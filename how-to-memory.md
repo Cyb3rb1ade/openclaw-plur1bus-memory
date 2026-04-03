@@ -612,3 +612,4 @@ Die L0-Summaries (≤150 Wörter) sind **Recall-Vorschauen**, nicht der gespeich
 *Plugin-Pfad: `/root/.openclaw/extensions/memory-lancedb-namespaced/`*
 *Plugin-README: `/root/.openclaw/extensions/memory-lancedb-namespaced/README.md`*
 *Workspace-Indexer: `openclaw memory status --deep`*
+*Git-Repo: `/root/openclaw-memory-system/` — v1.0.0, Branch main*

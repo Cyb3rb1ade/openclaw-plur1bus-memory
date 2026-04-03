@@ -1346,3 +1346,76 @@ systemctl --user restart openclaw-gateway.service
 | 5 Memory Leak AgentDbPool | Bounded durch Agent-Anzahl (~35), kein echter Leak in der Praxis |
 | 6 Connection Pooling | LanceDB embedded — keine File-Deskriptor-Probleme bei dieser Agenten-Anzahl |
 | 8 PII in Curation-Log | Lokales System, kein Netzwerk-Exposure. Regex-Scrubbing würde legitime Daten beschädigen |
+
+---
+
+## Repository & Weiterentwicklung
+
+Das Memory-System ist seit 2026-04-03 in einem eigenen Git-Repository unter Versionskontrolle.
+
+### Lokales Repo
+
+```
+/root/openclaw-memory-system/
+├── .gitignore
+├── CHANGELOG.md
+├── LICENSE                     MIT
+├── README.md
+├── how-to-memory-perfect.md    (diese Datei)
+├── how-to-memory.md
+├── extensions/
+│   ├── memory-lancedb-namespaced/   ← Plugin
+│   └── memory-lancedb-stock/        ← LanceDB-Abhängigkeit
+└── scripts/
+    ├── install-memory-system.sh
+    └── memory-gc.mjs
+```
+
+**Aktueller Stand:** `v1.0.0` (Tag), Branch `main`
+
+### Workflow — Änderungen einpflegen
+
+Änderungen werden in `/root/.openclaw/extensions/...` entwickelt und getestet, dann ins Repo übertragen:
+
+```bash
+cd /root/openclaw-memory-system
+
+# Plugin-Dateien synchronisieren
+rsync -a --exclude='node_modules' \
+  /root/.openclaw/extensions/memory-lancedb-namespaced/ \
+  extensions/memory-lancedb-namespaced/
+
+# Docs synchronisieren
+cp /root/.openclaw/how-to-memory-perfect.md .
+cp /root/.openclaw/how-to-memory.md .
+cp /root/.openclaw/scripts/memory-gc.mjs scripts/
+cp /root/.openclaw/scripts/install-memory-system.sh scripts/
+
+# Commit + Tag
+git add -p
+git commit -m "fix: ..."
+git tag v1.0.1
+```
+
+### Teilen / Veröffentlichen
+
+```bash
+# GitHub (z.B. unter github.com/openclaw/memory-system)
+git remote add origin https://github.com/openclaw/memory-system.git
+git push -u origin main --tags
+```
+
+### Externe Beiträge einpflegen
+
+```bash
+git remote add contrib https://github.com/andere/memory-system.git
+git fetch contrib
+git merge contrib/main --no-ff
+```
+
+### Was nicht ins Repo gehört (→ .gitignore)
+
+- `node_modules/` — via `npm install` installieren
+- API-Keys (`auth-profiles.json`, `auth.json`, `.env`)
+- LanceDB-Daten (`memory/lancedb-namespaced/`) — binär, kein sinnvolles Diff
+- Snapshots (`memory/.snapshots/`) — lokal, deployment-spezifisch
