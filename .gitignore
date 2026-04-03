@@ -1,0 +1,27 @@
+# Dependencies — via npm install
+extensions/memory-lancedb-stock/node_modules/
+extensions/memory-lancedb-namespaced/node_modules/
+
+# API Keys — niemals committen
+*.env
+.env*
+auth-profiles.json
+auth.json
+
+# LanceDB-Daten — binär, kein sinnvolles Diff
+memory/lancedb-namespaced/
+
+# Backups und Snapshots — lokal
+*.bak.*
+memory/.snapshots/
+
+# Logs
+*.log
+/tmp/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
