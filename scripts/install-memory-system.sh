@@ -67,7 +67,7 @@ prompt_secret() {
   fi
   read -rs val
   echo
-  eval "$var_name='$val'"
+  printf -v "$var_name" '%s' "$val"
 }
 
 prompt_input() {
@@ -75,7 +75,7 @@ prompt_input() {
   local val
   read -rp "  $prompt_text [${default_val}]: " val
   val="${val:-$default_val}"
-  eval "$var_name='$val'"
+  printf -v "$var_name" '%s' "$val"
 }
 
 # ─── Remote/Lokal-Abstraktion ─────────────────────────────────────────────────
