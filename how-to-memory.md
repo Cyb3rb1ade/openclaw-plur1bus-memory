@@ -609,7 +609,8 @@ Die L0-Summaries (≤150 Wörter) sind **Recall-Vorschauen**, nicht der gespeich
 *Dokumentation erstellt: 2026-03-22, aktualisiert: 2026-04-03*
 *Änderungen 2026-04-03 (Features): relative Pfade im Plugin, captureMaxChars-Default 5000, URL/Attachment-Priorisierung, Daily-Notes-Fix via LanceDB, install-memory-system.sh mit Auto-Erkennung + --update-plugin-only + --rollback + Snapshot*
 *Änderungen 2026-04-03 (Security): SQL-Injection-Fix (UUID-Validation), atomares Lock-File (wx-Flag + Staleness + Retry-Backoff), JSON-Parse + Schema-Validierung in callMergeCheck, Embedding-Retry mit Backoff, Auto-Capture Promise-Queue, GC-Pfade relativ*
-*Änderungen 2026-04-04 (Security follow-up): purgeExpired() Timestamp-Validierung, Lock-File Retry mit exponentiellem Backoff (5 Versuche)*
+*Änderungen 2026-04-04 (Security follow-up): purgeExpired() Timestamp-Validierung, Lock-File Retry mit exponentiellem Backoff (5 Versuche), eval→printf-v in install-memory-system.sh (Command Injection Fix)*
+*Nicht fixbar: LanceDB parametrisierte Queries (API unterstützt nur String), TOCTOU (openSync wx ist per POSIX atomar)*
 *Plugin-Pfad: `/root/.openclaw/extensions/memory-lancedb-namespaced/`*
 *Plugin-README: `/root/.openclaw/extensions/memory-lancedb-namespaced/README.md`*
 *Workspace-Indexer: `openclaw memory status --deep`*

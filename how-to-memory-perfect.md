@@ -1331,6 +1331,7 @@ systemctl --user restart openclaw-gateway.service
 | 3 | Race Condition Lock-File | Atomares `openSync('wx')` — schlägt fehl wenn Lock bereits existiert (kein TOCTOU). Staleness-Check: Locks älter als 5 Minuten werden automatisch als Crash-Artefakt entfernt. Retry mit exponentiellem Backoff (5 Versuche, 100ms→2s) bei `EEXIST`. |
 | 4 | JSON-Parse ohne Fehlerbehandlung in `callMergeCheck` | try/catch um `JSON.parse()` + inline Schema-Validierung: `merge` (boolean), `reason` (string), `mergedText` (string wenn merge=true) — ungültiges LLM-JSON führt zu `null` (kein Merge). |
 | 5 (neu) | `purgeExpired()` Timestamp ohne Validierung | `Number.isFinite(now)` Guard vor SQL-Interpolation — gleiche Konsistenz wie `memory-gc.mjs`. |
+| 6 (neu) | Command Injection in `install-memory-system.sh` | `eval "$var='$val'"` erlaubte Code-Ausführung bei manipulierten Eingaben. Ersetzt durch `printf -v "$var" '%s' "$val"` — sicheres bash-Äquivalent für indirekte Variablenzuweisung. |
 
 ### 🟡 Warnings
 
@@ -1344,9 +1345,11 @@ systemctl --user restart openclaw-gateway.service
 
 | # | Begründung |
 |---|-----------|
-| 5 Memory Leak AgentDbPool | Bounded durch Agent-Anzahl (~35), kein echter Leak in der Praxis |
-| 6 Connection Pooling | LanceDB embedded — keine File-Deskriptor-Probleme bei dieser Agenten-Anzahl |
-| 8 PII in Curation-Log | Lokales System, kein Netzwerk-Exposure. Regex-Scrubbing würde legitime Daten beschädigen |
+| Memory Leak AgentDbPool | Bounded durch Agent-Anzahl (~35), kein echter Leak in der Praxis |
+| Connection Pooling | LanceDB embedded — keine File-Deskriptor-Probleme bei dieser Agenten-Anzahl |
+| PII in Curation-Log | Lokales System, kein Netzwerk-Exposure. Regex-Scrubbing würde legitime Daten beschädigen |
+| Parametrisierte Queries (LanceDB) | LanceDB's `delete(predicate)` akzeptiert ausschließlich einen String — keine `?`-Parameter-Syntax. UUID-Validierung vor der Interpolation ist die einzig mögliche Absicherung. |
+| TOCTOU Lock-File | `openSync('wx')` ist per POSIX-Standard atomar (O_EXCL\|O_CREAT) — zwei Prozesse können nicht gleichzeitig die Datei erstellen. Kein TOCTOU-Problem. |
 
 ---
 
