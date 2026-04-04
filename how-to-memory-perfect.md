@@ -1328,8 +1328,9 @@ systemctl --user restart openclaw-gateway.service
 |---|-------|-----|
 | 1 | SQL-Injection in `table.delete()` | UUID-Regex-Validierung vor jeder DB-Deletion. IDs die nicht dem UUID-Format entsprechen werden mit Error abgewiesen. Gilt für `memory_forget` (User-Input) und `pendingIds` (Datei-Input). |
 | 2 | Hardcoded Pfade in `memory-gc.mjs` | `import.meta.url` + `dirname` — Pfade werden relativ zum Script-Verzeichnis aufgelöst. Agents werden aus `openclaw.json` gelesen statt hardcoded. |
-| 3 | Race Condition Lock-File | Atomares `openSync('wx')` — schlägt fehl wenn Lock bereits existiert (kein TOCTOU). Staleness-Check: Locks älter als 5 Minuten werden automatisch als Crash-Artefakt entfernt. |
-| 4 | JSON-Parse ohne Fehlerbehandlung in `callMergeCheck` | try/catch um `JSON.parse()` — ungültiges LLM-JSON führt zu `null` (kein Merge) statt Exception. |
+| 3 | Race Condition Lock-File | Atomares `openSync('wx')` — schlägt fehl wenn Lock bereits existiert (kein TOCTOU). Staleness-Check: Locks älter als 5 Minuten werden automatisch als Crash-Artefakt entfernt. Retry mit exponentiellem Backoff (5 Versuche, 100ms→2s) bei `EEXIST`. |
+| 4 | JSON-Parse ohne Fehlerbehandlung in `callMergeCheck` | try/catch um `JSON.parse()` + inline Schema-Validierung: `merge` (boolean), `reason` (string), `mergedText` (string wenn merge=true) — ungültiges LLM-JSON führt zu `null` (kein Merge). |
+| 5 (neu) | `purgeExpired()` Timestamp ohne Validierung | `Number.isFinite(now)` Guard vor SQL-Interpolation — gleiche Konsistenz wie `memory-gc.mjs`. |
 
 ### 🟡 Warnings
 

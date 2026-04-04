@@ -33,6 +33,7 @@ const TABLE  = "memories";
 const { connect } = await import(LANCEDB_MODULE);
 
 const now = Date.now();
+if (!Number.isFinite(now) || now < 0) throw new Error(`Invalid timestamp: ${now}`);
 let totalPurged = 0;
 
 console.log(`[memory-gc] ${new Date().toISOString()} — start (root: ${ROOT_DIR}, agents: ${AGENTS.join(", ")})`);

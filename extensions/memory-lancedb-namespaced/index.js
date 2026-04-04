@@ -242,6 +242,7 @@ class MemoryDB {
   async purgeExpired() {
     await this.init();
     const now = Date.now();
+    if (!Number.isFinite(now) || now < 0) throw new Error(`Invalid timestamp: ${now}`);
     await this.table.delete(`expiresAt > 0 AND expiresAt < ${now}`);
   }
 }
@@ -388,11 +389,16 @@ async function callMergeCheck(existingText, newText, llmCfg) {
     },
   ], { ...llmCfg, jsonMode: true, maxTokens: 300 });
   if (!content) return null;
+  let parsed;
   try {
-    return JSON.parse(content);
+    parsed = JSON.parse(content);
   } catch (_) {
     return null; // LLM returned invalid JSON — treat as no-merge
   }
+  // Schema-Validierung: merge muss boolean sein, reason string, mergedText optional string
+  if (typeof parsed?.merge !== "boolean" || typeof parsed?.reason !== "string") return null;
+  if (parsed.merge && typeof parsed.mergedText !== "string") return null;
+  return parsed;
 }
 
 // ============================================================================
@@ -932,17 +938,24 @@ const plugin = {
               }
             }
             try {
-              // Atomic lock acquire — openSync with 'wx' fails if file was created concurrently
-              try {
-                const fd = openSync(lockPath, "wx");
-                writeFileSync(fd, new Date().toISOString());
-                const { closeSync } = await import("node:fs");
-                closeSync(fd);
-              } catch (lockErr) {
-                if (lockErr.code === "EEXIST") {
-                  return { content: [{ type: "text", text: "knowledge_update: concurrent update detected. Try again in a moment." }] };
+              // Atomic lock acquire with exponential backoff retry
+              const { closeSync } = await import("node:fs");
+              let acquired = false;
+              for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                  const fd = openSync(lockPath, "wx");
+                  writeFileSync(fd, new Date().toISOString());
+                  closeSync(fd);
+                  acquired = true;
+                  break;
+                } catch (lockErr) {
+                  if (lockErr.code !== "EEXIST") throw lockErr;
+                  // Lock exists — wait with backoff and retry
+                  await new Promise(r => setTimeout(r, Math.min(100 * 2 ** attempt, 2000)));
                 }
-                throw lockErr;
+              }
+              if (!acquired) {
+                return { content: [{ type: "text", text: "knowledge_update: could not acquire lock after 5 attempts. Try again later." }] };
               }
 
               const pending = readKnowledgePending(ctx.workspaceDir);
