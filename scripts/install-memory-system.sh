@@ -249,7 +249,8 @@ if [[ "$TARGET" == *":"* ]]; then
   SSH_HOST="${TARGET%%:*}"
   TARGET_DIR="${TARGET#*:}"
 else
-  TARGET_DIR="$TARGET"
+  # Normalize local path — prevents traversal via symlinks or relative components
+  TARGET_DIR="$(realpath -m "$TARGET" 2>/dev/null || echo "$TARGET")"
 fi
 
 # ─── Header ───────────────────────────────────────────────────────────────────
@@ -693,20 +694,20 @@ else
   dryrun "Würde $TARGET_GC_SCRIPT erstellen"
 fi
 
-# Cron-Eintrag
-CRON_LINE="0 3 * * * root /usr/bin/node $TARGET_GC_SCRIPT >> /tmp/openclaw/memory-gc.log 2>&1"
+# Cron-Eintrag — User-Crontab (kein Root erforderlich, kein Privilege-Escalation-Risiko)
+CRON_LINE="0 3 * * * /usr/bin/node $TARGET_GC_SCRIPT >> /tmp/openclaw/memory-gc.log 2>&1"
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  dryrun "Würde zu /etc/crontab hinzufügen: $CRON_LINE"
+  dryrun "Würde zu User-Crontab hinzufügen: $CRON_LINE"
 else
-  CRON_CHECK=$(run_target "grep -q 'memory-gc' /etc/crontab 2>/dev/null && echo found || echo missing")
+  CRON_CHECK=$(run_target "(crontab -l 2>/dev/null || true) | grep -q 'memory-gc' && echo found || echo missing")
   if [[ "$CRON_CHECK" == "found" ]]; then
-    warn "Cron-Eintrag 'memory-gc' in /etc/crontab bereits vorhanden — übersprungen."
+    warn "Cron-Eintrag 'memory-gc' in User-Crontab bereits vorhanden — übersprungen."
   else
-    if run_target "echo '$CRON_LINE' >> /etc/crontab" 2>/dev/null; then
-      ok "Cron-Eintrag eingetragen (täglich 03:00)"
+    if run_target "(crontab -l 2>/dev/null || true; echo '$CRON_LINE') | crontab -" 2>/dev/null; then
+      ok "Cron-Eintrag in User-Crontab eingetragen (täglich 03:00)"
     else
-      warn "Konnte nicht in /etc/crontab schreiben. Root-Rechte nötig."
+      warn "Konnte User-Crontab nicht schreiben."
       warn "Manuell eintragen: $CRON_LINE"
     fi
   fi
