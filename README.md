@@ -1,79 +1,78 @@
 # OpenClaw Memory System
 
-Produktionsreifes, dreischichtiges Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten.
+A production-grade, three-layer memory system for [OpenClaw](https://github.com/openclaw) agents.
 
-Entwickelt und erprobt im produktiven Einsatz mit mehreren Agenten (Bernd, Bernhardine, Heisenberg) über mehrere Monate.
-
----
-
-## Was ist das?
-
-Dieses Paket löst das Kernproblem von LLM-Agenten: **Amnesie zwischen Sessions.**
-
-Es kombiniert drei Schichten:
-
-```
-Schicht 1   Flat-File Memory     workspace/memory/YYYY-MM-DD.md — menschenlesbar
-Schicht 2   Workspace-Indexer    SQLite + Vektor-Embeddings aller .md-Dateien
-Schicht 3   LanceDB              Konversations-Fakten, semantisch durchsuchbar
-```
-
-Alle drei arbeiten zusammen. Der Agent schreibt, das System erinnert sich automatisch.
+Built and battle-tested in production across multiple agents over several months.
 
 ---
 
-## Inhalt
+## What is this?
+
+This package solves the core problem of LLM agents: **amnesia between sessions.**
+
+It combines three layers:
+
+```
+Layer 1   Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
+Layer 2   Workspace Indexer    SQLite + vector embeddings of all .md files
+Layer 3   LanceDB              Conversation facts, semantically searchable
+```
+
+All three work together. The agent writes, the system remembers automatically.
+
+---
+
+## Contents
 
 ```
 extensions/
-  memory-lancedb-namespaced/   ← Das Hauptplugin (OpenClaw-Gateway-Plugin)
-  memory-lancedb-stock/        ← LanceDB-Wrapper (Abhängigkeit, npm install nötig)
+  memory-lancedb-namespaced/   ← Main plugin (OpenClaw Gateway plugin)
+  memory-lancedb-stock/        ← LanceDB wrapper (dependency, requires npm install)
 scripts/
-  install-memory-system.sh     ← Installations- und Update-Skript
-  memory-gc.mjs                ← TTL-Garbage-Collector (täglich via Cron)
-how-to-memory-perfect.md       ← Vollständige Dokumentation (Konzepte, Setup, Upgrade)
-how-to-memory.md               ← Deployment-spezifische Details
+  install-memory-system.sh     ← Installation and update script
+  memory-gc.mjs                ← TTL garbage collector (daily via cron)
+how-to-memory-perfect.md       ← Full documentation (concepts, setup, upgrade)
 ```
 
 ---
 
-## Schnellstart
+## Quickstart
 
 ```bash
-# Abhängigkeiten installieren (nur einmalig)
+# Install dependencies (once)
 cd extensions/memory-lancedb-stock && npm install
 
-# Installation — erkennt OpenClaw automatisch
+# Install — auto-detects OpenClaw
 ./scripts/install-memory-system.sh
 
-# Oder explizit:
-./scripts/install-memory-system.sh /pfad/zu/.openclaw
+# Explicit path:
+./scripts/install-memory-system.sh /path/to/.openclaw
 
 # Remote:
-./scripts/install-memory-system.sh user@host:/pfad/zu/.openclaw
+./scripts/install-memory-system.sh user@host:/path/to/.openclaw
 ```
 
-Das Skript:
-- Erkennt lokale OpenClaw-Installationen automatisch
-- Zeigt Auswahlmenü bei mehreren Instanzen
-- Fragt nach API-Keys (OpenAI für Embeddings, optional Cohere für Re-Ranking)
-- Erstellt LanceDB-Snapshot vor Änderungen
-- Richtet Cron-Job für täglichen GC ein
+The script:
+- Auto-detects local OpenClaw installations
+- Shows a selection menu if multiple instances are found
+- Prompts for API keys (OpenAI for embeddings, Cohere for re-ranking — optional)
+- Creates a LanceDB snapshot before making changes
+- Sets up a daily cron job for garbage collection
 
 ---
 
-## Update (bestehende Installation)
+## Update (existing installation)
 
 ```bash
-# Nur Plugin aktualisieren — keine Config-Änderungen, keine API-Key-Abfragen
-./scripts/install-memory-system.sh --update-plugin-only /pfad/zu/.openclaw
+# Update plugin only — no config changes, no API key prompts
+./scripts/install-memory-system.sh --update-plugin-only /path/to/.openclaw
 systemctl --user restart openclaw-gateway.service
 ```
 
 ## Rollback
 
 ```bash
-./scripts/install-memory-system.sh --rollback /pfad/zu/.openclaw
+./scripts/install-memory-system.sh --rollback /path/to/.openclaw
 systemctl --user restart openclaw-gateway.service
 ```
 
@@ -81,38 +80,38 @@ systemctl --user restart openclaw-gateway.service
 
 ## Features
 
-- **Per-Agent-Isolation** — jeder Agent hat seine eigene LanceDB-Datenbank
-- **Auto-Capture** — speichert automatisch relevante Gesprächsinhalte nach jedem Turn
-- **URL- und Attachment-Priorisierung** — Links und Dateianhänge vom User gehen nie verloren
-- **Auto-Recall** — injiziert Top-5-relevante Memories vor jedem Turn
-- **Cohere Re-Ranker** — optionales zweistufiges Retrieval für bessere Relevanz
-- **LLM-Merging** — logisch verwandte Memories werden automatisch zusammengeführt
-- **TTL-System** — `session` (24h), `short` (14 Tage), permanent
-- **Schicht 1.5 / KNOWLEDGE.md** — kuratierte Wissensbasis mit automatischer Kompaktierung
-- **Conflict-Log** — verfolgt widersprüchliche `decision`-Memories zwischen Agenten
-- **Atomic Writes** — KNOWLEDGE.md via temp+rename, Lock-File via `wx`-Flag
-- **Embedding-Retry** — exponentieller Backoff bei Rate-Limits
+- **Per-agent isolation** — each agent has its own LanceDB database
+- **Auto-capture** — automatically saves relevant conversation content after each turn
+- **URL and attachment prioritization** — links and file attachments from the user are never lost
+- **Auto-recall** — injects the top-5 most relevant memories before each turn
+- **Cohere re-ranker** — optional two-stage retrieval for better relevance
+- **LLM merging** — logically related memories are automatically consolidated
+- **TTL system** — `session` (24h), `short` (14 days), permanent
+- **Layer 1.5 / KNOWLEDGE.md** — curated knowledge base with automatic compaction
+- **Conflict log** — tracks contradictory `decision`-type memories across agents
+- **Atomic writes** — KNOWLEDGE.md via temp+rename, lock file via `wx` flag
+- **Embedding retry** — exponential backoff on rate limits
 
 ---
 
-## Voraussetzungen
+## Requirements
 
 - [OpenClaw](https://github.com/openclaw) Gateway
 - Node.js ≥ 18
-- OpenAI API Key (für Embeddings: `text-embedding-3-large` oder `text-embedding-3-small`)
-- Cohere API Key (optional, für Re-Ranking)
-- LLM-API (optional, für Merging und KNOWLEDGE.md — kompatibel mit kimi-for-coding, GPT-4, etc.)
+- OpenAI API key (for embeddings: `text-embedding-3-large` or `text-embedding-3-small`)
+- Cohere API key (optional, for re-ranking)
+- Any LLM API (optional, for merging and KNOWLEDGE.md — compatible with kimi-for-coding, GPT-4, etc.)
 
 ---
 
-## Vollständige Dokumentation
+## Full Documentation
 
 → [`how-to-memory-perfect.md`](how-to-memory-perfect.md)
 
-Enthält: Architektur, Konfigurationsreferenz, Upgrade-Anleitungen, Security-Audit-Fixes, Troubleshooting.
+Covers: architecture, configuration reference, upgrade guides, security audit fixes, troubleshooting.
 
 ---
 
-## Lizenz
+## License
 
 MIT
