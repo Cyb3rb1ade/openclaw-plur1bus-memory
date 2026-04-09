@@ -500,7 +500,7 @@ const plugin = {
   id: "memory-lancedb-namespaced",
   name: "Memory (LanceDB, per-Agent)",
   description: "Per-agent isolated LanceDB memory",
-  kind: "memory",
+  kind: "extension",
 
   register(api) {
     const cfg = api.pluginConfig || {};
