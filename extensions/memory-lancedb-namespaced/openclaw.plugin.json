@@ -72,6 +72,6 @@
           "enabled": { "type": "boolean", "default": true }
         }
       }
-    },
+    }
   }
 }
