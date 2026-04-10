@@ -735,6 +735,7 @@ rm memory/.dreams/short-term-recall.json
 *Änderungen 2026-04-03 (Features): relative Pfade im Plugin, captureMaxChars-Default 5000, URL/Attachment-Priorisierung, Daily-Notes-Fix via LanceDB, install-memory-system.sh mit Auto-Erkennung + --update-plugin-only + --rollback + Snapshot*
 *Änderungen 2026-04-03 (Security): SQL-Injection-Fix (UUID-Validation), atomares Lock-File (wx-Flag + Staleness + Retry-Backoff), JSON-Parse + Schema-Validierung in callMergeCheck, Embedding-Retry mit Backoff, Auto-Capture Promise-Queue, GC-Pfade relativ*
 *Änderungen 2026-04-04 (Security follow-up): purgeExpired() Timestamp-Validierung, Lock-File Retry mit exponentiellem Backoff (5 Versuche), eval→printf-v in install-memory-system.sh (Command Injection Fix)*
+*Änderungen 2026-04-11 (Plugin): kind `memory` → `extension` (OpenClaw 4.9 Native-Dreaming-Kompatibilität); `required: ["embedding"]` aus configSchema entfernt (per-Agent-Validation ohne explizite embedding-Config)*
 *Änderungen 2026-04-06 (Dreaming): dreaming-bridge.py + dreaming-promote.py als Leichtschlaf/Tiefschlaf-Äquivalent für LanceDB-Plugin; Branch dreaming-bridge/v1.0.0 im Memory-Repo*
 *Nicht fixbar: LanceDB parametrisierte Queries (API unterstützt nur String), TOCTOU (openSync wx ist per POSIX atomar)*
 *Plugin-Pfad: `/root/.openclaw/extensions/memory-lancedb-namespaced/`*
