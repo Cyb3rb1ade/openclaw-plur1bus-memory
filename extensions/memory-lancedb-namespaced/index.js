@@ -265,12 +265,15 @@ class AgentDbPool {
 }
 
 class Embeddings {
-  constructor(apiKey, model, baseUrl, dimensions) {
+  constructor(apiKey, model, baseUrl, dimensions, fallbackCfg) {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = baseUrl;
     this.dimensions = dimensions;
     this._client = null;
+    // fallbackCfg: { apiKey, model, baseUrl } — must produce same dimensions as primary
+    this._fallbackCfg = fallbackCfg || null;
+    this._fallbackClient = null;
   }
 
   async getClient() {
@@ -284,8 +287,20 @@ class Embeddings {
     return this._client;
   }
 
+  async getFallbackClient() {
+    if (!this._fallbackClient && this._fallbackCfg) {
+      const OpenAI = await getOpenAI();
+      this._fallbackClient = new OpenAI({
+        apiKey: this._fallbackCfg.apiKey,
+        baseURL: this._fallbackCfg.baseUrl,
+      });
+    }
+    return this._fallbackClient;
+  }
+
   async embed(text, retries = 3) {
     const client = await this.getClient();
+    let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const response = await client.embeddings.create({
@@ -295,12 +310,29 @@ class Embeddings {
         });
         return response.data[0].embedding;
       } catch (err) {
-        if (attempt === retries) throw err;
+        lastErr = err;
+        if (attempt === retries) break;
         const isRateLimit = err?.status === 429 || String(err).includes("rate");
         const delay = isRateLimit ? Math.min(1000 * 2 ** attempt, 16000) : 500 * (attempt + 1);
         await new Promise(r => setTimeout(r, delay));
       }
     }
+    // Primary failed — try fallback if configured
+    const fallbackClient = await this.getFallbackClient();
+    if (fallbackClient && this._fallbackCfg) {
+      try {
+        const response = await fallbackClient.embeddings.create({
+          model: this._fallbackCfg.model || this.model,
+          input: text,
+          dimensions: this.dimensions, // must match primary — same dim constraint
+        });
+        return response.data[0].embedding;
+      } catch (fallbackErr) {
+        // Both failed — throw original error for clarity
+        throw lastErr;
+      }
+    }
+    throw lastErr;
   }
 }
 
@@ -510,6 +542,14 @@ const plugin = {
     const model = embeddingCfg.model || DEFAULT_MODEL;
     const baseUrl = embeddingCfg.baseUrl;
     const dimensions = embeddingCfg.dimensions;
+    const fallbackEmbeddingCfg = embeddingCfg.fallback
+      ? {
+          apiKey: resolveEnvVars(embeddingCfg.fallback.apiKey || "${OPENAI_API_KEY_FALLBACK}"),
+          model: embeddingCfg.fallback.model || model,
+          baseUrl: embeddingCfg.fallback.baseUrl,
+        }
+      : null;
+    if (fallbackEmbeddingCfg) api.logger.info(`memory-lancedb-namespaced: embedding fallback configured (${fallbackEmbeddingCfg.model} @ ${fallbackEmbeddingCfg.baseUrl || "openai"})`);
     const autoRecall = cfg.autoRecall !== false;
 
     // Configurable thresholds
@@ -556,7 +596,7 @@ const plugin = {
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
 
     const pool = new AgentDbPool(baseDbPath, vectorDim);
-    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions, fallbackEmbeddingCfg);
 
     // Per-agent capture queue — serializes concurrent agent_end events to prevent DB race conditions
     const captureQueues = new Map(); // agentId → Promise (tail of queue)
