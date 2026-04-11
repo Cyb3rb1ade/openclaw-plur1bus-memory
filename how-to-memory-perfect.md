@@ -575,6 +575,96 @@ Ist der Re-Ranker nicht konfiguriert oder schlägt die API fehl (Netzwerk, Rate-
 
 ---
 
+## Embedding-Fallback: Resilienz bei API-Ausfall
+
+### Das Problem
+
+Das Memory-Plugin bricht ohne Embedding-API komplett zusammen: kein Store, kein Recall, kein Auto-Capture. Wenn der OpenAI-Endpunkt nicht erreichbar ist — wegen Netzwerkproblem, Rate-Limit oder falschem Key — verstummt das gesamte Gedächtnissystem.
+
+### Die kritische Einschränkung: Dimensionen
+
+LanceDB hat ein **fixes Schema pro Table**. Wenn `text-embedding-3-large` 3072 Dimensionen liefert, dann muss der Fallback ebenfalls exakt 3072 Dimensionen liefern — sonst werden Vektoren mit falscher Dimension gespeichert und die DB ist korrupt.
+
+**Kein Mix zwischen Modellen mit unterschiedlichen Dimensionen möglich.** Primary und Fallback müssen dasselbe Modell verwenden — oder zumindest ein Modell das dieselbe Dimension produziert.
+
+### Empfohlene Fallback-Szenarien
+
+| Szenario | Primary | Fallback |
+|---|---|---|
+| Zweiter OpenAI-Key | `text-embedding-3-large` (key A) | `text-embedding-3-large` (key B) |
+| Azure OpenAI | `text-embedding-3-large` (OpenAI) | `text-embedding-3-large` (Azure, gleiche Dims) |
+| Lokaler Proxy (LiteLLM, etc.) | `text-embedding-3-large` (OpenAI) | `text-embedding-3-large` via lokalem Proxy |
+| Reines Offline-Setup | `text-embedding-3-large` (Azure Private) | `text-embedding-3-large` (Azure Backup-Region) |
+
+### Konfiguration
+
+```json
+"embedding": {
+  "apiKey":     "${OPENAI_API_KEY}",
+  "model":      "text-embedding-3-large",
+  "dimensions": 3072,
+  "fallback": {
+    "apiKey":   "${OPENAI_API_KEY_FALLBACK}",
+    "model":    "text-embedding-3-large",
+    "baseUrl":  "https://mein-azure-endpunkt.openai.azure.com/openai/deployments/text-embedding-3-large"
+  }
+}
+```
+
+Für einen zweiten OpenAI-Key ohne `baseUrl`:
+
+```json
+"fallback": {
+  "apiKey": "${OPENAI_API_KEY_FALLBACK}"
+}
+```
+
+`model` und `baseUrl` im `fallback`-Block sind optional — wenn weggelassen, verwendet der Fallback dasselbe `model` und den Standard-OpenAI-Endpunkt.
+
+### Fallback-Verhalten
+
+```
+embed(text) aufgerufen
+  │
+  ├─ Primary versuchen (3 Versuche mit Backoff)
+  │   └─ OK → vector zurückgeben
+  │
+  └─ Primary gescheitert (alle Versuche)
+      │
+      ├─ fallback konfiguriert?
+      │   ├─ Ja → Fallback-Endpunkt versuchen (1 Versuch)
+      │   │       └─ OK → vector zurückgeben
+      │   │       └─ Fehler → original error werfen
+      │   │
+      │   └─ Nein → original error werfen
+      │            (caller entscheidet ob skip oder crash)
+```
+
+Das Plugin loggt beim Start: `memory-lancedb-namespaced: embedding fallback configured (model @ endpoint)`.
+
+### Graceful Degradation ohne Fallback
+
+Ohne Fallback-Config wirft `embed()` den Original-Fehler. Was dann passiert hängt vom Kontext ab:
+
+| Operation | Verhalten bei Embedding-Fehler |
+|---|---|
+| `memory_store` | Tool gibt Fehler zurück — Agent sieht es, kann reagieren |
+| `memory_recall` | Tool gibt Fehler zurück |
+| Auto-Recall (`before_agent_start`) | Fehler wird geloggt, kein Inject — Session läuft weiter |
+| Auto-Capture (`agent_end`) | Fehler wird geloggt, Memory nicht gespeichert — Session weiter |
+
+Auto-Recall und Auto-Capture sind daher von Natur aus "fire and ignore" — ein Embedding-Ausfall bricht keine Session.
+
+### Umgebungsvariablen
+
+```bash
+# /root/.openclaw/.env
+OPENAI_API_KEY=sk-proj-...       # Primary
+OPENAI_API_KEY_FALLBACK=sk-proj-... # Fallback (zweiter Key oder Azure)
+```
+
+---
+
 ## Auto-Capture: Vollautomatisches Indexieren
 
 ### Was ist das?
@@ -875,6 +965,113 @@ Die DBs landen automatisch unter:
 ├── alice/
 └── bob/
 ```
+
+---
+
+## ActiveMemory: Dedizierter Memory-Sub-Agent (ab OpenClaw 4.10)
+
+### Was ist ActiveMemory?
+
+ActiveMemory ist ein optionales Plugin, das **vor jeder Agenten-Antwort** einen kleinen
+Blocking-Sub-Agenten startet. Dieser Sub-Agent hat Zugriff auf alle Memory-Tools
+(`memory_recall`, `memory_store`) und erstellt eine kompakte Zusammenfassung relevanter
+Erinnerungen — die dann als Kontext in den Hauptagenten fließt.
+
+Der Unterschied zu Auto-Recall (Schicht 3): Auto-Recall injiziert semantisch ähnliche
+Memories passiv. ActiveMemory **denkt aktiv**, kombiniert Erinnerungen, löst Widersprüche
+auf und formuliert eine kurze Zusammenfassung, bevor der Hauptagent antwortet.
+
+### Per-Agent-Isolation
+
+Jeder Agent hat einen **vollständig getrennten** ActiveMemory-Kontext:
+
+- Bernd (main) → sieht nur `lancedb-namespaced/main/`
+- Bernhardine → sieht nur `lancedb-namespaced/bernhardine/`
+- Heisenberg → sieht nur `lancedb-namespaced/heisenberg/`
+
+Die `agents`-Liste in der Config steuert, **welche** Agenten den Sub-Agenten triggern —
+nicht dass sie Memories teilen. Die Isolation kommt vom Namespace-Routing in
+`memory-lancedb-namespaced`.
+
+### Konfiguration (openclaw.json)
+
+```json
+{
+  "plugins": {
+    "allow": ["memory-lancedb-namespaced", "active-memory"],
+    "entries": {
+      "active-memory": {
+        "enabled": true,
+        "config": {
+          "enabled": true,
+          "agents": ["main", "bernhardine", "heisenberg"],
+          "allowedChatTypes": ["direct"],
+          "modelFallbackPolicy": "default-remote",
+          "queryMode": "recent",
+          "promptStyle": "balanced",
+          "timeoutMs": 15000,
+          "maxSummaryChars": 220,
+          "persistTranscripts": false,
+          "logging": true
+        }
+      }
+    }
+  }
+}
+```
+
+### Konfigurationsparameter
+
+| Parameter | Bedeutung | Empfohlener Wert |
+|---|---|---|
+| `agents` | Welche Agenten triggern den Sub-Agenten | alle primären Agenten |
+| `allowedChatTypes` | Nur in `direct`-Chats oder auch in Gruppen | `["direct"]` |
+| `queryMode` | `recent` = neueste Memories zuerst / `relevant` = semantisch | `recent` |
+| `promptStyle` | `balanced` = ausgewogen, `compact` = kürzer, `verbose` = ausführlicher | `balanced` |
+| `timeoutMs` | Maximale Wartezeit — bei Überschreitung antwortet Hauptagent direkt | `15000` |
+| `maxSummaryChars` | Maximale Länge der Zusammenfassung (Zeichen) | `220` |
+| `persistTranscripts` | Sub-Agenten-Transcripts in Logs speichern | `false` |
+| `logging` | Plugin-Logging in Gateway-Log | `true` |
+
+### Wann aktivieren?
+
+ActiveMemory lohnt sich bei Agenten, die:
+- viele kurze Gespräche mit derselben Person führen (keine langen Threads)
+- proaktiv Kontext aus früheren Sessions wiederverwenden sollen
+- nicht ausschließlich auf Auto-Recall-Injektion angewiesen sein sollen
+
+Bei Agenten mit sehr langen Threads und viel Reasoning kann `timeoutMs` erhöht oder
+ActiveMemory für diesen Agenten deaktiviert werden (aus `agents`-Liste entfernen).
+
+### Zusammenspiel mit memory-lancedb-namespaced
+
+ActiveMemory ist kein Ersatz für Auto-Recall — es ist eine Ergänzung:
+
+```
+Eingehende Nachricht
+        │
+        ▼
+┌─────────────────────────────────┐
+│  ActiveMemory Sub-Agent         │  ← NEU (ab 4.10)
+│  - ruft memory_recall auf       │
+│  - erstellt 1-2-Satz Summary    │
+│  - max. 15s, dann skip          │
+└─────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────┐
+│  Auto-Recall (Schicht 3)        │
+│  - injiziert <relevant-memories>│
+│  - läuft parallel/passiv        │
+└─────────────────────────────────┘
+        │
+        ▼
+  Hauptagent antwortet
+```
+
+Beide Systeme sind **additiv**: Auto-Recall gibt rohe Treffer, ActiveMemory gibt eine
+synthetisierte Zusammenfassung. Wer minimale Latenz braucht, kann ActiveMemory
+deaktivieren und nur auf Auto-Recall vertrauen.
 
 ---
 
@@ -1582,3 +1779,132 @@ Die `openclaw-memory-promotion:`-Marker in MEMORY.md sind format-identisch zu Op
 ## Security-Audit-Fixes: 2026-04-06
 
 *(keine neuen Findings — Dreaming-Bridge ist read-only gegenüber LanceDB, schreibt nur .md/.json-Dateien in workspace/memory/)*
+
+---
+
+## Upgrade-Anleitung: 2026-04-11
+
+### Was ist neu?
+
+Diese Version enthält keine Änderungen am Memory-Plugin selbst. Die Upgrades betreffen die LLM-Schicht, das Reranking in den Research-Frontends und Korrekturen im Kimi-Transport-Layer von YAAWC.
+
+---
+
+### 1. k2p5 — Korrigierte Modell-Parameter in allen Agent-Configs
+
+**Problem:** In allen `agents/*/agent/models.json` stand `contextWindow: 256000` (dezimal) statt `262144` (256 × 1024, korrekte Binärform). `maxTokens` war `8192`.
+
+**Fix (bereits in allen Instanzen angewendet):**
+
+```python
+# Alle models.json auf einmal patchen:
+python3 -c "
+import json, glob
+for path in glob.glob('/root/.openclaw/agents/*/agent/models.json'):
+    with open(path) as f: data = json.load(f)
+    changed = False
+    for p in data.get('providers', {}).values():
+        for m in p.get('models', []):
+            if m.get('id') == 'k2p5':
+                m['contextWindow'] = 262144
+                m['maxTokens'] = 32768
+                changed = True
+    if changed:
+        with open(path, 'w') as f: json.dump(data, f, indent=2); f.write('\n')
+        print('Updated:', path)
+"
+```
+
+**Warum 262144 statt 256000?**
+256K (binär) = 256 × 1024 = 262.144. Der API-Endpunkt unterstützt den vollen Binär-Wert — `256000` ist ein Rundungsfehler aus früheren Setups.
+
+---
+
+### 2. YAAWC — Cohere Rerank für Web-Suche
+
+> Diese Änderung betrifft den Web-Such-Stack, **nicht** das Memory-Plugin.
+
+**Vorher:** `simpleWebSearchTool` scorte Ergebnisse mit `embedding_similarity + positionBonus + domainBonus` (Heuristik).
+
+**Nachher:** Cohere Rerank API (`rerank-v3.5`) — jedes (Query, Dokument)-Paar wird vom Cross-Encoder direkt bewertet.
+
+**Neue Dateien/Änderungen in YAAWC:**
+
+| Datei | Änderung |
+|---|---|
+| `src/lib/utils/reranker.ts` | Neu — Cohere-Reranker via fetch, Fallback auf Original-Reihenfolge |
+| `src/lib/config.ts` | `RERANKING`-Block + Getter `isRerankingEnabled()`, `getRerankTopK()` |
+| `config.toml` | `[RERANKING] ENABLED=true TOP_K=10 COHERE_MODEL=rerank-v3.5` |
+| `docker-compose.yaml` | `COHERE_API_KEY=<key>` als env var |
+| `simpleWebSearchTool.ts` | Heuristik ersetzt durch `await rerank(query, docTexts)` |
+
+**Konfiguration in `config.toml`:**
+
+```toml
+[RERANKING]
+ENABLED = true
+TOP_K = 10
+COHERE_MODEL = "rerank-v3.5"
+```
+
+API-Key kommt aus `COHERE_API_KEY`-Umgebungsvariable (nicht in config.toml um versehentliche Commits zu vermeiden).
+
+---
+
+### 3. Perplexica — Cohere Rerank via Patch-Script
+
+> Diese Änderung betrifft den Web-Such-Stack, **nicht** das Memory-Plugin.
+
+`perplexica-patch.sh` wurde um Sektion `[4b]` erweitert: `_cohereRerank()`-Hilfsfunktion wird in `metaSearchAgent.ts` injiziert und ersetzt die Domain+Position-Heuristik.
+
+**Environment-Variable für Perplexica-Backend:**
+
+```yaml
+# docker/docker-compose.yml → perplexica-backend:
+environment:
+  - COHERE_API_KEY=<key>
+```
+
+Nach Änderung: `docker compose up -d --force-recreate perplexica-backend` + `bash /root/.openclaw/docker/perplexica-patch.sh`.
+
+---
+
+### 4. YAAWC — kimiOpenAI.ts: maxTokens Default
+
+`KimiChatOpenAI`-Konstruktor setzt nun `maxTokens: params.maxTokens ?? 32768` als Pflicht-Default. Bisher wurde der LangChain-Default (4096) verwendet, was Antworten unnötig abschnitt.
+
+---
+
+### 5. YAAWC — contentUtils.ts: tool_calls überleben Thinking-Trim
+
+**Bug (behoben):** `removeThinkingBlocksFromMessages()` erstellte `new AIMessage(cleanedContent)` — das verwarf `additional_kwargs` (enthält `tool_calls` und `reasoning_content`). Downstream-Requests erhielten orphaned ToolMessages → `400 tool_call_id not found`.
+
+**Fix:** `new AIMessage({ content: cleanedContent, additional_kwargs: message.additional_kwargs, response_metadata: message.response_metadata })`.
+
+**Relevanz für Memory:** Die Korrektur betrifft Tool-Runden mit dem `memory_store`/`memory_recall`-Tool. Wenn ein Agent während eines Thinking-Turns ein Memory-Tool aufruft und die History danach getrimmt wird, gingen die Tool-Call-IDs zuvor verloren — was bei Folge-Requests zu 400-Fehlern führte. Dieser Fehler ist jetzt behoben.
+
+---
+
+### Upgrade-Checkliste 2026-04-11
+
+```
+Modell-Parameter:
+  [ ] models.json: alle k2p5-Einträge auf contextWindow=262144, maxTokens=32768
+      python3 -c "import json,glob; [...]"  (Skript siehe oben)
+
+YAAWC (nur falls selbst betrieben):
+  [ ] src/lib/utils/reranker.ts vorhanden (Cohere Reranker)
+  [ ] docker-compose.yaml: COHERE_API_KEY env
+  [ ] config.toml: [RERANKING] Sektion
+  [ ] COHERE_API_KEY in /root/.openclaw/.env vorhanden
+  [ ] src/lib/utils/contentUtils.ts: AIMessage erhält additional_kwargs
+  [ ] src/lib/providers/kimiOpenAI.ts: maxTokens ?? 32768 im Konstruktor
+  [ ] YAAWC Container neustarten: docker compose restart
+
+Perplexica (nur falls selbst betrieben):
+  [ ] docker/docker-compose.yml: COHERE_API_KEY in perplexica-backend env
+  [ ] bash /root/.openclaw/docker/perplexica-patch.sh
+
+Memory-Plugin:
+  [ ] Keine Änderungen — Plugin, Dreaming-Bridge, GC unverändert
+```

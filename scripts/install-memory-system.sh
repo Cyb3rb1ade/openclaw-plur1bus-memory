@@ -2,7 +2,7 @@
 # install-memory-system.sh — Installiert/aktualisiert das memory-lancedb-namespaced-System
 # in eine OpenClaw-Instanz (lokal oder remote via SSH).
 #
-# Stand: 2026-04-03
+# Stand: 2026-04-11
 #
 # Verwendung:
 #   ./install-memory-system.sh                          # Auto-Erkennung lokaler Installationen
@@ -417,15 +417,39 @@ USE_MERGING="n"
 MERGING_KEY=""
 MERGING_BASEURL="https://api.kimi.com/coding/v1"
 MERGING_MODEL="kimi-for-coding"
+USE_EMBEDDING_FALLBACK="n"
+EMBEDDING_FALLBACK_KEY=""
+EMBEDDING_FALLBACK_BASEURL=""
+EMBEDDING_FALLBACK_MODEL=""
+USE_ACTIVE_MEMORY="n"
 
 prompt_input OPENAI_KEY "OpenAI API Key (für Embeddings)" "\${OPENAI_API_KEY}"
 prompt_input COHERE_KEY "Cohere API Key (für Re-Ranker, leer = Re-Ranker deaktiviert)" ""
 
-if confirm "LLM-Merging aktivieren (kimi-for-coding oder anderes Modell)?" "n"; then
+# Embedding-Fallback
+echo ""
+info "Embedding-Fallback: zweiter Endpunkt falls Primary nicht erreichbar (z.B. zweiter OpenAI-Key oder Azure)."
+warn "  ⚠️  Fallback MUSS dasselbe Modell / dieselbe Dimension verwenden — LanceDB hat fixes Schema."
+if confirm "Embedding-Fallback konfigurieren?" "n"; then
+  USE_EMBEDDING_FALLBACK="y"
+  prompt_input EMBEDDING_FALLBACK_KEY     "Fallback API Key" "\${OPENAI_API_KEY_FALLBACK}"
+  prompt_input EMBEDDING_FALLBACK_BASEURL "Fallback Base-URL (leer = Standard OpenAI)" ""
+  prompt_input EMBEDDING_FALLBACK_MODEL   "Fallback Modell (leer = wie Primary)" ""
+fi
+
+if confirm "LLM-Merging aktivieren? (empfohlen: kimi-for-coding mit disableThinking=true; k2p5 funktioniert auch)" "n"; then
   USE_MERGING="y"
   prompt_input MERGING_BASEURL "Merging LLM Base-URL" "$MERGING_BASEURL"
   prompt_input MERGING_MODEL   "Merging LLM Modell" "$MERGING_MODEL"
   prompt_input MERGING_KEY     "Merging LLM API Key" "\${KIMI_API_KEY}"
+fi
+
+# ActiveMemory (ab OpenClaw 4.10)
+echo ""
+info "ActiveMemory: Dedizierter Sub-Agent, der vor jeder Antwort Memories synthetisiert (OpenClaw ≥ 4.10)."
+info "  → Blocking, max. 15s Timeout, per-Agent isoliert, ergänzt Auto-Recall."
+if confirm "ActiveMemory-Plugin aktivieren? (nur OpenClaw ≥ 4.10)" "n"; then
+  USE_ACTIVE_MEMORY="y"
 fi
 
 # Embedding-Modell
@@ -533,6 +557,21 @@ else
   SCHICHT15_BLOCK='{"enabled": false}'
 fi
 
+# Embedding Fallback Block
+if [[ "$USE_EMBEDDING_FALLBACK" == "y" ]]; then
+  EMBEDDING_FALLBACK_BLOCK=$(jq -n \
+    --arg key "$EMBEDDING_FALLBACK_KEY" \
+    --arg baseUrl "$EMBEDDING_FALLBACK_BASEURL" \
+    --arg model "$EMBEDDING_FALLBACK_MODEL" \
+    '{
+      "apiKey": $key,
+      "baseUrl": (if $baseUrl == "" then null else $baseUrl end),
+      "model":   (if $model   == "" then null else $model   end)
+    } | with_entries(select(.value != null))')
+else
+  EMBEDDING_FALLBACK_BLOCK='null'
+fi
+
 # Plugin-Config-Objekt
 PLUGIN_CONFIG=$(jq -n \
   --arg openai_key "$OPENAI_KEY" \
@@ -541,14 +580,18 @@ PLUGIN_CONFIG=$(jq -n \
   --argjson reranker "$RERANKER_BLOCK" \
   --argjson merging "$MERGING_BLOCK" \
   --argjson schicht15 "$SCHICHT15_BLOCK" \
+  --argjson embedding_fallback "$EMBEDDING_FALLBACK_BLOCK" \
   '{
     "enabled": true,
     "config": {
-      "embedding": {
-        "apiKey": $openai_key,
-        "model": $embedding_model,
-        "dimensions": 3072
-      },
+      "embedding": (
+        {
+          "apiKey": $openai_key,
+          "model": $embedding_model,
+          "dimensions": 3072
+        }
+        | if $embedding_fallback != null then . + {"fallback": $embedding_fallback} else . end
+      ),
       "baseDbPath": $db_path,
       "autoCapture": true,
       "autoRecall": true,
@@ -620,6 +663,62 @@ NODEOF
       "$TARGET_CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$TARGET_CONFIG"
   fi
   ok "openclaw.json gepatcht"
+fi
+
+# ─── Schritt 4b: ActiveMemory-Plugin konfigurieren ────────────────────────────
+
+if [[ "$USE_ACTIVE_MEMORY" == "y" ]]; then
+  step "Schritt 4b: ActiveMemory-Plugin"
+
+  AGENTS_JSON_ARR=$(printf '"%s",' "${AGENT_LIST[@]}" | sed 's/,$//')
+  ACTIVE_MEMORY_CONFIG=$(jq -n \
+    --argjson agents "[$AGENTS_JSON_ARR]" \
+    '{
+      "enabled": true,
+      "config": {
+        "enabled": true,
+        "agents": $agents,
+        "allowedChatTypes": ["direct"],
+        "modelFallbackPolicy": "default-remote",
+        "queryMode": "recent",
+        "promptStyle": "balanced",
+        "timeoutMs": 15000,
+        "maxSummaryChars": 220,
+        "persistTranscripts": false,
+        "logging": true
+      }
+    }')
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dryrun "Würde active-memory zu plugins.allow und plugins.entries hinzufügen"
+  else
+    if [[ "$IS_REMOTE" == "1" ]]; then
+      ACTIVE_MEMORY_ESCAPED=$(echo "$ACTIVE_MEMORY_CONFIG" | jq -c .)
+      ssh "$SSH_HOST" node --input-type=module << NODEOF2
+import { readFileSync, writeFileSync } from 'fs';
+const cfg = JSON.parse(readFileSync('${TARGET_CONFIG}', 'utf8'));
+const am = ${ACTIVE_MEMORY_ESCAPED};
+cfg.plugins = cfg.plugins || {};
+cfg.plugins.allow = cfg.plugins.allow || [];
+if (!cfg.plugins.allow.includes('active-memory'))
+  cfg.plugins.allow.push('active-memory');
+cfg.plugins.entries = cfg.plugins.entries || {};
+cfg.plugins.entries['active-memory'] = am;
+writeFileSync('${TARGET_CONFIG}', JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+console.log('active-memory patched');
+NODEOF2
+    else
+      TMPFILE=$(mktemp)
+      jq --argjson am "$ACTIVE_MEMORY_CONFIG" \
+        '.plugins.allow = ((.plugins.allow // []) | if index("active-memory") then . else . + ["active-memory"] end)
+         | .plugins.entries["active-memory"] = $am' \
+        "$TARGET_CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$TARGET_CONFIG"
+    fi
+    ok "ActiveMemory-Plugin konfiguriert (${#AGENT_LIST[@]} Agenten)"
+    info "  queryMode=recent, promptStyle=balanced, timeout=15s, maxSummaryChars=220"
+  fi
+else
+  info "ActiveMemory übersprungen (nicht aktiviert oder OpenClaw < 4.10)"
 fi
 
 # ─── Schritt 5: Speicherverzeichnisse anlegen ──────────────────────────────────
@@ -809,6 +908,12 @@ echo
 if [[ "$USE_MERGING" == "n" ]]; then
   echo -e "${YELLOW}  Hinweis: LLM-Merging wurde nicht aktiviert. Für bessere Memory-Qualität${RESET}"
   echo -e "${YELLOW}  Merging-Config manuell in openclaw.json unter plugins.entries.memory-lancedb-namespaced.config.merging ergänzen.${RESET}"
+  echo
+fi
+if [[ "$USE_ACTIVE_MEMORY" == "n" ]]; then
+  echo -e "${YELLOW}  Hinweis: ActiveMemory wurde nicht aktiviert (erfordert OpenClaw ≥ 4.10).${RESET}"
+  echo -e "${YELLOW}  Manuell aktivieren: plugins.allow += \"active-memory\", plugins.entries[\"active-memory\"] = {...}${RESET}"
+  echo -e "${YELLOW}  Doku: how-to-memory-perfect.md §ActiveMemory${RESET}"
   echo
 fi
 
