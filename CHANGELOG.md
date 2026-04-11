@@ -1,5 +1,63 @@
 # Changelog
 
+## [1.3.0] — 2026-04-11
+
+### Plugin (`memory-lancedb-namespaced`)
+
+**Features**
+- Embedding-Fallback: zweiter Embedding-Endpunkt bei Primary-Ausfall (gleiche Dimension Pflicht)
+- ActiveMemory-Unterstützung: Plugin liefert Memory-Tools für den neuen OpenClaw-4.10-Sub-Agenten
+
+**Fixes**
+- `openclaw.plugin.json`: trailing comma entfernt (ungültiges JSON)
+
+### `install-memory-system.sh`
+
+- Embedding-Fallback optional konfigurierbar (API Key, Base-URL, Modell)
+- ActiveMemory-Plugin optional in Schritt 4b konfigurieren (OpenClaw ≥ 4.10)
+- Merging: Kimi-spezifische Optionen (`disableThinking`, `User-Agent`-Header) sind jetzt
+  opt-in statt default — Script funktioniert unverändert mit OpenAI, Claude, GLM, ChatGPT u.a.
+- Default-Modell für Merging: `gpt-4o-mini` (statt `kimi-for-coding`)
+- Default-Base-URL für Merging: leer = Standard-OpenAI-Endpunkt (statt Kimi-URL)
+
+### `how-to-memory-perfect.md`
+
+- Neues Kapitel: §ActiveMemory — Konzept, Per-Agent-Isolation, Konfigurationsparameter,
+  Zusammenspiel mit Auto-Recall (Flussdiagramm)
+- Neues Kapitel: §Embedding-Fallback — Resilienz, Dimensions-Constraint, Konfiguration,
+  Graceful Degradation ohne Fallback
+- Upgrade-Anleitung 2026-04-11: k2p5 contextWindow=262144/maxTokens=32768-Fix, YAAWC
+  Cohere Reranker, contentUtils tool_call-Fix, kimiOpenAI maxTokens-Default
+
+---
+
+## [1.2.0] — 2026-04-06
+
+### Plugin (`memory-lancedb-namespaced`)
+
+**Features**
+- Dreaming-Bridge: automatische Promotion von Short-Term-Memories nach Relevanz-Scoring
+  (`short-term-recall.json` → LanceDB, Schwellwert konfigurierbar)
+- Cron-Eintrag für Dreaming-Bridge (`openclaw memory dream --agent <id>`)
+
+**Security-Fixes**
+- Pfad-Traversal-Schutz: `agentId` wird gegen `[a-zA-Z0-9_-]` validiert
+- LanceDB-Verbindungen werden nach Operationen geschlossen (kein Connection-Leak)
+- Fehlerbehandlung in Dreaming-Bridge verhindert unkontrollierten Absturz
+
+---
+
+## [1.1.0] — 2026-04-03
+
+### Plugin (`memory-lancedb-namespaced`)
+
+**Security-Fixes** (nach internem Audit)
+- `memory_store`: Path-Traversal via `agentId` geschlossen
+- `memory_forget`: UUID-Validierung vor `DELETE` verschärft
+- Lock-File: Race-Condition bei gleichzeitigem Store behoben
+
+---
+
 ## [1.0.0] — 2026-04-03
 
 Erste öffentliche Version. Konsolidiert alle Entwicklungen aus dem produktiven OpenClaw-Deployment.
