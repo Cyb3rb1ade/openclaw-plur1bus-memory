@@ -441,8 +441,11 @@ fi
 
 if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM — funktioniert mit beliebigem OpenAI-kompatiblen Anbieter)" "n"; then
   USE_MERGING="y"
-  prompt_input MERGING_BASEURL "Merging LLM Base-URL (leer = Standard-OpenAI)" ""
-  prompt_input MERGING_MODEL   "Merging LLM Modell (z.B. gpt-4o-mini, claude-3-haiku, glm-4)" "gpt-4o-mini"
+  # Vorhandene Merging-Config als Defaults auslesen (bei Update-Installationen)
+  _EXISTING_MERGING_MODEL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+  _EXISTING_MERGING_URL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.baseUrl // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+  prompt_input MERGING_BASEURL "Merging LLM Base-URL (leer = Standard-OpenAI)" "${_EXISTING_MERGING_URL:-}"
+  prompt_input MERGING_MODEL   "Merging LLM Modell" "${_EXISTING_MERGING_MODEL:-}"
   prompt_input MERGING_KEY     "Merging LLM API Key" "\${OPENAI_API_KEY}"
   echo ""
   info "Kimi k2p5-spezifische Optionen (NUR für Kimi-Nutzer):"
