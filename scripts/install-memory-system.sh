@@ -415,8 +415,10 @@ OPENAI_KEY=""
 COHERE_KEY=""
 USE_MERGING="n"
 MERGING_KEY=""
-MERGING_BASEURL="https://api.kimi.com/coding/v1"
-MERGING_MODEL="kimi-for-coding"
+MERGING_BASEURL=""
+MERGING_MODEL=""
+MERGING_DISABLE_THINKING="false"
+MERGING_USER_AGENT=""
 USE_EMBEDDING_FALLBACK="n"
 EMBEDDING_FALLBACK_KEY=""
 EMBEDDING_FALLBACK_BASEURL=""
@@ -437,11 +439,18 @@ if confirm "Embedding-Fallback konfigurieren?" "n"; then
   prompt_input EMBEDDING_FALLBACK_MODEL   "Fallback Modell (leer = wie Primary)" ""
 fi
 
-if confirm "LLM-Merging aktivieren? (empfohlen: kimi-for-coding mit disableThinking=true; k2p5 funktioniert auch)" "n"; then
+if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM — funktioniert mit beliebigem OpenAI-kompatiblen Anbieter)" "n"; then
   USE_MERGING="y"
-  prompt_input MERGING_BASEURL "Merging LLM Base-URL" "$MERGING_BASEURL"
-  prompt_input MERGING_MODEL   "Merging LLM Modell" "$MERGING_MODEL"
-  prompt_input MERGING_KEY     "Merging LLM API Key" "\${KIMI_API_KEY}"
+  prompt_input MERGING_BASEURL "Merging LLM Base-URL (leer = Standard-OpenAI)" ""
+  prompt_input MERGING_MODEL   "Merging LLM Modell (z.B. gpt-4o-mini, claude-3-haiku, glm-4)" "gpt-4o-mini"
+  prompt_input MERGING_KEY     "Merging LLM API Key" "\${OPENAI_API_KEY}"
+  echo ""
+  info "Kimi k2p5-spezifische Optionen (NUR für Kimi-Nutzer):"
+  info "  disableThinking=true unterdrückt das Reasoning-Budget, User-Agent ist Kimi-Pflichtfeld."
+  if confirm "  Kimi-spezifische Optionen aktivieren?" "n"; then
+    MERGING_DISABLE_THINKING="true"
+    MERGING_USER_AGENT="claude-code/1.0"
+  fi
 fi
 
 # ActiveMemory (ab OpenClaw 4.10)
@@ -542,16 +551,39 @@ fi
 
 # Merging-Block aufbauen
 if [[ "$USE_MERGING" == "y" ]]; then
+  # Basis-Config (provider-agnostisch)
   MERGING_BLOCK=$(jq -n \
     --arg key "$MERGING_KEY" \
     --arg url "$MERGING_BASEURL" \
     --arg model "$MERGING_MODEL" \
-    '{"enabled": true, "threshold": 0.70, "model": $model, "baseUrl": $url, "apiKey": $key, "disableThinking": true, "headers": {"User-Agent": "claude-code/1.0"}}')
+    --argjson disableThinking "$MERGING_DISABLE_THINKING" \
+    --arg userAgent "$MERGING_USER_AGENT" \
+    '{
+      "enabled": true,
+      "threshold": 0.70,
+      "model": $model,
+      "baseUrl": (if $url == "" then null else $url end),
+      "apiKey": $key,
+      "disableThinking": $disableThinking
+    }
+    | if $userAgent != "" then . + {"headers": {"User-Agent": $userAgent}} else . end
+    | with_entries(select(.value != null))')
   SCHICHT15_BLOCK=$(jq -n \
     --arg key "$MERGING_KEY" \
     --arg url "$MERGING_BASEURL" \
     --arg model "$MERGING_MODEL" \
-    '{"enabled": true, "model": $model, "baseUrl": $url, "apiKey": $key, "disableThinking": true, "headers": {"User-Agent": "claude-code/1.0"}, "minImportance": 0.7}')
+    --argjson disableThinking "$MERGING_DISABLE_THINKING" \
+    --arg userAgent "$MERGING_USER_AGENT" \
+    '{
+      "enabled": true,
+      "model": $model,
+      "baseUrl": (if $url == "" then null else $url end),
+      "apiKey": $key,
+      "disableThinking": $disableThinking,
+      "minImportance": 0.7
+    }
+    | if $userAgent != "" then . + {"headers": {"User-Agent": $userAgent}} else . end
+    | with_entries(select(.value != null))')
 else
   MERGING_BLOCK='{"enabled": false}'
   SCHICHT15_BLOCK='{"enabled": false}'
@@ -907,7 +939,8 @@ echo "     memory_recall: {query: 'Testfakt'}"
 echo
 if [[ "$USE_MERGING" == "n" ]]; then
   echo -e "${YELLOW}  Hinweis: LLM-Merging wurde nicht aktiviert. Für bessere Memory-Qualität${RESET}"
-  echo -e "${YELLOW}  Merging-Config manuell in openclaw.json unter plugins.entries.memory-lancedb-namespaced.config.merging ergänzen.${RESET}"
+  echo -e "${YELLOW}  Merging-Config manuell in openclaw.json ergänzen (funktioniert mit OpenAI, Claude, GLM, Kimi u.a.)${RESET}"
+  echo -e "${YELLOW}  Pfad: plugins.entries.memory-lancedb-namespaced.config.merging${RESET}"
   echo
 fi
 if [[ "$USE_ACTIVE_MEMORY" == "n" ]]; then
