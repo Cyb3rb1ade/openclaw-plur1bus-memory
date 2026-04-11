@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.3.1] — 2026-04-11
+
+### `install-memory-system.sh`
+
+- Merging: Default-Modell und Base-URL werden bei Update-Installationen aus der vorhandenen
+  `openclaw.json` gelesen und als Vorschlag angezeigt — kein hardcoded Modellname mehr
+- Merging: leeres Modellfeld bei Erstinstallation (User muss explizit eingeben)
+
+---
+
 ## [1.3.0] — 2026-04-11
 
 ### Plugin (`memory-lancedb-namespaced`)
