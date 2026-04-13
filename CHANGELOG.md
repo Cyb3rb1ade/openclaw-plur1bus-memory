@@ -46,14 +46,17 @@
 ### Plugin (`memory-lancedb-namespaced`)
 
 **Features**
-- Dreaming-Bridge: automatische Promotion von Short-Term-Memories nach Relevanz-Scoring
-  (`short-term-recall.json` → LanceDB, Schwellwert konfigurierbar)
-- Cron-Eintrag für Dreaming-Bridge (`openclaw memory dream --agent <id>`)
+- Plugin-Kind auf `extension` geändert — ermöglicht Koexistenz mit nativem `memory-core`
+  Dreaming (light → REM → deep Phasen pro Workspace), während LanceDB weiterhin
+  Auto-Capture/Recall per Agent liefert
+- ~~Dreaming-Bridge~~: externe Python-Skripte (`dreaming-bridge.py`, `dreaming-promote.py`)
+  wurden erstellt, aber nie via Cron aktiviert — das native `memory-core` Dreaming
+  übernahm die Funktion. Scripts bleiben als Referenz im Branch `dreaming-bridge/v1.0.0`
 
 **Security-Fixes**
 - Pfad-Traversal-Schutz: `agentId` wird gegen `[a-zA-Z0-9_-]` validiert
 - LanceDB-Verbindungen werden nach Operationen geschlossen (kein Connection-Leak)
-- Fehlerbehandlung in Dreaming-Bridge verhindert unkontrollierten Absturz
+- Fehlerbehandlung in Plugin-Hooks verhindert unkontrollierten Absturz
 
 ---
 

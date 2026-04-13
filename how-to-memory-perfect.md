@@ -1623,162 +1623,64 @@ git merge contrib/main --no-ff
 
 ---
 
-## Upgrade-Anleitung: 2026-04-06 — Dreaming-Bridge
+## Upgrade-Anleitung: 2026-04-06 → 2026-04-13 — Dreaming (nativ via memory-core)
 
-### Was ist neu?
+### Aktueller Stand (2026-04-13)
 
-OpenClaw v2026.4.5 bringt ein eingebautes Dreaming-System (`memory-core`) mit drei Phasen:
-
-- **Leichtschlaf** — liest tägliche `.md`-Dateien in `short-term-recall.json`
-- **Tiefschlaf** — promotet gewichtete Einträge in `MEMORY.md`
-- **REM** — generiert narrative `DREAMS.md`-Einträge
-
-Da `memory-lancedb-namespaced` den `plugins.slots.memory`-Slot belegt, ist `memory-core` deaktiviert — das managed Dreaming-System startet nicht. Zwei externe Python-Skripte replizieren Leichtschlaf und Tiefschlaf.
-
-### Architektur
+Das Dreaming läuft **nativ über OpenClaws `memory-core`** — nicht über externe Bridge-Scripts.
 
 ```
-LanceDB (memory-lancedb-namespaced)
-   │   importance ≥ 0.65, expiresAt = 0
-   │   23:30 täglich
-   ▼
-dreaming-bridge.py          [Leichtschlaf-Äquivalent]
-   ├─ Neu: Schreibt memory/YYYY-MM-DD.md
-   │       Anker-Kommentare für genaue Zeilennummern
-   │       <!-- bridge-entry:{rid} score={importance} -->
-   └─ Update: Aktualisiert short-term-recall.json
-              recallDays += heute, recallCount++
-              (Akkumulation über Tage)
-
-   memory/.dreams/
-   ├─ short-term-recall.json     ← Recall-Store (OpenClaw-Format)
-   └─ bridge-state.json          ← exportierte IDs + Importance
-
-   23:35 täglich
-   ▼
-dreaming-promote.py         [Tiefschlaf-Äquivalent]
-   └─ Schreibt memory/MEMORY.md
-      <!-- openclaw-memory-promotion:{key} -->
-      (kompatibel mit OpenClaw-nativem Dedup-Format)
+plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dreaming
+memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-### Scoring-Algorithmus (exaktes OpenClaw-Matching)
+### Was passiert beim Dreaming?
 
-Die Gewichtung ist identisch zu `short-term-promotion-G9ML8hkA.js`:
+`memory-core` durchläuft drei Phasen pro Workspace:
 
-```python
-frequency    = log1p(recallCount) / log1p(10)          # w=0.25
-relevance    = totalScore / recallCount                 # w=0.30
-diversity    = len(set(recallDays)) / 5                 # w=0.15
-recency      = exp(-ln2 × ageDays / halfLife14d)        # w=0.15
-consolidation= len(set(recallDays)) / 5                 # w=0.10
-conceptual   = len(set(concepts)) / 6                   # w=0.05
-
-composite = Σ(weight × component)
-```
-
-Promotion-Schwellen:
-
-| Parameter | Default | Wann überschrieben |
+| Phase | Funktion | Output |
 |---|---|---|
-| `MIN_SCORE` | 0.75 | Nie — OpenClaw-kompatibel |
-| `MIN_RECALL_COUNT` | 3 | Nie |
-| `MIN_UNIQUE_QUERIES` | 2 | Nie (mind. 2 verschiedene Tage) |
-| `MAX_PROMOTE` | 10 | Pro Lauf/Agent |
-| `HALF_LIFE_DAYS` | 14 | Exponentieller Recency-Decay |
+| **Light** | Tagesnotizen aus Workspace scannen, Kandidaten stagen | `memory/.dreams/short-term-recall.json` |
+| **REM** | Narrative Reflexionen aus Memory-Traces generieren | Dream Diary Entries |
+| **Deep** | Tiefe Konsolidierung, MEMORY.md-Promotions | `memory/MEMORY.md` Ergänzungen |
 
-### short-term-recall.json — Format
+### Namespace-Isolation
 
-```json
-{
-  "version": 1,
-  "updatedAt": "2026-04-06T23:30:00Z",
-  "entries": {
-    "memory:memory/2026-03-11.md:73:73": {
-      "path": "memory/2026-03-11.md",
-      "source": "memory",
-      "startLine": 73,
-      "endLine": 73,
-      "snippet": "KIMI-CODING COOLDOWN-MECHANISMUS: ...",
-      "recallCount": 4,
-      "totalScore": 3.8,
-      "recallDays": ["2026-03-11", "2026-04-05", "2026-04-06"],
-      "concepts": ["kimi", "cooldown", "timeout", "auth"]
-    }
-  }
-}
-```
+| Ebene | Isolation | Erklärung |
+|---|---|---|
+| **Workspace** | Strikt getrennt | Bernd, Bernhardine, Heisenberg haben eigene Workspaces → Dreams werden **nie** vermischt |
+| **Agents innerhalb Workspace** | Gemeinsam | Bernds `researcher`, `developer`, `architect` teilen den Dream-Kontext — **gewollt** (cross-pollination) |
+| **LanceDB** | Per-Agent isoliert | Auto-Capture/Recall bleibt strikt per Agent (38 separate DBs) |
 
-### MEMORY.md — Promotion-Format
-
-```markdown
-## Promoted From Short-Term Memory (2026-04-06)
-
-<!-- openclaw-memory-promotion:memory:memory/2026-03-11.md:73:73 -->
-- KIMI-CODING COOLDOWN-MECHANISMUS: Wenn ein kimi-coding API-Call timeoutet...
-  [score=0.753 recalls=4 avg=0.950 source=memory/2026-03-11.md:73-73]
-```
-
-### Cron-Einträge
-
-```cron
-# Dreaming Bridge — LanceDB → short-term-recall.json + tägliche .md-Dateien
-30 23 * * * python3 /root/.openclaw/scripts/dreaming-bridge.py --quiet >> /root/.openclaw/logs/dreaming-bridge.log 2>&1
-
-# Dreaming Promote — short-term-recall.json → MEMORY.md
-35 23 * * * python3 /root/.openclaw/scripts/dreaming-promote.py --quiet >> /root/.openclaw/logs/dreaming-promote.log 2>&1
-```
-
-### Abhängigkeiten
+### Verifikation
 
 ```bash
-pip install lancedb   # muss zur Plugin-Version passen
+# Dreaming aktiv?
+journalctl --user -u openclaw-gateway --since "2 hours ago" | grep -i dream
+
+# Erwarteter Output (pro Workspace):
+# memory-core: light dreaming staged N candidate(s) [workspace=...]
+# memory-core: REM dreaming wrote reflections from N trace(s) [workspace=...]
+# memory-core: dream diary entry written for deep phase [workspace=...]
+
+# Memory-Slot prüfen:
+python3 -c "import json; d=json.load(open('/root/.openclaw/openclaw.json')); print(d['plugins']['slots']['memory'])"
+# → memory-core
 ```
 
-### Erster Lauf / Backfill
+### Historischer Kontext: Bridge-Scripts (veraltet)
 
-Beim ersten Lauf exportiert die Bridge alle LanceDB-Einträge oberhalb des Schwellwerts. Heute-Einträge werden übersprungen (akkumulieren erst morgen). Die Promote-Skript benötigt mind. 2 Tage, bis der erste Eintrag den Score 0.75 erreicht (da `MIN_UNIQUE_QUERIES=2`).
-
-### Reset
-
-```bash
-# Dream-State zurücksetzen (tägliche .md-Dateien bleiben erhalten):
-rm workspace/memory/.dreams/bridge-state.json
-rm workspace/memory/.dreams/short-term-recall.json
-# → Bridge exportiert alles beim nächsten Lauf neu
-```
-
-### Git-Branch
-
-Das Dreaming-System ist **bewusst getrennt** vom Plugin selbst versioniert:
-
-```
-/root/openclaw-memory-system/
-  main                        ← Plugin memory-lancedb-namespaced (v1.x)
-  dreaming-bridge/v1.0.0     ← Dreaming-Pipeline (eigenständig)
-    scripts/dreaming-bridge.py
-    scripts/dreaming-promote.py
-    dreaming-bridge.md         ← Standalone-Dokumentation
-```
-
-Rationale: Plugin und Dreaming haben verschiedene Release-Zyklen. Plugin-Updates brechen die Bridge nicht und umgekehrt. Wer nur das Plugin nutzen möchte (ohne Dreaming), braucht den Branch nie.
-
-### Kompatibilität
-
-| Komponente | Version |
-|---|---|
-| OpenClaw | ≥ 2026.4.5 |
-| memory-lancedb-namespaced | ≥ 1.5 |
-| Python | ≥ 3.10 |
-| lancedb (Python) | kompatibel zur Plugin-Version |
-
-Die `openclaw-memory-promotion:`-Marker in MEMORY.md sind format-identisch zu OpenClaw's nativer Implementierung. Falls `memory-core` zukünftig den Memory-Slot übernimmt, entsteht kein Duplikat — der Dedup-Check greift auf die gleichen Marker.
+Die Python-Skripte `dreaming-bridge.py` und `dreaming-promote.py` wurden als Ersatz
+geschrieben, als `memory-lancedb-namespaced` den Memory-Slot belegte und `memory-core`
+deaktiviert war. Seit der Umstellung auf `slots.memory = "memory-core"` sind die
+Bridge-Skripte **nicht mehr aktiv** (kein Cron-Eintrag). Sie bleiben als
+Referenzimplementierung im Git-Branch `dreaming-bridge/v1.0.0` erhalten.
 
 ---
 
 ## Security-Audit-Fixes: 2026-04-06
 
-*(keine neuen Findings — Dreaming-Bridge ist read-only gegenüber LanceDB, schreibt nur .md/.json-Dateien in workspace/memory/)*
+*(keine neuen Findings — natives Dreaming läuft innerhalb des Gateway-Prozesses, kein externer Zugriff)*
 
 ---
 
