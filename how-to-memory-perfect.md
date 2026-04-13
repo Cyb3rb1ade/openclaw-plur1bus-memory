@@ -232,7 +232,7 @@ Das Plugin liegt im `extensions/`-Verzeichnis eurer OpenClaw-Installation. Nach 
       "baseDbPath": "~/.openclaw/memory/lancedb-namespaced",
       "autoRecall": true,
       "autoCapture": true,
-      "captureMaxChars": 5000
+      "captureMaxChars": 15000
     }
   }
 }
@@ -674,21 +674,22 @@ Eine optionale Funktion: Statt dass der Agent manuell `memory_store` aufruft, in
 ```json
 {
   "autoCapture": true,
-  "captureMaxChars": 5000
+  "captureMaxChars": 15000
 }
 ```
 
-**In unserem Setup: aktiv** (`autoCapture: true`, `captureMaxChars: 5000`). Die Agenten speichern zusätzlich proaktiv via `memory_store` für qualitativ hochwertigere Fakten.
+**In unserem Setup: aktiv** (`autoCapture: true`, `captureMaxChars: 15000`). Die Agenten speichern zusätzlich proaktiv via `memory_store` für qualitativ hochwertigere Fakten.
 
 ### Funktionsweise
 
 Nach jedem erfolgreichen Turn (`agent_end`-Hook):
 1. Alle Nachrichten des Turns werden durchsucht
-2. Texte zwischen 20 und `captureMaxChars` Zeichen werden als Kandidaten ausgewählt
-3. Origin wird automatisch erkannt: Gruppenkontext-Signale (`"is_group_chat": true`, Discord Guild etc.) → `"group"`, sonst `"dm"`
-4. Duplikat-Check gegen bestehende Memories (Score ≥ `duplicateThreshold`)
-5. Neue Texte werden mit `importance: 0.7` und auto-kategorisiert gespeichert
-6. Maximal 5 Memories pro Turn (die neuesten Nachrichten)
+2. Texte >20 Zeichen werden als Kandidaten erfasst
+3. **Überlange Texte (>captureMaxChars)** werden via LLM zusammengefasst — der Merging-LLM (z.B. kimi-for-coding) extrahiert die wichtigsten Fakten, Entscheidungen, Namen, URLs, Daten und technische Details. Bei LLM-Fehler: Fallback auf Truncation
+4. Origin wird automatisch erkannt: Gruppenkontext-Signale (`"is_group_chat": true`, Discord Guild etc.) → `"group"`, sonst `"dm"`
+5. Duplikat-Check gegen bestehende Memories (Score ≥ `duplicateThreshold`)
+6. Neue Texte werden mit `importance: 0.7` und auto-kategorisiert gespeichert
+7. Maximal 8 Memories pro Turn (3 User-URLs + 5 neueste)
 
 **User-URLs werden priorisiert erfasst (seit 2026-04-03)**
 
@@ -1178,7 +1179,7 @@ In `openclaw.json` unter `plugins.entries.memory-lancedb-namespaced.config`:
 
 ```json
 {
-  "captureMaxChars": 5000,
+  "captureMaxChars": 15000,
   "summaryMaxWords": 150
 }
 ```
@@ -1192,7 +1193,7 @@ const summaryMaxWords = cfg.summaryMaxWords ?? 150;
 
 Danach: `systemctl --user restart openclaw-gateway.service`
 
-**Wirkung:** Nachrichten bis 5000 Zeichen werden jetzt erfasst (statt bei 2000 ignoriert). Summaries haben bis 150 Wörter Kontext (statt 75).
+**Wirkung:** Nachrichten bis 15000 Zeichen werden direkt erfasst. Nachrichten über 15000 Zeichen werden via LLM zusammengefasst (kein Informationsverlust). Summaries haben bis 150 Wörter Kontext.
 
 ---
 
@@ -1489,7 +1490,7 @@ Migration der neuen Felder (`expiresAt`, `storedBy`) erfolgt automatisch beim er
 | Bereich | Was | Vorher | Nachher |
 |---------|-----|--------|---------|
 | Plugin `index.js` | Pfade zu `memory-lancedb-stock` | Hardcoded `/root/.openclaw/...` | Relativ via `import.meta.url` — funktioniert auf jedem Installations-Prefix |
-| Plugin `index.js` | `captureMaxChars` Default | `800` | `5000` — längere Nachrichten werden erfasst |
+| Plugin `index.js` | `captureMaxChars` Default | `800` | `15000` — überlange Nachrichten werden LLM-summarisiert statt verworfen |
 | Plugin `index.js` | Auto-Capture User-URLs | Fielen bei langen Turns raus (`slice(-5)`) | Werden immer priorisiert (eigene Liste, max 3 + 5 allgemeine = max 8) |
 | Plugin `index.js` | File-Attachments (Bilder, PDFs) | Komplett ignoriert | Als Stub erfasst: `[User schickte image: foto.jpg]` |
 | `install-memory-system.sh` | Ziel-Erkennung | Manueller Pfad erforderlich | Auto-Erkennung lokaler Installationen + Auswahlmenü bei mehreren |
