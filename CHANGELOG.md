@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.4.0] — 2026-04-13
+
+### Plugin (`memory-lancedb-namespaced`)
+
+**Features**
+- LLM-Summarization: überlange Nachrichten (>captureMaxChars) werden via LLM zusammengefasst
+  statt verworfen. Nutzt den Merging-LLM (kimi-for-coding). Fallback: Truncation bei LLM-Fehler
+- Default `captureMaxChars`: 5000 → 15000 (text-embedding-3-large unterstützt bis ~32K chars)
+
+**Fixes**
+- Auto-Capture: Nachrichten über dem Limit wurden bisher **still verworfen** (`content.length <= maxChars`
+  als Drop-Filter). Jetzt werden alle Nachrichten erfasst — kurze direkt, lange via Summarization
+
+### Dokumentation
+
+- `README.md`: Architektur-Diagramm (Memory + Dreaming), LLM-Summarization, Embedding-Fallback,
+  natives Dreaming, 38 Agents in Produktion (DE + EN)
+- `how-to-memory-perfect.md`: Dreaming-Sektion korrigiert — natives `memory-core` statt
+  Bridge-Scripts, Namespace-Isolation-Tabelle, Verifikationsanleitung
+- `CHANGELOG.md`: 1.2.0 korrigiert (Bridge nie implementiert, nur Plugin-Kind geändert)
+
+---
+
 ## [1.3.1] — 2026-04-11
 
 ### `install-memory-system.sh`
