@@ -645,7 +645,7 @@ const plugin = {
 
         try {
           // Extrahiere Text aus User- und Assistant-Nachrichten
-          const maxChars = cfg.captureMaxChars || 5000;
+          const maxChars = cfg.captureMaxChars || 15000;
           const texts = [];
           const userUrlTexts = []; // User-Nachrichten mit URLs — immer priorisieren
           const urlPattern = /https?:\/\/[^\s]{10,}/;
@@ -658,11 +658,12 @@ const plugin = {
 
             const content = msg.content;
 
-            // String Content
+            // String Content — truncate statt drop bei Überlänge
             if (typeof content === "string") {
-              if (content && content.length > 20 && content.length <= maxChars) {
-                texts.push(content);
-                if (isUser && urlPattern.test(content)) userUrlTexts.push(content);
+              if (content && content.length > 20) {
+                const captured = content.length > maxChars ? content.slice(0, maxChars) : content;
+                texts.push(captured);
+                if (isUser && urlPattern.test(captured)) userUrlTexts.push(captured);
               }
               continue;
             }
@@ -675,11 +676,11 @@ const plugin = {
                 if (
                   block.type === "text" &&
                   typeof block.text === "string" &&
-                  block.text.length > 20 &&
-                  block.text.length <= maxChars
+                  block.text.length > 20
                 ) {
-                  texts.push(block.text);
-                  if (isUser && urlPattern.test(block.text)) userUrlTexts.push(block.text);
+                  const captured = block.text.length > maxChars ? block.text.slice(0, maxChars) : block.text;
+                  texts.push(captured);
+                  if (isUser && urlPattern.test(captured)) userUrlTexts.push(captured);
                   continue;
                 }
 
