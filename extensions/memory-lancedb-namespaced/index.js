@@ -97,7 +97,7 @@ function resolveEnvVars(value) {
 }
 
 // ============================================================================
-// Summary generation — no LLM, pure text truncation
+// Summary generation — no LLM, pure text truncation (for metadata fields)
 // ============================================================================
 
 function generateSummary(text, maxWords = 75) {
@@ -111,6 +111,26 @@ function generateSummary(text, maxWords = 75) {
   );
   if (lastPunct > truncated.length * 0.6) return truncated.slice(0, lastPunct + 1);
   return truncated + '…';
+}
+
+// ============================================================================
+// LLM-based summarization for long messages (auto-capture)
+// ============================================================================
+
+async function summarizeForCapture(text, maxChars, llmCfg, logger) {
+  try {
+    const result = await callLlm([
+      {
+        role: "user",
+        content: `Summarize this text into the most important facts, decisions, preferences, and actionable information. Keep all specific names, numbers, URLs, dates, technical details, and configuration values. Output ONLY the summary, no preamble. Target length: ${Math.round(maxChars / 4)} characters.\n\n${text.slice(0, 60000)}`,
+      },
+    ], { ...llmCfg, maxTokens: Math.round(maxChars / 3) });
+    if (result && result.length > 20) return result;
+  } catch (e) {
+    if (logger) logger.warn(`memory-lancedb-namespaced: summarize failed (${e.message}), falling back to truncation`);
+  }
+  // Fallback: truncate if LLM fails
+  return text.slice(0, maxChars);
 }
 
 // ============================================================================
@@ -658,12 +678,11 @@ const plugin = {
 
             const content = msg.content;
 
-            // String Content — truncate statt drop bei Überlänge
+            // String Content — collect as-is (summarization happens later for oversized texts)
             if (typeof content === "string") {
               if (content && content.length > 20) {
-                const captured = content.length > maxChars ? content.slice(0, maxChars) : content;
-                texts.push(captured);
-                if (isUser && urlPattern.test(captured)) userUrlTexts.push(captured);
+                texts.push(content);
+                if (isUser && urlPattern.test(content)) userUrlTexts.push(content);
               }
               continue;
             }
@@ -678,9 +697,8 @@ const plugin = {
                   typeof block.text === "string" &&
                   block.text.length > 20
                 ) {
-                  const captured = block.text.length > maxChars ? block.text.slice(0, maxChars) : block.text;
-                  texts.push(captured);
-                  if (isUser && urlPattern.test(captured)) userUrlTexts.push(captured);
+                  texts.push(block.text);
+                  if (isUser && urlPattern.test(block.text)) userUrlTexts.push(block.text);
                   continue;
                 }
 
@@ -723,8 +741,18 @@ const plugin = {
           let stored = 0;
           let skipped = 0;
 
-          for (const text of captureList) {
+          for (let text of captureList) {
             try {
+              // Oversized texts: LLM-summarize (or truncate as fallback)
+              if (text.length > maxChars) {
+                if (mergingLlmCfg) {
+                  api.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
+                  text = await summarizeForCapture(text, maxChars, mergingLlmCfg, api.logger);
+                } else {
+                  text = text.slice(0, maxChars);
+                }
+              }
+
               const vector = await embeddings.embed(text);
 
               // Duplikat-Check
