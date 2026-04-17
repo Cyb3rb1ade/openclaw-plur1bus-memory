@@ -133,3 +133,27 @@ Erste öffentliche Version. Konsolidiert alle Entwicklungen aus dem produktiven 
 - `--rollback`: stellt letzten LanceDB-Snapshot + `openclaw.json.bak` wieder her
 - `--dry-run`: Vorschau ohne Änderungen
 - Automatischer LanceDB-Snapshot vor jeder Installation (max. 5, älteste werden gelöscht)
+
+---
+
+## [1.5.0] — 2026-04-17
+
+### Dreaming ↔ LanceDB Harmonisierung (neu)
+
+**Features**
+- Neues Script `scripts/embed-promoted-memories.mjs`: Liest Promotionen aus `MEMORY.md`
+  (erkennbar am `<!-- openclaw-memory-promotion:... -->` Marker) und embedded sie in die
+  per-Agent LanceDB
+- State-Tracking per Agent (`~/.openclaw/.embed-promotions-state/`): jede Promotion wird
+  nur einmal eingebettet (idempotent, Duplikat-Check via Cosine-Distance)
+- `importance: 0.9`, `category: "curated"`: höher gewichtet als normale Auto-Captures
+- Cron: alle 30 Minuten — deckt auch manuelle Tages-Promotionen ab
+
+**Wirkung:** Promotete Dreaming-Fakten erscheinen jetzt im Real-Time Active-Memory Recall,
+nicht nur beim Session-Bootstrap via MEMORY.md. Dreaming und LanceDB sind harmonisiert.
+
+### Kompatibilität
+
+- OpenClaw 2026.4.15+: `dreaming.storage.mode: "separate"` unterstützt
+- Active-Memory empfohlen: `moonshot/kimi-k2.5-instant`, timeoutMs: 15000 (statt k2p5 mit 60s)
+- k2p6: contextWindow=262144, maxTokens=32768 (identisch mit k2p5)

@@ -1811,3 +1811,91 @@ Perplexica (nur falls selbst betrieben):
 Memory-Plugin:
   [ ] Keine Änderungen — Plugin, Dreaming-Bridge, GC unverändert
 ```
+
+---
+
+## Aktualisierungen 2026-04-17
+
+### 1. Dreaming ↔ LanceDB Harmonisierung
+
+Promoted Dreaming-Inhalte (die aus dem nächtlichen Dreaming-Prozess in `MEMORY.md` hochgestuft werden) werden jetzt automatisch auch in die LanceDB eingebettet.
+
+**Warum:** Vorher waren promotete Memories nur beim Session-Bootstrap verfügbar (via `MEMORY.md`). Jetzt tauchen sie auch im Real-Time Recall auf — die Active-Memory-Injection bezieht sie mit ein.
+
+**Script:** `scripts/embed-promoted-memories.mjs`
+- Erkennt Promotionen via `<!-- openclaw-memory-promotion:... -->` Marker in `MEMORY.md`
+- State-Tracking: jede Promotion wird nur einmal eingebettet (idempotent)
+- Läuft alle 30 Minuten via Cron — auch tagsüber wenn manuell promotet wird
+- `importance: 0.9` und `category: "curated"` — höher gewichtet als normale Captures
+
+**Einrichten:**
+```bash
+# Cron: alle 30 Minuten
+*/30 * * * * OPENAI_API_KEY=<key> node /root/.openclaw/scripts/embed-promoted-memories.mjs >> /root/.openclaw/logs/embed-promotions.log 2>&1
+```
+
+### 2. Dreaming Storage Mode: `separate`
+
+Ab OpenClaw 2026.4.15 ist der Default für `dreaming.storage.mode` geändert:
+
+| Mode | Verhalten |
+|------|-----------|
+| `inline` (alt) | Dreaming-Blöcke direkt in `memory/YYYY-MM-DD.md` |
+| **`separate`** (neu default) | Dreaming-Blöcke in `memory/dreaming/{phase}/YYYY-MM-DD.md` |
+
+**Empfehlung:** `separate` verwenden — Tages-MD bleibt sauber, Dreaming-Inhalte in eigenem Ordner.
+
+**Config:**
+```json
+"plugins": {
+  "entries": {
+    "memory-core": {
+      "config": {
+        "dreaming": {
+          "storage": { "mode": "separate" }
+        }
+      }
+    }
+  }
+}
+```
+
+**Wichtig:** Die LanceDB-Capture-Pipeline und der Auto-Recall sind davon **nicht betroffen** — beide arbeiten mit Session-JSONL-Dateien, nicht mit Dreaming-Ausgabepfaden.
+
+### 3. Active-Memory: Schnelles Modell empfohlen
+
+Das Active-Memory Plugin (Pre-Prompt Recall) sollte ein **schnelles, nicht-denkendes** Modell nutzen. Mit `kimi-coding/k2p5` (reasoning enabled) liefen Recall-Queries in 36–60s Timeouts.
+
+**Empfohlene Config:**
+```json
+"active-memory": {
+  "enabled": true,
+  "config": {
+    "model": "moonshot/kimi-k2.5-instant",
+    "modelFallback": "google/gemini-flash-latest",
+    "timeoutMs": 15000,
+    "thinking": "off"
+  }
+}
+```
+
+`kimi-k2.5-instant` antwortet in ~300ms — 120× schneller als k2p5 für diese Aufgabe.
+
+### Upgrade-Checkliste 2026-04-17
+
+```
+Memory-Harmonisierung:
+  [ ] scripts/embed-promoted-memories.mjs deployed
+  [ ] Cron eingerichtet (alle 30 Minuten)
+  [ ] Erstes Embed-Run durchgeführt (alle bestehenden MEMORY.md-Promotionen)
+
+OpenClaw 2026.4.15:
+  [ ] dreaming.storage.mode: "separate" in openclaw.json gesetzt
+  [ ] active-memory model: moonshot/kimi-k2.5-instant, timeoutMs: 15000
+  [ ] apply-media-patch.sh: Globs für extensions/telegram/ und extensions/discord/ erweitert
+
+Modell-Updates:
+  [ ] k2p6 in allen agents/*/agent/models.json verfügbar
+  [ ] k2p5 + k2p6: contextWindow=262144, maxTokens=32768
+  [ ] Developer + Developer-Verifier: model=kimi-coding/k2p6
+```
