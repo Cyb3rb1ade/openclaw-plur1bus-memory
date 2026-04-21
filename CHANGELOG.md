@@ -157,3 +157,29 @@ nicht nur beim Session-Bootstrap via MEMORY.md. Dreaming und LanceDB sind harmon
 - OpenClaw 2026.4.15+: `dreaming.storage.mode: "separate"` unterstützt
 - Active-Memory empfohlen: `moonshot/kimi-k2.5-instant`, timeoutMs: 15000 (statt k2p5 mit 60s)
 - k2p6: contextWindow=262144, maxTokens=32768 (identisch mit k2p5)
+
+---
+
+## [1.6.0] — 2026-04-21
+
+### MEMORY.md → LanceDB Migration (neu)
+
+**Features**
+- Neues Script `scripts/migrate-memory-md-to-lancedb.mjs`: Migriert alle Einträge aus
+  `MEMORY.md` (Abschnitte + `<!-- openclaw-memory-promotion:... -->` Einträge) in LanceDB
+- Idempotent via Cosine-Similarity Duplikat-Check (threshold: 0.97)
+- `importance: 0.95`, `category: "knowledge"/"curated"` — höchste Priorität
+- `MEMORY.md` wird auf kompakten Header + Archivhinweis reduziert (~700 chars)
+- Backup: `MEMORY.md.bak-YYYYMMDD` bleibt erhalten
+- Unterstützt `--dry-run` für Vorschau ohne Änderungen
+
+**Ergebnis im Produktionseinsatz:**
+- Bernd: 408.9k → 0.7k (189 neue Embeddings, 451 Duplikate übersprungen)
+- Bernhardine: 582.9k → 0.7k (230 neue, 454 Dupes)
+- Heisenberg: 57.1k → 0.6k (27 neue, 71 Dupes)
+
+### OpenClaw 2026.4.20
+
+- `moonshot/kimi-k2.6` verfügbar und in Modellauswahl eingetragen
+- Hauptagenten (main, bernhardine, heisenberg) auf `kimi-coding/k2p6` als Default
+- Patches #5 und #14 retired (upstream gefixt)
