@@ -1899,3 +1899,85 @@ Modell-Updates:
   [ ] k2p5 + k2p6: contextWindow=262144, maxTokens=32768
   [ ] Developer + Developer-Verifier: model=kimi-coding/k2p6
 ```
+
+---
+
+## Aktualisierungen 2026-04-21
+
+### 1. MEMORY.md → LanceDB Migration (Schicht 4)
+
+Wenn `MEMORY.md` über Zeit durch Promotionen und manuelle Einträge sehr groß wird (>40k Zeichen), truncated der Gateway beim Bootstrap — das Wissen ist vorhanden, aber langsam zu laden und teilweise unsichtbar.
+
+**Lösung:** Alle Einträge aus `MEMORY.md` in die per-Agent LanceDB migrieren. Die `MEMORY.md` wird auf einen kompakten Header + Referenzhinweis reduziert. Das gesamte Wissen bleibt vollständig über `memory_recall` und Active-Memory abrufbar.
+
+**Script:** `scripts/migrate-memory-md-to-lancedb.mjs`
+
+```bash
+# Migration durchführen (alle drei Hauptagenten)
+OPENAI_API_KEY=<key> node scripts/migrate-memory-md-to-lancedb.mjs
+
+# Nur einen Agenten migrieren
+OPENAI_API_KEY=<key> node scripts/migrate-memory-md-to-lancedb.mjs main
+
+# Testlauf ohne Änderungen
+OPENAI_API_KEY=<key> node scripts/migrate-memory-md-to-lancedb.mjs main --dry-run
+```
+
+**Was passiert:**
+1. Alle Abschnitte und Promotionen aus `MEMORY.md` werden geparst (Sektionen, Einträge mit `<!-- openclaw-memory-promotion:... -->` Marker)
+2. Jeder Chunk wird via OpenAI `text-embedding-3-large` eingebettet
+3. Duplikat-Check (Cosine-Similarity > 0.97 → skip)
+4. Eintrag landet in LanceDB mit `importance: 0.95`, `category: "knowledge"` oder `"curated"`
+5. `MEMORY.md` wird auf ~2k Zeichen reduziert (Header + Archivhinweis)
+6. Backup: `MEMORY.md.bak-YYYYMMDD` bleibt erhalten
+
+**Ergebnis:**
+- Bootstrap schnell (<40k Zeichen)
+- Wissen vollständig in LanceDB — taucht automatisch in Active-Memory Recall auf
+- `memory_recall` findet alles semantisch
+- `MEMORY.md` wird weiterhin für neue Promotionen genutzt
+
+**Wann durchführen:**
+```bash
+# MEMORY.md-Größe prüfen
+wc -c workspace/MEMORY.md workspace-bernhardine/MEMORY.md workspace-heisenberg/MEMORY.md
+# Empfehlung: Migration wenn >100k Zeichen
+```
+
+**Architektur danach (Schicht 4):**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  MEMORY.md (kompakt, <40k)                                      │
+│  → Bootstrap beim Sessionstart                                   │
+│  → User-Profil, aktuelle Projekte, kritische Regeln             │
+├─────────────────────────────────────────────────────────────────┤
+│  LanceDB (semantisch, unbegrenzt)                                │
+│  → Auto-Recall: 5 relevante Memories pro Turn injiziert         │
+│  → memory_recall: manuelle Suche                                │
+│  → Quellen: Sessions, Dreaming-Promotionen, MEMORY.md-Migration │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 2. OpenClaw 2026.4.20: Updates
+
+- **Moonshot `kimi-k2.6` verfügbar** — in `models.providers.moonshot.models` + Agent-Fallback-Liste eintragen
+- **Patches #5 und #14 retired** — upstream gefixt in 4.20
+- **Cron: `jobs-state.json`** — Runtime-State ab 4.20 in separater Datei; nicht löschen
+- **k2.6 als Agent-Default** — `kimi-coding/k2p6` als Primary-Model empfohlen (statt k2p5)
+
+### Upgrade-Checkliste 2026-04-21
+
+```
+MEMORY.md Migration (wenn >100k chars):
+  [ ] node scripts/migrate-memory-md-to-lancedb.mjs --dry-run   # Vorschau
+  [ ] node scripts/migrate-memory-md-to-lancedb.mjs             # Migration
+  [ ] Gateway neustarten (Bootstrap wieder schnell)
+
+OpenClaw 2026.4.20:
+  [ ] moonshot/kimi-k2.6 in openclaw.json Provider + Fallback-Liste
+  [ ] moonshot/kimi-k2.6 in allen agents/*/agent/models.json
+  [ ] Haupt-Agenten (main, bernhardine, heisenberg) auf kimi-coding/k2p6
+  [ ] apply-media-patch.sh: Patches #5 und #14 als retired markiert
+  [ ] jobs-state.json erscheint automatisch beim ersten Cron-Run
+```
