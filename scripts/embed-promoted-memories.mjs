@@ -8,6 +8,11 @@
  * auch im Active-Memory Real-Time Recall auftauchen.
  *
  * Cron: 30 4 * * *  (täglich nach dem Dreaming-Zyklus ~04:00)
+ *
+ * Agent-Discovery: liest agents.list[] aus openclaw.json, dedupliziert nach
+ * Workspace (ein MEMORY.md pro Workspace, auch wenn mehrere Subagents ihn teilen).
+ * Fallback: main/bernhardine/heisenberg mit Standard-Workspaces.
+ * CLI: `node embed-promoted-memories.mjs [agentId...]` begrenzt auf bestimmte Agents.
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
@@ -19,20 +24,61 @@ import { dirname } from "node:path";
 
 const __pluginDir = dirname(fileURLToPath(import.meta.url));
 
-// Config
-const AGENTS = [
-  { id: "main",         workspace: "workspace" },
-  { id: "bernhardine",  workspace: "workspace-bernhardine" },
-  { id: "heisenberg",   workspace: "workspace-heisenberg" },
-];
 const BASE   = join(homedir(), ".openclaw");
 const DB_BASE = join(BASE, "memory", "lancedb-namespaced");
 const STATE_DIR = join(BASE, ".embed-promotions-state");
 const PLUGIN_DIR = join(BASE, "extensions", "memory-lancedb-namespaced");
 const LANCEDB_PATH = join(PLUGIN_DIR, "../memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js");
 const OPENAI_PATH  = join(PLUGIN_DIR, "../memory-lancedb-stock/node_modules/openai/index.js");
+const CONFIG_PATH  = join(BASE, "openclaw.json");
 const EMBEDDING_MODEL = "text-embedding-3-large";
 const EMBEDDING_DIM   = 3072;
+
+const FALLBACK_AGENTS = [
+  { id: "main",         workspace: join(BASE, "workspace") },
+  { id: "bernhardine",  workspace: join(BASE, "workspace-bernhardine") },
+  { id: "heisenberg",   workspace: join(BASE, "workspace-heisenberg") },
+];
+
+// ─── Agent Discovery ─────────────────────────────────────────────────────────
+
+function discoverAgents() {
+  if (!existsSync(CONFIG_PATH)) {
+    console.log("[discovery] openclaw.json not found, using fallback agents");
+    return FALLBACK_AGENTS;
+  }
+  try {
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    const defaultWorkspace = cfg?.agents?.defaults?.workspace || join(BASE, "workspace");
+    const list = cfg?.agents?.list;
+    if (!Array.isArray(list) || list.length === 0) {
+      console.log("[discovery] agents.list empty, using fallback");
+      return FALLBACK_AGENTS;
+    }
+    // Group by workspace path — one MEMORY.md per workspace. Per group, prefer
+    // the "owning" agent: IDs without a hyphen (main, bernhardine, heisenberg,
+    // cron) win over subagents (bernhardine-researcher, heisenberg-writer, …).
+    // Tie-break: shorter ID. This avoids picking a random subagent as the
+    // representative when the MEMORY.md really belongs to the main agent.
+    const byWorkspace = new Map();
+    for (const entry of list) {
+      if (!entry?.id) continue;
+      const workspace = entry.workspace || defaultWorkspace;
+      const existing = byWorkspace.get(workspace);
+      if (!existing) { byWorkspace.set(workspace, entry.id); continue; }
+      const hyphens = (s) => (s.match(/-/g) || []).length;
+      if (hyphens(entry.id) < hyphens(existing) ||
+          (hyphens(entry.id) === hyphens(existing) && entry.id.length < existing.length)) {
+        byWorkspace.set(workspace, entry.id);
+      }
+    }
+    const agents = [...byWorkspace.entries()].map(([workspace, id]) => ({ id, workspace }));
+    return agents.length > 0 ? agents : FALLBACK_AGENTS;
+  } catch (e) {
+    console.warn(`[discovery] failed to parse openclaw.json: ${e.message}, using fallback`);
+    return FALLBACK_AGENTS;
+  }
+}
 
 // Parse MEMORY.md and extract promoted entries
 function parsePromotions(content) {
@@ -93,9 +139,21 @@ async function main() {
     }]);
   }
 
-  for (const agent of AGENTS) {
-    const memoryMd = join(BASE, agent.workspace, "memory", "MEMORY.md");
-    if (!existsSync(memoryMd)) { console.log(`[${agent.id}] No MEMORY.md, skipping`); continue; }
+  const discovered = discoverAgents();
+  const cliFilter = process.argv.slice(2).filter(a => !a.startsWith("-"));
+  const agents = cliFilter.length > 0
+    ? discovered.filter(a => cliFilter.includes(a.id))
+    : discovered;
+
+  if (agents.length === 0) {
+    console.error(`No matching agents. Discovered: ${discovered.map(a => a.id).join(", ")}`);
+    process.exit(1);
+  }
+  console.log(`[run] processing ${agents.length} agent(s): ${agents.map(a => a.id).join(", ")}`);
+
+  for (const agent of agents) {
+    const memoryMd = join(agent.workspace, "memory", "MEMORY.md");
+    if (!existsSync(memoryMd)) { console.log(`[${agent.id}] No MEMORY.md at ${memoryMd}, skipping`); continue; }
 
     const content = readFileSync(memoryMd, "utf8");
     const promotions = parsePromotions(content);

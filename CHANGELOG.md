@@ -2,6 +2,31 @@
 
 ## [1.7.0] — 2026-04-22
 
+### Scripts — Dynamisches Agent-Discovery + Migrations-Backup
+
+**`scripts/embed-promoted-memories.mjs` & `scripts/migrate-memory-md-to-lancedb.mjs`**
+
+- **Dynamisches Agent-Discovery:** Statt hardcoded `main/bernhardine/heisenberg`
+  werden Agents aus `openclaw.json` → `agents.list[]` gelesen. Deduplizierung nach
+  Workspace-Pfad (mehrere Subagents teilen sich oft einen Workspace → nur ein
+  Migrations-Durchlauf pro Workspace). Pro Workspace wird der „Owner"-Agent
+  bevorzugt: IDs ohne Bindestrich (`main`, `bernhardine`, `heisenberg`, `cron`)
+  gewinnen über Subagents (`heisenberg-complex-researcher`, `bernhardine-writer`, …).
+  Tie-Break: kürzere ID
+- **Fallback:** Bei fehlender/defekter `openclaw.json` weiterhin die drei
+  klassischen Haupt-Agenten
+- **CLI-Filter** erweitert: `node script.mjs main bernhardine` verarbeitet nur
+  diese Teilmenge der discovered Agents (vorher: nur ein Agent via `argv[2]`)
+
+**`scripts/migrate-memory-md-to-lancedb.mjs` — Backup vor Überschreibung**
+
+- **Automatisches Backup** der originalen `MEMORY.md` nach `MEMORY.md.bak-YYYYMMDD`
+  **bevor** die Datei mit der kompakten Migrationsnotiz überschrieben wird.
+  Wenn `copyFileSync` fehlschlägt (Disk full, Permissions), **bricht die Migration
+  ab** und lässt die Originaldatei unangetastet. Vorher: Die neue MEMORY.md
+  referenzierte zwar ein Backup — erstellt wurde es aber nie. Bei einem Crash
+  während `writeFileSync` wäre die Originaldatei verloren gewesen
+
 ### Dokumentation — Troubleshooting Auto-Recall
 
 Neue Sektion in `how-to-memory-perfect.md`: **Auto-Recall feuert nicht — Fehlerbilder & Checks**.
