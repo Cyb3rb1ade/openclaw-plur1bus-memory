@@ -9,7 +9,7 @@
  * Beispiel: node migrate-memory-md-to-lancedb.mjs main
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -22,17 +22,50 @@ const DB_BASE = join(BASE, "memory", "lancedb-namespaced");
 const PLUGIN_DIR = join(BASE, "extensions", "memory-lancedb-namespaced");
 const LANCEDB_PATH = join(PLUGIN_DIR, "../memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js");
 const OPENAI_PATH  = join(PLUGIN_DIR, "../memory-lancedb-stock/node_modules/openai/index.js");
+const CONFIG_PATH  = join(BASE, "openclaw.json");
 
 const EMBEDDING_MODEL = "text-embedding-3-large";
 const EMBEDDING_DIM   = 3072;
 const MIN_CHUNK_LEN   = 30;
 const DRY_RUN = process.argv.includes("--dry-run");
 
-const AGENT_WORKSPACES = {
-  main:         "workspace",
-  bernhardine:  "workspace-bernhardine",
-  heisenberg:   "workspace-heisenberg",
-};
+const FALLBACK_AGENTS = [
+  { id: "main",         workspace: join(BASE, "workspace") },
+  { id: "bernhardine",  workspace: join(BASE, "workspace-bernhardine") },
+  { id: "heisenberg",   workspace: join(BASE, "workspace-heisenberg") },
+];
+
+// ─── Agent Discovery ─────────────────────────────────────────────────────────
+// Liest agents.list[] aus openclaw.json und dedupliziert nach Workspace:
+// mehrere Subagents teilen sich oft denselben Workspace → nur ein Agent pro
+// Workspace-Pfad wird für die Migration gewählt (der erste gefundene).
+
+function discoverAgents() {
+  if (!existsSync(CONFIG_PATH)) return FALLBACK_AGENTS;
+  try {
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    const defaultWorkspace = cfg?.agents?.defaults?.workspace || join(BASE, "workspace");
+    const list = cfg?.agents?.list;
+    if (!Array.isArray(list) || list.length === 0) return FALLBACK_AGENTS;
+    // Group by workspace, prefer owning agent (no hyphens, shortest id).
+    const byWorkspace = new Map();
+    for (const entry of list) {
+      if (!entry?.id) continue;
+      const workspace = entry.workspace || defaultWorkspace;
+      const existing = byWorkspace.get(workspace);
+      if (!existing) { byWorkspace.set(workspace, entry.id); continue; }
+      const hyphens = (s) => (s.match(/-/g) || []).length;
+      if (hyphens(entry.id) < hyphens(existing) ||
+          (hyphens(entry.id) === hyphens(existing) && entry.id.length < existing.length)) {
+        byWorkspace.set(workspace, entry.id);
+      }
+    }
+    const agents = [...byWorkspace.entries()].map(([workspace, id]) => ({ id, workspace }));
+    return agents.length > 0 ? agents : FALLBACK_AGENTS;
+  } catch {
+    return FALLBACK_AGENTS;
+  }
+}
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
@@ -108,11 +141,10 @@ async function getOrCreateTable(db, dim) {
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-async function migrateAgent(agentId, openai, lancedb) {
-  const workspace = AGENT_WORKSPACES[agentId];
-  if (!workspace) { console.error(`Unknown agent: ${agentId}`); return; }
+async function migrateAgent(agent, openai, lancedb) {
+  const { id: agentId, workspace } = agent;
 
-  const memoryMdPath = join(BASE, workspace, "MEMORY.md");
+  const memoryMdPath = join(workspace, "MEMORY.md");
   if (!existsSync(memoryMdPath)) {
     console.log(`[${agentId}] No MEMORY.md at ${memoryMdPath}, skipping`);
     return;
@@ -204,6 +236,18 @@ LanceDB-Datenbank migriert und ist semantisch durchsuchbar.
 *Diese Datei wird weiterhin für neue Promotions verwendet.*
 `;
 
+  // Backup *before* overwriting — MEMORY.md ist das wichtigste File eines Agenten.
+  // Wenn der Write unten crasht (Disk full, Permissions, Power loss), bleibt die
+  // Originaldatei unter MEMORY.md.bak-YYYYMMDD erhalten.
+  const backupPath = `${memoryMdPath}.bak-${today.replace(/-/g, "")}`;
+  try {
+    copyFileSync(memoryMdPath, backupPath);
+    console.log(`[${agentId}] Backup: ${backupPath}`);
+  } catch (backupErr) {
+    console.error(`[${agentId}] Backup failed — aborting to protect original MEMORY.md: ${backupErr.message}`);
+    return;
+  }
+
   writeFileSync(memoryMdPath, newContent, "utf8");
   console.log(`[${agentId}] MEMORY.md: ${(sizeBefore/1024).toFixed(1)}k → ${(newContent.length/1024).toFixed(1)}k chars`);
 }
@@ -216,10 +260,17 @@ async function main() {
   const { default: OpenAI } = await import(OPENAI_PATH);
   const openai = new OpenAI({ apiKey });
 
-  const agentArg = process.argv[2];
-  const agents = agentArg
-    ? [agentArg]
-    : Object.keys(AGENT_WORKSPACES);
+  const discovered = discoverAgents();
+  const cliFilter = process.argv.slice(2).filter(a => !a.startsWith("-"));
+  const agents = cliFilter.length > 0
+    ? discovered.filter(a => cliFilter.includes(a.id))
+    : discovered;
+
+  if (agents.length === 0) {
+    console.error(`No matching agents. Discovered: ${discovered.map(a => a.id).join(", ")}`);
+    process.exit(1);
+  }
+  console.log(`[run] processing ${agents.length} agent(s): ${agents.map(a => a.id).join(", ")}`);
 
   for (const agent of agents) {
     await migrateAgent(agent, openai, lancedb);
