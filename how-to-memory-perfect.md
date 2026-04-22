@@ -435,6 +435,52 @@ Nur Memories über dem `autoRecallMinScore`-Schwellenwert (Standard: 0.2) werden
 }
 ```
 
+### Auto-Recall feuert nicht — Fehlerbilder & Checks
+
+Wenn im Produktionslog keine `injecting N memories for agent=…` Zeilen erscheinen obwohl der Agent antwortet, liegt es meist an einer dieser drei Ursachen:
+
+**1. System-Nachrichten vom Gateway ≠ Agent-Turns**
+
+Gateway-Broadcasts (z.B. Model-Switch-Alerts von Quota-Monitoring, Restart-Notifications, Config-Change-Hinweise) erzeugen Telegram/Discord-Ausgaben über direkten `sendMessage`-Aufruf — **ohne** die Turn-Pipeline zu durchlaufen. Dadurch feuert kein `before_agent_start`-Hook, und Auto-Recall läuft korrekt **nicht**. Das Log zeigt dann Activity ohne Recall, was wie ein Plugin-Fehler aussieht.
+
+```bash
+# Check — feuert der Hook bei echten User-Turns?
+grep "memory-lancedb-namespaced: injecting" /tmp/openclaw/openclaw-$(date +%Y-%m-%d).log | tail
+# Verdachtsfall: Hook-Events fehlen, aber sendMessage-Events sind da?
+# → Ursache vermutlich System-Notifications. Einmal manuell eine Nachricht an den Agent
+#   senden und prüfen ob JETZT eine injecting-Zeile auftaucht.
+```
+
+Zur schnellen Verifikation lässt sich temporär ein Debug-Log im Plugin einfügen:
+```js
+api.on("before_agent_start", async (event, ctx) => {
+  api.logger.info(`before_agent_start fired agent=${ctx?.agentId} promptLen=${event?.prompt?.length ?? "NONE"}`);
+  // … bestehender Code …
+});
+```
+
+**2. Externer Switch überschreibt `agents.defaults.model.primary`**
+
+Quota-Monitor- oder Failover-Scripts mit hardcoded Modellnamen können die Primär-Config-Datei periodisch revertieren. Das betrifft Auto-Recall indirekt: Wenn das Merging-Modell oder das Recall-Embedding nachgelagert ein falsches/fehlendes Modell erreicht, schlägt Recall fehl und loggt Warnings statt Inject-Events.
+
+```bash
+# Check — wird die Config regelmäßig geschrieben?
+stat /root/.openclaw/openclaw.json    # Modify-Zeit prüfen gegen Cron-Tick-Muster
+# Verdacht: Modify immer zu :00, :15, :30, :45 → typisches */15-Cron-Muster
+```
+
+Wenn ein eigener Quota-Monitor im Einsatz ist, dort **alle** Hardcoded-Modellnamen (Target des Auto-Reverts) an die aktuelle Konfiguration anpassen. Sicherer: Quota-Script liest das Default-Modell aus `openclaw.json` und revertiert auf den letzten bekannten Nicht-Cooldown-Wert statt auf einen statischen String.
+
+**3. Legacy-Hook-Warning unter OpenClaw ≥ 4.20**
+
+Ab 4.20 markiert `openclaw plugins inspect memory-lancedb-namespaced` den Hook `before_agent_start` als **Legacy** (`usesLegacyBeforeAgentStart: yes`). Funktional ist er weiter supported — das Gateway ruft ihn für Model-Overrides und Prompt-Mutation auf. Keine Aktion nötig. Längerfristig ist eine Migration auf die neuen typisierten Hooks (`before_prompt_build`, `before_model_resolve`) vorgesehen.
+
+```bash
+openclaw plugins inspect memory-lancedb-namespaced 2>&1 | grep -E "Legacy|hooks"
+# Typed hooks: agent_end, before_agent_start
+# Legacy before_agent_start: yes    ← informativ, kein Fehler
+```
+
 ---
 
 ## Die drei Agent-Tools

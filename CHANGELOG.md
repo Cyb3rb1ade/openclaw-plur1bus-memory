@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.7.0] — 2026-04-22
+
+### Dokumentation — Troubleshooting Auto-Recall
+
+Neue Sektion in `how-to-memory-perfect.md`: **Auto-Recall feuert nicht — Fehlerbilder & Checks**.
+Konsolidiert drei aus der Produktion bekannte Fallen:
+
+1. **System-Nachrichten vs. Agent-Turns** — Gateway-Broadcasts (Model-Switch-Alerts,
+   Restart-Notifications) senden `telegram sendMessage` direkt, ohne durch die
+   Turn-Pipeline zu gehen. Dadurch feuert kein `before_agent_start`-Hook, Auto-Recall
+   läuft korrekt nicht. Fehldiagnose-Risiko hoch, weil Log-seitig "Activity ohne Recall"
+   sichtbar ist.
+2. **Externe Model-Switcher überschreiben Config** — Quota-Monitor- oder
+   Failover-Scripts mit hardcoded Modellnamen revertieren `agents.defaults.model.primary`
+   periodisch. Symptom: Nach jedem Cron-Tick steht wieder das alte Modell in `openclaw.json`.
+3. **Legacy-Hook-Warning unter OpenClaw ≥ 4.20** — Plugin nutzt `before_agent_start`,
+   in 4.20 als "legacy" markiert (Warnung bei `openclaw plugins inspect`). Funktional
+   weiter unterstützt; Migration auf `before_prompt_build` ist zukünftiger Umbau.
+
+### Plugin (`memory-lancedb-namespaced`)
+
+**Klarstellung in README + how-to:**
+- Merging/Schicht15-Modell: Empfehlung **`kimi-for-coding`** (offizieller API-Alias).
+  Lokale Aliase wie `k2p5`/`k2p6` routen gateway-intern auf dasselbe Modell, bieten aber
+  keinen Mehrwert und können bei Re-Benennungen brechen
+- ActiveMemory-Plugin-Konfig: `kimi-coding/kimi-for-coding` als Standard-Modell für den
+  Summary-LLM dokumentiert (qwen3-next-80b zwar direkt schnell, aber im embedded-runner
+  Tool-Calling-Framework unzuverlässig — `status=empty` nach 20+s)
+
+---
+
 ## [1.4.0] — 2026-04-13
 
 ### Plugin (`memory-lancedb-namespaced`)
