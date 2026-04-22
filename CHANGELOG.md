@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.7.1] — 2026-04-22
+
+### Fix — Path-Mismatch zwischen Dreaming und Embedder
+
+**`scripts/embed-promoted-memories.mjs`**
+
+- **Bug:** Script las seit jeher aus `{workspace}/memory/MEMORY.md`, Dreaming
+  schreibt Promotions aber nach `{workspace}/MEMORY.md` (Workspace-Root).
+  Symptom: Seit 2026-04-17 keine neuen Dreaming-Promotions mehr in LanceDB,
+  obwohl Dreaming selbst weiter lief — alle Pushes landeten im Legacy-Pfad,
+  der seit Anfang April nicht mehr gepflegt wurde.
+- **Fix:** Script liest jetzt primär `{workspace}/MEMORY.md`, fällt auf
+  `{workspace}/memory/MEMORY.md` nur zurück, wenn das Root-File fehlt.
+- **Impact:** Embedder läuft für `main`, `heisenberg`, `cron` wieder produktiv
+  (11 Promotions aus Backlog seit 17.04 eingebettet). Bernhardine hat die
+  MEMORY.md aktuell, aber ohne `openclaw-memory-promotion`-Marker — separate
+  Untersuchung warum Dreaming dort keine Promotionen mehr markiert.
+- `migrate-memory-md-to-lancedb.mjs` hatte den korrekten Pfad bereits — keine
+  Änderung nötig.
+
 ## [1.7.0] — 2026-04-22
 
 ### Scripts — Dynamisches Agent-Discovery + Migrations-Backup
