@@ -1689,7 +1689,7 @@ memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto
 |---|---|---|
 | **Light** | Tagesnotizen aus Workspace scannen, Kandidaten stagen | `memory/.dreams/short-term-recall.json` |
 | **REM** | Narrative Reflexionen aus Memory-Traces generieren | Dream Diary Entries |
-| **Deep** | Tiefe Konsolidierung, MEMORY.md-Promotions | `memory/MEMORY.md` Ergänzungen |
+| **Deep** | Tiefe Konsolidierung, MEMORY.md-Promotions | `MEMORY.md` (Workspace-Root) Ergänzungen |
 
 ### Namespace-Isolation
 
@@ -1879,6 +1879,31 @@ Promoted Dreaming-Inhalte (die aus dem nächtlichen Dreaming-Prozess in `MEMORY.
 # Cron: alle 30 Minuten
 */30 * * * * OPENAI_API_KEY=<key> node /root/.openclaw/scripts/embed-promoted-memories.mjs >> /root/.openclaw/logs/embed-promotions.log 2>&1
 ```
+
+**MEMORY.md-Pfad (wichtig, Stand v1.7.1):** Das Script liest primär aus
+`{workspace}/MEMORY.md` (Workspace-Root, wohin Dreaming seit Anfang April
+schreibt). `{workspace}/memory/MEMORY.md` ist nur noch Legacy-Fallback — wenn
+alte Installationen die Datei noch dort haben, wird sie als Zweitwahl genutzt.
+Bei Neuinstallationen kann `{workspace}/memory/` für andere Zwecke genutzt
+werden (z.B. Tageslog-Dateien `YYYY-MM-DD.md`), die MEMORY.md liegt im Root.
+
+**Fehlerbild „Promotionen landen nicht in LanceDB":** Wenn `MEMORY.md` aktuell
+ist aber kein neues Embedding sichtbar, prüfen:
+```bash
+# Welche Datei hat neue Promotion-Marker?
+for ws in workspace workspace-bernhardine workspace-heisenberg; do
+  for p in "$ws/MEMORY.md" "$ws/memory/MEMORY.md"; do
+    f="/root/.openclaw/$p"
+    [[ -f "$f" ]] || continue
+    c=$(grep -c "openclaw-memory-promotion" "$f")
+    printf "%-50s markers=%d mtime=%s\n" "$p" "$c" "$(stat -c '%y' "$f" | cut -c1-16)"
+  done
+done
+# State des Embedders — was wurde schon eingebettet?
+ls /root/.openclaw/.embed-promotions-state/
+```
+Falls Dreaming in die *Legacy*-Datei schreibt obwohl Root existiert: das
+Script nimmt dann nicht beide, sondern priorisiert Root. Dreaming-Config prüfen.
 
 ### 2. Dreaming Storage Mode: `separate`
 
