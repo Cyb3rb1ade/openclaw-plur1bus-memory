@@ -152,8 +152,13 @@ async function main() {
   console.log(`[run] processing ${agents.length} agent(s): ${agents.map(a => a.id).join(", ")}`);
 
   for (const agent of agents) {
-    const memoryMd = join(agent.workspace, "memory", "MEMORY.md");
-    if (!existsSync(memoryMd)) { console.log(`[${agent.id}] No MEMORY.md at ${memoryMd}, skipping`); continue; }
+    // Dreaming schreibt Promotions nach {workspace}/MEMORY.md (Workspace-Root).
+    // Das Legacy-Layout war {workspace}/memory/MEMORY.md; als Fallback unterstützt —
+    // nur falls Workspace-Root-File fehlt. Stand 2026-04-22: Legacy nicht mehr gepflegt.
+    const memoryMdRoot   = join(agent.workspace, "MEMORY.md");
+    const memoryMdLegacy = join(agent.workspace, "memory", "MEMORY.md");
+    const memoryMd = existsSync(memoryMdRoot) ? memoryMdRoot : memoryMdLegacy;
+    if (!existsSync(memoryMd)) { console.log(`[${agent.id}] No MEMORY.md at ${memoryMdRoot} or ${memoryMdLegacy}, skipping`); continue; }
 
     const content = readFileSync(memoryMd, "utf8");
     const promotions = parsePromotions(content);
