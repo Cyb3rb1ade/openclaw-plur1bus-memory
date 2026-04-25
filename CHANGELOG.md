@@ -1,5 +1,86 @@
 # Changelog
 
+## [1.8.2] — 2026-04-25
+
+### Cron-Optimierung — drei strukturelle Bugs in `auto-capture-lancedb.mjs` gefixt
+
+Forensische Analyse der Cron-Drop-Rate (50%) ergab nicht primär das Cap-Limit
+(in v1.8.1 von 5 auf 50 angehoben), sondern drei strukturelle Defekte im
+File-Discovery- und State-Tracking-Code:
+
+#### 🔴 Bug 1: Cron parsed `.trajectory.jsonl`-Reasoning-Logs
+
+`readdirSync().filter(f => f.endsWith(".jsonl"))` filterte die Trajectory-
+Variante nicht aus. Diese sind interne Reasoning-Logs ohne `role: user|assistant`
+und damit für Auto-Capture wertlos. Beweis: State-Files zeigten
+`lastFile: "...trajectory.jsonl"` statt der echten Sessions. Bei den meisten
+Cron-Runs wurden Reasoning-Internals geparst (5–10 candidates pro Run) statt
+echte Conversations (oft 50+ candidates).
+
+**Fix:** Neue Filter-Funktion `isSessionFile(name)` filtert jetzt
+`.trajectory.`, `.checkpoint.`, `.deleted.` raus.
+
+#### 🔴 Bug 2: Subagents komplett ignoriert
+
+`AGENTS = ["main", "bernhardine", "heisenberg"]` war hardcoded. **10+
+Subagenten** mit echten Sessions (developer: 5, budget-researcher: 10,
+complex-researcher: 3, deep-diver: 8 etc.) wurden nie erfasst.
+
+**Fix:** Neue `discoverAgents()`-Funktion liest `agents.list[]` aus
+`openclaw.json` (gleiches Pattern wie `embed-promoted-memories.mjs`, aber
+**nicht** workspace-dedupliziert da jeder Agent eigene Sessions hat).
+CLI: `node auto-capture-lancedb.mjs [agentId...]` filtert auf Subset.
+
+#### 🔴 Bug 3: State-Tracking war Byte→Line-Approximation
+
+State speicherte `lastSize` (Bytes), beim nächsten Run wurde die Line-Position
+geschätzt via `slice(0, lastSize).split("\\n").length - 1`. Bei JSONL mit
+langen Lines (Tool-Calls, Base64) verschob sich das — Lines wurden doppelt
+oder gar nicht gelesen.
+
+**Fix:** Neues State-Schema `{ files: { "<filename>": <byteOffset> } }`.
+Tracking exakt per Byte-Offset, kein Line-Counting mehr. Multi-File-Sweep:
+ALLE gewachsenen Sessions werden in einem Cron-Run verarbeitet (nicht nur
+"newest"). State auto-migriert von altem `{ lastFile, lastSize }`-Format.
+
+#### Bonus: Min-Char-Filter senken
+
+`MIN_TEXT_LEN: 20 → 10`. Wichtige kurze Bestätigungen (z.B. "Ja, mach das.",
+"Genau so.") wurden vorher gedroppt.
+
+#### Verifikation
+
+Nach State-Reset für alle drei primären Agenten:
+
+| Agent | Session-Files | Candidates | Stored | Kommentar |
+|---|---|---|---|---|
+| heisenberg | 6 | 84 | 12 | vorher: 1 trajectory-File mit ~5 candidates |
+| bernhardine | 133 | 3126 | 22 | Rest = Duplikate (Plugin-store hat schon erfasst) |
+| main | 121 | 2195 | 0 | alle bereits in DB durch direkte memory_store-Calls |
+
+Provenance-Felder werden jetzt **garantiert** in alle neuen Cron-Captures
+geschrieben (sourceMessageRole, sourceTurnId, sourceTimestamp, sourceUrl,
+evidenceQuote — alle live verifiziert in `bernhardine.memories`).
+
+#### Migration
+
+Beim nächsten Cron-Lauf wird das State-File automatisch konvertiert:
+- altes Format `{ lastFile: "X", lastSize: N }` → wird gelesen und in
+  `{ files: { "X": N } }` migriert
+- alte trajectory-Tracking-Einträge werden harmlos im State stehen gelassen
+  (filter überspringt sie ohnehin)
+
+Keine manuelle Aktion nötig. Wer den Catch-up-Effekt erzwingen will:
+`rm /root/.openclaw/.auto-capture-state/<agent>.json` löschen — der
+Duplicate-Check verhindert dann zuverlässig Re-Storage.
+
+#### Nicht in diesem Release (v1.8.3 oder später)
+
+- Inotify/systemd.path-basierter Live-Watcher (statt 5-Min-Cron)
+- Multi-File-Tracking pro Session-File-Status (heute alle gleichberechtigt)
+- OpenClaw-Schema-Patch für `allowConversationAccess` → würde Cron komplett
+  obsolet machen, aber riskant bei `openclaw update`
+
 ## [1.8.1] — 2026-04-25
 
 ### Follow-up zu v1.8.0 — Forgetting-Pfade entschärft, Scripts ergänzen Provenance

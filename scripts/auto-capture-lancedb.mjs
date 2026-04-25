@@ -14,14 +14,40 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
-const AGENTS = ["main", "bernhardine", "heisenberg"];
-const AGENTS_DIR = join(homedir(), ".openclaw", "agents");
-const STATE_DIR = join(homedir(), ".openclaw", ".auto-capture-state");
-const BASE_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
+const FALLBACK_AGENTS = ["main", "bernhardine", "heisenberg"];
+const HOME = homedir();
+const BASE = join(HOME, ".openclaw");
+const CONFIG_PATH = join(BASE, "openclaw.json");
+const AGENTS_DIR = join(BASE, "agents");
+const STATE_DIR = join(BASE, ".auto-capture-state");
+const BASE_DB_PATH = join(BASE, "memory", "lancedb-namespaced");
 const MAX_TEXT_LEN = 15000;
 const DUPLICATE_THRESHOLD = 0.95;
 const SUMMARY_MAX_WORDS = 150;
+const MIN_TEXT_LEN = 10; // gesenkt von 20 — kurze Bestätigungen werden auch erfasst
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-large";
+
+// ─── Agent Discovery — alle Agents aus openclaw.json (NICHT pro workspace dedupliziert,
+// da Subagents eigene Sessions haben) ──────────────────────────────────────
+function discoverAgents() {
+  if (!existsSync(CONFIG_PATH)) {
+    console.log("[discovery] openclaw.json not found — using fallback");
+    return FALLBACK_AGENTS;
+  }
+  try {
+    const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+    const list = cfg?.agents?.list;
+    if (!Array.isArray(list) || list.length === 0) {
+      console.log("[discovery] agents.list empty — using fallback");
+      return FALLBACK_AGENTS;
+    }
+    const ids = list.map(e => e?.id).filter(Boolean);
+    return ids.length > 0 ? ids : FALLBACK_AGENTS;
+  } catch (e) {
+    console.warn(`[discovery] parse failed: ${e.message} — using fallback`);
+    return FALLBACK_AGENTS;
+  }
+}
 
 // ─── LanceDB + OpenAI imports (from memory-lancedb-stock) ───────────────────
 const PLUGIN_DIR = join(homedir(), ".openclaw", "extensions", "memory-lancedb-namespaced");
@@ -139,7 +165,7 @@ function extractTexts(messages) {
         .map((c) => c.text)
         .join("\n");
     }
-    if (text.trim().length > 20) {
+    if (text.trim().length >= MIN_TEXT_LEN) {
       const prefix = role === "user" ? "User: " : "Assistant: ";
       const cleaned = text.trim();
       const urlMatch = role === "user" ? cleaned.match(urlPattern) : null;
@@ -156,18 +182,24 @@ function extractTexts(messages) {
   return items;
 }
 
-// ─── State tracking (prevent re-capture) ────────────────────────────────────
+// ─── State tracking (Byte-Offset pro Datei — exakt, keine Approximation) ───
 function getStateFile(agentId) {
   return join(STATE_DIR, `${agentId}.json`);
 }
 
 function loadState(agentId) {
   const f = getStateFile(agentId);
-  if (!existsSync(f)) return { lastFile: "", lastSize: 0 };
+  if (!existsSync(f)) return { files: {} };
   try {
-    return JSON.parse(readFileSync(f, "utf8"));
+    const raw = JSON.parse(readFileSync(f, "utf8"));
+    // v1.8.2-Migration: alte { lastFile, lastSize }-State wird konvertiert
+    if (raw.files) return raw;
+    if (raw.lastFile && typeof raw.lastSize === "number") {
+      return { files: { [raw.lastFile]: raw.lastSize } };
+    }
+    return { files: {} };
   } catch {
-    return { lastFile: "", lastSize: 0 };
+    return { files: {} };
   }
 }
 
@@ -176,55 +208,61 @@ function saveState(agentId, state) {
   writeFileSync(getStateFile(agentId), JSON.stringify(state));
 }
 
+// Filter: echte Session-Dateien (kein trajectory, checkpoint, deleted, trajectory-path)
+function isSessionFile(name) {
+  if (!name.endsWith(".jsonl")) return false;
+  if (name.includes(".trajectory.")) return false;
+  if (name.includes(".checkpoint.")) return false;
+  if (name.includes(".deleted.")) return false;
+  return true;
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────────
 async function captureAgent(agentId, embeddings) {
   const sessionsDir = join(AGENTS_DIR, agentId, "sessions");
-  if (!existsSync(sessionsDir)) return;
+  if (!existsSync(sessionsDir)) return { stored: 0, candidates: 0 };
 
-  // Find newest active .jsonl file
+  // ALLE aktiven Sessions sammeln (nicht nur newest) — keine Drops mehr bei parallelen Sessions
   const files = readdirSync(sessionsDir)
-    .filter((f) => f.endsWith(".jsonl"))
-    .map((f) => ({ name: f, path: join(sessionsDir, f), mtime: statSync(join(sessionsDir, f)).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime);
+    .filter(isSessionFile)
+    .map((f) => ({ name: f, path: join(sessionsDir, f), size: statSync(join(sessionsDir, f)).size }))
+    .filter((f) => f.size > 0);
 
-  if (files.length === 0) return;
-  const newest = files[0];
+  if (files.length === 0) return { stored: 0, candidates: 0 };
 
-  // Check state — skip if unchanged
   const state = loadState(agentId);
-  const currentSize = statSync(newest.path).size;
-  if (state.lastFile === newest.name && state.lastSize === currentSize) return;
+  const stateFiles = state.files || {};
 
-  // Read JSONL — only the NEW portion
-  const raw = readFileSync(newest.path, "utf8");
-  const lines = raw.trim().split("\n");
+  // Sammle ALLE neuen Items aus ALLEN gewachsenen Sessions
+  const allItems = [];
+  for (const file of files) {
+    const lastOffset = stateFiles[file.name] || 0;
+    if (file.size <= lastOffset) continue; // unverändert oder geschrumpft (truncate)
 
-  // If same file but grown, only read new lines
-  let startLine = 0;
-  if (state.lastFile === newest.name && state.lastSize > 0) {
-    // Approximate: count lines in old portion
-    const oldLines = readFileSync(newest.path, "utf8").slice(0, state.lastSize).split("\n").length - 1;
-    startLine = Math.max(0, oldLines);
+    // Lies NUR ab byteOffset → exakt, keine Line-Approximation
+    const raw = readFileSync(file.path, "utf8");
+    // Sicherstellen dass wir an einer Line-Grenze starten (bei UTF-8 multibyte ggf. shift)
+    const newPortion = raw.slice(lastOffset);
+    const newLines = newPortion.split("\n").filter(l => l.trim().length > 0);
+
+    const messages = [];
+    for (const line of newLines) {
+      try { messages.push(JSON.parse(line)); } catch {}
+    }
+    const items = extractTexts(messages);
+    for (const it of items) it._sourceFile = file.name; // für State-Update später
+    allItems.push(...items);
+
+    stateFiles[file.name] = file.size; // tracke neue Position
   }
 
-  const newLines = lines.slice(startLine);
-  if (newLines.length === 0) {
-    saveState(agentId, { lastFile: newest.name, lastSize: currentSize });
-    return;
+  if (allItems.length === 0) {
+    saveState(agentId, { files: stateFiles });
+    return { stored: 0, candidates: 0 };
   }
 
-  const messages = [];
-  for (const line of newLines) {
-    try {
-      messages.push(JSON.parse(line));
-    } catch {}
-  }
-
-  const items = extractTexts(messages);
-  if (items.length === 0) {
-    saveState(agentId, { lastFile: newest.name, lastSize: currentSize });
-    return;
-  }
+  // Items aus allen Files mergen — ältere zuerst, neueste zuletzt (für Slicing)
+  const items = allItems;
 
   // Cap erhöht von 5 → 50 (v1.8.0): bei langen Bursts wurden >50% gedroppt.
   // Duplicate-Check (0.95) filtert echten Müll ohnehin raus.
@@ -283,10 +321,11 @@ async function captureAgent(agentId, embeddings) {
     }
   }
 
-  saveState(agentId, { lastFile: newest.name, lastSize: currentSize });
+  saveState(agentId, { files: stateFiles });
   if (stored > 0) {
-    console.log(`[${agentId}] captured ${stored}/${toCapture.length} memories (had ${items.length} candidates)`);
+    console.log(`[${agentId}] captured ${stored}/${toCapture.length} memories (had ${items.length} candidates from ${files.length} session-files)`);
   }
+  return { stored, candidates: items.length };
 }
 
 async function main() {
@@ -296,15 +335,29 @@ async function main() {
     process.exit(1);
   }
 
+  const filterArgs = process.argv.slice(2).filter(a => !a.startsWith("--"));
+  const allAgents = discoverAgents();
+  const agents = filterArgs.length > 0
+    ? allAgents.filter(a => filterArgs.includes(a))
+    : allAgents;
+
+  console.log(`[main] processing ${agents.length} agents${filterArgs.length ? ` (filtered)` : ""}: ${agents.join(", ")}`);
+
   await init();
   const embeddings = createEmbeddings(apiKey, EMBEDDING_MODEL);
 
-  for (const agent of AGENTS) {
+  let totalStored = 0, totalCands = 0, errors = 0;
+  for (const agent of agents) {
     try {
-      await captureAgent(agent, embeddings);
+      const r = await captureAgent(agent, embeddings);
+      totalStored += r.stored; totalCands += r.candidates;
     } catch (err) {
+      errors++;
       console.error(`[${agent}] error: ${err.message}`);
     }
+  }
+  if (totalCands > 0 || totalStored > 0) {
+    console.log(`[main] done: ${totalStored} stored, ${totalCands} candidates, ${errors} errors`);
   }
 }
 
