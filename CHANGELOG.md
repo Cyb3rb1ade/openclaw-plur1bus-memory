@@ -1,5 +1,71 @@
 # Changelog
 
+## [1.8.3] — 2026-04-25
+
+### Manifest-Sync, fallback-Schema, Header-Comment, Bump-Helper
+
+Drei stille Korrektheits-Bugs die kein Feature-Verhalten ändern, aber
+zukünftige Diagnose & Wartung sauber halten:
+
+#### Versions-Drift
+
+`extensions/memory-lancedb-namespaced/openclaw.plugin.json` und
+`package.json` standen seit dem Initial-Release auf `"version": "1.0.0"`,
+während das Repo + CHANGELOG bereits auf v1.8.2 waren. Wenn OpenClaw,
+Installer oder Debug-Ausgaben diese Version lesen, führt das zu falscher
+Diagnose ("Plugin-Version 1.0.0" trotz aktiver v1.8.x-Features).
+
+**Fix:** Beide Manifeste auf `"version": "1.8.3"`. Neuer Helper:
+
+```bash
+./scripts/bump-version.sh check        # Drift-Detection
+./scripts/bump-version.sh patch        # 1.8.2 → 1.8.3 (aus CHANGELOG)
+./scripts/bump-version.sh minor        # 1.8.2 → 1.9.0
+./scripts/bump-version.sh 1.8.5        # explizite Version
+```
+
+CHANGELOG-Section bleibt manuell (Bump-Grund schreiben), aber Manifest +
+package.json werden synchron gehalten.
+
+#### embedding.fallback im Manifest gewhitelisted
+
+Der Code (`Embeddings`-Klasse) wertet seit langem `embeddingCfg.fallback`
+aus für sekundäre Embedding-Endpunkte (zweiter OpenAI-Key, Azure-Backup,
+LiteLLM-Proxy). Im `openclaw.plugin.json` war `embedding` aber mit
+`additionalProperties: false` gesperrt und erlaubte nur `apiKey/model/baseUrl/dimensions`
+— eine Konfiguration mit `embedding.fallback: {…}` wäre vom Gateway-Schema-
+Validator als ungültig markiert worden.
+
+**Fix:** `fallback`-Sub-Schema im Manifest ergänzt:
+
+```json
+"fallback": {
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "apiKey":  { "type": "string" },
+    "model":   { "type": "string" },
+    "baseUrl": { "type": "string" }
+  }
+}
+```
+
+#### Header-Kommentar in `index.js` veraltet
+
+Stand seit Initial-Release: *"Auto-Capture ist deaktiviert, da OpenClaw
+keinen agent_end Hook unterstützt."* Das stimmt seit OpenClaw 4.x nicht
+mehr (Hook existiert, ist nur durch Schema-Bug geblockt) und seit v1.8.x
+gar nicht mehr (Plugin-Hook + Cron-Fallback). Ein Entwickler liest das und
+denkt: "Auto-Capture ist aus" — und sucht den Bug an der falschen Stelle.
+
+**Fix:** Header-Kommentar überarbeitet — beschreibt jetzt korrekt:
+- Primary: agent_end-Hook (mit aktuellem Schema-Issue)
+- Fallback: scripts/auto-capture-lancedb.mjs (5-Min-Cron, v1.8.2-fixes)
+- Recall-Pipeline-Übersicht
+- Provenance-Felder
+
+Keine Code-Änderungen, nur Dokumentation im Modul-Header.
+
 ## [1.8.2] — 2026-04-25
 
 ### Cron-Optimierung — drei strukturelle Bugs in `auto-capture-lancedb.mjs` gefixt

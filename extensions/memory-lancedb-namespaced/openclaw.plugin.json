@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "Memory (LanceDB, per-Agent)",
   "description": "LanceDB-backed long-term memory with per-agent isolation. Each agent gets its own database under {baseDbPath}/{agentId}/.",
-  "version": "1.0.0",
+  "version": "1.8.3",
   "kind": "extension",
   "configSchema": {
     "type": "object",
@@ -15,7 +15,16 @@
           "apiKey": { "type": "string" },
           "model": { "type": "string" },
           "baseUrl": { "type": "string" },
-          "dimensions": { "type": "number" }
+          "dimensions": { "type": "number" },
+          "fallback": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiKey": { "type": "string" },
+              "model": { "type": "string" },
+              "baseUrl": { "type": "string" }
+            }
+          }
         },
         "required": ["apiKey"]
       },
