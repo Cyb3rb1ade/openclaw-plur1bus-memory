@@ -630,13 +630,21 @@ PLUGIN_CONFIG=$(jq -n \
       "baseDbPath": $db_path,
       "autoCapture": true,
       "autoRecall": true,
-      "captureMaxChars": 5000,
+      "captureMaxChars": 15000,
       "summaryMaxWords": 150,
       "recallMinScore": 0.15,
       "autoRecallMinScore": 0.20,
       "duplicateThreshold": 0.95,
       "forgetThreshold": 0.30,
       "gc": {"enabled": true},
+      "recall": {
+        "importanceBoost": 0.3,
+        "dedup": true,
+        "dedupJaccard": 0.6,
+        "canonicalFirst": true,
+        "canonicalMinScore": 0.30,
+        "canonicalMaxItems": 2
+      },
       "reranker": $reranker,
       "merging": $merging,
       "schicht15": $schicht15

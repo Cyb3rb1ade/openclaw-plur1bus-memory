@@ -200,6 +200,13 @@ async function main() {
           mergedFrom: "[]",
           expiresAt: 0,
           storedBy: agent.id,
+          // v1.8.0
+          sourceTurnId: "",
+          sourceMessageRole: "internal",
+          sourceTimestamp: Date.now(),
+          sourceUrl: "",
+          evidenceQuote: p.text.slice(0, 200),
+          scope: "agent-private",
         }]);
         alreadyEmbedded.add(p.meta);
         stored++;

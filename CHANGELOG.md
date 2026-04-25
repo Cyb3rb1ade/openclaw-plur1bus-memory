@@ -1,5 +1,75 @@
 # Changelog
 
+## [1.8.1] — 2026-04-25
+
+### Follow-up zu v1.8.0 — Forgetting-Pfade entschärft, Scripts ergänzen Provenance
+
+Im Anschluss an v1.8.0 wurde das System auf Forgetting-Pfade analysiert. Die
+meisten Mechanismen sind in der Praxis nicht aktiv (TTL: 0.06% der Memories,
+echte Merges: 0). Die einzige relevante Lücke war das Auto-Capture-Cron-Script.
+
+**`scripts/auto-capture-lancedb.mjs` (neu im Repo, war bisher nur lokal)**
+
+- **Cap erhöht von 5 → 50 pro Cron-Run.** Vorher: 48.5% Drop-Rate aus dem
+  bereits gefilterten Pool, plus implizite Verluste vor dem Slicing in
+  langen Bursts (Bernhardine-Session vom 09.04. mit 2158 Messages → ein
+  großer Teil never captured).
+- **User-URL-Priorisierung:** zuerst bis zu 10 User-URLs, dann letzte 50
+  Texte, gesamt-Cap 50. Spiegelt die Plugin-eigene Capture-Logik.
+- **Provenance-Felder werden jetzt geschrieben:** `sourceTurnId` aus
+  JSONL-`id`, `sourceMessageRole` aus `msg.role`, `sourceTimestamp` aus
+  JSONL-`timestamp`, `sourceUrl` aus URL-Match in User-Texten,
+  `evidenceQuote` = erste 200 Zeichen des Originaltextes, `scope` =
+  `agent-private`.
+- **Schema-Migration on-the-fly:** Wenn `getOrCreateTable` eine bestehende
+  DB öffnet, werden fehlende v1.8.0-Spalten via `addColumns()` ergänzt
+  (idempotent). Frische DBs werden mit allen Spalten erstellt.
+
+**`scripts/embed-promoted-memories.mjs`**
+
+Schreibt v1.8.0-Felder beim Embedding von Dreaming-Promotions:
+`sourceMessageRole = "internal"`, `evidenceQuote` = Promotion-Text,
+`scope = "agent-private"`.
+
+**`scripts/migrate-memory-md-to-lancedb.mjs`**
+
+Schreibt v1.8.0-Felder bei MEMORY.md-Migrationen:
+`sourceMessageRole = "internal"`, `evidenceQuote` = Original-Chunk,
+`scope = "agent-private"`.
+
+**`scripts/install-memory-system.sh`**
+
+- Fresh-Install-Plugin-Config enthält jetzt den `recall`-Block:
+  ```json
+  "recall": {
+    "importanceBoost": 0.3, "dedup": true, "dedupJaccard": 0.6,
+    "canonicalFirst": true, "canonicalMinScore": 0.30, "canonicalMaxItems": 2
+  }
+  ```
+- `captureMaxChars` Default angehoben von 5000 → 15000 (Alignment mit
+  Production-Config seit v1.4.0).
+
+### Forgetting-Analyse — komplette Übersicht
+
+Geprüfte Pfade (Risiko in der Praxis):
+
+| Pfad | Aktiv? | Risiko |
+|---|---|---|
+| TTL-Purge (`memory-gc.mjs`) | 6/9307 = 0.06% | minimal |
+| Merge in `memory_store` | 0 echte Merges | OK (per Design) |
+| `memory_forget`-Tool | sehr selten | gering |
+| KNOWLEDGE.md-Compaction (>200 Zeilen) | rar | gering — Raw-Memories bleiben in DB |
+| Duplicate-Rejection (≥0.95) | 19 events historisch | gering |
+| **Auto-Capture-Cron-Cap (5/Run)** | 48.5% Drop-Rate | **JETZT GEFIXT (Cap 50)** |
+| Auto-Capture-Truncation (>15000) | LLM-Summary | mittel — controlled |
+| Recall-Threshold (0.20) | by design | mittel — soft forgetting |
+| Subagent-Isolation | by design | OK |
+| Kein periodischer LanceDB-Backup | nur install-snapshot | mittel (separater Punkt) |
+
+Mit dem Cap-Fix ist der einzige echte Datenverlust-Pfad geschlossen.
+Soft forgetting (Threshold-basierte Recall-Limits) bleibt by design — Daten
+sind in der DB, nur nicht immer surfaced.
+
 ## [1.8.0] — 2026-04-25
 
 ### Memory-Hygiene-Release — Canonical-First Recall, Provenance, Doctor-CLI
