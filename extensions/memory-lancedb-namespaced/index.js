@@ -1,11 +1,28 @@
 /**
- * memory-lancedb-namespaced
+ * memory-lancedb-namespaced — v1.8.x
  *
  * Per-agent isolation: jeder Agent bekommt seine eigene LanceDB unter {baseDbPath}/{agentId}/
  * Gleiche API wie memory-lancedb, aber mit ctx.agentId routing.
  *
- * HINWEIS: Auto-Capture ist deaktiviert, da OpenClaw keinen "agent_end" Hook unterstützt.
- * Stattdessen: Agents sollen memory_store Tool verwenden für wichtige Informationen.
+ * Auto-Capture: AKTIV.
+ *   - Primary: agent_end-Hook (registriert hier in register()) — funktioniert
+ *     nur wenn OpenClaw das Plugin via plugins.entries.<id>.hooks.allow*
+ *     freischaltet. Seit OpenClaw 4.x braucht der Hook ein
+ *     allowConversationAccess-Flag, das aktuell vom Runtime-Schema noch nicht
+ *     gewhitelisted ist (Schema-Mismatch in OpenClaw selbst, kein Plugin-Bug).
+ *   - Fallback: scripts/auto-capture-lancedb.mjs läuft alle 5 Minuten via
+ *     System-Cron, parst die Session-JSONLs und stored neue User/Assistant-
+ *     Messages mit voller Provenance. v1.8.2 hat drei Bugs darin gefixt
+ *     (trajectory-Filter, dynamic agent discovery, byte-offset state).
+ *
+ * Recall-Pipeline (v1.8.0+):
+ *   Query → Embedding → LanceDB Top-N → Importance-Boost → Cohere Rerank
+ *   → Inter-Result-Dedup → kombiniert mit Canonical-First (KNOWLEDGE.md)
+ *   → Top-5 als <relevant-memories> injiziert.
+ *
+ * Provenance-Felder im Schema (v1.8.0+):
+ *   sourceTurnId, sourceMessageRole, sourceTimestamp, sourceUrl,
+ *   evidenceQuote, scope.
  */
 
 import { randomUUID } from "node:crypto";
