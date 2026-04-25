@@ -1,5 +1,89 @@
 # Changelog
 
+## [1.8.4] — 2026-04-25
+
+### 🔴 Security: recall-eval mit Live-Daten aus Repo entfernt
+
+`scripts/recall-eval.json` enthielt echte personenbezogene Daten und Key-
+Suffixe — wurde versehentlich mit v1.8.0 öffentlich committed. Heutiger
+HEAD ist sanitisiert; **History bleibt vorerst unverändert** (siehe unten).
+
+| Wert | Sensitivität |
+|---|---|
+| Eva Telegram Chat-ID `[REDACTED_CHAT_ID]` | hoch — direkt missbrauchbar für Spam |
+| Erik Telegram Chat-ID `[REDACTED_CHAT_ID]` | hoch — selbiges |
+| Bernd Kimi-Key-Suffix `[REDACTED_KEY_SUFFIX]` | mittel — letzte 5 Zeichen |
+| `@h3isenbot` Bot-Handle | niedrig — öffentlich |
+| Personennamen Eva/Erik/Christian | mittel |
+
+**Aktionen umgesetzt:**
+
+1. `scripts/recall-eval.json` aus Repo entfernt (`git rm`)
+2. `scripts/recall-eval.sample.json` als Vorlage committed — nur Platzhalter
+3. `.gitignore` ergänzt: `scripts/recall-eval.json`
+4. `memory-doctor eval` fällt jetzt auf `recall-eval.sample.json` zurück
+   wenn keine echte recall-eval.json vorhanden — mit Warning, dass die
+   Sample-Datei keine produktiven Tests enthält
+
+**Ausstehend (nutzer-Entscheidung erforderlich):**
+
+- Git-History-Rewrite mit `git filter-repo` oder BFG zum Scrubben des
+  Commits `a611ea7` (v1.8.0). Erfordert force-push auf `main` und alle
+  Tags. Nicht automatisch ausgeführt — destruktiv.
+- Token-Rotation für `[REDACTED_KEY_SUFFIX]`-Suffix (vollständigen Key). Da nur die
+  letzten 5 Zeichen exposed sind, ist Brute-Force unrealistisch — aber
+  bei Hochsicherheits-Anforderungen wäre Rotation sauber.
+
+### Category-Taxonomie vereinheitlicht
+
+Plugin und Cron-Script schrieben unterschiedliche Kategorien in dieselben
+LanceDB-Tabellen:
+
+| Quelle | Kategorien |
+|---|---|
+| Plugin (`MEMORY_CATEGORIES`) | preference, fact, decision, entity, other |
+| Cron `categorizeMemory()` | reference, debug, config, conversation |
+| `embed-promoted-memories.mjs` | curated |
+| `migrate-memory-md-to-lancedb.mjs` | curated, knowledge |
+
+Resultat: 11 verschiedene Kategorien in der Praxis, aber nur 5 vom Plugin
+für `memory_store` validiert. Doctor/Recall/UI würden bei späterer
+Filterung ungleichmäßig matchen.
+
+**Fix:** Eine zentrale Taxonomie:
+
+```
+preference, fact, decision, entity, reference,
+debug, config, conversation, knowledge, curated, other
+```
+
+- `MEMORY_CATEGORIES` im Plugin auf alle 11 erweitert (memory_store-enum)
+- `categorizeMemory()` im Plugin überarbeitet — erkennt jetzt zusätzlich
+  debug/config/reference, Default ist `conversation` statt `other`
+- `categorizeMemory()` im Cron-Script spiegelgleich auf dieselbe Heuristik
+  (mit Kommentar, dass die beiden Funktionen synchron bleiben müssen)
+
+Bestehende Memories behalten ihre Kategorie — keine Migration nötig.
+
+### Bug: `memory-doctor dupes` ignorierte den threshold-Parameter
+
+CLI nahm den Threshold zwar entgegen und zeigte ihn im Header an, der
+eigentliche Cluster-Check verwendete aber hardcoded `if (sim >= 0.85)`.
+Außerdem stand in der Ausgabe "cosine" obwohl Jaccard auf Text/Summary
+genutzt wird.
+
+**Fix:** `if (sim >= threshold)` (verwendet jetzt den User-Wert).
+Beschriftung korrigiert auf "Jaccard". Default 0.85 (war versehentlich
+0.95 dokumentiert — Code hat schon immer 0.85 verwendet, jetzt
+konsistent).
+
+### Doku: Header-Kommentar in `index.js` überarbeitet
+
+Statt der knappen v1.8.3-Version jetzt umfangreicher: erklärt
+Auto-Capture-Setup (Hook + Cron-Fallback inkl. OpenClaw-4.x-Schema-Issue),
+Recall-Pipeline-Reihenfolge, Provenance-Felder. Zukünftige Maintainer
+sollen aus dem Header heraus die Architektur verstehen können.
+
 ## [1.8.3] — 2026-04-25
 
 ### Manifest-Sync, fallback-Schema, Header-Comment, Bump-Helper

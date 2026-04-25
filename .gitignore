@@ -8,6 +8,10 @@ extensions/memory-lancedb-namespaced/node_modules/
 auth-profiles.json
 auth.json
 
+# Recall-Eval enthält oft echte Test-Queries mit personenbezogenen Daten,
+# Chat-IDs, Key-Suffixen etc. Nur die *.sample.json wird committed.
+scripts/recall-eval.json
+
 # LanceDB-Daten — binär, kein sinnvolles Diff
 memory/lancedb-namespaced/
 
