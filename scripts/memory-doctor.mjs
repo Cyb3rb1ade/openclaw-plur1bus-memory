@@ -9,6 +9,7 @@
  *   orphans   [agent]            — Memories ohne storedBy / origin
  *   pending   [agent]            — High-importance Memories nicht in KNOWLEDGE.md
  *   eval      [agent] [mode]     — mode = "raw" (default, nur LanceDB) oder "pipeline" (volle Live-Pipeline mit Canonical/Boost/Dedup/Rerank)
+ *   provider-check               — validiert Embedding-Endpoint, Modell, Dim, DB-Dim-Konsistenz
  *   all                          — alle Checks (kompakt)
  *
  * Beispiele:
@@ -393,6 +394,96 @@ async function cmdEval(args) {
   console.log(`\nGesamt [${mode}]: ${totalPass}/${totalCases} (${(totalPass / Math.max(1, totalCases) * 100).toFixed(0)}%)`);
 }
 
+async function cmdProviderCheck(args) {
+  // v2.1.1: validiert komplettes Embedding-Setup gegen alle Agent-DBs.
+  // Prüft: API erreichbar, Modell antwortet, Dim stimmt mit allen DBs überein.
+  const cfg = loadConfig();
+  const emb = cfg.plugin?.embedding;
+  if (!emb) { console.error("Keine embedding-Config gefunden."); process.exit(1); }
+
+  const apiKey = emb.apiKey?.startsWith("${")
+    ? process.env[emb.apiKey.replace(/^\$\{|}$/g, "")]
+    : emb.apiKey;
+  const baseUrl = emb.baseUrl || null;
+  const model = emb.model;
+  const configDim = emb.dimensions;
+
+  console.log(`\n=== Embedding-Provider-Check ===\n`);
+  console.log(`Endpoint:      ${baseUrl || "https://api.openai.com/v1 (default)"}`);
+  console.log(`Modell:        ${model}`);
+  console.log(`Config-Dim:    ${configDim || "(nicht gesetzt — wird aus EMBEDDING_DIMENSIONS-Map default)"}`);
+  console.log(`API-Key:       ${apiKey ? `${apiKey.slice(0, 8)}…${apiKey.slice(-4)}` : "(fehlt!)"}`);
+  console.log();
+
+  if (!apiKey) {
+    console.error("✗ API-Key fehlt oder ENV-Variable nicht gesetzt.");
+    process.exit(1);
+  }
+
+  // Test 1: Embedding-Call
+  console.log("[1/3] Test-Embedding-Call …");
+  const OpenAI = await getOpenAI();
+  const client = new OpenAI({ apiKey, ...(baseUrl ? { baseURL: baseUrl } : {}) });
+  const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
+  const req = { model, input: "provider-check probe", encoding_format: "float" };
+  if (isOpenAi && configDim) req.dimensions = configDim;
+  let actualDim;
+  try {
+    const r = await client.embeddings.create(req);
+    actualDim = r.data[0].embedding.length;
+    console.log(`     ✓ Modell antwortet, ${actualDim}-dim Vektoren`);
+  } catch (e) {
+    console.error(`     ✗ Embedding-Call fehlgeschlagen: ${e.message}`);
+    process.exit(1);
+  }
+
+  // Test 2: Config-Dim vs. tatsächliche Dim
+  console.log(`\n[2/3] Config-Dim Konsistenz …`);
+  if (configDim && configDim !== actualDim) {
+    console.error(`     ✗ Config sagt ${configDim}, API liefert ${actualDim}. Korrigiere openclaw.json!`);
+    process.exit(1);
+  } else if (configDim === actualDim) {
+    console.log(`     ✓ Config (${configDim}) = API (${actualDim})`);
+  } else {
+    console.log(`     ⚠ Config-Dim leer, API liefert ${actualDim} — ergänze 'dimensions: ${actualDim}' in openclaw.json`);
+  }
+
+  // Test 3: Alle bestehenden Agent-DBs auf Dim-Mismatch prüfen
+  console.log(`\n[3/3] Bestehende Agent-DBs vs. API-Dim ${actualDim} …`);
+  const agents = discoverAgents(cfg.baseDbPath);
+  let mismatch = 0;
+  for (const ag of agents) {
+    const tbl = await openTable(cfg.baseDbPath, ag);
+    if (!tbl) continue;
+    try {
+      const schema = await tbl.schema();
+      const vecField = schema.fields.find(f => f.name === "vector");
+      // FixedSizeList<3072> oder ähnlich — extract size aus type
+      const dimStr = vecField?.type?.toString().match(/\d+/)?.[0];
+      const dbDim = dimStr ? parseInt(dimStr) : null;
+      if (dbDim === null) {
+        console.log(`     ? ${ag}: Schema-Dim nicht ermittelbar`);
+      } else if (dbDim === actualDim) {
+        console.log(`     ✓ ${ag}: ${dbDim} = ${actualDim}`);
+      } else {
+        console.log(`     ✗ ${ag}: DB hat ${dbDim}, API liefert ${actualDim} — store/recall werden brechen!`);
+        mismatch++;
+      }
+    } catch (e) {
+      console.log(`     ? ${ag}: ${e.message}`);
+    }
+  }
+
+  console.log();
+  if (mismatch > 0) {
+    console.error(`⚠ ${mismatch} Agent-DB(s) mit Dim-Mismatch — Provider/Modell-Wechsel wahrscheinlich. Optionen:`);
+    console.error(`  1. Wechsel rückgängig (auf altes Modell zurück)`);
+    console.error(`  2. Fresh-DB pro Agent: rm -r /pfad/zu/lancedb-namespaced/<agent>/ — Dreaming/Migrate/embed-promoted füllt sie wieder`);
+    process.exit(1);
+  }
+  console.log(`✓ Provider-Check bestanden (${agents.length} Agenten geprüft, alle DB-Dim = ${actualDim})`);
+}
+
 async function cmdAll() {
   await cmdStats([]);
   console.log();
@@ -409,11 +500,11 @@ async function cmdAll() {
 
 const [, , cmd, ...args] = process.argv;
 
-const commands = { stats: cmdStats, dupes: cmdDupes, stale: cmdStale, orphans: cmdOrphans, pending: cmdPending, eval: cmdEval, all: cmdAll };
+const commands = { stats: cmdStats, dupes: cmdDupes, stale: cmdStale, orphans: cmdOrphans, pending: cmdPending, eval: cmdEval, "provider-check": cmdProviderCheck, all: cmdAll };
 
 if (!cmd || !commands[cmd]) {
   console.log("Usage: memory-doctor.mjs <command> [args]\n");
-  console.log("Commands: stats, dupes, stale, orphans, pending, eval, all\n");
+  console.log("Commands: stats, dupes, stale, orphans, pending, eval, provider-check, all\n");
   console.log("Examples:");
   console.log("  node memory-doctor.mjs stats");
   console.log("  node memory-doctor.mjs dupes bernhardine 0.90  # default 0.85 (Jaccard)");

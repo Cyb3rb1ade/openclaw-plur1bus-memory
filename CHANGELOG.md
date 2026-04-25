@@ -1,5 +1,83 @@
 # Changelog
 
+## [2.1.1] — 2026-04-25
+
+### v2.1.0-Hardening — 5 Polish-Fixes gebündelt
+
+Nach v2.1.0-Release fielen fünf Lücken auf, die alle als ein Release adressiert werden:
+
+#### 1. Header-Kommentar generisch (statt versions-spezifisch)
+
+`index.js` Header sagte "v1.8.x" — verwirrend nach v2.1.0. Jetzt:
+> "Version: siehe openclaw.plugin.json (Single Source of Truth, gepflegt via scripts/bump-version.sh)."
+
+#### 2. Hard-Fail bei Provider-Modell ohne `dimensions`
+
+Bisher: Plugin nutzte stillschweigend default 1536 dim für unbekannte Modelle. Bei OpenRouter-Modellen (z.B. `nvidia/llama-nemotron-...:free` mit 2048 dim) → Vektoren wurden in 1536-dim DB-Schema geschrieben → silent corruption.
+
+**Fix:** Plugin wirft beim Register mit klarer Fehlermeldung:
+```
+memory-lancedb-namespaced: Modell 'baai/bge-m3' (Provider: https://openrouter.ai/api/v1)
+hat keine konfigurierten 'dimensions'. Setze plugins.entries.memory-lancedb-namespaced.config.embedding.dimensions
+explizit (z.B. 1024 für BAAI/Mistral, 2048 für NVIDIA-Nemotron, 3072 für Gemini).
+Test-Call: curl ... → data[0].embedding.length lesen.
+```
+
+OpenAI-Modelle bleiben tolerant (Default-Map fallback mit Warnung).
+
+#### 3. Runtime-Dim-Validation in `Embeddings.embed()`
+
+Neue Methode `_validateDim(vec)` — wirft Fehler wenn API einen Vektor mit unerwartetes Dim liefert (z.B. weil Provider plötzlich anderes Modell zurückgibt). Schützt vor silent Korruption mitten im Live-Betrieb.
+
+#### 4. `memory-doctor provider-check` — neuer Subcommand
+
+Validiert das gesamte Embedding-Setup:
+- API-Endpoint erreichbar?
+- Modell antwortet, wie viele dims?
+- Config-Dim matcht API-Dim?
+- ALLE bestehenden Agent-DBs haben gleiche Dim wie API?
+
+Output:
+```
+=== Embedding-Provider-Check ===
+Endpoint:      https://api.openai.com/v1 (default)
+Modell:        text-embedding-3-large
+Config-Dim:    (nicht gesetzt — wird aus EMBEDDING_DIMENSIONS-Map default)
+API-Key:       sk-proj-…oM0A
+
+[1/3] Test-Embedding-Call …  ✓ 3072-dim Vektoren
+[2/3] Config-Dim Konsistenz … ⚠ Config-Dim leer, ergänze 'dimensions: 3072'
+[3/3] Bestehende Agent-DBs vs. API-Dim 3072 …
+     ✓ bernhardine: 3072 = 3072
+     ✓ main: 3072 = 3072
+     … (14 Agenten)
+✓ Provider-Check bestanden
+```
+
+#### 5. Installer Pre-Flight-Check vor Provider-Wechsel
+
+Vor dem Schreiben der neuen Plugin-Config liest der Installer alle bestehenden LanceDB-Schemas und vergleicht sie mit der neuen Dimension. Bei Mismatch:
+
+```
+⚠ 14 Agent-DB(s) haben andere Dimension als die neue Config.
+   Speichern wird brechen, Recall wird brechen.
+
+   Optionen:
+   1. Wechsel rückgängig (auf altes Modell zurück)
+   2. Fresh DBs: rm -r .../lancedb-namespaced/<agent>/  → Dreaming/Migrate füllen sie wieder
+```
+
+User muss explizit bestätigen, sonst Abbruch.
+
+#### Bonus: README für v2.1+ aktualisiert
+
+- OpenRouter-Sektion mit Verweis auf 20+ Modelle
+- Provider-Wechsel-Warnung mit den 3 Optionen
+- `recall-eval.json` → `recall-eval.sample.json`
+- `provider-check` in der Subcommand-Liste
+- `bump-version.sh` als Helper aufgeführt
+- Beide Sprachen (DE + EN) konsistent
+
 ## [2.1.0] — 2026-04-25
 
 ### OpenRouter-Support für Embeddings — 20+ Modelle als Alternative zu OpenAI
