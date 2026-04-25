@@ -1,5 +1,82 @@
 # Changelog
 
+## [1.8.6] — 2026-04-25
+
+### 🔴 Security: SQL-Hardening — Defense-in-Depth an allen 4 Sites
+
+LanceDB akzeptiert keine prepared statements (`.where(predicate)` nimmt nur
+Strings). Bisherige UUID-Validierung war an 4 Stellen verstreut, jede mit
+eigenem Regex und unterschiedlicher Fehlerbehandlung. Ein Audit-Bericht
+flaggte besonders das `id IN (...)` in `knowledge_update` als verwundbar
+gegen Injection-Versuche bei zukünftigen Code-Änderungen.
+
+**Drei zentrale Helper** im Plugin-Header definiert:
+
+```js
+function safeUuid(id) → string | throws
+function safeUuidList(ids, maxItems = 100) → string | null
+function safeTimestamp(n) → number | throws
+```
+
+Alle wirft auf invalid input (statt silent skip). Mit anchored Regex
+(`^...$`), expliziter Length-Check (36 Zeichen für UUID), Type-Check und
+Range-Check für Timestamps (`0 < n < 1e15`).
+
+**4 Sites refactored:**
+
+| Site | Vorher | Nachher |
+|---|---|---|
+| `MemoryDB.delete(id)` | inline UUID-Regex | `safeUuid(id)` |
+| `MemoryDB.purgeExpired()` | inline `Number.isFinite` | `safeTimestamp(Date.now())` |
+| `knowledge_update` IN-Clause | inline filter, nur 16 Stellen escape | `safeUuidList(ids, 100)` mit Cap |
+| `memory-gc.mjs` | inline `Number.isFinite` | Inline-Kopie von `safeTimestamp` |
+
+**Audit-Log für destruktive Operationen** — neue Datei
+`{workspaceDir}/.adaptive-learning/destructive-ops.jsonl`. Jeder
+`memory_forget`-Call und jede Merge-Replacement (im memory_store) loggt:
+
+```json
+{"event":"memory.deleted","source":"memory_forget|memory_store_merge",
+ "agentId":"main","memoryId":"uuid","via":"id|query|merge",
+ "timestamp":"2026-04-25T..."}
+```
+
+Macht versehentliche oder maliziöse Memory-Löschungen nachvollziehbar.
+
+**Bonus: leere catch in Schema-Migration**
+
+Der `catch (_e) {}`-Block bei der LanceDB-Schema-Migration (auto-runs auf
+jeder DB beim ersten Init) schluckte alle Errors silent — Schema-Drifts
+wären unsichtbar gewesen. Jetzt: `console.warn` mit DB-Pfad und Error-
+Message. Bricht weiterhin nicht (graceful degradation für ältere LanceDB-
+Versionen ohne `addColumns`-Support).
+
+**16/16 Helper-Tests grün** (inline-Tests für alle Helper-Edge-Cases —
+SQL-Injection-Versuch, NaN, Infinity, leere Listen, Cap, etc.).
+
+**Sync-Hinweis:** `safeTimestamp` musste in `memory-gc.mjs` inline kopiert
+werden (Standalone-Script, kein Plugin-Import). Wird in v1.9.0 in shared
+module wandern (gleiches Argument wie für distance→score in v1.8.5).
+
+### History-Rewrite — Commit a611ea7 sanitisiert
+
+Komplementär zu v1.8.4 (HEAD-Sanitization von `recall-eval.json`) wurde
+die Git-History via `git filter-repo` gescrubbt:
+
+1. `--invert-paths --path scripts/recall-eval.json` — Datei aus aller
+   History entfernt
+2. `--replace-text` — sensitive Strings (Chat-IDs, Key-Suffix) durch
+   `[REDACTED_*]`-Placeholder ersetzt (auch in CHANGELOG-Erwähnungen)
+3. `--message-callback` — gleiches in Commit-Messages (v1.8.4-Commit
+   beschrieb den Leak und enthielt selbst die Strings)
+4. Force-push `main` + alle Tags
+
+**Verifikation:** Fresh clone, `git log --all -p | grep -E "1211667028|2048378590|wkxqm"` → **0 matches**. Alle Tags v1.0.0..v1.8.5 vorhanden, mit neuen Commit-Hashes.
+
+**Bekannte Akzeptanz:** Bestehende Forks und Clones haben weiterhin die
+ursprünglichen Daten. `git pull` für Bestandsclones bricht — Anwender
+brauchen `git fetch --all --tags --force && git reset --hard origin/main`.
+
 ## [1.8.5] — 2026-04-25
 
 ### Distance→Score-Formel überall konsistent
