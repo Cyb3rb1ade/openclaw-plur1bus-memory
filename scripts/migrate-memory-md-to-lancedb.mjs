@@ -181,9 +181,11 @@ async function migrateAgent(agent, openai, lancedb) {
       });
       const vector = Array.from(resp.data[0].embedding);
 
-      // Duplicate check
+      // Duplicate check — Score-Formel spiegelgleich zu Plugin: 1 / (1+d)
       const results = await table.search(vector).limit(1).toArray();
-      if (results.length > 0 && results[0]._distance !== undefined && (1 - results[0]._distance) > 0.97) {
+      const score = results.length > 0 && results[0]._distance !== undefined
+        ? 1 / (1 + (results[0]._distance ?? 0)) : 0;
+      if (score >= 0.97) {
         dupes++;
         continue;
       }

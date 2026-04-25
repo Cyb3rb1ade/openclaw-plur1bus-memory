@@ -180,9 +180,11 @@ async function main() {
     for (const p of toEmbed) {
       try {
         const vector = await embed(p.text);
-        // Duplicate check
+        // Duplicate check — Score-Formel spiegelgleich zu Plugin: 1 / (1+d)
         const results = await table.search(vector).limit(1).toArray();
-        const isDupe = results.length > 0 && results[0]._distance !== undefined && (1 - results[0]._distance) > 0.95;
+        const score = results.length > 0 && results[0]._distance !== undefined
+          ? 1 / (1 + (results[0]._distance ?? 0)) : 0;
+        const isDupe = score >= 0.95;
         if (isDupe) {
           console.log(`  [${agent.id}] Skipped (duplicate): ${p.text.slice(0, 60)}...`);
           alreadyEmbedded.add(p.meta);
