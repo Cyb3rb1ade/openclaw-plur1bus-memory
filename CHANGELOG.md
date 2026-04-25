@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.8.5] — 2026-04-25
+
+### Distance→Score-Formel überall konsistent
+
+Plugin-Code und drei Cron-Scripts schrieben in dieselbe LanceDB, nutzten
+für Duplicate-Detection aber unterschiedliche Distance-zu-Score-Formeln:
+
+| Stelle | Formel | Verhalten |
+|---|---|---|
+| Plugin (4 Stellen in MemoryDB) | `1 / (1 + d)` | korrekt (begrenzt auf [0, 1]) |
+| `auto-capture-lancedb.mjs:302` | `1 - d` | falsch — bei d>1 negativ |
+| `embed-promoted-memories.mjs:185` | `1 - d` | selbiges |
+| `migrate-memory-md-to-lancedb.mjs:186` | `1 - d` | selbiges |
+| `memory-doctor.mjs:297` | `1 / (1 + d)` | korrekt |
+
+Bei LanceDB-L2-Distanzen >1 (typisch bei nicht-normalisierten Embeddings
+oder weit auseinander liegenden Vektoren) gab `1 - d` negative Scores —
+der `> threshold`-Vergleich wurde silent inkonsistent.
+
+**Fix:** Alle drei Cron-Scripts nutzen jetzt `1 / (1 + d)` mit
+expliziter Kommentar-Notiz:
+```
+// Score-Formel spiegelgleich zu Plugin: 1 / (1+d)
+```
+
+Verhaltensänderung: Bei normalisierten cosine-Distanzen (Range [0, 2])
+werden jetzt mehr Texte als Duplikate erkannt — was die Plugin-Semantik
+widerspiegelt. Bestehende Memories sind nicht betroffen, nur künftige
+Captures.
+
+In v1.9.0 wird `distanceToScore()` als Helper in `recall-pipeline.mjs`
+extrahiert — damit Plugin und alle Scripts denselben Code aus einer
+Quelle importieren statt 4× das Gleiche zu duplizieren.
+
 ## [1.8.4] — 2026-04-25
 
 ### 🔴 Security: recall-eval mit Live-Daten aus Repo entfernt

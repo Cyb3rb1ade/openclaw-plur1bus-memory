@@ -297,10 +297,14 @@ async function captureAgent(agentId, embeddings) {
       const trimmed = it.text.slice(0, MAX_TEXT_LEN);
       const vector = await embeddings.embed(trimmed);
 
-      // Duplicate check
+      // Duplicate check — Score-Formel MUSS spiegelgleich zu MemoryDB.search()
+      // im Plugin sein: score = 1 / (1 + distance). Die alte Formel (1 - d)
+      // war für L2-Distanzen >1 falsch (gibt negative scores) und für
+      // normalisierte cosine-Distanzen ein anderes Schwellenwert-Verhalten.
       const results = await table.search(vector).limit(1).toArray();
-      if (results.length > 0 && results[0]._distance !== undefined && (1 - results[0]._distance) > DUPLICATE_THRESHOLD) {
-        continue;
+      if (results.length > 0 && results[0]._distance !== undefined) {
+        const score = 1 / (1 + (results[0]._distance ?? 0));
+        if (score >= DUPLICATE_THRESHOLD) continue;
       }
 
       await table.add([
