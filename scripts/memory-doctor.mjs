@@ -268,12 +268,15 @@ async function cmdEval(args) {
   const dimensions = cfg.plugin?.embedding?.dimensions;
 
   if (!apiKey || apiKey.startsWith("${")) {
-    console.error("OPENAI_API_KEY nicht direkt in openclaw.json — eval braucht echten Key.");
+    console.error("API-Key (OPENAI/OPENROUTER) nicht direkt in openclaw.json — eval braucht echten Key.");
     process.exit(1);
   }
 
+  // v2.1.0: baseUrl unterstützt OpenRouter und andere OpenAI-kompatible Endpunkte
+  const baseUrl = cfg.plugin?.embedding?.baseUrl;
   const OpenAI = await getOpenAI();
-  const openai = new OpenAI({ apiKey });
+  const openai = new OpenAI({ apiKey, ...(baseUrl ? { baseURL: baseUrl } : {}) });
+  if (baseUrl) console.log(`(Eval nutzt baseUrl: ${baseUrl})`);
 
   // Pipeline-Mode: lade shared module + recall-config aus openclaw.json
   let runRecallPipeline, recallCfg, rerankerInstance;
@@ -319,9 +322,16 @@ async function cmdEval(args) {
       let topCategories = [];    // für expectedCategory
       let topScore = 0;          // für minScore
 
+      // v2.1.0: encoding_format=float für OpenRouter-Kompatibilität
+      const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
+      const buildEmbReq = (input) => {
+        const r = { model, input, encoding_format: "float" };
+        if (isOpenAi && dimensions) r.dimensions = dimensions;
+        return r;
+      };
+
       if (mode === "raw") {
-        // Reine LanceDB-Vektorsuche, wie pre-v1.9.0
-        const emb = await openai.embeddings.create({ model, input: c.query, ...(dimensions ? { dimensions } : {}) });
+        const emb = await openai.embeddings.create(buildEmbReq(c.query));
         const vec = emb.data[0].embedding;
         const results = await tbl.vectorSearch(vec).limit(limit).toArray();
         collectedTexts = results.map(r => (r.text || "").toLowerCase());
@@ -333,7 +343,7 @@ async function cmdEval(args) {
         const embeddings = {
           dim: dimensions,
           embed: async (text) => {
-            const r = await openai.embeddings.create({ model, input: text, ...(dimensions ? { dimensions } : {}) });
+            const r = await openai.embeddings.create(buildEmbReq(text));
             return Array.from(r.data[0].embedding);
           },
         };

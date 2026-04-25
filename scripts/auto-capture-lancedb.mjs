@@ -78,11 +78,12 @@ function createEmbeddings(apiKey, model) {
   return {
     dim,
     async embed(text) {
-      const resp = await openai.embeddings.create({
-        model,
-        input: text.slice(0, 8000),
-        dimensions: dim,
-      });
+      // v2.1.0: encoding_format=float (NVIDIA-OpenRouter rejected base64-Default).
+      // dimensions nur wenn OpenAI-Modell (sonst "unknown parameter" bei BAAI/Mistral).
+      const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
+      const req = { model, input: text.slice(0, 8000), encoding_format: "float" };
+      if (isOpenAi) req.dimensions = dim;
+      const resp = await openai.embeddings.create(req);
       return Array.from(resp.data[0].embedding);
     },
   };

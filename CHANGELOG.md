@@ -1,5 +1,117 @@
 # Changelog
 
+## [2.1.0] — 2026-04-25
+
+### OpenRouter-Support für Embeddings — 20+ Modelle als Alternative zu OpenAI
+
+Bisher waren Embeddings effektiv an OpenAI gebunden (text-embedding-3-large/
+small, ada-002). v2.1 öffnet das System für [OpenRouter](https://openrouter.ai)
+— eine Aggregator-API mit 20+ Embedding-Modellen verschiedener Anbieter
+(BAAI/BGE, Mistral, Google Gemini, NVIDIA, Qwen, Perplexity, …) inkl. einem
+**kostenlosen Modell** (NVIDIA Llama Nemotron Embed VL 1B V2, 2048-dim).
+
+#### Was ist neu
+
+**Installer-Flow (`install-memory-system.sh`):**
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Embedding-Provider-Auswahl:                                  │
+│  → OpenAI (Standard, default n) — text-embedding-3-large/... │
+│  → OpenRouter (v2.1+, opt-in) — 20+ Modelle (BAAI, Mistral,│
+│                                  Gemini, Qwen, NVIDIA-free…) │
+│ Hinweis: Reranker (Cohere) wird unten separat gefragt.       │
+│                                                              │
+│ OpenRouter statt OpenAI für Embeddings nutzen? [y/n, n]: y   │
+│   → OpenRouter API Key: sk-or-v1-...                         │
+│   → Lade verfügbare Embedding-Modelle…                       │
+│      1. google/gemini-embedding-2-preview    8192 ctx  …     │
+│      2. baai/bge-m3                          8192 ctx  …     │
+│      3. nvidia/llama-nemotron-...-:free    131072 ctx  …     │
+│      ... (20+ Modelle gelistet)                              │
+│   → OpenRouter-Modell-ID: baai/bge-m3                        │
+│   → Test-Embedding-Call → ermittle Vektor-Dimension…         │
+│      ✓ Modell 'baai/bge-m3' liefert 1024-dim Vektoren.       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Wesentliche Punkte:**
+
+- **Auto-Discovery:** Live-Query an `https://openrouter.ai/api/v1/embeddings/models`
+  zeigt aktuelle Modelle mit Context-Window und Preis pro Token.
+- **Dimension auto-detect:** Statt eine Hardcoded-Map zu pflegen wird ein
+  Test-Embedding-Call gemacht und die echte Dimension aus der Response
+  gelesen (foolproof — funktioniert mit jedem zukünftigen Modell).
+- **Fallback-Hierarchie:** OR=nein → OpenAI; Cohere=leer → kein Reranker.
+  Komplett orthogonal: jeder Block ist einzeln entscheidbar.
+
+| Wahl | Embeddings | Reranker | Recall-Pipeline |
+|---|---|---|---|
+| OR=n, Cohere=leer | OpenAI | – | Vector-only |
+| OR=n, Cohere=ja | OpenAI | Cohere | Full Pipeline |
+| OR=ja, Cohere=leer | OpenRouter | – | Vector-only |
+| OR=ja, Cohere=ja | OpenRouter | Cohere | Full Pipeline |
+
+**Kein OpenRouter-Reranker:** OpenRouter listet aktuell keinen dedizierten
+Rerank-Endpoint. Cohere bleibt der einzige Reranker (was für die meisten
+Setups OK ist — Cohere hat freie Tier).
+
+#### Plugin-Code-Änderungen
+
+**`Embeddings._buildEmbeddingRequest()`** — neue private Helper-Methode:
+
+```js
+_buildEmbeddingRequest(model, text) {
+  const isOpenAi = !model.includes("/") || model.startsWith("openai/")
+                || model.startsWith("text-embedding-");
+  const req = { model, input: text, encoding_format: "float" };
+  if (isOpenAi && this.dimensions) req.dimensions = this.dimensions;
+  return req;
+}
+```
+
+Zwei wichtige Anpassungen:
+1. **`encoding_format: "float"` immer explizit** — OpenAI-SDK setzt sonst
+   default `"base64"`, was viele OpenRouter-Provider (v.a. NVIDIA) mit 400
+   ablehnen ("Nvidia embeddings do not support base64 encoding_format").
+2. **`dimensions` nur für OpenAI-Modelle** — andere Provider (BAAI, Mistral,
+   …) werfen sonst "unknown parameter". Heuristisch erkannt via Modell-ID-
+   Prefix.
+
+Beide Anpassungen auch in **allen 4 Cron-Scripts** angewendet
+(auto-capture-lancedb, embed-promoted-memories, migrate-memory-md, memory-doctor).
+
+#### `memory-doctor eval` lernt baseUrl
+
+Eval nutzt jetzt die `embedding.baseUrl` aus `openclaw.json` — funktioniert
+also automatisch mit OpenRouter, Azure-OpenAI, LiteLLM, oder jedem anderen
+OpenAI-kompatiblen Endpunkt. Im Output: `(Eval nutzt baseUrl: https://...)`.
+
+#### Migration
+
+**Bestehende Installationen:** keine Aktion nötig. Plugin-Verhalten bei
+OpenAI-Embeddings unverändert. `encoding_format: "float"` ist von OpenAI
+vollständig unterstützt — keine Verhaltensänderung dort.
+
+**Wechsel zwischen Providern:** WICHTIG — Embedding-Dimensionen sind in
+LanceDB fest. Wechsel von OpenAI (3072) zu BAAI (1024) erfordert eine
+**fresh DB**, sonst Dimension-Mismatch (sauber erkannt, no silent failure).
+
+```bash
+# Snapshot vor Provider-Wechsel:
+./scripts/install-memory-system.sh --rollback /pfad/zu/.openclaw  # falls Plan B
+# oder eine neue baseDbPath setzen (z.B. lancedb-namespaced-openrouter)
+```
+
+#### Verifikation
+
+- ✓ OpenRouter-API erreichbar (curl ohne Auth listet 355 Modelle, 20+ Embed)
+- ✓ NVIDIA-free liefert 2048-dim Vektoren mit gültigem API-Key
+- ✓ Plugin's Embeddings-Klasse mit `baseURL: "https://openrouter.ai/api/v1"` läuft
+- ✓ Doctor erkennt baseUrl und nutzt sie im eval
+- ✓ 81/81 Tests grün (existierende Test-Suite gegen Refactor abgesichert)
+- ✓ Gateway-Restart-Test sauber
+
 ## [1.9.0] — 2026-04-25
 
 ### Refactor: Shared `lib/` Module + Pipeline-Eval — Konsolidierung der v1.8.x-Duplikation
