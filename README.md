@@ -2,12 +2,14 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
+[![Latest Release](https://img.shields.io/github/v/tag/Cyb3rb1ade/openclaw-plur1bus-memory)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/tags)
+
 ---
 
 <a name="deutsch"></a>
 ## Deutsch
 
-Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **drei Memory-Schichten** und **nativem Dreaming**.
+Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -17,17 +19,15 @@ Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monat
 
 Dieses Paket löst das Kernproblem von LLM-Agenten: **Amnesie zwischen Sessions.**
 
-Es kombiniert drei Memory-Schichten und ein Dreaming-System:
-
 ```
-Schicht 1   Flat-File Memory     workspace/memory/YYYY-MM-DD.md — menschenlesbar
-Schicht 2   Workspace-Indexer    SQLite + Vektor-Embeddings aller .md-Dateien
-Schicht 3   LanceDB              Konversations-Fakten, semantisch durchsuchbar
-Schicht 4   Dreaming             Natives memory-core (light → REM → deep) pro Workspace
+Schicht 1     Flat-File Memory       workspace/memory/YYYY-MM-DD.md — menschenlesbar
+Schicht 1.5   KNOWLEDGE.md           Kurierte Wissensbasis mit YAML-Frontmatter
+Schicht 2     Workspace-Indexer      SQLite + Vektor-Embeddings aller .md-Dateien
+Schicht 3     LanceDB                Konversations-Fakten, semantisch durchsuchbar
+Schicht 4     Dreaming               Natives memory-core (light → REM → deep) pro Workspace
 ```
 
-Alle Schichten arbeiten zusammen. Der Agent schreibt, das System erinnert sich automatisch.
-Dreaming konsolidiert Memories über Nacht in MEMORY.md und Dream Diary.
+Der Agent schreibt, das System erinnert sich automatisch. Dreaming konsolidiert Memories über Nacht in MEMORY.md und Dream Diary.
 
 ---
 
@@ -35,12 +35,19 @@ Dreaming konsolidiert Memories über Nacht in MEMORY.md und Dream Diary.
 
 ```
 extensions/
-  memory-lancedb-namespaced/   ← Das Hauptplugin (OpenClaw-Gateway-Plugin)
-  memory-lancedb-stock/        ← LanceDB-Wrapper (Abhängigkeit, npm install nötig)
+  memory-lancedb-namespaced/   ← Hauptplugin (OpenClaw-Gateway-Plugin)
+  memory-lancedb-stock/        ← LanceDB-Wrapper (Abhängigkeit, npm install)
 scripts/
-  install-memory-system.sh     ← Installations- und Update-Skript
-  memory-gc.mjs                ← TTL-Garbage-Collector (täglich via Cron)
-how-to-memory-perfect.md       ← Vollständige Dokumentation (Konzepte, Setup, Upgrade)
+  install-memory-system.sh     ← Installation, Update, Rollback (mit Auto-Discovery)
+  memory-gc.mjs                ← TTL-Garbage-Collector (täglich via Cron, 03:00)
+  memory-doctor.mjs            ← Health-CLI (stats/dupes/stale/orphans/pending/eval)
+  recall-eval.json             ← Recall-Test-Batterie für eval-Subcommand
+  auto-capture-lancedb.mjs     ← Cron-Fallback für Auto-Capture (alle 5 Min)
+  embed-promoted-memories.mjs  ← Bridge Dreaming-Promotionen → LanceDB (alle 30 Min)
+  migrate-memory-md-to-lancedb.mjs  ← Einmalige MEMORY.md → LanceDB Migration
+how-to-memory.md               ← Schnell-Referenz (Konzepte und Setup)
+how-to-memory-perfect.md       ← Vollständige Dokumentation (Architektur, Upgrades)
+CHANGELOG.md                   ← Versionshistorie
 ```
 
 ---
@@ -64,7 +71,7 @@ cd extensions/memory-lancedb-stock && npm install
 Das Skript:
 - Erkennt lokale OpenClaw-Installationen automatisch
 - Zeigt Auswahlmenü bei mehreren Instanzen
-- Fragt nach API-Keys (OpenAI für Embeddings, optional Cohere für Re-Ranking)
+- Fragt nach API-Keys (OpenAI, optional Cohere für Reranking, kimi-for-coding/GPT-4 für Merging)
 - Erstellt LanceDB-Snapshot vor Änderungen
 - Richtet Cron-Job für täglichen GC ein
 
@@ -77,7 +84,7 @@ Das Skript:
 ./scripts/install-memory-system.sh --update-plugin-only /pfad/zu/.openclaw
 systemctl --user restart openclaw-gateway.service
 
-# Rollback
+# Rollback letzter Snapshot
 ./scripts/install-memory-system.sh --rollback /pfad/zu/.openclaw
 systemctl --user restart openclaw-gateway.service
 ```
@@ -86,19 +93,47 @@ systemctl --user restart openclaw-gateway.service
 
 ## Features
 
-- **Per-Agent-Isolation** — jeder Agent hat seine eigene LanceDB-Datenbank (38 DBs in Produktion)
-- **Auto-Capture** — speichert automatisch relevante Gesprächsinhalte nach jedem Turn
-- **LLM-Summarization** — überlange Nachrichten (>15K Zeichen) werden via LLM zusammengefasst statt verworfen
-- **URL- und Attachment-Priorisierung** — Links und Dateianhänge gehen nie verloren
-- **Auto-Recall** — injiziert Top-5-relevante Memories vor jedem Turn
-- **Cohere Re-Ranker** — optionales zweistufiges Retrieval für bessere Relevanz
-- **LLM-Merging** — logisch verwandte Memories werden automatisch zusammengeführt
-- **Natives Dreaming** — `memory-core` als Slot-Owner führt light/REM/deep Phasen pro Workspace durch
-- **TTL-System** — `session` (24h), `short` (14 Tage), permanent
-- **KNOWLEDGE.md** — kuratierte Wissensbasis mit automatischer Kompaktierung
-- **Embedding-Fallback** — zweiter Embedding-Endpunkt bei Primary-Ausfall
-- **Atomic Writes** — KNOWLEDGE.md via temp+rename, Lock-File via `wx`-Flag
-- **Embedding-Retry** — exponentieller Backoff bei Rate-Limits
+### Recall-Pipeline (v1.8.0+)
+
+- **Canonical-First Recall** — `KNOWLEDGE.md` wird semantisch VOR LanceDB durchsucht. Kuratierte Wahrheit kommt zuerst im `<relevant-memories>`-Block.
+- **Importance-Boost** — Score wird angepasst zu `score * (1 + importance * 0.3)`. High-importance Memories rutschen nach oben.
+- **Inter-Result-Dedup** — Nach Cohere-Rerank werden ähnliche Memories (Jaccard ≥ 0.6) suprimiert. Verhindert dass 5 Varianten desselben Sachverhalts den Kontext fluten.
+- **Cohere Reranker** — Optionales zweistufiges Retrieval (Top-20 → Cohere v3.5 → Top-5).
+
+### Capture-Pipeline
+
+- **Auto-Capture** — speichert automatisch relevante Gesprächsinhalte nach jedem Turn (Plugin-Hook + Cron-Fallback).
+- **Cron-Fallback** (`auto-capture-lancedb.mjs`) — verarbeitet Sessions wenn Plugin-Hook geblockt ist (OpenClaw 4.x Schema-Issue). v1.8.2: Trajectory-Filter, Dynamic Agent Discovery, Byte-Offset-State-Tracking, Multi-File-Sweep.
+- **LLM-Summarization** — überlange Nachrichten (>15K Zeichen) werden via LLM zusammengefasst statt verworfen.
+- **URL- und Attachment-Priorisierung** — Links und Dateianhänge gehen nie verloren.
+- **Provenance-Tracking** (v1.8.0+) — jede Memory bekommt `sourceTurnId`, `sourceMessageRole`, `sourceTimestamp`, `sourceUrl`, `evidenceQuote`, `scope`.
+
+### Storage-Schicht
+
+- **Per-Agent-Isolation** — jeder Agent hat seine eigene LanceDB-Datenbank.
+- **LLM-Merging** — logisch verwandte Memories werden automatisch zusammengeführt (Score 0.70-0.94).
+- **TTL-System** — `session` (24h), `short` (14 Tage), permanent.
+- **Schicht 1.5 / KNOWLEDGE.md** — kuratierte Wissensbasis mit YAML-Frontmatter (`last_verified`, `source_memories`), automatische Kompaktierung bei >200 Zeilen.
+- **Embedding-Fallback** — zweiter Embedding-Endpunkt bei Primary-Ausfall.
+- **Embedding-Retry** — exponentieller Backoff bei Rate-Limits.
+- **Atomic Writes** — KNOWLEDGE.md via temp+rename, Lock-File via `wx`-Flag.
+- **Conflict-Log** — semantisch ähnliche Decision-Memories zwischen Agenten werden geloggt mit proaktivem Review-Reminder.
+
+### Health & Wartung
+
+- **`memory-doctor stats`** — Anzahl, Speicher, Decision-Count, storedBy-Lücken pro Agent
+- **`memory-doctor dupes`** — Cluster fast-identischer Memories via Jaccard
+- **`memory-doctor stale`** — Memories älter X Tage mit niedriger Importance
+- **`memory-doctor orphans`** — Memories ohne `storedBy` oder `origin`
+- **`memory-doctor pending`** — High-Importance Memories nicht in `KNOWLEDGE.md`
+- **`memory-doctor eval`** — Recall-Eval gegen Testbatterie (macht Threshold-Tuning messbar)
+
+### Dreaming (Schicht 4)
+
+- **Natives Dreaming** — `memory-core` als Slot-Owner führt light/REM/deep Phasen pro Workspace durch.
+- **Workspace-Isolation** — Bernds Dreams ≠ Bernhardines Dreams ≠ Heisenbergs Dreams.
+- **Cross-Pollination** innerhalb eines Workspace — Subagents teilen sich den Dream-Kontext.
+- **Dreaming → LanceDB Bridge** (`embed-promoted-memories.mjs`) — neue MEMORY.md-Promotionen werden alle 30 Min nachgebettet.
 
 ---
 
@@ -107,37 +142,62 @@ systemctl --user restart openclaw-gateway.service
 - [OpenClaw](https://github.com/openclaw) Gateway ≥ 2026.4.5 (für natives Dreaming)
 - Node.js ≥ 18
 - OpenAI API Key (für Embeddings: `text-embedding-3-large` oder `text-embedding-3-small`)
-- Cohere API Key (optional, für Re-Ranking)
-- LLM-API (optional, für Merging + Summarization — kompatibel mit kimi-for-coding, GPT-4, etc.)
+- Cohere API Key (optional, für Reranking)
+- LLM-API (optional, für Merging + Summarization + KNOWLEDGE.md — kompatibel mit kimi-for-coding, GPT-4, Claude, etc.)
 
 ---
 
-## Architektur: Memory + Dreaming
+## Architektur
 
 ```
 plugins.slots.memory = "memory-core"              ← Slot-Owner, Dreaming
 memory-lancedb-namespaced.kind = "extension"      ← Auto-Capture/Recall per Agent
 
-┌── Laufzeit (jeder Turn) ──────────────────────────────────┐
-│  User-Nachricht → Auto-Recall (LanceDB, Top-5, Reranked)  │
-│  Agent antwortet → Auto-Capture (LanceDB, per Agent)       │
-│                    └─ >15K Zeichen? → LLM-Summarize        │
-└────────────────────────────────────────────────────────────┘
+┌── Laufzeit (jeder Turn) ──────────────────────────────────────────┐
+│  User-Nachricht                                                    │
+│      │                                                             │
+│      ▼                                                             │
+│  Auto-Recall:                                                      │
+│      1. Search KNOWLEDGE.md (canonical-first, mtime-cached)        │
+│      2. LanceDB vector search (Top-20)                             │
+│      3. Importance-Boost                                           │
+│      4. Cohere Rerank (optional)                                   │
+│      5. Inter-Result-Dedup                                         │
+│      → Top-5 als <relevant-memories>                               │
+│      │                                                             │
+│      ▼                                                             │
+│  Agent antwortet                                                   │
+│      │                                                             │
+│      ▼                                                             │
+│  Auto-Capture (Plugin-Hook oder 5-Min-Cron):                       │
+│      → Provenance-Felder erfasst (turnId, role, timestamp, URL)    │
+│      → >15K Zeichen? LLM-Summarize                                 │
+│      → Duplicate-Check (≥0.95) skip                                │
+│      → Merge-Check (0.70-0.94) LLM-konsolidieren                   │
+│      → Sonst: store                                                │
+└────────────────────────────────────────────────────────────────────┘
 
-┌── Dreaming (automatisch, periodisch) ─────────────────────┐
-│  memory-core pro Workspace:                                │
-│    Light Sleep → REM Sleep → Deep Sleep                    │
-│    → memory/.dreams/, MEMORY.md, Dream Diary               │
-│  Workspace-Isolation: Bernd ≠ Bernhardine ≠ Heisenberg    │
-│  Agent-Isolation: LanceDB bleibt strikt per Agent          │
-└────────────────────────────────────────────────────────────┘
+┌── Dreaming (memory-core, periodisch pro Workspace) ───────────────┐
+│  Light Sleep → REM Sleep → Deep Sleep                              │
+│  → memory/.dreams/, MEMORY.md, Dream Diary                         │
+│  → embed-promoted-memories.mjs bridged neue Promotionen → LanceDB  │
+└────────────────────────────────────────────────────────────────────┘
+
+┌── Wartung (System-Cron) ──────────────────────────────────────────┐
+│  03:00  memory-gc.mjs                — TTL-Purge                   │
+│  alle 5 Min  auto-capture-lancedb    — Capture-Fallback            │
+│  alle 30 Min embed-promoted-memories — Dreaming-Bridge             │
+│  on-demand   memory-doctor           — Health, Eval, Wartung       │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Vollständige Dokumentation
 
-→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md)
+→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — vollständige Architektur, Konfigurations-Referenz, Upgrade-Anleitungen, Security-Audits, Troubleshooting.
+
+→ [`CHANGELOG.md`](CHANGELOG.md) — Versionshistorie mit allen Breaking-Changes und Migrations-Anweisungen.
 
 ---
 
@@ -150,7 +210,7 @@ MIT
 <a name="english"></a>
 ## English
 
-A production-grade memory system for [OpenClaw](https://github.com/openclaw) agents with **three memory layers** and **native dreaming**.
+A production-grade memory system for [OpenClaw](https://github.com/openclaw) agents with **four memory layers**, **native dreaming**, **canonical-first recall** and full **provenance tracking**.
 
 Built and battle-tested in production across 38 agents over several months.
 
@@ -160,17 +220,15 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-It combines three memory layers and a dreaming system:
-
 ```
-Layer 1   Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
-Layer 2   Workspace Indexer    SQLite + vector embeddings of all .md files
-Layer 3   LanceDB              Conversation facts, semantically searchable
-Layer 4   Dreaming             Native memory-core (light → REM → deep) per workspace
+Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
+Layer 1.5  KNOWLEDGE.md         Curated knowledge base with YAML frontmatter
+Layer 2    Workspace Indexer    SQLite + vector embeddings of all .md files
+Layer 3    LanceDB              Conversation facts, semantically searchable
+Layer 4    Dreaming             Native memory-core (light → REM → deep) per workspace
 ```
 
-All layers work together. The agent writes, the system remembers automatically.
-Dreaming consolidates memories overnight into MEMORY.md and Dream Diary.
+The agent writes, the system remembers automatically. Dreaming consolidates memories overnight into MEMORY.md and the Dream Diary.
 
 ---
 
@@ -181,9 +239,16 @@ extensions/
   memory-lancedb-namespaced/   ← Main plugin (OpenClaw Gateway plugin)
   memory-lancedb-stock/        ← LanceDB wrapper (dependency, requires npm install)
 scripts/
-  install-memory-system.sh     ← Installation and update script
-  memory-gc.mjs                ← TTL garbage collector (daily via cron)
-how-to-memory-perfect.md       ← Full documentation (concepts, setup, upgrade)
+  install-memory-system.sh     ← Installation, update, rollback (with auto-discovery)
+  memory-gc.mjs                ← TTL garbage collector (daily via cron at 03:00)
+  memory-doctor.mjs            ← Health CLI (stats/dupes/stale/orphans/pending/eval)
+  recall-eval.json             ← Recall test battery for the eval subcommand
+  auto-capture-lancedb.mjs     ← Cron fallback for auto-capture (every 5 minutes)
+  embed-promoted-memories.mjs  ← Bridge dreaming promotions → LanceDB (every 30 min)
+  migrate-memory-md-to-lancedb.mjs  ← One-shot MEMORY.md → LanceDB migration
+how-to-memory.md               ← Quick reference (concepts and setup)
+how-to-memory-perfect.md       ← Full documentation (architecture, upgrades)
+CHANGELOG.md                   ← Version history
 ```
 
 ---
@@ -206,24 +271,21 @@ cd extensions/memory-lancedb-stock && npm install
 
 The script:
 - Auto-detects local OpenClaw installations
-- Shows a selection menu if multiple instances are found
-- Prompts for API keys (OpenAI for embeddings, Cohere for re-ranking — optional)
+- Shows a selection menu when multiple instances are found
+- Prompts for API keys (OpenAI, optional Cohere for reranking, kimi-for-coding/GPT-4 for merging)
 - Creates a LanceDB snapshot before making changes
 - Sets up a daily cron job for garbage collection
 
 ---
 
-## Update (existing installation)
+## Update / Rollback
 
 ```bash
 # Update plugin only — no config changes, no API key prompts
 ./scripts/install-memory-system.sh --update-plugin-only /path/to/.openclaw
 systemctl --user restart openclaw-gateway.service
-```
 
-## Rollback
-
-```bash
+# Rollback latest snapshot
 ./scripts/install-memory-system.sh --rollback /path/to/.openclaw
 systemctl --user restart openclaw-gateway.service
 ```
@@ -232,19 +294,47 @@ systemctl --user restart openclaw-gateway.service
 
 ## Features
 
-- **Per-agent isolation** — each agent has its own LanceDB database (38 DBs in production)
-- **Auto-capture** — automatically saves relevant conversation content after each turn
-- **LLM summarization** — oversized messages (>15K chars) are LLM-summarized instead of dropped
-- **URL and attachment prioritization** — links and file attachments from the user are never lost
-- **Auto-recall** — injects the top-5 most relevant memories before each turn
-- **Cohere re-ranker** — optional two-stage retrieval for better relevance
-- **LLM merging** — logically related memories are automatically consolidated
-- **Native dreaming** — `memory-core` as slot owner runs light/REM/deep phases per workspace
-- **TTL system** — `session` (24h), `short` (14 days), permanent
-- **Layer 1.5 / KNOWLEDGE.md** — curated knowledge base with automatic compaction
-- **Embedding fallback** — secondary embedding endpoint on primary failure
-- **Atomic writes** — KNOWLEDGE.md via temp+rename, lock file via `wx` flag
-- **Embedding retry** — exponential backoff on rate limits
+### Recall pipeline (v1.8.0+)
+
+- **Canonical-first recall** — `KNOWLEDGE.md` is semantically searched BEFORE LanceDB. Curated truth comes first in the `<relevant-memories>` block.
+- **Importance boost** — score is adjusted to `score * (1 + importance * 0.3)`. High-importance memories climb to the top.
+- **Inter-result dedup** — after Cohere rerank, similar memories (Jaccard ≥ 0.6) are suppressed. Prevents 5 variants of the same fact flooding the context.
+- **Cohere reranker** — optional two-stage retrieval (top-20 → Cohere v3.5 → top-5).
+
+### Capture pipeline
+
+- **Auto-capture** — automatically saves relevant conversation content after each turn (plugin hook + cron fallback).
+- **Cron fallback** (`auto-capture-lancedb.mjs`) — handles capture when the plugin hook is blocked (OpenClaw 4.x schema issue). v1.8.2: trajectory filter, dynamic agent discovery, byte-offset state tracking, multi-file sweep.
+- **LLM summarization** — oversized messages (>15K chars) are LLM-summarized instead of dropped.
+- **URL and attachment prioritization** — links and file attachments from the user are never lost.
+- **Provenance tracking** (v1.8.0+) — every memory gets `sourceTurnId`, `sourceMessageRole`, `sourceTimestamp`, `sourceUrl`, `evidenceQuote`, `scope`.
+
+### Storage layer
+
+- **Per-agent isolation** — each agent has its own LanceDB database.
+- **LLM merging** — logically related memories are automatically consolidated (score 0.70-0.94).
+- **TTL system** — `session` (24h), `short` (14 days), permanent.
+- **Layer 1.5 / KNOWLEDGE.md** — curated knowledge base with YAML frontmatter (`last_verified`, `source_memories`), automatic compaction beyond 200 lines.
+- **Embedding fallback** — secondary embedding endpoint on primary failure.
+- **Embedding retry** — exponential backoff on rate limits.
+- **Atomic writes** — KNOWLEDGE.md via temp+rename, lock file via `wx` flag.
+- **Conflict log** — semantically similar decision memories across agents are logged with a proactive review reminder.
+
+### Health & maintenance
+
+- **`memory-doctor stats`** — count, storage, decision-count, storedBy gaps per agent
+- **`memory-doctor dupes`** — clusters of near-identical memories via Jaccard
+- **`memory-doctor stale`** — memories older than X days with low importance
+- **`memory-doctor orphans`** — memories without `storedBy` or `origin`
+- **`memory-doctor pending`** — high-importance memories not in `KNOWLEDGE.md`
+- **`memory-doctor eval`** — recall eval against the test battery (makes threshold tuning measurable)
+
+### Dreaming (Layer 4)
+
+- **Native dreaming** — `memory-core` as slot owner runs light/REM/deep phases per workspace.
+- **Workspace isolation** — Bernd's dreams ≠ Bernhardine's dreams ≠ Heisenberg's dreams.
+- **Cross-pollination** within a workspace — subagents share the dream context.
+- **Dreaming → LanceDB bridge** (`embed-promoted-memories.mjs`) — new MEMORY.md promotions are embedded every 30 min.
 
 ---
 
@@ -253,16 +343,62 @@ systemctl --user restart openclaw-gateway.service
 - [OpenClaw](https://github.com/openclaw) Gateway ≥ 2026.4.5 (for native dreaming)
 - Node.js ≥ 18
 - OpenAI API key (for embeddings: `text-embedding-3-large` or `text-embedding-3-small`)
-- Cohere API key (optional, for re-ranking)
-- Any LLM API (optional, for merging + summarization — compatible with kimi-for-coding, GPT-4, etc.)
+- Cohere API key (optional, for reranking)
+- Any LLM API (optional, for merging + summarization + KNOWLEDGE.md — compatible with kimi-for-coding, GPT-4, Claude, etc.)
+
+---
+
+## Architecture
+
+```
+plugins.slots.memory = "memory-core"              ← Slot owner, dreaming
+memory-lancedb-namespaced.kind = "extension"      ← Auto-capture/recall per agent
+
+┌── Runtime (every turn) ───────────────────────────────────────────┐
+│  User message                                                      │
+│      │                                                             │
+│      ▼                                                             │
+│  Auto-recall:                                                      │
+│      1. Search KNOWLEDGE.md (canonical-first, mtime-cached)        │
+│      2. LanceDB vector search (top-20)                             │
+│      3. Importance boost                                           │
+│      4. Cohere rerank (optional)                                   │
+│      5. Inter-result dedup                                         │
+│      → Top-5 as <relevant-memories>                                │
+│      │                                                             │
+│      ▼                                                             │
+│  Agent responds                                                    │
+│      │                                                             │
+│      ▼                                                             │
+│  Auto-capture (plugin hook or 5-min cron):                         │
+│      → Provenance fields captured (turnId, role, timestamp, URL)   │
+│      → >15K chars? LLM-summarize                                   │
+│      → Duplicate check (≥0.95) skip                                │
+│      → Merge check (0.70-0.94) LLM-consolidate                     │
+│      → Otherwise: store                                            │
+└────────────────────────────────────────────────────────────────────┘
+
+┌── Dreaming (memory-core, periodic per workspace) ─────────────────┐
+│  Light sleep → REM sleep → Deep sleep                              │
+│  → memory/.dreams/, MEMORY.md, Dream Diary                         │
+│  → embed-promoted-memories.mjs bridges new promotions → LanceDB    │
+└────────────────────────────────────────────────────────────────────┘
+
+┌── Maintenance (system cron) ──────────────────────────────────────┐
+│  03:00       memory-gc.mjs                — TTL purge              │
+│  every 5 min auto-capture-lancedb         — capture fallback       │
+│  every 30 min embed-promoted-memories     — dreaming bridge        │
+│  on-demand   memory-doctor                — health, eval, ops      │
+└────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Full Documentation
 
-→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md)
+→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — full architecture, configuration reference, upgrade guides, security audits, troubleshooting.
 
-Covers: architecture, configuration reference, dreaming, upgrade guides, security audit fixes, troubleshooting.
+→ [`CHANGELOG.md`](CHANGELOG.md) — version history with all breaking changes and migration instructions.
 
 ---
 
