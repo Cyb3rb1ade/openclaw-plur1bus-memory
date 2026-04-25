@@ -1,19 +1,17 @@
 /**
  * memory-lancedb-namespaced — v1.8.x
  *
- * Per-agent isolation: jeder Agent bekommt seine eigene LanceDB unter {baseDbPath}/{agentId}/
- * Gleiche API wie memory-lancedb, aber mit ctx.agentId routing.
+ * Per-Agent-LanceDB unter {baseDbPath}/{agentId}/ via ctx.agentId-Routing.
  *
- * Auto-Capture: AKTIV.
- *   - Primary: agent_end-Hook (registriert hier in register()) — funktioniert
- *     nur wenn OpenClaw das Plugin via plugins.entries.<id>.hooks.allow*
- *     freischaltet. Seit OpenClaw 4.x braucht der Hook ein
- *     allowConversationAccess-Flag, das aktuell vom Runtime-Schema noch nicht
- *     gewhitelisted ist (Schema-Mismatch in OpenClaw selbst, kein Plugin-Bug).
- *   - Fallback: scripts/auto-capture-lancedb.mjs läuft alle 5 Minuten via
- *     System-Cron, parst die Session-JSONLs und stored neue User/Assistant-
- *     Messages mit voller Provenance. v1.8.2 hat drei Bugs darin gefixt
- *     (trajectory-Filter, dynamic agent discovery, byte-offset state).
+ * Auto-Capture:
+ *   - Plugin-Hook, wenn OpenClaw conversation access erlaubt.
+ *     Seit 4.x braucht das Plugin ein allowConversationAccess-Flag, das
+ *     vom Runtime-Schema noch nicht gewhitelisted ist (Schema-Mismatch
+ *     in OpenClaw selbst, kein Plugin-Bug). Solange daher: Hook geblockt.
+ *   - Cron-Fallback via scripts/auto-capture-lancedb.mjs bei Hook-Blockade.
+ *     Läuft alle 5 Min, parst Session-JSONLs, schreibt mit voller Provenance.
+ *     v1.8.2 hat drei Bugs gefixt (trajectory-Filter, dynamic agent discovery,
+ *     byte-offset state — siehe CHANGELOG).
  *
  * Recall-Pipeline (v1.8.0+):
  *   Query → Embedding → LanceDB Top-N → Importance-Boost → Cohere Rerank
@@ -45,7 +43,26 @@ const EMBEDDING_DIMENSIONS = {
 };
 
 const TABLE_NAME = "memories";
-const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"];
+
+// Vereinheitlichte Kategorie-Taxonomie (v1.8.4) — alle Write-Pfade nutzen diese Liste:
+// Plugin (memory_store/auto-capture), auto-capture-lancedb.mjs Cron,
+// embed-promoted-memories.mjs, migrate-memory-md-to-lancedb.mjs.
+//
+//   preference     — User-Präferenzen ("mag kurze Antworten")
+//   fact           — Fakten über User/Projekte/Umgebung
+//   decision       — Architektur-/Tech-Entscheidungen
+//   entity         — Personen, Firmen, Produkte, Orte
+//   reference      — externe Refs: URLs, Links, Dokumente
+//   debug          — Fehler, Stacks, Reproduktionsschritte
+//   config         — Settings, Schwellenwerte, Defaults
+//   conversation   — generischer Gesprächs-Capture (Auto-Capture-Default)
+//   knowledge      — kuratiertes Wissen (z.B. aus MEMORY.md-Migration)
+//   curated        — Dreaming-Promotionen, manuell kuratiert
+//   other          — Fallback
+const MEMORY_CATEGORIES = [
+  "preference", "fact", "decision", "entity", "reference",
+  "debug", "config", "conversation", "knowledge", "curated", "other",
+];
 const MEMORY_ORIGINS = ["dm", "group", "cron", "internal"];
 const MEMORY_SCOPES = ["agent-private", "workspace", "user"];
 
@@ -447,11 +464,15 @@ class Embeddings {
 
 function categorizeMemory(text) {
   const lower = text.toLowerCase();
-  if (/prefer|like|love|hate|want|always|never|usually|tend to/.test(lower)) return "preference";
-  if (/decided|will use|going with|chosen|picked/.test(lower)) return "decision";
-  if (/is |are |was |were |has |have |\d{4}/.test(lower)) return "fact";
+  // Reihenfolge ist wichtig: spezifische Patterns zuerst, dann allgemeinere.
+  if (/prefer|like|love|hate|want|always|never|usually|tend to|bevorzug|mag|möchte/.test(lower)) return "preference";
+  if (/decided|will use|going with|chosen|picked|entschieden|wählen wir|nehmen wir/.test(lower)) return "decision";
+  if (/error|exception|stack trace|traceback|fehler|failed|reproduce/.test(lower)) return "debug";
+  if (/config|setting|threshold|default|umgebungsvariable|env var/.test(lower)) return "config";
+  if (/https?:\/\/|url|link|reference/.test(lower)) return "reference";
   if (/name:|person:|company:|product:|place:/.test(lower)) return "entity";
-  return "other";
+  if (/is |are |was |were |has |have |\d{4}/.test(lower)) return "fact";
+  return "conversation"; // Default für gewöhnliche Auto-Capture-Texte (war: "other")
 }
 
 const DISPLAY_SOURCES = new Set(["group", "cron", "internal"]);

@@ -135,11 +135,21 @@ async function getOrCreateTable(dbPath, dim) {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+// Heuristik MUSS spiegelgleich zur Plugin-categorizeMemory sein (siehe
+// extensions/memory-lancedb-namespaced/index.js). Beide Funktionen schreiben
+// in dieselbe LanceDB — abweichende Kategorien führen zu inkonsistenter
+// Filterung in Doctor/Recall/UI.
+// Zentrale Taxonomie (v1.8.4): preference, fact, decision, entity, reference,
+// debug, config, conversation, knowledge, curated, other.
 function categorizeMemory(text) {
   const t = text.toLowerCase();
-  if (t.includes("http") || t.includes("url") || t.includes("link")) return "reference";
-  if (t.includes("fehler") || t.includes("error") || t.includes("fix")) return "debug";
-  if (t.includes("config") || t.includes("setting")) return "config";
+  if (/prefer|like|love|hate|want|always|never|usually|tend to|bevorzug|mag|möchte/.test(t)) return "preference";
+  if (/decided|will use|going with|chosen|picked|entschieden|wählen wir|nehmen wir/.test(t)) return "decision";
+  if (/error|exception|stack trace|traceback|fehler|failed|reproduce/.test(t)) return "debug";
+  if (/config|setting|threshold|default|umgebungsvariable|env var/.test(t)) return "config";
+  if (/https?:\/\/|url|link|reference/.test(t)) return "reference";
+  if (/name:|person:|company:|product:|place:/.test(t)) return "entity";
+  if (/is |are |was |were |has |have |\d{4}/.test(t)) return "fact";
   return "conversation";
 }
 

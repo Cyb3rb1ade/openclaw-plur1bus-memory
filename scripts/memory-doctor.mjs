@@ -4,7 +4,7 @@
  *
  * Subcommands:
  *   stats     [agent]            — Zähler, Verteilungen, Speicher pro Agent
- *   dupes     [agent] [thresh]   — Cluster fast-identischer Memories (cosine ≥ thresh, default 0.95)
+ *   dupes     [agent] [thresh]   — Cluster fast-identischer Memories (Jaccard ≥ thresh, default 0.85)
  *   stale     [days]             — Memories älter X Tage mit niedriger importance (default: 90)
  *   orphans   [agent]            — Memories ohne storedBy / origin
  *   pending   [agent]            — High-importance Memories nicht in KNOWLEDGE.md
@@ -147,15 +147,18 @@ async function cmdStats(args) {
 async function cmdDupes(args) {
   const cfg = loadConfig();
   const agentFilter = args[0];
-  const threshold = parseFloat(args[1]) || 0.95;
+  // Jaccard-Default 0.85 (textuelle Token-Überlappung). Anders als der LanceDB
+  // duplicateThreshold (0.95) für Vektor-Cosine — Jaccard ist strenger weil es
+  // exakte Wort-Übereinstimmung verlangt, nicht nur semantische Ähnlichkeit.
+  const threshold = parseFloat(args[1]) || 0.85;
   const agents = discoverAgents(cfg.baseDbPath, agentFilter);
-  console.log(`\nDuplicate clusters per agent (cosine ≥ ${threshold}):\n`);
+  console.log(`\nDuplicate clusters per agent (Jaccard ≥ ${threshold}):\n`);
   for (const ag of agents) {
     const tbl = await openTable(cfg.baseDbPath, ag);
     if (!tbl) continue;
     const rows = await (await tbl.query()).toArray();
     if (rows.length < 2) continue;
-    // Skip vector-based — too expensive for large sets. Use Jaccard on text/summary.
+    // Jaccard auf text/summary — billig genug für tausende Memories, skaliert O(n²).
     const clusters = [];
     const seen = new Set();
     for (let i = 0; i < rows.length; i++) {
@@ -164,7 +167,7 @@ async function cmdDupes(args) {
       for (let j = i + 1; j < rows.length; j++) {
         if (seen.has(j)) continue;
         const sim = jaccard(rows[i].summary || rows[i].text, rows[j].summary || rows[j].text);
-        if (sim >= 0.85) {
+        if (sim >= threshold) {
           cluster.push(j);
           seen.add(j);
         }
@@ -243,11 +246,18 @@ async function cmdPending(args) {
 async function cmdEval(args) {
   const cfg = loadConfig();
   const evalPath = join(__dir, "recall-eval.json");
-  if (!existsSync(evalPath)) {
-    console.error(`Recall-Eval-Datei fehlt: ${evalPath}`);
+  const samplePath = join(__dir, "recall-eval.sample.json");
+  let activePath;
+  if (existsSync(evalPath)) {
+    activePath = evalPath;
+  } else if (existsSync(samplePath)) {
+    activePath = samplePath;
+    console.warn(`! recall-eval.json fehlt — verwende ${samplePath}.\n  Kopiere die Sample-Datei und passe sie an deine LanceDB an, dann erneut laufen lassen.\n`);
+  } else {
+    console.error(`Recall-Eval-Datei fehlt: ${evalPath} und ${samplePath}`);
     process.exit(1);
   }
-  const evalData = JSON.parse(readFileSync(evalPath, "utf8"));
+  const evalData = JSON.parse(readFileSync(activePath, "utf8"));
   const apiKey = cfg.plugin?.embedding?.apiKey;
   const model = cfg.plugin?.embedding?.model || "text-embedding-3-small";
   const dimensions = cfg.plugin?.embedding?.dimensions;
@@ -319,7 +329,7 @@ if (!cmd || !commands[cmd]) {
   console.log("Commands: stats, dupes, stale, orphans, pending, eval, all\n");
   console.log("Examples:");
   console.log("  node memory-doctor.mjs stats");
-  console.log("  node memory-doctor.mjs dupes bernhardine 0.95");
+  console.log("  node memory-doctor.mjs dupes bernhardine 0.90  # default 0.85 (Jaccard)");
   console.log("  node memory-doctor.mjs stale 90");
   console.log("  node memory-doctor.mjs eval main");
   process.exit(cmd ? 1 : 0);

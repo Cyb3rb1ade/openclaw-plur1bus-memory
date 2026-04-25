@@ -1,0 +1,40 @@
+{
+  "_doc": "Recall-Eval-Cases pro Agent. KOPIE als 'recall-eval.json' speichern (in .gitignore) und mit echten Test-Queries befüllen, die zur eigenen LanceDB passen. Felder pro Case: query (required), one of [expectedMemoryId, expectedTextContains[], expectedCategory, minScore], optional limit (default 5). 'expectedTextContains' verlangt dass ALLE Strings (case-insensitive) im kombinierten Top-5 vorkommen.",
+
+  "main": [
+    {
+      "query": "Was bevorzugt der User bei Code-Beispielen?",
+      "expectedCategory": "preference",
+      "limit": 5
+    },
+    {
+      "query": "Welche Architektur-Entscheidung wurde für Datenbanken getroffen?",
+      "expectedCategory": "decision",
+      "limit": 5
+    },
+    {
+      "query": "Was ist das Hauptprojekt das gerade läuft?",
+      "minScore": 0.4
+    }
+  ],
+
+  "bernhardine": [
+    {
+      "query": "Wer ist die Hauptansprechpartnerin?",
+      "expectedTextContains": ["NAME_HIER_EINSETZEN"],
+      "limit": 5
+    },
+    {
+      "query": "Welche Persönlichkeitsmerkmale soll der Agent haben?",
+      "minScore": 0.4
+    }
+  ],
+
+  "heisenberg": [
+    {
+      "query": "Wer ist der primäre User des Bots?",
+      "expectedTextContains": ["NAME_HIER_EINSETZEN"],
+      "limit": 5
+    }
+  ]
+}
