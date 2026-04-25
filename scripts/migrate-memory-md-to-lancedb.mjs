@@ -200,6 +200,13 @@ async function migrateAgent(agent, openai, lancedb) {
         mergedFrom: "[]",
         expiresAt: 0,
         storedBy: agentId,
+        // v1.8.0
+        sourceTurnId: "",
+        sourceMessageRole: "internal",
+        sourceTimestamp: Date.now(),
+        sourceUrl: "",
+        evidenceQuote: text.slice(0, 200),
+        scope: "agent-private",
       }]);
       stored++;
       process.stdout.write(`\r[${agentId}] ${stored} stored, ${dupes} dupes, ${errors} errors`);
