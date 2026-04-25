@@ -1,5 +1,146 @@
 # Changelog
 
+## [1.8.0] — 2026-04-25
+
+### Memory-Hygiene-Release — Canonical-First Recall, Provenance, Doctor-CLI
+
+Inspiriert von einer GBrain-vs-Plur1bus-Analyse (Vergleichs-Stack auf
+github.com/garrytan/gbrain) wurden drei zentrale Schwächen adressiert:
+unkuratierter Memory-Haufen, fehlende Provenance, und keine messbaren
+Health-/Recall-Metriken.
+
+#### 🟢 Bündel A — Recall-Qualität (Quick Wins)
+
+**`extensions/memory-lancedb-namespaced/index.js` — Recall-Pipeline**
+
+- **Inter-Result-Dedup vor Injection** — Nach Cohere-Rerank wird die Top-N
+  noch durch eine Jaccard-Token-Similarity-Schleife geschickt. Wenn zwei
+  Summaries ≥ `recall.dedupJaccard` (Default 0.6) ähnlich sind, wird die
+  schwächer-rankende verworfen und die nächste rückt nach. Verhindert dass
+  fünf Varianten desselben Sachverhalts den Kontext fluten.
+  Konfigurierbar: `recall.dedup` (default true), `recall.dedupJaccard`.
+- **Importance-Boost im Recall** — Score wird angepasst zu
+  `score * (1 + importance * boost)`. High-importance Memories rutschen
+  nach oben. Konfigurierbar: `recall.importanceBoost` (Default 0.3).
+  Wirkt sowohl in Auto-Recall als auch in `memory_recall`.
+
+**`scripts/memory-doctor.mjs` — neues CLI**
+
+- `stats [agent]` — pro Agent: Anzahl, Speicher, ≥0.85, TTL, Decision-Count,
+  storedBy-Lücken (Legacy-Erkennung)
+- `dupes [agent] [thresh]` — Cluster fast-identischer Memories via Jaccard
+- `stale [days]` — Memories älter X Tage mit importance < 0.5
+- `orphans [agent]` — Memories ohne `storedBy` oder `origin`
+- `pending [agent]` — High-importance Memories nicht in `KNOWLEDGE.md`
+- `eval [agent]` — Recall-Eval gegen `recall-eval.json` Testbatterie
+- `all` — alle Checks kompakt
+
+**`scripts/recall-eval.json` — Recall-Test-Batterie**
+
+JSON-Schema pro Agent mit Test-Queries und einem von:
+`expectedMemoryId`, `expectedTextContains[]`, `expectedCategory`, `minScore`.
+Pass-Rate-Berechnung — macht Threshold-Tuning messbar statt subjektiv.
+
+#### 🟡 Bündel B — Architektur
+
+**B1: Provenance-Felder im Schema**
+
+Sechs neue LanceDB-Spalten (alle auto-migriert beim ersten DB-Zugriff):
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `sourceTurnId` | string | Turn-ID die diesen Memory erzeugt hat |
+| `sourceMessageRole` | string | `user` / `assistant` / `tool` / `system` |
+| `sourceTimestamp` | int64 (ms) | Wann wurde die Quell-Nachricht gesendet |
+| `sourceUrl` | string | URL aus User-Nachricht (Auto-Capture) |
+| `evidenceQuote` | string | Original-Zitat (≤200 Zeichen) das den Memory backt |
+| `scope` | string | `agent-private` (default) \| `workspace` \| `user` |
+
+`memory_store` akzeptiert die Felder als optionale Parameter.
+Auto-Capture befüllt sie automatisch aus der Turn-Struktur.
+
+**B2: Canonical-First Recall**
+
+Bevor LanceDB durchsucht wird, scannt der Hook semantisch
+`{workspaceDir}/memory/KNOWLEDGE.md`:
+
+1. KNOWLEDGE.md wird per H1/H2/H3-Header in Sections gechunked
+2. Jede Section bekommt einen Embedding-Vektor (`text-embedding-3-large`)
+3. Cache liegt in `.adaptive-learning/knowledge-cache.json`,
+   invalidiert per `mtime`
+4. Bei Recall: Cosine-Similarity gegen Query-Vektor, Top-N mit Score
+   ≥ `recall.canonicalMinScore` (Default 0.30) werden injiziert
+5. Format: `[canonical|knowledge] <heading> — <snippet>`
+6. Kanonische Treffer kommen ZUERST im `<relevant-memories>`-Block,
+   raw memories füllen die verbleibenden Slots
+
+Konfigurierbar: `recall.canonicalFirst` (default true),
+`recall.canonicalMinScore`, `recall.canonicalMaxItems` (default 2).
+
+**B3: Markdown-Frontmatter in KNOWLEDGE.md**
+
+`updateKnowledgeMd` und `knowledge_update` schreiben jetzt YAML-Frontmatter:
+
+```yaml
+---
+type: knowledge
+agent: bernhardine
+last_verified: 2026-04-25
+source_memories:
+  - uuid-1
+  - uuid-2
+---
+```
+
+LLM-Prompts wurden angepasst, **nur den Body** zu manipulieren — Frontmatter
+wird programmatisch generiert/aktualisiert. Bestehende `source_memories`
+werden mit neuen Pending-IDs gemerged (max. 50 jüngste).
+`last_verified` wird bei jedem Update aktualisiert — nutzbar von
+`memory-doctor stale` für KNOWLEDGE.md-Frische-Checks.
+
+#### Neue Plugin-Config (komplett optional, alle mit sicheren Defaults)
+
+```json
+"recall": {
+  "importanceBoost":   0.3,
+  "dedup":             true,
+  "dedupJaccard":      0.6,
+  "canonicalFirst":    true,
+  "canonicalMinScore": 0.30,
+  "canonicalMaxItems": 2
+}
+```
+
+#### Migration
+
+Voll-automatisch beim nächsten Gateway-Start. Sechs neue Spalten werden
+zu allen LanceDB-Agent-Tabellen hinzugefügt mit sicheren Defaults
+(`expiresAt = 0`, `storedBy = ""`, `scope = "agent-private"`). Bestehende
+Memories behalten alle alten Werte unverändert.
+
+#### Bekannte Einschränkung (außerhalb dieses Releases)
+
+Auto-Capture-Hook (`agent_end`) wird seit OpenClaw 4.x mit Warnung
+`typed hook "agent_end" blocked because non-bundled plugins must set
+plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true`
+geblockt. Der Konfig-Schlüssel `allowConversationAccess` ist im
+OpenClaw-Runtime-Schema (`runtime-schema-Dgzy-2rz.js`) **nicht** gewhitelisted,
+obwohl die Manifest-Registry ihn erwartet — das ist ein Schema-Mismatch
+in OpenClaw selbst, kein Plugin-Bug. Workaround steht aus, bis OpenClaw
+das Feld in `plugins.entries.*.hooks.properties` ergänzt. Auto-Recall,
+Memory-Tools und Schicht 1.5 sind nicht betroffen.
+
+#### Verifikation
+
+```bash
+# Stats:
+node scripts/memory-doctor.mjs stats
+# Eval-Batterie:
+node scripts/memory-doctor.mjs eval
+# Live: prüfe Gateway-Log auf 'injecting N memories + M canonical':
+journalctl --user -u openclaw-gateway --since "5 minutes ago" | grep canonical
+```
+
 ## [1.7.1] — 2026-04-22
 
 ### Fix — Path-Mismatch zwischen Dreaming und Embedder

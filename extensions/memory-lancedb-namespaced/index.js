@@ -30,10 +30,48 @@ const EMBEDDING_DIMENSIONS = {
 const TABLE_NAME = "memories";
 const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"];
 const MEMORY_ORIGINS = ["dm", "group", "cron", "internal"];
+const MEMORY_SCOPES = ["agent-private", "workspace", "user"];
 
 // Lazy-loaded modules
 let _lancedb = null;
 let _OpenAI = null;
+
+// ============================================================================
+// Helpers — text similarity (cheap, for inter-result dedup)
+// ============================================================================
+
+function tokenize(text) {
+  return new Set(
+    String(text || "")
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .split(/\s+/)
+      .filter((w) => w.length >= 4),
+  );
+}
+
+function jaccardSimilarity(a, b) {
+  const sa = tokenize(a);
+  const sb = tokenize(b);
+  if (sa.size === 0 || sb.size === 0) return 0;
+  let inter = 0;
+  for (const w of sa) if (sb.has(w)) inter++;
+  const union = sa.size + sb.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+function cosineSimilarityVec(a, b) {
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom === 0 ? 0 : dot / denom;
+}
 
 // ============================================================================
 // Reranker — Cohere Rerank API v2
@@ -177,6 +215,31 @@ class MemoryDB {
           if (!hasStoredBy) {
             await this.table.addColumns([{ name: 'storedBy', valueSql: "''" }]);
           }
+          // v1.8.0 — Provenance + Scope
+          const hasSourceTurnId = schema.fields.some(f => f.name === 'sourceTurnId');
+          if (!hasSourceTurnId) {
+            await this.table.addColumns([{ name: 'sourceTurnId', valueSql: "''" }]);
+          }
+          const hasSourceMessageRole = schema.fields.some(f => f.name === 'sourceMessageRole');
+          if (!hasSourceMessageRole) {
+            await this.table.addColumns([{ name: 'sourceMessageRole', valueSql: "''" }]);
+          }
+          const hasSourceTimestamp = schema.fields.some(f => f.name === 'sourceTimestamp');
+          if (!hasSourceTimestamp) {
+            await this.table.addColumns([{ name: 'sourceTimestamp', valueSql: '0' }]);
+          }
+          const hasSourceUrl = schema.fields.some(f => f.name === 'sourceUrl');
+          if (!hasSourceUrl) {
+            await this.table.addColumns([{ name: 'sourceUrl', valueSql: "''" }]);
+          }
+          const hasEvidenceQuote = schema.fields.some(f => f.name === 'evidenceQuote');
+          if (!hasEvidenceQuote) {
+            await this.table.addColumns([{ name: 'evidenceQuote', valueSql: "''" }]);
+          }
+          const hasScope = schema.fields.some(f => f.name === 'scope');
+          if (!hasScope) {
+            await this.table.addColumns([{ name: 'scope', valueSql: "'agent-private'" }]);
+          }
         } catch (_e) { /* older LanceDB version — graceful degradation */ }
       } else {
         this.table = await this.db.createTable(TABLE_NAME, [
@@ -192,6 +255,12 @@ class MemoryDB {
             mergedFrom: "[]",
             expiresAt: 0,
             storedBy: "",
+            sourceTurnId: "",
+            sourceMessageRole: "",
+            sourceTimestamp: 0,
+            sourceUrl: "",
+            evidenceQuote: "",
+            scope: "agent-private",
           },
         ]);
         await this.table.delete('id = "__schema__"');
@@ -217,8 +286,11 @@ class MemoryDB {
         summary: r.summary || "",
         origin: r.origin || "dm",
         category: r.category,
-        importance: r.importance,
+        importance: r.importance ?? 0.5,
         createdAt: r.createdAt,
+        sourceUrl: r.sourceUrl || "",
+        evidenceQuote: r.evidenceQuote || "",
+        scope: r.scope || "agent-private",
       },
       score: 1 / (1 + (r._distance ?? 0)),
     }));
@@ -497,7 +569,7 @@ function clearKnowledgePending(workspaceDir) {
 // Schicht 1.5 — KNOWLEDGE.md
 // ============================================================================
 
-async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCfg, logger) {
+async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCfg, logger, agentId, sourceMemoryIds) {
   if (!workspaceDir || !llmCfg) return;
   const memDir = join(workspaceDir, "memory");
   const knowledgePath = join(memDir, "KNOWLEDGE.md");
@@ -507,41 +579,201 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
     if (existsSync(knowledgePath)) currentContent = readFileSync(knowledgePath, "utf8");
   } catch (_) {}
 
+  // Strip frontmatter before sending to LLM (LLM should not touch it)
+  const { frontmatter: existingFm, body: currentBody } = stripFrontmatter(currentContent);
+  let mergedSources = sourceMemoryIds || [];
+  if (existingFm) {
+    const m = existingFm.match(/source_memories:\s*\n((?:\s+-\s+.+\n?)*)/);
+    if (m) {
+      const oldIds = m[1].split("\n").map(l => l.replace(/^\s+-\s+/, "").trim()).filter(Boolean);
+      mergedSources = [...new Set([...oldIds, ...mergedSources])];
+    }
+  }
+
   const today = new Date().toISOString().slice(0, 10);
 
   const updated = await callLlm([
     {
       role: "user",
-      content: `Here is the current KNOWLEDGE.md (empty = not yet created):\n${currentContent || "(empty)"}\n\nNew memory (category=${category}, importance=${importance.toFixed(1)}, date=${today}):\n${text}\n\nIntegrate this information into the KNOWLEDGE.md.\n- Add a new entry under the appropriate section with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown, no code block wrapper.`,
+      content: `Here is the current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memory (category=${category}, importance=${importance.toFixed(1)}, date=${today}):\n${text}\n\nIntegrate this information into the KNOWLEDGE.md body.\n- Add a new entry under the appropriate section with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.`,
     },
   ], { ...llmCfg, maxTokens: 3000 });
 
   if (!updated) return;
 
-  let finalContent = updated;
+  let finalBody = updated;
 
-  if (finalContent.split("\n").length > 200) {
+  if (finalBody.split("\n").length > 200) {
     const compacted = await callLlm([
       {
         role: "user",
-        content: `The following KNOWLEDGE.md has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown, no code block wrapper.\n\n${finalContent}`,
+        content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
       },
     ], { ...llmCfg, maxTokens: 4000 });
 
     const compactedLines = compacted?.split("\n").length ?? Infinity;
     if (compacted && compactedLines <= 150) {
-      finalContent = compacted;
+      finalBody = compacted;
     } else {
       logger?.warn?.(`memory-lancedb-namespaced: KNOWLEDGE.md compaction skipped: result (${compactedLines} lines) not ≤150`);
-      // Write the uncompacted updated version anyway
     }
   }
 
+  // Re-attach frontmatter
+  const finalContent = withFrontmatter(finalBody, { agentId, sourceMemoryIds: mergedSources, today });
+
   if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
-  // Atomic write: write to temp file, then rename
   const tmpPath = knowledgePath + ".tmp";
   writeFileSync(tmpPath, finalContent, "utf8");
   renameSync(tmpPath, knowledgePath);
+}
+
+// ============================================================================
+// Recall enhancements — dedup + importance-boost
+// ============================================================================
+
+function applyImportanceBoost(results, boost) {
+  if (!boost || boost <= 0) return results;
+  const boosted = results.map((r) => ({
+    ...r,
+    score: r.score * (1 + (r.entry.importance ?? 0.5) * boost),
+  }));
+  boosted.sort((a, b) => b.score - a.score);
+  return boosted;
+}
+
+function dedupResults(results, maxOut, jaccardThreshold = 0.6) {
+  const out = [];
+  for (const r of results) {
+    let isDup = false;
+    const text = r.entry.summary || r.entry.text || "";
+    for (const kept of out) {
+      const keptText = kept.entry.summary || kept.entry.text || "";
+      if (jaccardSimilarity(text, keptText) >= jaccardThreshold) {
+        isDup = true;
+        break;
+      }
+    }
+    if (!isDup) out.push(r);
+    if (out.length >= maxOut) break;
+  }
+  return out;
+}
+
+// ============================================================================
+// Canonical-first — KNOWLEDGE.md semantic search with mtime-based cache
+// ============================================================================
+
+const KNOWLEDGE_CACHE_FILE = "knowledge-cache.json";
+
+function parseKnowledgeMd(content) {
+  // Strip frontmatter if present
+  let body = content;
+  if (body.startsWith("---\n")) {
+    const end = body.indexOf("\n---\n", 4);
+    if (end > 0) body = body.slice(end + 5);
+  }
+  // Split by H2/H3 sections
+  const lines = body.split("\n");
+  const sections = [];
+  let current = null;
+  for (const line of lines) {
+    const m = line.match(/^(#{1,3})\s+(.+)$/);
+    if (m) {
+      if (current && current.text.trim().length > 30) sections.push(current);
+      current = { heading: m[2].trim(), text: line + "\n" };
+    } else if (current) {
+      current.text += line + "\n";
+    }
+  }
+  if (current && current.text.trim().length > 30) sections.push(current);
+  return sections;
+}
+
+function readKnowledgeCache(workspaceDir) {
+  try {
+    const p = join(workspaceDir, ".adaptive-learning", KNOWLEDGE_CACHE_FILE);
+    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8"));
+  } catch (_) {}
+  return null;
+}
+
+function writeKnowledgeCache(workspaceDir, cache) {
+  try {
+    const dir = join(workspaceDir, ".adaptive-learning");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, KNOWLEDGE_CACHE_FILE), JSON.stringify(cache), "utf8");
+  } catch (_) {}
+}
+
+async function getKnowledgeChunks(workspaceDir, embeddings, logger) {
+  if (!workspaceDir) return [];
+  const knowledgePath = join(workspaceDir, "memory", "KNOWLEDGE.md");
+  if (!existsSync(knowledgePath)) return [];
+  const stat = statSync(knowledgePath);
+  const mtime = stat.mtimeMs;
+
+  const cache = readKnowledgeCache(workspaceDir);
+  if (cache && cache.mtime === mtime && Array.isArray(cache.chunks) && cache.chunks.length > 0) {
+    return cache.chunks;
+  }
+
+  const content = readFileSync(knowledgePath, "utf8");
+  const sections = parseKnowledgeMd(content);
+  if (sections.length === 0) return [];
+
+  const chunks = [];
+  for (const sec of sections) {
+    try {
+      const vec = await embeddings.embed(sec.text.slice(0, 4000));
+      chunks.push({ heading: sec.heading, text: sec.text, vector: vec });
+    } catch (e) {
+      logger?.warn?.(`memory-lancedb-namespaced: knowledge embed failed for "${sec.heading}": ${String(e)}`);
+    }
+  }
+  writeKnowledgeCache(workspaceDir, { mtime, chunks });
+  return chunks;
+}
+
+async function searchCanonical(workspaceDir, queryVector, embeddings, minScore, topN, logger) {
+  const chunks = await getKnowledgeChunks(workspaceDir, embeddings, logger);
+  if (chunks.length === 0) return [];
+  const scored = chunks.map((c) => ({
+    heading: c.heading,
+    text: c.text,
+    score: cosineSimilarityVec(queryVector, c.vector),
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored.filter((s) => s.score >= minScore).slice(0, topN);
+}
+
+// ============================================================================
+// KNOWLEDGE.md frontmatter helpers
+// ============================================================================
+
+function stripFrontmatter(content) {
+  if (!content.startsWith("---\n")) return { frontmatter: null, body: content };
+  const end = content.indexOf("\n---\n", 4);
+  if (end < 0) return { frontmatter: null, body: content };
+  return { frontmatter: content.slice(4, end), body: content.slice(end + 5) };
+}
+
+function buildFrontmatter({ agentId, sourceMemoryIds, today }) {
+  const lines = ["---"];
+  lines.push(`type: knowledge`);
+  if (agentId) lines.push(`agent: ${agentId}`);
+  lines.push(`last_verified: ${today}`);
+  if (sourceMemoryIds && sourceMemoryIds.length > 0) {
+    lines.push(`source_memories:`);
+    for (const id of sourceMemoryIds.slice(-50)) lines.push(`  - ${id}`);
+  }
+  lines.push("---");
+  return lines.join("\n") + "\n";
+}
+
+function withFrontmatter(content, fmMeta) {
+  const { body } = stripFrontmatter(content);
+  return buildFrontmatter(fmMeta) + body.replace(/^\n+/, "");
 }
 
 // ============================================================================
@@ -578,6 +810,15 @@ const plugin = {
     const duplicateThreshold = cfg.duplicateThreshold ?? 0.95;
     const forgetThreshold    = cfg.forgetThreshold    ?? 0.3;
     const summaryMaxWords    = cfg.summaryMaxWords    ?? 150;
+
+    // v1.8.0 — Recall-Quality knobs
+    const recallCfg = cfg.recall || {};
+    const importanceBoost  = recallCfg.importanceBoost  ?? 0.3;
+    const dedupEnabled     = recallCfg.dedup            !== false; // default on
+    const dedupJaccard     = recallCfg.dedupJaccard     ?? 0.6;
+    const canonicalEnabled = recallCfg.canonicalFirst   !== false; // default on
+    const canonicalMinScore = recallCfg.canonicalMinScore ?? 0.30;
+    const canonicalMaxItems = recallCfg.canonicalMaxItems ?? 2;
 
     // GC config
     const gcCfg = cfg.gc || {};
@@ -664,45 +905,43 @@ const plugin = {
         enqueueCapture(agentId, async () => {
 
         try {
-          // Extrahiere Text aus User- und Assistant-Nachrichten
+          // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
           const maxChars = cfg.captureMaxChars || 15000;
-          const texts = [];
-          const userUrlTexts = []; // User-Nachrichten mit URLs — immer priorisieren
+          const turnId = event.turnId || event.runId || "";
+          const items = [];      // {text, role, isUserUrl, sourceUrl}
           const urlPattern = /https?:\/\/[^\s]{10,}/;
+
+          const extractUrl = (t) => {
+            const m = (t || "").match(urlPattern);
+            return m ? m[0].slice(0, 500) : "";
+          };
 
           for (const msg of event.messages) {
             if (!msg || typeof msg !== "object") continue;
             const isUser = msg.role === "user";
             const isAssistant = msg.role === "assistant";
             if (!isUser && !isAssistant) continue;
-
+            const role = msg.role;
             const content = msg.content;
 
-            // String Content — collect as-is (summarization happens later for oversized texts)
             if (typeof content === "string") {
               if (content && content.length > 20) {
-                texts.push(content);
-                if (isUser && urlPattern.test(content)) userUrlTexts.push(content);
+                const sourceUrl = isUser ? extractUrl(content) : "";
+                items.push({ text: content, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
               }
               continue;
             }
 
-            // Array Content (content blocks)
             if (Array.isArray(content)) {
               for (const block of content) {
                 if (!block || typeof block !== "object") continue;
 
-                if (
-                  block.type === "text" &&
-                  typeof block.text === "string" &&
-                  block.text.length > 20
-                ) {
-                  texts.push(block.text);
-                  if (isUser && urlPattern.test(block.text)) userUrlTexts.push(block.text);
+                if (block.type === "text" && typeof block.text === "string" && block.text.length > 20) {
+                  const sourceUrl = isUser ? extractUrl(block.text) : "";
+                  items.push({ text: block.text, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
                   continue;
                 }
 
-                // Non-text blocks (image, document, file, etc.) — mindestens als Stub erfassen
                 if (isUser && block.type && block.type !== "text") {
                   const name = block.name || block.fileName || block.filename || "";
                   const mediaType = block.mediaType || block.mimeType || block.mime_type || "";
@@ -713,35 +952,36 @@ const plugin = {
                     "]",
                   ].join("").trim();
                   if (stub.length > 20) {
-                    texts.push(stub);
-                    userUrlTexts.push(stub); // Attachments wie URLs priorisieren
+                    items.push({ text: stub, role, isUserUrl: true, sourceUrl: "" }); // Attachments wie URLs priorisieren
                   }
                 }
               }
             }
           }
 
-          if (texts.length === 0) {
+          if (items.length === 0) {
             api.logger.info(`memory-lancedb-namespaced: no texts to capture`);
             return;
           }
 
-          api.logger.info(`memory-lancedb-namespaced: found ${texts.length} texts to capture for agent=${agentId}`);
-          const captureOrigin = texts.some((text) => textSuggestsGroupOrigin(text)) ? "group" : "dm";
+          api.logger.info(`memory-lancedb-namespaced: found ${items.length} texts to capture for agent=${agentId}`);
+          const captureOrigin = items.some((it) => textSuggestsGroupOrigin(it.text)) ? "group" : "dm";
 
-          // Priorisierung: User-Nachrichten mit URLs zuerst (max 3), dann neueste Texte (max 5)
-          // Gesamt-Cap: 8. Verhindert dass frühe Link-Nachrichten von späteren Antworten verdrängt werden.
-          const seen = new Set();
+          // Priorisierung: User-Nachrichten mit URLs zuerst (max 3), dann neueste (max 5)
+          const userUrlItems = items.filter(it => it.isUserUrl);
+          const seenTexts = new Set();
           const captureList = [];
-          for (const t of [...userUrlTexts.slice(-3), ...texts.slice(-5)]) {
-            if (!seen.has(t)) { seen.add(t); captureList.push(t); }
+          for (const it of [...userUrlItems.slice(-3), ...items.slice(-5)]) {
+            if (!seenTexts.has(it.text)) { seenTexts.add(it.text); captureList.push(it); }
             if (captureList.length >= 8) break;
           }
 
           let stored = 0;
           let skipped = 0;
+          const captureTimestamp = Date.now();
 
-          for (let text of captureList) {
+          for (let it of captureList) {
+            let text = it.text;
             try {
               // Oversized texts: LLM-summarize (or truncate as fallback)
               if (text.length > maxChars) {
@@ -764,6 +1004,7 @@ const plugin = {
 
               const category = categorizeMemory(text);
               const summary = generateSummary(text, summaryMaxWords);
+              const evidenceQuote = it.text.slice(0, 200);
 
               await db.store({
                 id: randomUUID(),
@@ -773,10 +1014,16 @@ const plugin = {
                 vector,
                 importance: 0.7,
                 category,
-                createdAt: Date.now(),
+                createdAt: captureTimestamp,
                 mergedFrom: "[]",
                 expiresAt: 0,
                 storedBy: agentId,
+                sourceTurnId: turnId || "",
+                sourceMessageRole: it.role || "",
+                sourceTimestamp: captureTimestamp,
+                sourceUrl: it.sourceUrl || "",
+                evidenceQuote,
+                scope: "agent-private",
               });
               stored++;
               api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
@@ -819,34 +1066,57 @@ const plugin = {
             try {
               const limit = params.limit || 5;
               const vector = await embeddings.embed(params.query);
-              // Mit Reranker: mehr Kandidaten holen, dann re-ranken
               const fetchLimit = reranker ? Math.max(rerankCandidates, limit * 3) : limit;
               const results = await db.search(vector, fetchLimit, recallMinScore);
-              if (results.length === 0) return { content: [{ type: "text", text: "No relevant memories found." }] };
 
-              let ordered = results;
-              if (reranker && results.length > 1) {
+              // Canonical-first: search KNOWLEDGE.md sections
+              let canonicalHits = [];
+              if (canonicalEnabled && ctx?.workspaceDir) {
                 try {
-                  const docs = results.map((r) => r.entry.summary || generateSummary(r.entry.text, summaryMaxWords));
-                  const reranked = await reranker.rerank(params.query, docs, limit);
-                  ordered = reranked.map((r) => results[r.index]);
-                } catch (rerr) {
-                  api.logger.warn(`memory-lancedb-namespaced: rerank failed, falling back to vector order: ${String(rerr)}`);
-                  ordered = results.slice(0, limit);
+                  canonicalHits = await searchCanonical(ctx.workspaceDir, vector, embeddings, canonicalMinScore, canonicalMaxItems, api.logger);
+                } catch (e) {
+                  api.logger.warn(`memory-lancedb-namespaced: canonical search failed: ${String(e)}`);
                 }
-              } else {
-                ordered = results.slice(0, limit);
               }
 
+              if (results.length === 0 && canonicalHits.length === 0) {
+                return { content: [{ type: "text", text: "No relevant memories found." }] };
+              }
+
+              const boosted = applyImportanceBoost(results, importanceBoost);
+
+              let ordered = boosted;
+              if (reranker && boosted.length > 1) {
+                try {
+                  const docs = boosted.map((r) => r.entry.summary || generateSummary(r.entry.text, summaryMaxWords));
+                  const reranked = await reranker.rerank(params.query, docs, Math.max(limit, dedupEnabled ? limit * 2 : limit));
+                  ordered = reranked.map((r) => boosted[r.index]);
+                } catch (rerr) {
+                  api.logger.warn(`memory-lancedb-namespaced: rerank failed, falling back to vector order: ${String(rerr)}`);
+                  ordered = boosted.slice(0, limit);
+                }
+              }
+
+              const remainingSlots = Math.max(0, limit - canonicalHits.length);
+              ordered = dedupEnabled
+                ? dedupResults(ordered, remainingSlots, dedupJaccard)
+                : ordered.slice(0, remainingSlots);
+
               const fullText = params.full_text === true;
-              const text = ordered.map((r) => {
+              const lines = [];
+              for (const c of canonicalHits) {
+                const head = c.heading.replace(/\s+/g, " ").slice(0, 80);
+                const body = fullText ? c.text.trim() : generateSummary(c.text.replace(/^#+\s+.+\n/, "").trim(), 80);
+                lines.push(`[canonical|knowledge] ${head} — ${body} (score: ${c.score.toFixed(2)})`);
+              }
+              for (const r of ordered) {
                 const display = fullText
                   ? r.entry.text
                   : (r.entry.summary || generateSummary(r.entry.text, summaryMaxWords));
                 const orig = DISPLAY_SOURCES.has(r.entry.origin) ? `|${r.entry.origin}` : "";
-                return `[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id})`;
-              }).join("\n");
-              return { content: [{ type: "text", text }] };
+                lines.push(`[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id})`);
+              }
+              return { content: [{ type: "text", text: lines.join("\n") }] };
             } catch (err) {
               return { content: [{ type: "text", text: `Memory recall failed: ${String(err)}` }] };
             }
@@ -864,6 +1134,9 @@ const plugin = {
               importance: { type: "number", description: "Importance 0-1 (default 0.5)" },
               origin: { type: "string", enum: MEMORY_ORIGINS, description: "Origin context: 'dm' = direct message (default), 'group' = Telegram group chat, 'cron' = background job, 'internal' = agent-generated. ALWAYS set 'group' when storing from a group chat!" },
               ttl: { type: "string", enum: ["session", "short"], description: "Memory lifetime: 'session' = until tomorrow, 'short' = 14 days. Omit for permanent storage." },
+              sourceUrl: { type: "string", description: "Optional URL this memory is derived from (provenance)" },
+              evidenceQuote: { type: "string", description: "Optional original quote (≤200 chars) that backs this memory" },
+              scope: { type: "string", enum: MEMORY_SCOPES, description: "Visibility scope: 'agent-private' (default), 'workspace' (shared within workspace), 'user' (shared across all agents of one user)" },
             },
             required: ["text"],
           },
@@ -874,6 +1147,9 @@ const plugin = {
               const origin = MEMORY_ORIGINS.includes(params.origin) ? params.origin : "dm";
               const importance = params.importance ?? 0.5;
               const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
+              const scope = MEMORY_SCOPES.includes(params.scope) ? params.scope : "agent-private";
+              const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
+              const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
 
               // 1. Duplicate check
               const existing = await db.findSimilar(vector, params.text, duplicateThreshold);
@@ -904,7 +1180,7 @@ const plugin = {
                   if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
                     await db.delete(mergeCandidate.entry.id);
                     const mergedVector = await embeddings.embed(mergeResult.mergedText);
-                    const mergedEntry = { id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: agentId };
+                    const mergedEntry = { id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
                     await db.store(mergedEntry);
                     if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
                     if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -925,7 +1201,7 @@ const plugin = {
 
               // 3. Normal store
               const summary = generateSummary(params.text, summaryMaxWords);
-              const entry = { id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId };
+              const entry = { id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
               if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -1057,6 +1333,18 @@ const plugin = {
                 if (existsSync(knowledgePath)) currentContent = readFileSync(knowledgePath, "utf8");
               } catch (_) {}
 
+              // Strip frontmatter — LLM should never touch it
+              const { frontmatter: existingFm, body: currentBody } = stripFrontmatter(currentContent);
+              const sourceMemoryIds = pendingTexts.map(m => m.id);
+              let mergedSources = sourceMemoryIds;
+              if (existingFm) {
+                const m = existingFm.match(/source_memories:\s*\n((?:\s+-\s+.+\n?)*)/);
+                if (m) {
+                  const oldIds = m[1].split("\n").map(l => l.replace(/^\s+-\s+/, "").trim()).filter(Boolean);
+                  mergedSources = [...new Set([...oldIds, ...sourceMemoryIds])];
+                }
+              }
+
               const today = new Date().toISOString().slice(0, 10);
               const newEntriesBlock = pendingTexts.length > 0
                 ? pendingTexts.map(m => `- category=${m.category}, importance=${m.importance.toFixed(1)}: ${m.text}`).join("\n")
@@ -1065,7 +1353,7 @@ const plugin = {
               const updated = await callLlm([
                 {
                   role: "user",
-                  content: `Here is the current KNOWLEDGE.md (empty = not yet created):\n${currentContent || "(empty)"}\n\nNew memories to integrate (date=${today}):\n${newEntriesBlock}${params?.note ? `\n\nCurator note: ${params.note}` : ""}\n\nIntegrate these into the KNOWLEDGE.md.\n- Add entries under appropriate sections with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown, no code block wrapper.`,
+                  content: `Here is the current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memories to integrate (date=${today}):\n${newEntriesBlock}${params?.note ? `\n\nCurator note: ${params.note}` : ""}\n\nIntegrate these into the KNOWLEDGE.md body.\n- Add entries under appropriate sections with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.`,
                 },
               ], { ...schicht15LlmCfg, maxTokens: 3000 });
 
@@ -1073,25 +1361,28 @@ const plugin = {
                 return { content: [{ type: "text", text: "knowledge_update: LLM returned empty result." }] };
               }
 
-              let finalContent = updated;
+              let finalBody = updated;
 
               // Compaction if >200 lines
-              if (finalContent.split("\n").length > 200) {
+              if (finalBody.split("\n").length > 200) {
                 const compacted = await callLlm([
                   {
                     role: "user",
-                    content: `The following KNOWLEDGE.md has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown, no code block wrapper.\n\n${finalContent}`,
+                    content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
                   },
                 ], { ...schicht15LlmCfg, maxTokens: 4000 });
 
                 const compactedLines = compacted?.split("\n").length ?? Infinity;
                 if (compacted && compactedLines <= 150) {
-                  finalContent = compacted;
+                  finalBody = compacted;
                   api.logger.info(`memory-lancedb-namespaced: KNOWLEDGE.md compacted to ${compactedLines} lines`);
                 } else {
                   api.logger.warn(`memory-lancedb-namespaced: KNOWLEDGE.md compaction skipped: result (${compactedLines} lines) not ≤150`);
                 }
               }
+
+              // Re-attach frontmatter (last_verified updated, source_memories merged)
+              const finalContent = withFrontmatter(finalBody, { agentId, sourceMemoryIds: mergedSources, today });
 
               // Atomic write
               if (!existsSync(memDir)) mkdirSync(memDir, { recursive: true });
@@ -1132,31 +1423,58 @@ const plugin = {
           const topN = 5;
           const fetchLimit = reranker ? Math.max(rerankCandidates, topN * 3) : topN;
           const results = await db.search(vector, fetchLimit, autoRecallMinScore);
-          if (results.length === 0) return;
 
-          let ordered = results;
-          if (reranker && results.length > 1) {
+          // Canonical-first — Search KNOWLEDGE.md for matching sections
+          let canonicalHits = [];
+          if (canonicalEnabled && ctx?.workspaceDir) {
             try {
-              const docs = results.map((r) => r.entry.summary || generateSummary(r.entry.text, summaryMaxWords));
-              const reranked = await reranker.rerank(event.prompt, docs, topN);
-              ordered = reranked.map((r) => results[r.index]);
-            } catch (rerr) {
-              api.logger.warn(`memory-lancedb-namespaced: auto-recall rerank failed, falling back: ${String(rerr)}`);
-              ordered = results.slice(0, topN);
+              canonicalHits = await searchCanonical(ctx.workspaceDir, vector, embeddings, canonicalMinScore, canonicalMaxItems, api.logger);
+            } catch (e) {
+              api.logger.warn(`memory-lancedb-namespaced: canonical search failed: ${String(e)}`);
             }
-          } else {
-            ordered = results.slice(0, topN);
           }
 
-          api.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
-          const memoriesContext = formatRelevantMemoriesContext(
-            ordered.map((r) => ({
+          if (results.length === 0 && canonicalHits.length === 0) return;
+
+          // Importance-boost — re-rank vector results by score * (1 + importance * boost)
+          const boosted = applyImportanceBoost(results, importanceBoost);
+
+          let ordered = boosted;
+          if (reranker && boosted.length > 1) {
+            try {
+              const docs = boosted.map((r) => r.entry.summary || generateSummary(r.entry.text, summaryMaxWords));
+              const reranked = await reranker.rerank(event.prompt, docs, Math.max(topN, dedupEnabled ? topN * 2 : topN));
+              ordered = reranked.map((r) => boosted[r.index]);
+            } catch (rerr) {
+              api.logger.warn(`memory-lancedb-namespaced: auto-recall rerank failed, falling back: ${String(rerr)}`);
+              ordered = boosted.slice(0, topN);
+            }
+          }
+
+          // Dedup against each other (keeps first/best of similar pairs)
+          // Slot share: canonical takes priority, raw memories fill remaining slots
+          const remainingSlots = Math.max(0, topN - canonicalHits.length);
+          ordered = dedupEnabled
+            ? dedupResults(ordered, remainingSlots, dedupJaccard)
+            : ordered.slice(0, remainingSlots);
+
+          api.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
+
+          const items = [];
+          for (const c of canonicalHits) {
+            const head = c.heading.replace(/\s+/g, " ").slice(0, 80);
+            const snippet = generateSummary(c.text.replace(/^#+\s+.+\n/, "").trim(), 60);
+            items.push({ id: `canonical:${head}`, category: "canonical", source: "knowledge", display: `${head} — ${snippet}` });
+          }
+          for (const r of ordered) {
+            items.push({
               id: r.entry.id,
               category: r.entry.category,
               source: r.entry.origin || "dm",
               display: r.entry.summary || generateSummary(r.entry.text, summaryMaxWords),
-            })),
-          );
+            });
+          }
+          const memoriesContext = formatRelevantMemoriesContext(items);
 
           // Schicht 1.5 overlay nudge: remind agent to call knowledge_update if pending count is high
           let nudge = "";

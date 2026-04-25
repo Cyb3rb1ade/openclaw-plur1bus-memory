@@ -71,6 +71,18 @@
         "properties": {
           "enabled": { "type": "boolean", "default": true }
         }
+      },
+      "recall": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "importanceBoost":      { "type": "number",  "default": 0.3 },
+          "dedup":                { "type": "boolean", "default": true },
+          "dedupJaccard":         { "type": "number",  "default": 0.6 },
+          "canonicalFirst":       { "type": "boolean", "default": true },
+          "canonicalMinScore":    { "type": "number",  "default": 0.30 },
+          "canonicalMaxItems":    { "type": "number",  "default": 2 }
+        }
       }
     }
   }

@@ -435,52 +435,6 @@ Nur Memories über dem `autoRecallMinScore`-Schwellenwert (Standard: 0.2) werden
 }
 ```
 
-### Auto-Recall feuert nicht — Fehlerbilder & Checks
-
-Wenn im Produktionslog keine `injecting N memories for agent=…` Zeilen erscheinen obwohl der Agent antwortet, liegt es meist an einer dieser drei Ursachen:
-
-**1. System-Nachrichten vom Gateway ≠ Agent-Turns**
-
-Gateway-Broadcasts (z.B. Model-Switch-Alerts von Quota-Monitoring, Restart-Notifications, Config-Change-Hinweise) erzeugen Telegram/Discord-Ausgaben über direkten `sendMessage`-Aufruf — **ohne** die Turn-Pipeline zu durchlaufen. Dadurch feuert kein `before_agent_start`-Hook, und Auto-Recall läuft korrekt **nicht**. Das Log zeigt dann Activity ohne Recall, was wie ein Plugin-Fehler aussieht.
-
-```bash
-# Check — feuert der Hook bei echten User-Turns?
-grep "memory-lancedb-namespaced: injecting" /tmp/openclaw/openclaw-$(date +%Y-%m-%d).log | tail
-# Verdachtsfall: Hook-Events fehlen, aber sendMessage-Events sind da?
-# → Ursache vermutlich System-Notifications. Einmal manuell eine Nachricht an den Agent
-#   senden und prüfen ob JETZT eine injecting-Zeile auftaucht.
-```
-
-Zur schnellen Verifikation lässt sich temporär ein Debug-Log im Plugin einfügen:
-```js
-api.on("before_agent_start", async (event, ctx) => {
-  api.logger.info(`before_agent_start fired agent=${ctx?.agentId} promptLen=${event?.prompt?.length ?? "NONE"}`);
-  // … bestehender Code …
-});
-```
-
-**2. Externer Switch überschreibt `agents.defaults.model.primary`**
-
-Quota-Monitor- oder Failover-Scripts mit hardcoded Modellnamen können die Primär-Config-Datei periodisch revertieren. Das betrifft Auto-Recall indirekt: Wenn das Merging-Modell oder das Recall-Embedding nachgelagert ein falsches/fehlendes Modell erreicht, schlägt Recall fehl und loggt Warnings statt Inject-Events.
-
-```bash
-# Check — wird die Config regelmäßig geschrieben?
-stat /root/.openclaw/openclaw.json    # Modify-Zeit prüfen gegen Cron-Tick-Muster
-# Verdacht: Modify immer zu :00, :15, :30, :45 → typisches */15-Cron-Muster
-```
-
-Wenn ein eigener Quota-Monitor im Einsatz ist, dort **alle** Hardcoded-Modellnamen (Target des Auto-Reverts) an die aktuelle Konfiguration anpassen. Sicherer: Quota-Script liest das Default-Modell aus `openclaw.json` und revertiert auf den letzten bekannten Nicht-Cooldown-Wert statt auf einen statischen String.
-
-**3. Legacy-Hook-Warning unter OpenClaw ≥ 4.20**
-
-Ab 4.20 markiert `openclaw plugins inspect memory-lancedb-namespaced` den Hook `before_agent_start` als **Legacy** (`usesLegacyBeforeAgentStart: yes`). Funktional ist er weiter supported — das Gateway ruft ihn für Model-Overrides und Prompt-Mutation auf. Keine Aktion nötig. Längerfristig ist eine Migration auf die neuen typisierten Hooks (`before_prompt_build`, `before_model_resolve`) vorgesehen.
-
-```bash
-openclaw plugins inspect memory-lancedb-namespaced 2>&1 | grep -E "Legacy|hooks"
-# Typed hooks: agent_end, before_agent_start
-# Legacy before_agent_start: yes    ← informativ, kein Fehler
-```
-
 ---
 
 ## Die drei Agent-Tools
@@ -1672,7 +1626,7 @@ git merge contrib/main --no-ff
 
 ## Upgrade-Anleitung: 2026-04-06 → 2026-04-13 — Dreaming (nativ via memory-core)
 
-### Aktueller Stand (2026-04-13)
+### Aktueller Stand (2026-04-25, OpenClaw 2026.4.23)
 
 Das Dreaming läuft **nativ über OpenClaws `memory-core`** — nicht über externe Bridge-Scripts.
 
@@ -1689,7 +1643,7 @@ memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto
 |---|---|---|
 | **Light** | Tagesnotizen aus Workspace scannen, Kandidaten stagen | `memory/.dreams/short-term-recall.json` |
 | **REM** | Narrative Reflexionen aus Memory-Traces generieren | Dream Diary Entries |
-| **Deep** | Tiefe Konsolidierung, MEMORY.md-Promotions | `MEMORY.md` (Workspace-Root) Ergänzungen |
+| **Deep** | Tiefe Konsolidierung, MEMORY.md-Promotions | `memory/MEMORY.md` Ergänzungen |
 
 ### Namespace-Isolation
 
@@ -1860,195 +1814,209 @@ Memory-Plugin:
 
 ---
 
-## Aktualisierungen 2026-04-17
+## Änderungen OpenClaw 2026.4.22 + 2026.4.23 — Memory-System
 
-### 1. Dreaming ↔ LanceDB Harmonisierung
+Alle Verbesserungen greifen automatisch ohne Config-Änderungen.
 
-Promoted Dreaming-Inhalte (die aus dem nächtlichen Dreaming-Prozess in `MEMORY.md` hochgestuft werden) werden jetzt automatisch auch in die LanceDB eingebettet.
+### 2026.4.22
 
-**Warum:** Vorher waren promotete Memories nur beim Session-Bootstrap verfügbar (via `MEMORY.md`). Jetzt tauchen sie auch im Real-Time Recall auf — die Active-Memory-Injection bezieht sie mit ein.
+**sqlite-vec KNN für Vektor-Recall:** Der Workspace-Indexer (Schicht 2) nutzt jetzt K-Nearest-Neighbour-Suche via sqlite-vec — bessere Qualität bei Multi-Model-Indizes, Full-Post-Filter-Limits bleiben erhalten.
 
-**Script:** `scripts/embed-promoted-memories.mjs`
-- Erkennt Promotionen via `<!-- openclaw-memory-promotion:... -->` Marker in `MEMORY.md`
-- State-Tracking: jede Promotion wird nur einmal eingebettet (idempotent)
-- Läuft alle 30 Minuten via Cron — auch tagsüber wenn manuell promotet wird
-- `importance: 0.9` und `category: "curated"` — höher gewichtet als normale Captures
+**Dynamische Hook-Verdrahtung:** Auto-Recall und Auto-Capture bleiben intern verdrahtet auch wenn sie beim Start im disabled-Zustand sind. Aktivierung per live Config-Änderung greift sofort ohne Gateway-Restart. Umgekehrt: Plugin-Entry-Entfernung deaktiviert Hooks ebenfalls sofort.
 
-**Einrichten:**
-```bash
-# Cron: alle 30 Minuten
-*/30 * * * * OPENAI_API_KEY=<key> node /root/.openclaw/scripts/embed-promoted-memories.mjs >> /root/.openclaw/logs/embed-promotions.log 2>&1
-```
+**Retry nach LanceDB-Init-Fehler:** Schlägt das LanceDB-Init beim Gateway-Start fehl (z.B. durch kurzen FS-Timeout), wird automatisch ein Retry versucht statt dauerhaft zu cachen.
 
-**MEMORY.md-Pfad (wichtig, Stand v1.7.1):** Das Script liest primär aus
-`{workspace}/MEMORY.md` (Workspace-Root, wohin Dreaming seit Anfang April
-schreibt). `{workspace}/memory/MEMORY.md` ist nur noch Legacy-Fallback — wenn
-alte Installationen die Datei noch dort haben, wird sie als Zweitwahl genutzt.
-Bei Neuinstallationen kann `{workspace}/memory/` für andere Zwecke genutzt
-werden (z.B. Tageslog-Dateien `YYYY-MM-DD.md`), die MEMORY.md liegt im Root.
+### 2026.4.23
 
-**Fehlerbild „Promotionen landen nicht in LanceDB":** Wenn `MEMORY.md` aktuell
-ist aber kein neues Embedding sichtbar, prüfen:
-```bash
-# Welche Datei hat neue Promotion-Marker?
-for ws in workspace workspace-bernhardine workspace-heisenberg; do
-  for p in "$ws/MEMORY.md" "$ws/memory/MEMORY.md"; do
-    f="/root/.openclaw/$p"
-    [[ -f "$f" ]] || continue
-    c=$(grep -c "openclaw-memory-promotion" "$f")
-    printf "%-50s markers=%d mtime=%s\n" "$p" "$c" "$(stat -c '%y' "$f" | cut -c1-16)"
-  done
-done
-# State des Embedders — was wurde schon eingebettet?
-ls /root/.openclaw/.embed-promotions-state/
-```
-Falls Dreaming in die *Legacy*-Datei schreibt obwohl Root existiert: das
-Script nimmt dann nicht beide, sondern priorisiert Root. Dreaming-Config prüfen.
+**Dreaming-Cron entkoppelt:** Das Dreaming läuft jetzt als eigenständiger Lightweight-Agent-Turn, nicht mehr als Teil des Heartbeat-Jobs. Kein Handlungsbedarf — vollständig intern. Heartbeat-Cron-Jobs in `jobs.json` unverändert.
 
-### 2. Dreaming Storage Mode: `separate`
+**`memorySearch.local.contextSize`:** Neues konfigurierbares Feld (Default: 4096 Tokens) für den Kontext beim lokalen Embedding-Search. Für constrained Environments verkleinerbar. Konfigurierbar via `memorySearch.local.contextSize` in `openclaw.json` — bei uns Default ausreichend.
 
-Ab OpenClaw 2026.4.15 ist der Default für `dreaming.storage.mode` geändert:
-
-| Mode | Verhalten |
-|------|-----------|
-| `inline` (alt) | Dreaming-Blöcke direkt in `memory/YYYY-MM-DD.md` |
-| **`separate`** (neu default) | Dreaming-Blöcke in `memory/dreaming/{phase}/YYYY-MM-DD.md` |
-
-**Empfehlung:** `separate` verwenden — Tages-MD bleibt sauber, Dreaming-Inhalte in eigenem Ordner.
-
-**Config:**
-```json
-"plugins": {
-  "entries": {
-    "memory-core": {
-      "config": {
-        "dreaming": {
-          "storage": { "mode": "separate" }
-        }
-      }
-    }
-  }
-}
-```
-
-**Wichtig:** Die LanceDB-Capture-Pipeline und der Auto-Recall sind davon **nicht betroffen** — beide arbeiten mit Session-JSONL-Dateien, nicht mit Dreaming-Ausgabepfaden.
-
-### 3. Active-Memory: Schnelles Modell empfohlen
-
-Das Active-Memory Plugin (Pre-Prompt Recall) sollte ein **schnelles, nicht-denkendes** Modell nutzen. Mit `kimi-coding/k2p5` (reasoning enabled) liefen Recall-Queries in 36–60s Timeouts.
-
-**Empfohlene Config:**
-```json
-"active-memory": {
-  "enabled": true,
-  "config": {
-    "model": "moonshot/kimi-k2.5-instant",
-    "modelFallback": "google/gemini-flash-latest",
-    "timeoutMs": 15000,
-    "thinking": "off"
-  }
-}
-```
-
-`kimi-k2.5-instant` antwortet in ~300ms — 120× schneller als k2p5 für diese Aufgabe.
-
-### Upgrade-Checkliste 2026-04-17
-
-```
-Memory-Harmonisierung:
-  [ ] scripts/embed-promoted-memories.mjs deployed
-  [ ] Cron eingerichtet (alle 30 Minuten)
-  [ ] Erstes Embed-Run durchgeführt (alle bestehenden MEMORY.md-Promotionen)
-
-OpenClaw 2026.4.15:
-  [ ] dreaming.storage.mode: "separate" in openclaw.json gesetzt
-  [ ] active-memory model: moonshot/kimi-k2.5-instant, timeoutMs: 15000
-  [ ] apply-media-patch.sh: Globs für extensions/telegram/ und extensions/discord/ erweitert
-
-Modell-Updates:
-  [ ] k2p6 in allen agents/*/agent/models.json verfügbar
-  [ ] k2p5 + k2p6: contextWindow=262144, maxTokens=32768
-  [ ] Developer + Developer-Verifier: model=kimi-coding/k2p6
-```
+**Root Memory Canonicalization:** OpenClaw behandelt `MEMORY.md` als kanonischen Einstiegspunkt — kompatibel mit unserem bestehenden Setup.
 
 ---
 
-## Aktualisierungen 2026-04-21
+## v1.8.0 (2026-04-25) — Memory-Hygiene-Release
 
-### 1. MEMORY.md → LanceDB Migration (Schicht 4)
+Inspiriert von einer Architektur-Analyse gegen [GBrain](https://github.com/garrytan/gbrain) wurden drei Schwächen adressiert: unkurierter Memory-Haufen, fehlende Provenance, und keine messbaren Health-/Recall-Metriken. Drei Bündel — alle additiv, alle Defaults sicher.
 
-Wenn `MEMORY.md` über Zeit durch Promotionen und manuelle Einträge sehr groß wird (>40k Zeichen), truncated der Gateway beim Bootstrap — das Wissen ist vorhanden, aber langsam zu laden und teilweise unsichtbar.
+### Bündel A — Recall-Qualität
 
-**Lösung:** Alle Einträge aus `MEMORY.md` in die per-Agent LanceDB migrieren. Die `MEMORY.md` wird auf einen kompakten Header + Referenzhinweis reduziert. Das gesamte Wissen bleibt vollständig über `memory_recall` und Active-Memory abrufbar.
+#### Inter-Result-Dedup vor Injection
 
-**Script:** `scripts/migrate-memory-md-to-lancedb.mjs`
+Nach Cohere-Rerank durchläuft die Top-N noch einen Jaccard-Token-Similarity-Pass. Sind zwei Summaries ≥ `recall.dedupJaccard` (Default 0.6) ähnlich, wird die schwächer-rankende verworfen, die nächste rückt nach. Verhindert dass fünf Varianten desselben Sachverhalts den Kontext fluten.
+
+#### Importance-Boost im Recall
+
+Score-Anpassung: `boostedScore = score * (1 + importance * boost)`. High-importance Memories rutschen nach oben. Default `recall.importanceBoost: 0.3`. Wirkt in Auto-Recall und im manuellen `memory_recall`-Tool.
+
+#### `scripts/memory-doctor.mjs` — Health-CLI
+
+Neues Wartungs-Tool mit 7 Subcommands:
 
 ```bash
-# Migration durchführen (alle drei Hauptagenten)
-OPENAI_API_KEY=<key> node scripts/migrate-memory-md-to-lancedb.mjs
-
-# Nur einen Agenten migrieren
-OPENAI_API_KEY=<key> node scripts/migrate-memory-md-to-lancedb.mjs main
-
-# Testlauf ohne Änderungen
-OPENAI_API_KEY=<key> node scripts/migrate-memory-md-to-lancedb.mjs main --dry-run
+node scripts/memory-doctor.mjs stats     # Zähler, Speicher, Lücken pro Agent
+node scripts/memory-doctor.mjs dupes     # Cluster fast-identischer Memories (Jaccard)
+node scripts/memory-doctor.mjs stale 90  # Memories älter X Tage mit imp < 0.5
+node scripts/memory-doctor.mjs orphans   # Memories ohne storedBy/origin
+node scripts/memory-doctor.mjs pending   # high-imp Memories nicht in KNOWLEDGE.md
+node scripts/memory-doctor.mjs eval      # recall-eval.json gegen agent laufen
+node scripts/memory-doctor.mjs all       # alle Checks kompakt
 ```
 
-**Was passiert:**
-1. Alle Abschnitte und Promotionen aus `MEMORY.md` werden geparst (Sektionen, Einträge mit `<!-- openclaw-memory-promotion:... -->` Marker)
-2. Jeder Chunk wird via OpenAI `text-embedding-3-large` eingebettet
-3. Duplikat-Check (Cosine-Similarity > 0.97 → skip)
-4. Eintrag landet in LanceDB mit `importance: 0.95`, `category: "knowledge"` oder `"curated"`
-5. `MEMORY.md` wird auf ~2k Zeichen reduziert (Header + Archivhinweis)
-6. Backup: `MEMORY.md.bak-YYYYMMDD` bleibt erhalten
+Discovery liest Agents aus `openclaw.json`, Tabellen werden direkt via embedded LanceDB gelesen — kein Gateway-API-Call nötig.
 
-**Ergebnis:**
-- Bootstrap schnell (<40k Zeichen)
-- Wissen vollständig in LanceDB — taucht automatisch in Active-Memory Recall auf
-- `memory_recall` findet alles semantisch
-- `MEMORY.md` wird weiterhin für neue Promotionen genutzt
+#### `scripts/recall-eval.json` — Recall-Test-Batterie
 
-**Wann durchführen:**
+JSON-Schema pro Agent mit Test-Queries. Pro Query genau eines von `expectedMemoryId`, `expectedTextContains[]`, `expectedCategory`, `minScore`. Pass-Rate-Berechnung macht Threshold-Tuning **messbar** statt subjektiv. Beispiel:
+
+```json
+{
+  "bernhardine": [
+    { "query": "Wer ist Eva?", "expectedTextContains": ["eva"], "limit": 5 },
+    { "query": "Eriks Telegram-ID", "expectedTextContains": ["[REDACTED_CHAT_ID]"] }
+  ]
+}
+```
+
+### Bündel B — Architektur
+
+#### B1 — Provenance-Felder im Schema
+
+Sechs neue LanceDB-Spalten (alle auto-migriert beim ersten DB-Zugriff):
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `sourceTurnId` | string | Turn-ID die diesen Memory erzeugt hat |
+| `sourceMessageRole` | string | `user` / `assistant` / `tool` / `system` |
+| `sourceTimestamp` | int64 (ms) | Wann wurde die Quell-Nachricht gesendet |
+| `sourceUrl` | string | URL aus User-Nachricht (Auto-Capture) |
+| `evidenceQuote` | string | Original-Zitat (≤200 Zeichen) |
+| `scope` | string | `agent-private` (default) \| `workspace` \| `user` |
+
+`memory_store` akzeptiert die Felder als optionale Parameter:
+
+```json
+{
+  "text": "Christian bevorzugt direkte Antworten.",
+  "category": "preference",
+  "importance": 0.85,
+  "sourceUrl": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/issues/12",
+  "evidenceQuote": "Mach bitte direkte Antworten ohne Präambel."
+}
+```
+
+Auto-Capture befüllt sie automatisch aus der Turn-Struktur — `sourceMessageRole` aus `msg.role`, `sourceTimestamp` aus `Date.now()`, `sourceUrl` per Regex aus User-Nachrichten, `evidenceQuote` aus den ersten 200 Zeichen des Original-Textes (vor LLM-Summary).
+
+`scope` bereitet einen späteren Cross-Agent-Sharing-Modus vor — heute noch funktional `agent-private` für alle (= bestehendes Verhalten).
+
+#### B2 — Canonical-First Recall
+
+Vor dem LanceDB-Vektor-Search wird `memory/KNOWLEDGE.md` semantisch durchsucht:
+
+```
+Query
+  │
+  ▼
+[ NEU ] Search KNOWLEDGE.md sections (cosine-sim against query vector)
+  │      Top-N (≥ canonicalMinScore) als <relevant-memories>[canonical|knowledge]
+  │
+  ├──► LanceDB vector search (existing)
+  │       │
+  │       ▼
+  │     Importance-Boost
+  │       │
+  │       ▼
+  │     Cohere Rerank
+  │       │
+  │       ▼
+  │     Inter-Result-Dedup
+  │
+  ▼
+Slot-Aufteilung: canonical first, raw memories füllen Restslots (Total ≤ 5)
+```
+
+**Caching:** KNOWLEDGE.md wird per H1/H2/H3-Header in Sections gechunked, jede Section bekommt einen Embedding-Vektor. Cache liegt in `{workspaceDir}/.adaptive-learning/knowledge-cache.json`, invalidiert per `mtime`. Erstes Recall nach KNOWLEDGE.md-Update generiert die Embeddings (~2–5s je nach Größe), dann sind sie cached.
+
+**Output-Format:**
+
+```xml
+<relevant-memories>
+  - [canonical|knowledge] Eva — Identität — Eva ist die Frau von Christian (Mr. Cy)…
+  - [canonical|knowledge] Erik — Gesundheit — Erik (18) hat Typ-1-Diabetes, Nightscout-Monitoring…
+  - [preference] Antworten auf Deutsch, kurz und direkt… (ID: abc-123)
+  - [fact|group] Im Gruppen-Chat wurde beschlossen… (ID: def-456)
+</relevant-memories>
+```
+
+#### B3 — Markdown-Frontmatter in KNOWLEDGE.md
+
+`updateKnowledgeMd` und `knowledge_update` schreiben jetzt YAML-Frontmatter:
+
+```yaml
+---
+type: knowledge
+agent: bernhardine
+last_verified: 2026-04-25
+source_memories:
+  - 9b3f1234-...
+  - 7c8e2456-...
+---
+
+# Bernhardines kuratiertes Wissen
+
+## Eva — Identität
+...
+```
+
+LLM-Prompts wurden angepasst: der LLM bekommt **nur den Body** zu sehen und darf nur den Body zurückgeben. Das Frontmatter wird programmatisch generiert und re-attacht. Bestehende `source_memories`-Listen werden mit neuen Pending-IDs gemerged (max. 50 jüngste). `last_verified` wird bei jedem Update aktualisiert — von `memory-doctor stale` für KNOWLEDGE.md-Frische-Checks nutzbar.
+
+### Komplette neue Plugin-Config
+
+```json
+"recall": {
+  "importanceBoost":   0.3,
+  "dedup":             true,
+  "dedupJaccard":      0.6,
+  "canonicalFirst":    true,
+  "canonicalMinScore": 0.30,
+  "canonicalMaxItems": 2
+}
+```
+
+Alle Defaults sicher — bestehende Installationen funktionieren ohne Config-Änderung. Wer das alte Verhalten wieder will: `recall.dedup: false` und `recall.canonicalFirst: false`.
+
+### Migration
+
+Voll-automatisch beim nächsten Gateway-Start. Sechs neue LanceDB-Spalten werden zu allen Agent-Tabellen hinzugefügt mit sicheren Defaults. Bestehende Memories behalten alle alten Werte unverändert.
+
+### Bekannte Einschränkung — `agent_end`-Hook
+
+Auto-Capture (`agent_end`) wird seit OpenClaw 4.x mit Warnung
+`typed hook "agent_end" blocked because non-bundled plugins must set hooks.allowConversationAccess=true` im Log geblockt.
+
+Der Schlüssel `allowConversationAccess` ist im OpenClaw-Runtime-Schema **nicht** gewhitelisted, obwohl die Manifest-Registry ihn erwartet — Schema-Mismatch in OpenClaw selbst, kein Plugin-Bug. Workaround steht aus, bis OpenClaw das Feld in `plugins.entries.*.hooks.properties` ergänzt.
+
+**Was funktioniert weiterhin:** Auto-Recall, `memory_store` / `memory_recall` / `memory_forget` / `knowledge_update`, Schicht 1.5, GC, Conflict-Log, Canonical-First, Doctor-CLI. **Was nicht:** Auto-Capture aus Turn-Messages (kann via `memory_store` kompensiert werden, was die Agenten-SOULs ohnehin tun).
+
+### Verifikation nach Update
+
 ```bash
-# MEMORY.md-Größe prüfen
-wc -c workspace/MEMORY.md workspace-bernhardine/MEMORY.md workspace-heisenberg/MEMORY.md
-# Empfehlung: Migration wenn >100k Zeichen
-```
+# 1. Schema-Migration prüfen (jeder Agent sollte 18 Felder haben):
+python3 -c "
+import lancedb
+tbl = lancedb.connect('/root/.openclaw/memory/lancedb-namespaced/main').open_table('memories')
+fields = [f.name for f in tbl.schema]
+new = ['sourceTurnId','sourceMessageRole','sourceTimestamp','sourceUrl','evidenceQuote','scope']
+for n in new: print(f'{\"✓\" if n in fields else \"✗\"} {n}')
+"
 
-**Architektur danach (Schicht 4):**
+# 2. Doctor-CLI Stats:
+node /root/.openclaw/scripts/memory-doctor.mjs stats
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  MEMORY.md (kompakt, <40k)                                      │
-│  → Bootstrap beim Sessionstart                                   │
-│  → User-Profil, aktuelle Projekte, kritische Regeln             │
-├─────────────────────────────────────────────────────────────────┤
-│  LanceDB (semantisch, unbegrenzt)                                │
-│  → Auto-Recall: 5 relevante Memories pro Turn injiziert         │
-│  → memory_recall: manuelle Suche                                │
-│  → Quellen: Sessions, Dreaming-Promotionen, MEMORY.md-Migration │
-└─────────────────────────────────────────────────────────────────┘
-```
+# 3. Recall-Eval-Baseline:
+node /root/.openclaw/scripts/memory-doctor.mjs eval
 
-### 2. OpenClaw 2026.4.20: Updates
-
-- **Moonshot `kimi-k2.6` verfügbar** — in `models.providers.moonshot.models` + Agent-Fallback-Liste eintragen
-- **Patches #5 und #14 retired** — upstream gefixt in 4.20
-- **Cron: `jobs-state.json`** — Runtime-State ab 4.20 in separater Datei; nicht löschen
-- **k2.6 als Agent-Default** — `kimi-coding/k2p6` als Primary-Model empfohlen (statt k2p5)
-
-### Upgrade-Checkliste 2026-04-21
-
-```
-MEMORY.md Migration (wenn >100k chars):
-  [ ] node scripts/migrate-memory-md-to-lancedb.mjs --dry-run   # Vorschau
-  [ ] node scripts/migrate-memory-md-to-lancedb.mjs             # Migration
-  [ ] Gateway neustarten (Bootstrap wieder schnell)
-
-OpenClaw 2026.4.20:
-  [ ] moonshot/kimi-k2.6 in openclaw.json Provider + Fallback-Liste
-  [ ] moonshot/kimi-k2.6 in allen agents/*/agent/models.json
-  [ ] Haupt-Agenten (main, bernhardine, heisenberg) auf kimi-coding/k2p6
-  [ ] apply-media-patch.sh: Patches #5 und #14 als retired markiert
-  [ ] jobs-state.json erscheint automatisch beim ersten Cron-Run
+# 4. Live: Canonical-First sollte im Log auftauchen:
+journalctl --user -u openclaw-gateway --since "5 minutes ago" | grep "+ .* canonical"
 ```
