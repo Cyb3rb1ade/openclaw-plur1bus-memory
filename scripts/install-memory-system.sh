@@ -425,7 +425,73 @@ EMBEDDING_FALLBACK_BASEURL=""
 EMBEDDING_FALLBACK_MODEL=""
 USE_ACTIVE_MEMORY="n"
 
-prompt_input OPENAI_KEY "OpenAI API Key (für Embeddings)" "\${OPENAI_API_KEY}"
+echo ""
+info "Embedding-Provider-Auswahl:"
+info "  → OpenAI (Standard, default n) — text-embedding-3-large/small, ada-002"
+info "  → OpenRouter (v2.1+, opt-in) — 20+ Embedding-Modelle (BAAI/BGE, Mistral, Gemini, Qwen, NVIDIA-free, …)"
+info "Hinweis: Reranker (Cohere) wird unten separat gefragt — nicht von dieser Auswahl betroffen."
+USE_OPENROUTER="n"
+EMBEDDING_BASE_URL=""
+EMBEDDING_DIMENSIONS=""
+
+if confirm "OpenRouter statt OpenAI für Embeddings nutzen?" "n"; then
+  USE_OPENROUTER="y"
+  prompt_input OPENAI_KEY "OpenRouter API Key" "\${OPENROUTER_API_KEY}"
+  EMBEDDING_BASE_URL="https://openrouter.ai/api/v1"
+
+  echo ""
+  info "Lade verfügbare Embedding-Modelle von OpenRouter…"
+  OR_MODELS_JSON=$(curl -sf --max-time 15 "https://openrouter.ai/api/v1/embeddings/models" 2>/dev/null || echo "")
+  if [[ -z "$OR_MODELS_JSON" ]]; then
+    warn "OpenRouter-API nicht erreichbar — falle auf manuelle Modell-Eingabe zurück."
+    EMBEDDING_MODEL="openai/text-embedding-3-large"
+    prompt_input EMBEDDING_MODEL "OpenRouter Embedding-Modell" "$EMBEDDING_MODEL"
+  else
+    # Parse + zeige als Tabelle
+    echo "$OR_MODELS_JSON" | jq -r '
+      .data[] |
+      [.id, (.context_length // 0 | tostring), (.pricing.prompt // "0"), (.description // "" | .[0:70])] |
+      @tsv
+    ' | nl -w3 -s'. ' | awk -F'\t' '{ printf "  %s%-50s %8s ctx  $%-12s %s\n", $1, $2, $3, $4, $5 }' | head -40
+    echo ""
+    info "Tipp: openai/text-embedding-3-large (3072d, multi-lingual, beste Qualität) ist Standard."
+    EMBEDDING_MODEL="openai/text-embedding-3-large"
+    prompt_input EMBEDDING_MODEL "OpenRouter-Modell-ID (z.B. baai/bge-m3, mistralai/mistral-embed-2312)" "$EMBEDDING_MODEL"
+  fi
+
+  # Test-Embedding-Call → Dimension automatisch ermitteln
+  echo ""
+  info "Test-Embedding-Call → ermittle echte Vektor-Dimension…"
+  RESOLVED_KEY="$OPENAI_KEY"
+  [[ "$RESOLVED_KEY" == *'${'* ]] && RESOLVED_KEY=$(eval echo "$RESOLVED_KEY")
+  TEST_RESP=$(curl -sf --max-time 30 -X POST "https://openrouter.ai/api/v1/embeddings" \
+    -H "Authorization: Bearer $RESOLVED_KEY" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$EMBEDDING_MODEL\",\"input\":\"dimension test\",\"encoding_format\":\"float\"}" 2>/dev/null || echo "")
+  if [[ -n "$TEST_RESP" ]]; then
+    EMBEDDING_DIMENSIONS=$(echo "$TEST_RESP" | python3 -c "
+import json, sys
+try:
+  d = json.load(sys.stdin)
+  if 'data' in d and d['data']:
+    print(len(d['data'][0]['embedding']))
+  else:
+    sys.exit(1)
+except:
+  sys.exit(1)
+" 2>/dev/null || echo "")
+  fi
+
+  if [[ -z "$EMBEDDING_DIMENSIONS" ]]; then
+    warn "Test-Call fehlgeschlagen — bitte Dimension manuell angeben (z.B. 1024 für BGE/Mistral, 3072 für OpenAI-large, 1536 für OpenAI-small)."
+    prompt_input EMBEDDING_DIMENSIONS "Embedding-Dimension" "1024"
+  else
+    info "  ✓ Modell '$EMBEDDING_MODEL' liefert $EMBEDDING_DIMENSIONS-dimensionale Vektoren."
+  fi
+else
+  prompt_input OPENAI_KEY "OpenAI API Key (für Embeddings)" "\${OPENAI_API_KEY}"
+fi
+
 prompt_input COHERE_KEY "Cohere API Key (für Re-Ranker, leer = Re-Ranker deaktiviert)" ""
 
 # Embedding-Fallback
@@ -464,9 +530,15 @@ if confirm "ActiveMemory-Plugin aktivieren? (nur OpenClaw ≥ 4.10)" "n"; then
   USE_ACTIVE_MEMORY="y"
 fi
 
-# Embedding-Modell
-EMBEDDING_MODEL="text-embedding-3-large"
-prompt_input EMBEDDING_MODEL "Embedding-Modell" "$EMBEDDING_MODEL"
+# Embedding-Modell (nur fragen wenn nicht via OpenRouter schon gesetzt)
+if [[ "$USE_OPENROUTER" != "y" ]]; then
+  EMBEDDING_MODEL="text-embedding-3-large"
+  prompt_input EMBEDDING_MODEL "Embedding-Modell" "$EMBEDDING_MODEL"
+  EMBEDDING_DIMENSIONS=3072  # OpenAI text-embedding-3-large default
+  if [[ "$EMBEDDING_MODEL" == *"small"* ]] || [[ "$EMBEDDING_MODEL" == *"ada"* ]]; then
+    EMBEDDING_DIMENSIONS=1536
+  fi
+fi
 
 # ─── Schritt 2: Agenten ermitteln ─────────────────────────────────────────────
 
@@ -611,6 +683,8 @@ fi
 PLUGIN_CONFIG=$(jq -n \
   --arg openai_key "$OPENAI_KEY" \
   --arg embedding_model "$EMBEDDING_MODEL" \
+  --arg embedding_base_url "${EMBEDDING_BASE_URL:-}" \
+  --argjson embedding_dims "${EMBEDDING_DIMENSIONS:-3072}" \
   --arg db_path "$TARGET_DIR/memory/lancedb-namespaced" \
   --argjson reranker "$RERANKER_BLOCK" \
   --argjson merging "$MERGING_BLOCK" \
@@ -623,8 +697,9 @@ PLUGIN_CONFIG=$(jq -n \
         {
           "apiKey": $openai_key,
           "model": $embedding_model,
-          "dimensions": 3072
+          "dimensions": $embedding_dims
         }
+        | if $embedding_base_url != "" then . + {"baseUrl": $embedding_base_url} else . end
         | if $embedding_fallback != null then . + {"fallback": $embedding_fallback} else . end
       ),
       "baseDbPath": $db_path,

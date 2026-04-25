@@ -178,10 +178,11 @@ async function migrateAgent(agent, openai, lancedb) {
     try {
       const text = chunk.text.slice(0, 8000);
 
-      // Embed
-      const resp = await openai.embeddings.create({
-        model: EMBEDDING_MODEL, input: text, dimensions: EMBEDDING_DIM
-      });
+      // Embed (v2.1.0: encoding_format=float für OpenRouter-Kompatibilität)
+      const isOpenAi = !EMBEDDING_MODEL.includes("/") || EMBEDDING_MODEL.startsWith("openai/") || EMBEDDING_MODEL.startsWith("text-embedding-");
+      const req = { model: EMBEDDING_MODEL, input: text, encoding_format: "float" };
+      if (isOpenAi) req.dimensions = EMBEDDING_DIM;
+      const resp = await openai.embeddings.create(req);
       const vector = Array.from(resp.data[0].embedding);
 
       // Duplicate check via shared distanceToScore (v1.9.0)

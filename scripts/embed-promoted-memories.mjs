@@ -127,7 +127,11 @@ async function main() {
   const openai = new OpenAI({ apiKey });
 
   async function embed(text) {
-    const r = await openai.embeddings.create({ model: EMBEDDING_MODEL, input: text.slice(0, 8000), dimensions: EMBEDDING_DIM });
+    // v2.1.0: encoding_format=float für OpenRouter-Kompatibilität
+    const isOpenAi = !EMBEDDING_MODEL.includes("/") || EMBEDDING_MODEL.startsWith("openai/") || EMBEDDING_MODEL.startsWith("text-embedding-");
+    const _req = { model: EMBEDDING_MODEL, input: text.slice(0, 8000), encoding_format: "float" };
+    if (isOpenAi) _req.dimensions = EMBEDDING_DIM;
+    const r = await openai.embeddings.create(_req);
     return Array.from(r.data[0].embedding);
   }
 

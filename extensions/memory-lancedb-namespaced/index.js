@@ -361,16 +361,24 @@ class Embeddings {
     return this._fallbackClient;
   }
 
+  // v2.1.0 — Build embedding-request body. encoding_format: "float" ist explizit
+  // gesetzt weil OpenAI-SDK default base64 nutzt, was viele OpenRouter-Provider
+  // (NVIDIA, manche andere) mit 400 ablehnen. dimensions ist nur für OpenAI-
+  // Modelle gültig — andere Provider werfen sonst "unknown parameter" → wir
+  // omitten es bei Nicht-OpenAI-Modellen (heuristisch via Modell-ID-Prefix).
+  _buildEmbeddingRequest(model, text) {
+    const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
+    const req = { model, input: text, encoding_format: "float" };
+    if (isOpenAi && this.dimensions) req.dimensions = this.dimensions;
+    return req;
+  }
+
   async embed(text, retries = 3) {
     const client = await this.getClient();
     let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const response = await client.embeddings.create({
-          model: this.model,
-          input: text,
-          dimensions: this.dimensions,
-        });
+        const response = await client.embeddings.create(this._buildEmbeddingRequest(this.model, text));
         return response.data[0].embedding;
       } catch (err) {
         lastErr = err;
@@ -384,11 +392,8 @@ class Embeddings {
     const fallbackClient = await this.getFallbackClient();
     if (fallbackClient && this._fallbackCfg) {
       try {
-        const response = await fallbackClient.embeddings.create({
-          model: this._fallbackCfg.model || this.model,
-          input: text,
-          dimensions: this.dimensions, // must match primary — same dim constraint
-        });
+        const fallbackModel = this._fallbackCfg.model || this.model;
+        const response = await fallbackClient.embeddings.create(this._buildEmbeddingRequest(fallbackModel, text));
         return response.data[0].embedding;
       } catch (fallbackErr) {
         // Both failed — throw original error for clarity
