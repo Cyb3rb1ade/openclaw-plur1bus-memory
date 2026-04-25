@@ -32,14 +32,8 @@ const TABLE  = "memories";
 
 const { connect } = await import(LANCEDB_MODULE);
 
-// safeTimestamp — Inline-Kopie der gleichnamigen Plugin-Funktion (v1.8.6).
-// Wird in v1.9.0 in shared module wandern (zusammen mit safeUuid, distanceToScore).
-function safeTimestamp(n) {
-  if (!Number.isFinite(n) || n < 0 || n > 1e15) {
-    throw new Error(`Invalid timestamp: ${n}`);
-  }
-  return Math.floor(n);
-}
+// Shared safeTimestamp aus dem Plugin (v1.9.0).
+const { safeTimestamp } = await import(join(ROOT_DIR, "extensions/memory-lancedb-namespaced/lib/sql-safety.js"));
 
 const now = safeTimestamp(Date.now());
 let totalPurged = 0;

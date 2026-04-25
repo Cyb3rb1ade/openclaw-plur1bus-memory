@@ -8,7 +8,7 @@
  *   stale     [days]             — Memories älter X Tage mit niedriger importance (default: 90)
  *   orphans   [agent]            — Memories ohne storedBy / origin
  *   pending   [agent]            — High-importance Memories nicht in KNOWLEDGE.md
- *   eval      [agent]            — recall-eval.json gegen agent laufen lassen
+ *   eval      [agent] [mode]     — mode = "raw" (default, nur LanceDB) oder "pipeline" (volle Live-Pipeline mit Canonical/Boost/Dedup/Rerank)
  *   all                          — alle Checks (kompakt)
  *
  * Beispiele:
@@ -244,6 +244,11 @@ async function cmdPending(args) {
 }
 
 async function cmdEval(args) {
+  // Argumente: cmdEval(["agent?", "raw|pipeline?"])
+  // Default-Mode: raw (Backward-kompatibel zu v1.8.x)
+  const agentFilter = args[0] && !["raw", "pipeline"].includes(args[0]) ? args[0] : null;
+  const mode = args.find(a => ["raw", "pipeline"].includes(a)) || "raw";
+
   const cfg = loadConfig();
   const evalPath = join(__dir, "recall-eval.json");
   const samplePath = join(__dir, "recall-eval.sample.json");
@@ -269,10 +274,37 @@ async function cmdEval(args) {
 
   const OpenAI = await getOpenAI();
   const openai = new OpenAI({ apiKey });
-  const agentFilter = args[0];
+
+  // Pipeline-Mode: lade shared module + recall-config aus openclaw.json
+  let runRecallPipeline, recallCfg, rerankerInstance;
+  if (mode === "pipeline") {
+    const pipelineMod = await import("../extensions/memory-lancedb-namespaced/lib/recall-pipeline.js");
+    runRecallPipeline = pipelineMod.runRecallPipeline;
+    recallCfg = cfg.plugin?.recall || {};
+    // Reranker konfigurieren wenn aktiv
+    const rrCfg = cfg.plugin?.reranker;
+    if (rrCfg?.enabled !== false && rrCfg?.apiKey) {
+      const rrKey = rrCfg.apiKey.startsWith("${")
+        ? process.env[rrCfg.apiKey.replace(/^\$\{|}$/g, "")]
+        : rrCfg.apiKey;
+      if (rrKey) {
+        rerankerInstance = {
+          async rerank(query, documents, topN) {
+            const r = await fetch("https://api.cohere.com/v2/rerank", {
+              method: "POST",
+              headers: { "Authorization": `Bearer ${rrKey}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ model: rrCfg.model || "rerank-v3.5", query, documents, top_n: topN, return_documents: false }),
+            });
+            if (!r.ok) throw new Error(`rerank ${r.status}`);
+            return (await r.json()).results;
+          },
+        };
+      }
+    }
+  }
 
   const agents = Object.keys(evalData).filter(a => !a.startsWith("_") && (!agentFilter || a === agentFilter));
-  console.log(`\nRecall-Eval für ${agents.length} Agenten:\n`);
+  console.log(`\nRecall-Eval [${mode}] für ${agents.length} Agenten:\n`);
 
   let totalCases = 0, totalPass = 0;
   for (const ag of agents) {
@@ -281,21 +313,66 @@ async function cmdEval(args) {
     const cases = evalData[ag] || [];
     let pass = 0;
     for (const c of cases) {
-      const emb = await openai.embeddings.create({ model, input: c.query, ...(dimensions ? { dimensions } : {}) });
-      const vec = emb.data[0].embedding;
-      const results = await tbl.vectorSearch(vec).limit(c.limit || 5).toArray();
-      const top5 = results.slice(0, c.limit || 5);
+      const limit = c.limit || 5;
+      let collectedTexts = [];   // alle Texte für expectedTextContains
+      let topIds = [];           // alle IDs für expectedMemoryId
+      let topCategories = [];    // für expectedCategory
+      let topScore = 0;          // für minScore
+
+      if (mode === "raw") {
+        // Reine LanceDB-Vektorsuche, wie pre-v1.9.0
+        const emb = await openai.embeddings.create({ model, input: c.query, ...(dimensions ? { dimensions } : {}) });
+        const vec = emb.data[0].embedding;
+        const results = await tbl.vectorSearch(vec).limit(limit).toArray();
+        collectedTexts = results.map(r => (r.text || "").toLowerCase());
+        topIds = results.map(r => r.id);
+        topCategories = results.map(r => r.category);
+        if (results[0]) topScore = 1 / (1 + (results[0]._distance ?? 0));
+      } else {
+        // Pipeline-Mode: exakt was Auto-Recall live tut
+        const embeddings = {
+          dim: dimensions,
+          embed: async (text) => {
+            const r = await openai.embeddings.create({ model, input: text, ...(dimensions ? { dimensions } : {}) });
+            return Array.from(r.data[0].embedding);
+          },
+        };
+        const workspaceDir = workspaceDirFor(ag, cfg);
+        const r = await runRecallPipeline({
+          query: c.query,
+          dbTable: tbl,
+          embeddings,
+          workspaceDir,
+          topN: limit,
+          recallMinScore: cfg.plugin?.recallMinScore ?? 0.15,
+          importanceBoost: recallCfg.importanceBoost ?? 0.3,
+          dedupEnabled: recallCfg.dedup !== false,
+          dedupJaccard: recallCfg.dedupJaccard ?? 0.6,
+          canonicalEnabled: recallCfg.canonicalFirst !== false,
+          canonicalMinScore: recallCfg.canonicalMinScore ?? 0.30,
+          canonicalMaxItems: recallCfg.canonicalMaxItems ?? 2,
+          reranker: rerankerInstance,
+          rerankCandidates: cfg.plugin?.reranker?.candidates ?? 20,
+        });
+        // Sammle Texte aus canonical + memories für die Match-Checks
+        for (const cn of r.canonical) collectedTexts.push((cn.text || "").toLowerCase());
+        for (const m of r.memories) collectedTexts.push((m.entry.text || "").toLowerCase());
+        topIds = r.memories.map(m => m.entry.id);
+        topCategories = r.memories.map(m => m.entry.category);
+        if (r.memories[0]) topScore = r.memories[0].score;
+        else if (r.canonical[0]) topScore = r.canonical[0].score;
+      }
+
       let ok = false;
       if (c.expectedMemoryId) {
-        ok = top5.some(r => r.id === c.expectedMemoryId);
+        ok = topIds.includes(c.expectedMemoryId);
       } else if (c.expectedTextContains) {
-        const all = top5.map(r => (r.text || "").toLowerCase()).join(" ");
+        const all = collectedTexts.join(" ");
         ok = c.expectedTextContains.every(s => all.includes(s.toLowerCase()));
       } else if (c.expectedCategory) {
-        ok = top5.some(r => r.category === c.expectedCategory);
-      } else if (c.minScore && top5[0]) {
-        const score = 1 / (1 + (top5[0]._distance ?? 0));
-        ok = score >= c.minScore;
+        ok = topCategories.includes(c.expectedCategory);
+      } else if (c.minScore) {
+        ok = topScore >= c.minScore;
       }
       if (ok) pass++;
       console.log(`    ${ok ? "✓" : "✗"} ${c.query}`);
@@ -303,7 +380,7 @@ async function cmdEval(args) {
     console.log(`  ${ag}: ${pass}/${cases.length} pass (${(pass / cases.length * 100).toFixed(0)}%)`);
     totalCases += cases.length; totalPass += pass;
   }
-  console.log(`\nGesamt: ${totalPass}/${totalCases} (${(totalPass / Math.max(1, totalCases) * 100).toFixed(0)}%)`);
+  console.log(`\nGesamt [${mode}]: ${totalPass}/${totalCases} (${(totalPass / Math.max(1, totalCases) * 100).toFixed(0)}%)`);
 }
 
 async function cmdAll() {
@@ -331,7 +408,8 @@ if (!cmd || !commands[cmd]) {
   console.log("  node memory-doctor.mjs stats");
   console.log("  node memory-doctor.mjs dupes bernhardine 0.90  # default 0.85 (Jaccard)");
   console.log("  node memory-doctor.mjs stale 90");
-  console.log("  node memory-doctor.mjs eval main");
+  console.log("  node memory-doctor.mjs eval main          # default 'raw' (Vektorsuche pur)");
+  console.log("  node memory-doctor.mjs eval main pipeline # volle Live-Pipeline (Canonical+Boost+Rerank+Dedup)");
   process.exit(cmd ? 1 : 0);
 }
 
