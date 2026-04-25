@@ -22,6 +22,9 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
+// Shared module aus dem Plugin (v1.9.0)
+import { distanceToScore } from "../extensions/memory-lancedb-namespaced/lib/score.js";
+
 const __pluginDir = dirname(fileURLToPath(import.meta.url));
 
 const BASE   = join(homedir(), ".openclaw");
@@ -180,10 +183,10 @@ async function main() {
     for (const p of toEmbed) {
       try {
         const vector = await embed(p.text);
-        // Duplicate check — Score-Formel spiegelgleich zu Plugin: 1 / (1+d)
+        // Duplicate check via shared distanceToScore (v1.9.0)
         const results = await table.search(vector).limit(1).toArray();
         const score = results.length > 0 && results[0]._distance !== undefined
-          ? 1 / (1 + (results[0]._distance ?? 0)) : 0;
+          ? distanceToScore(results[0]._distance) : 0;
         const isDupe = score >= 0.95;
         if (isDupe) {
           console.log(`  [${agent.id}] Skipped (duplicate): ${p.text.slice(0, 60)}...`);

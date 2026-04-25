@@ -16,6 +16,9 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
+// Shared module aus dem Plugin (v1.9.0)
+import { distanceToScore } from "../extensions/memory-lancedb-namespaced/lib/score.js";
+
 const __pluginDir = dirname(fileURLToPath(import.meta.url));
 const BASE = join(homedir(), ".openclaw");
 const DB_BASE = join(BASE, "memory", "lancedb-namespaced");
@@ -181,10 +184,10 @@ async function migrateAgent(agent, openai, lancedb) {
       });
       const vector = Array.from(resp.data[0].embedding);
 
-      // Duplicate check — Score-Formel spiegelgleich zu Plugin: 1 / (1+d)
+      // Duplicate check via shared distanceToScore (v1.9.0)
       const results = await table.search(vector).limit(1).toArray();
       const score = results.length > 0 && results[0]._distance !== undefined
-        ? 1 / (1 + (results[0]._distance ?? 0)) : 0;
+        ? distanceToScore(results[0]._distance) : 0;
       if (score >= 0.97) {
         dupes++;
         continue;

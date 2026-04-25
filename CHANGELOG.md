@@ -1,5 +1,113 @@
 # Changelog
 
+## [1.9.0] — 2026-04-25
+
+### Refactor: Shared `lib/` Module + Pipeline-Eval — Konsolidierung der v1.8.x-Duplikation
+
+Über v1.8.0–v1.8.6 hatte sich Code-Duplikation aufgebaut: `distanceToScore`
+in 5 Dateien, UUID-Validierung mehrfach, `safeTimestamp` als Inline-Kopie,
+`categorizeMemory` doppelt, ganze Recall-Pipeline als 70-Zeilen-Blob in zwei
+Tools (`memory_recall` + `before_agent_start`-Hook). Plus: kein automatisches
+Test-Setup für die fragilen Bits.
+
+**v1.9.0 räumt das auf, ohne Verhalten zu ändern** (außer eval-pipeline =
+neues Feature).
+
+#### Neue Struktur
+
+```
+extensions/memory-lancedb-namespaced/
+├── index.js              ← Plugin-Definition (von 1454 → 1376 Zeilen)
+├── lib/
+│   ├── score.js          ← distanceToScore — eine Quelle für Plugin + 4 Cron-Scripts
+│   ├── sql-safety.js     ← safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog
+│   ├── text-utils.js     ← tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary
+│   ├── categorize.js     ← MEMORY_CATEGORIES/ORIGINS/SCOPES + categorizeMemory
+│   ├── frontmatter.js    ← stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds
+│   └── recall-pipeline.js ← applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline
+└── __tests__/
+    ├── score.test.js          (6 tests)
+    ├── sql-safety.test.js     (19 tests)
+    ├── text-utils.test.js     (16 tests)
+    ├── categorize.test.js     (13 tests)
+    ├── frontmatter.test.js    (11 tests)
+    └── recall-pipeline.test.js (16 tests)
+```
+
+**81 Tests, 81 grün** via `node --test __tests__/*.test.js` — keine externe
+Test-Library-Dependency. Tests fokussiert auf die historisch fragilen
+Stellen (Schema-Migration, Frontmatter, Distance-Score, Dedup, SQL-Safety).
+
+#### `runRecallPipeline()` — der Pipeline-Orchestrator
+
+Alle Recall-Komponenten aus dem 70-Zeilen-Inline-Blob im `before_agent_start`-
+Hook und im `memory_recall`-Tool sind jetzt eine einzige Funktion in
+`lib/recall-pipeline.js`:
+
+```js
+const { canonical, memories, queryVector } = await runRecallPipeline({
+  query, dbTable, embeddings, workspaceDir,
+  topN, recallMinScore, importanceBoost, dedupEnabled, dedupJaccard,
+  canonicalEnabled, canonicalMinScore, canonicalMaxItems,
+  reranker, rerankCandidates, summaryMaxWords, logger,
+});
+```
+
+Plugin nutzt sie an 2 Stellen, Doctor nutzt sie für eval-pipeline. Eine
+Pipeline, drei Konsumenten, garantiert identisches Verhalten.
+
+#### `memory-doctor eval` bekommt `raw|pipeline`-Modi
+
+Das war einer der Hauptgründe für den Refactor:
+
+```bash
+node memory-doctor.mjs eval bernhardine raw       # nur LanceDB-Vektorsuche (Backward-kompatibel)
+node memory-doctor.mjs eval bernhardine pipeline  # volle Live-Pipeline mit Canonical+Boost+Rerank+Dedup
+```
+
+**Sofortiger Mehrwert messbar:** Bernhardines Eval-Pass-Rate stieg von
+**75 % (raw) auf 100 % (pipeline)**. Der Erik-Krankheits-Test (`nightscout`)
+fand das Wort nur über den Canonical-Hit aus KNOWLEDGE.md "Erik — Gesundheit".
+Rohe Vektorsuche allein hatte es nicht in den Top-10.
+
+#### Bug-Fix nebenbei: `dedupResults` mit `maxOut=0`
+
+Die ausgelagerten Tests fanden sofort einen echten Bug: `dedupResults(items, 0, ...)`
+gab 1 Item zurück statt 0, weil der Push vor dem Cap-Check passierte. Fix:
+Early-Return bei `maxOut <= 0`. Hatte praktisch nie zugeschlagen (canonical
+fast nie 5+ items), aber jetzt korrekt.
+
+#### Bug-Fix nebenbei: `categorizeMemory` Reihenfolge
+
+Test "Wir nehmen Redis als Cache" → "fact" statt "decision" weil die
+Decision-Heuristik nur "nehmen wir" (mit umgekehrter Wortreihenfolge)
+kannte. Erweitert um "wir nehmen", "wir wählen", "wir entscheiden".
+
+#### Cron-Scripts importieren auch aus lib/
+
+| Script | Importiert |
+|---|---|
+| `auto-capture-lancedb.mjs` | `distanceToScore`, `categorizeMemory` |
+| `embed-promoted-memories.mjs` | `distanceToScore` |
+| `migrate-memory-md-to-lancedb.mjs` | `distanceToScore` |
+| `memory-gc.mjs` | `safeTimestamp` |
+| `memory-doctor.mjs` | `runRecallPipeline` (für eval pipeline-Mode) |
+
+Inline-Kopien sind alle entfernt. Eine Quelle der Wahrheit pro Funktion.
+
+#### Migration
+
+Keine Daten-Migration. Plugin-Loader-Verhalten ändert sich nicht — Plugin
+ist weiterhin "single-entry" via `index.js` (das jetzt aus `lib/` importiert).
+Funktional identisch, nur intern aufgeräumt.
+
+#### Verifikation
+
+- 81/81 Tests grün
+- Gateway-Restart läuft sauber
+- Live-Recall-Test (Bernhardine "Wer ist Eva?") liefert "+ 2 canonical" wie vor v1.9.0
+- `memory-doctor eval bernhardine pipeline` zeigt 100 % Pass-Rate (vs 75 % raw)
+
 ## [1.8.6] — 2026-04-25
 
 ### 🔴 Security: SQL-Hardening — Defense-in-Depth an allen 4 Sites

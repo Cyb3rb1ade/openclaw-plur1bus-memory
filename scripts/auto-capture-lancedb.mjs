@@ -13,6 +13,10 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
+// Shared modules aus dem Plugin (v1.9.0)
+import { distanceToScore } from "../extensions/memory-lancedb-namespaced/lib/score.js";
+import { categorizeMemory } from "../extensions/memory-lancedb-namespaced/lib/categorize.js";
+
 // ─── Config ─────────────────────────────────────────────────────────────────
 const FALLBACK_AGENTS = ["main", "bernhardine", "heisenberg"];
 const HOME = homedir();
@@ -135,23 +139,7 @@ async function getOrCreateTable(dbPath, dim) {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-// Heuristik MUSS spiegelgleich zur Plugin-categorizeMemory sein (siehe
-// extensions/memory-lancedb-namespaced/index.js). Beide Funktionen schreiben
-// in dieselbe LanceDB — abweichende Kategorien führen zu inkonsistenter
-// Filterung in Doctor/Recall/UI.
-// Zentrale Taxonomie (v1.8.4): preference, fact, decision, entity, reference,
-// debug, config, conversation, knowledge, curated, other.
-function categorizeMemory(text) {
-  const t = text.toLowerCase();
-  if (/prefer|like|love|hate|want|always|never|usually|tend to|bevorzug|mag|möchte/.test(t)) return "preference";
-  if (/decided|will use|going with|chosen|picked|entschieden|wählen wir|nehmen wir/.test(t)) return "decision";
-  if (/error|exception|stack trace|traceback|fehler|failed|reproduce/.test(t)) return "debug";
-  if (/config|setting|threshold|default|umgebungsvariable|env var/.test(t)) return "config";
-  if (/https?:\/\/|url|link|reference/.test(t)) return "reference";
-  if (/name:|person:|company:|product:|place:/.test(t)) return "entity";
-  if (/is |are |was |were |has |have |\d{4}/.test(t)) return "fact";
-  return "conversation";
-}
+// categorizeMemory wird aus shared module importiert (v1.9.0).
 
 function generateSummary(text, maxWords) {
   const words = text.replace(/\s+/g, " ").trim().split(" ");
@@ -297,14 +285,10 @@ async function captureAgent(agentId, embeddings) {
       const trimmed = it.text.slice(0, MAX_TEXT_LEN);
       const vector = await embeddings.embed(trimmed);
 
-      // Duplicate check — Score-Formel MUSS spiegelgleich zu MemoryDB.search()
-      // im Plugin sein: score = 1 / (1 + distance). Die alte Formel (1 - d)
-      // war für L2-Distanzen >1 falsch (gibt negative scores) und für
-      // normalisierte cosine-Distanzen ein anderes Schwellenwert-Verhalten.
+      // Duplicate check via shared distanceToScore (v1.9.0).
       const results = await table.search(vector).limit(1).toArray();
       if (results.length > 0 && results[0]._distance !== undefined) {
-        const score = 1 / (1 + (results[0]._distance ?? 0));
-        if (score >= DUPLICATE_THRESHOLD) continue;
+        if (distanceToScore(results[0]._distance) >= DUPLICATE_THRESHOLD) continue;
       }
 
       await table.add([
