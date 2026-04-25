@@ -1,5 +1,9 @@
 /**
- * memory-lancedb-namespaced — v1.8.x
+ * memory-lancedb-namespaced
+ *
+ * Version: siehe openclaw.plugin.json (Single Source of Truth, gepflegt
+ * via scripts/bump-version.sh). Dieser Header beschreibt das Verhalten,
+ * keine bestimmte Version.
  *
  * Per-Agent-LanceDB unter {baseDbPath}/{agentId}/ via ctx.agentId-Routing.
  *
@@ -337,6 +341,41 @@ class Embeddings {
     // fallbackCfg: { apiKey, model, baseUrl } — must produce same dimensions as primary
     this._fallbackCfg = fallbackCfg || null;
     this._fallbackClient = null;
+    this._detectedDim = null; // gesetzt nach erstem embed-Call
+  }
+
+  /**
+   * v2.1.1: stellt sicher dass dimensions vor dem ersten embed-Call bekannt
+   * sind. Bei Nicht-OpenAI-Provider ohne explizite dimensions: macht einen
+   * Test-Call und liest die echte Dimension. Bei Mismatch (Config sagt X,
+   * API liefert Y): wirft mit klarer Fehlermeldung — verhindert silent
+   * Daten-Korruption.
+   */
+  async ensureDimensions(logger) {
+    if (this._detectedDim !== null) return this._detectedDim;
+    if (this.dimensions && this.dimensions > 0) {
+      this._detectedDim = this.dimensions;
+      return this.dimensions;
+    }
+    // Keine dimensions konfiguriert → Test-Call
+    const isOpenAi = !this.model.includes("/") || this.model.startsWith("openai/") || this.model.startsWith("text-embedding-");
+    if (isOpenAi) {
+      // OpenAI ohne explizite dimensions: 3072 für large, 1536 für small/ada
+      this._detectedDim = (this.model.includes("small") || this.model.includes("ada")) ? 1536 : 3072;
+      logger?.info?.(`memory-lancedb-namespaced: OpenAI-Modell '${this.model}' → assumed ${this._detectedDim} dimensions`);
+      return this._detectedDim;
+    }
+    // Nicht-OpenAI Provider (OpenRouter, etc.) ohne dimensions → Test-Call
+    logger?.info?.(`memory-lancedb-namespaced: keine dimensions für '${this.model}' konfiguriert — ermittle via Test-Call…`);
+    try {
+      const client = await this.getClient();
+      const r = await client.embeddings.create({ model: this.model, input: "dim probe", encoding_format: "float" });
+      this._detectedDim = r.data[0].embedding.length;
+      logger?.info?.(`memory-lancedb-namespaced: Modell '${this.model}' liefert ${this._detectedDim}-dim Vektoren`);
+      return this._detectedDim;
+    } catch (e) {
+      throw new Error(`Kann Embedding-Dimension für '${this.model}' nicht ermitteln (${e.message}). Bitte 'dimensions' explizit in openclaw.json setzen.`);
+    }
   }
 
   async getClient() {
@@ -373,13 +412,26 @@ class Embeddings {
     return req;
   }
 
+  /**
+   * v2.1.1: Hard-Fail bei Dim-Mismatch. Wenn _detectedDim gesetzt ist und
+   * der Embedding-Call etwas anderes liefert: Throw statt silent korrupter
+   * Vektor in der DB. Schützt vor Provider-Wechsel ohne fresh DB.
+   */
+  _validateDim(vec) {
+    if (this._detectedDim !== null && vec.length !== this._detectedDim) {
+      throw new Error(`Embedding-Dimension-Mismatch: erwartet ${this._detectedDim}, bekam ${vec.length} (Modell: ${this.model}). Provider-Wechsel ohne fresh DB? Siehe Migration in CHANGELOG v2.1.0.`);
+    }
+    if (this._detectedDim === null) this._detectedDim = vec.length;
+    return vec;
+  }
+
   async embed(text, retries = 3) {
     const client = await this.getClient();
     let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const response = await client.embeddings.create(this._buildEmbeddingRequest(this.model, text));
-        return response.data[0].embedding;
+        return this._validateDim(response.data[0].embedding);
       } catch (err) {
         lastErr = err;
         if (attempt === retries) break;
@@ -394,7 +446,7 @@ class Embeddings {
       try {
         const fallbackModel = this._fallbackCfg.model || this.model;
         const response = await fallbackClient.embeddings.create(this._buildEmbeddingRequest(fallbackModel, text));
-        return response.data[0].embedding;
+        return this._validateDim(response.data[0].embedding);
       } catch (fallbackErr) {
         // Both failed — throw original error for clarity
         throw lastErr;
@@ -678,11 +730,36 @@ const plugin = {
     } : null;
     if (schicht15Enabled) api.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance})`)
 
-    const vectorDim = dimensions ?? (EMBEDDING_DIMENSIONS[model] || 1536);
+    // v2.1.1: hard-fail wenn Provider-Modell ohne dimensions konfiguriert ist.
+    // OpenAI-Modelle: aus EMBEDDING_DIMENSIONS-Map fallback.
+    // Nicht-OpenAI-Modelle (OpenRouter, custom baseUrl, etc.): MÜSSEN explizit
+    // dimensions in der Config haben, sonst weiß die LanceDB nicht welche
+    // Vektor-Dim erwartet wird → Schema-Mismatch beim ersten store.
+    let vectorDim = dimensions;
+    if (!vectorDim) {
+      vectorDim = EMBEDDING_DIMENSIONS[model];
+      if (!vectorDim) {
+        const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
+        if (isOpenAi) {
+          // Unbekanntes OpenAI-Modell — defensive default, mit Warnung
+          vectorDim = 1536;
+          api.logger.warn(`memory-lancedb-namespaced: unbekanntes OpenAI-Modell '${model}' — fallback auf 1536 dimensions. Empfohlen: 'dimensions' explizit setzen.`);
+        } else {
+          // Provider-Modell (OpenRouter, etc.) ohne dimensions — hart fail
+          throw new Error(
+            `memory-lancedb-namespaced: Modell '${model}' (Provider: ${baseUrl || "?"}) hat keine konfigurierten 'dimensions'. ` +
+            `Setze plugins.entries.memory-lancedb-namespaced.config.embedding.dimensions explizit ` +
+            `(z.B. 1024 für BAAI/Mistral, 2048 für NVIDIA-Nemotron, 3072 für Gemini). ` +
+            `Test-Call: curl -H "Authorization: Bearer KEY" -d '{"model":"${model}","input":"test","encoding_format":"float"}' ${baseUrl || "https://api.openai.com/v1"}/embeddings ` +
+            `→ data[0].embedding.length lesen.`
+          );
+        }
+      }
+    }
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
 
     const pool = new AgentDbPool(baseDbPath, vectorDim);
-    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions, fallbackEmbeddingCfg);
+    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions || vectorDim, fallbackEmbeddingCfg);
 
     // Per-agent capture queue — serializes concurrent agent_end events to prevent DB race conditions
     const captureQueues = new Map(); // agentId → Promise (tail of queue)

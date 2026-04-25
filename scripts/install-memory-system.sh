@@ -540,6 +540,60 @@ if [[ "$USE_OPENROUTER" != "y" ]]; then
   fi
 fi
 
+# v2.1.1: Pre-Flight-Check — vergleiche neue Dim mit bestehenden LanceDBs.
+# Verhindert silent Datenkorruption bei Provider-Wechsel.
+echo ""
+info "Pre-Flight: prüfe bestehende LanceDB-Dimensionen vs. neue Config ($EMBEDDING_DIMENSIONS)…"
+TARGET_DB_PATH="$TARGET_DIR/memory/lancedb-namespaced"
+EXISTING_DBS=$(run_target "ls -d '$TARGET_DB_PATH'/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null || true" || echo "")
+if [[ -n "$EXISTING_DBS" ]]; then
+  MISMATCH_COUNT=0
+  while IFS= read -r ag; do
+    [[ -z "$ag" ]] && continue
+    # Schema-Dim per Python aus LanceDB lesen — funktioniert remote nicht direkt, nur lokal
+    if [[ "$IS_REMOTE" == "1" ]]; then continue; fi
+    DB_DIM=$(python3 -c "
+import sys
+try:
+  sys.path.insert(0, '$SOURCE_DIR/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/python')
+except: pass
+try:
+  import lancedb
+  db = lancedb.connect('$TARGET_DB_PATH/$ag')
+  if 'memories' in db.table_names():
+    tbl = db.open_table('memories')
+    for f in tbl.schema:
+      if f.name == 'vector':
+        print(str(f.type).split('<')[1].split('>')[0].split(',')[0].strip())
+        break
+except: pass
+" 2>/dev/null || echo "")
+    if [[ -n "$DB_DIM" && "$DB_DIM" != "$EMBEDDING_DIMENSIONS" ]]; then
+      warn "  Agent '$ag': bestehende DB hat ${DB_DIM} dims, neue Config will $EMBEDDING_DIMENSIONS"
+      MISMATCH_COUNT=$((MISMATCH_COUNT + 1))
+    fi
+  done <<< "$EXISTING_DBS"
+
+  if [[ "$MISMATCH_COUNT" -gt 0 ]]; then
+    warn ""
+    warn "⚠ $MISMATCH_COUNT Agent-DB(s) haben andere Dimension als die neue Config."
+    warn "   Speichern wird brechen, Recall wird brechen."
+    warn ""
+    warn "   Optionen:"
+    warn "   1. Wechsel rückgängig (auf altes Modell zurück)"
+    warn "   2. Fresh DBs: rm -r $TARGET_DB_PATH/<agent>/  → Dreaming/Migrate füllen sie wieder"
+    warn ""
+    if ! confirm "Trotzdem fortfahren?" "n"; then
+      error "Abgebrochen wegen Dim-Mismatch."
+      exit 1
+    fi
+  else
+    ok "Alle bestehenden DBs sind kompatibel."
+  fi
+else
+  info "Keine bestehenden DBs gefunden — Fresh-Install."
+fi
+
 # ─── Schritt 2: Agenten ermitteln ─────────────────────────────────────────────
 
 step "Schritt 2: Agenten ermitteln"

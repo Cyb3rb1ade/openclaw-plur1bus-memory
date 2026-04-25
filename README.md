@@ -39,9 +39,10 @@ extensions/
   memory-lancedb-stock/        ← LanceDB-Wrapper (Abhängigkeit, npm install)
 scripts/
   install-memory-system.sh     ← Installation, Update, Rollback (mit Auto-Discovery)
+  bump-version.sh              ← Synchronisiert Versions in Manifest + CHANGELOG
   memory-gc.mjs                ← TTL-Garbage-Collector (täglich via Cron, 03:00)
-  memory-doctor.mjs            ← Health-CLI (stats/dupes/stale/orphans/pending/eval)
-  recall-eval.json             ← Recall-Test-Batterie für eval-Subcommand
+  memory-doctor.mjs            ← Health-CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
+  recall-eval.sample.json      ← Vorlage für recall-eval.json (echte Test-Datei in .gitignore)
   auto-capture-lancedb.mjs     ← Cron-Fallback für Auto-Capture (alle 5 Min)
   embed-promoted-memories.mjs  ← Bridge Dreaming-Promotionen → LanceDB (alle 30 Min)
   migrate-memory-md-to-lancedb.mjs  ← Einmalige MEMORY.md → LanceDB Migration
@@ -71,9 +72,21 @@ cd extensions/memory-lancedb-stock && npm install
 Das Skript:
 - Erkennt lokale OpenClaw-Installationen automatisch
 - Zeigt Auswahlmenü bei mehreren Instanzen
-- Fragt nach API-Keys (OpenAI, optional Cohere für Reranking, kimi-for-coding/GPT-4 für Merging)
+- Fragt nach API-Keys (**OpenAI ODER OpenRouter** für Embeddings, optional Cohere für Reranking, kimi-for-coding/GPT-4 für Merging)
+- Bei OpenRouter (v2.1+): listet 20+ Embedding-Modelle live, ermittelt Vektor-Dimension automatisch via Test-Call
+- **Pre-Flight-Check** (v2.1.1+) — vergleicht neue Dim mit bestehenden Agent-DBs, warnt bei Mismatch (Provider-Wechsel braucht fresh DB!)
 - Erstellt LanceDB-Snapshot vor Änderungen
 - Richtet Cron-Job für täglichen GC ein
+
+### ⚠️ Provider-Wechsel: Wichtige Warnung
+
+LanceDB hat **fixe Vektor-Dimension pro Tabelle**. Wechsel von OpenAI (3072d) zu BAAI (1024d) oder NVIDIA (2048d) → bestehende DB ist inkompatibel. Optionen:
+
+1. **Bei alter Config bleiben** — bewährter Pfad
+2. **Fresh-DB pro Agent** — `rm -r /pfad/zu/lancedb-namespaced/<agent>/` und Memories über Dreaming/Migrate/embed-promoted neu aufbauen lassen
+3. **Andere baseDbPath** — `embedding.baseDbPath` umkonfigurieren auf `lancedb-namespaced-v2`, dann läuft alt+neu parallel
+
+Vor jedem Wechsel: `node scripts/memory-doctor.mjs provider-check` — checkt API + alle Agent-DBs, schlägt Alarm bei Inkonsistenz.
 
 ---
 
@@ -126,7 +139,8 @@ systemctl --user restart openclaw-gateway.service
 - **`memory-doctor stale`** — Memories älter X Tage mit niedriger Importance
 - **`memory-doctor orphans`** — Memories ohne `storedBy` oder `origin`
 - **`memory-doctor pending`** — High-Importance Memories nicht in `KNOWLEDGE.md`
-- **`memory-doctor eval`** — Recall-Eval gegen Testbatterie (macht Threshold-Tuning messbar)
+- **`memory-doctor eval [agent] [raw\|pipeline]`** — Recall-Eval (raw=LanceDB-only, pipeline=full Live-Pipeline)
+- **`memory-doctor provider-check`** (v2.1.1+) — validiert Embedding-Endpoint, Modell, Dim, alle DB-Dim-Konsistenz
 
 ### Dreaming (Schicht 4)
 
@@ -240,9 +254,10 @@ extensions/
   memory-lancedb-stock/        ← LanceDB wrapper (dependency, requires npm install)
 scripts/
   install-memory-system.sh     ← Installation, update, rollback (with auto-discovery)
+  bump-version.sh              ← Synchronizes versions in manifest + CHANGELOG
   memory-gc.mjs                ← TTL garbage collector (daily via cron at 03:00)
-  memory-doctor.mjs            ← Health CLI (stats/dupes/stale/orphans/pending/eval)
-  recall-eval.json             ← Recall test battery for the eval subcommand
+  memory-doctor.mjs            ← Health CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
+  recall-eval.sample.json      ← Template for recall-eval.json (real test file in .gitignore)
   auto-capture-lancedb.mjs     ← Cron fallback for auto-capture (every 5 minutes)
   embed-promoted-memories.mjs  ← Bridge dreaming promotions → LanceDB (every 30 min)
   migrate-memory-md-to-lancedb.mjs  ← One-shot MEMORY.md → LanceDB migration
@@ -272,9 +287,21 @@ cd extensions/memory-lancedb-stock && npm install
 The script:
 - Auto-detects local OpenClaw installations
 - Shows a selection menu when multiple instances are found
-- Prompts for API keys (OpenAI, optional Cohere for reranking, kimi-for-coding/GPT-4 for merging)
+- Prompts for API keys (**OpenAI OR OpenRouter** for embeddings, optional Cohere for reranking, kimi-for-coding/GPT-4 for merging)
+- For OpenRouter (v2.1+): lists 20+ embedding models live, auto-detects vector dimension via test call
+- **Pre-flight check** (v2.1.1+) — compares new dim against existing agent DBs, warns on mismatch (provider switch needs fresh DB!)
 - Creates a LanceDB snapshot before making changes
 - Sets up a daily cron job for garbage collection
+
+### ⚠️ Provider Switch: Important Warning
+
+LanceDB has **fixed vector dimension per table**. Switching from OpenAI (3072d) to BAAI (1024d) or NVIDIA (2048d) → existing DB is incompatible. Options:
+
+1. **Stay on existing config** — proven path
+2. **Fresh DB per agent** — `rm -r /path/to/lancedb-namespaced/<agent>/` and let Dreaming/Migrate/embed-promoted rebuild
+3. **Different baseDbPath** — reconfigure `embedding.baseDbPath` to `lancedb-namespaced-v2`, run old+new in parallel
+
+Before any switch: `node scripts/memory-doctor.mjs provider-check` — checks API + all agent DBs, raises alarm on inconsistency.
 
 ---
 
@@ -327,7 +354,8 @@ systemctl --user restart openclaw-gateway.service
 - **`memory-doctor stale`** — memories older than X days with low importance
 - **`memory-doctor orphans`** — memories without `storedBy` or `origin`
 - **`memory-doctor pending`** — high-importance memories not in `KNOWLEDGE.md`
-- **`memory-doctor eval`** — recall eval against the test battery (makes threshold tuning measurable)
+- **`memory-doctor eval [agent] [raw\|pipeline]`** — recall eval (raw=LanceDB-only, pipeline=full live pipeline)
+- **`memory-doctor provider-check`** (v2.1.1+) — validates embedding endpoint, model, dim, all DB-dim consistency
 
 ### Dreaming (Layer 4)
 
