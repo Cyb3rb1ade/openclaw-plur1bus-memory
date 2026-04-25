@@ -32,8 +32,16 @@ const TABLE  = "memories";
 
 const { connect } = await import(LANCEDB_MODULE);
 
-const now = Date.now();
-if (!Number.isFinite(now) || now < 0) throw new Error(`Invalid timestamp: ${now}`);
+// safeTimestamp — Inline-Kopie der gleichnamigen Plugin-Funktion (v1.8.6).
+// Wird in v1.9.0 in shared module wandern (zusammen mit safeUuid, distanceToScore).
+function safeTimestamp(n) {
+  if (!Number.isFinite(n) || n < 0 || n > 1e15) {
+    throw new Error(`Invalid timestamp: ${n}`);
+  }
+  return Math.floor(n);
+}
+
+const now = safeTimestamp(Date.now());
 let totalPurged = 0;
 
 console.log(`[memory-gc] ${new Date().toISOString()} — start (root: ${ROOT_DIR}, agents: ${AGENTS.join(", ")})`);

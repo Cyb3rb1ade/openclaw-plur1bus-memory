@@ -108,6 +108,46 @@ function cosineSimilarityVec(a, b) {
 }
 
 // ============================================================================
+// SQL-Safety Helpers (v1.8.6) — defense-in-depth, da LanceDB nur String-
+// Predicates kennt (keine prepared statements). Alle Stellen die User-Input
+// in SQL-Strings interpolieren MÜSSEN diese Helpers nutzen.
+// In v1.9.0 wandern diese in shared module (zusammen mit distanceToScore).
+// ============================================================================
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function safeUuid(id) {
+  if (typeof id !== "string" || id.length !== 36 || !UUID_RE.test(id)) {
+    throw new Error(`Invalid memory ID format: ${JSON.stringify(id).slice(0, 80)}`);
+  }
+  return id;
+}
+
+function safeUuidList(ids, maxItems = 100) {
+  if (!Array.isArray(ids)) throw new Error("safeUuidList: not an array");
+  const valid = ids.filter(id => typeof id === "string" && id.length === 36 && UUID_RE.test(id));
+  if (valid.length === 0) return null;
+  return valid.slice(0, maxItems).map(id => `'${id}'`).join(",");
+}
+
+function safeTimestamp(n) {
+  if (!Number.isFinite(n) || n < 0 || n > 1e15) {
+    throw new Error(`Invalid timestamp: ${n}`);
+  }
+  return Math.floor(n);
+}
+
+// Audit-Log für destruktive Operationen — non-blocking, nie crashen
+function appendDestructiveOpLog(workspaceDir, entry) {
+  if (!workspaceDir) return;
+  try {
+    const dir = join(workspaceDir, ".adaptive-learning");
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    appendFileSync(join(dir, "destructive-ops.jsonl"), JSON.stringify(entry) + "\n", "utf8");
+  } catch (_) { /* non-blocking */ }
+}
+
+// ============================================================================
 // Reranker — Cohere Rerank API v2
 // ============================================================================
 
@@ -274,7 +314,12 @@ class MemoryDB {
           if (!hasScope) {
             await this.table.addColumns([{ name: 'scope', valueSql: "'agent-private'" }]);
           }
-        } catch (_e) { /* older LanceDB version — graceful degradation */ }
+        } catch (e) {
+          // Schema-Migration kann auf älteren LanceDB-Versionen scheitern
+          // (kein addColumns-Support). Graceful degradation, aber loggen statt
+          // silent swallow — Schema-Drifts sind sonst unsichtbar.
+          console.warn(`[memory-lancedb-namespaced] schema migration warning for ${this.dbPath}: ${e.message}`);
+        }
       } else {
         this.table = await this.db.createTable(TABLE_NAME, [
           {
@@ -358,17 +403,14 @@ class MemoryDB {
 
   async delete(id) {
     await this.init();
-    // Validate UUID format before interpolating into SQL — prevents injection
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
-      throw new Error(`Invalid memory ID format: ${id}`);
-    }
-    await this.table.delete(`id = "${id}"`);
+    // safeUuid wirft Error wenn id nicht exakt UUID-Format hat
+    const safe = safeUuid(id);
+    await this.table.delete(`id = "${safe}"`);
   }
 
   async purgeExpired() {
     await this.init();
-    const now = Date.now();
-    if (!Number.isFinite(now) || now < 0) throw new Error(`Invalid timestamp: ${now}`);
+    const now = safeTimestamp(Date.now());
     await this.table.delete(`expiresAt > 0 AND expiresAt < ${now}`);
   }
 }
@@ -1217,6 +1259,7 @@ const plugin = {
                   const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
                   if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
                     await db.delete(mergeCandidate.entry.id);
+                    appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
                     const mergedVector = await embeddings.embed(mergeResult.mergedText);
                     const mergedEntry = { id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
                     await db.store(mergedEntry);
@@ -1266,6 +1309,7 @@ const plugin = {
             try {
               if (params.memoryId) {
                 await db.delete(params.memoryId);
+                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: params.memoryId, via: "id", timestamp: new Date().toISOString() });
                 return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten.` }] };
               }
               if (params.query) {
@@ -1276,7 +1320,9 @@ const plugin = {
                   const list = results.map((r) => `${r.entry.id}: ${r.entry.text}`).join("\n");
                   return { content: [{ type: "text", text: `Found ${results.length} candidates. Specify memoryId:\n${list}` }] };
                 }
-                await db.delete(results[0].entry.id);
+                const targetId = results[0].entry.id;
+                await db.delete(targetId);
+                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: targetId, via: "query", query: params.query.slice(0, 200), timestamp: new Date().toISOString() });
                 return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }] };
               }
               return { content: [{ type: "text", text: "Provide query or memoryId." }] };
@@ -1349,10 +1395,13 @@ const plugin = {
               if (pendingIds.length > 0) {
                 try {
                   await db.init();
-                  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-                  const safeIds = pendingIds.filter(id => uuidRe.test(id));
-                  const rows = await db.table.query().where(`id IN (${safeIds.map(id => `'${id}'`).join(",")})`).toArray();
-                  pendingTexts = rows.map(r => ({ id: r.id, text: r.text, category: r.category || "fact", importance: r.importance ?? 0.5 }));
+                  const inList = safeUuidList(pendingIds, 100);
+                  if (inList === null) {
+                    api.logger.warn(`memory-lancedb-namespaced: knowledge_update — keine valid UUIDs in ${pendingIds.length} pending IDs`);
+                  } else {
+                    const rows = await db.table.query().where(`id IN (${inList})`).toArray();
+                    pendingTexts = rows.map(r => ({ id: r.id, text: r.text, category: r.category || "fact", importance: r.importance ?? 0.5 }));
+                  }
                 } catch (fetchErr) {
                   api.logger.warn(`memory-lancedb-namespaced: knowledge_update DB fetch failed: ${String(fetchErr)}`);
                 }
