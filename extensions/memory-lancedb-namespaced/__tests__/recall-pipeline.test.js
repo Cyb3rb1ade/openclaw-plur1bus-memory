@@ -57,13 +57,13 @@ test("dedupResults: keine Duplikate → alle behalten (bis maxOut)", () => {
 
 test("dedupResults: nahe Duplikate werden suppimiert", () => {
   const results = [
-    { entry: { summary: "Christian mag Kaffee morgens" }, score: 0.9 },
-    { entry: { summary: "Christian mag Kaffee morgens immer" }, score: 0.8 },
+    { entry: { summary: "der Nutzer mag Kaffee morgens" }, score: 0.9 },
+    { entry: { summary: "der Nutzer mag Kaffee morgens immer" }, score: 0.8 },
     { entry: { summary: "Auto und Bahn ganz anderes Thema" }, score: 0.7 },
   ];
   const out = dedupResults(results, 5, 0.6);
-  assert.equal(out.length, 2, "Christian-mag-Kaffee-Variante sollte gefiltert sein");
-  assert.equal(out[0].entry.summary, "Christian mag Kaffee morgens");
+  assert.equal(out.length, 2, "der Nutzer-mag-Kaffee-Variante sollte gefiltert sein");
+  assert.equal(out[0].entry.summary, "der Nutzer mag Kaffee morgens");
   assert.equal(out[1].entry.summary, "Auto und Bahn ganz anderes Thema");
 });
 

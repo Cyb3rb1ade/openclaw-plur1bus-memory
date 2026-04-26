@@ -43,7 +43,7 @@ Output:
 Endpoint:      https://api.openai.com/v1 (default)
 Modell:        text-embedding-3-large
 Config-Dim:    (nicht gesetzt — wird aus EMBEDDING_DIMENSIONS-Map default)
-API-Key:       sk-proj-…oM0A
+API-Key:       sk-proj-[REDACTED]
 
 [1/3] Test-Embedding-Call …  ✓ 3072-dim Vektoren
 [2/3] Config-Dim Konsistenz … ⚠ Config-Dim leer, ergänze 'dimensions: 3072'
@@ -256,8 +256,8 @@ node memory-doctor.mjs eval bernhardine pipeline  # volle Live-Pipeline mit Cano
 ```
 
 **Sofortiger Mehrwert messbar:** Bernhardines Eval-Pass-Rate stieg von
-**75 % (raw) auf 100 % (pipeline)**. Der Erik-Krankheits-Test (`nightscout`)
-fand das Wort nur über den Canonical-Hit aus KNOWLEDGE.md "Erik — Gesundheit".
+**75 % (raw) auf 100 % (pipeline)**. Der Beispiel-Gesundheits-Test (`monitoring-system`)
+fand das Wort nur über den Canonical-Hit aus KNOWLEDGE.md "Person B — Gesundheit".
 Rohe Vektorsuche allein hatte es nicht in den Top-10.
 
 #### Bug-Fix nebenbei: `dedupResults` mit `maxOut=0`
@@ -295,7 +295,7 @@ Funktional identisch, nur intern aufgeräumt.
 
 - 81/81 Tests grün
 - Gateway-Restart läuft sauber
-- Live-Recall-Test (Bernhardine "Wer ist Eva?") liefert "+ 2 canonical" wie vor v1.9.0
+- Live-Recall-Test (Bernhardine "Wer ist Person A?") liefert "+ 2 canonical" wie vor v1.9.0
 - `memory-doctor eval bernhardine pipeline` zeigt 100 % Pass-Rate (vs 75 % raw)
 
 ## [1.8.6] — 2026-04-25
@@ -369,7 +369,7 @@ die Git-History via `git filter-repo` gescrubbt:
    beschrieb den Leak und enthielt selbst die Strings)
 4. Force-push `main` + alle Tags
 
-**Verifikation:** Fresh clone, `git log --all -p | grep -E "1211667028|2048378590|wkxqm"` → **0 matches**. Alle Tags v1.0.0..v1.8.5 vorhanden, mit neuen Commit-Hashes.
+**Verifikation:** Fresh clone, `git log --all -p | grep -E "REDACTED_CHAT_ID|REDACTED_KEY_SUFFIX"` → **0 matches**. Alle Tags v1.0.0..v1.8.5 vorhanden, mit neuen Commit-Hashes.
 
 **Bekannte Akzeptanz:** Bestehende Forks und Clones haben weiterhin die
 ursprünglichen Daten. `git pull` für Bestandsclones bricht — Anwender
@@ -419,11 +419,11 @@ HEAD ist sanitisiert; **History bleibt vorerst unverändert** (siehe unten).
 
 | Wert | Sensitivität |
 |---|---|
-| Eva Telegram Chat-ID `[REDACTED_CHAT_ID]` | hoch — direkt missbrauchbar für Spam |
-| Erik Telegram Chat-ID `[REDACTED_CHAT_ID]` | hoch — selbiges |
+| Person A Telegram Chat-ID `[REDACTED_CHAT_ID]` | hoch — direkt missbrauchbar für Spam |
+| Person B Telegram Chat-ID `[REDACTED_CHAT_ID]` | hoch — selbiges |
 | Bernd Kimi-Key-Suffix `[REDACTED_KEY_SUFFIX]` | mittel — letzte 5 Zeichen |
-| `@h3isenbot` Bot-Handle | niedrig — öffentlich |
-| Personennamen Eva/Erik/Christian | mittel |
+| `[REDACTED_BOT_HANDLE]` Bot-Handle | niedrig — öffentlich |
+| Personenbezogene Namen | mittel |
 
 **Aktionen umgesetzt:**
 

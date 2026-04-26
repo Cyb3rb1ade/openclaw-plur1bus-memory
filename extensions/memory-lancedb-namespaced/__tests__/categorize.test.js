@@ -28,7 +28,7 @@ test("categorizeMemory: preference (englisch)", () => {
 });
 
 test("categorizeMemory: preference (deutsch)", () => {
-  assert.equal(categorizeMemory("Christian bevorzugt kurze Antworten"), "preference");
+  assert.equal(categorizeMemory("der Nutzer bevorzugt kurze Antworten"), "preference");
   assert.equal(categorizeMemory("Ich mag das"), "preference");
 });
 
@@ -52,7 +52,7 @@ test("categorizeMemory: reference", () => {
 });
 
 test("categorizeMemory: entity", () => {
-  assert.equal(categorizeMemory("name: Christian Mueller"), "entity");
+  assert.equal(categorizeMemory("name: der Nutzer Mueller"), "entity");
   assert.equal(categorizeMemory("company: Acme Inc"), "entity");
 });
 
