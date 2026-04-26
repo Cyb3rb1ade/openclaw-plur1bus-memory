@@ -11,6 +11,8 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
+**Aktuelle Version:** `2.1.2` — Yield-sicherer Memory-Flush plus Session-History-Cleanup.
+
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
 ---
@@ -46,6 +48,7 @@ scripts/
   auto-capture-lancedb.mjs     ← Cron-Fallback für Auto-Capture (alle 5 Min)
   embed-promoted-memories.mjs  ← Bridge Dreaming-Promotionen → LanceDB (alle 30 Min)
   migrate-memory-md-to-lancedb.mjs  ← Einmalige MEMORY.md → LanceDB Migration
+  cleanup-session-history.mjs  ← Bereinigt aufgeblähte OpenClaw-Session-Transcripts
 how-to-memory.md               ← Schnell-Referenz (Konzepte und Setup)
 how-to-memory-perfect.md       ← Vollständige Dokumentation (Architektur, Upgrades)
 CHANGELOG.md                   ← Versionshistorie
@@ -234,6 +237,8 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
+**Current version:** `2.1.2` — yield-safe memory flush guidance plus session-history cleanup.
+
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
 Layer 1.5  KNOWLEDGE.md         Curated knowledge base with YAML frontmatter
@@ -261,6 +266,7 @@ scripts/
   auto-capture-lancedb.mjs     ← Cron fallback for auto-capture (every 5 minutes)
   embed-promoted-memories.mjs  ← Bridge dreaming promotions → LanceDB (every 30 min)
   migrate-memory-md-to-lancedb.mjs  ← One-shot MEMORY.md → LanceDB migration
+  cleanup-session-history.mjs  ← Cleans bloated OpenClaw session transcripts
 how-to-memory.md               ← Quick reference (concepts and setup)
 how-to-memory-perfect.md       ← Full documentation (architecture, upgrades)
 CHANGELOG.md                   ← Version history

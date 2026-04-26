@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## [2.1.2] — 2026-04-26
 
-### Session-History Cleanup
+### Yield-sicherer Memory-Flush und Session-History Cleanup
 
 - Neues Script `scripts/cleanup-session-history.mjs` ergänzt.
 - Zweck: physische Bereinigung bereits aufgeblähter OpenClaw-Session-Transcripts
@@ -10,6 +10,7 @@
 - Verhalten: Dry-Run per Default, `--write` für Rewrite, Backups unter
   `.history-cleanup-backups/`, aktive Branch per `parentId`, führende
   Session-Metadaten bleiben erhalten.
+- SOUL-/Doku-Regel ergänzt: Memory- und Learning-Toolcalls müssen vor `sessions_yield` abgeschlossen sein.
 - Beispiel:
   `node scripts/cleanup-session-history.mjs --agent main --agent bernhardine --agent heisenberg --write`
 
