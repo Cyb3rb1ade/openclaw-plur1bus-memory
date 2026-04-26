@@ -422,6 +422,30 @@ memory-lancedb-namespaced.kind = "extension"      ← Auto-capture/recall per ag
 
 ---
 
+## Session History Cleanup
+
+OpenClaw versions with append-only transcript branch rewrites can leave inactive
+JSONL entries in session history. Newer runtime reads follow the active
+`parentId` branch, but existing files can still stay physically bloated.
+
+Use the cleanup script in dry-run mode first:
+
+```bash
+node scripts/cleanup-session-history.mjs --agent main --agent bernhardine --agent heisenberg
+```
+
+Apply the rewrite with backups:
+
+```bash
+node scripts/cleanup-session-history.mjs --agent main --agent bernhardine --agent heisenberg --write
+```
+
+The script preserves leading session metadata, keeps the active transcript
+branch, writes backups to `.history-cleanup-backups/`, and ignores archived
+`*.deleted.*` plus `*.trajectory.jsonl` files unless explicitly requested.
+
+---
+
 ## Full Documentation
 
 → [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — full architecture, configuration reference, upgrade guides, security audits, troubleshooting.

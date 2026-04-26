@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Session-History Cleanup
+
+- Neues Script `scripts/cleanup-session-history.mjs` ergänzt.
+- Zweck: physische Bereinigung bereits aufgeblähter OpenClaw-Session-Transcripts
+  nach append-only Branch-Rewrites.
+- Verhalten: Dry-Run per Default, `--write` für Rewrite, Backups unter
+  `.history-cleanup-backups/`, aktive Branch per `parentId`, führende
+  Session-Metadaten bleiben erhalten.
+- Beispiel:
+  `node scripts/cleanup-session-history.mjs --agent main --agent bernhardine --agent heisenberg --write`
+
 ## [2.1.1] — 2026-04-25
 
 ### v2.1.0-Hardening — 5 Polish-Fixes gebündelt
