@@ -213,4 +213,4 @@ Schema einer Zeile:
 | Bernd | `~/.openclaw/memory/lancedb-namespaced/main/` |
 | Bernhardine | `~/.openclaw/memory/lancedb-namespaced/bernhardine/` |
 | Heisenberg | `~/.openclaw/memory/lancedb-namespaced/heisenberg/` |
-| Erik | `~/.openclaw/memory/lancedb-namespaced/erik/` |
+| Person B | `~/.openclaw/memory/lancedb-namespaced/person-b/` |

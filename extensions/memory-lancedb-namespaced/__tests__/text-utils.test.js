@@ -28,7 +28,7 @@ test("tokenize: empty/null input", () => {
 });
 
 test("jaccardSimilarity: identical texts → 1", () => {
-  const t = "Christian mag Kaffee mit viel Milch";
+  const t = "der Nutzer mag Kaffee mit viel Milch";
   assert.equal(jaccardSimilarity(t, t), 1);
 });
 
@@ -37,7 +37,7 @@ test("jaccardSimilarity: completely different → 0", () => {
 });
 
 test("jaccardSimilarity: half overlap → 0.33-0.5 range", () => {
-  const sim = jaccardSimilarity("Christian mag Kaffee", "Christian mag Tee");
+  const sim = jaccardSimilarity("der Nutzer mag Kaffee", "der Nutzer mag Tee");
   assert.ok(sim > 0.3 && sim < 0.6, `expected partial overlap, got ${sim}`);
 });
 

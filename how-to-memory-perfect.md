@@ -519,6 +519,28 @@ Wenn per Query gesucht wird und mehrere Treffer existieren, listet das Plugin al
 
 ---
 
+
+### Memory-Flush vor `sessions_yield`
+
+`sessions_yield` ist ein Orchestrierungswerkzeug: Der Agent beendet den aktuellen Turn bewusst, um später durch ein Follow-up-Ereignis weiterzumachen. Das ist nützlich nach Subagent-Spawns, aber riskant, wenn der Agent vorher Memory- oder Learning-Toolcalls geplant hat.
+
+**SOUL/Agent-Instruktion:** Der folgende Block beschreibt die operative Regel für jeden Yield.
+
+```markdown
+## sessions_yield — Memory-Flush vor Turn-Ende
+
+`sessions_yield` ist erlaubt, wenn ein Turn bewusst beendet werden soll, z.B. nach einem Subagent-Spawn.
+
+Vorher immer prüfen:
+- Entstanden neue Nutzerpräferenzen, Entscheidungen, Projektfakten, URLs, Korrekturen oder Learning-Kandidaten?
+- Müssen `memory_store`, `memory_recall`, `memory_search`, `knowledge_update` oder `adaptive_learning_log` ausgeführt werden?
+- Sind alle Tool-Ergebnisse zurück und erfolgreich verarbeitet?
+
+Erst danach darf `sessions_yield` den Turn beenden. Wenn ein Memory-Tool fehlschlägt, retry oder transparent melden; nicht yielden und so tun, als sei gespeichert worden.
+```
+
+Damit bleibt `sessions_yield` nutzbar, ohne Auto-Capture, manuelle Stores, Knowledge-Curation oder Adaptive-Learning-Logs abzuschneiden.
+
 ## Re-Ranker: Zwei-Stufen-Retrieval für bessere Relevanz
 
 ### Das Problem mit reiner Vektorsuche
@@ -1412,7 +1434,7 @@ await this.table.addColumns([{ name: 'storedBy', valueSql: "''" }]);
 ```json
 // Session-Memory (vergänglich)
 {
-  "text": "Christian ist heute im Urlaub, antwortet erst morgen",
+  "text": "der Nutzer ist heute im Urlaub, antwortet erst morgen",
   "category": "fact",
   "ttl": "session"
 }
@@ -1427,7 +1449,7 @@ await this.table.addColumns([{ name: 'storedBy', valueSql: "''" }]);
 
 // Permanente Information (kein ttl-Parameter)
 {
-  "text": "Christian bevorzugt deutsche Sprache für alle Agent-Antworten",
+  "text": "der Nutzer bevorzugt deutsche Sprache für alle Agent-Antworten",
   "category": "preference",
   "importance": 0.9
 }
@@ -1873,8 +1895,8 @@ JSON-Schema pro Agent mit Test-Queries. Pro Query genau eines von `expectedMemor
 ```json
 {
   "bernhardine": [
-    { "query": "Wer ist Eva?", "expectedTextContains": ["eva"], "limit": 5 },
-    { "query": "Eriks Telegram-ID", "expectedTextContains": ["[REDACTED_CHAT_ID]"] }
+    { "query": "Wer ist Person A?", "expectedTextContains": ["person a"], "limit": 5 },
+    { "query": "Person Bs Telegram-ID", "expectedTextContains": ["[REDACTED_CHAT_ID]"] }
   ]
 }
 ```
@@ -1898,7 +1920,7 @@ Sechs neue LanceDB-Spalten (alle auto-migriert beim ersten DB-Zugriff):
 
 ```json
 {
-  "text": "Christian bevorzugt direkte Antworten.",
+  "text": "der Nutzer bevorzugt direkte Antworten.",
   "category": "preference",
   "importance": 0.85,
   "sourceUrl": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/issues/12",
@@ -1942,8 +1964,8 @@ Slot-Aufteilung: canonical first, raw memories füllen Restslots (Total ≤ 5)
 
 ```xml
 <relevant-memories>
-  - [canonical|knowledge] Eva — Identität — Eva ist die Frau von Christian (Mr. Cy)…
-  - [canonical|knowledge] Erik — Gesundheit — Erik (18) hat Typ-1-Diabetes, Nightscout-Monitoring…
+  - [canonical|knowledge] Person A — Profil — Person A ist ein Beispielkontakt des Nutzers…
+  - [canonical|knowledge] Person B — Gesundheit — Person B (18) hat ein medizinisches Thema, Monitoring-Kontext…
   - [preference] Antworten auf Deutsch, kurz und direkt… (ID: abc-123)
   - [fact|group] Im Gruppen-Chat wurde beschlossen… (ID: def-456)
 </relevant-memories>
@@ -1965,7 +1987,7 @@ source_memories:
 
 # Bernhardines kuratiertes Wissen
 
-## Eva — Identität
+## Person A — Identität
 ...
 ```
 
