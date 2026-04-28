@@ -1184,7 +1184,7 @@ table.to_pandas()
 
 ---
 
-*Dokumentation: `how-to-memory-perfect.md` — aktualisiert: 2026-04-03*
+*Dokumentation: `how-to-memory-perfect.md` — aktualisiert: 2026-04-28*
 *Interne Implementierungs-Details (deployment-spezifisch): `how-to-memory.md`*
 *Plugin-README: `extensions/memory-lancedb-namespaced/README.md`*
 *Workspace-Indexer Status: `openclaw memory status --deep`*
@@ -1855,6 +1855,163 @@ Alle Verbesserungen greifen automatisch ohne Config-Änderungen.
 **`memorySearch.local.contextSize`:** Neues konfigurierbares Feld (Default: 4096 Tokens) für den Kontext beim lokalen Embedding-Search. Für constrained Environments verkleinerbar. Konfigurierbar via `memorySearch.local.contextSize` in `openclaw.json` — bei uns Default ausreichend.
 
 **Root Memory Canonicalization:** OpenClaw behandelt `MEMORY.md` als kanonischen Einstiegspunkt — kompatibel mit unserem bestehenden Setup.
+
+---
+
+# v2.1.x (2026-04-28) — OpenClaw-Patches + Fast-Path
+
+Drei Critical-Patches die das Memory-System im Produktivbetrieb absichern. Alle werden bei der Installation automatisch durch `patches/apply-memory-patches.sh` angewendet (Schritt 9 in `install-memory-system.sh`).
+
+---
+
+## Patch #16 — Stuck-Session-Abort
+
+**Datei:** `dist/diagnostic-*.js` (Anchor: `logSessionStuck`)
+
+**Problem:** Sessions bleiben im Zustand `processing` hängen — z.B. weil der Agent auf einen Subagent-Spawn wartet, der nie zurückkehrt. Der Gateway-Heartbeat loggt `stuck-session` nur, greift aber nicht ein.
+
+**Fix:** Nach dem `logSessionStuck()`-Log wird bei Überschreitung von `diagnostics.stuckSessionAbortMs` (Default: 600s) intern `process.kill(process.pid, "SIGUSR1")` gesendet. Das löst einen sauberen Gateway-Reset aus, ohne den Prozess hart zu killen.
+
+```javascript
+// Nach logSessionStuck():
+const _stuckAbortMs = getRuntimeConfig()?.diagnostics?.stuckSessionAbortMs ?? (stuckSessionWarnMs * 5);
+if (ageMs > _stuckAbortMs) {
+    diagnosticLogger.warn(`stuck session ABORT: sessionKey=${state.sessionKey} age=${ageMs/1e3}s`);
+    process.kill(process.pid, "SIGUSR1");
+}
+```
+
+**Konfiguration in `openclaw.json`:**
+
+```json
+"diagnostics": {
+  "stuckSessionAbortMs": 600000
+}
+```
+
+**Verifikation:**
+
+```bash
+journalctl --user -u openclaw-gateway --no-pager | grep "stuck session ABORT"
+```
+
+---
+
+## Patch #17 — Cohere Reranking nach Hybrid-Merge
+
+**Datei:** `dist/manager-*.js` (Anchor: `strict = merged.filter(...)` vor `return strict.slice(0, maxResults)`)
+
+**Problem:** Der builtin Memory-Backend liefert nach `mergeHybridResults()` nur Score-gewichtete Resultate. Semantische Relevanz (Cross-Encoder) wird nicht berücksichtigt.
+
+**Fix:** Nach dem `merged.filter()` werden die Top-K-Ergebnisse via Cohere `rerank-v3.5` API neu sortiert. Der API-Key wird direkt aus `/root/.openclaw/.env` gelesen — keine extra Config nötig.
+
+```javascript
+// Nach merged.filter(), vor return strict.slice():
+let __cohereKey = ""; try {
+  __cohereKey = (await import("node:fs")).readFileSync("/root/.openclaw/.env","utf8")
+    .match(/COHERE_API_KEY=([^\n]+)/)?.[1]?.trim() ?? "";
+} catch {}
+
+if (__cohereKey && merged.length > 1) {
+  const __cr = await fetch("https://api.cohere.com/v2/rerank", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${__cohereKey}`, "Content-Type": "application/json", "User-Agent": "claude-code/1.0" },
+    body: JSON.stringify({
+      model: "rerank-v3.5",
+      query: cleaned,
+      documents: merged.map(r => r.snippet || ""),
+      top_n: Math.min(merged.length, maxResults * 2),
+      return_documents: false
+    }),
+    signal: AbortSignal.timeout(8000)
+  });
+  if (__cr.ok) {
+    const __cd = await __cr.json();
+    strict = __cd.results.map(r => merged[r.index]).filter(Boolean);
+  }
+}
+```
+
+**Voraussetzung:** `COHERE_API_KEY` in `/root/.openclaw/.env`
+
+**Verifikation:**
+
+```bash
+journalctl --user -u openclaw-gateway --no-pager | grep "cohere.*rerank\|rerank.*cohere"
+```
+
+---
+
+## Patch #18 — Active-Memory Fast-Path
+
+**Datei:** `dist/extensions/active-memory/index.js` (Anchor: `return cached;` + `start timeoutMs`)
+
+**Problem:** ActiveMemory startet bei jedem Turn einen PiAgent-Subagenten (kimi-for-coding, 20s Timeout) → Session-Write-Lock → blockiert die Lane → 20–120s Latenz.
+
+**Fix:** Vor dem PiAgent-Start wird `getMemorySearchManager` aus dem `memory-*.js`-Modul direkt aufgerufen. Wenn der Manager Ergebnisse liefert, wird die Zusammenfassung sofort zurückgegeben — ohne Subagent, ohne Session-Lock, ohne Timeout.
+
+```
+Ohne Fast-Path:  query → PiAgent → timeoutMs=20000 → Session-Lock → blockiert Lane
+Mit Fast-Path:   query → manager.search() → <1s → done status=ok elapsedMs=<3000
+```
+
+**Was der Fast-Path tut:**
+
+1. Importiert `getMemorySearchManager` (als `n` exportiert) aus dem aktuellen `memory-*.js`-Modul
+2. Ruft `manager.search()` mit `maxResults: 6` und `sessionKey` auf
+3. Baut aus den Suchtreffern eine `summary` (Text der Memories, joined mit `"---"`)
+4. Prüft ob `buildPromptPrefix()` eine Zusammenfassung erzeugt
+5. Falls ja → sofort zurückgeben mit `status: "ok"` + `[fast-path]` Log
+6. Falls nein (0 Treffer) → fällt in den langsamen PiAgent-Pfad zurück
+
+**Automatische Modul-Erkennung:**
+
+Das Patch-Script scannt `dist/memory-*.js` nach dem Modul mit dem Export `getMemorySearchManager as n`. Das garantiert Versions-Unabhängigkeit — nach jedem OpenClaw-Update funktioniert der Fast-Path weiterhin automatisch.
+
+**Log-Verifikation:**
+
+```bash
+# Erfolgreicher Fast-Path:
+journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*fast-path.*done status=ok"
+
+# Manager nicht geladen (Fallback auf PiAgent):
+journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*start timeoutMs=20000"
+
+# Tip: Schnellster Weg, neuen Fast-Path zu triggern:
+curl -s "https://api.kimi.com/ping" > /dev/null 2>&1 && echo "API OK"
+```
+
+**Typische Latenz:**
+
+| Pfad | elapsedMs |
+|---|---|
+| Fast-Path (Hit) | 800–3000ms |
+| Fast-Path (0 Treffer) → PiAgent-Fallback | 20.000ms |
+| ohne Fast-Path (PiAgent-only) | 20.000–120.000ms |
+
+**Wichtig:** Wenn die builtin Memory-Backend-Suche 0 Treffer zurückgibt (z.B. weil noch keine Memories existieren oder die Query nicht passt), fällt der Fast-Path in den PiAgent-Pfad zurück. Das ist korrektes Verhalten — der Fast-Path ist ein Optimierung, kein Ersatz für den Subagenten.
+
+---
+
+## Installation: Patch-Anwendung (Schritt 9)
+
+`install-memory-system.sh` wendet die Patches automatisch im letzten Installations-Schritt an:
+
+```bash
+# patches/apply-memory-patches.sh wird ausgeführt
+bash patches/apply-memory-patches.sh
+# Output:
+#   [patch] stuck-session-abort: already patched (diagnostic-DitKp9ni.js)
+#   [patch] memory-core-cohere-rerank: already patched (manager-ICKYl3BU.js)
+#   [patch] active-memory-fast-path: already patched
+
+# Gateway neu starten
+systemctl --user restart openclaw-gateway.service
+```
+
+**Idempotenz:** Alle Patches prüfen auf ihren Marker (`/* patch-name-patch */`). Bei bestehender Installation → `"already patched"`, keine Änderung.
+
+**Nach OpenClaw-Update:** `bash patches/apply-memory-patches.sh` erneut ausführen, dann Gateway-Restart.
 
 ---
 

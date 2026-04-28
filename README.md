@@ -11,7 +11,7 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.4` — Fast-Path-Fix + SQLite-Migration auf text-embedding-3-large + OpenClaw 4.26.
+**Aktuelle Version:** `2.1.4` — Fast-Path-Fix (active-memory) + SQLite-Migration auf text-embedding-3-large + OpenClaw 4.26.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -39,8 +39,10 @@ Der Agent schreibt, das System erinnert sich automatisch. Dreaming konsolidiert 
 extensions/
   memory-lancedb-namespaced/   ← Hauptplugin (OpenClaw-Gateway-Plugin)
   memory-lancedb-stock/        ← LanceDB-Wrapper (Abhängigkeit, npm install)
+patches/
+  apply-memory-patches.sh      ← OpenClaw-Patches (Stuck-Session, Cohere-Rerank, Fast-Path)
 scripts/
-  install-memory-system.sh     ← Installation, Update, Rollback (mit Auto-Discovery)
+  install-memory-system.sh     ← Installation, Update, Rollback + Patches (mit Auto-Discovery)
   bump-version.sh              ← Synchronisiert Versions in Manifest + CHANGELOG
   memory-gc.mjs                ← TTL-Garbage-Collector (täglich via Cron, 03:00)
   memory-doctor.mjs            ← Health-CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
@@ -50,7 +52,7 @@ scripts/
   migrate-memory-md-to-lancedb.mjs  ← Einmalige MEMORY.md → LanceDB Migration
   cleanup-session-history.mjs  ← Bereinigt aufgeblähte OpenClaw-Session-Transcripts
 how-to-memory.md               ← Schnell-Referenz (Konzepte und Setup)
-how-to-memory-perfect.md       ← Vollständige Dokumentation (Architektur, Upgrades)
+how-to-memory-perfect.md       ← Vollständige Dokumentation (Architektur, Upgrades, Patches)
 CHANGELOG.md                   ← Versionshistorie
 ```
 
@@ -152,6 +154,18 @@ systemctl --user restart openclaw-gateway.service
 - **Cross-Pollination** innerhalb eines Workspace — Subagents teilen sich den Dream-Kontext.
 - **Dreaming → LanceDB Bridge** (`embed-promoted-memories.mjs`) — neue MEMORY.md-Promotionen werden alle 30 Min nachgebettet.
 
+### OpenClaw-Patches
+
+`patches/apply-memory-patches.sh` wird bei der Installation automatisch ausgeführt (Schritt 9). Drei Patches:
+
+| Patch | Datei | Was |
+|---|---|---|
+| **#16** Stuck-Session-Abort | `diagnostic-*.js` | SIGUSR1 wenn Session > `stuckSessionAbortMs` (Default 600s) hängt |
+| **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` nach `mergeHybridResults()` — bessere Top-K-Sortierung |
+| **#18** Active-Memory Fast-Path | `active-memory/index.js` | `manager.search()` direkt statt PiAgent-Subagent — <3s Latenz statt 20-120s |
+
+Der Fast-Path ist **OpenClaw-Versions-unabhängig**: das Script erkennt den aktuellen `memory-*.js`-Modulnamen automatisch. Bei künftigen Updates muss nur `apply-memory-patches.sh` nochmal laufen.
+
 ---
 
 ## Voraussetzungen
@@ -237,7 +251,7 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.4` — Fast-path fix + SQLite migration to text-embedding-3-large + OpenClaw 4.26.
+**Current version:** `2.1.4` — Fast-path fix (active-memory) + SQLite migration to text-embedding-3-large + OpenClaw 4.26.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
@@ -257,8 +271,10 @@ The agent writes, the system remembers automatically. Dreaming consolidates memo
 extensions/
   memory-lancedb-namespaced/   ← Main plugin (OpenClaw Gateway plugin)
   memory-lancedb-stock/        ← LanceDB wrapper (dependency, requires npm install)
+patches/
+  apply-memory-patches.sh      ← OpenClaw patches (stuck-session, cohere-rerank, fast-path)
 scripts/
-  install-memory-system.sh     ← Installation, update, rollback (with auto-discovery)
+  install-memory-system.sh     ← Installation, update, rollback + patches (with auto-discovery)
   bump-version.sh              ← Synchronizes versions in manifest + CHANGELOG
   memory-gc.mjs                ← TTL garbage collector (daily via cron at 03:00)
   memory-doctor.mjs            ← Health CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
@@ -268,7 +284,7 @@ scripts/
   migrate-memory-md-to-lancedb.mjs  ← One-shot MEMORY.md → LanceDB migration
   cleanup-session-history.mjs  ← Cleans bloated OpenClaw session transcripts
 how-to-memory.md               ← Quick reference (concepts and setup)
-how-to-memory-perfect.md       ← Full documentation (architecture, upgrades)
+how-to-memory-perfect.md       ← Full documentation (architecture, upgrades, patches)
 CHANGELOG.md                   ← Version history
 ```
 
@@ -369,6 +385,18 @@ systemctl --user restart openclaw-gateway.service
 - **Workspace isolation** — Bernd's dreams ≠ Bernhardine's dreams ≠ Heisenberg's dreams.
 - **Cross-pollination** within a workspace — subagents share the dream context.
 - **Dreaming → LanceDB bridge** (`embed-promoted-memories.mjs`) — new MEMORY.md promotions are embedded every 30 min.
+
+### OpenClaw Patches
+
+`patches/apply-memory-patches.sh` runs automatically during installation (step 9). Three patches:
+
+| Patch | File | What |
+|---|---|---|
+| **#16** Stuck-Session Abort | `diagnostic-*.js` | SIGUSR1 when session exceeds `stuckSessionAbortMs` (default 600s) |
+| **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` after `mergeHybridResults()` — better top-K ranking |
+| **#18** Active-Memory Fast-Path | `active-memory/index.js` | Direct `manager.search()` instead of PiAgent subagent — <3s vs 20–120s |
+
+The fast-path is **OpenClaw version-independent**: the script auto-detects the current `memory-*.js` module name. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores all patches.
 
 ---
 
