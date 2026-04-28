@@ -11,7 +11,7 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.2` — Yield-sicherer Memory-Flush plus Session-History-Cleanup.
+**Aktuelle Version:** `2.1.4` — Fast-Path-Fix + SQLite-Migration auf text-embedding-3-large + OpenClaw 4.26.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -237,7 +237,7 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.2` — yield-safe memory flush guidance plus session-history cleanup.
+**Current version:** `2.1.4` — Fast-path fix + SQLite migration to text-embedding-3-large + OpenClaw 4.26.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
