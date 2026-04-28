@@ -1,3 +1,19 @@
+## [2.1.4] - 2026-04-28
+
+### Fixed
+- **Active-Memory Fast-Path**: Fixed config mismatch (use `params.api.config` instead of `params.config`)
+- **Active-Memory Fast-Path**: Removed `ensureProviderInitialized()` to avoid model filter mismatch (1536→3072 dims)
+- **Kimi-for-Coding**: Temperature now always 1.0 (not just when thinking enabled)
+- **SQLite Embeddings**: Migrated main/bernhardine/heisenberg from text-embedding-3-small (1536) to text-embedding-3-large (3072)
+
+### Changed
+- **OpenClaw**: Updated to 4.26 (fixes Telegram polling bug #73115 + memory-core improvements)
+- **Fast-Path Patch**: Updated for 4.26 module name changes (`memory-BRQCcYLp.js`)
+
+### Performance
+- Fast-path search now uses FTS-only mode (no provider init) → sub-second response
+- Eliminated 54-second blocking on warmSession/embedding batch
+
 # Changelog
 
 ## [2.1.2] — 2026-04-26
