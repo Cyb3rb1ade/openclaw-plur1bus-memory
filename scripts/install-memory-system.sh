@@ -1041,7 +1041,28 @@ for agent in "${AGENT_LIST[@]}"; do
   fi
 done
 
-# ─── Schritt 9: Abschluss ─────────────────────────────────────────────────────
+# ─── Schritt 9: OpenClaw-Patches anwenden ─────────────────────────────────────
+
+step "Schritt 9: OpenClaw-Patches anwenden"
+
+PATCHES_SCRIPT="$SOURCE_DIR/patches/apply-memory-patches.sh"
+if [[ -f "$PATCHES_SCRIPT" ]]; then
+  if [[ "$DRY_RUN" == "0" ]]; then
+    if [[ "$IS_REMOTE" == "1" ]]; then
+      scp "$PATCHES_SCRIPT" "${SSH_HOST}:/tmp/apply-memory-patches.sh"
+      ssh "$SSH_HOST" "bash /tmp/apply-memory-patches.sh && rm /tmp/apply-memory-patches.sh"
+    else
+      bash "$PATCHES_SCRIPT"
+    fi
+    ok "Patches angewendet"
+  else
+    dryrun "Würde Patches anwenden: $PATCHES_SCRIPT"
+  fi
+else
+  warn "patches/apply-memory-patches.sh nicht gefunden — übersprungen"
+fi
+
+# ─── Schritt 10: Abschluss ────────────────────────────────────────────────────
 
 echo
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"
