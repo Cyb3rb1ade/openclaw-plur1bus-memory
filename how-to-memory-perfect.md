@@ -1618,14 +1618,14 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag v1.0.1
+git tag v2.1.5
 ```
 
 ### Teilen / Veröffentlichen
 
 ```bash
-# GitHub (z.B. unter github.com/openclaw/memory-system)
-git remote add origin https://github.com/openclaw/memory-system.git
+# GitHub
+git remote add origin git@github.com:Cyb3rb1ade/openclaw-plur1bus-memory.git
 git push -u origin main --tags
 ```
 
@@ -1648,7 +1648,7 @@ git merge contrib/main --no-ff
 
 ## Upgrade-Anleitung: 2026-04-06 → 2026-04-13 — Dreaming (nativ via memory-core)
 
-### Aktueller Stand (2026-04-25, OpenClaw 2026.4.23)
+### Aktueller Stand (2026-05-01, OpenClaw 2026.4.29)
 
 Das Dreaming läuft **nativ über OpenClaws `memory-core`** — nicht über externe Bridge-Scripts.
 
@@ -1656,6 +1656,8 @@ Das Dreaming läuft **nativ über OpenClaws `memory-core`** — nicht über exte
 plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dreaming
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
+
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.5`, Auto-Capture und Auto-Recall aktiv. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal.
 
 ### Was passiert beim Dreaming?
 
