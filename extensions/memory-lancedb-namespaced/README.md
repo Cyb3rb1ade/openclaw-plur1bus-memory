@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `2.1.5` — getestet mit OpenClaw `2026.4.29`. Die 4.29-Kompatibilität umfasst `~/.openclaw/plugins/installs.json` als primären Install-Record, schema-konforme Message-Policy-Werte und robustere Journal-/Plugin-List-Checks für Auto-Capture/Auto-Recall.
+**Aktuelle Version:** `2.1.6` — getestet mit OpenClaw `2026.4.29`. Die 4.29-Kompatibilität umfasst `~/.openclaw/plugins/installs.json` als primären Install-Record, schema-konforme Message-Policy-Werte, robuste Journal-/Plugin-List-Checks und einen Installer, der `memory-core` als Slot-Owner erhält.
 
 ---
 
