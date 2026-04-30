@@ -1,3 +1,17 @@
+## [2.1.5] - 2026-05-01
+
+### Changed
+- **OpenClaw 2026.4.29 compatibility**: `update-openclaw.sh` now treats `~/.openclaw/plugins/installs.json` as the primary plugin install-record store and only falls back to legacy `openclaw.json.plugins.installs`.
+- **Message policy guards**: Updated 4.29 checks to write schema-valid values: `messages.visibleReplies = "message_tool"` and `messages.queue.mode = "steer"`.
+- **Patch runner hardening**: Retired or missing OpenClaw dist anchors no longer block Gateway startup when the relevant upstream code has moved or been removed.
+- **Runtime dependency repair**: Documented and validated the 2026.4.29 bundled-channel dependency fix using the version-scoped runtime-deps cache.
+- **Memory health checks**: Plugin verification now accepts `openclaw plugins list` and Gateway journal evidence, avoiding false failures when fast `openclaw status` omits custom plugin registration lines.
+
+### Fixed
+- Fixed Python `except:` checks in `update-openclaw.sh` that could catch `SystemExit` and produce false `stream error` warnings.
+- Fixed `set -o pipefail`/`grep -q` false negatives in large journal scans by using here-strings for Memory health detection.
+- Bumped `memory-lancedb-namespaced` manifest/package version to keep README, CHANGELOG and plugin metadata aligned.
+
 ## [2.1.4] - 2026-04-28
 
 ### Fixed

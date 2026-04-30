@@ -40,12 +40,21 @@ header(){ echo -e "\n${BOLD}${CYAN}━━━  $*  ━━━${RESET}"; }
 WAIT_STATUS_OUTPUT=""
 wait_for_plugins_ready() {
     local required=("adaptive-learning-loop: registered" "memory-lancedb-namespaced: registered")
-    local attempt out miss m
+    local attempt out journal miss m
     for attempt in 1 2 3; do
         out=$(timeout 90s openclaw status 2>&1 || true)
         miss=0
         for m in "${required[@]}"; do
-            echo "$out" | grep -q "$m" || { miss=1; break; }
+            grep -q "$m" <<< "$out" || { miss=1; break; }
+        done
+        if (( miss == 0 )); then
+            WAIT_STATUS_OUTPUT="$out"
+            return 0
+        fi
+        journal=$(journalctl --user -u openclaw-gateway --since "2 hours ago" --no-pager -n 5000 2>/dev/null || true)
+        miss=0
+        for m in "${required[@]}"; do
+            grep -q "$m" <<< "$journal" || { miss=1; break; }
         done
         if (( miss == 0 )); then
             WAIT_STATUS_OUTPUT="$out"
@@ -62,6 +71,7 @@ ERRORS=0
 CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 OPENCLAW_JSON="/root/.openclaw/openclaw.json"
+OPENCLAW_INSTALLS_JSON="/root/.openclaw/plugins/installs.json"
 
 # ─── PRE-FLIGHT ──────────────────────────────────────────────────────────────
 header "PRE-FLIGHT CHECKS"
@@ -167,8 +177,46 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
         CURRENT_POSITIVE_THRESHOLD=$(jq -r '.plugins.entries["adaptive-learning-loop"].config.positiveFeedbackThreshold // empty' "$OPENCLAW_JSON" 2>/dev/null || true)
         CURRENT_NEGATIVE_THRESHOLD=$(jq -r '.plugins.entries["adaptive-learning-loop"].config.negativeFeedbackThreshold // empty' "$OPENCLAW_JSON" 2>/dev/null || true)
         CURRENT_MIXED_THRESHOLD=$(jq -r '.plugins.entries["adaptive-learning-loop"].config.mixedFeedbackReviewThreshold // empty' "$OPENCLAW_JSON" 2>/dev/null || true)
-        CURRENT_INSTALL=$(jq -r '.plugins.installs["adaptive-learning-loop"].installPath // empty' "$OPENCLAW_JSON" 2>/dev/null || true)
-        CURRENT_INSTALL_VERSION=$(jq -r '.plugins.installs["adaptive-learning-loop"].version // empty' "$OPENCLAW_JSON" 2>/dev/null || true)
+        CURRENT_INSTALL=$(python3 -c "
+import json
+installs_path = '$OPENCLAW_INSTALLS_JSON'
+cfg_path = '$OPENCLAW_JSON'
+install_path = ''
+try:
+    with open(installs_path) as f:
+        installs = json.load(f)
+    install_path = installs.get('adaptive-learning-loop', {}).get('installPath', '') or ''
+except Exception:
+    pass
+if not install_path:
+    try:
+        with open(cfg_path) as f:
+            d = json.load(f)
+        install_path = d.get('plugins', {}).get('installs', {}).get('adaptive-learning-loop', {}).get('installPath', '') or ''
+    except Exception:
+        pass
+print(install_path)
+" 2>/dev/null || true)
+        CURRENT_INSTALL_VERSION=$(python3 -c "
+import json
+installs_path = '$OPENCLAW_INSTALLS_JSON'
+cfg_path = '$OPENCLAW_JSON'
+version = ''
+try:
+    with open(installs_path) as f:
+        installs = json.load(f)
+    version = installs.get('adaptive-learning-loop', {}).get('version', '') or ''
+except Exception:
+    pass
+if not version:
+    try:
+        with open(cfg_path) as f:
+            d = json.load(f)
+        version = d.get('plugins', {}).get('installs', {}).get('adaptive-learning-loop', {}).get('version', '') or ''
+    except Exception:
+        pass
+print(version)
+" 2>/dev/null || true)
 
         if [[ "$CURRENT_CURATOR" == "main" \
            && "$CURRENT_QUEUE" == "$ADAPTIVE_QUEUE" \
@@ -220,6 +268,29 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
                   }
                 ' "$OPENCLAW_JSON" > "$TMP_JSON"
             mv "$TMP_JSON" "$OPENCLAW_JSON"
+            python3 -c "
+import json, os
+path = '$OPENCLAW_INSTALLS_JSON'
+adaptive_dir = '$ADAPTIVE_DIR'
+version = '$ADAPTIVE_VERSION'
+os.makedirs(os.path.dirname(path), exist_ok=True)
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            data = json.load(f) or {}
+    except Exception:
+        data = {}
+data['adaptive-learning-loop'] = {
+    'source': 'path',
+    'sourcePath': adaptive_dir,
+    'installPath': adaptive_dir,
+    'version': version
+}
+with open(path, 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+    f.write('\n')
+" 2>/dev/null || true
             ok "adaptive-learning-loop Config + Install-Record wiederhergestellt"
         fi
     else
@@ -229,9 +300,24 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
     # Ab 4.25: plugins.installs wird nach plugins/installs.json migriert.
     # before-compact-save hat sourcePath=/tmp — überlebt keine Reboots → Migration.
     BCSAVE_SRC=$(python3 -c "
-import json
-d = json.load(open('$OPENCLAW_JSON'))
-print(d.get('plugins',{}).get('installs',{}).get('before-compact-save',{}).get('sourcePath',''))
+import json, os
+installs_path = '$OPENCLAW_INSTALLS_JSON'
+cfg_path = '$OPENCLAW_JSON'
+src = ''
+try:
+    with open(installs_path) as f:
+        d = json.load(f)
+    src = d.get('before-compact-save', {}).get('sourcePath', '') or ''
+except Exception:
+    pass
+if not src:
+    try:
+        with open(cfg_path) as f:
+            d = json.load(f)
+        src = d.get('plugins', {}).get('installs', {}).get('before-compact-save', {}).get('sourcePath', '') or ''
+    except Exception:
+        pass
+print(src)
 " 2>/dev/null || echo "")
     if [[ "$BCSAVE_SRC" == /tmp/* ]]; then
         warn "before-compact-save.sourcePath zeigt auf /tmp (${BCSAVE_SRC}) — nicht reboot-sicher"
@@ -244,15 +330,40 @@ print(d.get('plugins',{}).get('installs',{}).get('before-compact-save',{}).get('
         fi
         if [[ -d "$BCSAVE_DEST" ]]; then
             python3 -c "
-import json
-path = '$OPENCLAW_JSON'
+import json, os
+cfg_path = '$OPENCLAW_JSON'
+installs_path = '$OPENCLAW_INSTALLS_JSON'
 dest = '$BCSAVE_DEST'
-with open(path) as f: d = json.load(f)
-installs = d.setdefault('plugins', {}).setdefault('installs', {})
+os.makedirs(os.path.dirname(installs_path), exist_ok=True)
+
+if os.path.exists(installs_path):
+    try:
+        with open(installs_path) as f:
+            installs = json.load(f) or {}
+    except Exception:
+        installs = {}
+else:
+    installs = {}
+
 if 'before-compact-save' in installs:
     installs['before-compact-save']['sourcePath'] = dest
     installs['before-compact-save']['installPath'] = dest
-with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
+    with open(installs_path, 'w') as f:
+        json.dump(installs, f, indent=2, ensure_ascii=False)
+        f.write('\n')
+
+try:
+    with open(cfg_path) as f:
+        d = json.load(f)
+    legacy = d.setdefault('plugins', {}).setdefault('installs', {})
+    if 'before-compact-save' in legacy:
+        legacy['before-compact-save']['sourcePath'] = dest
+        legacy['before-compact-save']['installPath'] = dest
+        with open(cfg_path, 'w') as f:
+            json.dump(d, f, indent=2, ensure_ascii=False)
+            f.write('\n')
+except Exception:
+    pass
 " 2>/dev/null
             ok "  → before-compact-save.sourcePath migriert: $BCSAVE_DEST"
         fi
@@ -629,7 +740,7 @@ try:
             print(ag.get('reasoningDefault', 'null'))
             sys.exit(0)
     print('null')
-except: print('error')
+except Exception: print('error')
 " 2>/dev/null)
 
 if [[ "$REASONING_CURRENT" == "stream" ]]; then
@@ -666,7 +777,7 @@ try:
             print(','.join(ag.get('subagents',{}).get('allowAgents',[])))
             sys.exit(0)
     print('')
-except: print('error')
+except Exception: print('error')
 " 2>/dev/null)
 
 if echo "$ALLOW_AGENTS" | grep -q "youtube"; then
@@ -957,36 +1068,46 @@ else
     warn "Plugin-Registry nicht innerhalb 45s bereit — Checks laufen mit letztem Status"
 fi
 STATUS_OUTPUT="$WAIT_STATUS_OUTPUT"
-if echo "$STATUS_OUTPUT" | grep -q 'adaptive-learning-loop: registered'; then
+JOURNAL_OUTPUT=$(journalctl --user -u openclaw-gateway --since "2 hours ago" --no-pager -n 5000 2>/dev/null || true)
+PLUGIN_LIST_OUTPUT=$(timeout 60s openclaw plugins list 2>&1 || true)
+if grep -q 'adaptive-learning-loop: registered' <<< "$STATUS_OUTPUT"; then
     ok "adaptive-learning-loop im OpenClaw-Status registriert"
+elif grep -q 'adaptive-learning-loop: registered' <<< "$JOURNAL_OUTPUT"; then
+    ok "adaptive-learning-loop im Gateway-Journal registriert"
+elif grep -q 'global:adaptive-learning-loop/index.js' <<< "$PLUGIN_LIST_OUTPUT"; then
+    ok "adaptive-learning-loop in Plugin-Liste enabled"
 else
     warn "adaptive-learning-loop taucht in 'openclaw status' nicht als registriert auf"
 fi
 
-if echo "$STATUS_OUTPUT" | grep -q 'memory-lancedb-namespaced: registered'; then
+if grep -q 'memory-lancedb-namespaced: registered' <<< "$STATUS_OUTPUT"; then
     ok "memory-lancedb-namespaced im OpenClaw-Status registriert"
+elif grep -q 'memory-lancedb-namespaced: registered' <<< "$JOURNAL_OUTPUT"; then
+    ok "memory-lancedb-namespaced im Gateway-Journal registriert"
+elif grep -q 'global:memory-lancedb-namespaced/index.js' <<< "$PLUGIN_LIST_OUTPUT"; then
+    ok "memory-lancedb-namespaced in Plugin-Liste enabled"
 else
     warn "memory-lancedb-namespaced taucht in 'openclaw status' nicht als registriert auf"
 fi
-
-JOURNAL_OUTPUT=$(journalctl --user -u openclaw-gateway --since "5 minutes ago" --no-pager -n 200 2>/dev/null || true)
 
 # Memory-System Tiefencheck — prüft ob Auto-Capture und Auto-Recall aktiv sind
 # Wichtig nach Updates: Plugin-API-Änderungen (Hook-Namen, Event-Format) führen zu
 # stillem Ausfall — kein Crash, nur kein Capture mehr (Symptom: stored=0, skipped=0)
 header "MEMORY-SYSTEM HEALTH CHECK"
 
-MEM_JOURNAL=$(journalctl --user -u openclaw-gateway --no-pager -n 500 2>/dev/null || true)
+MEM_JOURNAL=$(journalctl --user -u openclaw-gateway --since "2 hours ago" --no-pager -n 5000 2>/dev/null || true)
 
 # 1. Plugin registriert?
 # Primär: live `openclaw status` (bereits oben mit Wait-Logik geholt in $STATUS_OUTPUT).
 # Fallback: Journal — nur wenn status leer ist (z.B. Gateway tot). Vorher führte das
 # Journal-Only-Check zu Falschalarm "NICHT registriert" nach Update, weil die
 # Registration-Zeile innerhalb von ~500 Zeilen bereits aus dem Ring rotiert war.
-if echo "$STATUS_OUTPUT" | grep -q 'memory-lancedb-namespaced: registered'; then
+if grep -q 'memory-lancedb-namespaced: registered' <<< "$STATUS_OUTPUT"; then
     ok "memory-lancedb-namespaced: registered ✓"
-elif echo "$MEM_JOURNAL" | grep -q 'memory-lancedb-namespaced: registered'; then
+elif grep -q 'memory-lancedb-namespaced: registered' <<< "$MEM_JOURNAL"; then
     ok "memory-lancedb-namespaced: registered ✓ (via Journal)"
+elif grep -q 'global:memory-lancedb-namespaced/index.js' <<< "$PLUGIN_LIST_OUTPUT"; then
+    ok "memory-lancedb-namespaced: enabled ✓ (via Plugin-Liste)"
 else
     fail "memory-lancedb-namespaced: NICHT registriert — Plugin startet nicht"
 fi
@@ -995,24 +1116,26 @@ fi
 # Primär: $STATUS_OUTPUT (openclaw status zeigt "enabling autoCapture" direkt nach
 # plugin-init). Fallback: Journal — Ring-Rotation kann die Zeile nach ein paar
 # Stunden aus `-n 500` drücken, siehe Kommentar bei Check 1.
-if echo "$STATUS_OUTPUT" | grep -q 'enabling autoCapture'; then
+if grep -q 'enabling autoCapture' <<< "$STATUS_OUTPUT"; then
     ok "autoCapture: aktiv ✓"
-elif echo "$MEM_JOURNAL" | grep -q 'enabling autoCapture'; then
+elif grep -q 'enabling autoCapture' <<< "$MEM_JOURNAL"; then
     ok "autoCapture: aktiv ✓ (via Journal)"
+elif grep -q 'capture complete' <<< "$MEM_JOURNAL"; then
+    ok "autoCapture: aktiv ✓ (Capture-Aktivität im Journal)"
 else
     warn "autoCapture: nicht im Journal — evtl. deaktiviert oder API-Änderung"
 fi
 
 # 3. Auto-Recall aktiv?
-if echo "$MEM_JOURNAL" | grep -q 'injecting.*memories for agent'; then
-    LAST_INJECT=$(echo "$MEM_JOURNAL" | grep 'injecting.*memories for agent' | tail -1)
+if grep -q 'injecting .*memories' <<< "$MEM_JOURNAL"; then
+    LAST_INJECT=$(grep 'injecting .*memories' <<< "$MEM_JOURNAL" | tail -1)
     ok "autoRecall: aktiv ✓ (letzter Inject: $(echo "$LAST_INJECT" | grep -o '[0-9]*\] .*' | head -c 60))"
 else
     warn "autoRecall: keine Inject-Zeile im Journal — evtl. noch keine Session seit Neustart"
 fi
 
 # 4. Letztes Capture erfolgreich?
-LAST_CAPTURE=$(echo "$MEM_JOURNAL" | grep 'capture complete' | tail -1)
+LAST_CAPTURE=$(grep 'capture complete' <<< "$MEM_JOURNAL" | tail -1)
 if [[ -n "$LAST_CAPTURE" ]]; then
     STORED=$(echo "$LAST_CAPTURE" | grep -o 'stored=[0-9]*' | grep -o '[0-9]*')
     SKIPPED=$(echo "$LAST_CAPTURE" | grep -o 'skipped=[0-9]*' | grep -o '[0-9]*')
@@ -1048,12 +1171,14 @@ if [[ -d "$MEM_REPO/.git" ]]; then
 else
     info "Memory-System Git-Repo nicht vorhanden ($MEM_REPO) — optional, aber empfohlen"
 fi
-if echo "$STATUS_OUTPUT" | grep -q 'adaptive-learning-loop: registered'; then
+if grep -q 'adaptive-learning-loop: registered' <<< "$STATUS_OUTPUT"; then
     ok "adaptive-learning-loop im Gateway-Journal bestätigt"
-elif echo "$JOURNAL_OUTPUT" | grep -q 'adaptive-learning-loop: registered'; then
+elif grep -q 'adaptive-learning-loop: registered' <<< "$JOURNAL_OUTPUT"; then
     ok "adaptive-learning-loop im Gateway-Journal bestätigt (via Journal)"
+elif grep -q 'global:adaptive-learning-loop/index.js' <<< "$PLUGIN_LIST_OUTPUT"; then
+    ok "adaptive-learning-loop in Plugin-Liste bestätigt"
 else
-    warn "adaptive-learning-loop nicht in openclaw-status und nicht im 5-min-Journal gefunden"
+    warn "adaptive-learning-loop nicht in openclaw-status, Journal oder Plugin-Liste gefunden"
 fi
 
 if jq -e '.plugins.entries["memory-lancedb"]' "$OPENCLAW_JSON" >/dev/null 2>&1; then
@@ -1112,7 +1237,7 @@ import json, sys
 try:
     d = json.load(open('/root/.openclaw/openclaw.json'))
     print(d.get('plugins', {}).get('entries', {}).get('memory-lancedb-namespaced', {}).get('hooks', {}).get('allowConversationAccess', 'missing'))
-except: print('error')
+except Exception: print('error')
 " 2>/dev/null)
 
 if [[ "$CONV_ACCESS" == "True" ]]; then
@@ -1129,6 +1254,60 @@ entry.setdefault('hooks', {})['allowConversationAccess'] = True
 with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
 "
         ok "  → allowConversationAccess = true gesetzt (Gateway-Neustart nötig)"
+    fi
+fi
+
+# ─── 4.29 MESSAGES POLICY GUARDS ──────────────────────────────────────────────
+header "4.29 MESSAGES POLICY GUARDS"
+
+VISIBLE_REPLIES=$(python3 -c "
+import json
+with open('$OPENCLAW_JSON') as f:
+    d = json.load(f)
+v = d.get('messages', {}).get('visibleReplies', None)
+print('missing' if v is None else str(v))
+" 2>/dev/null || echo "error")
+
+QUEUE_MODE=$(python3 -c "
+import json
+with open('$OPENCLAW_JSON') as f:
+    d = json.load(f)
+q = d.get('messages', {}).get('queue', {})
+mode = q.get('mode')
+print('missing' if mode is None else str(mode))
+" 2>/dev/null || echo "error")
+
+if [[ "$VISIBLE_REPLIES" == "message_tool" ]]; then
+    ok "messages.visibleReplies = message_tool"
+else
+    warn "messages.visibleReplies = ${VISIBLE_REPLIES} (empfohlen: message_tool für sichtbare Replies via message(action=send))"
+    if [[ "$CHECK_ONLY" != "1" ]]; then
+        python3 -c "
+import json
+path = '$OPENCLAW_JSON'
+with open(path) as f: d = json.load(f)
+d.setdefault('messages', {})['visibleReplies'] = 'message_tool'
+with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
+"
+        ok "  → messages.visibleReplies auf message_tool gesetzt"
+    fi
+fi
+
+if [[ "$QUEUE_MODE" == "steer" ]]; then
+    ok "messages.queue.mode = steer"
+else
+    warn "messages queue mode = ${QUEUE_MODE} (empfohlen: steer unter 4.29)"
+    if [[ "$CHECK_ONLY" != "1" ]]; then
+        python3 -c "
+import json
+path = '$OPENCLAW_JSON'
+with open(path) as f: d = json.load(f)
+q = d.setdefault('messages', {}).setdefault('queue', {})
+q['mode'] = 'steer'
+q.pop('activeRun', None)
+with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
+"
+        ok "  → messages.queue.mode = steer gesetzt"
     fi
 fi
 
