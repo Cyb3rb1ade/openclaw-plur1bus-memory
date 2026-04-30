@@ -2,7 +2,7 @@
 # install-memory-system.sh — Installiert/aktualisiert das memory-lancedb-namespaced-System
 # in eine OpenClaw-Instanz (lokal oder remote via SSH).
 #
-# Stand: 2026-04-11
+# Stand: 2026-05-01
 #
 # Verwendung:
 #   ./install-memory-system.sh                          # Auto-Erkennung lokaler Installationen
@@ -48,10 +48,23 @@ error()   { echo -e "${RED}[error]${RESET} $*" >&2; }
 step()    { echo -e "\n${BOLD}▶ $*${RESET}"; }
 dryrun()  { echo -e "${YELLOW}[dry-run]${RESET} $*"; }
 
+display_default() {
+  local prompt_text="$1" default_val="${2:-}"
+  if [[ "$prompt_text" =~ ([Kk]ey|[Ss]ecret|API) && -n "$default_val" && "$default_val" != \$\{* ]]; then
+    printf '%s' '***'
+  else
+    printf '%s' "$default_val"
+  fi
+}
+
 confirm() {
   local prompt="$1" default="${2:-y}"
   local yn
-  if [[ "$DRY_RUN" == "1" ]]; then dryrun "Würde fragen: $prompt"; return 0; fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dryrun "Würde fragen: $prompt (default=$default)"
+    [[ "$default" =~ ^[Yy]$ ]]
+    return $?
+  fi
   read -rp "$prompt [y/n, default=$default]: " yn
   yn="${yn:-$default}"
   [[ "$yn" =~ ^[Yy]$ ]]
@@ -65,6 +78,11 @@ prompt_secret() {
   else
     echo -e "  ${CYAN}$prompt_text${RESET}:"
   fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dryrun "Würde Secret abfragen: $prompt_text"
+    printf -v "$var_name" '%s' "$default_hint"
+    return 0
+  fi
   read -rs val
   echo
   printf -v "$var_name" '%s' "$val"
@@ -73,6 +91,11 @@ prompt_secret() {
 prompt_input() {
   local var_name="$1" prompt_text="$2" default_val="${3:-}"
   local val
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dryrun "Würde Eingabe abfragen: $prompt_text [$(display_default "$prompt_text" "$default_val")]"
+    printf -v "$var_name" '%s' "$default_val"
+    return 0
+  fi
   read -rp "  $prompt_text [${default_val}]: " val
   val="${val:-$default_val}"
   printf -v "$var_name" '%s' "$val"
@@ -425,6 +448,16 @@ EMBEDDING_FALLBACK_BASEURL=""
 EMBEDDING_FALLBACK_MODEL=""
 USE_ACTIVE_MEMORY="n"
 
+# Bestehende Config als Default verwenden. Full-Install darf bei Updates nicht
+# versehentlich Keys, Pfade oder moderne 4.x-Konfigurationen überschreiben.
+EXISTING_EMBEDDING_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_EMBEDDING_MODEL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_EMBEDDING_BASE_URL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.baseUrl // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_EMBEDDING_DIMS=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.dimensions // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_BASE_DB_PATH=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.baseDbPath // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_COHERE_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.reranker.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_MEMORY_SLOT=$(run_target "jq -r '.plugins.slots.memory // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+
 echo ""
 info "Embedding-Provider-Auswahl:"
 info "  → OpenAI (Standard, default n) — text-embedding-3-large/small, ada-002"
@@ -489,10 +522,10 @@ except:
     info "  ✓ Modell '$EMBEDDING_MODEL' liefert $EMBEDDING_DIMENSIONS-dimensionale Vektoren."
   fi
 else
-  prompt_input OPENAI_KEY "OpenAI API Key (für Embeddings)" "\${OPENAI_API_KEY}"
+  prompt_input OPENAI_KEY "OpenAI API Key (für Embeddings)" "${EXISTING_EMBEDDING_KEY:-\${OPENAI_API_KEY}}"
 fi
 
-prompt_input COHERE_KEY "Cohere API Key (für Re-Ranker, leer = Re-Ranker deaktiviert)" ""
+prompt_input COHERE_KEY "Cohere API Key (für Re-Ranker, leer = Re-Ranker deaktiviert)" "${EXISTING_COHERE_KEY:-}"
 
 # Embedding-Fallback
 echo ""
@@ -510,9 +543,10 @@ if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM —
   # Vorhandene Merging-Config als Defaults auslesen (bei Update-Installationen)
   _EXISTING_MERGING_MODEL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
   _EXISTING_MERGING_URL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.baseUrl // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+  _EXISTING_MERGING_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
   prompt_input MERGING_BASEURL "Merging LLM Base-URL (leer = Standard-OpenAI)" "${_EXISTING_MERGING_URL:-}"
   prompt_input MERGING_MODEL   "Merging LLM Modell" "${_EXISTING_MERGING_MODEL:-}"
-  prompt_input MERGING_KEY     "Merging LLM API Key" "\${OPENAI_API_KEY}"
+  prompt_input MERGING_KEY     "Merging LLM API Key" "${_EXISTING_MERGING_KEY:-\${OPENAI_API_KEY}}"
   echo ""
   info "Kimi k2p5-spezifische Optionen (NUR für Kimi-Nutzer):"
   info "  disableThinking=true unterdrückt das Reasoning-Budget, User-Agent ist Kimi-Pflichtfeld."
@@ -532,10 +566,11 @@ fi
 
 # Embedding-Modell (nur fragen wenn nicht via OpenRouter schon gesetzt)
 if [[ "$USE_OPENROUTER" != "y" ]]; then
-  EMBEDDING_MODEL="text-embedding-3-large"
+  EMBEDDING_BASE_URL="${EXISTING_EMBEDDING_BASE_URL:-}"
+  EMBEDDING_MODEL="${EXISTING_EMBEDDING_MODEL:-text-embedding-3-large}"
   prompt_input EMBEDDING_MODEL "Embedding-Modell" "$EMBEDDING_MODEL"
-  EMBEDDING_DIMENSIONS=3072  # OpenAI text-embedding-3-large default
-  if [[ "$EMBEDDING_MODEL" == *"small"* ]] || [[ "$EMBEDDING_MODEL" == *"ada"* ]]; then
+  EMBEDDING_DIMENSIONS="${EXISTING_EMBEDDING_DIMS:-3072}"  # OpenAI text-embedding-3-large default
+  if [[ -z "$EXISTING_EMBEDDING_DIMS" && ( "$EMBEDDING_MODEL" == *"small"* || "$EMBEDDING_MODEL" == *"ada"* ) ]]; then
     EMBEDDING_DIMENSIONS=1536
   fi
 fi
@@ -552,7 +587,11 @@ if [[ -n "$EXISTING_DBS" ]]; then
     [[ -z "$ag" ]] && continue
     # Schema-Dim per Python aus LanceDB lesen — funktioniert remote nicht direkt, nur lokal
     if [[ "$IS_REMOTE" == "1" ]]; then continue; fi
-    DB_DIM=$(python3 -c "
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dryrun "Würde LanceDB-Dimension für Agent '$ag' prüfen"
+      continue
+    fi
+    DB_DIM=$(timeout 10s python3 -c "
 import sys
 try:
   sys.path.insert(0, '$SOURCE_DIR/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/python')
@@ -598,7 +637,7 @@ fi
 
 step "Schritt 2: Agenten ermitteln"
 
-AGENTS_JSON=$(run_target "jq -r '.agents | keys[]' '$TARGET_CONFIG' 2>/dev/null || echo ''")
+AGENTS_JSON=$(run_target "jq -r 'if (.agents.list? | type) == \"array\" then .agents.list[]?.id else (.agents | keys[] | select(. != \"defaults\" and . != \"list\")) end' '$TARGET_CONFIG' 2>/dev/null || echo ''")
 AGENT_LIST=()
 while IFS= read -r agent; do
   [[ -n "$agent" ]] && AGENT_LIST+=("$agent")
@@ -614,7 +653,7 @@ info "Gefundene Agenten: ${AGENT_LIST[*]}"
 # Workspace-Pfade ermitteln
 declare -A WORKSPACE_MAP
 for agent in "${AGENT_LIST[@]}"; do
-  ws=$(run_target "jq -r '.agents[\"$agent\"].workspace // empty' '$TARGET_CONFIG' 2>/dev/null || echo ''")
+  ws=$(run_target "jq -r --arg agent '$agent' 'if (.agents.list? | type) == \"array\" then (.agents.list[]? | select(.id == \$agent) | .workspace // empty) else (.agents[\$agent].workspace // empty) end' '$TARGET_CONFIG' 2>/dev/null || echo ''")
   if [[ -z "$ws" || "$ws" == "null" ]]; then
     ws="$TARGET_DIR/workspace"
     [[ "$agent" != "main" ]] && ws="${ws}-${agent}"
@@ -739,7 +778,7 @@ PLUGIN_CONFIG=$(jq -n \
   --arg embedding_model "$EMBEDDING_MODEL" \
   --arg embedding_base_url "${EMBEDDING_BASE_URL:-}" \
   --argjson embedding_dims "${EMBEDDING_DIMENSIONS:-3072}" \
-  --arg db_path "$TARGET_DIR/memory/lancedb-namespaced" \
+  --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
   --argjson reranker "$RERANKER_BLOCK" \
   --argjson merging "$MERGING_BLOCK" \
   --argjson schicht15 "$SCHICHT15_BLOCK" \
@@ -785,18 +824,17 @@ JQ_PATCH=$(cat <<'JQEOF'
 # Plugin-Entry + Allow-Eintrag + Slots
 . as $root
 | .plugins.allow = ((.plugins.allow // []) | if index("memory-lancedb-namespaced") then . else . + ["memory-lancedb-namespaced"] end)
-| .plugins.slots.memory = "memory-lancedb-namespaced"
-| .plugins.entries["memory-lancedb-namespaced"] = $plugin_config
+| .plugins.slots.memory = (.plugins.slots.memory // "memory-core")
+| .plugins.entries["memory-lancedb-namespaced"] = (($plugin_config) + {"hooks": ((.plugins.entries["memory-lancedb-namespaced"].hooks // {}) + {"allowConversationAccess": true})})
 | if .plugins.entries["memory-lancedb"] then .plugins.entries["memory-lancedb"].enabled = false else . end
-| if .plugins.entries["memory-core"] then .plugins.entries["memory-core"].enabled = false else . end
 JQEOF
 )
 
 if [[ "$DRY_RUN" == "1" ]]; then
   dryrun "Würde openclaw.json mit Plugin-Config patchen"
   dryrun "  - plugins.allow += memory-lancedb-namespaced"
-  dryrun "  - plugins.slots.memory = memory-lancedb-namespaced"
-  dryrun "  - plugins.entries.memory-lancedb-namespaced = {embedding, autoCapture, reranker, ...}"
+  dryrun "  - plugins.slots.memory bleibt '${EXISTING_MEMORY_SLOT:-memory-core}'"
+  dryrun "  - plugins.entries.memory-lancedb-namespaced = {embedding, autoCapture, reranker, hooks.allowConversationAccess, ...}"
 else
   # Backup erstellen
   run_target "cp '$TARGET_CONFIG' '${TARGET_CONFIG}.bak.$(date +%Y%m%d-%H%M%S)'"
@@ -815,11 +853,12 @@ cfg.plugins.allow = cfg.plugins.allow || [];
 if (!cfg.plugins.allow.includes('memory-lancedb-namespaced'))
   cfg.plugins.allow.push('memory-lancedb-namespaced');
 cfg.plugins.slots = cfg.plugins.slots || {};
-cfg.plugins.slots.memory = 'memory-lancedb-namespaced';
+cfg.plugins.slots.memory = cfg.plugins.slots.memory || 'memory-core';
 cfg.plugins.entries = cfg.plugins.entries || {};
+const existing = cfg.plugins.entries['memory-lancedb-namespaced'] || {};
+plugin.hooks = { ...(existing.hooks || {}), allowConversationAccess: true };
 cfg.plugins.entries['memory-lancedb-namespaced'] = plugin;
 if (cfg.plugins.entries['memory-lancedb']) cfg.plugins.entries['memory-lancedb'].enabled = false;
-if (cfg.plugins.entries['memory-core']) cfg.plugins.entries['memory-core'].enabled = false;
 writeFileSync('${TARGET_CONFIG}', JSON.stringify(cfg, null, 2) + '\n', 'utf8');
 console.log('patched');
 NODEOF
@@ -828,10 +867,10 @@ NODEOF
     TMPFILE=$(mktemp)
     jq --argjson plugin_config "$PLUGIN_CONFIG" \
       '(. | .plugins.allow = ((.plugins.allow // []) | if index("memory-lancedb-namespaced") then . else . + ["memory-lancedb-namespaced"] end))
-       | .plugins.slots.memory = "memory-lancedb-namespaced"
-       | .plugins.entries["memory-lancedb-namespaced"] = $plugin_config
+       | .plugins.slots.memory = (.plugins.slots.memory // "memory-core")
+       | .plugins.entries["memory-lancedb-namespaced"] = (($plugin_config) + {"hooks": ((.plugins.entries["memory-lancedb-namespaced"].hooks // {}) + {"allowConversationAccess": true})})
        | if .plugins.entries["memory-lancedb"] then .plugins.entries["memory-lancedb"].enabled = false else . end
-       | if .plugins.entries["memory-core"] then .plugins.entries["memory-core"].enabled = false else . end' \
+      ' \
       "$TARGET_CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$TARGET_CONFIG"
   fi
   ok "openclaw.json gepatcht"
@@ -851,13 +890,15 @@ if [[ "$USE_ACTIVE_MEMORY" == "y" ]]; then
         "enabled": true,
         "agents": $agents,
         "allowedChatTypes": ["direct"],
-        "modelFallbackPolicy": "default-remote",
         "queryMode": "recent",
         "promptStyle": "balanced",
-        "timeoutMs": 15000,
+        "timeoutMs": 20000,
         "maxSummaryChars": 220,
         "persistTranscripts": false,
-        "logging": true
+        "logging": true,
+        "modelFallback": "moonshot/kimi-k2.6",
+        "model": "kimi-coding/kimi-for-coding",
+        "thinking": "off"
       }
     }')
 

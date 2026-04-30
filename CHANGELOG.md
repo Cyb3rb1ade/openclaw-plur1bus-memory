@@ -1,3 +1,12 @@
+## [2.1.6] - 2026-05-01
+
+### Fixed
+- Fixed `install-memory-system.sh` full dry-run for non-interactive execution: defaults now follow the selected prompt default instead of enabling every optional feature.
+- Masked existing API-key defaults in dry-run output.
+- Updated installer config patching for modern OpenClaw 2026.4.x layouts: keep `plugins.slots.memory = "memory-core"`, preserve `hooks.allowConversationAccess`, and do not disable `memory-core`.
+- Fixed agent discovery for `agents.list[]` array configs instead of reading only top-level `agents` keys (`defaults`, `list`).
+- Updated optional ActiveMemory install config away from deprecated `modelFallbackPolicy`.
+
 ## [2.1.5] - 2026-05-01
 
 ### Changed

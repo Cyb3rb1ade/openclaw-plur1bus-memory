@@ -11,7 +11,7 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.5` — OpenClaw 2026.4.29-Kompatibilität: `installs.json`, schema-konforme Message-Policy, Runtime-Dep-Repair und robuste Update-/Memory-Checks.
+**Aktuelle Version:** `2.1.6` — Installer-Hotfix für OpenClaw 2026.4.x: Dry-Run ohne Secrets, `memory-core` bleibt Slot-Owner, `agents.list[]` wird korrekt erkannt.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -251,7 +251,7 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.5` — OpenClaw 2026.4.29 compatibility: `installs.json`, schema-valid message policy, runtime dependency repair and robust update/memory checks.
+**Current version:** `2.1.6` — installer hotfix for OpenClaw 2026.4.x: dry-run without secrets, `memory-core` remains slot owner, `agents.list[]` is detected correctly.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
