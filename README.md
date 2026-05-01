@@ -11,7 +11,7 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.7` — Installer-Hotfix: bestehende Provider/Modelle werden per User-Entscheidung übernommen oder neu konfiguriert; Fresh-Install unterstützt nicht-OpenAI/Kimi-Setups.
+**Aktuelle Version:** `2.1.9` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
@@ -253,7 +253,7 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.7` — installer hotfix: existing providers/models are preserved or reconfigured by explicit user choice; fresh installs support non-OpenAI/Kimi setups.
+**Current version:** `2.1.9` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
