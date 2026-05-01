@@ -678,7 +678,11 @@ if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM —
   _EXISTING_MERGING_URL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.baseUrl // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
   _EXISTING_MERGING_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
   prompt_input MERGING_BASEURL "Merging LLM Base-URL (leer = Provider-Default)" "${_EXISTING_MERGING_URL:-}"
-  prompt_input MERGING_MODEL   "Merging LLM Modell" "${_EXISTING_MERGING_MODEL:-}"
+  while true; do
+    prompt_input MERGING_MODEL "Merging LLM Modell (erforderlich; OpenAI-kompatibler Chat-Completions-Endpunkt)" "${_EXISTING_MERGING_MODEL:-}"
+    [[ -n "$MERGING_MODEL" ]] && break
+    warn "Merging braucht ein explizites Modell. Es gibt keinen Kimi/OpenAI-Zwangsdefault mehr."
+  done
   prompt_input MERGING_KEY     "Merging LLM API Key" "${_EXISTING_MERGING_KEY:-}"
   echo ""
   info "Kimi k2p5-spezifische Optionen (NUR für Kimi-Nutzer):"
@@ -1315,7 +1319,7 @@ echo "     memory_recall: {query: 'Testfakt'}"
 echo
 if [[ "$USE_MERGING" == "n" ]]; then
   echo -e "${YELLOW}  Hinweis: LLM-Merging wurde nicht aktiviert. Für bessere Memory-Qualität${RESET}"
-  echo -e "${YELLOW}  Merging-Config manuell in openclaw.json ergänzen (funktioniert mit OpenAI, Claude, GLM, Kimi u.a.)${RESET}"
+  echo -e "${YELLOW}  Merging-Config manuell in openclaw.json ergänzen (beliebiger OpenAI-kompatibler Chat-Completions-Anbieter; Modell explizit setzen)${RESET}"
   echo -e "${YELLOW}  Pfad: plugins.entries.memory-lancedb-namespaced.config.merging${RESET}"
   echo
 fi

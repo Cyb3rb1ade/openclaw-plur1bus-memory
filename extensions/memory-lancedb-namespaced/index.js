@@ -704,30 +704,43 @@ const plugin = {
     // TTL presets
     const TTL_MAP = { session: 86_400_000, short: 14 * 86_400_000 };
 
-    // Merging config
+    // Merging config. Provider-neutral default: optional LLM features must
+    // declare their chat model explicitly; do not silently fall back to Kimi.
     const mergingCfg = cfg.merging || {};
-    const mergingEnabled = mergingCfg.enabled === true;
+    const mergingRequested = mergingCfg.enabled === true;
+    const mergingModel = typeof mergingCfg.model === "string" ? mergingCfg.model.trim() : "";
+    const mergingEnabled = mergingRequested && mergingModel !== "";
     const mergingThreshold = mergingCfg.threshold ?? 0.70;
     const mergingLlmCfg = mergingEnabled ? {
-      model: mergingCfg.model || "kimi-for-coding",
+      model: mergingModel,
       baseUrl: mergingCfg.baseUrl || undefined,
       apiKey: mergingCfg.apiKey ? resolveEnvVars(mergingCfg.apiKey) : apiKey,
       disableThinking: mergingCfg.disableThinking ?? false,
       headers: mergingCfg.headers || undefined,
     } : null;
+    if (mergingRequested && !mergingEnabled) {
+      api.logger.warn("memory-lancedb-namespaced: merging.enabled=true but merging.model is empty; disabling LLM merging. Set config.merging.model for any OpenAI-compatible chat provider.");
+    }
     if (mergingEnabled) api.logger.info(`memory-lancedb-namespaced: merging enabled (threshold: ${mergingThreshold}, model: ${mergingLlmCfg.model})`);
 
     // Schicht 1.5 config
     const schicht15Cfg = cfg.schicht15 || {};
-    const schicht15Enabled = schicht15Cfg.enabled === true;
+    const schicht15Requested = schicht15Cfg.enabled === true;
+    const schicht15Model = (typeof schicht15Cfg.model === "string" && schicht15Cfg.model.trim() !== "")
+      ? schicht15Cfg.model.trim()
+      : mergingModel;
+    const schicht15Enabled = schicht15Requested && schicht15Model !== "";
     const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
     const schicht15LlmCfg = schicht15Enabled ? {
-      model: schicht15Cfg.model || mergingCfg.model || "kimi-for-coding",
+      model: schicht15Model,
       baseUrl: schicht15Cfg.baseUrl || mergingCfg.baseUrl || undefined,
       apiKey: schicht15Cfg.apiKey ? resolveEnvVars(schicht15Cfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
       disableThinking: schicht15Cfg.disableThinking ?? mergingCfg.disableThinking ?? false,
       headers: schicht15Cfg.headers || mergingCfg.headers || undefined,
     } : null;
+    if (schicht15Requested && !schicht15Enabled) {
+      api.logger.warn("memory-lancedb-namespaced: schicht15.enabled=true but no schicht15.model or merging.model is configured; disabling KNOWLEDGE.md LLM tooling.");
+    }
     if (schicht15Enabled) api.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance})`)
 
     // v2.1.1: hard-fail wenn Provider-Modell ohne dimensions konfiguriert ist.

@@ -11,7 +11,7 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.16` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung.
+**Aktuelle Version:** `2.1.17` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
@@ -82,8 +82,9 @@ cd extensions/memory-lancedb-stock && npm install
 Das Skript:
 - Erkennt lokale OpenClaw-Installationen automatisch
 - Zeigt Auswahlmenü bei mehreren Instanzen
-- Fragt nach API-Keys (**OpenAI ODER OpenRouter** für Embeddings, optional Cohere für Reranking, kimi-for-coding/GPT-4 für Merging)
+- Fragt nach API-Keys (**OpenAI-kompatibel ODER OpenRouter** für Embeddings, optional Cohere für Reranking, beliebiger OpenAI-kompatibler Chat-Completions-Anbieter für Merging)
 - Bei OpenRouter (v2.1+): listet 20+ Embedding-Modelle live, ermittelt Vektor-Dimension automatisch via Test-Call
+- Setzt bei optionalem Merging kein Kimi/OpenAI-Modell heimlich voraus; der User muss das Merging-Modell explizit wählen
 - **Pre-Flight-Check** (v2.1.1+) — vergleicht neue Dim mit bestehenden Agent-DBs, warnt bei Mismatch (Provider-Wechsel braucht fresh DB!)
 - Erstellt LanceDB-Snapshot vor Änderungen
 - Richtet Cron-Job für täglichen GC ein
@@ -97,6 +98,17 @@ LanceDB hat **fixe Vektor-Dimension pro Tabelle**. Wechsel von OpenAI (3072d) zu
 3. **Andere baseDbPath** — `embedding.baseDbPath` umkonfigurieren auf `lancedb-namespaced-v2`, dann läuft alt+neu parallel
 
 Vor jedem Wechsel: `node scripts/memory-doctor.mjs provider-check` — checkt API + alle Agent-DBs, schlägt Alarm bei Inkonsistenz.
+
+### Provider-Kompatibilität
+
+| Bereich | Provider-Anforderung |
+|---------|----------------------|
+| OpenClaw-Hauptmodell | Frei wählbar: OpenAI, Kimi, Claude, GLM, lokale Modelle usw. |
+| Embeddings | OpenAI-kompatible `/embeddings` API oder OpenRouter; `model` und `dimensions` müssen zur DB passen |
+| Reranking | Optional Cohere; ohne Key bleibt Vector-only Recall aktiv |
+| Merging / Summarization / KNOWLEDGE.md | Optional; braucht explizites `merging.model` bzw. `schicht15.model` auf einem OpenAI-kompatiblen Chat-Completions-Endpunkt |
+
+plur1bus setzt kein Chat-Modell für OpenClaw voraus. Nur die Memory-internen Embedding- und optionalen LLM-Endpunkte müssen passend konfiguriert sein.
 
 ---
 
@@ -180,7 +192,7 @@ Der 4.29-Latenzfix ist **OpenClaw-Bundle-Namen-unabhängig**: das Script findet 
 - Node.js ≥ 18
 - Embedding API Key (OpenAI-kompatibel oder OpenRouter; Modell und Dimension werden im Installer abgefragt)
 - Cohere API Key (optional, für Reranking)
-- LLM-API (optional, für Merging + Summarization + KNOWLEDGE.md — kompatibel mit kimi-for-coding, GPT-4, Claude, etc.)
+- OpenAI-kompatible Chat-Completions-API (optional, für Merging + Summarization + KNOWLEDGE.md; Modell muss explizit gesetzt werden)
 
 ---
 
@@ -257,7 +269,7 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.16` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice.
+**Current version:** `2.1.17` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
@@ -320,8 +332,9 @@ cd extensions/memory-lancedb-stock && npm install
 The script:
 - Auto-detects local OpenClaw installations
 - Shows a selection menu when multiple instances are found
-- Prompts for API keys (**OpenAI OR OpenRouter** for embeddings, optional Cohere for reranking, kimi-for-coding/GPT-4 for merging)
+- Prompts for API keys (**OpenAI-compatible OR OpenRouter** for embeddings, optional Cohere for reranking, any OpenAI-compatible chat-completions provider for merging)
 - For OpenRouter (v2.1+): lists 20+ embedding models live, auto-detects vector dimension via test call
+- Does not silently assume Kimi/OpenAI for optional merging; the user must choose the merging model explicitly
 - **Pre-flight check** (v2.1.1+) — compares new dim against existing agent DBs, warns on mismatch (provider switch needs fresh DB!)
 - Creates a LanceDB snapshot before making changes
 - Sets up a daily cron job for garbage collection
@@ -335,6 +348,17 @@ LanceDB has **fixed vector dimension per table**. Switching from OpenAI (3072d) 
 3. **Different baseDbPath** — reconfigure `embedding.baseDbPath` to `lancedb-namespaced-v2`, run old+new in parallel
 
 Before any switch: `node scripts/memory-doctor.mjs provider-check` — checks API + all agent DBs, raises alarm on inconsistency.
+
+### Provider Compatibility
+
+| Area | Provider requirement |
+|------|----------------------|
+| OpenClaw primary model | Unrestricted: OpenAI, Kimi, Claude, GLM, local models, etc. |
+| Embeddings | OpenAI-compatible `/embeddings` API or OpenRouter; `model` and `dimensions` must match the DB |
+| Reranking | Optional Cohere; without a key, vector-only recall remains active |
+| Merging / summarization / KNOWLEDGE.md | Optional; requires explicit `merging.model` or `schicht15.model` on an OpenAI-compatible chat-completions endpoint |
+
+plur1bus does not require a specific OpenClaw chat model. Only the memory-internal embedding and optional LLM endpoints need compatible configuration.
 
 ---
 
@@ -418,7 +442,7 @@ The 4.29 latency fix is **OpenClaw bundle-name independent**: the script finds t
 - Node.js ≥ 18
 - Embedding API key (OpenAI-compatible or OpenRouter; model and dimensions are selected in the installer)
 - Cohere API key (optional, for reranking)
-- Any LLM API (optional, for merging + summarization + KNOWLEDGE.md — compatible with kimi-for-coding, GPT-4, Claude, etc.)
+- OpenAI-compatible chat-completions API (optional, for merging + summarization + KNOWLEDGE.md; model must be set explicitly)
 
 ---
 

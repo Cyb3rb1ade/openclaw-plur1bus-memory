@@ -707,7 +707,7 @@ Eine optionale Funktion: Statt dass der Agent manuell `memory_store` aufruft, in
 Nach jedem erfolgreichen Turn (`agent_end`-Hook):
 1. Alle Nachrichten des Turns werden durchsucht
 2. Texte >20 Zeichen werden als Kandidaten erfasst
-3. **Überlange Texte (>captureMaxChars)** werden via LLM zusammengefasst — der Merging-LLM (z.B. kimi-for-coding) extrahiert die wichtigsten Fakten, Entscheidungen, Namen, URLs, Daten und technische Details. Bei LLM-Fehler: Fallback auf Truncation
+3. **Überlange Texte (>captureMaxChars)** werden via LLM zusammengefasst, wenn `merging.enabled=true` und ein explizites `merging.model` konfiguriert ist. Der Endpunkt muss OpenAI-kompatible Chat-Completions anbieten. Ohne LLM oder bei LLM-Fehler: Fallback auf Truncation
 4. Origin wird automatisch erkannt: Gruppenkontext-Signale (`"is_group_chat": true`, Discord Guild etc.) → `"group"`, sonst `"dm"`
 5. Duplikat-Check gegen bestehende Memories (Score ≥ `duplicateThreshold`)
 6. Neue Texte werden mit `importance: 0.7` und auto-kategorisiert gespeichert
@@ -1170,8 +1170,8 @@ table.to_pandas()
 - [ ] `autoRecall: true` setzen
 - [ ] `autoCapture` je nach Präferenz — für Anfänger `false`, dann über SOUL.md manuell instruieren
 - [ ] Re-Ranker konfigurieren: Cohere API Key, `reranker`-Block in Plugin-Config
-- [ ] LLM-Merging aktivieren: `merging.enabled: true`, Modell + API-Key, `disableThinking: true` empfohlen
-- [ ] Schicht 1.5 aktivieren: `schicht15.enabled: true`, Modell + API-Key, `disableThinking: true` empfohlen
+- [ ] LLM-Merging aktivieren: `merging.enabled: true`, explizites Modell + API-Key; `disableThinking: true` nur bei Reasoning-Modellen, die es unterstützen
+- [ ] Schicht 1.5 aktivieren: `schicht15.enabled: true`, explizites Modell + API-Key oder bewusst `merging.model` erben
 - [ ] SOUL.md aller Agenten: `knowledge_update`-Trigger-Regeln hinzufügen
 
 **Verifizierung**
@@ -1334,25 +1334,21 @@ Das gilt auch für das `openai`-Bundle-Plugin: ohne `"openai"` in der Allowlist 
   "merging": {
     "enabled": true,
     "threshold": 0.70,
-    "model": "kimi-for-coding",
-    "baseUrl": "https://api.kimi.com/coding/v1",
-    "apiKey": "sk-kimi-...",
-    "disableThinking": true,
-    "headers": { "User-Agent": "claude-code/1.0" }
+    "model": "gpt-4o-mini",
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "${OPENAI_API_KEY}"
   },
   "schicht15": {
     "enabled": true,
-    "model": "kimi-for-coding",
-    "baseUrl": "https://api.kimi.com/coding/v1",
-    "apiKey": "sk-kimi-...",
-    "disableThinking": true,
-    "headers": { "User-Agent": "claude-code/1.0" },
+    "model": "gpt-4o-mini",
+    "baseUrl": "https://api.openai.com/v1",
+    "apiKey": "${OPENAI_API_KEY}",
     "minImportance": 0.7
   }
 }
 ```
 
-> Kein OpenAI-Key nötig — `kimi-for-coding` mit `disableThinking: true` ist schnell und günstig. Andere OpenAI-kompatible Endpunkte funktionieren genauso.
+> Provider-neutral: jedes OpenAI-kompatible Chat-Completions-Modell ist möglich. Es gibt keinen versteckten Kimi-Default mehr; bei Kimi können `disableThinking` und `headers.User-Agent` weiterhin explizit gesetzt werden.
 
 ### 2. Plugin-Schema aktualisieren (openclaw.plugin.json)
 
@@ -1618,7 +1614,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag v2.1.16
+git tag v2.1.17
 ```
 
 ### Teilen / Veröffentlichen
@@ -1657,7 +1653,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.16`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt schema-konforme Message-Werte (`messages.visibleReplies = "automatic"` für Direct-Chat-Finalantworten, `messages.groupChat.visibleReplies = "message_tool"` für explizite Gruppen-Posts, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, normale Embedded-Agent-Runs auf session-isolierten Lanes, native Subagent-Dispatch-/Steer-/Send-Runs auf per-child Lanes statt global `subagent`. Startup-/Interval-/Commitment-Heartbeats haben eine Startup-Grace und Backpressure, damit Bernd/main nicht durch Bernhardine-/Heisenberg-Heartbeat-Arbeit blockiert wird. Subagent-Completion-Announcements warten bei internen/session-only Zielen nicht mehr auf einen vollständigen Final-Agent-Run. Direct-`NO_REPLY` bleibt silent.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.17`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt schema-konforme Message-Werte (`messages.visibleReplies = "automatic"` für Direct-Chat-Finalantworten, `messages.groupChat.visibleReplies = "message_tool"` für explizite Gruppen-Posts, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, normale Embedded-Agent-Runs auf session-isolierten Lanes, native Subagent-Dispatch-/Steer-/Send-Runs auf per-child Lanes statt global `subagent`. Startup-/Interval-/Commitment-Heartbeats haben eine Startup-Grace und Backpressure, damit Bernd/main nicht durch Bernhardine-/Heisenberg-Heartbeat-Arbeit blockiert wird. Subagent-Completion-Announcements warten bei internen/session-only Zielen nicht mehr auf einen vollständigen Final-Agent-Run. Direct-`NO_REPLY` bleibt silent. Der OpenClaw-Haupt-LLM-Provider ist frei; plur1bus benötigt nur einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell.
 
 ### Was passiert beim Dreaming?
 
