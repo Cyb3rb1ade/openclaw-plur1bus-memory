@@ -8,6 +8,12 @@
 #   build for setup-grace + recall timeouts.
 # - openclaw/openclaw#75375 class: make boot-md startup work non-blocking.
 # - openclaw/openclaw#75305 class: avoid empty hidden memory-flush transcript prompt.
+# - OpenClaw 2026.4.29 lane regression: isolate normal embedded agent runs by
+#   session so Bernhardine/Heisenberg heartbeat work cannot block Bernd/main.
+# - OpenClaw 2026.4.29 startup regression: keep startup heartbeat from waking
+#   every configured agent immediately; targeted heartbeats and due intervals stay enabled.
+# - Task registry compatibility: reconcile stale running task zombies before
+#   they can spawn CPU-bound recovery children.
 # - Kimi coding params: keep user-facing sessions on thinking, but make
 #   active-memory's thinking=off recall use Kimi instant temperature 0.6.
 
@@ -59,6 +65,60 @@ if changed:
     print("[patch] silent-reply direct policy: applied (NO_REPLY stays silent in direct chats)")
 else:
     print("[patch] silent-reply direct policy: already configured")
+PYEOF
+}
+
+patch_stale_task_zombies() {
+  python3 - "$STATE_DIR" "$STAMP" <<'PYEOF'
+import os
+import shutil
+import sqlite3
+import sys
+import time
+
+state_dir = sys.argv[1]
+stamp = sys.argv[2]
+db_path = os.path.join(state_dir, "tasks", "runs.sqlite")
+
+if not os.path.exists(db_path):
+    print(f"[patch] stale task zombies: task DB not found ({db_path}), skipping")
+    raise SystemExit(0)
+
+now_ms = int(time.time() * 1000)
+cutoff_ms = now_ms - 24 * 60 * 60 * 1000
+
+con = sqlite3.connect(db_path, timeout=5)
+try:
+    cur = con.cursor()
+    cur.execute(
+        "select count(*) from task_runs where status = 'running' and coalesce(last_event_at, started_at, created_at, 0) < ?",
+        (cutoff_ms,),
+    )
+    count = int(cur.fetchone()[0] or 0)
+    if count <= 0:
+        print("[patch] stale task zombies: none")
+        raise SystemExit(0)
+
+    backup = f"{db_path}.bak-stale-running-{stamp}"
+    shutil.copy2(db_path, backup)
+    cur.execute(
+        """
+        update task_runs
+           set status = 'lost',
+               ended_at = coalesce(ended_at, ?),
+               last_event_at = ?,
+               cleanup_after = ?,
+               error = coalesce(error, 'stale running task reconciled by plur1bus hotfix')
+         where status = 'running'
+           and coalesce(last_event_at, started_at, created_at, 0) < ?
+        """,
+        (now_ms, now_ms, now_ms + 7 * 24 * 60 * 60 * 1000, cutoff_ms),
+    )
+    con.commit()
+    print(f"[patch] stale task zombies: reconciled {count} running task(s)")
+    print(f"[patch] backup: {backup}")
+finally:
+    con.close()
 PYEOF
 }
 
@@ -602,6 +662,57 @@ if os.path.exists(active_memory):
 else:
     print("[patch] active-memory: target not found, skipping")
 
+pi_embedded = find_one(
+    "pi-embedded-*.js",
+    lambda c: "function runEmbeddedPiAgent" in c and "resolveGlobalLane(params.lane" in c,
+    "session-isolated embedded agent lane",
+    required=False,
+)
+if pi_embedded:
+    code = read(pi_embedded)
+    marker = "plur1bus-openclaw-20260429-session-global-lane"
+    if marker in code:
+        print(f"[patch] session-isolated embedded agent lane: already patched ({os.path.basename(pi_embedded)})")
+    else:
+        old = (
+            "\tconst sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);\n"
+            "\tconst globalLane = resolveGlobalLane(params.lane);"
+        )
+        new = (
+            "\tconst defaultGlobalLane = params.sessionKey?.trim() ? `agent:${params.sessionKey.trim()}` : void 0; /* plur1bus-openclaw-20260429-session-global-lane */\n"
+            "\tconst sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);\n"
+            "\tconst globalLane = resolveGlobalLane(params.lane ?? defaultGlobalLane);"
+        )
+        count = code.count(old)
+        if count:
+            backup(pi_embedded)
+            write(pi_embedded, code.replace(old, new))
+            print(f"[patch] session-isolated embedded agent lane: patched {count} occurrence(s) ({os.path.basename(pi_embedded)})")
+        else:
+            print(f"[patch] session-isolated embedded agent lane: anchor not found ({os.path.basename(pi_embedded)})")
+else:
+    print("[patch] session-isolated embedded agent lane: target not found, skipping")
+
+heartbeat_runner = find_one(
+    "heartbeat-runner-*.js",
+    lambda c: (
+        'const isInterval = reason === "interval";' in c
+        or "plur1bus-openclaw-20260429-no-startup-heartbeat-storm" in c
+    ) and "for (const agent of state.agents.values())" in c,
+    "heartbeat startup due schedule",
+    required=False,
+)
+if heartbeat_runner:
+    replace_once(
+        heartbeat_runner,
+        "plur1bus-openclaw-20260429-no-startup-heartbeat-storm",
+        '\t\tconst isInterval = reason === "interval";',
+        '\t\tconst isInterval = reason === "interval" || reason === "startup"; /* plur1bus-openclaw-20260429-no-startup-heartbeat-storm */',
+        "heartbeat startup due schedule",
+    )
+else:
+    print("[patch] heartbeat startup due schedule: target not found, skipping")
+
 boot_md = os.path.join(dist, "bundled/boot-md/handler.js")
 if os.path.exists(boot_md):
     replace_once(
@@ -648,6 +759,7 @@ PYEOF
 }
 
 patch_silent_reply_config || rc=1
+patch_stale_task_zombies || rc=1
 patch_openclaw_20260429_latency || rc=1
 
 exit "$rc"

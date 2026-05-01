@@ -1,3 +1,10 @@
+## [2.1.13] - 2026-05-01
+
+### Fixed
+- Isolated normal embedded OpenClaw agent runs by session-derived global lanes (`agent:<sessionKey>`) when no explicit lane is provided. This prevents Bernhardine/Heisenberg/heartbeat work from blocking Bernd/main on OpenClaw 2026.4.29 while preserving explicit lanes such as `active-memory`, `cron`, `subagent`, and `voice`.
+- Made OpenClaw startup heartbeats due-aware so a Gateway restart no longer wakes every configured agent at once; targeted heartbeats and normal due intervals stay enabled.
+- Added stale task-registry zombie reconciliation to `apply-plur1bus-user-hotfix.sh`: `running` tasks older than 24h are backed up and marked `lost` before they can spawn CPU-bound recovery children.
+
 ## [2.1.12] - 2026-05-01
 
 ### Fixed
