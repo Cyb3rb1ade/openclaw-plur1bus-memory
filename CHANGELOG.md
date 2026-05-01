@@ -1,3 +1,8 @@
+## [2.1.9] - 2026-05-01
+
+### Fixed
+- Aligned README and plugin README displayed release version with the manifest after the OpenClaw `>=2026.4.29` minimum-version clarification.
+
 ## [2.1.8] - 2026-05-01
 
 ### Fixed
