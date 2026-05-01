@@ -1618,7 +1618,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag v2.1.9
+git tag v2.1.10
 ```
 
 ### Teilen / Veröffentlichen
@@ -1657,7 +1657,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.9`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.10`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal.
 
 ### Was passiert beim Dreaming?
 
@@ -1860,9 +1860,9 @@ Alle Verbesserungen greifen automatisch ohne Config-Änderungen.
 
 ---
 
-# v2.1.x (2026-04-28) — OpenClaw-Patches + Fast-Path
+# v2.1.x (2026-04-28 bis 2026-05-01) — OpenClaw-Patches + 4.29-Latenzfix
 
-Drei Critical-Patches die das Memory-System im Produktivbetrieb absichern. Alle werden bei der Installation automatisch durch `patches/apply-memory-patches.sh` angewendet (Schritt 9 in `install-memory-system.sh`).
+Aktive Critical-Patches sichern das Memory-System im Produktivbetrieb ab. Alle werden bei der Installation automatisch durch `patches/apply-memory-patches.sh` angewendet (Schritt 9 in `install-memory-system.sh`).
 
 ---
 
@@ -1944,54 +1944,30 @@ journalctl --user -u openclaw-gateway --no-pager | grep "cohere.*rerank\|rerank.
 
 ---
 
-## Patch #18 — Active-Memory Fast-Path
+## Patch #18 — Active-Memory Fast-Path (retired)
 
-**Datei:** `dist/extensions/active-memory/index.js` (Anchor: `return cached;` + `start timeoutMs`)
+**Status:** No-op auf aktuellen Builds.
 
-**Problem:** ActiveMemory startet bei jedem Turn einen PiAgent-Subagenten (kimi-for-coding, 20s Timeout) → Session-Write-Lock → blockiert die Lane → 20–120s Latenz.
+Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber den plur1bus-Pluginpfad umgehen. Seit `2.1.10` bleibt ActiveMemory auf dem normalen Toolpfad und wird stattdessen über Patch #19 beschleunigt.
 
-**Fix:** Vor dem PiAgent-Start wird `getMemorySearchManager` aus dem `memory-*.js`-Modul direkt aufgerufen. Wenn der Manager Ergebnisse liefert, wird die Zusammenfassung sofort zurückgegeben — ohne Subagent, ohne Session-Lock, ohne Timeout.
+## Patch #19 — plur1bus User Hotfix für OpenClaw 2026.4.29
 
-```
-Ohne Fast-Path:  query → PiAgent → timeoutMs=20000 → Session-Lock → blockiert Lane
-Mit Fast-Path:   query → manager.search() → <1s → done status=ok elapsedMs=<3000
-```
+**Dateien:** `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `openclaw-tools-*.js`, `active-memory/index.js`, `bundled/boot-md/handler.js`, `agent-runner.runtime-*.js`
 
-**Was der Fast-Path tut:**
+**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. ActiveMemory nutzt für `main`, `bernhardine` und `heisenberg` einen Embedded-Recall mit nur drei Memory-Tools, zahlt aber trotzdem die volle Tool-Factory-Latenz. Zusätzlich blockiert der Hook bis zu `timeoutMs + setupGraceTimeoutMs`. Auf einigen Konfigurationen initialisieren außerdem eingebaute Media-/Web-Tools ihre Provider schon beim Prompt-Build.
 
-1. Importiert `getMemorySearchManager` (als `n` exportiert) aus dem aktuellen `memory-*.js`-Modul
-2. Ruft `manager.search()` mit `maxResults: 6` und `sessionKey` auf
-3. Baut aus den Suchtreffern eine `summary` (Text der Memories, joined mit `"---"`)
-4. Prüft ob `buildPromptPrefix()` eine Zusammenfassung erzeugt
-5. Falls ja → sofort zurückgeben mit `status: "ok"` + `[fast-path]` Log
-6. Falls nein (0 Treffer) → fällt in den langsamen PiAgent-Pfad zurück
+**Fix:** Embedded-Runs verwenden im Gateway-Prozess die bereits aktive Plugin-Registry, statt pro Agent die Runtime-Registry neu zu laden. Zusätzlich wird `toolsAllow` vor `createOpenClawTools()` und vor Plugin-Factory-Aufrufen angewendet. Für volle Embedded-Runs cached der Patch Plugin-Tool-Deskriptoren und ruft teure Factories erst beim tatsächlichen Tool-Call erneut auf. Eingebaute schwere Tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) bleiben sichtbar, werden aber lazy initialisiert. ActiveMemory bleibt eingeschaltet, aber das Hook-Budget wird begrenzt; `boot-md` startet non-blocking; der versteckte Pre-Compaction-Flush nutzt keinen leeren User-Prompt mehr.
 
-**Automatische Modul-Erkennung:**
-
-Das Patch-Script scannt `dist/memory-*.js` nach dem Modul mit dem Export `getMemorySearchManager as n`. Das garantiert Versions-Unabhängigkeit — nach jedem OpenClaw-Update funktioniert der Fast-Path weiterhin automatisch.
-
-**Log-Verifikation:**
+**Verifikation:**
 
 ```bash
-# Erfolgreicher Fast-Path:
-journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*fast-path.*done status=ok"
-
-# Manager nicht geladen (Fallback auf PiAgent):
-journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*start timeoutMs=20000"
-
-# Tip: Schnellster Weg, neuen Fast-Path zu triggern:
-curl -s "https://api.kimi.com/ping" > /dev/null 2>&1 && echo "API OK"
+bash patches/apply-plur1bus-user-hotfix.sh
+node --check /usr/lib/node_modules/openclaw/dist/selection-*.js
+node --check /usr/lib/node_modules/openclaw/dist/pi-tools-*.js
+journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*before_prompt_build.*timed out"
 ```
 
-**Typische Latenz:**
-
-| Pfad | elapsedMs |
-|---|---|
-| Fast-Path (Hit) | 800–3000ms |
-| Fast-Path (0 Treffer) → PiAgent-Fallback | 20.000ms |
-| ohne Fast-Path (PiAgent-only) | 20.000–120.000ms |
-
-**Wichtig:** Wenn die builtin Memory-Backend-Suche 0 Treffer zurückgibt (z.B. weil noch keine Memories existieren oder die Query nicht passt), fällt der Fast-Path in den PiAgent-Pfad zurück. Das ist korrektes Verhalten — der Fast-Path ist ein Optimierung, kein Ersatz für den Subagenten.
+**Erwartung:** Keine `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für `main`, `bernhardine` und `heisenberg` aktiv.
 
 ---
 
@@ -2005,7 +1981,8 @@ bash patches/apply-memory-patches.sh
 # Output:
 #   [patch] stuck-session-abort: already patched (diagnostic-DitKp9ni.js)
 #   [patch] memory-core-cohere-rerank: already patched (manager-ICKYl3BU.js)
-#   [patch] active-memory-fast-path: already patched
+#   [patch] active-memory-fast-path: retired ...
+#   [patch] selection toolsAllow prefilter: already patched ...
 
 # Gateway neu starten
 systemctl --user restart openclaw-gateway.service

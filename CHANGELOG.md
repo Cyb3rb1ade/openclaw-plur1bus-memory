@@ -1,3 +1,15 @@
+## [2.1.10] - 2026-05-01
+
+### Fixed
+- Added `patches/apply-plur1bus-user-hotfix.sh` for OpenClaw `2026.4.29` latency regressions reported in openclaw/openclaw#75329, #75330, #75290 and #74860.
+- The new hotfix preserves plur1bus and active-memory for `main`, `bernhardine` and `heisenberg`; it reuses the active Gateway plugin registry and applies `toolsAllow` before plugin tool factories run instead of bypassing the memory plugin.
+- Heavy built-in OpenClaw media/web tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) are now exposed as lazy descriptors, so prompt preparation no longer initializes provider stacks unless the tool is actually called.
+- Capped active-memory prompt-hook blocking, removed the extra setup-grace wait, made `boot-md` startup work non-blocking, and replaced the empty hidden pre-compaction flush prompt.
+- Retired the older direct active-memory fast-path patch as a no-op because it could bypass the plur1bus plugin path on newer OpenClaw builds.
+- Installer remote mode now transfers the user hotfix script together with `apply-memory-patches.sh`.
+- Installer now refreshes the OpenClaw plugin registry after direct plugin copies so `openclaw plugins list` reports the current package version.
+- `memory-doctor.mjs` now falls back to the installed `~/.openclaw/extensions/memory-lancedb-stock/node_modules` dependencies when the Git checkout has no local `node_modules`.
+
 ## [2.1.9] - 2026-05-01
 
 ### Fixed

@@ -182,6 +182,24 @@ read_target_file() {
   fi
 }
 
+# Aktualisiert die OpenClaw-Plugin-Registry, damit Versionsanzeigen nicht aus
+# plugins/installs.json veralten, nachdem Dateien direkt kopiert wurden.
+refresh_plugin_registry() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dryrun "openclaw plugins registry --refresh"
+    return 0
+  fi
+  if ! run_target "command -v openclaw >/dev/null 2>&1"; then
+    warn "openclaw CLI nicht gefunden — Plugin-Registry nicht aktualisiert"
+    return 0
+  fi
+  if run_target "openclaw plugins registry --refresh >/dev/null"; then
+    ok "OpenClaw Plugin-Registry aktualisiert"
+  else
+    warn "OpenClaw Plugin-Registry konnte nicht aktualisiert werden"
+  fi
+}
+
 # ─── Argument-Parsing ─────────────────────────────────────────────────────────
 
 DRY_RUN=0
@@ -403,6 +421,7 @@ if [[ "$UPDATE_ONLY" == "1" ]]; then
     fi
     ok "Plugin aktualisiert: $EXTENSIONS_DIR/memory-lancedb-namespaced/"
   fi
+  refresh_plugin_registry
 
   echo
   echo -e "${BOLD}Plugin-Update abgeschlossen.${RESET}"
@@ -1215,11 +1234,15 @@ done
 step "Schritt 9: OpenClaw-Patches anwenden"
 
 PATCHES_SCRIPT="$SOURCE_DIR/patches/apply-memory-patches.sh"
+PATCHES_USER_SCRIPT="$SOURCE_DIR/patches/apply-plur1bus-user-hotfix.sh"
 if [[ -f "$PATCHES_SCRIPT" ]]; then
   if [[ "$DRY_RUN" == "0" ]]; then
     if [[ "$IS_REMOTE" == "1" ]]; then
       scp "$PATCHES_SCRIPT" "${SSH_HOST}:/tmp/apply-memory-patches.sh"
-      ssh "$SSH_HOST" "bash /tmp/apply-memory-patches.sh && rm /tmp/apply-memory-patches.sh"
+      if [[ -f "$PATCHES_USER_SCRIPT" ]]; then
+        scp "$PATCHES_USER_SCRIPT" "${SSH_HOST}:/tmp/apply-plur1bus-user-hotfix.sh"
+      fi
+      ssh "$SSH_HOST" "bash /tmp/apply-memory-patches.sh; rc=\$?; rm -f /tmp/apply-memory-patches.sh /tmp/apply-plur1bus-user-hotfix.sh; exit \$rc"
     else
       bash "$PATCHES_SCRIPT"
     fi
@@ -1231,7 +1254,12 @@ else
   warn "patches/apply-memory-patches.sh nicht gefunden — übersprungen"
 fi
 
-# ─── Schritt 10: Abschluss ────────────────────────────────────────────────────
+# ─── Schritt 10: OpenClaw Plugin-Registry aktualisieren ──────────────────────
+
+step "Schritt 10: OpenClaw Plugin-Registry aktualisieren"
+refresh_plugin_registry
+
+# ─── Schritt 11: Abschluss ────────────────────────────────────────────────────
 
 echo
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"

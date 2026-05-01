@@ -11,9 +11,11 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.9` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung.
+**Aktuelle Version:** `2.1.10` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
+
+**OpenClaw-2026.4.29-Hotfix:** `patches/apply-plur1bus-user-hotfix.sh` hält plur1bus/ActiveMemory aktiv und reduziert Prompt-Build-Latenz durch frühes `toolsAllow`, Plugin-Registry-Reuse, Plugin-Descriptor-Caching und lazy Media-/Web-Tool-Deskriptoren.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -42,9 +44,10 @@ extensions/
   memory-lancedb-namespaced/   ← Hauptplugin (OpenClaw-Gateway-Plugin)
   memory-lancedb-stock/        ← LanceDB-Wrapper (Abhängigkeit, npm install)
 patches/
-  apply-memory-patches.sh      ← OpenClaw-Patches (Stuck-Session, Cohere-Rerank, Fast-Path)
+  apply-memory-patches.sh      ← OpenClaw-Patches (Stuck-Session, Cohere-Rerank, 4.29-Latenzfix)
+  apply-plur1bus-user-hotfix.sh ← User-Hotfix für OpenClaw 2026.4.29 Tool-Prep/Prompt-Blocking
 scripts/
-  install-memory-system.sh     ← Installation, Update, Rollback + Patches (mit Auto-Discovery)
+  install-memory-system.sh     ← Installation, Update, Registry-Refresh, Rollback + Patches (mit Auto-Discovery)
   bump-version.sh              ← Synchronisiert Versions in Manifest + CHANGELOG
   memory-gc.mjs                ← TTL-Garbage-Collector (täglich via Cron, 03:00)
   memory-doctor.mjs            ← Health-CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
@@ -158,15 +161,16 @@ systemctl --user restart openclaw-gateway.service
 
 ### OpenClaw-Patches
 
-`patches/apply-memory-patches.sh` wird bei der Installation automatisch ausgeführt (Schritt 9). Drei Patches:
+`patches/apply-memory-patches.sh` wird bei der Installation automatisch ausgeführt (Schritt 9). Aktive Patches:
 
 | Patch | Datei | Was |
 |---|---|---|
 | **#16** Stuck-Session-Abort | `diagnostic-*.js` | SIGUSR1 wenn Session > `stuckSessionAbortMs` (Default 600s) hängt |
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` nach `mergeHybridResults()` — bessere Top-K-Sortierung |
-| **#18** Active-Memory Fast-Path | `active-memory/index.js` | `manager.search()` direkt statt PiAgent-Subagent — <3s Latenz statt 20-120s |
+| **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op auf aktuellen Builds, damit plur1bus nicht umgangen wird |
+| **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js` | aktive Gateway-Registry wiederverwenden, `toolsAllow` vor Plugin-Factories, Plugin-Deskriptor-Cache, kürzeres active-memory Hook-Budget, non-blocking `boot-md` |
 
-Der Fast-Path ist **OpenClaw-Versions-unabhängig**: das Script erkennt den aktuellen `memory-*.js`-Modulnamen automatisch. Bei künftigen Updates muss nur `apply-memory-patches.sh` nochmal laufen.
+Der 4.29-Latenzfix ist **OpenClaw-Bundle-Namen-unabhängig**: das Script findet die aktuellen `selection-*`, `pi-tools-*` und `tools-*` Bundles per Inhalt. Bei künftigen Updates muss nur `apply-memory-patches.sh` erneut laufen.
 
 ---
 
@@ -253,9 +257,11 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.9` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice.
+**Current version:** `2.1.10` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
+
+**OpenClaw 2026.4.29 hotfix:** `patches/apply-plur1bus-user-hotfix.sh` keeps plur1bus/ActiveMemory enabled and reduces prompt-build latency through early `toolsAllow`, plugin-registry reuse, plugin-descriptor caching, and lazy media/web tool descriptors.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
@@ -276,9 +282,10 @@ extensions/
   memory-lancedb-namespaced/   ← Main plugin (OpenClaw Gateway plugin)
   memory-lancedb-stock/        ← LanceDB wrapper (dependency, requires npm install)
 patches/
-  apply-memory-patches.sh      ← OpenClaw patches (stuck-session, cohere-rerank, fast-path)
+  apply-memory-patches.sh      ← OpenClaw patches (stuck-session, cohere-rerank, 4.29 latency fix)
+  apply-plur1bus-user-hotfix.sh ← User hotfix for OpenClaw 2026.4.29 tool-prep/prompt blocking
 scripts/
-  install-memory-system.sh     ← Installation, update, rollback + patches (with auto-discovery)
+  install-memory-system.sh     ← Installation, update, registry refresh, rollback + patches (with auto-discovery)
   bump-version.sh              ← Synchronizes versions in manifest + CHANGELOG
   memory-gc.mjs                ← TTL garbage collector (daily via cron at 03:00)
   memory-doctor.mjs            ← Health CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
@@ -392,15 +399,16 @@ systemctl --user restart openclaw-gateway.service
 
 ### OpenClaw Patches
 
-`patches/apply-memory-patches.sh` runs automatically during installation (step 9). Three patches:
+`patches/apply-memory-patches.sh` runs automatically during installation (step 9). Active patches:
 
 | Patch | File | What |
 |---|---|---|
 | **#16** Stuck-Session Abort | `diagnostic-*.js` | SIGUSR1 when session exceeds `stuckSessionAbortMs` (default 600s) |
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` after `mergeHybridResults()` — better top-K ranking |
-| **#18** Active-Memory Fast-Path | `active-memory/index.js` | Direct `manager.search()` instead of PiAgent subagent — <3s vs 20–120s |
+| **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op on current builds so plur1bus is not bypassed |
+| **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js` | Reuses the active Gateway registry, applies `toolsAllow` before plugin factories, adds a plugin descriptor cache, caps active-memory hook waits, makes `boot-md` non-blocking |
 
-The fast-path is **OpenClaw version-independent**: the script auto-detects the current `memory-*.js` module name. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores all patches.
+The 4.29 latency fix is **OpenClaw bundle-name independent**: the script finds the current `selection-*`, `pi-tools-*` and `tools-*` bundles by content. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores all patches.
 
 ---
 

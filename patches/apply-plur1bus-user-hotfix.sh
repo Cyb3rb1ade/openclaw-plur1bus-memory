@@ -1,0 +1,537 @@
+#!/usr/bin/env bash
+# plur1bus user hotfixes for OpenClaw 2026.4.29 latency regressions.
+#
+# Fixes addressed:
+# - openclaw/openclaw#75290 and #74860: apply toolsAllow before plugin tool
+#   factories run, so embedded memory recalls do not build every plugin tool.
+# - openclaw/openclaw#75329 and #75330: keep active-memory from blocking prompt
+#   build for setup-grace + recall timeouts.
+# - openclaw/openclaw#75375 class: make boot-md startup work non-blocking.
+# - openclaw/openclaw#75305 class: avoid empty hidden memory-flush transcript prompt.
+
+set -u
+
+DIST_DIR="${OPENCLAW_DIST_DIR:-/usr/lib/node_modules/openclaw/dist}"
+STAMP="$(date +%Y%m%d%H%M%S)"
+rc=0
+
+patch_openclaw_20260429_latency() {
+  python3 - "$DIST_DIR" "$STAMP" <<'PYEOF'
+import glob
+import os
+import re
+import shutil
+import sys
+
+dist = sys.argv[1]
+stamp = sys.argv[2]
+backed = set()
+
+def read(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+def write(path, code):
+    if path not in backed:
+        shutil.copy2(path, f"{path}.bak-plur1bus-{stamp}")
+        backed.add(path)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(code)
+
+def find_one(pattern, predicate, label, required=True):
+    for path in sorted(glob.glob(os.path.join(dist, pattern))):
+        try:
+            code = read(path)
+        except OSError:
+            continue
+        if predicate(code):
+            return path
+    if required:
+        raise RuntimeError(f"{label}: target not found")
+    return None
+
+def replace_once(path, marker, old, new, label):
+    code = read(path)
+    if marker in code:
+        print(f"[patch] {label}: already patched ({os.path.basename(path)})")
+        return
+    if old not in code:
+        raise RuntimeError(f"{label}: anchor not found ({os.path.basename(path)})")
+    write(path, code.replace(old, new, 1))
+    print(f"[patch] {label}: applied ({os.path.basename(path)})")
+
+def regex_once(path, marker, pattern, repl, label):
+    code = read(path)
+    if marker in code:
+        print(f"[patch] {label}: already patched ({os.path.basename(path)})")
+        return
+    next_code, count = re.subn(pattern, repl, code, count=1, flags=re.S)
+    if count != 1:
+        raise RuntimeError(f"{label}: anchor not found ({os.path.basename(path)})")
+    write(path, next_code)
+    print(f"[patch] {label}: applied ({os.path.basename(path)})")
+
+selection = find_one(
+    "selection-*.js",
+    lambda c: "async function runEmbeddedAttempt" in c and "createOpenClawCodingTools({" in c,
+    "selection toolsAllow prefilter",
+)
+regex_once(
+    selection,
+    "plur1bus-openclaw-20260429-toolsallow-prefilter",
+    r"(\n\t+const toolsRaw = params\.disableTools \|\| isRawModelRun \? \[\] : applyEmbeddedAttemptToolsAllow\(createOpenClawCodingTools\(\{\n)(\t+agentId: sessionAgentId,)",
+    r"\1\t\t\ttoolsAllow: params.toolsAllow, /* plur1bus-openclaw-20260429-toolsallow-prefilter */\n\2",
+    "selection toolsAllow prefilter",
+)
+
+pi_tools = find_one(
+    "pi-tools-*.js",
+    lambda c: "function createOpenClawCodingTools" in c and "pluginToolAllowlist: collectExplicitAllowlist" in c,
+    "pi-tools runtime allowlist",
+)
+replace_once(
+    pi_tools,
+    "plur1bus-openclaw-20260429-runtime-toolsallow-policy",
+    "\tconst subagentPolicy = options?.sessionKey && isSubagentEnvelopeSession(options.sessionKey, {\n"
+    "\t\tcfg: options.config,\n"
+    "\t\tstore: subagentStore\n"
+    "\t}) ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey, { store: subagentStore }) : void 0;",
+    "\tconst subagentPolicy = options?.sessionKey && isSubagentEnvelopeSession(options.sessionKey, {\n"
+    "\t\tcfg: options.config,\n"
+    "\t\tstore: subagentStore\n"
+    "\t}) ? resolveSubagentToolPolicyForSession(options.config, options.sessionKey, { store: subagentStore }) : void 0;\n"
+    "\tconst runtimeToolsAllowPolicy = Array.isArray(options?.toolsAllow) ? { allow: options.toolsAllow } : void 0; /* plur1bus-openclaw-20260429-runtime-toolsallow-policy */",
+    "pi-tools runtime toolsAllow policy",
+)
+code = read(pi_tools)
+if "runtimeToolsAllowPolicy\n\t\t\t])" in code or "runtimeToolsAllowPolicy\r\n\t\t\t])" in code:
+    print(f"[patch] pi-tools plugin allowlist: already patched ({os.path.basename(pi_tools)})")
+else:
+    old = (
+        "\t\t\t\tgroupPolicy,\n"
+        "\t\t\t\tsandboxToolPolicy,\n"
+        "\t\t\t\tsubagentPolicy\n"
+        "\t\t\t]),"
+    )
+    new = (
+        "\t\t\t\tgroupPolicy,\n"
+        "\t\t\t\tsandboxToolPolicy,\n"
+        "\t\t\t\tsubagentPolicy,\n"
+        "\t\t\t\truntimeToolsAllowPolicy\n"
+        "\t\t\t]),"
+    )
+    if old not in code:
+        raise RuntimeError(f"pi-tools plugin allowlist: anchor not found ({os.path.basename(pi_tools)})")
+    write(pi_tools, code.replace(old, new, 1))
+    print(f"[patch] pi-tools plugin allowlist: applied ({os.path.basename(pi_tools)})")
+
+plugin_tools = find_one(
+    "tools-*.js",
+    lambda c: "function resolvePluginTools" in c and "function normalizeAllowlist" in c,
+    "plugin tool factory prefilter",
+)
+replace_once(
+    plugin_tools,
+    "plur1bus-openclaw-20260429-active-registry-reuse",
+    'function resolvePluginToolRegistry(params) {\n'
+    '\tif (params.allowGatewaySubagentBinding && getActivePluginRegistryKey() && getActivePluginRuntimeSubagentMode() === "gateway-bindable") return getActivePluginRegistry() ?? resolveRuntimePluginRegistry(params.loadOptions);\n'
+    '\treturn resolveRuntimePluginRegistry(params.loadOptions);\n'
+    '}',
+    'function resolvePluginToolRegistry(params) {\n'
+    '\tconst activeRegistry = getActivePluginRegistry();\n'
+    '\tif (activeRegistry && getActivePluginRegistryKey()) return activeRegistry; /* plur1bus-openclaw-20260429-active-registry-reuse */\n'
+    '\tif (params.allowGatewaySubagentBinding && getActivePluginRegistryKey() && getActivePluginRuntimeSubagentMode() === "gateway-bindable") return getActivePluginRegistry() ?? resolveRuntimePluginRegistry(params.loadOptions);\n'
+    '\treturn resolveRuntimePluginRegistry(params.loadOptions);\n'
+    '}',
+    "plugin tool active registry reuse",
+)
+replace_once(
+    plugin_tools,
+    "plur1bus-openclaw-20260429-plugin-factory-prefilter",
+    'function isOptionalToolAllowed(params) {\n'
+    '\tif (params.allowlist.size === 0) return false;\n'
+    '\tconst toolName = normalizeToolName(params.toolName);\n'
+    '\tif (params.allowlist.has(toolName)) return true;\n'
+    '\tconst pluginKey = normalizeToolName(params.pluginId);\n'
+    '\tif (params.allowlist.has(pluginKey)) return true;\n'
+    '\treturn params.allowlist.has("group:plugins");\n'
+    '}',
+    'function isOptionalToolAllowed(params) {\n'
+    '\tif (params.allowlist.size === 0) return false;\n'
+    '\tconst toolName = normalizeToolName(params.toolName);\n'
+    '\tif (params.allowlist.has(toolName)) return true;\n'
+    '\tconst pluginKey = normalizeToolName(params.pluginId);\n'
+    '\tif (params.allowlist.has(pluginKey)) return true;\n'
+    '\treturn params.allowlist.has("group:plugins");\n'
+    '}\n'
+    'function isPluginToolEntryAllowedByAllowlist(entry, allowlist) {\n'
+    '\tif (allowlist.size === 0) return true;\n'
+    '\tconst pluginKey = normalizeToolName(entry.pluginId);\n'
+    '\tif (allowlist.has(pluginKey) || allowlist.has("group:plugins")) return true;\n'
+    '\tif (!Array.isArray(entry.names) || entry.names.length === 0) return true;\n'
+    '\treturn entry.names.some((name) => allowlist.has(normalizeToolName(name)));\n'
+    '} /* plur1bus-openclaw-20260429-plugin-factory-prefilter */',
+    "plugin tool factory prefilter helper",
+)
+replace_once(
+    plugin_tools,
+    "!isPluginToolEntryAllowedByAllowlist(entry, allowlist)",
+    "\t\tif (existingNormalized.has(pluginIdKey)) {\n"
+    "\t\t\tconst message = `plugin id conflicts with core tool name (${entry.pluginId})`;",
+    "\t\tif (!isPluginToolEntryAllowedByAllowlist(entry, allowlist)) continue;\n"
+    "\t\tif (existingNormalized.has(pluginIdKey)) {\n"
+    "\t\t\tconst message = `plugin id conflicts with core tool name (${entry.pluginId})`;",
+    "plugin tool factory prefilter loop",
+)
+replace_once(
+    plugin_tools,
+    "const pluginToolDescriptorCache",
+    "const pluginToolMeta = /* @__PURE__ */ new WeakMap();",
+    "const pluginToolMeta = /* @__PURE__ */ new WeakMap();\n"
+    "const pluginToolDescriptorCache = /* @__PURE__ */ new Map(); /* plur1bus-openclaw-20260429-plugin-descriptor-cache-map */",
+    "plugin tool descriptor cache map",
+)
+replace_once(
+    plugin_tools,
+    "plur1bus-openclaw-20260429-plugin-descriptor-cache",
+    'function readPluginToolName(tool) {\n'
+    '\tif (!isRecord(tool)) return "";\n'
+    '\treturn typeof tool.name === "string" ? tool.name.trim() : "";\n'
+    '}',
+    'function readPluginToolName(tool) {\n'
+    '\tif (!isRecord(tool)) return "";\n'
+    '\treturn typeof tool.name === "string" ? tool.name.trim() : "";\n'
+    '}\n'
+    'function buildPluginToolDescriptorCacheKey(entry) {\n'
+    '\treturn JSON.stringify([entry.pluginId, entry.source, entry.names]);\n'
+    '}\n'
+    'function clonePluginToolDescriptor(tool) {\n'
+    '\tconst { execute, ...descriptor } = tool;\n'
+    '\treturn descriptor;\n'
+    '}\n'
+    'function buildLazyPluginToolFromDescriptor(entry, descriptor, context) {\n'
+    '\treturn {\n'
+    '\t\t...descriptor,\n'
+    '\t\texecute: async (...args) => {\n'
+    '\t\t\tconst resolved = entry.factory(context);\n'
+    '\t\t\tconst list = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];\n'
+    '\t\t\tconst live = list.find((tool) => readPluginToolName(tool) === descriptor.name);\n'
+    '\t\t\tif (!live || typeof live.execute !== "function") throw new Error(`plugin tool unavailable (${entry.pluginId}): ${descriptor.name}`);\n'
+    '\t\t\treturn live.execute(...args);\n'
+    '\t\t}\n'
+    '\t};\n'
+    '} /* plur1bus-openclaw-20260429-plugin-descriptor-cache */',
+    "plugin tool descriptor cache helpers",
+)
+replace_once(
+    plugin_tools,
+    "pluginToolDescriptorCache.get(descriptorCacheKey)",
+    '\t\tlet resolved = null;\n'
+    '\t\ttry {\n'
+    '\t\t\tresolved = entry.factory(params.context);\n'
+    '\t\t} catch (err) {\n'
+    '\t\t\tcontext.logger.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);\n'
+    '\t\t\tcontinue;\n'
+    '\t\t}',
+    '\t\tlet resolved = null;\n'
+    '\t\tconst descriptorCacheKey = buildPluginToolDescriptorCacheKey(entry);\n'
+    '\t\tconst cachedDescriptors = pluginToolDescriptorCache.get(descriptorCacheKey);\n'
+    '\t\tif (cachedDescriptors) resolved = cachedDescriptors.map((descriptor) => buildLazyPluginToolFromDescriptor(entry, descriptor, params.context));\n'
+    '\t\telse try {\n'
+    '\t\t\tresolved = entry.factory(params.context);\n'
+    '\t\t} catch (err) {\n'
+    '\t\t\tcontext.logger.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);\n'
+    '\t\t\tcontinue;\n'
+    '\t\t}',
+    "plugin tool descriptor cache lookup",
+)
+replace_once(
+    plugin_tools,
+    "pluginToolDescriptorCache.set(descriptorCacheKey",
+    '\t\tconst list = entry.optional ? listRaw.filter((tool) => isOptionalToolAllowed({\n'
+    '\t\t\ttoolName: readPluginToolName(tool),\n'
+    '\t\t\tpluginId: entry.pluginId,\n'
+    '\t\t\tallowlist\n'
+    '\t\t})) : listRaw;\n'
+    '\t\tif (list.length === 0) continue;',
+    '\t\tconst list = entry.optional ? listRaw.filter((tool) => isOptionalToolAllowed({\n'
+    '\t\t\ttoolName: readPluginToolName(tool),\n'
+    '\t\t\tpluginId: entry.pluginId,\n'
+    '\t\t\tallowlist\n'
+    '\t\t})) : listRaw;\n'
+    '\t\tif (!cachedDescriptors && list.length > 0) pluginToolDescriptorCache.set(descriptorCacheKey, list.map((tool) => clonePluginToolDescriptor(tool)));\n'
+    '\t\tif (list.length === 0) continue;',
+    "plugin tool descriptor cache store",
+)
+
+openclaw_tools = find_one(
+    "openclaw-tools-*.js",
+    lambda c: "function createOpenClawTools(options)" in c and "function createImageGenerateTool" in c,
+    "openclaw heavy tool lazy descriptors",
+    required=False,
+)
+if openclaw_tools:
+    replace_once(
+        openclaw_tools,
+        "plur1bus-openclaw-20260429-lazy-heavy-tools",
+        "let openClawToolsDeps = { callGateway };",
+        "let openClawToolsDeps = { callGateway };\n"
+        "function createLazyOpenClawToolDescriptor(descriptor, factory) {\n"
+        "\treturn {\n"
+        "\t\t...descriptor,\n"
+        "\t\texecute: async (...args) => {\n"
+        "\t\t\tconst tool = factory();\n"
+        "\t\t\tif (!tool || typeof tool.execute !== \"function\") throw new Error(`${descriptor.name} is not available in the current configuration.`);\n"
+        "\t\t\treturn tool.execute(...args);\n"
+        "\t\t}\n"
+        "\t};\n"
+        "} /* plur1bus-openclaw-20260429-lazy-heavy-tools */",
+        "openclaw heavy tool lazy helper",
+    )
+    replace_once(
+        openclaw_tools,
+        "createLazyOpenClawToolDescriptor({\n\t\tlabel: \"Image\",",
+        "\tconst imageTool = options?.agentDir?.trim() ? createImageTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options.agentDir,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy,\n"
+        "\t\tmodelHasVision: options?.modelHasVision\n"
+        "\t}) : null;",
+        "\tconst imageTool = options?.agentDir?.trim() ? createLazyOpenClawToolDescriptor({\n"
+        "\t\tlabel: \"Image\",\n"
+        "\t\tname: \"image\",\n"
+        "\t\tdescription: options?.modelHasVision ? \"Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple.\" : \"Analyze one or more images with the configured image model. Provide a prompt describing what to analyze.\",\n"
+        "\t\tparameters: Type.Object({\n"
+        "\t\t\tprompt: Type.Optional(Type.String()),\n"
+        "\t\t\timage: Type.Optional(Type.String({ description: \"Single image path or URL.\" })),\n"
+        "\t\t\timages: Type.Optional(Type.Array(Type.String(), { description: \"Multiple image paths or URLs.\" })),\n"
+        "\t\t\tmodel: Type.Optional(Type.String()),\n"
+        "\t\t\tmaxBytesMb: Type.Optional(Type.Number()),\n"
+        "\t\t\tmaxImages: Type.Optional(Type.Number())\n"
+        "\t\t})\n"
+        "\t}, () => createImageTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options.agentDir,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy,\n"
+        "\t\tmodelHasVision: options?.modelHasVision\n"
+        "\t})) : null;",
+        "openclaw image tool lazy descriptor",
+    )
+    replace_once(
+        openclaw_tools,
+        "createLazyOpenClawToolDescriptor({\n\t\tlabel: \"Image Generation\",",
+        "\tconst imageGenerateTool = createImageGenerateTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options?.agentDir,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy\n"
+        "\t});",
+        "\tconst imageGenerateTool = createLazyOpenClawToolDescriptor({\n"
+        "\t\tlabel: \"Image Generation\",\n"
+        "\t\tname: \"image_generate\",\n"
+        "\t\tdescription: \"Generate new images or edit reference images with the configured or inferred image-generation model. Use action=\\\"list\\\" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.\",\n"
+        "\t\tparameters: ImageGenerateToolSchema\n"
+        "\t}, () => createImageGenerateTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options?.agentDir,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy\n"
+        "\t}));",
+        "openclaw image_generate lazy descriptor",
+    )
+    replace_once(
+        openclaw_tools,
+        "createLazyOpenClawToolDescriptor({\n\t\tlabel: \"Video Generation\",",
+        "\tconst videoGenerateTool = createVideoGenerateTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options?.agentDir,\n"
+        "\t\tagentSessionKey: options?.agentSessionKey,\n"
+        "\t\trequesterOrigin: deliveryContext ?? void 0,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy\n"
+        "\t});",
+        "\tconst videoGenerateTool = createLazyOpenClawToolDescriptor({\n"
+        "\t\tlabel: \"Video Generation\",\n"
+        "\t\tname: \"video_generate\",\n"
+        "\t\tdisplaySummary: \"Generate videos\",\n"
+        "\t\tdescription: \"Generate videos using configured providers. Generated videos are saved under OpenClaw-managed media storage and delivered automatically as attachments.\",\n"
+        "\t\tparameters: VideoGenerateToolSchema\n"
+        "\t}, () => createVideoGenerateTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options?.agentDir,\n"
+        "\t\tagentSessionKey: options?.agentSessionKey,\n"
+        "\t\trequesterOrigin: deliveryContext ?? void 0,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy\n"
+        "\t}));",
+        "openclaw video_generate lazy descriptor",
+    )
+    replace_once(
+        openclaw_tools,
+        "createLazyOpenClawToolDescriptor({\n\t\tlabel: \"Music Generation\",",
+        "\tconst musicGenerateTool = createMusicGenerateTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options?.agentDir,\n"
+        "\t\tagentSessionKey: options?.agentSessionKey,\n"
+        "\t\trequesterOrigin: deliveryContext ?? void 0,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy\n"
+        "\t});",
+        "\tconst musicGenerateTool = createLazyOpenClawToolDescriptor({\n"
+        "\t\tlabel: \"Music Generation\",\n"
+        "\t\tname: \"music_generate\",\n"
+        "\t\tdisplaySummary: \"Generate music\",\n"
+        "\t\tdescription: \"Generate music using configured providers. Generated tracks are saved under OpenClaw-managed media storage and delivered automatically as attachments.\",\n"
+        "\t\tparameters: MusicGenerateToolSchema\n"
+        "\t}, () => createMusicGenerateTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options?.agentDir,\n"
+        "\t\tagentSessionKey: options?.agentSessionKey,\n"
+        "\t\trequesterOrigin: deliveryContext ?? void 0,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy\n"
+        "\t}));",
+        "openclaw music_generate lazy descriptor",
+    )
+    replace_once(
+        openclaw_tools,
+        "createLazyOpenClawToolDescriptor({\n\t\tlabel: \"PDF\",",
+        "\tconst pdfTool = options?.agentDir?.trim() ? createPdfTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options.agentDir,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy\n"
+        "\t}) : null;",
+        "\tconst pdfTool = options?.agentDir?.trim() ? createLazyOpenClawToolDescriptor({\n"
+        "\t\tlabel: \"PDF\",\n"
+        "\t\tname: \"pdf\",\n"
+        "\t\tdescription: \"Analyze one or more PDF documents with a model. Use pdf for a single path/URL, or pdfs for multiple. Provide a prompt describing what to analyze.\",\n"
+        "\t\tparameters: PdfToolSchema\n"
+        "\t}, () => createPdfTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tagentDir: options.agentDir,\n"
+        "\t\tworkspaceDir,\n"
+        "\t\tsandbox,\n"
+        "\t\tfsPolicy: options?.fsPolicy\n"
+        "\t})) : null;",
+        "openclaw pdf tool lazy descriptor",
+    )
+    replace_once(
+        openclaw_tools,
+        "createLazyOpenClawToolDescriptor({\n\t\tlabel: \"Web Search\",",
+        "\tconst webSearchTool = createWebSearchTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tsandboxed: options?.sandboxed,\n"
+        "\t\truntimeWebSearch: runtimeWebTools?.search\n"
+        "\t});",
+        "\tconst webSearchTool = createLazyOpenClawToolDescriptor({\n"
+        "\t\tlabel: \"Web Search\",\n"
+        "\t\tname: \"web_search\",\n"
+        "\t\tdescription: \"Search the web with the configured OpenClaw web-search provider.\",\n"
+        "\t\tparameters: Type.Object({ query: Type.String({ description: \"Search query.\" }) }, { additionalProperties: true })\n"
+        "\t}, () => createWebSearchTool({\n"
+        "\t\tconfig: options?.config,\n"
+        "\t\tsandboxed: options?.sandboxed,\n"
+        "\t\truntimeWebSearch: runtimeWebTools?.search\n"
+        "\t}));",
+        "openclaw web_search lazy descriptor",
+    )
+else:
+    print("[patch] openclaw heavy tool lazy descriptors: target not found, skipping")
+
+active_memory = os.path.join(dist, "extensions/active-memory/index.js")
+if os.path.exists(active_memory):
+    replace_once(
+        active_memory,
+        "plur1bus-openclaw-20260429-no-setup-grace",
+        "const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 3e4;",
+        "const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0; /* plur1bus-openclaw-20260429-no-setup-grace */",
+        "active-memory setup grace",
+    )
+    replace_once(
+        active_memory,
+        "plur1bus-openclaw-20260429-watchdog-cap",
+        "\tconst watchdogTimeoutMs = params.config.timeoutMs + setupGraceTimeoutMs;",
+        "\tconst watchdogTimeoutMs = params.config.timeoutMs; /* plur1bus-openclaw-20260429-watchdog-cap */",
+        "active-memory watchdog cap",
+    )
+    replace_once(
+        active_memory,
+        "plur1bus-openclaw-20260429-hook-budget",
+        "\t\tconst beforePromptBuildTimeoutMs = config.timeoutMs + setupGraceTimeoutMs;",
+        "\t\tconst beforePromptBuildTimeoutMs = Math.min(config.timeoutMs, Math.max(3e3, Number(config.hookTimeoutMs) || 1e4)); /* plur1bus-openclaw-20260429-hook-budget */",
+        "active-memory before_prompt_build budget",
+    )
+    replace_once(
+        active_memory,
+        "config: { ...config, timeoutMs: beforePromptBuildTimeoutMs }",
+        "\t\t\t\tconst result = await maybeResolveActiveRecall({\n"
+        "\t\t\t\t\tapi,\n"
+        "\t\t\t\t\tconfig,",
+        "\t\t\t\tconst result = await maybeResolveActiveRecall({\n"
+        "\t\t\t\t\tapi,\n"
+        "\t\t\t\t\tconfig: { ...config, timeoutMs: beforePromptBuildTimeoutMs },",
+        "active-memory hook timeout propagation",
+    )
+else:
+    print("[patch] active-memory: target not found, skipping")
+
+boot_md = os.path.join(dist, "bundled/boot-md/handler.js")
+if os.path.exists(boot_md):
+    replace_once(
+        boot_md,
+        "plur1bus-openclaw-20260429-boot-md-nonblocking",
+        "\tawait runStartupTasks({",
+        "\tsetImmediate(() => {\n"
+        "\t\trunStartupTasks({ /* plur1bus-openclaw-20260429-boot-md-nonblocking */",
+        "boot-md nonblocking start",
+    )
+    replace_once(
+        boot_md,
+        "boot: startup tasks failed:",
+        "\t\tlog\n"
+        "\t});",
+        "\t\tlog\n"
+        "\t\t}).catch((err) => log.error(`boot: startup tasks failed: ${formatErrorMessage(err)}`));\n"
+        "\t});",
+        "boot-md nonblocking end",
+    )
+else:
+    print("[patch] boot-md: target not found, skipping")
+
+agent_runner = find_one(
+    "agent-runner.runtime-*.js",
+    lambda c: 'transcriptPrompt: ""' in c and "memoryFlushWritePath" in c,
+    "memory flush transcript prompt",
+    required=False,
+)
+if agent_runner:
+    replace_once(
+        agent_runner,
+        "plur1bus-openclaw-20260429-nonempty-flush-prompt",
+        '\t\t\t\t\ttranscriptPrompt: "",',
+        '\t\t\t\t\ttranscriptPrompt: "Run the hidden pre-compaction memory flush now. Do not send a visible user-facing reply.", /* plur1bus-openclaw-20260429-nonempty-flush-prompt */',
+        "memory flush transcript prompt",
+    )
+else:
+    print("[patch] memory flush transcript prompt: target not found or already patched, skipping")
+
+for path in sorted(backed):
+    print(f"[patch] backup: {path}.bak-plur1bus-{stamp}")
+PYEOF
+}
+
+patch_openclaw_20260429_latency || rc=1
+
+exit "$rc"
