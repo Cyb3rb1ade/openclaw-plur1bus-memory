@@ -49,6 +49,23 @@ error()   { echo -e "${RED}[error]${RESET} $*" >&2; }
 step()    { echo -e "\n${BOLD}▶ $*${RESET}"; }
 dryrun()  { echo -e "${YELLOW}[dry-run]${RESET} $*"; }
 
+usage() {
+  cat <<EOF
+Verwendung: $0 [--dry-run] [--update-plugin-only] [--rollback] [ziel]
+
+Ziele:
+  Lokal:              $0 /home/user/.openclaw
+  Remote:             $0 user@host:/home/user/.openclaw
+  Auto-Erkennung:     $0
+
+Optionen:
+  --dry-run              Vorschau ohne Änderungen
+  --update-plugin-only   Nur Plugin-Dateien und Registry aktualisieren
+  --rollback             Letzten Snapshot wiederherstellen
+  -h, --help             Diese Hilfe anzeigen
+EOF
+}
+
 version_ge() {
   local have="$1" need="$2"
   [[ -z "$have" || -z "$need" ]] && return 1
@@ -209,9 +226,11 @@ TARGET=""
 
 for arg in "$@"; do
   case "$arg" in
+    -h|--help)          usage; exit 0 ;;
     --dry-run)            DRY_RUN=1 ;;
     --update-plugin-only) UPDATE_ONLY=1 ;;
     --rollback)           ROLLBACK=1 ;;
+    --*)                  error "Unbekannte Option: $arg"; usage; exit 2 ;;
     *) TARGET="$arg" ;;
   esac
 done
@@ -251,18 +270,8 @@ if [[ -z "$TARGET" ]]; then
   mapfile -t FOUND_INSTALLS < <(detect_local_installations)
 
   if [[ ${#FOUND_INSTALLS[@]} -eq 0 ]]; then
-    echo "Verwendung: $0 [--dry-run] [--update-plugin-only] [--rollback] <ziel>"
-    echo "  Lokal:              $0 /home/user/.openclaw"
-    echo "  Remote:             $0 user@host:/home/user/.openclaw"
-    echo "  Nur Plugin-Update:  $0 --update-plugin-only /home/user/.openclaw"
-    echo "  Rollback:           $0 --rollback /home/user/.openclaw"
-    echo ""
-    echo "  --update-plugin-only  Kopiert nur das Plugin (index.js etc.) und startet"
-    echo "                        den Gateway neu. Keine API-Key-Abfragen, keine Config-"
-    echo "                        Änderungen, keine Datenverluste."
-    echo "  --rollback            Stellt openclaw.json und LanceDB-Daten aus dem letzten"
-    echo "                        Snapshot wieder her."
-    echo ""
+    usage
+    echo
     warn "Keine lokale OpenClaw-Installation gefunden. Bitte Pfad manuell angeben."
     exit 1
 

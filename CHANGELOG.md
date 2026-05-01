@@ -1,3 +1,11 @@
+## [2.1.12] - 2026-05-01
+
+### Fixed
+- Isolated ActiveMemory embedded recall on its own global command lane (`active-memory`) instead of OpenClaw's default `main` lane, preventing timed-out memory recalls from blocking Bernd/main while preserving plur1bus and ActiveMemory.
+- Added persistent Silent-Reply policy repair to the plur1bus user hotfix: direct `NO_REPLY` replies are now allowed to stay silent instead of being rewritten into visible filler such as "No extra reply needed here."
+- Kept per-agent LanceDB routing unchanged: `main`, `bernhardine`, `heisenberg`, and their subagents continue to use `{baseDbPath}/{agentId}/`.
+- Fixed `scripts/install-memory-system.sh --help` so help exits before target detection instead of accidentally running install preflight with an invalid path.
+
 ## [2.1.11] - 2026-05-01
 
 ### Fixed
