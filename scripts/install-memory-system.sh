@@ -719,6 +719,7 @@ if [[ -n "$EXISTING_DBS" ]]; then
   MISMATCH_COUNT=0
   while IFS= read -r ag; do
     [[ -z "$ag" ]] && continue
+    [[ "$ag" == "defaults" || "$ag" == "list" ]] && continue
     # Schema-Dim per Python aus LanceDB lesen — funktioniert remote nicht direkt, nur lokal
     if [[ "$IS_REMOTE" == "1" ]]; then continue; fi
     if [[ "$DRY_RUN" == "1" ]]; then
@@ -836,7 +837,11 @@ copy_to_target "$PLUGIN_SRC" "$EXTENSIONS_DIR/"
 info "Kopiere memory-lancedb-stock (LanceDB node_modules)..."
 copy_to_target "$STOCK_SRC" "$EXTENSIONS_DIR/"
 
-ok "Plugins kopiert nach $EXTENSIONS_DIR"
+if [[ "$DRY_RUN" == "1" ]]; then
+  dryrun "Würde Plugins nach $EXTENSIONS_DIR kopieren"
+else
+  ok "Plugins kopiert nach $EXTENSIONS_DIR"
+fi
 
 # ─── Schritt 4: openclaw.json patchen ─────────────────────────────────────────
 
@@ -1188,14 +1193,16 @@ step "Schritt 7: Dokumentation kopieren"
 for doc in "${DOC_FILES[@]}"; do
   src_doc="$SOURCE_DIR/$doc"
   if [[ -f "$src_doc" ]]; then
-    if [[ "$DRY_RUN" == "0" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dryrun "Würde kopieren: $doc → $TARGET_DIR/$doc"
+    else
       if [[ "$IS_REMOTE" == "1" ]]; then
         scp "$src_doc" "${SSH_HOST}:${TARGET_DIR}/$doc"
       else
         cp "$src_doc" "$TARGET_DIR/$doc"
       fi
+      ok "Kopiert: $doc → $TARGET_DIR/$doc"
     fi
-    ok "Kopiert: $doc → $TARGET_DIR/$doc"
   else
     warn "$doc nicht gefunden in $SOURCE_DIR — übersprungen"
   fi
@@ -1228,10 +1235,12 @@ for agent in "${AGENT_LIST[@]}"; do
     if [[ "$already" == "yes" ]]; then
       info "SOUL.md von '$agent': Conflict-Log-Sektion bereits vorhanden — übersprungen"
     else
-      if [[ "$DRY_RUN" == "0" ]]; then
+      if [[ "$DRY_RUN" == "1" ]]; then
+        dryrun "Würde SOUL.md von '$agent' um Conflict-Log-Sektion ergänzen"
+      else
         run_target "echo '$SOUL_SECTION' >> '$soul_path'"
+        ok "SOUL.md von '$agent': Conflict-Log-Sektion hinzugefügt"
       fi
-      ok "SOUL.md von '$agent': Conflict-Log-Sektion hinzugefügt"
     fi
   else
     warn "SOUL.md für Agent '$agent' nicht gefunden ($soul_path) — übersprungen"
