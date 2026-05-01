@@ -1,3 +1,10 @@
+## [2.1.8] - 2026-05-01
+
+### Fixed
+- Made the minimum required OpenClaw version explicit in GitHub-visible docs: README and plugin README now state OpenClaw `>=2026.4.29`.
+- Added installer preflight detection via `openclaw --version`; detected versions below `2026.4.29` now abort before touching config or files.
+- Updated Requirements language to avoid implying OpenAI-only embeddings.
+
 ## [2.1.7] - 2026-05-01
 
 ### Fixed

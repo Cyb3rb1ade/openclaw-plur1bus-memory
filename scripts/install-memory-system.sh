@@ -35,6 +35,7 @@ PLUGIN_SRC="$SOURCE_DIR/extensions/memory-lancedb-namespaced"
 STOCK_SRC="$SOURCE_DIR/extensions/memory-lancedb-stock"
 DOC_FILES=("how-to-memory.md" "how-to-memory-perfect.md")
 GC_SCRIPT="$SOURCE_DIR/scripts/memory-gc.mjs"
+MIN_OPENCLAW_VERSION="2026.4.29"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; RESET='\033[0m'
 BOLD='\033[1m'
@@ -47,6 +48,12 @@ warn()    { echo -e "${YELLOW}[warn]${RESET} $*"; }
 error()   { echo -e "${RED}[error]${RESET} $*" >&2; }
 step()    { echo -e "\n${BOLD}▶ $*${RESET}"; }
 dryrun()  { echo -e "${YELLOW}[dry-run]${RESET} $*"; }
+
+version_ge() {
+  local have="$1" need="$2"
+  [[ -z "$have" || -z "$need" ]] && return 1
+  [[ "$(printf '%s\n%s\n' "$need" "$have" | sort -V | head -n1)" == "$need" ]]
+}
 
 display_default() {
   local prompt_text="$1" default_val="${2:-}"
@@ -451,6 +458,21 @@ if ! run_target "test -f '$TARGET_CONFIG'" 2>/dev/null; then
   exit 1
 fi
 ok "openclaw.json gefunden"
+
+# Mindestversion prüfen. CLI-Version ist maßgeblich; meta.lastTouchedVersion in
+# openclaw.json kann nach Updates stale sein.
+OPENCLAW_VERSION_RAW=$(run_target "openclaw --version 2>/dev/null | head -1" 2>/dev/null || true)
+OPENCLAW_VERSION=$(printf '%s\n' "$OPENCLAW_VERSION_RAW" | grep -Eo '[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}' | head -1 || true)
+if [[ -z "$OPENCLAW_VERSION" ]]; then
+  warn "OpenClaw-Version konnte nicht automatisch erkannt werden."
+  warn "Dieses Release benötigt OpenClaw >= $MIN_OPENCLAW_VERSION."
+elif version_ge "$OPENCLAW_VERSION" "$MIN_OPENCLAW_VERSION"; then
+  ok "OpenClaw-Version kompatibel: $OPENCLAW_VERSION >= $MIN_OPENCLAW_VERSION"
+else
+  error "OpenClaw $OPENCLAW_VERSION erkannt; erforderlich ist >= $MIN_OPENCLAW_VERSION."
+  error "Bitte zuerst OpenClaw aktualisieren, dann Installer erneut ausführen."
+  exit 1
+fi
 
 # ─── Schritt 1: API-Keys abfragen ─────────────────────────────────────────────
 

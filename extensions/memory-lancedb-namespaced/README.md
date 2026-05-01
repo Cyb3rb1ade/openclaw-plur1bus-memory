@@ -5,6 +5,8 @@ Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
 **Aktuelle Version:** `2.1.7` — getestet mit OpenClaw `2026.4.29`. Die 4.29-Kompatibilität umfasst `~/.openclaw/plugins/installs.json` als primären Install-Record, schema-konforme Message-Policy-Werte, robuste Journal-/Plugin-List-Checks und einen Installer, der bestehende Provider/Modelle respektiert.
 
+**Mindestversion:** OpenClaw `2026.4.29` oder neuer.
+
 ---
 
 ## Features
