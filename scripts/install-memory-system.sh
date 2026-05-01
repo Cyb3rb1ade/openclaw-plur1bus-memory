@@ -61,13 +61,38 @@ confirm() {
   local prompt="$1" default="${2:-y}"
   local yn
   if [[ "$DRY_RUN" == "1" ]]; then
-    dryrun "Würde fragen: $prompt (default=$default)"
+    dryrun "Würde Ja/Nein fragen: $prompt (default=$default)"
     [[ "$default" =~ ^[Yy]$ ]]
     return $?
   fi
   read -rp "$prompt [y/n, default=$default]: " yn
   yn="${yn:-$default}"
   [[ "$yn" =~ ^[Yy]$ ]]
+}
+
+prompt_choice() {
+  local var_name="$1" prompt_text="$2" default_val="$3"
+  shift 3
+  local choices=("$@")
+  local val valid
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dryrun "Würde Auswahl fragen: $prompt_text (default=$default_val; Optionen: ${choices[*]})"
+    printf -v "$var_name" '%s' "$default_val"
+    return 0
+  fi
+  while true; do
+    read -rp "  $prompt_text [${default_val}] (${choices[*]}): " val
+    val="${val:-$default_val}"
+    valid=0
+    for choice in "${choices[@]}"; do
+      [[ "$val" == "$choice" ]] && valid=1 && break
+    done
+    if [[ "$valid" == "1" ]]; then
+      printf -v "$var_name" '%s' "$val"
+      return 0
+    fi
+    warn "Ungültige Auswahl: $val"
+  done
 }
 
 prompt_secret() {
@@ -447,9 +472,14 @@ EMBEDDING_FALLBACK_KEY=""
 EMBEDDING_FALLBACK_BASEURL=""
 EMBEDDING_FALLBACK_MODEL=""
 USE_ACTIVE_MEMORY="n"
+KEEP_EXISTING_MEMORY_CONFIG=0
+KEEP_EXISTING_ACTIVE_MEMORY_CONFIG=0
+MEMORY_CONFIG_MODE=""
+ACTIVE_MEMORY_MODE=""
 
 # Bestehende Config als Default verwenden. Full-Install darf bei Updates nicht
 # versehentlich Keys, Pfade oder moderne 4.x-Konfigurationen überschreiben.
+EXISTING_PLUGIN_ENTRY=$(run_target "jq -c '.plugins.entries[\"memory-lancedb-namespaced\"] // null' '$TARGET_CONFIG' 2>/dev/null" || echo "null")
 EXISTING_EMBEDDING_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_EMBEDDING_MODEL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_EMBEDDING_BASE_URL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.baseUrl // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
@@ -457,17 +487,69 @@ EXISTING_EMBEDDING_DIMS=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-n
 EXISTING_BASE_DB_PATH=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.baseDbPath // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_COHERE_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.reranker.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_MEMORY_SLOT=$(run_target "jq -r '.plugins.slots.memory // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+MEMORY_SEARCH_EMBEDDING_KEY=$(run_target "jq -r '.agents.defaults.memorySearch.remote.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+MEMORY_SEARCH_EMBEDDING_MODEL=$(run_target "jq -r '.agents.defaults.memorySearch.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_ACTIVE_MEMORY_ENTRY=$(run_target "jq -c '.plugins.entries[\"active-memory\"] // null' '$TARGET_CONFIG' 2>/dev/null" || echo "null")
+DEFAULT_CHAT_MODEL=$(run_target "jq -r '.agents.defaults.model.primary // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+DEFAULT_CHAT_FALLBACK=$(run_target "jq -r '.agents.defaults.model.fallbacks[0] // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EMBEDDING_KEY_DEFAULT="$EXISTING_EMBEDDING_KEY"
+[[ -z "$EMBEDDING_KEY_DEFAULT" ]] && EMBEDDING_KEY_DEFAULT="$MEMORY_SEARCH_EMBEDDING_KEY"
+[[ -z "$EMBEDDING_KEY_DEFAULT" ]] && EMBEDDING_KEY_DEFAULT='${OPENAI_API_KEY}'
+EMBEDDING_MODEL_DEFAULT="$EXISTING_EMBEDDING_MODEL"
+[[ -z "$EMBEDDING_MODEL_DEFAULT" ]] && EMBEDDING_MODEL_DEFAULT="$MEMORY_SEARCH_EMBEDDING_MODEL"
+[[ -z "$EMBEDDING_MODEL_DEFAULT" ]] && EMBEDDING_MODEL_DEFAULT="text-embedding-3-large"
 
-echo ""
-info "Embedding-Provider-Auswahl:"
-info "  → OpenAI (Standard, default n) — text-embedding-3-large/small, ada-002"
-info "  → OpenRouter (v2.1+, opt-in) — 20+ Embedding-Modelle (BAAI/BGE, Mistral, Gemini, Qwen, NVIDIA-free, …)"
-info "Hinweis: Reranker (Cohere) wird unten separat gefragt — nicht von dieser Auswahl betroffen."
+if [[ "$EXISTING_PLUGIN_ENTRY" != "null" && -n "$EXISTING_PLUGIN_ENTRY" ]]; then
+  info "Bestehende memory-lancedb-namespaced-Config gefunden."
+  info "Der Installer kann bestehende Provider/Modelle unverändert übernehmen oder bewusst neu konfigurieren."
+  prompt_choice MEMORY_CONFIG_MODE "Memory-Konfigurationsmodus: keep=unverändert übernehmen, reconfigure=neu konfigurieren" "keep" "keep" "reconfigure"
+else
+  info "Keine bestehende memory-lancedb-namespaced-Config gefunden — Fresh-Install wird konfiguriert."
+  MEMORY_CONFIG_MODE="fresh"
+fi
+
+case "$MEMORY_CONFIG_MODE" in
+  keep)
+    KEEP_EXISTING_MEMORY_CONFIG=1
+    info "Memory-Config wird übernommen; keine OpenAI/Kimi-Defaults werden gesetzt."
+    ;;
+  reconfigure)
+    info "Memory-Config wird bewusst neu konfiguriert."
+    ;;
+  fresh)
+    info "Memory-Config wird neu angelegt."
+    ;;
+esac
+
+if [[ "$EXISTING_ACTIVE_MEMORY_ENTRY" != "null" && -n "$EXISTING_ACTIVE_MEMORY_ENTRY" ]]; then
+  info "Bestehende active-memory-Config gefunden."
+  prompt_choice ACTIVE_MEMORY_MODE "ActiveMemory-Modus: keep=unverändert übernehmen, reconfigure=neu konfigurieren, disable=nicht anfassen/deaktiviert lassen" "keep" "keep" "reconfigure" "disable"
+  if [[ "$ACTIVE_MEMORY_MODE" == "keep" ]]; then
+    KEEP_EXISTING_ACTIVE_MEMORY_CONFIG=1
+    USE_ACTIVE_MEMORY="y"
+  elif [[ "$ACTIVE_MEMORY_MODE" == "reconfigure" ]]; then
+    USE_ACTIVE_MEMORY="y"
+  fi
+else
+  prompt_choice ACTIVE_MEMORY_MODE "ActiveMemory installieren? no=nein, yes=ja" "no" "no" "yes"
+  [[ "$ACTIVE_MEMORY_MODE" == "yes" ]] && USE_ACTIVE_MEMORY="y"
+fi
+
 USE_OPENROUTER="n"
 EMBEDDING_BASE_URL=""
 EMBEDDING_DIMENSIONS=""
 
-if confirm "OpenRouter statt OpenAI für Embeddings nutzen?" "n"; then
+if [[ "$KEEP_EXISTING_MEMORY_CONFIG" != "1" ]]; then
+echo ""
+info "Embedding-Provider-Auswahl:"
+info "  → Der User entscheidet den Provider."
+info "  → Defaults kommen aus bestehender OpenClaw-MemorySearch-Config, falls vorhanden."
+info "  → OpenRouter (v2.1+, opt-in) — 20+ Embedding-Modelle (BAAI/BGE, Mistral, Gemini, Qwen, NVIDIA-free, …)"
+info "Hinweis: Reranker (Cohere) wird unten separat gefragt — nicht von dieser Auswahl betroffen."
+
+prompt_choice EMBEDDING_PROVIDER_MODE "Embedding-Provider: default=OpenAI-kompatibel/manuell, openrouter=OpenRouter" "default" "default" "openrouter"
+
+if [[ "$EMBEDDING_PROVIDER_MODE" == "openrouter" ]]; then
   USE_OPENROUTER="y"
   prompt_input OPENAI_KEY "OpenRouter API Key" "\${OPENROUTER_API_KEY}"
   EMBEDDING_BASE_URL="https://openrouter.ai/api/v1"
@@ -522,7 +604,8 @@ except:
     info "  ✓ Modell '$EMBEDDING_MODEL' liefert $EMBEDDING_DIMENSIONS-dimensionale Vektoren."
   fi
 else
-  prompt_input OPENAI_KEY "OpenAI API Key (für Embeddings)" "${EXISTING_EMBEDDING_KEY:-\${OPENAI_API_KEY}}"
+  prompt_input OPENAI_KEY "Embedding API Key" "$EMBEDDING_KEY_DEFAULT"
+  prompt_input EMBEDDING_BASE_URL "Embedding Base-URL (leer = Provider-Default)" "${EXISTING_EMBEDDING_BASE_URL:-}"
 fi
 
 prompt_input COHERE_KEY "Cohere API Key (für Re-Ranker, leer = Re-Ranker deaktiviert)" "${EXISTING_COHERE_KEY:-}"
@@ -534,7 +617,7 @@ warn "  ⚠️  Fallback MUSS dasselbe Modell / dieselbe Dimension verwenden —
 if confirm "Embedding-Fallback konfigurieren?" "n"; then
   USE_EMBEDDING_FALLBACK="y"
   prompt_input EMBEDDING_FALLBACK_KEY     "Fallback API Key" "\${OPENAI_API_KEY_FALLBACK}"
-  prompt_input EMBEDDING_FALLBACK_BASEURL "Fallback Base-URL (leer = Standard OpenAI)" ""
+  prompt_input EMBEDDING_FALLBACK_BASEURL "Fallback Base-URL (leer = Provider-Default)" ""
   prompt_input EMBEDDING_FALLBACK_MODEL   "Fallback Modell (leer = wie Primary)" ""
 fi
 
@@ -544,9 +627,9 @@ if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM —
   _EXISTING_MERGING_MODEL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
   _EXISTING_MERGING_URL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.baseUrl // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
   _EXISTING_MERGING_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
-  prompt_input MERGING_BASEURL "Merging LLM Base-URL (leer = Standard-OpenAI)" "${_EXISTING_MERGING_URL:-}"
+  prompt_input MERGING_BASEURL "Merging LLM Base-URL (leer = Provider-Default)" "${_EXISTING_MERGING_URL:-}"
   prompt_input MERGING_MODEL   "Merging LLM Modell" "${_EXISTING_MERGING_MODEL:-}"
-  prompt_input MERGING_KEY     "Merging LLM API Key" "${_EXISTING_MERGING_KEY:-\${OPENAI_API_KEY}}"
+  prompt_input MERGING_KEY     "Merging LLM API Key" "${_EXISTING_MERGING_KEY:-}"
   echo ""
   info "Kimi k2p5-spezifische Optionen (NUR für Kimi-Nutzer):"
   info "  disableThinking=true unterdrückt das Reasoning-Budget, User-Agent ist Kimi-Pflichtfeld."
@@ -556,23 +639,24 @@ if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM —
   fi
 fi
 
-# ActiveMemory (ab OpenClaw 4.10)
-echo ""
-info "ActiveMemory: Dedizierter Sub-Agent, der vor jeder Antwort Memories synthetisiert (OpenClaw ≥ 4.10)."
-info "  → Blocking, max. 15s Timeout, per-Agent isoliert, ergänzt Auto-Recall."
-if confirm "ActiveMemory-Plugin aktivieren? (nur OpenClaw ≥ 4.10)" "n"; then
-  USE_ACTIVE_MEMORY="y"
-fi
-
 # Embedding-Modell (nur fragen wenn nicht via OpenRouter schon gesetzt)
 if [[ "$USE_OPENROUTER" != "y" ]]; then
-  EMBEDDING_BASE_URL="${EXISTING_EMBEDDING_BASE_URL:-}"
-  EMBEDDING_MODEL="${EXISTING_EMBEDDING_MODEL:-text-embedding-3-large}"
+  EMBEDDING_MODEL="$EMBEDDING_MODEL_DEFAULT"
   prompt_input EMBEDDING_MODEL "Embedding-Modell" "$EMBEDDING_MODEL"
-  EMBEDDING_DIMENSIONS="${EXISTING_EMBEDDING_DIMS:-3072}"  # OpenAI text-embedding-3-large default
-  if [[ -z "$EXISTING_EMBEDDING_DIMS" && ( "$EMBEDDING_MODEL" == *"small"* || "$EMBEDDING_MODEL" == *"ada"* ) ]]; then
+  EMBEDDING_DIMENSIONS="${EXISTING_EMBEDDING_DIMS:-}"
+  if [[ -z "$EMBEDDING_DIMENSIONS" && "$EMBEDDING_MODEL" == *"text-embedding-3-large"* ]]; then
+    EMBEDDING_DIMENSIONS=3072
+  elif [[ -z "$EMBEDDING_DIMENSIONS" && ( "$EMBEDDING_MODEL" == *"small"* || "$EMBEDDING_MODEL" == *"ada"* ) ]]; then
     EMBEDDING_DIMENSIONS=1536
+  elif [[ -z "$EMBEDDING_DIMENSIONS" ]]; then
+    EMBEDDING_DIMENSIONS=1024
   fi
+  prompt_input EMBEDDING_DIMENSIONS "Embedding-Dimension (muss zur DB passen)" "$EMBEDDING_DIMENSIONS"
+fi
+else
+  EMBEDDING_MODEL="${EXISTING_EMBEDDING_MODEL:-}"
+  EMBEDDING_DIMENSIONS="${EXISTING_EMBEDDING_DIMS:-3072}"
+  EMBEDDING_BASE_URL="${EXISTING_EMBEDDING_BASE_URL:-}"
 fi
 
 # v2.1.1: Pre-Flight-Check — vergleiche neue Dim mit bestehenden LanceDBs.
@@ -708,116 +792,120 @@ ok "Plugins kopiert nach $EXTENSIONS_DIR"
 
 step "Schritt 4: openclaw.json patchen"
 
-# Reranker-Block aufbauen
-if [[ -n "$COHERE_KEY" && "$COHERE_KEY" != "" ]]; then
-  RERANKER_BLOCK=$(jq -n \
-    --arg key "$COHERE_KEY" \
-    '{"enabled": true, "apiKey": $key, "model": "rerank-v3.5", "candidates": 20}')
+if [[ "$KEEP_EXISTING_MEMORY_CONFIG" == "1" ]]; then
+  PLUGIN_CONFIG="$EXISTING_PLUGIN_ENTRY"
 else
-  RERANKER_BLOCK='{"enabled": false}'
-fi
+  # Reranker-Block aufbauen
+  if [[ -n "$COHERE_KEY" && "$COHERE_KEY" != "" ]]; then
+    RERANKER_BLOCK=$(jq -n \
+      --arg key "$COHERE_KEY" \
+      '{"enabled": true, "apiKey": $key, "model": "rerank-v3.5", "candidates": 20}')
+  else
+    RERANKER_BLOCK='{"enabled": false}'
+  fi
 
-# Merging-Block aufbauen
-if [[ "$USE_MERGING" == "y" ]]; then
-  # Basis-Config (provider-agnostisch)
-  MERGING_BLOCK=$(jq -n \
-    --arg key "$MERGING_KEY" \
-    --arg url "$MERGING_BASEURL" \
-    --arg model "$MERGING_MODEL" \
-    --argjson disableThinking "$MERGING_DISABLE_THINKING" \
-    --arg userAgent "$MERGING_USER_AGENT" \
+  # Merging-Block aufbauen
+  if [[ "$USE_MERGING" == "y" ]]; then
+    # Basis-Config (provider-agnostisch)
+    MERGING_BLOCK=$(jq -n \
+      --arg key "$MERGING_KEY" \
+      --arg url "$MERGING_BASEURL" \
+      --arg model "$MERGING_MODEL" \
+      --argjson disableThinking "$MERGING_DISABLE_THINKING" \
+      --arg userAgent "$MERGING_USER_AGENT" \
+      '{
+        "enabled": true,
+        "threshold": 0.70,
+        "model": $model,
+        "baseUrl": (if $url == "" then null else $url end),
+        "apiKey": (if $key == "" then null else $key end),
+        "disableThinking": $disableThinking
+      }
+      | if $userAgent != "" then . + {"headers": {"User-Agent": $userAgent}} else . end
+      | with_entries(select(.value != null))')
+    SCHICHT15_BLOCK=$(jq -n \
+      --arg key "$MERGING_KEY" \
+      --arg url "$MERGING_BASEURL" \
+      --arg model "$MERGING_MODEL" \
+      --argjson disableThinking "$MERGING_DISABLE_THINKING" \
+      --arg userAgent "$MERGING_USER_AGENT" \
+      '{
+        "enabled": true,
+        "model": $model,
+        "baseUrl": (if $url == "" then null else $url end),
+        "apiKey": (if $key == "" then null else $key end),
+        "disableThinking": $disableThinking,
+        "minImportance": 0.7
+      }
+      | if $userAgent != "" then . + {"headers": {"User-Agent": $userAgent}} else . end
+      | with_entries(select(.value != null))')
+  else
+    MERGING_BLOCK='{"enabled": false}'
+    SCHICHT15_BLOCK='{"enabled": false}'
+  fi
+
+  # Embedding Fallback Block
+  if [[ "$USE_EMBEDDING_FALLBACK" == "y" ]]; then
+    EMBEDDING_FALLBACK_BLOCK=$(jq -n \
+      --arg key "$EMBEDDING_FALLBACK_KEY" \
+      --arg baseUrl "$EMBEDDING_FALLBACK_BASEURL" \
+      --arg model "$EMBEDDING_FALLBACK_MODEL" \
+      '{
+        "apiKey": (if $key == "" then null else $key end),
+        "baseUrl": (if $baseUrl == "" then null else $baseUrl end),
+        "model":   (if $model   == "" then null else $model   end)
+      } | with_entries(select(.value != null))')
+  else
+    EMBEDDING_FALLBACK_BLOCK='null'
+  fi
+
+  # Plugin-Config-Objekt
+  PLUGIN_CONFIG=$(jq -n \
+    --arg openai_key "$OPENAI_KEY" \
+    --arg embedding_model "$EMBEDDING_MODEL" \
+    --arg embedding_base_url "${EMBEDDING_BASE_URL:-}" \
+    --argjson embedding_dims "${EMBEDDING_DIMENSIONS:-3072}" \
+    --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
+    --argjson reranker "$RERANKER_BLOCK" \
+    --argjson merging "$MERGING_BLOCK" \
+    --argjson schicht15 "$SCHICHT15_BLOCK" \
+    --argjson embedding_fallback "$EMBEDDING_FALLBACK_BLOCK" \
     '{
       "enabled": true,
-      "threshold": 0.70,
-      "model": $model,
-      "baseUrl": (if $url == "" then null else $url end),
-      "apiKey": $key,
-      "disableThinking": $disableThinking
-    }
-    | if $userAgent != "" then . + {"headers": {"User-Agent": $userAgent}} else . end
-    | with_entries(select(.value != null))')
-  SCHICHT15_BLOCK=$(jq -n \
-    --arg key "$MERGING_KEY" \
-    --arg url "$MERGING_BASEURL" \
-    --arg model "$MERGING_MODEL" \
-    --argjson disableThinking "$MERGING_DISABLE_THINKING" \
-    --arg userAgent "$MERGING_USER_AGENT" \
-    '{
-      "enabled": true,
-      "model": $model,
-      "baseUrl": (if $url == "" then null else $url end),
-      "apiKey": $key,
-      "disableThinking": $disableThinking,
-      "minImportance": 0.7
-    }
-    | if $userAgent != "" then . + {"headers": {"User-Agent": $userAgent}} else . end
-    | with_entries(select(.value != null))')
-else
-  MERGING_BLOCK='{"enabled": false}'
-  SCHICHT15_BLOCK='{"enabled": false}'
+      "config": {
+        "embedding": (
+          {
+            "apiKey": $openai_key,
+            "model": $embedding_model,
+            "dimensions": $embedding_dims
+          }
+          | if $embedding_base_url != "" then . + {"baseUrl": $embedding_base_url} else . end
+          | if $embedding_fallback != null then . + {"fallback": $embedding_fallback} else . end
+        ),
+        "baseDbPath": $db_path,
+        "autoCapture": true,
+        "autoRecall": true,
+        "captureMaxChars": 15000,
+        "summaryMaxWords": 150,
+        "recallMinScore": 0.15,
+        "autoRecallMinScore": 0.20,
+        "duplicateThreshold": 0.95,
+        "forgetThreshold": 0.30,
+        "gc": {"enabled": true},
+        "recall": {
+          "importanceBoost": 0.3,
+          "dedup": true,
+          "dedupJaccard": 0.6,
+          "canonicalFirst": true,
+          "canonicalMinScore": 0.30,
+          "canonicalMaxItems": 2
+        },
+        "reranker": $reranker,
+        "merging": $merging,
+        "schicht15": $schicht15
+      }
+    }')
 fi
-
-# Embedding Fallback Block
-if [[ "$USE_EMBEDDING_FALLBACK" == "y" ]]; then
-  EMBEDDING_FALLBACK_BLOCK=$(jq -n \
-    --arg key "$EMBEDDING_FALLBACK_KEY" \
-    --arg baseUrl "$EMBEDDING_FALLBACK_BASEURL" \
-    --arg model "$EMBEDDING_FALLBACK_MODEL" \
-    '{
-      "apiKey": $key,
-      "baseUrl": (if $baseUrl == "" then null else $baseUrl end),
-      "model":   (if $model   == "" then null else $model   end)
-    } | with_entries(select(.value != null))')
-else
-  EMBEDDING_FALLBACK_BLOCK='null'
-fi
-
-# Plugin-Config-Objekt
-PLUGIN_CONFIG=$(jq -n \
-  --arg openai_key "$OPENAI_KEY" \
-  --arg embedding_model "$EMBEDDING_MODEL" \
-  --arg embedding_base_url "${EMBEDDING_BASE_URL:-}" \
-  --argjson embedding_dims "${EMBEDDING_DIMENSIONS:-3072}" \
-  --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
-  --argjson reranker "$RERANKER_BLOCK" \
-  --argjson merging "$MERGING_BLOCK" \
-  --argjson schicht15 "$SCHICHT15_BLOCK" \
-  --argjson embedding_fallback "$EMBEDDING_FALLBACK_BLOCK" \
-  '{
-    "enabled": true,
-    "config": {
-      "embedding": (
-        {
-          "apiKey": $openai_key,
-          "model": $embedding_model,
-          "dimensions": $embedding_dims
-        }
-        | if $embedding_base_url != "" then . + {"baseUrl": $embedding_base_url} else . end
-        | if $embedding_fallback != null then . + {"fallback": $embedding_fallback} else . end
-      ),
-      "baseDbPath": $db_path,
-      "autoCapture": true,
-      "autoRecall": true,
-      "captureMaxChars": 15000,
-      "summaryMaxWords": 150,
-      "recallMinScore": 0.15,
-      "autoRecallMinScore": 0.20,
-      "duplicateThreshold": 0.95,
-      "forgetThreshold": 0.30,
-      "gc": {"enabled": true},
-      "recall": {
-        "importanceBoost": 0.3,
-        "dedup": true,
-        "dedupJaccard": 0.6,
-        "canonicalFirst": true,
-        "canonicalMinScore": 0.30,
-        "canonicalMaxItems": 2
-      },
-      "reranker": $reranker,
-      "merging": $merging,
-      "schicht15": $schicht15
-    }
-  }')
 
 # jq-Patch-Script (wird remote oder lokal ausgeführt)
 JQ_PATCH=$(cat <<'JQEOF'
@@ -834,7 +922,11 @@ if [[ "$DRY_RUN" == "1" ]]; then
   dryrun "Würde openclaw.json mit Plugin-Config patchen"
   dryrun "  - plugins.allow += memory-lancedb-namespaced"
   dryrun "  - plugins.slots.memory bleibt '${EXISTING_MEMORY_SLOT:-memory-core}'"
-  dryrun "  - plugins.entries.memory-lancedb-namespaced = {embedding, autoCapture, reranker, hooks.allowConversationAccess, ...}"
+  if [[ "$KEEP_EXISTING_MEMORY_CONFIG" == "1" ]]; then
+    dryrun "  - plugins.entries.memory-lancedb-namespaced bleibt inhaltlich erhalten; hooks.allowConversationAccess wird sichergestellt"
+  else
+    dryrun "  - plugins.entries.memory-lancedb-namespaced wird aus User-Auswahl neu geschrieben"
+  fi
 else
   # Backup erstellen
   run_target "cp '$TARGET_CONFIG' '${TARGET_CONFIG}.bak.$(date +%Y%m%d-%H%M%S)'"
@@ -881,29 +973,43 @@ fi
 if [[ "$USE_ACTIVE_MEMORY" == "y" ]]; then
   step "Schritt 4b: ActiveMemory-Plugin"
 
-  AGENTS_JSON_ARR=$(printf '"%s",' "${AGENT_LIST[@]}" | sed 's/,$//')
-  ACTIVE_MEMORY_CONFIG=$(jq -n \
-    --argjson agents "[$AGENTS_JSON_ARR]" \
-    '{
-      "enabled": true,
-      "config": {
+  if [[ "$KEEP_EXISTING_ACTIVE_MEMORY_CONFIG" == "1" ]]; then
+    ACTIVE_MEMORY_CONFIG="$EXISTING_ACTIVE_MEMORY_ENTRY"
+  else
+    ACTIVE_MEMORY_MODEL="${DEFAULT_CHAT_MODEL:-}"
+    ACTIVE_MEMORY_FALLBACK="${DEFAULT_CHAT_FALLBACK:-}"
+    prompt_input ACTIVE_MEMORY_MODEL "ActiveMemory Modell (leer = OpenClaw default)" "$ACTIVE_MEMORY_MODEL"
+    prompt_input ACTIVE_MEMORY_FALLBACK "ActiveMemory Fallback-Modell (leer = keiner)" "$ACTIVE_MEMORY_FALLBACK"
+
+    AGENTS_JSON_ARR=$(printf '"%s",' "${AGENT_LIST[@]}" | sed 's/,$//')
+    ACTIVE_MEMORY_CONFIG=$(jq -n \
+      --argjson agents "[$AGENTS_JSON_ARR]" \
+      --arg model "$ACTIVE_MEMORY_MODEL" \
+      --arg fallback "$ACTIVE_MEMORY_FALLBACK" \
+      '{
         "enabled": true,
-        "agents": $agents,
-        "allowedChatTypes": ["direct"],
-        "queryMode": "recent",
-        "promptStyle": "balanced",
-        "timeoutMs": 20000,
-        "maxSummaryChars": 220,
-        "persistTranscripts": false,
-        "logging": true,
-        "modelFallback": "moonshot/kimi-k2.6",
-        "model": "kimi-coding/kimi-for-coding",
-        "thinking": "off"
+        "config": {
+          "enabled": true,
+          "agents": $agents,
+          "allowedChatTypes": ["direct"],
+          "queryMode": "recent",
+          "promptStyle": "balanced",
+          "timeoutMs": 20000,
+          "maxSummaryChars": 220,
+          "persistTranscripts": false,
+          "logging": true
+        }
       }
-    }')
+      | if $model != "" then .config.model = $model else . end
+      | if $fallback != "" then .config.modelFallback = $fallback else . end')
+  fi
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    dryrun "Würde active-memory zu plugins.allow und plugins.entries hinzufügen"
+    if [[ "$KEEP_EXISTING_ACTIVE_MEMORY_CONFIG" == "1" ]]; then
+      dryrun "Würde bestehende active-memory Config unverändert übernehmen"
+    else
+      dryrun "Würde active-memory aus User-Auswahl konfigurieren"
+    fi
   else
     if [[ "$IS_REMOTE" == "1" ]]; then
       ACTIVE_MEMORY_ESCAPED=$(echo "$ACTIVE_MEMORY_CONFIG" | jq -c .)
@@ -928,7 +1034,7 @@ NODEOF2
         "$TARGET_CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$TARGET_CONFIG"
     fi
     ok "ActiveMemory-Plugin konfiguriert (${#AGENT_LIST[@]} Agenten)"
-    info "  queryMode=recent, promptStyle=balanced, timeout=15s, maxSummaryChars=220"
+    info "  queryMode=recent, promptStyle=balanced, timeout=20s, maxSummaryChars=220"
   fi
 else
   info "ActiveMemory übersprungen (nicht aktiviert oder OpenClaw < 4.10)"

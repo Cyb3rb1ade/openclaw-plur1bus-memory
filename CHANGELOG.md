@@ -1,3 +1,12 @@
+## [2.1.7] - 2026-05-01
+
+### Fixed
+- Made `install-memory-system.sh` explicitly user-driven for both existing installations and fresh installs.
+- Existing installations now default to `keep`: preserve the full `memory-lancedb-namespaced` provider/model config and only ensure required install wiring such as `hooks.allowConversationAccess`.
+- Added explicit choices for `memory-lancedb-namespaced` config (`keep` or `reconfigure`) and `active-memory` config (`keep`, `reconfigure`, or `disable`).
+- Fresh installs now derive defaults from the target OpenClaw config where possible, including `agents.defaults.memorySearch` and `agents.defaults.model.primary`, instead of hardcoding Kimi/Moonshot for chat-model features.
+- Embedding setup now asks for provider endpoint, model and vector dimensions when not preserving existing config, so non-OpenAI embedding providers can be configured safely.
+
 ## [2.1.6] - 2026-05-01
 
 ### Fixed
