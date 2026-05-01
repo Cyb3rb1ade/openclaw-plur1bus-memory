@@ -1,3 +1,10 @@
+## [2.1.16] - 2026-05-01
+
+### Fixed
+- Fixed Telegram Direct-Chat delivery after the 2026.4.29 message-policy guard: `messages.visibleReplies` is now kept at `automatic` so Bernd/main final replies and reasoning stream callbacks are delivered in DMs, while `messages.groupChat.visibleReplies = "message_tool"` preserves explicit visible posting for groups.
+- Fixed Kimi-Coding thinking defaults for OpenClaw 2026.4.29: configs using `kimi-coding/*` now keep the schema-valid `agents.defaults.thinkingDefault = "low"` because the Gateway rejects `medium` for Kimi-Coding and normalizes `--thinking on` to the same executable mode.
+- Persisted the reply-visibility repair in both `update-openclaw.sh` and `apply-plur1bus-user-hotfix.sh` so OpenClaw updates and service restarts do not reintroduce invisible Direct-Chat replies.
+
 ## [2.1.15] - 2026-05-01
 
 ### Fixed

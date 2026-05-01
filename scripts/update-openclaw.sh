@@ -1268,6 +1268,14 @@ v = d.get('messages', {}).get('visibleReplies', None)
 print('missing' if v is None else str(v))
 " 2>/dev/null || echo "error")
 
+GROUP_VISIBLE_REPLIES=$(python3 -c "
+import json
+with open('$OPENCLAW_JSON') as f:
+    d = json.load(f)
+v = d.get('messages', {}).get('groupChat', {}).get('visibleReplies', None)
+print('missing' if v is None else str(v))
+" 2>/dev/null || echo "error")
+
 QUEUE_MODE=$(python3 -c "
 import json
 with open('$OPENCLAW_JSON') as f:
@@ -1277,20 +1285,78 @@ mode = q.get('mode')
 print('missing' if mode is None else str(mode))
 " 2>/dev/null || echo "error")
 
-if [[ "$VISIBLE_REPLIES" == "message_tool" ]]; then
-    ok "messages.visibleReplies = message_tool"
+if [[ "$VISIBLE_REPLIES" == "automatic" ]]; then
+    ok "messages.visibleReplies = automatic (Direct-Chats liefern finale Replies)"
 else
-    warn "messages.visibleReplies = ${VISIBLE_REPLIES} (empfohlen: message_tool für sichtbare Replies via message(action=send))"
+    warn "messages.visibleReplies = ${VISIBLE_REPLIES} (erwartet: automatic, sonst bleiben Direct-Chat-Finalantworten unsichtbar)"
     if [[ "$CHECK_ONLY" != "1" ]]; then
         python3 -c "
 import json
 path = '$OPENCLAW_JSON'
 with open(path) as f: d = json.load(f)
-d.setdefault('messages', {})['visibleReplies'] = 'message_tool'
+d.setdefault('messages', {})['visibleReplies'] = 'automatic'
 with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
 "
-        ok "  → messages.visibleReplies auf message_tool gesetzt"
+        ok "  → messages.visibleReplies auf automatic gesetzt"
     fi
+fi
+
+if [[ "$GROUP_VISIBLE_REPLIES" == "message_tool" ]]; then
+    ok "messages.groupChat.visibleReplies = message_tool"
+else
+    warn "messages.groupChat.visibleReplies = ${GROUP_VISIBLE_REPLIES} (empfohlen: message_tool für sichtbare Gruppen-Replies via message(action=send))"
+    if [[ "$CHECK_ONLY" != "1" ]]; then
+        python3 -c "
+import json
+path = '$OPENCLAW_JSON'
+with open(path) as f: d = json.load(f)
+d.setdefault('messages', {}).setdefault('groupChat', {})['visibleReplies'] = 'message_tool'
+with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
+"
+        ok "  → messages.groupChat.visibleReplies auf message_tool gesetzt"
+    fi
+fi
+
+# ─── 4.29 KIMI-CODING THINKING GUARD ──────────────────────────────────────────
+header "4.29 KIMI-CODING THINKING GUARD"
+
+KIMI_CODING_CONFIGURED=$(python3 -c "
+import json
+with open('$OPENCLAW_JSON') as f:
+    d = json.load(f)
+agents = d.get('agents', {})
+defaults = agents.get('defaults', {})
+primary = defaults.get('model', {}).get('primary') if isinstance(defaults.get('model'), dict) else None
+models = [str(a.get('model') or '') for a in agents.get('list', []) if isinstance(a, dict)]
+print('yes' if str(primary or '').startswith('kimi-coding/') or any(m.startswith('kimi-coding/') for m in models) else 'no')
+" 2>/dev/null || echo "error")
+
+THINKING_DEFAULT=$(python3 -c "
+import json
+with open('$OPENCLAW_JSON') as f:
+    d = json.load(f)
+v = d.get('agents', {}).get('defaults', {}).get('thinkingDefault', None)
+print('missing' if v is None else str(v))
+" 2>/dev/null || echo "error")
+
+if [[ "$KIMI_CODING_CONFIGURED" == "yes" ]]; then
+    if [[ "$THINKING_DEFAULT" == "low" ]]; then
+        ok "agents.defaults.thinkingDefault = low (schema-valid; kimi-coding thinking on wird intern so ausgeführt)"
+    else
+        warn "agents.defaults.thinkingDefault = ${THINKING_DEFAULT} (kimi-coding bricht mit medium; persistenter schema-valider Wert ist low)"
+        if [[ "$CHECK_ONLY" != "1" ]]; then
+            python3 -c "
+import json
+path = '$OPENCLAW_JSON'
+with open(path) as f: d = json.load(f)
+d.setdefault('agents', {}).setdefault('defaults', {})['thinkingDefault'] = 'low'
+with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
+"
+            ok "  → agents.defaults.thinkingDefault auf low gesetzt"
+        fi
+    fi
+else
+    ok "kein kimi-coding Default gefunden; thinkingDefault bleibt unverändert"
 fi
 
 if [[ "$QUEUE_MODE" == "steer" ]]; then

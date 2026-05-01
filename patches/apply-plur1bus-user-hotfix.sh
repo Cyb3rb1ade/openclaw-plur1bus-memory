@@ -70,6 +70,91 @@ else:
 PYEOF
 }
 
+patch_reply_visibility_config() {
+  python3 - "$CONFIG_FILE" "$STAMP" <<'PYEOF'
+import json
+import os
+import shutil
+import sys
+
+config_file = sys.argv[1]
+stamp = sys.argv[2]
+
+if not os.path.exists(config_file):
+    print(f"[patch] telegram reply visibility policy: config not found ({config_file}), skipping")
+    raise SystemExit(0)
+
+with open(config_file, "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+
+messages = cfg.setdefault("messages", {})
+group_chat = messages.setdefault("groupChat", {})
+
+changed = False
+if messages.get("visibleReplies") != "automatic":
+    messages["visibleReplies"] = "automatic"
+    changed = True
+if group_chat.get("visibleReplies") != "message_tool":
+    group_chat["visibleReplies"] = "message_tool"
+    changed = True
+
+if changed:
+    backup = f"{config_file}.bak-plur1bus-reply-visibility-{stamp}"
+    shutil.copy2(config_file, backup)
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    print("[patch] telegram reply visibility policy: applied (direct=automatic, group=message_tool)")
+else:
+    print("[patch] telegram reply visibility policy: already configured")
+PYEOF
+}
+
+patch_kimi_coding_thinking_default() {
+  python3 - "$CONFIG_FILE" "$STAMP" <<'PYEOF'
+import json
+import os
+import shutil
+import sys
+
+config_file = sys.argv[1]
+stamp = sys.argv[2]
+
+if not os.path.exists(config_file):
+    print(f"[patch] kimi-coding thinking default: config not found ({config_file}), skipping")
+    raise SystemExit(0)
+
+with open(config_file, "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+
+agents = cfg.setdefault("agents", {})
+defaults = agents.setdefault("defaults", {})
+primary = (defaults.get("model") or {}).get("primary") if isinstance(defaults.get("model"), dict) else None
+agent_models = [
+    str(agent.get("model") or "")
+    for agent in agents.get("list", [])
+    if isinstance(agent, dict)
+]
+uses_kimi_coding = str(primary or "").startswith("kimi-coding/") or any(model.startswith("kimi-coding/") for model in agent_models)
+
+if not uses_kimi_coding:
+    print("[patch] kimi-coding thinking default: no kimi-coding models configured, skipping")
+    raise SystemExit(0)
+
+if defaults.get("thinkingDefault") == "low":
+    print("[patch] kimi-coding thinking default: already configured")
+    raise SystemExit(0)
+
+backup = f"{config_file}.bak-plur1bus-kimi-thinking-{stamp}"
+shutil.copy2(config_file, backup)
+defaults["thinkingDefault"] = "low"
+with open(config_file, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print("[patch] kimi-coding thinking default: applied (agents.defaults.thinkingDefault=low)")
+PYEOF
+}
+
 patch_stale_task_zombies() {
   python3 - "$STATE_DIR" "$STAMP" <<'PYEOF'
 import os
@@ -1024,6 +1109,8 @@ PYEOF
 }
 
 patch_silent_reply_config || rc=1
+patch_reply_visibility_config || rc=1
+patch_kimi_coding_thinking_default || rc=1
 patch_stale_task_zombies || rc=1
 patch_openclaw_20260429_latency || rc=1
 
