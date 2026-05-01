@@ -1,3 +1,10 @@
+## [2.1.11] - 2026-05-01
+
+### Fixed
+- Fixed Kimi coding request parameters for OpenClaw 2026.4.29's current `createKimiThinkingWrapper`: `thinking=enabled` now sends `temperature=1.0` plus `budget_tokens=16384`, while `thinking=disabled` sends Kimi instant-mode `temperature=0.6` and `top_p=0.95`.
+- Kept ActiveMemory enabled for `main`, `bernhardine`, and `heisenberg`, but safe in instant mode (`thinking=off`) so memory recall does not consume visible reasoning budget or trigger Kimi temperature errors.
+- Tightened ActiveMemory prompt-hook blocking to 3000ms for already-patched installs as well as fresh hotfix runs.
+
 ## [2.1.10] - 2026-05-01
 
 ### Fixed

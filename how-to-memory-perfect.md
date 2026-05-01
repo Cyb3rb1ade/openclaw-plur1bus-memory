@@ -1618,7 +1618,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag v2.1.10
+git tag v2.1.11
 ```
 
 ### Teilen / Veröffentlichen
@@ -1657,7 +1657,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.10`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.11`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal.
 
 ### Was passiert beim Dreaming?
 
@@ -1948,7 +1948,7 @@ journalctl --user -u openclaw-gateway --no-pager | grep "cohere.*rerank\|rerank.
 
 **Status:** No-op auf aktuellen Builds.
 
-Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber den plur1bus-Pluginpfad umgehen. Seit `2.1.10` bleibt ActiveMemory auf dem normalen Toolpfad und wird stattdessen über Patch #19 beschleunigt.
+Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber den plur1bus-Pluginpfad umgehen. Seit `2.1.11` bleibt ActiveMemory auf dem normalen Toolpfad und wird stattdessen über Patch #19 beschleunigt.
 
 ## Patch #19 — plur1bus User Hotfix für OpenClaw 2026.4.29
 
