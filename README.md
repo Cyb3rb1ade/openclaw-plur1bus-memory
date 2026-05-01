@@ -11,11 +11,11 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.17` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+**Aktuelle Version:** `2.1.19` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
-**OpenClaw-2026.4.29-Hotfix:** `patches/apply-plur1bus-user-hotfix.sh` hält plur1bus/ActiveMemory aktiv und reduziert Prompt-Build-Latenz durch frühes `toolsAllow`, Plugin-Registry-Reuse, Plugin-Descriptor-Caching, lazy Media-/Web-Tool-Deskriptoren, eine isolierte ActiveMemory-Command-Lane, session-isolierte Embedded-Agent-Lanes, Startup-Grace sowie due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Stale-Task-Zombie-Reconciliation, Kimi-Coding-kompatible Thinking-Defaults, echte Silent-Replies in Direct-Chats und eine Telegram-Reply-Policy, die Direct-Chat-Finalantworten automatisch ausliefert, während Gruppen sichtbare Antworten weiter explizit über das Message-Tool posten.
+**OpenClaw-2026.4.29-Hotfix:** `patches/apply-plur1bus-user-hotfix.sh` hält plur1bus/ActiveMemory aktiv und reduziert Prompt-Build-Latenz durch frühes `toolsAllow`, Plugin-Registry-Reuse, Plugin-Descriptor-Caching, lazy Media-/Web-Tool-Deskriptoren, eine isolierte ActiveMemory-Command-Lane, session-isolierte Embedded-Agent-Lanes, Startup-Grace sowie due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Stale-Task-Zombie-Reconciliation, Kimi-Coding-kompatible Thinking-Defaults, echte Silent-Replies in Direct-Chats und eine Telegram-Reply-Policy, die Direct-Chat- und Gruppen-Finalantworten automatisch ausliefert.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -269,11 +269,11 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.17` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+**Current version:** `2.1.19` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
-**OpenClaw 2026.4.29 hotfix:** `patches/apply-plur1bus-user-hotfix.sh` keeps plur1bus/ActiveMemory enabled and reduces prompt-build latency through early `toolsAllow`, plugin-registry reuse, plugin-descriptor caching, lazy media/web tool descriptors, an isolated ActiveMemory command lane, session-isolated embedded agent lanes, startup grace plus due-aware and staggered startup/interval/commitment heartbeats, subagent lane isolation, subagent completion announce backpressure, stale task-zombie reconciliation, Kimi-Coding-compatible thinking defaults, real silent replies in direct chats, and a Telegram reply policy that auto-delivers direct-chat final replies while keeping group-visible replies explicit via the message tool.
+**OpenClaw 2026.4.29 hotfix:** `patches/apply-plur1bus-user-hotfix.sh` keeps plur1bus/ActiveMemory enabled and reduces prompt-build latency through early `toolsAllow`, plugin-registry reuse, plugin-descriptor caching, lazy media/web tool descriptors, an isolated ActiveMemory command lane, session-isolated embedded agent lanes, startup grace plus due-aware and staggered startup/interval/commitment heartbeats, subagent lane isolation, subagent completion announce backpressure, stale task-zombie reconciliation, Kimi-Coding-compatible thinking defaults, Kimi-Coding protocol/BaseURL consistency checks, real silent replies in direct chats, and a Telegram reply policy that auto-delivers direct-chat and group-chat final replies.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
@@ -430,7 +430,7 @@ systemctl --user restart openclaw-gateway.service
 | **#16** Stuck-Session Abort | `diagnostic-*.js` | SIGUSR1 when session exceeds `stuckSessionAbortMs` (default 600s) |
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` after `mergeHybridResults()` — better top-K ranking |
 | **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op on current builds so plur1bus is not bypassed |
-| **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `subagent-announce-delivery-*.js`, `openclaw.json` | Reuses the active Gateway registry, applies `toolsAllow` before plugin factories, adds a plugin descriptor cache, caps active-memory hook waits, makes `boot-md` non-blocking, isolates subagent dispatch lanes, avoids internal final-wait for subagent completion announces, and preserves direct-chat reply delivery |
+| **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `subagent-announce-delivery-*.js`, `openclaw.json` | Reuses the active Gateway registry, applies `toolsAllow` before plugin factories, adds a plugin descriptor cache, caps active-memory hook waits, makes `boot-md` non-blocking, isolates subagent dispatch lanes, avoids internal final-wait for subagent completion announces, preserves direct/group reply delivery, and keeps Kimi-Coding protocol/BaseURL pairs consistent |
 
 The 4.29 latency fix is **OpenClaw bundle-name independent**: the script finds the current `selection-*`, `pi-tools-*` and `tools-*` bundles by content. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores all patches.
 
