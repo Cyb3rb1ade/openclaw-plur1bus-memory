@@ -29,7 +29,7 @@ const CONFIG_PATH = join(homedir(), ".openclaw", "openclaw.json");
 let _lancedb = null;
 async function getLanceDB() {
   if (!_lancedb) {
-    const lancedbPath = join(__dir, "..", "extensions", "memory-lancedb-stock", "node_modules", "@lancedb", "lancedb", "dist", "index.js");
+    const lancedbPath = resolveStockDependency("@lancedb", "lancedb", "dist", "index.js");
     _lancedb = await import(lancedbPath);
   }
   return _lancedb;
@@ -38,7 +38,7 @@ async function getLanceDB() {
 let _OpenAI = null;
 async function getOpenAI() {
   if (!_OpenAI) {
-    const openaiPath = join(__dir, "..", "extensions", "memory-lancedb-stock", "node_modules", "openai", "index.js");
+    const openaiPath = resolveStockDependency("openai", "index.js");
     const m = await import(openaiPath);
     _OpenAI = m.default;
   }
@@ -51,6 +51,18 @@ function loadConfig() {
   let baseDbPath = plugin.baseDbPath || join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
   if (baseDbPath.startsWith("~/")) baseDbPath = join(homedir(), baseDbPath.slice(2));
   return { plugin, baseDbPath, agents: cfg?.agents?.list || [] };
+}
+
+function resolveStockDependency(...parts) {
+  const candidates = [
+    join(__dir, "..", "extensions", "memory-lancedb-stock", "node_modules", ...parts),
+    join(homedir(), ".openclaw", "extensions", "memory-lancedb-stock", "node_modules", ...parts),
+  ];
+  const found = candidates.find((path) => existsSync(path));
+  if (!found) {
+    throw new Error(`Missing memory-lancedb-stock dependency: ${parts.join("/")}`);
+  }
+  return found;
 }
 
 function discoverAgents(baseDbPath, filter) {

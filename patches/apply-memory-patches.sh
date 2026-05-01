@@ -5,7 +5,8 @@
 # Patches:
 # 16) stuck-session-abort: SIGUSR1 when session stuck > stuckSessionAbortMs
 # 17) memory-core-cohere-rerank: Cohere rerank-v3.5 after mergeHybridResults()
-# 18) active-memory-fast-path: direct manager.search() instead of PiAgent subagent
+# 18) active-memory-fast-path: retired; preserved as no-op for older installs
+# 19) plur1bus-user OpenClaw 2026.4.29 latency hotfixes
 
 set -u
 
@@ -19,7 +20,7 @@ import sys, glob, os
 dist = sys.argv[1]
 target = next((f for f in glob.glob(os.path.join(dist, "diagnostic-*.js")) if "logSessionStuck" in open(f).read()), None)
 if not target:
-    print("[patch] stuck-session-abort: target not found"); raise SystemExit(1)
+    print("[patch] stuck-session-abort: target not found (retired or moved upstream)"); raise SystemExit(0)
 with open(target) as f: code = f.read()
 if "stuck-session-abort-patch" in code:
     print(f"[patch] stuck-session-abort: already patched ({os.path.basename(target)})"); raise SystemExit(0)
@@ -43,7 +44,8 @@ new = (
     '\t\t\t}'
 )
 if old not in code:
-    print(f"[patch] stuck-session-abort: anchor not found ({os.path.basename(target)})"); raise SystemExit(1)
+    print(f"[patch] stuck-session-abort: anchor not found ({os.path.basename(target)}) — skipping")
+    raise SystemExit(0)
 with open(target, "w") as f: f.write(code.replace(old, new, 1))
 print(f"[patch] stuck-session-abort: applied ({os.path.basename(target)})")
 PYEOF
@@ -95,6 +97,8 @@ patch_memory_core_cohere_rerank || rc=1
 
 # 18) Active-Memory Fast Path
 patch_active_memory_fast_path() {
+  echo "[patch] active-memory-fast-path: retired (plur1bus-user hotfix keeps active-memory on the plugin tool path)"
+  return 0
   python3 - << 'PYEOF'
 import os, glob
 
@@ -151,5 +155,13 @@ print(f"[patch] active-memory-fast-path: applied ({os.path.basename(target)}, mo
 PYEOF
 }
 patch_active_memory_fast_path || rc=1
+
+# 19) OpenClaw 2026.4.29 latency hotfixes for plur1bus users
+patch_plur1bus_user_hotfix() {
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  bash "$script_dir/apply-plur1bus-user-hotfix.sh"
+}
+patch_plur1bus_user_hotfix || rc=1
 
 exit $rc
