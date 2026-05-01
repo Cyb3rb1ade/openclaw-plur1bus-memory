@@ -1,3 +1,10 @@
+## [2.1.17] - 2026-05-01
+
+### Fixed
+- Removed the remaining hard Kimi fallback from optional LLM paths: `merging.enabled=true` now requires an explicit `merging.model`, and `schicht15.enabled=true` requires either `schicht15.model` or an explicit `merging.model`.
+- Made the installer provider-neutral for LLM merging: when the user enables Merging, the model prompt is mandatory and no Kimi/OpenAI default is inserted silently.
+- Clarified GitHub documentation: the main OpenClaw chat provider can be anything; plur1bus only requires an OpenAI-compatible embeddings endpoint or OpenRouter, while optional Merging/Schicht 1.5 require an explicitly configured OpenAI-compatible chat-completions endpoint.
+
 ## [2.1.16] - 2026-05-01
 
 ### Fixed
