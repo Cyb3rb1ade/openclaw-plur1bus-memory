@@ -8,6 +8,8 @@
 #   build for setup-grace + recall timeouts.
 # - openclaw/openclaw#75375 class: make boot-md startup work non-blocking.
 # - openclaw/openclaw#75305 class: avoid empty hidden memory-flush transcript prompt.
+# - Kimi coding params: keep user-facing sessions on thinking, but make
+#   active-memory's thinking=off recall use Kimi instant temperature 0.6.
 
 set -u
 
@@ -70,6 +72,55 @@ def regex_once(path, marker, pattern, repl, label):
         raise RuntimeError(f"{label}: anchor not found ({os.path.basename(path)})")
     write(path, next_code)
     print(f"[patch] {label}: applied ({os.path.basename(path)})")
+
+for stream_path in sorted(glob.glob(os.path.join(dist, "stream-*.js"))):
+    code = read(stream_path)
+    marker = "kimi-coding fixed-temp thinking payload"
+    old = '''function createKimiThinkingWrapper(baseStreamFn, thinkingType) {
+\tconst underlying = baseStreamFn ?? streamSimple;
+\treturn (model, context, options) => streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+\t\tpayloadObj.thinking = { type: thinkingType };
+\t\tdelete payloadObj.reasoning;
+\t\tdelete payloadObj.reasoning_effort;
+\t\tdelete payloadObj.reasoningEffort;
+\t});
+}'''
+    new = '''function createKimiThinkingWrapper(baseStreamFn, thinkingType) {
+\tconst underlying = baseStreamFn ?? streamSimple;
+\treturn (model, context, options) => streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+\t\tconst _kc = typeof model?.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding";
+\t\tpayloadObj.thinking = _kc && thinkingType === "enabled" ? { type: thinkingType, budget_tokens: 16384 } : { type: thinkingType };
+\t\tif (_kc) {
+\t\t\tpayloadObj.temperature = thinkingType === "disabled" ? 0.6 : 1.0;
+\t\t\tpayloadObj.top_p = 0.95;
+\t\t} /* kimi-coding fixed-temp thinking payload */
+\t\tdelete payloadObj.reasoning;
+\t\tdelete payloadObj.reasoning_effort;
+\t\tdelete payloadObj.reasoningEffort;
+\t});
+}'''
+    legacy = '''\t\tconst _kc = typeof model?.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding";
+\t\tpayloadObj.thinking = _kc ? { type: thinkingType, budget_tokens: 16384 } : { type: thinkingType };
+\t\tif (_kc) payloadObj.temperature = 1.0;'''
+    fixed_legacy = '''\t\tconst _kc = typeof model?.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding";
+\t\tpayloadObj.thinking = _kc && thinkingType === "enabled" ? { type: thinkingType, budget_tokens: 16384 } : { type: thinkingType };
+\t\tif (_kc) {
+\t\t\tpayloadObj.temperature = thinkingType === "disabled" ? 0.6 : 1.0;
+\t\t\tpayloadObj.top_p = 0.95;
+\t\t} /* kimi-coding fixed-temp thinking payload */'''
+    if marker in code:
+        print(f"[patch] kimi provider thinking payload: already patched ({os.path.basename(stream_path)})")
+        break
+    if legacy in code:
+        write(stream_path, code.replace(legacy, fixed_legacy, 1))
+        print(f"[patch] kimi provider thinking payload: fixed legacy temperature ({os.path.basename(stream_path)})")
+        break
+    if old in code:
+        write(stream_path, code.replace(old, new, 1))
+        print(f"[patch] kimi provider thinking payload: applied ({os.path.basename(stream_path)})")
+        break
+else:
+    print("[patch] kimi provider thinking payload: stream wrapper not found, skipping")
 
 selection = find_one(
     "selection-*.js",
@@ -470,9 +521,18 @@ if os.path.exists(active_memory):
         active_memory,
         "plur1bus-openclaw-20260429-hook-budget",
         "\t\tconst beforePromptBuildTimeoutMs = config.timeoutMs + setupGraceTimeoutMs;",
-        "\t\tconst beforePromptBuildTimeoutMs = Math.min(config.timeoutMs, Math.max(3e3, Number(config.hookTimeoutMs) || 1e4)); /* plur1bus-openclaw-20260429-hook-budget */",
+        "\t\tconst beforePromptBuildTimeoutMs = Math.min(config.timeoutMs, 3e3); /* plur1bus-openclaw-20260429-hook-budget */",
         "active-memory before_prompt_build budget",
     )
+    code = read(active_memory)
+    legacy_hook_budget = "\t\tconst beforePromptBuildTimeoutMs = Math.min(config.timeoutMs, Math.max(3e3, Number(config.hookTimeoutMs) || 1e4)); /* plur1bus-openclaw-20260429-hook-budget */"
+    if legacy_hook_budget in code:
+        write(active_memory, code.replace(
+            legacy_hook_budget,
+            "\t\tconst beforePromptBuildTimeoutMs = Math.min(config.timeoutMs, 3e3); /* plur1bus-openclaw-20260429-hook-budget */",
+            1,
+        ))
+        print(f"[patch] active-memory before_prompt_build budget: tightened to 3000ms ({os.path.basename(active_memory)})")
     replace_once(
         active_memory,
         "config: { ...config, timeoutMs: beforePromptBuildTimeoutMs }",
