@@ -13,6 +13,8 @@ Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)
 
 **Aktuelle Version:** `2.1.7` — Installer-Hotfix: bestehende Provider/Modelle werden per User-Entscheidung übernommen oder neu konfiguriert; Fresh-Install unterstützt nicht-OpenAI/Kimi-Setups.
 
+**Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
+
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
 ---
@@ -170,9 +172,9 @@ Der Fast-Path ist **OpenClaw-Versions-unabhängig**: das Script erkennt den aktu
 
 ## Voraussetzungen
 
-- [OpenClaw](https://github.com/openclaw) Gateway ≥ 2026.4.5 (für natives Dreaming)
+- [OpenClaw](https://github.com/openclaw) Gateway ≥ 2026.4.29
 - Node.js ≥ 18
-- OpenAI API Key (für Embeddings: `text-embedding-3-large` oder `text-embedding-3-small`)
+- Embedding API Key (OpenAI-kompatibel oder OpenRouter; Modell und Dimension werden im Installer abgefragt)
 - Cohere API Key (optional, für Reranking)
 - LLM-API (optional, für Merging + Summarization + KNOWLEDGE.md — kompatibel mit kimi-for-coding, GPT-4, Claude, etc.)
 
@@ -252,6 +254,8 @@ Built and battle-tested in production across 38 agents over several months.
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
 **Current version:** `2.1.7` — installer hotfix: existing providers/models are preserved or reconfigured by explicit user choice; fresh installs support non-OpenAI/Kimi setups.
+
+**Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
@@ -402,9 +406,9 @@ The fast-path is **OpenClaw version-independent**: the script auto-detects the c
 
 ## Requirements
 
-- [OpenClaw](https://github.com/openclaw) Gateway ≥ 2026.4.5 (for native dreaming)
+- [OpenClaw](https://github.com/openclaw) Gateway ≥ 2026.4.29
 - Node.js ≥ 18
-- OpenAI API key (for embeddings: `text-embedding-3-large` or `text-embedding-3-small`)
+- Embedding API key (OpenAI-compatible or OpenRouter; model and dimensions are selected in the installer)
 - Cohere API key (optional, for reranking)
 - Any LLM API (optional, for merging + summarization + KNOWLEDGE.md — compatible with kimi-for-coding, GPT-4, Claude, etc.)
 
