@@ -1,3 +1,16 @@
+## [2.1.19] - 2026-05-01
+
+### Fixed
+- Fixed Kimi-Coding compatibility for OpenClaw 2026.4.29 configs that mix protocol and Base URL: `anthropic-messages` is kept on `https://api.kimi.com/coding/`, while `openai-completions` is kept on `https://api.kimi.com/coding/v1`.
+- Made the 4.29 Kimi thinking guard detect object-form agent models (`{ primary, fallbacks }`) so safe agent-level fallback chains are no longer missed.
+- Documented the Kimi-Coding protocol/BaseURL invariant and the reason Fallbacks must use object-form agent models instead of string overrides.
+
+## [2.1.18] - 2026-05-01
+
+### Fixed
+- Restored Telegram group-chat automatic delivery: `messages.groupChat.visibleReplies` is now kept at `automatic` so group final replies and reasoning stream callbacks are not left private behind `message_tool_only`.
+- Updated `update-openclaw.sh` and the plur1bus user hotfix so future OpenClaw restarts/updates do not revert group chats to message-tool-only delivery.
+
 ## [2.1.17] - 2026-05-01
 
 ### Fixed

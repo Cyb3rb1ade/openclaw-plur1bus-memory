@@ -94,8 +94,8 @@ changed = False
 if messages.get("visibleReplies") != "automatic":
     messages["visibleReplies"] = "automatic"
     changed = True
-if group_chat.get("visibleReplies") != "message_tool":
-    group_chat["visibleReplies"] = "message_tool"
+if group_chat.get("visibleReplies") != "automatic":
+    group_chat["visibleReplies"] = "automatic"
     changed = True
 
 if changed:
@@ -104,9 +104,60 @@ if changed:
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
         f.write("\n")
-    print("[patch] telegram reply visibility policy: applied (direct=automatic, group=message_tool)")
+    print("[patch] telegram reply visibility policy: applied (direct=automatic, group=automatic)")
 else:
     print("[patch] telegram reply visibility policy: already configured")
+PYEOF
+}
+
+patch_kimi_coding_provider_config() {
+  python3 - "$CONFIG_FILE" "$STAMP" <<'PYEOF'
+import json
+import os
+import shutil
+import sys
+
+config_file = sys.argv[1]
+stamp = sys.argv[2]
+
+if not os.path.exists(config_file):
+    print(f"[patch] kimi-coding provider config: config not found ({config_file}), skipping")
+    raise SystemExit(0)
+
+with open(config_file, "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+
+providers = cfg.get("models", {}).get("providers", {})
+provider = providers.get("kimi-coding")
+if not isinstance(provider, dict):
+    print("[patch] kimi-coding provider config: provider not configured, skipping")
+    raise SystemExit(0)
+
+api = provider.get("api")
+base_url = provider.get("baseUrl")
+target_base_url = None
+if api == "anthropic-messages" and isinstance(base_url, str) and base_url.rstrip("/") == "https://api.kimi.com/coding/v1":
+    target_base_url = "https://api.kimi.com/coding/"
+elif api == "openai-completions" and isinstance(base_url, str) and base_url.rstrip("/") == "https://api.kimi.com/coding":
+    target_base_url = "https://api.kimi.com/coding/v1"
+
+headers = provider.setdefault("headers", {})
+needs_header = not isinstance(headers.get("User-Agent"), str) or not headers.get("User-Agent").strip()
+
+if not target_base_url and not needs_header:
+    print("[patch] kimi-coding provider config: already consistent")
+    raise SystemExit(0)
+
+backup = f"{config_file}.bak-plur1bus-kimi-provider-{stamp}"
+shutil.copy2(config_file, backup)
+if target_base_url:
+    provider["baseUrl"] = target_base_url
+if needs_header:
+    headers["User-Agent"] = "claude-code/0.1.0"
+with open(config_file, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print("[patch] kimi-coding provider config: applied (protocol/baseUrl pair consistent)")
 PYEOF
 }
 
@@ -130,11 +181,22 @@ with open(config_file, "r", encoding="utf-8") as f:
 agents = cfg.setdefault("agents", {})
 defaults = agents.setdefault("defaults", {})
 primary = (defaults.get("model") or {}).get("primary") if isinstance(defaults.get("model"), dict) else None
-agent_models = [
-    str(agent.get("model") or "")
-    for agent in agents.get("list", [])
-    if isinstance(agent, dict)
-]
+def model_refs(raw):
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, dict):
+        refs = []
+        if isinstance(raw.get("primary"), str):
+            refs.append(raw["primary"])
+        if isinstance(raw.get("fallbacks"), list):
+            refs.extend([x for x in raw["fallbacks"] if isinstance(x, str)])
+        return refs
+    return []
+
+agent_models = []
+for agent in agents.get("list", []):
+    if isinstance(agent, dict):
+        agent_models.extend(model_refs(agent.get("model")))
 uses_kimi_coding = str(primary or "").startswith("kimi-coding/") or any(model.startswith("kimi-coding/") for model in agent_models)
 
 if not uses_kimi_coding:
@@ -280,7 +342,8 @@ for stream_path in sorted(glob.glob(os.path.join(dist, "stream-*.js"))):
     new = '''function createKimiThinkingWrapper(baseStreamFn, thinkingType) {
 \tconst underlying = baseStreamFn ?? streamSimple;
 \treturn (model, context, options) => streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-\t\tconst _kc = typeof model?.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding";
+\t\tconst _kcp = typeof model?.provider === "string" ? model.provider.trim().toLowerCase() : "";
+\t\tconst _kc = _kcp === "kimi-coding" || _kcp === "kimi" || _kcp === "kimi-code";
 \t\tpayloadObj.thinking = _kc && thinkingType === "enabled" ? { type: thinkingType, budget_tokens: 16384 } : { type: thinkingType };
 \t\tif (_kc) {
 \t\t\tpayloadObj.temperature = thinkingType === "disabled" ? 0.6 : 1.0;
@@ -294,14 +357,21 @@ for stream_path in sorted(glob.glob(os.path.join(dist, "stream-*.js"))):
     legacy = '''\t\tconst _kc = typeof model?.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding";
 \t\tpayloadObj.thinking = _kc ? { type: thinkingType, budget_tokens: 16384 } : { type: thinkingType };
 \t\tif (_kc) payloadObj.temperature = 1.0;'''
-    fixed_legacy = '''\t\tconst _kc = typeof model?.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding";
+    fixed_legacy = '''\t\tconst _kcp = typeof model?.provider === "string" ? model.provider.trim().toLowerCase() : "";
+\t\tconst _kc = _kcp === "kimi-coding" || _kcp === "kimi" || _kcp === "kimi-code";
 \t\tpayloadObj.thinking = _kc && thinkingType === "enabled" ? { type: thinkingType, budget_tokens: 16384 } : { type: thinkingType };
 \t\tif (_kc) {
 \t\t\tpayloadObj.temperature = thinkingType === "disabled" ? 0.6 : 1.0;
 \t\t\tpayloadObj.top_p = 0.95;
 \t\t} /* kimi-coding fixed-temp thinking payload */'''
     if marker in code:
-        print(f"[patch] kimi provider thinking payload: already patched ({os.path.basename(stream_path)})")
+        alias_old = 'const _kc = typeof model?.provider === "string" && model.provider.trim().toLowerCase() === "kimi-coding";'
+        alias_new = 'const _kcp = typeof model?.provider === "string" ? model.provider.trim().toLowerCase() : "";\\n\\t\\tconst _kc = _kcp === "kimi-coding" || _kcp === "kimi" || _kcp === "kimi-code";'
+        if alias_old in code:
+            write(stream_path, code.replace(alias_old, alias_new, 1))
+            print(f"[patch] kimi provider thinking payload: upgraded provider aliases ({os.path.basename(stream_path)})")
+        else:
+            print(f"[patch] kimi provider thinking payload: already patched ({os.path.basename(stream_path)})")
         break
     if legacy in code:
         write(stream_path, code.replace(legacy, fixed_legacy, 1))
@@ -1110,6 +1180,7 @@ PYEOF
 
 patch_silent_reply_config || rc=1
 patch_reply_visibility_config || rc=1
+patch_kimi_coding_provider_config || rc=1
 patch_kimi_coding_thinking_default || rc=1
 patch_stale_task_zombies || rc=1
 patch_openclaw_20260429_latency || rc=1

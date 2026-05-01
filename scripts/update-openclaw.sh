@@ -1301,35 +1301,99 @@ with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.writ
     fi
 fi
 
-if [[ "$GROUP_VISIBLE_REPLIES" == "message_tool" ]]; then
-    ok "messages.groupChat.visibleReplies = message_tool"
+if [[ "$GROUP_VISIBLE_REPLIES" == "automatic" ]]; then
+    ok "messages.groupChat.visibleReplies = automatic (Gruppen liefern finale Replies und Reasoning-Stream sichtbar aus)"
 else
-    warn "messages.groupChat.visibleReplies = ${GROUP_VISIBLE_REPLIES} (empfohlen: message_tool für sichtbare Gruppen-Replies via message(action=send))"
+    warn "messages.groupChat.visibleReplies = ${GROUP_VISIBLE_REPLIES} (erwartet: automatic, sonst bleiben Gruppen-Finalantworten privat/message_tool-only)"
     if [[ "$CHECK_ONLY" != "1" ]]; then
         python3 -c "
 import json
 path = '$OPENCLAW_JSON'
 with open(path) as f: d = json.load(f)
-d.setdefault('messages', {}).setdefault('groupChat', {})['visibleReplies'] = 'message_tool'
+d.setdefault('messages', {}).setdefault('groupChat', {})['visibleReplies'] = 'automatic'
 with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
 "
-        ok "  → messages.groupChat.visibleReplies auf message_tool gesetzt"
+        ok "  → messages.groupChat.visibleReplies auf automatic gesetzt"
     fi
 fi
 
-# ─── 4.29 KIMI-CODING THINKING GUARD ──────────────────────────────────────────
-header "4.29 KIMI-CODING THINKING GUARD"
+	# ─── 4.29 KIMI-CODING THINKING GUARD ──────────────────────────────────────────
+	header "4.29 KIMI-CODING THINKING GUARD"
 
-KIMI_CODING_CONFIGURED=$(python3 -c "
-import json
-with open('$OPENCLAW_JSON') as f:
-    d = json.load(f)
-agents = d.get('agents', {})
-defaults = agents.get('defaults', {})
-primary = defaults.get('model', {}).get('primary') if isinstance(defaults.get('model'), dict) else None
-models = [str(a.get('model') or '') for a in agents.get('list', []) if isinstance(a, dict)]
-print('yes' if str(primary or '').startswith('kimi-coding/') or any(m.startswith('kimi-coding/') for m in models) else 'no')
-" 2>/dev/null || echo "error")
+	KIMI_PROVIDER_STATUS=$(python3 -c "
+	import json
+	with open('$OPENCLAW_JSON') as f:
+	    d = json.load(f)
+	provider = d.get('models', {}).get('providers', {}).get('kimi-coding')
+	if not isinstance(provider, dict):
+	    print('missing')
+	else:
+	    api = provider.get('api')
+	    base = str(provider.get('baseUrl') or '').rstrip('/')
+	    if api == 'anthropic-messages' and base == 'https://api.kimi.com/coding/v1':
+	        print('fix-anthropic-base')
+	    elif api == 'openai-completions' and base == 'https://api.kimi.com/coding':
+	        print('fix-openai-base')
+	    else:
+	        print('ok')
+	" 2>/dev/null || echo "error")
+
+	if [[ "$KIMI_PROVIDER_STATUS" == "fix-anthropic-base" ]]; then
+	    warn "kimi-coding Provider mischt anthropic-messages mit /coding/v1 (falsches Protokoll/BaseURL-Paar)"
+	    if [[ "$CHECK_ONLY" != "1" ]]; then
+	        python3 -c "
+	import json
+	path = '$OPENCLAW_JSON'
+	with open(path) as f: d = json.load(f)
+	p = d.setdefault('models', {}).setdefault('providers', {}).setdefault('kimi-coding', {})
+	p['baseUrl'] = 'https://api.kimi.com/coding/'
+	p['headers'] = {**(p.get('headers') or {}), 'User-Agent': (p.get('headers') or {}).get('User-Agent') or 'claude-code/0.1.0'}
+	with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
+	"
+	        ok "  → kimi-coding anthropic baseUrl auf https://api.kimi.com/coding/ gesetzt"
+	    fi
+	elif [[ "$KIMI_PROVIDER_STATUS" == "fix-openai-base" ]]; then
+	    warn "kimi-coding Provider mischt openai-completions mit /coding (falsches Protokoll/BaseURL-Paar)"
+	    if [[ "$CHECK_ONLY" != "1" ]]; then
+	        python3 -c "
+	import json
+	path = '$OPENCLAW_JSON'
+	with open(path) as f: d = json.load(f)
+	p = d.setdefault('models', {}).setdefault('providers', {}).setdefault('kimi-coding', {})
+	p['baseUrl'] = 'https://api.kimi.com/coding/v1'
+	p['headers'] = {**(p.get('headers') or {}), 'User-Agent': (p.get('headers') or {}).get('User-Agent') or 'claude-code/0.1.0'}
+	with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
+	"
+	        ok "  → kimi-coding openai baseUrl auf https://api.kimi.com/coding/v1 gesetzt"
+	    fi
+	elif [[ "$KIMI_PROVIDER_STATUS" == "ok" ]]; then
+	    ok "kimi-coding Provider-Protokoll/BaseURL ist konsistent"
+	fi
+
+	KIMI_CODING_CONFIGURED=$(python3 -c "
+	import json
+	with open('$OPENCLAW_JSON') as f:
+	    d = json.load(f)
+	agents = d.get('agents', {})
+	defaults = agents.get('defaults', {})
+	primary = defaults.get('model', {}).get('primary') if isinstance(defaults.get('model'), dict) else None
+	def refs(raw):
+	    if isinstance(raw, str):
+	        return [raw]
+	    if isinstance(raw, dict):
+	        out = []
+	        if isinstance(raw.get('primary'), str):
+	            out.append(raw.get('primary'))
+	        if isinstance(raw.get('fallbacks'), list):
+	            out.extend([x for x in raw.get('fallbacks') if isinstance(x, str)])
+	        return out
+	    return []
+	models = []
+	for a in agents.get('list', []):
+	    if isinstance(a, dict):
+	        models.extend(refs(a.get('model')))
+	print('yes' if str(primary or '').startswith('kimi-coding/') or any(m.startswith('kimi-coding/') for m in models) else 'no')
+	" 2>/dev/null || echo "error")
 
 THINKING_DEFAULT=$(python3 -c "
 import json
