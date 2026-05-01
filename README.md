@@ -11,11 +11,11 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.11` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung.
+**Aktuelle Version:** `2.1.12` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
-**OpenClaw-2026.4.29-Hotfix:** `patches/apply-plur1bus-user-hotfix.sh` hält plur1bus/ActiveMemory aktiv und reduziert Prompt-Build-Latenz durch frühes `toolsAllow`, Plugin-Registry-Reuse, Plugin-Descriptor-Caching und lazy Media-/Web-Tool-Deskriptoren.
+**OpenClaw-2026.4.29-Hotfix:** `patches/apply-plur1bus-user-hotfix.sh` hält plur1bus/ActiveMemory aktiv und reduziert Prompt-Build-Latenz durch frühes `toolsAllow`, Plugin-Registry-Reuse, Plugin-Descriptor-Caching, lazy Media-/Web-Tool-Deskriptoren, eine isolierte ActiveMemory-Command-Lane und echte Silent-Replies in Direct-Chats.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -257,11 +257,11 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.11` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice.
+**Current version:** `2.1.12` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
-**OpenClaw 2026.4.29 hotfix:** `patches/apply-plur1bus-user-hotfix.sh` keeps plur1bus/ActiveMemory enabled and reduces prompt-build latency through early `toolsAllow`, plugin-registry reuse, plugin-descriptor caching, and lazy media/web tool descriptors.
+**OpenClaw 2026.4.29 hotfix:** `patches/apply-plur1bus-user-hotfix.sh` keeps plur1bus/ActiveMemory enabled and reduces prompt-build latency through early `toolsAllow`, plugin-registry reuse, plugin-descriptor caching, lazy media/web tool descriptors, an isolated ActiveMemory command lane, and real silent replies in direct chats.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable

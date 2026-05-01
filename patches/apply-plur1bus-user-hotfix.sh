@@ -14,8 +14,53 @@
 set -u
 
 DIST_DIR="${OPENCLAW_DIST_DIR:-/usr/lib/node_modules/openclaw/dist}"
+STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+CONFIG_FILE="${OPENCLAW_CONFIG_FILE:-$STATE_DIR/openclaw.json}"
 STAMP="$(date +%Y%m%d%H%M%S)"
 rc=0
+
+patch_silent_reply_config() {
+  python3 - "$CONFIG_FILE" "$STAMP" <<'PYEOF'
+import json
+import os
+import shutil
+import sys
+
+config_file = sys.argv[1]
+stamp = sys.argv[2]
+
+if not os.path.exists(config_file):
+    print(f"[patch] silent-reply direct policy: config not found ({config_file}), skipping")
+    raise SystemExit(0)
+
+with open(config_file, "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+
+agents = cfg.setdefault("agents", {})
+defaults = agents.setdefault("defaults", {})
+silent = defaults.setdefault("silentReply", {})
+rewrite = defaults.setdefault("silentReplyRewrite", {})
+
+changed = False
+for key in ("direct", "group", "internal"):
+    if silent.get(key) != "allow":
+        silent[key] = "allow"
+        changed = True
+    if rewrite.get(key) is not False:
+        rewrite[key] = False
+        changed = True
+
+if changed:
+    backup = f"{config_file}.bak-plur1bus-silent-reply-{stamp}"
+    shutil.copy2(config_file, backup)
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    print("[patch] silent-reply direct policy: applied (NO_REPLY stays silent in direct chats)")
+else:
+    print("[patch] silent-reply direct policy: already configured")
+PYEOF
+}
 
 patch_openclaw_20260429_latency() {
   python3 - "$DIST_DIR" "$STAMP" <<'PYEOF'
@@ -535,6 +580,16 @@ if os.path.exists(active_memory):
         print(f"[patch] active-memory before_prompt_build budget: tightened to 3000ms ({os.path.basename(active_memory)})")
     replace_once(
         active_memory,
+        "plur1bus-openclaw-20260429-active-memory-lane",
+        "\t\t\t\tagentId: params.agentId,\n"
+        "\t\t\t\tmessageChannel,",
+        "\t\t\t\tagentId: params.agentId,\n"
+        "\t\t\t\tlane: \"active-memory\", /* plur1bus-openclaw-20260429-active-memory-lane */\n"
+        "\t\t\t\tmessageChannel,",
+        "active-memory isolated command lane",
+    )
+    replace_once(
+        active_memory,
         "config: { ...config, timeoutMs: beforePromptBuildTimeoutMs }",
         "\t\t\t\tconst result = await maybeResolveActiveRecall({\n"
         "\t\t\t\t\tapi,\n"
@@ -592,6 +647,7 @@ for path in sorted(backed):
 PYEOF
 }
 
+patch_silent_reply_config || rc=1
 patch_openclaw_20260429_latency || rc=1
 
 exit "$rc"

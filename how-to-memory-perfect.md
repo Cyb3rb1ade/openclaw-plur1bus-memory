@@ -1618,7 +1618,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag v2.1.11
+git tag v2.1.12
 ```
 
 ### Teilen / Veröffentlichen
@@ -1657,7 +1657,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.11`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.12`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, Direct-`NO_REPLY` bleibt silent.
 
 ### Was passiert beim Dreaming?
 
@@ -1948,7 +1948,7 @@ journalctl --user -u openclaw-gateway --no-pager | grep "cohere.*rerank\|rerank.
 
 **Status:** No-op auf aktuellen Builds.
 
-Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber den plur1bus-Pluginpfad umgehen. Seit `2.1.11` bleibt ActiveMemory auf dem normalen Toolpfad und wird stattdessen über Patch #19 beschleunigt.
+Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber den plur1bus-Pluginpfad umgehen. Seit `2.1.12` bleibt ActiveMemory auf dem normalen Toolpfad und wird stattdessen über Patch #19 beschleunigt.
 
 ## Patch #19 — plur1bus User Hotfix für OpenClaw 2026.4.29
 
@@ -1956,7 +1956,7 @@ Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber d
 
 **Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. ActiveMemory nutzt für `main`, `bernhardine` und `heisenberg` einen Embedded-Recall mit nur drei Memory-Tools, zahlt aber trotzdem die volle Tool-Factory-Latenz. Zusätzlich blockiert der Hook bis zu `timeoutMs + setupGraceTimeoutMs`. Auf einigen Konfigurationen initialisieren außerdem eingebaute Media-/Web-Tools ihre Provider schon beim Prompt-Build.
 
-**Fix:** Embedded-Runs verwenden im Gateway-Prozess die bereits aktive Plugin-Registry, statt pro Agent die Runtime-Registry neu zu laden. Zusätzlich wird `toolsAllow` vor `createOpenClawTools()` und vor Plugin-Factory-Aufrufen angewendet. Für volle Embedded-Runs cached der Patch Plugin-Tool-Deskriptoren und ruft teure Factories erst beim tatsächlichen Tool-Call erneut auf. Eingebaute schwere Tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) bleiben sichtbar, werden aber lazy initialisiert. ActiveMemory bleibt eingeschaltet, aber das Hook-Budget wird begrenzt; `boot-md` startet non-blocking; der versteckte Pre-Compaction-Flush nutzt keinen leeren User-Prompt mehr.
+**Fix:** Embedded-Runs verwenden im Gateway-Prozess die bereits aktive Plugin-Registry, statt pro Agent die Runtime-Registry neu zu laden. Zusätzlich wird `toolsAllow` vor `createOpenClawTools()` und vor Plugin-Factory-Aufrufen angewendet. Für volle Embedded-Runs cached der Patch Plugin-Tool-Deskriptoren und ruft teure Factories erst beim tatsächlichen Tool-Call erneut auf. Eingebaute schwere Tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) bleiben sichtbar, werden aber lazy initialisiert. ActiveMemory bleibt eingeschaltet, aber das Hook-Budget wird begrenzt und der Embedded-Recall nutzt eine isolierte `active-memory`-Command-Lane statt `main`; `boot-md` startet non-blocking; Direct-`NO_REPLY` wird wirklich übersprungen statt als Fülltext ausgeliefert; der versteckte Pre-Compaction-Flush nutzt keinen leeren User-Prompt mehr.
 
 **Verifikation:**
 
