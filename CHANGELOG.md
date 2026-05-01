@@ -1,3 +1,9 @@
+## [2.1.15] - 2026-05-01
+
+### Fixed
+- Added subagent lane isolation and completion announce backpressure for OpenClaw 2026.4.29: native subagent dispatch/steer/send calls now use per-child lanes instead of the global `subagent` lane, internal/session-only completion announcements no longer wait for a full final agent response, and the default announce timeout is capped at 30s. External delivery still waits for a visible result and keeps its fallback path.
+- Updated README, plugin README and long-form memory docs for the 2.1.15 lane/announce-backpressure hotfix before publishing the next GitHub tag.
+
 ## [2.1.14] - 2026-05-01
 
 ### Fixed

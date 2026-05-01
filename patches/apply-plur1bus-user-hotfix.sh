@@ -10,6 +10,8 @@
 # - openclaw/openclaw#75305 class: avoid empty hidden memory-flush transcript prompt.
 # - OpenClaw 2026.4.29 lane regression: isolate normal embedded agent runs by
 #   session so Bernhardine/Heisenberg heartbeat work cannot block Bernd/main.
+# - OpenClaw 2026.4.29 subagent lane regression: route native subagent
+#   dispatch/steer/send work to per-child lanes instead of the global subagent lane.
 # - OpenClaw 2026.4.29 startup/interval regression: keep broad heartbeat
 #   sweeps from monopolizing the Gateway; targeted heartbeats and due intervals stay enabled.
 # - Task registry compatibility: reconcile stale running task zombies before
@@ -661,6 +663,135 @@ if os.path.exists(active_memory):
     )
 else:
     print("[patch] active-memory: target not found, skipping")
+
+subagent_announce = find_one(
+    "subagent-announce-delivery-*.js",
+    lambda c: "DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS" in c and "completion direct announce agent call" in c,
+    "subagent completion announce backpressure",
+    required=False,
+)
+if subagent_announce:
+    replace_once(
+        subagent_announce,
+        "plur1bus-openclaw-20260429-subagent-announce-timeout-cap",
+        "const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 12e4;",
+        "const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 3e4; /* plur1bus-openclaw-20260429-subagent-announce-timeout-cap */",
+        "subagent announce timeout cap",
+    )
+    replace_once(
+        subagent_announce,
+        "plur1bus-openclaw-20260429-session-only-announce-short-wait",
+        "\t\tlet directAnnounceResponse;\n"
+        "\t\ttry {",
+        "\t\tconst directAnnounceTimeoutMs = params.expectsCompletionMessage && !deliveryTarget.deliver ? Math.min(announceTimeoutMs, 15000) : announceTimeoutMs; /* plur1bus-openclaw-20260429-session-only-announce-short-wait */\n"
+        "\t\tlet directAnnounceResponse;\n"
+        "\t\ttry {",
+        "subagent session-only completion announce short wait",
+    )
+    replace_once(
+        subagent_announce,
+        "plur1bus-openclaw-20260429-session-only-announce-no-final-wait",
+        "\t\t\t\t\texpectFinal: true,\n"
+        "\t\t\t\t\ttimeoutMs: announceTimeoutMs\n",
+        "\t\t\t\t\texpectFinal: deliveryTarget.deliver ? true : false, /* plur1bus-openclaw-20260429-session-only-announce-no-final-wait */\n"
+        "\t\t\t\t\ttimeoutMs: directAnnounceTimeoutMs\n",
+        "subagent session-only completion announce no final wait",
+    )
+else:
+    print("[patch] subagent completion announce backpressure: target not found, skipping")
+
+subagent_spawn = find_one(
+    "subagent-spawn-*.js",
+    lambda c: (
+        ("lane: AGENT_LANE_SUBAGENT" in c and "childSessionKey" in c)
+        or "plur1bus-openclaw-20260429-native-subagent-session-lane" in c
+    ),
+    "subagent per-child dispatch lane",
+    required=False,
+)
+if subagent_spawn:
+    replace_once(
+        subagent_spawn,
+        "plur1bus-openclaw-20260429-subagent-child-lane-import",
+        'import { t as AGENT_LANE_SUBAGENT } from "./lanes-B35PnfP1.js";',
+        'import { i as resolveNestedAgentLaneForSession, t as AGENT_LANE_SUBAGENT } from "./lanes-B35PnfP1.js"; /* plur1bus-openclaw-20260429-subagent-child-lane-import */',
+        "subagent per-child dispatch lane import",
+    )
+    replace_once(
+        subagent_spawn,
+        "plur1bus-openclaw-20260429-native-subagent-session-lane",
+        "\t\t\t\tlane: AGENT_LANE_SUBAGENT,",
+        "\t\t\t\tlane: resolveNestedAgentLaneForSession(childSessionKey), /* plur1bus-openclaw-20260429-native-subagent-session-lane */",
+        "subagent per-child dispatch lane",
+    )
+else:
+    print("[patch] subagent per-child dispatch lane: target not found, skipping")
+
+acp_spawn = find_one(
+    "acp-spawn-*.js",
+    lambda c: (
+        ("lane: AGENT_LANE_SUBAGENT" in c and "sessionKey" in c)
+        or "plur1bus-openclaw-20260429-acp-session-lane" in c
+    ),
+    "ACP per-child dispatch lane",
+    required=False,
+)
+if acp_spawn:
+    replace_once(
+        acp_spawn,
+        "plur1bus-openclaw-20260429-acp-child-lane-import",
+        'import { t as AGENT_LANE_SUBAGENT } from "./lanes-B35PnfP1.js";',
+        'import { i as resolveNestedAgentLaneForSession, t as AGENT_LANE_SUBAGENT } from "./lanes-B35PnfP1.js"; /* plur1bus-openclaw-20260429-acp-child-lane-import */',
+        "ACP per-child dispatch lane import",
+    )
+    replace_once(
+        acp_spawn,
+        "plur1bus-openclaw-20260429-acp-session-lane",
+        "\t\t\t\tlane: AGENT_LANE_SUBAGENT,",
+        "\t\t\t\tlane: resolveNestedAgentLaneForSession(sessionKey), /* plur1bus-openclaw-20260429-acp-session-lane */",
+        "ACP per-child dispatch lane",
+    )
+else:
+    print("[patch] ACP per-child dispatch lane: target not found, skipping")
+
+subagent_control = find_one(
+    "subagent-control-*.js",
+    lambda c: (
+        ("lane: AGENT_LANE_SUBAGENT" in c and "targetSessionKey" in c)
+        or "plur1bus-openclaw-20260429-subagent-steer-child-lane" in c
+        or "plur1bus-openclaw-20260429-subagent-send-child-lane" in c
+    ),
+    "subagent control per-child lane",
+    required=False,
+)
+if subagent_control:
+    replace_once(
+        subagent_control,
+        "plur1bus-openclaw-20260429-subagent-control-child-lane-import",
+        'import { t as AGENT_LANE_SUBAGENT } from "./lanes-B35PnfP1.js";',
+        'import { i as resolveNestedAgentLaneForSession, t as AGENT_LANE_SUBAGENT } from "./lanes-B35PnfP1.js"; /* plur1bus-openclaw-20260429-subagent-control-child-lane-import */',
+        "subagent control per-child lane import",
+    )
+    replace_once(
+        subagent_control,
+        "plur1bus-openclaw-20260429-subagent-steer-child-lane",
+        "\t\t\t\tlane: AGENT_LANE_SUBAGENT,\n"
+        "\t\t\t\ttimeout: 0",
+        "\t\t\t\tlane: resolveNestedAgentLaneForSession(params.entry.childSessionKey), /* plur1bus-openclaw-20260429-subagent-steer-child-lane */\n"
+        "\t\t\t\ttimeout: 0",
+        "subagent steer per-child lane",
+    )
+    replace_once(
+        subagent_control,
+        "plur1bus-openclaw-20260429-subagent-send-child-lane",
+        "\t\t\t\tlane: AGENT_LANE_SUBAGENT,\n"
+        "\t\t\t\ttimeout: 0",
+        "\t\t\t\tlane: resolveNestedAgentLaneForSession(targetSessionKey), /* plur1bus-openclaw-20260429-subagent-send-child-lane */\n"
+        "\t\t\t\ttimeout: 0",
+        "subagent send per-child lane",
+    )
+else:
+    print("[patch] subagent control per-child lane: target not found, skipping")
 
 pi_embedded = find_one(
     "pi-embedded-*.js",

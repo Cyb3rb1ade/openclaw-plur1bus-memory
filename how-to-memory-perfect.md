@@ -1618,7 +1618,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag v2.1.12
+git tag v2.1.15
 ```
 
 ### Teilen / Veröffentlichen
@@ -1657,7 +1657,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.12`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, Direct-`NO_REPLY` bleibt silent.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.15`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt nur noch schema-konforme Werte (`messages.visibleReplies = "message_tool"`, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, normale Embedded-Agent-Runs auf session-isolierten Lanes, native Subagent-Dispatch-/Steer-/Send-Runs auf per-child Lanes statt global `subagent`. Startup-/Interval-/Commitment-Heartbeats haben eine Startup-Grace und Backpressure, damit Bernd/main nicht durch Bernhardine-/Heisenberg-Heartbeat-Arbeit blockiert wird. Subagent-Completion-Announcements warten bei internen/session-only Zielen nicht mehr auf einen vollständigen Final-Agent-Run. Direct-`NO_REPLY` bleibt silent.
 
 ### Was passiert beim Dreaming?
 
@@ -1956,7 +1956,7 @@ Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber d
 
 **Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. ActiveMemory nutzt für `main`, `bernhardine` und `heisenberg` einen Embedded-Recall mit nur drei Memory-Tools, zahlt aber trotzdem die volle Tool-Factory-Latenz. Zusätzlich blockiert der Hook bis zu `timeoutMs + setupGraceTimeoutMs`. Auf einigen Konfigurationen initialisieren außerdem eingebaute Media-/Web-Tools ihre Provider schon beim Prompt-Build.
 
-**Fix:** Embedded-Runs verwenden im Gateway-Prozess die bereits aktive Plugin-Registry, statt pro Agent die Runtime-Registry neu zu laden. Zusätzlich wird `toolsAllow` vor `createOpenClawTools()` und vor Plugin-Factory-Aufrufen angewendet. Für volle Embedded-Runs cached der Patch Plugin-Tool-Deskriptoren und ruft teure Factories erst beim tatsächlichen Tool-Call erneut auf. Eingebaute schwere Tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) bleiben sichtbar, werden aber lazy initialisiert. ActiveMemory bleibt eingeschaltet, aber das Hook-Budget wird begrenzt und der Embedded-Recall nutzt eine isolierte `active-memory`-Command-Lane statt `main`; `boot-md` startet non-blocking; Direct-`NO_REPLY` wird wirklich übersprungen statt als Fülltext ausgeliefert; der versteckte Pre-Compaction-Flush nutzt keinen leeren User-Prompt mehr.
+**Fix:** Embedded-Runs verwenden im Gateway-Prozess die bereits aktive Plugin-Registry, statt pro Agent die Runtime-Registry neu zu laden. Zusätzlich wird `toolsAllow` vor `createOpenClawTools()` und vor Plugin-Factory-Aufrufen angewendet. Für volle Embedded-Runs cached der Patch Plugin-Tool-Deskriptoren und ruft teure Factories erst beim tatsächlichen Tool-Call erneut auf. Eingebaute schwere Tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) bleiben sichtbar, werden aber lazy initialisiert. ActiveMemory bleibt eingeschaltet, aber das Hook-Budget wird begrenzt und der Embedded-Recall nutzt eine isolierte `active-memory`-Command-Lane statt `main`; normale Embedded-Agent-Runs nutzen session-isolierte Lanes (`agent:<sessionKey>`). Native Subagent-Spawns, ACP-Spawns sowie Subagent-Steer/Send nutzen per-child Lanes (`nested:<childSessionKey>`) statt der globalen `subagent`-Lane. Startup-/Interval-/Commitment-Heartbeats bekommen Startup-Grace und Backpressure, sodass breite Heartbeat-Sweeps nur gestaffelt laufen und Bernd/main nicht blockieren. Subagent-Completion-Announcements bekommen ein 30s Default-Timeout; interne/session-only Announcements warten nicht mehr auf ein finales Agent-Result, externe Zustellung behält aber Final-Wait und Fallback. `boot-md` startet non-blocking; Direct-`NO_REPLY` wird wirklich übersprungen statt als Fülltext ausgeliefert; der versteckte Pre-Compaction-Flush nutzt keinen leeren User-Prompt mehr.
 
 **Verifikation:**
 
@@ -1965,9 +1965,10 @@ bash patches/apply-plur1bus-user-hotfix.sh
 node --check /usr/lib/node_modules/openclaw/dist/selection-*.js
 node --check /usr/lib/node_modules/openclaw/dist/pi-tools-*.js
 journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*before_prompt_build.*timed out"
+openclaw status
 ```
 
-**Erwartung:** Keine `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für `main`, `bernhardine` und `heisenberg` aktiv.
+**Erwartung:** Keine `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für `main`, `bernhardine` und `heisenberg` aktiv. `openclaw status` sollte nach Gateway-Ready in deutlich unter einer Sekunde antworten, auch wenn Heartbeats fällig sind.
 
 ---
 
