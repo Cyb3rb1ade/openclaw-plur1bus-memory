@@ -10,8 +10,8 @@
 # - openclaw/openclaw#75305 class: avoid empty hidden memory-flush transcript prompt.
 # - OpenClaw 2026.4.29 lane regression: isolate normal embedded agent runs by
 #   session so Bernhardine/Heisenberg heartbeat work cannot block Bernd/main.
-# - OpenClaw 2026.4.29 startup regression: keep startup heartbeat from waking
-#   every configured agent immediately; targeted heartbeats and due intervals stay enabled.
+# - OpenClaw 2026.4.29 startup/interval regression: keep broad heartbeat
+#   sweeps from monopolizing the Gateway; targeted heartbeats and due intervals stay enabled.
 # - Task registry compatibility: reconcile stale running task zombies before
 #   they can spawn CPU-bound recovery children.
 # - Kimi coding params: keep user-facing sessions on thinking, but make
@@ -710,6 +710,140 @@ if heartbeat_runner:
         '\t\tconst isInterval = reason === "interval" || reason === "startup"; /* plur1bus-openclaw-20260429-no-startup-heartbeat-storm */',
         "heartbeat startup due schedule",
     )
+    replace_once(
+        heartbeat_runner,
+        "plur1bus-openclaw-20260429-heartbeat-startup-grace",
+        "\t\t\tconst nextDueMs = resolveNextDue(now, intervalMs, phaseMs, prevAgents.get(agent.agentId));\n",
+        "\t\t\tconst resolvedNextDueMs = resolveNextDue(now, intervalMs, phaseMs, prevAgents.get(agent.agentId));\n"
+        "\t\t\tconst nextDueMs = !initialized ? Math.max(resolvedNextDueMs, now + Math.min(intervalMs, 120000)) : resolvedNextDueMs; /* plur1bus-openclaw-20260429-heartbeat-startup-grace */\n",
+        "heartbeat startup grace",
+    )
+    heartbeat_code = read(heartbeat_runner)
+    defer_marker = "plur1bus-openclaw-20260429-heartbeat-defer-overdue-after-broad-run"
+    one_run_marker = "plur1bus-openclaw-20260429-heartbeat-one-run-per-tick"
+    one_run_line = "\t\t\t\tif ((reason === \"interval\" || reason === \"startup\") && ran) break; /* plur1bus-openclaw-20260429-heartbeat-one-run-per-tick */\n"
+    if defer_marker not in heartbeat_code and one_run_marker not in heartbeat_code:
+        replace_once(
+            heartbeat_runner,
+            one_run_marker,
+            "\t\t\t\tfor (const dueSessionKey of dueSessionKeys) {\n",
+            one_run_line +
+            "\t\t\t\tfor (const dueSessionKey of dueSessionKeys) {\n",
+            "heartbeat one broad run per tick",
+        )
+        heartbeat_code = read(heartbeat_runner)
+    if defer_marker in heartbeat_code:
+        print(f"[patch] heartbeat defer overdue broad backlog: already patched ({os.path.basename(heartbeat_runner)})")
+        if one_run_line in heartbeat_code:
+            write(heartbeat_runner, heartbeat_code.replace(one_run_line, "", 1))
+            heartbeat_code = read(heartbeat_runner)
+            print(f"[patch] heartbeat redundant one-run marker cleanup: applied ({os.path.basename(heartbeat_runner)})")
+    else:
+        new_block = (
+            "\t\t\t\tif ((reason === \"interval\" || reason === \"startup\") && ran) {\n"
+            "\t\t\t\t\tlet deferIndex = 0; /* plur1bus-openclaw-20260429-heartbeat-defer-overdue-after-broad-run */\n"
+            "\t\t\t\t\tfor (const otherAgent of state.agents.values()) {\n"
+            "\t\t\t\t\t\tif (otherAgent === agent || otherAgent.nextDueMs > now) continue;\n"
+            "\t\t\t\t\t\tconst deferMs = Math.min(otherAgent.intervalMs, 30000 + deferIndex * 15000);\n"
+            "\t\t\t\t\t\totherAgent.nextDueMs = now + deferMs;\n"
+            "\t\t\t\t\t\tdeferIndex += 1;\n"
+            "\t\t\t\t\t}\n"
+            "\t\t\t\t\tbreak;\n"
+            "\t\t\t\t}\n"
+        )
+        if one_run_line in heartbeat_code:
+            write(heartbeat_runner, heartbeat_code.replace(one_run_line, new_block, 1))
+            heartbeat_code = read(heartbeat_runner)
+            print(f"[patch] heartbeat defer overdue broad backlog: applied ({os.path.basename(heartbeat_runner)})")
+        else:
+            print(f"[patch] heartbeat defer overdue broad backlog: anchor not found ({os.path.basename(heartbeat_runner)})")
+    commitment_marker = "plur1bus-openclaw-20260429-heartbeat-one-commitment-per-tick"
+    if commitment_marker in heartbeat_code:
+        print(f"[patch] heartbeat one commitment per broad tick: already patched ({os.path.basename(heartbeat_runner)})")
+        premature_commitment_break = "\t\t\t\t\t\tif (reason === \"interval\" || reason === \"startup\") break; /* plur1bus-openclaw-20260429-heartbeat-one-commitment-per-tick */\n"
+        if premature_commitment_break in heartbeat_code:
+            write(
+                heartbeat_runner,
+                heartbeat_code.replace(
+                    premature_commitment_break,
+                    "\t\t\t\t\t\tran = true; /* plur1bus-openclaw-20260429-heartbeat-one-commitment-per-tick */\n",
+                    1,
+                ).replace("\t\t\t\t\t\tran = true;\n\t\t\t\t\t\tran = true; /* plur1bus-openclaw-20260429-heartbeat-one-commitment-per-tick */\n", "\t\t\t\t\t\tran = true; /* plur1bus-openclaw-20260429-heartbeat-one-commitment-per-tick */\n", 1)
+            )
+            heartbeat_code = read(heartbeat_runner)
+            print(f"[patch] heartbeat premature commitment break cleanup: applied ({os.path.basename(heartbeat_runner)})")
+    else:
+        old_commitment = "\t\t\t\t\tif (commitmentRes.status === \"ran\") ran = true;\n"
+        new_commitment = (
+            "\t\t\t\t\tif (commitmentRes.status === \"ran\") {\n"
+            "\t\t\t\t\t\tran = true; /* plur1bus-openclaw-20260429-heartbeat-one-commitment-per-tick */\n"
+            "\t\t\t\t\t}\n"
+        )
+        if old_commitment in heartbeat_code:
+            write(heartbeat_runner, heartbeat_code.replace(old_commitment, new_commitment, 1))
+            heartbeat_code = read(heartbeat_runner)
+            print(f"[patch] heartbeat one commitment per broad tick: applied ({os.path.basename(heartbeat_runner)})")
+        else:
+            print(f"[patch] heartbeat one commitment per broad tick: anchor not found ({os.path.basename(heartbeat_runner)})")
+    post_commitment_marker = "plur1bus-openclaw-20260429-heartbeat-defer-after-commitment"
+    if post_commitment_marker in heartbeat_code:
+        print(f"[patch] heartbeat defer after commitment: already patched ({os.path.basename(heartbeat_runner)})")
+    else:
+        old_after_commitment = (
+            "\t\t\t\t\tif (commitmentRes.status === \"ran\") {\n"
+            "\t\t\t\t\t\tran = true; /* plur1bus-openclaw-20260429-heartbeat-one-commitment-per-tick */\n"
+            "\t\t\t\t\t}\n"
+            "\t\t\t\t}\n"
+            "\t\t\t}\n"
+        )
+        new_after_commitment = (
+            "\t\t\t\t\tif (commitmentRes.status === \"ran\") {\n"
+            "\t\t\t\t\t\tran = true; /* plur1bus-openclaw-20260429-heartbeat-one-commitment-per-tick */\n"
+            "\t\t\t\t\t}\n"
+            "\t\t\t\t\tif ((reason === \"interval\" || reason === \"startup\") && ran) {\n"
+            "\t\t\t\t\t\tlet deferIndex = 0; /* plur1bus-openclaw-20260429-heartbeat-defer-after-commitment */\n"
+            "\t\t\t\t\t\tfor (const otherAgent of state.agents.values()) {\n"
+            "\t\t\t\t\t\t\tif (otherAgent === agent || otherAgent.nextDueMs > now) continue;\n"
+            "\t\t\t\t\t\t\tconst deferMs = Math.min(otherAgent.intervalMs, 30000 + deferIndex * 15000);\n"
+            "\t\t\t\t\t\t\totherAgent.nextDueMs = now + deferMs;\n"
+            "\t\t\t\t\t\t\tdeferIndex += 1;\n"
+            "\t\t\t\t\t\t}\n"
+            "\t\t\t\t\t\tbreak;\n"
+            "\t\t\t\t\t}\n"
+            "\t\t\t\t}\n"
+            "\t\t\t}\n"
+        )
+        if old_after_commitment in heartbeat_code:
+            write(heartbeat_runner, heartbeat_code.replace(old_after_commitment, new_after_commitment, 1))
+            print(f"[patch] heartbeat defer after commitment: applied ({os.path.basename(heartbeat_runner)})")
+        else:
+            print(f"[patch] heartbeat defer after commitment: anchor not found ({os.path.basename(heartbeat_runner)})")
+    outer_commitment_marker = "plur1bus-openclaw-20260429-heartbeat-break-agent-after-commitment"
+    heartbeat_code = read(heartbeat_runner)
+    if outer_commitment_marker in heartbeat_code:
+        print(f"[patch] heartbeat break outer agent loop after commitment: already patched ({os.path.basename(heartbeat_runner)})")
+    else:
+        old_outer_commitment = "\t\t\t\t}\n\t\t\t}\n\t\t\tif (ran) return {\n"
+        new_outer_commitment = (
+            "\t\t\t\t}\n"
+            "\t\t\t\tif ((reason === \"interval\" || reason === \"startup\") && ran) {\n"
+            "\t\t\t\t\tlet deferIndex = 0; /* plur1bus-openclaw-20260429-heartbeat-break-agent-after-commitment */\n"
+            "\t\t\t\t\tfor (const otherAgent of state.agents.values()) {\n"
+            "\t\t\t\t\t\tif (otherAgent === agent || otherAgent.nextDueMs > now) continue;\n"
+            "\t\t\t\t\t\tconst deferMs = Math.min(otherAgent.intervalMs, 30000 + deferIndex * 15000);\n"
+            "\t\t\t\t\t\totherAgent.nextDueMs = now + deferMs;\n"
+            "\t\t\t\t\t\tdeferIndex += 1;\n"
+            "\t\t\t\t\t}\n"
+            "\t\t\t\t\tbreak;\n"
+            "\t\t\t\t}\n"
+            "\t\t\t}\n"
+            "\t\t\tif (ran) return {\n"
+        )
+        if old_outer_commitment in heartbeat_code:
+            write(heartbeat_runner, heartbeat_code.replace(old_outer_commitment, new_outer_commitment, 1))
+            print(f"[patch] heartbeat break outer agent loop after commitment: applied ({os.path.basename(heartbeat_runner)})")
+        else:
+            print(f"[patch] heartbeat break outer agent loop after commitment: anchor not found ({os.path.basename(heartbeat_runner)})")
 else:
     print("[patch] heartbeat startup due schedule: target not found, skipping")
 

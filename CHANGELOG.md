@@ -1,3 +1,12 @@
+## [2.1.14] - 2026-05-01
+
+### Fixed
+- Added heartbeat backlog backpressure for OpenClaw 2026.4.29: broad `startup`/`interval` heartbeat sweeps now run at most one due agent or due commitment session per tick and defer the remaining overdue agents in short staggered slots instead of immediately re-entering a 0ms loop. Targeted heartbeats and normal due intervals remain enabled.
+- Added a startup grace floor for heartbeat scheduling so Gateway cold starts can finish HTTP/channel readiness before due heartbeats begin heavy embedded-agent preparation.
+- Kept the fix compatible with Bernd, Bernhardine, and Heisenberg per-agent LanceDB routing; heartbeat work remains on session-isolated embedded lanes and no memory subsystem is disabled.
+- Corrected installer `--dry-run` reporting for plugin copies, documentation copies, and `SOUL.md` conflict-log additions so preview mode reports intended writes as dry-run actions instead of success messages.
+- Filtered pseudo directories such as `defaults` and `list` from the installer LanceDB-dimension preflight output.
+
 ## [2.1.13] - 2026-05-01
 
 ### Fixed
