@@ -1198,8 +1198,8 @@ table.to_pandas()
 
 ---
 
-*Dokumentation: `how-to-memory-perfect.md` — aktualisiert: 2026-04-28*
-*Interne Implementierungs-Details (deployment-spezifisch): `how-to-memory.md`*
+*Öffentliche kanonische Dokumentation: `how-to-memory-perfect.md` — aktualisiert: 2026-05-02*
+*Lokale Schnell-Referenz (deployment-spezifisch): `how-to-memory.md`*
 *Plugin-README: `extensions/memory-lancedb-namespaced/README.md`*
 *Workspace-Indexer Status: `openclaw memory status --deep`*
 
@@ -1595,8 +1595,8 @@ Das Memory-System ist seit 2026-04-03 in einem eigenen Git-Repository unter Vers
 ├── CHANGELOG.md
 ├── LICENSE                     MIT
 ├── README.md
-├── how-to-memory-perfect.md    (diese Datei)
-├── how-to-memory.md
+├── how-to-memory-perfect.md    (öffentliche kanonische Dokumentation)
+├── how-to-memory.md            (lokale Schnell-Referenz)
 ├── extensions/
 │   ├── memory-lancedb-namespaced/   ← Plugin
 │   └── memory-lancedb-stock/        ← LanceDB-Abhängigkeit
@@ -1605,7 +1605,7 @@ Das Memory-System ist seit 2026-04-03 in einem eigenen Git-Repository unter Vers
     └── memory-gc.mjs
 ```
 
-**Aktueller Stand:** `v1.0.0` (Tag), Branch `main`
+**Aktueller Stand:** `v2.1.20` (Tag), Branch `main`
 
 ### Workflow — Änderungen einpflegen
 
@@ -1622,13 +1622,15 @@ rsync -a --exclude='node_modules' \
 # Docs synchronisieren
 cp /root/.openclaw/how-to-memory-perfect.md .
 cp /root/.openclaw/how-to-memory.md .
+cp /root/.openclaw/SYSTEM-DOCUMENTATION.md .
+cp /root/.openclaw/HOW-TO-UPDATE.md .
 cp /root/.openclaw/scripts/memory-gc.mjs scripts/
 cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag v2.1.20
+git tag -a v2.1.20 -m "v2.1.20"
 ```
 
 ### Teilen / Veröffentlichen

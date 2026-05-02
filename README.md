@@ -56,8 +56,8 @@ scripts/
   embed-promoted-memories.mjs  ← Bridge Dreaming-Promotionen → LanceDB (alle 30 Min)
   migrate-memory-md-to-lancedb.mjs  ← Einmalige MEMORY.md → LanceDB Migration
   cleanup-session-history.mjs  ← Bereinigt aufgeblähte OpenClaw-Session-Transcripts
-how-to-memory.md               ← Schnell-Referenz (Konzepte und Setup)
-how-to-memory-perfect.md       ← Vollständige Dokumentation (Architektur, Upgrades, Patches)
+how-to-memory-perfect.md       ← öffentliche/kanonische Dokumentation (Architektur, Upgrades, Patches)
+how-to-memory.md               ← lokale Schnell-Referenz (Konzepte und Setup)
 SYSTEM-DOCUMENTATION.md        ← systemd, Cron, Session-Start, Runtime-Deps und Kimi-only Betrieb
 HOW-TO-UPDATE.md               ← sicherer OpenClaw/plur1bus Update- und Release-Ablauf
 CHANGELOG.md                   ← Versionshistorie
@@ -261,9 +261,9 @@ memory-lancedb-namespaced.kind = "extension"      ← Auto-Capture/Recall per Ag
 
 ---
 
-## Vollständige Dokumentation
+## Öffentliche Dokumentation
 
-→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — vollständige Architektur, Konfigurations-Referenz, Upgrade-Anleitungen, Security-Audits, Troubleshooting.
+→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — öffentliche kanonische Dokumentation: vollständige Architektur, Konfigurations-Referenz, Upgrade-Anleitungen, Security-Audits, Troubleshooting.
 
 → [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, Cron, Session-Start, Runtime-Deps-Cache und Kimi-only Betriebsnotizen.
 
@@ -329,8 +329,8 @@ scripts/
   embed-promoted-memories.mjs  ← Bridge dreaming promotions → LanceDB (every 30 min)
   migrate-memory-md-to-lancedb.mjs  ← One-shot MEMORY.md → LanceDB migration
   cleanup-session-history.mjs  ← Cleans bloated OpenClaw session transcripts
-how-to-memory.md               ← Quick reference (concepts and setup)
-how-to-memory-perfect.md       ← Full documentation (architecture, upgrades, patches)
+how-to-memory-perfect.md       ← public/canonical documentation (architecture, upgrades, patches)
+how-to-memory.md               ← local quick reference (concepts and setup)
 SYSTEM-DOCUMENTATION.md        ← systemd, cron, session-start, runtime deps and Kimi-only ops notes
 HOW-TO-UPDATE.md               ← safe OpenClaw/plur1bus update and release flow
 CHANGELOG.md                   ← Version history
@@ -558,9 +558,9 @@ branch, writes backups to `.history-cleanup-backups/`, and ignores archived
 
 ---
 
-## Full Documentation
+## Public Documentation
 
-→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — full architecture, configuration reference, upgrade guides, security audits, troubleshooting.
+→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — public canonical documentation: full architecture, configuration reference, upgrade guides, security audits, troubleshooting.
 
 → [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, cron, session-start, runtime-deps cache and Kimi-only operational notes.
 
