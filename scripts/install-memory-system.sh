@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"  # /root/.openclaw
 PLUGIN_SRC="$SOURCE_DIR/extensions/memory-lancedb-namespaced"
 STOCK_SRC="$SOURCE_DIR/extensions/memory-lancedb-stock"
-DOC_FILES=("how-to-memory.md" "how-to-memory-perfect.md")
+DOC_FILES=("how-to-memory.md" "how-to-memory-perfect.md" "SYSTEM-DOCUMENTATION.md" "HOW-TO-UPDATE.md")
 GC_SCRIPT="$SOURCE_DIR/scripts/memory-gc.mjs"
 MIN_OPENCLAW_VERSION="2026.4.29"
 

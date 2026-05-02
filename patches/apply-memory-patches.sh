@@ -7,6 +7,8 @@
 # 17) memory-core-cohere-rerank: Cohere rerank-v3.5 after mergeHybridResults()
 # 18) active-memory-fast-path: retired; preserved as no-op for older installs
 # 19) plur1bus-user OpenClaw 2026.4.29 latency hotfixes
+# 20) bundled-runtime-deps race guard: skip npm installs when all packages are
+#     already semver-satisfied, even if plugin install manifests differ
 
 set -u
 
@@ -163,5 +165,57 @@ patch_plur1bus_user_hotfix() {
   bash "$script_dir/apply-plur1bus-user-hotfix.sh"
 }
 patch_plur1bus_user_hotfix || rc=1
+
+patch_bundled_runtime_deps_satisfied_cache() {
+  local target="$DIST_DIR/bundled-runtime-deps-Dj2QXhNg.js"
+  [[ -f "$target" ]] || { echo "[patch] bundled runtime deps satisfied cache: target not found"; return 0; }
+  python3 - "$target" <<'PYEOF'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+materialized_marker = "hasSatisfiedInstallSpecPackages(installRoot, installSpecs)) return true;"
+repair_marker = "if (isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {"
+if materialized_marker in text and repair_marker in text:
+    print("[patch] bundled runtime deps satisfied cache: already patched")
+    raise SystemExit(0)
+
+old_materialized = """function isRuntimeDepsPlanMaterialized(installRoot, installSpecs) {
+\tconst generatedManifestSpecs = readGeneratedInstallManifestSpecs(installRoot);
+"""
+new_materialized = """function isRuntimeDepsPlanMaterialized(installRoot, installSpecs) {
+\tif (hasSatisfiedInstallSpecPackages(installRoot, installSpecs)) return true;
+\tconst generatedManifestSpecs = readGeneratedInstallManifestSpecs(installRoot);
+"""
+if materialized_marker not in text:
+    if old_materialized not in text:
+        print("[patch] bundled runtime deps satisfied cache: materialized anchor not found")
+        raise SystemExit(0)
+    text = text.replace(old_materialized, new_materialized, 1)
+
+old_repair = """async function repairBundledRuntimeDepsInstallRootAsync(params) {
+\treturn await withBundledRuntimeDepsInstallRootLockAsync(params.installRoot, async () => {
+\t\tconst installSpecs = normalizeRuntimeDepSpecs(params.installSpecs);
+"""
+new_repair = """async function repairBundledRuntimeDepsInstallRootAsync(params) {
+\treturn await withBundledRuntimeDepsInstallRootLockAsync(params.installRoot, async () => {
+\t\tconst installSpecs = normalizeRuntimeDepSpecs(params.installSpecs);
+\t\tif (isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
+\t\t\tremoveLegacyRuntimeDepsManifest(params.installRoot);
+\t\t\treturn { installSpecs };
+\t\t}
+"""
+if repair_marker not in text:
+    if old_repair not in text:
+        print("[patch] bundled runtime deps satisfied cache: repair anchor not found")
+        raise SystemExit(0)
+    text = text.replace(old_repair, new_repair, 1)
+
+path.write_text(text)
+print("[patch] bundled runtime deps satisfied cache: applied")
+PYEOF
+}
+patch_bundled_runtime_deps_satisfied_cache || rc=1
 
 exit $rc

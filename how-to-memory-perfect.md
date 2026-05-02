@@ -131,9 +131,11 @@ Das kostet ~2 Sekunden und der Agent ist vollständig kontextuiert.
 
 ### Was ist das?
 
-Der Workspace-Indexer ist eine **in den OpenClaw-Gateway eingebaute Funktion** (kein separates Plugin). Er crawlt alle `.md`-Dateien im Workspace-Verzeichnis des Agenten, chunked sie nach Token-Anzahl, vektorisiert sie mit Embedding-Modellen und legt alles in einer SQLite-Datenbank mit Vektorsearch-Extension ab.
+Der Workspace-Indexer ist eine **in den OpenClaw-Gateway eingebaute Funktion** (kein separates Plugin). Er crawlt alle `.md`-Dateien im Workspace-Verzeichnis des Agenten, chunked sie nach Token-Anzahl, vektorisiert sie mit dem in `agents.defaults.memorySearch` konfigurierten Embedding-Provider und legt alles in einer SQLite-Datenbank mit Vektorsearch-Extension ab.
 
 Während Schicht 1 (Flat-Files) manuell gelesen werden muss und Schicht 3 (LanceDB) nur explizit gespeicherte Fakten enthält, macht Schicht 2 den **gesamten Workspace** semantisch durchsuchbar — automatisch und ohne Zutun des Agenten.
+
+**Wichtig für Kimi-only/No-Fallback-Deployments:** Schicht 2 ist optional und unabhängig von plur1bus. Wenn kein OpenAI-kompatibler Embedding-Endpunkt für die native OpenClaw-Workspace-Suche genutzt werden soll, kann `agents.defaults.memorySearch.enabled = false` gesetzt werden. Schicht 3 (`memory-lancedb-namespaced`) bleibt aktiv und liefert weiterhin Auto-Recall/Auto-Capture.
 
 ### Was wird indexiert?
 
@@ -158,6 +160,7 @@ Standardgewichtung: 80% Vektor + 20% BM25. Das kombiniert semantisches Verständ
 
 ```json
 "memorySearch": {
+  "enabled": true,
   "provider": "openai",
   "model": "text-embedding-3-large",
   "query": {
@@ -168,6 +171,17 @@ Standardgewichtung: 80% Vektor + 20% BM25. Das kombiniert semantisches Verständ
       "textWeight": 0.2,
       "candidateMultiplier": 10
     }
+  }
+}
+```
+
+Kimi-only/no-fallback Beispiel ohne native Workspace-Suche:
+
+```json
+"agents": {
+  "defaults": {
+    "model": { "primary": "kimi-coding/kimi-for-coding", "fallbacks": [] },
+    "memorySearch": { "enabled": false, "fallback": "none" }
   }
 }
 ```
@@ -1158,7 +1172,7 @@ table.to_pandas()
 - [ ] In `ONBOARDING.md` / Sessionstart-Instruktion: Tageslog-Lese-Routine hinzufügen (heute + gestern)
 
 **Schicht 2: Workspace-Indexer**
-- [ ] `memorySearch`-Block in `openclaw.json` konfigurieren (Embedding-Provider, Modell, Hybrid-Suche)
+- [ ] Optional: `memorySearch`-Block in `openclaw.json` konfigurieren (Embedding-Provider, Modell, Hybrid-Suche) oder bei Kimi-only/no-OpenAI bewusst deaktivieren
 - [ ] Ersten Index anstoßen: `openclaw memory index --force`
 - [ ] Status prüfen: `openclaw memory status --deep` (zeigt Dateien, Chunks, Cache-Einträge pro Agent)
 - [ ] Optional: `extraPaths` konfigurieren wenn Dateien außerhalb des Workspace indexiert werden sollen
@@ -1614,7 +1628,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag v2.1.19
+git tag v2.1.20
 ```
 
 ### Teilen / Veröffentlichen
@@ -1653,7 +1667,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.19`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt schema-konforme Message-Werte (`messages.visibleReplies = "automatic"` für Direct-Chat-Finalantworten, `messages.groupChat.visibleReplies = "automatic"` für Gruppen-Finalantworten und sichtbaren Reasoning-Stream, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, normale Embedded-Agent-Runs auf session-isolierten Lanes, native Subagent-Dispatch-/Steer-/Send-Runs auf per-child Lanes statt global `subagent`. Startup-/Interval-/Commitment-Heartbeats haben eine Startup-Grace und Backpressure, damit Bernd/main nicht durch Bernhardine-/Heisenberg-Heartbeat-Arbeit blockiert wird. Subagent-Completion-Announcements warten bei internen/session-only Zielen nicht mehr auf einen vollständigen Final-Agent-Run. Direct-`NO_REPLY` bleibt silent. Der OpenClaw-Haupt-LLM-Provider ist frei; Kimi-Coding-Konfigurationen werden nur auf konsistente Protokoll/BaseURL-Paare geprüft. plur1bus benötigt nur einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.20`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt schema-konforme Message-Werte (`messages.visibleReplies = "automatic"` für Direct-Chat-Finalantworten, `messages.groupChat.visibleReplies = "automatic"` für Gruppen-Finalantworten und sichtbaren Reasoning-Stream, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, normale Embedded-Agent-Runs auf session-isolierten Lanes, native Subagent-Dispatch-/Steer-/Send-Runs auf per-child Lanes statt global `subagent`. Startup-/Interval-/Commitment-Heartbeats haben eine Startup-Grace und Backpressure, damit Bernd/main nicht durch Bernhardine-/Heisenberg-Heartbeat-Arbeit blockiert wird. Subagent-Completion-Announcements warten bei internen/session-only Zielen nicht mehr auf einen vollständigen Final-Agent-Run. Direct-`NO_REPLY` bleibt silent. Der OpenClaw-Haupt-LLM-Provider ist frei; Kimi-Coding-Konfigurationen werden nur auf konsistente Protokoll/BaseURL-Paare geprüft. Wer Kimi-only will, pinnt Agenten/Subagents/Cron-AgentTurns/Sessions explizit auf `kimi-coding/kimi-for-coding` und setzt `fallbacks: []`. plur1bus benötigt nur einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann in No-OpenAI/Kimi-only-Setups deaktiviert werden.
 
 ### Was passiert beim Dreaming?
 

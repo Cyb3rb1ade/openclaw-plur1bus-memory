@@ -11,7 +11,7 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.19` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+**Aktuelle Version:** `2.1.20` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
@@ -58,6 +58,8 @@ scripts/
   cleanup-session-history.mjs  ← Bereinigt aufgeblähte OpenClaw-Session-Transcripts
 how-to-memory.md               ← Schnell-Referenz (Konzepte und Setup)
 how-to-memory-perfect.md       ← Vollständige Dokumentation (Architektur, Upgrades, Patches)
+SYSTEM-DOCUMENTATION.md        ← systemd, Cron, Session-Start, Runtime-Deps und Kimi-only Betrieb
+HOW-TO-UPDATE.md               ← sicherer OpenClaw/plur1bus Update- und Release-Ablauf
 CHANGELOG.md                   ← Versionshistorie
 ```
 
@@ -109,6 +111,22 @@ Vor jedem Wechsel: `node scripts/memory-doctor.mjs provider-check` — checkt AP
 | Merging / Summarization / KNOWLEDGE.md | Optional; braucht explizites `merging.model` bzw. `schicht15.model` auf einem OpenAI-kompatiblen Chat-Completions-Endpunkt |
 
 plur1bus setzt kein Chat-Modell für OpenClaw voraus. Nur die Memory-internen Embedding- und optionalen LLM-Endpunkte müssen passend konfiguriert sein.
+
+### Kimi-only / No-Fallback Betrieb
+
+Wer alle Agenten und Subagents ausschließlich über Kimi-for-Coding betreiben möchte, sollte die OpenClaw-Chat-Routen explizit pinnen:
+
+```json
+"agents": {
+  "defaults": {
+    "model": { "primary": "kimi-coding/kimi-for-coding", "fallbacks": [] }
+  }
+}
+```
+
+Zusätzlich müssen bestehende `agents.list[]`-Einträge, Cron-`agentTurn`-Payloads und gespeicherte Session-Overrides auf `kimi-coding/kimi-for-coding` gesetzt werden. `fallbacks: []` ist Absicht: bei Kimi-only gibt es kein automatisches Ausweichen auf OpenAI, XAI, Google oder andere Provider.
+
+Wichtig: plur1bus selbst bleibt provider-neutral. Embeddings und optionales Merging/Schicht 1.5 sind eigene Memory-Endpunkte. Die native OpenClaw-Workspace-Suche `agents.defaults.memorySearch` ist für plur1bus nicht erforderlich; in Kimi-only/no-OpenAI-Token-Setups kann sie deaktiviert werden, ohne Auto-Recall/Auto-Capture von `memory-lancedb-namespaced` abzuschalten.
 
 ---
 
@@ -181,6 +199,7 @@ systemctl --user restart openclaw-gateway.service
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` nach `mergeHybridResults()` — bessere Top-K-Sortierung |
 | **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op auf aktuellen Builds, damit plur1bus nicht umgangen wird |
 | **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `subagent-announce-delivery-*.js`, `openclaw.json` | aktive Gateway-Registry wiederverwenden, `toolsAllow` vor Plugin-Factories, Plugin-Deskriptor-Cache, kürzeres active-memory Hook-Budget, non-blocking `boot-md`, Subagent-Lane-Isolation, Subagent-Completion-Announce ohne internes Final-Wait, Direct-Chat-Reply-Delivery erhalten |
+| **#20** Runtime-Deps Race Guard | `bundled-runtime-deps-*.js` | überspringt redundante `npm install`-Runs, wenn der gemeinsame Plugin-Runtime-Deps-Cache bereits semver-passende Pakete enthält; verhindert `ENOTEMPTY`-Rennen beim Laden von Telegram/Discord/memory-core |
 
 Der 4.29-Latenzfix ist **OpenClaw-Bundle-Namen-unabhängig**: das Script findet die aktuellen `selection-*`, `pi-tools-*` und `tools-*` Bundles per Inhalt. Bei künftigen Updates muss nur `apply-memory-patches.sh` erneut laufen.
 
@@ -246,6 +265,10 @@ memory-lancedb-namespaced.kind = "extension"      ← Auto-Capture/Recall per Ag
 
 → [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — vollständige Architektur, Konfigurations-Referenz, Upgrade-Anleitungen, Security-Audits, Troubleshooting.
 
+→ [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, Cron, Session-Start, Runtime-Deps-Cache und Kimi-only Betriebsnotizen.
+
+→ [`HOW-TO-UPDATE.md`](HOW-TO-UPDATE.md) — sichere Update- und Release-Checkliste.
+
 → [`CHANGELOG.md`](CHANGELOG.md) — Versionshistorie mit allen Breaking-Changes und Migrations-Anweisungen.
 
 ---
@@ -269,7 +292,7 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.19` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+**Current version:** `2.1.20` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
@@ -308,6 +331,8 @@ scripts/
   cleanup-session-history.mjs  ← Cleans bloated OpenClaw session transcripts
 how-to-memory.md               ← Quick reference (concepts and setup)
 how-to-memory-perfect.md       ← Full documentation (architecture, upgrades, patches)
+SYSTEM-DOCUMENTATION.md        ← systemd, cron, session-start, runtime deps and Kimi-only ops notes
+HOW-TO-UPDATE.md               ← safe OpenClaw/plur1bus update and release flow
 CHANGELOG.md                   ← Version history
 ```
 
@@ -359,6 +384,22 @@ Before any switch: `node scripts/memory-doctor.mjs provider-check` — checks AP
 | Merging / summarization / KNOWLEDGE.md | Optional; requires explicit `merging.model` or `schicht15.model` on an OpenAI-compatible chat-completions endpoint |
 
 plur1bus does not require a specific OpenClaw chat model. Only the memory-internal embedding and optional LLM endpoints need compatible configuration.
+
+### Kimi-only / No-Fallback Operation
+
+If you want every agent and subagent to use Kimi-for-Coding only, pin OpenClaw chat routing explicitly:
+
+```json
+"agents": {
+  "defaults": {
+    "model": { "primary": "kimi-coding/kimi-for-coding", "fallbacks": [] }
+  }
+}
+```
+
+Also update existing `agents.list[]` entries, cron `agentTurn` payloads and stored session overrides to `kimi-coding/kimi-for-coding`. `fallbacks: []` is intentional: Kimi-only means no automatic fallback to OpenAI, XAI, Google or any other provider.
+
+plur1bus itself remains provider-neutral. Embeddings and optional merging/layer-1.5 are separate memory endpoints. Native OpenClaw workspace search via `agents.defaults.memorySearch` is not required by plur1bus; in Kimi-only/no-OpenAI-token deployments it can be disabled while `memory-lancedb-namespaced` continues to provide Auto-Recall and Auto-Capture.
 
 ---
 
@@ -431,6 +472,7 @@ systemctl --user restart openclaw-gateway.service
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` after `mergeHybridResults()` — better top-K ranking |
 | **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op on current builds so plur1bus is not bypassed |
 | **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `subagent-announce-delivery-*.js`, `openclaw.json` | Reuses the active Gateway registry, applies `toolsAllow` before plugin factories, adds a plugin descriptor cache, caps active-memory hook waits, makes `boot-md` non-blocking, isolates subagent dispatch lanes, avoids internal final-wait for subagent completion announces, preserves direct/group reply delivery, and keeps Kimi-Coding protocol/BaseURL pairs consistent |
+| **#20** Runtime-Deps Race Guard | `bundled-runtime-deps-*.js` | Skips redundant `npm install` runs when the shared plugin runtime-deps cache already contains semver-compatible packages; prevents `ENOTEMPTY` races while loading Telegram/Discord/memory-core |
 
 The 4.29 latency fix is **OpenClaw bundle-name independent**: the script finds the current `selection-*`, `pi-tools-*` and `tools-*` bundles by content. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores all patches.
 
@@ -519,6 +561,10 @@ branch, writes backups to `.history-cleanup-backups/`, and ignores archived
 ## Full Documentation
 
 → [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — full architecture, configuration reference, upgrade guides, security audits, troubleshooting.
+
+→ [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, cron, session-start, runtime-deps cache and Kimi-only operational notes.
+
+→ [`HOW-TO-UPDATE.md`](HOW-TO-UPDATE.md) — safe update and release checklist.
 
 → [`CHANGELOG.md`](CHANGELOG.md) — version history with all breaking changes and migration instructions.
 

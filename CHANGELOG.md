@@ -1,3 +1,15 @@
+## [2.1.20] - 2026-05-02
+
+### Fixed
+- Added a bundled runtime-deps race guard for OpenClaw `2026.4.29`: if the shared `plugin-runtime-deps` root already contains semver-satisfied packages, startup and per-plugin staging now skip redundant `npm install` runs instead of racing into `ENOTEMPTY` rename failures. This fixes Telegram/Discord/memory-core startup stalls after cache repair.
+- Documented the safe Kimi-only deployment pattern: agent/subagent/session/cron chat routes can be pinned to `kimi-coding/kimi-for-coding` with empty fallback arrays, while plur1bus remains provider-neutral for embeddings and optional LLM features.
+- Clarified that native OpenClaw `agents.defaults.memorySearch` is optional and independent from plur1bus. For Kimi-only/no-OpenAI-token deployments it can be disabled; plur1bus `active-memory` and `memory-lancedb-namespaced` continue to provide Auto-Recall/Auto-Capture.
+
+### Documentation
+- Added `SYSTEM-DOCUMENTATION.md` with the relevant systemd user service, ExecStartPre patch chain, user-cron GC, session-start, runtime-deps cache and Kimi-only operational notes.
+- Added `HOW-TO-UPDATE.md` with the safe OpenClaw/plur1bus update, verification and release checklist.
+- Updated README, plugin README, `how-to-memory.md` and `how-to-memory-perfect.md` for `2.1.20`, OpenClaw `>=2026.4.29`, Kimi-only/no-fallback operation and the runtime-deps cache fix.
+
 ## [2.1.19] - 2026-05-01
 
 ### Fixed
