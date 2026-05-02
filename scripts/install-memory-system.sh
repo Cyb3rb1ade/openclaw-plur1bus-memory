@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"  # /root/.openclaw
 PLUGIN_SRC="$SOURCE_DIR/extensions/memory-lancedb-namespaced"
 STOCK_SRC="$SOURCE_DIR/extensions/memory-lancedb-stock"
-DOC_FILES=("how-to-memory.md" "how-to-memory-perfect.md" "SYSTEM-DOCUMENTATION.md" "HOW-TO-UPDATE.md")
+DOC_FILES=("how-to-memory-perfect.md" "SYSTEM-DOCUMENTATION.md" "HOW-TO-UPDATE.md")
 GC_SCRIPT="$SOURCE_DIR/scripts/memory-gc.mjs"
 MIN_OPENCLAW_VERSION="2026.4.29"
 
@@ -561,7 +561,7 @@ fi
 case "$MEMORY_CONFIG_MODE" in
   keep)
     KEEP_EXISTING_MEMORY_CONFIG=1
-    info "Memory-Config wird übernommen; keine OpenAI/Kimi-Defaults werden gesetzt."
+    info "Memory-Config wird übernommen; keine provider-spezifischen Defaults werden gesetzt."
     ;;
   reconfigure)
     info "Memory-Config wird bewusst neu konfiguriert."
@@ -681,15 +681,17 @@ if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM —
   while true; do
     prompt_input MERGING_MODEL "Merging LLM Modell (erforderlich; OpenAI-kompatibler Chat-Completions-Endpunkt)" "${_EXISTING_MERGING_MODEL:-}"
     [[ -n "$MERGING_MODEL" ]] && break
-    warn "Merging braucht ein explizites Modell. Es gibt keinen Kimi/OpenAI-Zwangsdefault mehr."
+    warn "Merging braucht ein explizites Modell. Es gibt keinen provider-spezifischen Zwangsdefault."
   done
   prompt_input MERGING_KEY     "Merging LLM API Key" "${_EXISTING_MERGING_KEY:-}"
   echo ""
-  info "Kimi k2p5-spezifische Optionen (NUR für Kimi-Nutzer):"
-  info "  disableThinking=true unterdrückt das Reasoning-Budget, User-Agent ist Kimi-Pflichtfeld."
-  if confirm "  Kimi-spezifische Optionen aktivieren?" "n"; then
-    MERGING_DISABLE_THINKING="true"
-    MERGING_USER_AGENT="claude-code/1.0"
+  info "Optionale provider-spezifische Chat-Optionen:"
+  info "  Einige OpenAI-kompatible Anbieter unterstützen disableThinking oder verlangen einen User-Agent."
+  if confirm "  Provider-spezifische Optionen konfigurieren?" "n"; then
+    if confirm "  disableThinking=true setzen?" "n"; then
+      MERGING_DISABLE_THINKING="true"
+    fi
+    prompt_input MERGING_USER_AGENT "  User-Agent Header (leer = keiner)" ""
   fi
 fi
 

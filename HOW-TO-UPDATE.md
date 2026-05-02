@@ -61,28 +61,16 @@ Expected plugins include:
 - `memory-core`
 - `memory-lancedb-namespaced`
 
-## 5. Kimi-only Deployments
+## 5. Verify Provider Routing
 
-If the deployment is intentionally Kimi-only, verify:
+plur1bus does not require a specific OpenClaw chat provider. If the deployment intentionally uses explicit agent/session/cron model routes, verify that the update preserved them:
 
 ```bash
 jq '.agents.defaults.model' ~/.openclaw/openclaw.json
 jq '[.jobs[] | select(.payload.kind? == "agentTurn") | {name, model:.payload.model}]' ~/.openclaw/cron/jobs.json
 ```
 
-Expected model:
-
-```text
-kimi-coding/kimi-for-coding
-```
-
-Expected fallback list:
-
-```json
-[]
-```
-
-Native OpenClaw `agents.defaults.memorySearch` may be disabled in Kimi-only/no-OpenAI-token setups. This does not disable plur1bus LanceDB Auto-Recall/Auto-Capture.
+Native OpenClaw `agents.defaults.memorySearch` is optional and independent from plur1bus. Disabling it does not disable plur1bus LanceDB Auto-Recall/Auto-Capture.
 
 ## 6. Publish a plur1bus Release
 

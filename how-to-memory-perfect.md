@@ -135,7 +135,7 @@ Der Workspace-Indexer ist eine **in den OpenClaw-Gateway eingebaute Funktion** (
 
 Während Schicht 1 (Flat-Files) manuell gelesen werden muss und Schicht 3 (LanceDB) nur explizit gespeicherte Fakten enthält, macht Schicht 2 den **gesamten Workspace** semantisch durchsuchbar — automatisch und ohne Zutun des Agenten.
 
-**Wichtig für Kimi-only/No-Fallback-Deployments:** Schicht 2 ist optional und unabhängig von plur1bus. Wenn kein OpenAI-kompatibler Embedding-Endpunkt für die native OpenClaw-Workspace-Suche genutzt werden soll, kann `agents.defaults.memorySearch.enabled = false` gesetzt werden. Schicht 3 (`memory-lancedb-namespaced`) bleibt aktiv und liefert weiterhin Auto-Recall/Auto-Capture.
+**Wichtig:** Schicht 2 ist optional und unabhängig von plur1bus. Wenn kein Embedding-Endpunkt für die native OpenClaw-Workspace-Suche genutzt werden soll, kann `agents.defaults.memorySearch.enabled = false` gesetzt werden. Schicht 3 (`memory-lancedb-namespaced`) bleibt aktiv und liefert weiterhin Auto-Recall/Auto-Capture.
 
 ### Was wird indexiert?
 
@@ -175,12 +175,11 @@ Standardgewichtung: 80% Vektor + 20% BM25. Das kombiniert semantisches Verständ
 }
 ```
 
-Kimi-only/no-fallback Beispiel ohne native Workspace-Suche:
+Beispiel ohne native Workspace-Suche:
 
 ```json
 "agents": {
   "defaults": {
-    "model": { "primary": "kimi-coding/kimi-for-coding", "fallbacks": [] },
     "memorySearch": { "enabled": false, "fallback": "none" }
   }
 }
@@ -284,8 +283,8 @@ Das Plugin löst das automatisch über `agentId`-Routing:
 ```
 {baseDbPath}/
 ├── bernd/          ← Memories von Agent "bernd"
-├── bernhardine/    ← Memories von Agent "bernhardine"
-├── heisenberg/     ← Memories von Agent "heisenberg"
+├── agent-a/        ← Memories von Agent "agent-a"
+├── agent-b/        ← Memories von Agent "agent-b"
 └── default/        ← Fallback wenn kein agentId gesetzt
 ```
 
@@ -642,7 +641,7 @@ LanceDB hat ein **fixes Schema pro Table**. Wenn `text-embedding-3-large` 3072 D
   "fallback": {
     "apiKey":   "${OPENAI_API_KEY_FALLBACK}",
     "model":    "text-embedding-3-large",
-    "baseUrl":  "https://mein-azure-endpunkt.openai.azure.com/openai/deployments/text-embedding-3-large"
+    "baseUrl":  "https://example-resource.openai.azure.com/openai/deployments/text-embedding-3-large"
   }
 }
 ```
@@ -800,7 +799,7 @@ Das Script verbindet sich direkt mit den LanceDB-Instanzen aller drei Agenten un
 
 ### Was ist das?
 
-Wenn mehrere Agenten unabhängig `decision`-Memories speichern, können Widersprüche entstehen: Bernd speichert "wir nutzen PostgreSQL", Heisenberg speichert "wir nutzen MongoDB". Ohne Traceability ist dieser Widerspruch unsichtbar.
+Wenn mehrere Agenten unabhängig `decision`-Memories speichern, können Widersprüche entstehen: ein Agent speichert "wir nutzen PostgreSQL", ein anderer speichert "wir nutzen MongoDB". Ohne Traceability ist dieser Widerspruch unsichtbar.
 
 Das Plugin erkennt semantisch ähnliche `decision`-Memories von unterschiedlichen Agenten (Score 0.70–0.94) und loggt sie in:
 
@@ -814,10 +813,10 @@ Schema eines Eintrags:
   "schemaVersion": 1,
   "timestamp": "2026-03-31T12:00:00.000Z",
   "newMemoryId": "uuid-neu",
-  "newAgentId": "main",
+  "newAgentId": "agent-a",
   "newText": "Wir nutzen PostgreSQL für alle persistenten Daten.",
   "existingMemoryId": "uuid-alt",
-  "existingAgentId": "bernhardine",
+  "existingAgentId": "agent-b",
   "existingText": "Wir nutzen MongoDB als primäre Datenbank.",
   "score": 0.83,
   "category": "decision",
@@ -1022,9 +1021,9 @@ auf und formuliert eine kurze Zusammenfassung, bevor der Hauptagent antwortet.
 
 Jeder Agent hat einen **vollständig getrennten** ActiveMemory-Kontext:
 
-- Bernd (main) → sieht nur `lancedb-namespaced/main/`
-- Bernhardine → sieht nur `lancedb-namespaced/bernhardine/`
-- Heisenberg → sieht nur `lancedb-namespaced/heisenberg/`
+- Default-Agent → sieht nur `lancedb-namespaced/main/`
+- Agent A → sieht nur `lancedb-namespaced/agent-a/`
+- Agent B → sieht nur `lancedb-namespaced/agent-b/`
 
 Die `agents`-Liste in der Config steuert, **welche** Agenten den Sub-Agenten triggern —
 nicht dass sie Memories teilen. Die Isolation kommt vom Namespace-Routing in
@@ -1041,7 +1040,7 @@ nicht dass sie Memories teilen. Die Isolation kommt vom Namespace-Routing in
         "enabled": true,
         "config": {
           "enabled": true,
-          "agents": ["main", "bernhardine", "heisenberg"],
+          "agents": ["main", "agent-a", "agent-b"],
           "allowedChatTypes": ["direct"],
           "modelFallbackPolicy": "default-remote",
           "queryMode": "recent",
@@ -1172,7 +1171,7 @@ table.to_pandas()
 - [ ] In `ONBOARDING.md` / Sessionstart-Instruktion: Tageslog-Lese-Routine hinzufügen (heute + gestern)
 
 **Schicht 2: Workspace-Indexer**
-- [ ] Optional: `memorySearch`-Block in `openclaw.json` konfigurieren (Embedding-Provider, Modell, Hybrid-Suche) oder bei Kimi-only/no-OpenAI bewusst deaktivieren
+- [ ] Optional: `memorySearch`-Block in `openclaw.json` konfigurieren (Embedding-Provider, Modell, Hybrid-Suche) oder bewusst deaktivieren
 - [ ] Ersten Index anstoßen: `openclaw memory index --force`
 - [ ] Status prüfen: `openclaw memory status --deep` (zeigt Dateien, Chunks, Cache-Einträge pro Agent)
 - [ ] Optional: `extraPaths` konfigurieren wenn Dateien außerhalb des Workspace indexiert werden sollen
@@ -1362,7 +1361,7 @@ Das gilt auch für das `openai`-Bundle-Plugin: ohne `"openai"` in der Allowlist 
 }
 ```
 
-> Provider-neutral: jedes OpenAI-kompatible Chat-Completions-Modell ist möglich. Es gibt keinen versteckten Kimi-Default mehr; bei Kimi können `disableThinking` und `headers.User-Agent` weiterhin explizit gesetzt werden.
+> Provider-neutral: jedes OpenAI-kompatible Chat-Completions-Modell ist möglich. Es gibt keinen versteckten Provider-Default; provider-spezifische Optionen wie `disableThinking` oder `headers.User-Agent` können weiterhin explizit gesetzt werden.
 
 ### 2. Plugin-Schema aktualisieren (openclaw.plugin.json)
 
@@ -1475,10 +1474,10 @@ Schema einer Zeile:
 {
   "timestamp": "2026-03-28T12:00:00.000Z",
   "newMemoryId": "uuid-neu",
-  "newAgentId": "main",
+  "newAgentId": "agent-a",
   "newText": "Wir nutzen PostgreSQL für alle persistenten Daten.",
   "existingMemoryId": "uuid-alt",
-  "existingAgentId": "bernhardine",
+  "existingAgentId": "agent-b",
   "existingText": "Wir nutzen MongoDB als primäre Datenbank.",
   "score": 0.83,
   "category": "decision",
@@ -1669,7 +1668,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.20`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt schema-konforme Message-Werte (`messages.visibleReplies = "automatic"` für Direct-Chat-Finalantworten, `messages.groupChat.visibleReplies = "automatic"` für Gruppen-Finalantworten und sichtbaren Reasoning-Stream, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, normale Embedded-Agent-Runs auf session-isolierten Lanes, native Subagent-Dispatch-/Steer-/Send-Runs auf per-child Lanes statt global `subagent`. Startup-/Interval-/Commitment-Heartbeats haben eine Startup-Grace und Backpressure, damit Bernd/main nicht durch Bernhardine-/Heisenberg-Heartbeat-Arbeit blockiert wird. Subagent-Completion-Announcements warten bei internen/session-only Zielen nicht mehr auf einen vollständigen Final-Agent-Run. Direct-`NO_REPLY` bleibt silent. Der OpenClaw-Haupt-LLM-Provider ist frei; Kimi-Coding-Konfigurationen werden nur auf konsistente Protokoll/BaseURL-Paare geprüft. Wer Kimi-only will, pinnt Agenten/Subagents/Cron-AgentTurns/Sessions explizit auf `kimi-coding/kimi-for-coding` und setzt `fallbacks: []`. plur1bus benötigt nur einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann in No-OpenAI/Kimi-only-Setups deaktiviert werden.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.20`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt schema-konforme Message-Werte (`messages.visibleReplies = "automatic"` für Direct-Chat-Finalantworten, `messages.groupChat.visibleReplies = "automatic"` für Gruppen-Finalantworten und sichtbaren Reasoning-Stream, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, normale Embedded-Agent-Runs auf session-isolierten Lanes, native Subagent-Dispatch-/Steer-/Send-Runs auf per-child Lanes statt global `subagent`. Startup-/Interval-/Commitment-Heartbeats haben eine Startup-Grace und Backpressure, damit breite Heartbeat-Sweeps nicht den primären Agenten blockieren. Subagent-Completion-Announcements warten bei internen/session-only Zielen nicht mehr auf einen vollständigen Final-Agent-Run. Direct-`NO_REPLY` bleibt silent. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
 
 ### Was passiert beim Dreaming?
 
@@ -1685,8 +1684,8 @@ memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto
 
 | Ebene | Isolation | Erklärung |
 |---|---|---|
-| **Workspace** | Strikt getrennt | Bernd, Bernhardine, Heisenberg haben eigene Workspaces → Dreams werden **nie** vermischt |
-| **Agents innerhalb Workspace** | Gemeinsam | Bernds `researcher`, `developer`, `architect` teilen den Dream-Kontext — **gewollt** (cross-pollination) |
+| **Workspace** | Strikt getrennt | Separate Workspaces haben eigene Dream-Kontexte und werden **nie** vermischt |
+| **Agents innerhalb Workspace** | Gemeinsam | Subagents desselben Workspaces teilen den Dream-Kontext — **gewollt** (cross-pollination) |
 | **LanceDB** | Per-Agent isoliert | Auto-Capture/Recall bleibt strikt per Agent (38 separate DBs) |
 
 ### Verifikation
@@ -1725,7 +1724,7 @@ Referenzimplementierung im Git-Branch `dreaming-bridge/v1.0.0` erhalten.
 
 ### Was ist neu?
 
-Diese Version enthält keine Änderungen am Memory-Plugin selbst. Die Upgrades betreffen die LLM-Schicht, das Reranking in den Research-Frontends und Korrekturen im Kimi-Transport-Layer von YAAWC.
+Diese Version enthält keine Änderungen am Memory-Plugin selbst. Die Upgrades betreffen die LLM-Schicht, das Reranking in den Research-Frontends und provider-spezifische Transport-Korrekturen in YAAWC.
 
 ---
 
@@ -1808,9 +1807,9 @@ Nach Änderung: `docker compose up -d --force-recreate perplexica-backend` + `ba
 
 ---
 
-### 4. YAAWC — kimiOpenAI.ts: maxTokens Default
+### 4. YAAWC — Provider-Adapter: maxTokens Default
 
-`KimiChatOpenAI`-Konstruktor setzt nun `maxTokens: params.maxTokens ?? 32768` als Pflicht-Default. Bisher wurde der LangChain-Default (4096) verwendet, was Antworten unnötig abschnitt.
+Der betroffene OpenAI-kompatible Provider-Adapter setzt nun `maxTokens: params.maxTokens ?? 32768` als Pflicht-Default. Bisher wurde der LangChain-Default (4096) verwendet, was Antworten unnötig abschnitt.
 
 ---
 
@@ -1837,7 +1836,7 @@ YAAWC (nur falls selbst betrieben):
   [ ] config.toml: [RERANKING] Sektion
   [ ] COHERE_API_KEY in /root/.openclaw/.env vorhanden
   [ ] src/lib/utils/contentUtils.ts: AIMessage erhält additional_kwargs
-  [ ] src/lib/providers/kimiOpenAI.ts: maxTokens ?? 32768 im Konstruktor
+  [ ] Provider-Adapter: maxTokens ?? 32768 im Konstruktor
   [ ] YAAWC Container neustarten: docker compose restart
 
 Perplexica (nur falls selbst betrieben):
@@ -1966,9 +1965,9 @@ Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber d
 
 **Dateien:** `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `openclaw-tools-*.js`, `active-memory/index.js`, `bundled/boot-md/handler.js`, `agent-runner.runtime-*.js`
 
-**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. ActiveMemory nutzt für `main`, `bernhardine` und `heisenberg` einen Embedded-Recall mit nur drei Memory-Tools, zahlt aber trotzdem die volle Tool-Factory-Latenz. Zusätzlich blockiert der Hook bis zu `timeoutMs + setupGraceTimeoutMs`. Auf einigen Konfigurationen initialisieren außerdem eingebaute Media-/Web-Tools ihre Provider schon beim Prompt-Build.
+**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. ActiveMemory nutzt Embedded-Recalls mit wenigen Memory-Tools, zahlt aber trotzdem die volle Tool-Factory-Latenz. Zusätzlich blockiert der Hook bis zu `timeoutMs + setupGraceTimeoutMs`. Auf einigen Konfigurationen initialisieren außerdem eingebaute Media-/Web-Tools ihre Provider schon beim Prompt-Build.
 
-**Fix:** Embedded-Runs verwenden im Gateway-Prozess die bereits aktive Plugin-Registry, statt pro Agent die Runtime-Registry neu zu laden. Zusätzlich wird `toolsAllow` vor `createOpenClawTools()` und vor Plugin-Factory-Aufrufen angewendet. Für volle Embedded-Runs cached der Patch Plugin-Tool-Deskriptoren und ruft teure Factories erst beim tatsächlichen Tool-Call erneut auf. Eingebaute schwere Tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) bleiben sichtbar, werden aber lazy initialisiert. ActiveMemory bleibt eingeschaltet, aber das Hook-Budget wird begrenzt und der Embedded-Recall nutzt eine isolierte `active-memory`-Command-Lane statt `main`; normale Embedded-Agent-Runs nutzen session-isolierte Lanes (`agent:<sessionKey>`). Native Subagent-Spawns, ACP-Spawns sowie Subagent-Steer/Send nutzen per-child Lanes (`nested:<childSessionKey>`) statt der globalen `subagent`-Lane. Startup-/Interval-/Commitment-Heartbeats bekommen Startup-Grace und Backpressure, sodass breite Heartbeat-Sweeps nur gestaffelt laufen und Bernd/main nicht blockieren. Subagent-Completion-Announcements bekommen ein 30s Default-Timeout; interne/session-only Announcements warten nicht mehr auf ein finales Agent-Result, externe Zustellung behält aber Final-Wait und Fallback. `boot-md` startet non-blocking; Direct-`NO_REPLY` wird wirklich übersprungen statt als Fülltext ausgeliefert; der versteckte Pre-Compaction-Flush nutzt keinen leeren User-Prompt mehr.
+**Fix:** Embedded-Runs verwenden im Gateway-Prozess die bereits aktive Plugin-Registry, statt pro Agent die Runtime-Registry neu zu laden. Zusätzlich wird `toolsAllow` vor `createOpenClawTools()` und vor Plugin-Factory-Aufrufen angewendet. Für volle Embedded-Runs cached der Patch Plugin-Tool-Deskriptoren und ruft teure Factories erst beim tatsächlichen Tool-Call erneut auf. Eingebaute schwere Tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) bleiben sichtbar, werden aber lazy initialisiert. ActiveMemory bleibt eingeschaltet, aber das Hook-Budget wird begrenzt und der Embedded-Recall nutzt eine isolierte `active-memory`-Command-Lane statt `main`; normale Embedded-Agent-Runs nutzen session-isolierte Lanes (`agent:<sessionKey>`). Native Subagent-Spawns, ACP-Spawns sowie Subagent-Steer/Send nutzen per-child Lanes (`nested:<childSessionKey>`) statt der globalen `subagent`-Lane. Startup-/Interval-/Commitment-Heartbeats bekommen Startup-Grace und Backpressure, sodass breite Heartbeat-Sweeps nur gestaffelt laufen und den primären Agenten nicht blockieren. Subagent-Completion-Announcements bekommen ein 30s Default-Timeout; interne/session-only Announcements warten nicht mehr auf ein finales Agent-Result, externe Zustellung behält aber Final-Wait und Fallback. `boot-md` startet non-blocking; Direct-`NO_REPLY` wird wirklich übersprungen statt als Fülltext ausgeliefert; der versteckte Pre-Compaction-Flush nutzt keinen leeren User-Prompt mehr.
 
 **Verifikation:**
 
@@ -1980,7 +1979,7 @@ journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*before_p
 openclaw status
 ```
 
-**Erwartung:** Keine `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für `main`, `bernhardine` und `heisenberg` aktiv. `openclaw status` sollte nach Gateway-Ready in deutlich unter einer Sekunde antworten, auch wenn Heartbeats fällig sind.
+**Erwartung:** Keine `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für konfigurierte Agenten aktiv. `openclaw status` sollte nach Gateway-Ready in deutlich unter einer Sekunde antworten, auch wenn Heartbeats fällig sind.
 
 ---
 
@@ -2043,7 +2042,7 @@ JSON-Schema pro Agent mit Test-Queries. Pro Query genau eines von `expectedMemor
 
 ```json
 {
-  "bernhardine": [
+  "agent-a": [
     { "query": "Wer ist Person A?", "expectedTextContains": ["person a"], "limit": 5 },
     { "query": "Person Bs Telegram-ID", "expectedTextContains": ["[REDACTED_CHAT_ID]"] }
   ]
@@ -2127,14 +2126,14 @@ Slot-Aufteilung: canonical first, raw memories füllen Restslots (Total ≤ 5)
 ```yaml
 ---
 type: knowledge
-agent: bernhardine
+agent: agent-a
 last_verified: 2026-04-25
 source_memories:
   - 9b3f1234-...
   - 7c8e2456-...
 ---
 
-# Bernhardines kuratiertes Wissen
+# Kuratiertes Wissen von Agent A
 
 ## Person A — Identität
 ...
