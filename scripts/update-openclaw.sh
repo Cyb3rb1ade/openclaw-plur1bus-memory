@@ -546,6 +546,24 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
     fi
 fi
 
+# ─── PLUGIN RUNTIME-DEPS ─────────────────────────────────────────────────────
+header "PLUGIN RUNTIME-DEPS"
+
+PLUGIN_DEPS_JSON=$(openclaw plugins deps --json 2>/dev/null || true)
+if [[ -z "$PLUGIN_DEPS_JSON" ]]; then
+    warn "openclaw plugins deps --json lieferte keine Ausgabe"
+else
+    PLUGIN_DEPS_MISSING=$(jq -r '.missing // [] | length' <<< "$PLUGIN_DEPS_JSON" 2>/dev/null || echo "error")
+    PLUGIN_DEPS_CONFLICTS=$(jq -r '.conflicts // [] | length' <<< "$PLUGIN_DEPS_JSON" 2>/dev/null || echo "error")
+    if [[ "$PLUGIN_DEPS_MISSING" == "0" && "$PLUGIN_DEPS_CONFLICTS" == "0" ]]; then
+        ok "Bundled Plugin Runtime-Deps vollständig"
+    else
+        warn "Bundled Plugin Runtime-Deps nicht sauber (missing=$PLUGIN_DEPS_MISSING conflicts=$PLUGIN_DEPS_CONFLICTS)"
+        jq '{missing, conflicts}' <<< "$PLUGIN_DEPS_JSON" 2>/dev/null | sed 's/^/       /' || true
+        reminder "Wenn ENOTEMPTY/fehlende Pakete im Journal auftauchen: apply-media-patch/apply-memory-patches erneut ausführen und Gateway neu starten."
+    fi
+fi
+
 # ─── SERVICE VERSION AKTUALISIEREN ──────────────────────────────────────────
 if [[ "$CHECK_ONLY" != "1" ]]; then
     header "SERVICE VERSION AKTUALISIEREN"
