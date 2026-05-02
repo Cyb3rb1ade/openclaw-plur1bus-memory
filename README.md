@@ -15,7 +15,7 @@ Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
-**OpenClaw-2026.4.29-Hotfix:** `patches/apply-plur1bus-user-hotfix.sh` hält plur1bus/ActiveMemory aktiv und reduziert Prompt-Build-Latenz durch frühes `toolsAllow`, Plugin-Registry-Reuse, Plugin-Descriptor-Caching, lazy Media-/Web-Tool-Deskriptoren, eine isolierte ActiveMemory-Command-Lane, session-isolierte Embedded-Agent-Lanes, Startup-Grace sowie due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Stale-Task-Zombie-Reconciliation, Kimi-Coding-kompatible Thinking-Defaults, echte Silent-Replies in Direct-Chats und eine Telegram-Reply-Policy, die Direct-Chat- und Gruppen-Finalantworten automatisch ausliefert.
+**OpenClaw-2026.4.29-Hotfix:** `patches/apply-plur1bus-user-hotfix.sh` hält plur1bus/ActiveMemory aktiv und reduziert Prompt-Build-Latenz durch frühes `toolsAllow`, Plugin-Registry-Reuse, Plugin-Descriptor-Caching, lazy Media-/Web-Tool-Deskriptoren, eine isolierte ActiveMemory-Command-Lane, session-isolierte Embedded-Agent-Lanes, Startup-Grace sowie due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Stale-Task-Zombie-Reconciliation, provider-sichere Modell-Konfiguration, echte Silent-Replies in Direct-Chats und eine Telegram-Reply-Policy, die Direct-Chat- und Gruppen-Finalantworten automatisch ausliefert.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -57,8 +57,7 @@ scripts/
   migrate-memory-md-to-lancedb.mjs  ← Einmalige MEMORY.md → LanceDB Migration
   cleanup-session-history.mjs  ← Bereinigt aufgeblähte OpenClaw-Session-Transcripts
 how-to-memory-perfect.md       ← öffentliche/kanonische Dokumentation (Architektur, Upgrades, Patches)
-how-to-memory.md               ← lokale Schnell-Referenz (Konzepte und Setup)
-SYSTEM-DOCUMENTATION.md        ← systemd, Cron, Session-Start, Runtime-Deps und Kimi-only Betrieb
+SYSTEM-DOCUMENTATION.md        ← systemd, Cron, Session-Start, Runtime-Deps und provider-neutraler Betrieb
 HOW-TO-UPDATE.md               ← sicherer OpenClaw/plur1bus Update- und Release-Ablauf
 CHANGELOG.md                   ← Versionshistorie
 ```
@@ -86,7 +85,7 @@ Das Skript:
 - Zeigt Auswahlmenü bei mehreren Instanzen
 - Fragt nach API-Keys (**OpenAI-kompatibel ODER OpenRouter** für Embeddings, optional Cohere für Reranking, beliebiger OpenAI-kompatibler Chat-Completions-Anbieter für Merging)
 - Bei OpenRouter (v2.1+): listet 20+ Embedding-Modelle live, ermittelt Vektor-Dimension automatisch via Test-Call
-- Setzt bei optionalem Merging kein Kimi/OpenAI-Modell heimlich voraus; der User muss das Merging-Modell explizit wählen
+- Setzt bei optionalem Merging kein Chat-Modell heimlich voraus; der User muss das Merging-Modell explizit wählen
 - **Pre-Flight-Check** (v2.1.1+) — vergleicht neue Dim mit bestehenden Agent-DBs, warnt bei Mismatch (Provider-Wechsel braucht fresh DB!)
 - Erstellt LanceDB-Snapshot vor Änderungen
 - Richtet Cron-Job für täglichen GC ein
@@ -105,28 +104,16 @@ Vor jedem Wechsel: `node scripts/memory-doctor.mjs provider-check` — checkt AP
 
 | Bereich | Provider-Anforderung |
 |---------|----------------------|
-| OpenClaw-Hauptmodell | Frei wählbar: OpenAI, Kimi, Claude, GLM, lokale Modelle usw. |
+| OpenClaw-Hauptmodell | Frei wählbar: jeder von OpenClaw unterstützte Chat-Provider |
 | Embeddings | OpenAI-kompatible `/embeddings` API oder OpenRouter; `model` und `dimensions` müssen zur DB passen |
 | Reranking | Optional Cohere; ohne Key bleibt Vector-only Recall aktiv |
 | Merging / Summarization / KNOWLEDGE.md | Optional; braucht explizites `merging.model` bzw. `schicht15.model` auf einem OpenAI-kompatiblen Chat-Completions-Endpunkt |
 
-plur1bus setzt kein Chat-Modell für OpenClaw voraus. Nur die Memory-internen Embedding- und optionalen LLM-Endpunkte müssen passend konfiguriert sein.
+plur1bus setzt kein Chat-Modell für OpenClaw voraus. Bestehende Agent-, Subagent-, Session- und Cron-Modellrouten bleiben Aufgabe der OpenClaw-Konfiguration; der Installer überschreibt sie nicht ungefragt. Nur die Memory-internen Embedding- und optionalen LLM-Endpunkte müssen passend konfiguriert sein.
 
-### Kimi-only / No-Fallback Betrieb
+### Native Workspace-Suche
 
-Wer alle Agenten und Subagents ausschließlich über Kimi-for-Coding betreiben möchte, sollte die OpenClaw-Chat-Routen explizit pinnen:
-
-```json
-"agents": {
-  "defaults": {
-    "model": { "primary": "kimi-coding/kimi-for-coding", "fallbacks": [] }
-  }
-}
-```
-
-Zusätzlich müssen bestehende `agents.list[]`-Einträge, Cron-`agentTurn`-Payloads und gespeicherte Session-Overrides auf `kimi-coding/kimi-for-coding` gesetzt werden. `fallbacks: []` ist Absicht: bei Kimi-only gibt es kein automatisches Ausweichen auf OpenAI, XAI, Google oder andere Provider.
-
-Wichtig: plur1bus selbst bleibt provider-neutral. Embeddings und optionales Merging/Schicht 1.5 sind eigene Memory-Endpunkte. Die native OpenClaw-Workspace-Suche `agents.defaults.memorySearch` ist für plur1bus nicht erforderlich; in Kimi-only/no-OpenAI-Token-Setups kann sie deaktiviert werden, ohne Auto-Recall/Auto-Capture von `memory-lancedb-namespaced` abzuschalten.
+Die native OpenClaw-Workspace-Suche `agents.defaults.memorySearch` ist optional und unabhängig von plur1bus. Sie kann aktiv bleiben, wenn ein passender Embedding-Provider konfiguriert ist. Sie kann auch deaktiviert werden, ohne Auto-Recall/Auto-Capture von `memory-lancedb-namespaced` abzuschalten.
 
 ---
 
@@ -185,7 +172,7 @@ systemctl --user restart openclaw-gateway.service
 ### Dreaming (Schicht 4)
 
 - **Natives Dreaming** — `memory-core` als Slot-Owner führt light/REM/deep Phasen pro Workspace durch.
-- **Workspace-Isolation** — Bernds Dreams ≠ Bernhardines Dreams ≠ Heisenbergs Dreams.
+- **Workspace-Isolation** — getrennte Workspaces konsolidieren ihre Dreams unabhängig voneinander.
 - **Cross-Pollination** innerhalb eines Workspace — Subagents teilen sich den Dream-Kontext.
 - **Dreaming → LanceDB Bridge** (`embed-promoted-memories.mjs`) — neue MEMORY.md-Promotionen werden alle 30 Min nachgebettet.
 
@@ -265,7 +252,7 @@ memory-lancedb-namespaced.kind = "extension"      ← Auto-Capture/Recall per Ag
 
 → [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — öffentliche kanonische Dokumentation: vollständige Architektur, Konfigurations-Referenz, Upgrade-Anleitungen, Security-Audits, Troubleshooting.
 
-→ [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, Cron, Session-Start, Runtime-Deps-Cache und Kimi-only Betriebsnotizen.
+→ [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, Cron, Session-Start, Runtime-Deps-Cache und provider-neutrale Betriebsnotizen.
 
 → [`HOW-TO-UPDATE.md`](HOW-TO-UPDATE.md) — sichere Update- und Release-Checkliste.
 
@@ -296,7 +283,7 @@ This package solves the core problem of LLM agents: **amnesia between sessions.*
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
-**OpenClaw 2026.4.29 hotfix:** `patches/apply-plur1bus-user-hotfix.sh` keeps plur1bus/ActiveMemory enabled and reduces prompt-build latency through early `toolsAllow`, plugin-registry reuse, plugin-descriptor caching, lazy media/web tool descriptors, an isolated ActiveMemory command lane, session-isolated embedded agent lanes, startup grace plus due-aware and staggered startup/interval/commitment heartbeats, subagent lane isolation, subagent completion announce backpressure, stale task-zombie reconciliation, Kimi-Coding-compatible thinking defaults, Kimi-Coding protocol/BaseURL consistency checks, real silent replies in direct chats, and a Telegram reply policy that auto-delivers direct-chat and group-chat final replies.
+**OpenClaw 2026.4.29 hotfix:** `patches/apply-plur1bus-user-hotfix.sh` keeps plur1bus/ActiveMemory enabled and reduces prompt-build latency through early `toolsAllow`, plugin-registry reuse, plugin-descriptor caching, lazy media/web tool descriptors, an isolated ActiveMemory command lane, session-isolated embedded agent lanes, startup grace plus due-aware and staggered startup/interval/commitment heartbeats, subagent lane isolation, subagent completion announce backpressure, stale task-zombie reconciliation, provider-safe model configuration, real silent replies in direct chats, and a Telegram reply policy that auto-delivers direct-chat and group-chat final replies.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
@@ -330,8 +317,7 @@ scripts/
   migrate-memory-md-to-lancedb.mjs  ← One-shot MEMORY.md → LanceDB migration
   cleanup-session-history.mjs  ← Cleans bloated OpenClaw session transcripts
 how-to-memory-perfect.md       ← public/canonical documentation (architecture, upgrades, patches)
-how-to-memory.md               ← local quick reference (concepts and setup)
-SYSTEM-DOCUMENTATION.md        ← systemd, cron, session-start, runtime deps and Kimi-only ops notes
+SYSTEM-DOCUMENTATION.md        ← systemd, cron, session-start, runtime deps and provider-neutral ops notes
 HOW-TO-UPDATE.md               ← safe OpenClaw/plur1bus update and release flow
 CHANGELOG.md                   ← Version history
 ```
@@ -359,7 +345,7 @@ The script:
 - Shows a selection menu when multiple instances are found
 - Prompts for API keys (**OpenAI-compatible OR OpenRouter** for embeddings, optional Cohere for reranking, any OpenAI-compatible chat-completions provider for merging)
 - For OpenRouter (v2.1+): lists 20+ embedding models live, auto-detects vector dimension via test call
-- Does not silently assume Kimi/OpenAI for optional merging; the user must choose the merging model explicitly
+- Does not silently assume a chat model for optional merging; the user must choose the merging model explicitly
 - **Pre-flight check** (v2.1.1+) — compares new dim against existing agent DBs, warns on mismatch (provider switch needs fresh DB!)
 - Creates a LanceDB snapshot before making changes
 - Sets up a daily cron job for garbage collection
@@ -378,28 +364,16 @@ Before any switch: `node scripts/memory-doctor.mjs provider-check` — checks AP
 
 | Area | Provider requirement |
 |------|----------------------|
-| OpenClaw primary model | Unrestricted: OpenAI, Kimi, Claude, GLM, local models, etc. |
+| OpenClaw primary model | Unrestricted: any chat provider supported by OpenClaw |
 | Embeddings | OpenAI-compatible `/embeddings` API or OpenRouter; `model` and `dimensions` must match the DB |
 | Reranking | Optional Cohere; without a key, vector-only recall remains active |
 | Merging / summarization / KNOWLEDGE.md | Optional; requires explicit `merging.model` or `schicht15.model` on an OpenAI-compatible chat-completions endpoint |
 
-plur1bus does not require a specific OpenClaw chat model. Only the memory-internal embedding and optional LLM endpoints need compatible configuration.
+plur1bus does not require a specific OpenClaw chat model. Existing agent, subagent, session and cron model routes remain part of the OpenClaw configuration; the installer does not overwrite them without an explicit user choice. Only the memory-internal embedding and optional LLM endpoints need compatible configuration.
 
-### Kimi-only / No-Fallback Operation
+### Native Workspace Search
 
-If you want every agent and subagent to use Kimi-for-Coding only, pin OpenClaw chat routing explicitly:
-
-```json
-"agents": {
-  "defaults": {
-    "model": { "primary": "kimi-coding/kimi-for-coding", "fallbacks": [] }
-  }
-}
-```
-
-Also update existing `agents.list[]` entries, cron `agentTurn` payloads and stored session overrides to `kimi-coding/kimi-for-coding`. `fallbacks: []` is intentional: Kimi-only means no automatic fallback to OpenAI, XAI, Google or any other provider.
-
-plur1bus itself remains provider-neutral. Embeddings and optional merging/layer-1.5 are separate memory endpoints. Native OpenClaw workspace search via `agents.defaults.memorySearch` is not required by plur1bus; in Kimi-only/no-OpenAI-token deployments it can be disabled while `memory-lancedb-namespaced` continues to provide Auto-Recall and Auto-Capture.
+Native OpenClaw workspace search via `agents.defaults.memorySearch` is optional and independent from plur1bus. It can remain enabled when a compatible embedding provider is configured. It can also be disabled without disabling Auto-Recall or Auto-Capture from `memory-lancedb-namespaced`.
 
 ---
 
@@ -458,7 +432,7 @@ systemctl --user restart openclaw-gateway.service
 ### Dreaming (Layer 4)
 
 - **Native dreaming** — `memory-core` as slot owner runs light/REM/deep phases per workspace.
-- **Workspace isolation** — Bernd's dreams ≠ Bernhardine's dreams ≠ Heisenberg's dreams.
+- **Workspace isolation** — separate workspaces consolidate their dreams independently.
 - **Cross-pollination** within a workspace — subagents share the dream context.
 - **Dreaming → LanceDB bridge** (`embed-promoted-memories.mjs`) — new MEMORY.md promotions are embedded every 30 min.
 
@@ -471,7 +445,7 @@ systemctl --user restart openclaw-gateway.service
 | **#16** Stuck-Session Abort | `diagnostic-*.js` | SIGUSR1 when session exceeds `stuckSessionAbortMs` (default 600s) |
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` after `mergeHybridResults()` — better top-K ranking |
 | **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op on current builds so plur1bus is not bypassed |
-| **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `subagent-announce-delivery-*.js`, `openclaw.json` | Reuses the active Gateway registry, applies `toolsAllow` before plugin factories, adds a plugin descriptor cache, caps active-memory hook waits, makes `boot-md` non-blocking, isolates subagent dispatch lanes, avoids internal final-wait for subagent completion announces, preserves direct/group reply delivery, and keeps Kimi-Coding protocol/BaseURL pairs consistent |
+| **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `subagent-announce-delivery-*.js`, `openclaw.json` | Reuses the active Gateway registry, applies `toolsAllow` before plugin factories, adds a plugin descriptor cache, caps active-memory hook waits, makes `boot-md` non-blocking, isolates subagent dispatch lanes, avoids internal final-wait for subagent completion announces, preserves direct/group reply delivery, and keeps provider-specific model settings schema-safe |
 | **#20** Runtime-Deps Race Guard | `bundled-runtime-deps-*.js` | Skips redundant `npm install` runs when the shared plugin runtime-deps cache already contains semver-compatible packages; prevents `ENOTEMPTY` races while loading Telegram/Discord/memory-core |
 
 The 4.29 latency fix is **OpenClaw bundle-name independent**: the script finds the current `selection-*`, `pi-tools-*` and `tools-*` bundles by content. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores all patches.
@@ -543,13 +517,13 @@ JSONL entries in session history. Newer runtime reads follow the active
 Use the cleanup script in dry-run mode first:
 
 ```bash
-node scripts/cleanup-session-history.mjs --agent main --agent bernhardine --agent heisenberg
+node scripts/cleanup-session-history.mjs --agent main --agent agent-a --agent agent-b
 ```
 
 Apply the rewrite with backups:
 
 ```bash
-node scripts/cleanup-session-history.mjs --agent main --agent bernhardine --agent heisenberg --write
+node scripts/cleanup-session-history.mjs --agent main --agent agent-a --agent agent-b --write
 ```
 
 The script preserves leading session metadata, keeps the active transcript
@@ -562,7 +536,7 @@ branch, writes backups to `.history-cleanup-backups/`, and ignores archived
 
 → [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — public canonical documentation: full architecture, configuration reference, upgrade guides, security audits, troubleshooting.
 
-→ [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, cron, session-start, runtime-deps cache and Kimi-only operational notes.
+→ [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, cron, session-start, runtime-deps cache and provider-neutral operational notes.
 
 → [`HOW-TO-UPDATE.md`](HOW-TO-UPDATE.md) — safe update and release checklist.
 

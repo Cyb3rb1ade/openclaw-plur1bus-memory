@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `2.1.20` — getestet mit OpenClaw `2026.4.29`. Die 4.29-Kompatibilität umfasst `~/.openclaw/plugins/installs.json` als primären Install-Record, schema-konforme Message-Policy-Werte, robuste Journal-/Plugin-List-Checks, einen Installer, der bestehende Provider/Modelle respektiert, provider-neutrale optionale LLM-Konfiguration, und den plur1bus User-Hotfix für Tool-Prep/Prompt-Blocking, ActiveMemory-Lane-Isolation, session-isolierte Embedded-Lanes, Startup-Grace, due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Runtime-Deps-Race-Guard gegen parallele `npm install`-Rennen, echte Silent-Replies, Telegram-Direct-/Group-Reply-Delivery und Kimi-Coding-Protokoll/BaseURL-Konsistenz.
+**Aktuelle Version:** `2.1.20` — getestet mit OpenClaw `2026.4.29`. Die 4.29-Kompatibilität umfasst `~/.openclaw/plugins/installs.json` als primären Install-Record, schema-konforme Message-Policy-Werte, robuste Journal-/Plugin-List-Checks, einen Installer, der bestehende Provider/Modelle respektiert, provider-neutrale optionale LLM-Konfiguration, und den plur1bus User-Hotfix für Tool-Prep/Prompt-Blocking, ActiveMemory-Lane-Isolation, session-isolierte Embedded-Lanes, Startup-Grace, due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Runtime-Deps-Race-Guard gegen parallele `npm install`-Rennen, echte Silent-Replies, Telegram-Direct-/Group-Reply-Delivery und schema-sichere provider-spezifische Modell-Konfiguration.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer.
 
@@ -19,8 +19,8 @@ Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 - **Conflict-Logging** — widersprüchliche `decision`-Memories verschiedener Agenten werden in `conflict-log.jsonl` protokolliert
 - **Merging** — semantisch ähnliche Memories (Score 0.70–0.94) werden via LLM zusammengeführt
 - **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings brauchen OpenAI-kompatible API/OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
-- **Kimi-only-kompatibel** — OpenClaw-Chat-Routen können auf `kimi-coding/kimi-for-coding` mit `fallbacks: []` gepinnt werden; plur1bus selbst bleibt davon unabhängig
-- **Per-Agent-Isolation** — Bernd, Bernhardine, Heisenberg haben getrennte DBs
+- **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei wählbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
+- **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
 - **Schema-Migration** — bestehende DBs erhalten neue Spalten automatisch beim ersten Zugriff
 - **Konfigurierbare Thresholds** — alle Score-Grenzen per `openclaw.json` einstellbar
 
@@ -186,7 +186,7 @@ Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
 
 ## Conflict-Log
 
-`{workspaceDir}/.adaptive-learning/conflict-log.jsonl` protokolliert widersprüchliche `decision`-Memories zwischen verschiedenen Agenten (Bernd, Bernhardine, Heisenberg).
+`{workspaceDir}/.adaptive-learning/conflict-log.jsonl` protokolliert widersprüchliche `decision`-Memories zwischen verschiedenen Agenten.
 
 **Trigger:** Neue `decision`-Memory ähnelt einer bestehenden eines anderen Agenten (Score 0.70–0.94).
 
@@ -197,10 +197,10 @@ Schema einer Zeile:
 {
   "timestamp": "2026-03-28T12:00:00.000Z",
   "newMemoryId": "uuid-neu",
-  "newAgentId": "main",
+  "newAgentId": "agent-a",
   "newText": "Wir nutzen PostgreSQL.",
   "existingMemoryId": "uuid-alt",
-  "existingAgentId": "bernhardine",
+  "existingAgentId": "agent-b",
   "existingText": "Wir nutzen MongoDB.",
   "score": 0.83,
   "category": "decision",
@@ -216,7 +216,7 @@ Schema einer Zeile:
 
 | Agent | Pfad |
 |-------|------|
-| Bernd | `~/.openclaw/memory/lancedb-namespaced/main/` |
-| Bernhardine | `~/.openclaw/memory/lancedb-namespaced/bernhardine/` |
-| Heisenberg | `~/.openclaw/memory/lancedb-namespaced/heisenberg/` |
+| Default agent | `~/.openclaw/memory/lancedb-namespaced/main/` |
+| Agent A | `~/.openclaw/memory/lancedb-namespaced/agent-a/` |
+| Agent B | `~/.openclaw/memory/lancedb-namespaced/agent-b/` |
 | Person B | `~/.openclaw/memory/lancedb-namespaced/person-b/` |

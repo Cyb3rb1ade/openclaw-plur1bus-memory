@@ -45,10 +45,10 @@ OpenClaw cron jobs are separate and live in:
 ~/.openclaw/cron/jobs.json
 ```
 
-For Kimi-only deployments, every OpenClaw cron `payload.kind == "agentTurn"` should set:
+For provider-specific deployments, OpenClaw cron `payload.kind == "agentTurn"` jobs may carry explicit model overrides. plur1bus does not require or change those overrides:
 
-```json
-"model": "kimi-coding/kimi-for-coding"
+```bash
+jq '[.jobs[] | select(.payload.kind? == "agentTurn") | {name, model:.payload.model}]' ~/.openclaw/cron/jobs.json
 ```
 
 ## Session Start
@@ -59,38 +59,25 @@ OpenClaw stores session overrides below:
 ~/.openclaw/agents/<agentId>/sessions/sessions.json
 ```
 
-If a deployment is Kimi-only, existing session entries should be migrated to:
+If a deployment changes chat providers, existing session entries may contain stale provider/model overrides:
 
-```json
-{
-  "modelProvider": "kimi-coding",
-  "model": "kimi-for-coding",
-  "modelOverride": "kimi-for-coding"
-}
+```bash
+jq '.sessions[]? | {id, modelProvider, model, modelOverride}' ~/.openclaw/agents/<agentId>/sessions/sessions.json
 ```
 
-Historical `systemPromptReport.provider/model` fields are diagnostic metadata only, but updating them avoids misleading status/debug output after a provider migration.
+Historical `systemPromptReport.provider/model` fields are diagnostic metadata only, but updating them avoids misleading status/debug output after a provider migration. The plur1bus installer preserves existing session/model routing unless the user explicitly reconfigures it.
 
-## Kimi-only / No Fallback
+## Chat Provider Neutrality
 
-plur1bus does not force a chat model. A deployment can use OpenAI, Kimi, Claude-compatible providers, local providers or a strict Kimi-only policy.
+plur1bus does not force a chat model. A deployment can use any chat provider supported by OpenClaw. Provider-specific model routing belongs to the OpenClaw agent/session/cron configuration, not to the memory plugin.
 
-Strict Kimi-only policy means:
-
-- `agents.defaults.model.primary = "kimi-coding/kimi-for-coding"`.
-- `agents.defaults.model.fallbacks = []`.
-- Every `agents.list[]` model is the same object-form primary with empty fallbacks.
-- Every cron `agentTurn` payload uses `kimi-coding/kimi-for-coding`.
-- Existing session overrides are migrated.
-- No automatic fallback to other chat providers is configured.
-
-`active-memory` may run Kimi instant mode (`thinking: "off"`) to reduce latency and cost. That changes Kimi execution mode, not the provider.
+Memory-internal embeddings and optional LLM features are configured separately. Existing provider/model settings are preserved by default; fresh installs ask the user before writing memory-related provider settings.
 
 ## Native OpenClaw memorySearch
 
 `agents.defaults.memorySearch` is OpenClaw's native workspace indexer. It is independent from plur1bus.
 
-For Kimi-only/no-OpenAI-token setups, it is safe to disable native memorySearch:
+It is safe to disable native memorySearch when the deployment does not want OpenClaw's built-in workspace indexer:
 
 ```json
 "memorySearch": {
