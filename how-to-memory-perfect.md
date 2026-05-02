@@ -2044,7 +2044,7 @@ JSON-Schema pro Agent mit Test-Queries. Pro Query genau eines von `expectedMemor
 {
   "agent-a": [
     { "query": "Wer ist Person A?", "expectedTextContains": ["person a"], "limit": 5 },
-    { "query": "Person Bs Telegram-ID", "expectedTextContains": ["[REDACTED_CHAT_ID]"] }
+    { "query": "Person Bs Chat-ID", "expectedTextContains": ["<chat-id>"] }
   ]
 }
 ```
