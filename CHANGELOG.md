@@ -1,3 +1,9 @@
+## [2.1.23] - 2026-05-04
+
+### Fixed
+- Made the OpenClaw update validation preserve the full `adaptive-learning-loop` runtime tool contract: `adaptive_learning_log`, `adaptive_learning_feedback`, `adaptive_learning_review`, and `adaptive_learning_apply`.
+- Applied the same contract fix to the live local `adaptive-learning-loop` manifest and verified that `openclaw plugins doctor` no longer reports `contracts.tools` warnings.
+
 ## [2.1.22] - 2026-05-04
 
 ### Fixed

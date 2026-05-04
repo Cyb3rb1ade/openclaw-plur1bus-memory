@@ -190,7 +190,7 @@ EOF
     adaptive_manifest="/root/.openclaw/extensions/adaptive-learning-loop/openclaw.plugin.json"
     if [[ -f "$adaptive_manifest" ]]; then
         tmp_json=$(mktemp)
-        jq '.contracts.tools = (((.contracts.tools // []) + ["adaptive_learning_log"]) | unique)' "$adaptive_manifest" > "$tmp_json"
+        jq '.contracts.tools = (((.contracts.tools // []) + ["adaptive_learning_log", "adaptive_learning_feedback", "adaptive_learning_review", "adaptive_learning_apply"]) | unique)' "$adaptive_manifest" > "$tmp_json"
         mv "$tmp_json" "$adaptive_manifest"
         ok "adaptive-learning-loop contracts.tools gesetzt"
     fi
@@ -255,8 +255,8 @@ validate_local_plugin_runtime_deps() {
         warn "memory-lancedb-namespaced manifest deklariert nicht alle Runtime-Tools"
         missing=1
     }
-    jq -e '.contracts.tools | index("adaptive_learning_log")' /root/.openclaw/extensions/adaptive-learning-loop/openclaw.plugin.json >/dev/null || {
-        warn "adaptive-learning-loop manifest deklariert adaptive_learning_log nicht"
+    jq -e '(.contracts.tools // []) as $tools | all(["adaptive_learning_log", "adaptive_learning_feedback", "adaptive_learning_review", "adaptive_learning_apply"][]; $tools | index(.))' /root/.openclaw/extensions/adaptive-learning-loop/openclaw.plugin.json >/dev/null || {
+        warn "adaptive-learning-loop manifest deklariert nicht alle Runtime-Tools"
         missing=1
     }
 
