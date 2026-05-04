@@ -6,7 +6,7 @@
 # 16) stuck-session-abort: SIGUSR1 when session stuck > stuckSessionAbortMs
 # 17) memory-core-cohere-rerank: Cohere rerank-v3.5 after mergeHybridResults()
 # 18) active-memory-fast-path: retired; preserved as no-op for older installs
-# 19) plur1bus-user OpenClaw 2026.4.29 latency hotfixes
+# 19) plur1bus-user OpenClaw compatibility hotfixes
 # 20) bundled-runtime-deps race guard: skip npm installs when all packages are
 #     already semver-satisfied, even if plugin install manifests differ
 
@@ -158,13 +158,27 @@ PYEOF
 }
 patch_active_memory_fast_path || rc=1
 
-# 19) OpenClaw 2026.4.29 latency hotfixes for plur1bus users
-patch_plur1bus_user_hotfix() {
+# 19) Versioned OpenClaw compatibility hotfixes for plur1bus users
+patch_plur1bus_openclaw_compat() {
   local script_dir
+  local version_raw
+  local version
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  bash "$script_dir/apply-plur1bus-user-hotfix.sh"
+  version_raw="$(openclaw --version 2>/dev/null || true)"
+  version="$(sed -n 's/^OpenClaw \([0-9][^ ]*\).*/\1/p' <<< "$version_raw")"
+  case "$version" in
+    2026.5.3-1)
+      bash "$script_dir/apply-openclaw-20260503-compat.sh"
+      ;;
+    2026.4.29)
+      bash "$script_dir/apply-openclaw-20260429-compat.sh"
+      ;;
+    *)
+      echo "[patch] plur1bus OpenClaw compat: no version-specific patch for '${version:-unknown}' (${version_raw:-no version output}), skipping"
+      ;;
+  esac
 }
-patch_plur1bus_user_hotfix || rc=1
+patch_plur1bus_openclaw_compat || rc=1
 
 patch_bundled_runtime_deps_satisfied_cache() {
   local target="$DIST_DIR/bundled-runtime-deps-Dj2QXhNg.js"

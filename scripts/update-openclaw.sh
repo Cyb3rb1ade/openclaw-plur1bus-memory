@@ -72,6 +72,200 @@ CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 OPENCLAW_JSON="/root/.openclaw/openclaw.json"
 OPENCLAW_INSTALLS_JSON="/root/.openclaw/plugins/installs.json"
+OPENCLAW_UPDATE_TARGET="${OPENCLAW_UPDATE_TARGET:-2026.5.3-1}"
+
+validate_openclaw_compat_patch() {
+    local target="$1"
+    local tmpdir package_dir tarball check_files f
+
+    case "$target" in
+        2026.5.3-1) ;;
+        *)
+            info "Kein lokaler Compat-Dry-Run für Zielversion $target konfiguriert"
+            return 0
+            ;;
+    esac
+
+    header "COMPAT-PATCH DRY-RUN"
+    tmpdir="$(mktemp -d /tmp/openclaw-compat-${target//[^A-Za-z0-9]/}-XXXXXX)"
+    package_dir="$tmpdir/package"
+
+    if [[ -d /tmp/openclaw-compat-20260503/package/dist ]] && \
+       [[ "$(jq -r '.version // empty' /tmp/openclaw-compat-20260503/package/package.json 2>/dev/null || true)" == "$target" ]]; then
+        cp -a /tmp/openclaw-compat-20260503/package "$package_dir"
+        ok "Nutze vorhandenes entpacktes openclaw@$target Paket aus /tmp"
+    else
+        info "Lade openclaw@$target fuer Patch-Dry-Run..."
+        npm pack "openclaw@$target" --pack-destination "$tmpdir" >/dev/null
+        tarball="$(find "$tmpdir" -maxdepth 1 -name 'openclaw-*.tgz' | head -1)"
+        [[ -n "$tarball" ]] || { fail "npm pack lieferte kein Tarball"; return 1; }
+        tar -xzf "$tarball" -C "$tmpdir"
+    fi
+
+    OPENCLAW_DIST_DIR="$package_dir/dist" bash /root/openclaw-memory-system/patches/apply-openclaw-20260503-compat.sh
+
+    check_files=(
+        "$package_dir/dist/extensions/active-memory/index.js"
+        "$package_dir/dist"/subagent-announce-delivery-*.js
+        "$package_dir/dist"/subagent-spawn-*.js
+        "$package_dir/dist"/acp-spawn-*.js
+        "$package_dir/dist"/subagent-control-*.js
+        "$package_dir/dist"/heartbeat-runner-*.js
+        "$package_dir/dist/bundled/boot-md/handler.js"
+        "$package_dir/dist"/agent-runner.runtime-*.js
+    )
+    for f in "${check_files[@]}"; do
+        [[ -f "$f" ]] || continue
+        node --check "$f" >/dev/null
+    done
+    ok "openclaw@$target Compat-Patch laeuft auf entpacktem Tarball sauber durch"
+}
+
+cleanup_memory_lancedb_stock_manifest_for_20260503() {
+    local target="$1"
+    local stock_dir stock_manifest tmp_json
+
+    [[ "$target" == "2026.5.3-1" ]] || return 0
+
+    stock_dir="/root/.openclaw/extensions/memory-lancedb-stock"
+    stock_manifest="$stock_dir/openclaw.plugin.json"
+
+    if [[ ! -f "$stock_manifest" && -f "$stock_manifest.disabled" ]]; then
+        cp "$stock_manifest.disabled" "$stock_manifest"
+        ok "memory-lancedb-stock Manifest wiederhergestellt; OpenClaw 5.3 erwartet es bei der Config-Validierung"
+    elif [[ -f "$stock_manifest" ]]; then
+        ok "memory-lancedb-stock Manifest vorhanden"
+    fi
+
+    if [[ -f "$OPENCLAW_INSTALLS_JSON" ]]; then
+        tmp_json=$(mktemp)
+        jq \
+            --arg pluginId "memory-lancedb-stock" \
+            --arg source "$stock_dir" \
+            '
+            del(.[$pluginId])
+            | if (.plugins | type) == "array" then
+                .plugins |= map(select(.pluginId != $pluginId))
+              else . end
+            | if (.installRecords | type) == "array" then
+                .installRecords |= map(select(.pluginId != $pluginId))
+              else . end
+            | if (.diagnostics | type) == "array" then
+                .diagnostics |= map(select((.source // "") != $source and ((.message // "") | contains($pluginId) | not)))
+              else . end
+            ' "$OPENCLAW_INSTALLS_JSON" > "$tmp_json"
+        mv "$tmp_json" "$OPENCLAW_INSTALLS_JSON"
+        ok "stale memory-lancedb-stock Install-Record entfernt"
+    fi
+}
+
+ensure_20260503_plugin_contracts_and_runtime_stubs() {
+    local target="$1"
+    local stock_index namespaced_manifest adaptive_manifest tmp_json
+
+    [[ "$target" == "2026.5.3-1" ]] || return 0
+
+    stock_index="/root/.openclaw/extensions/memory-lancedb-stock/index.js"
+    if [[ ! -f "$stock_index" ]]; then
+        cat > "$stock_index" <<'EOF'
+export default async function memoryLancedbStockRuntime(api) {
+  api?.logger?.warn?.(
+    "memory-lancedb-stock is dependency-only in this local setup; use memory-lancedb-namespaced for runtime memory tools.",
+  );
+}
+EOF
+        ok "memory-lancedb-stock Runtime-Stub erstellt (unterdrueckt TypeScript-runtime Warnung)"
+    else
+        ok "memory-lancedb-stock Runtime-Stub vorhanden"
+    fi
+
+    namespaced_manifest="/root/.openclaw/extensions/memory-lancedb-namespaced/openclaw.plugin.json"
+    if [[ -f "$namespaced_manifest" ]]; then
+        tmp_json=$(mktemp)
+        jq '.contracts.tools = (((.contracts.tools // []) + ["memory_recall"]) | unique)' "$namespaced_manifest" > "$tmp_json"
+        mv "$tmp_json" "$namespaced_manifest"
+        ok "memory-lancedb-namespaced contracts.tools gesetzt"
+    fi
+
+    adaptive_manifest="/root/.openclaw/extensions/adaptive-learning-loop/openclaw.plugin.json"
+    if [[ -f "$adaptive_manifest" ]]; then
+        tmp_json=$(mktemp)
+        jq '.contracts.tools = (((.contracts.tools // []) + ["adaptive_learning_log"]) | unique)' "$adaptive_manifest" > "$tmp_json"
+        mv "$tmp_json" "$adaptive_manifest"
+        ok "adaptive-learning-loop contracts.tools gesetzt"
+    fi
+}
+
+cleanup_stale_discord_channel_for_20260503() {
+    local target="$1"
+    local stock_discord tmp_json
+
+    [[ "$target" == "2026.5.3-1" ]] || return 0
+
+    stock_discord="/usr/lib/node_modules/openclaw/dist/extensions/discord"
+    if [[ -e "$stock_discord" ]]; then
+        info "Discord-Plugin vorhanden; keine automatische Deaktivierung"
+        return 0
+    fi
+
+    if [[ -f "$OPENCLAW_JSON" ]]; then
+        tmp_json=$(mktemp)
+        jq '
+          if (.channels.discord? != null) then
+            .channels.discord.enabled = false
+            | if (.channels.discord.accounts | type) == "object" then
+                .channels.discord.accounts |= with_entries(.value.enabled = false)
+              else . end
+          else . end
+          | if (.plugins.allow | type) == "array" then
+              .plugins.allow |= map(select(. != "discord"))
+            else . end
+        ' "$OPENCLAW_JSON" > "$tmp_json"
+        mv "$tmp_json" "$OPENCLAW_JSON"
+        ok "stale Discord-Channel deaktiviert und aus plugins.allow entfernt"
+    fi
+}
+
+validate_local_plugin_runtime_deps() {
+    local missing=0
+    local required_paths=(
+        "/root/.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js"
+        "/root/.openclaw/extensions/memory-lancedb-stock/node_modules/openai/index.js"
+        "/root/.openclaw/extensions/memory-lancedb-stock/index.js"
+        "/root/.openclaw/extensions/memory-lancedb-stock/openclaw.plugin.json"
+        "/root/.openclaw/extensions/memory-lancedb-namespaced/index.js"
+        "/root/.openclaw/extensions/memory-lancedb-namespaced/openclaw.plugin.json"
+        "/root/.openclaw/extensions/adaptive-learning-loop/index.js"
+        "/root/.openclaw/extensions/adaptive-learning-loop/openclaw.plugin.json"
+    )
+    local path
+
+    for path in "${required_paths[@]}"; do
+        if [[ ! -f "$path" ]]; then
+            warn "Plugin Runtime-Datei fehlt: $path"
+            missing=1
+        fi
+    done
+
+    node --check /root/.openclaw/extensions/memory-lancedb-stock/index.js >/dev/null
+    node --check /root/.openclaw/extensions/memory-lancedb-namespaced/index.js >/dev/null
+    node --check /root/.openclaw/extensions/adaptive-learning-loop/index.js >/dev/null
+
+    jq -e '.contracts.tools | index("memory_recall")' /root/.openclaw/extensions/memory-lancedb-namespaced/openclaw.plugin.json >/dev/null || {
+        warn "memory-lancedb-namespaced manifest deklariert memory_recall nicht"
+        missing=1
+    }
+    jq -e '.contracts.tools | index("adaptive_learning_log")' /root/.openclaw/extensions/adaptive-learning-loop/openclaw.plugin.json >/dev/null || {
+        warn "adaptive-learning-loop manifest deklariert adaptive_learning_log nicht"
+        missing=1
+    }
+
+    if [[ "$missing" == "0" ]]; then
+        ok "Lokale Plugin Runtime-Deps und Tool-Contracts vollständig"
+    else
+        return 1
+    fi
+}
 
 # ─── PRE-FLIGHT ──────────────────────────────────────────────────────────────
 header "PRE-FLIGHT CHECKS"
@@ -112,17 +306,29 @@ pause "Snapshot erstellt? Dann weiter."
 
 [[ "$CHECK_ONLY" == "1" ]] && { info "Nur-Check-Modus — kein Update wird durchgeführt."; }
 
+# ─── CLAWSWEEPER UPSTREAM-REVIEW ─────────────────────────────────────────────
+if [[ -x /root/openclaw-memory-system/scripts/clawsweeper-gate.sh ]]; then
+    extra_flags=()
+    [[ "$CHECK_ONLY" == "1" ]] && extra_flags+=(--no-block)
+    /root/openclaw-memory-system/scripts/clawsweeper-gate.sh "$VERSION_BEFORE" "$OPENCLAW_UPDATE_TARGET" "${extra_flags[@]}" || \
+        warn "clawsweeper-gate fehlgeschlagen — Update geht trotzdem weiter"
+fi
+
+validate_openclaw_compat_patch "$OPENCLAW_UPDATE_TARGET"
+
 # ─── UPDATE ──────────────────────────────────────────────────────────────────
 if [[ "$CHECK_ONLY" != "1" ]]; then
     header "UPDATE DURCHFÜHREN"
-    info "Führe aus: npm i -g openclaw@latest"
-    npm i -g openclaw@latest
+    info "Führe aus: npm i -g openclaw@$OPENCLAW_UPDATE_TARGET"
+    npm i -g "openclaw@$OPENCLAW_UPDATE_TARGET"
     VERSION_AFTER=$(openclaw --version 2>/dev/null || echo "unbekannt")
     if [[ "$VERSION_BEFORE" == "$VERSION_AFTER" ]]; then
         ok "Version unverändert: ${VERSION_AFTER} (bereits aktuell)"
     else
         ok "Update: ${VERSION_BEFORE} → ${BOLD}${VERSION_AFTER}${RESET}"
     fi
+
+    bash /root/openclaw-memory-system/patches/apply-memory-patches.sh
 
     # LanceDB node_modules-Check: memory-lancedb-namespaced nutzt LanceDB aus memory-lancedb-stock.
     # Ab 2026-04-03: Pfade sind relativ via import.meta.url — kein Hardcoded-Pfad-Patch mehr nötig.
@@ -141,7 +347,11 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
     # memory-lancedb-stock hatte ebenfalls ID "memory-lancedb" → Duplicate-Plugin-Warning.
     # Fix: openclaw.plugin.json in memory-lancedb-stock auf ID "memory-lancedb-stock" setzen.
     STOCK_MANIFEST="/root/.openclaw/extensions/memory-lancedb-stock/openclaw.plugin.json"
-    if [[ -f "$STOCK_MANIFEST" ]]; then
+    if [[ "$OPENCLAW_UPDATE_TARGET" == "2026.5.3-1" ]]; then
+        cleanup_memory_lancedb_stock_manifest_for_20260503 "$OPENCLAW_UPDATE_TARGET"
+        ensure_20260503_plugin_contracts_and_runtime_stubs "$OPENCLAW_UPDATE_TARGET"
+        cleanup_stale_discord_channel_for_20260503 "$OPENCLAW_UPDATE_TARGET"
+    elif [[ -f "$STOCK_MANIFEST" ]]; then
         CURRENT_ID=$(grep '"id"' "$STOCK_MANIFEST" | grep -o '"[^"]*"' | tail -1 | tr -d '"')
         if [[ "$CURRENT_ID" == "memory-lancedb" ]]; then
             sed -i 's/"id": "memory-lancedb"/"id": "memory-lancedb-stock"/' "$STOCK_MANIFEST"
@@ -549,10 +759,14 @@ fi
 # ─── PLUGIN RUNTIME-DEPS ─────────────────────────────────────────────────────
 header "PLUGIN RUNTIME-DEPS"
 
-PLUGIN_DEPS_JSON=$(openclaw plugins deps --json 2>/dev/null || true)
-if [[ -z "$PLUGIN_DEPS_JSON" ]]; then
-    warn "openclaw plugins deps --json lieferte keine Ausgabe"
+if ! openclaw plugins --help 2>/dev/null | grep -Eq '^[[:space:]]+deps([[:space:]]|$)'; then
+    validate_local_plugin_runtime_deps || warn "Lokale Plugin Runtime-Deps/Contracts unvollständig"
 else
+    PLUGIN_DEPS_JSON=$(openclaw plugins deps --json 2>/dev/null || true)
+    if [[ -z "$PLUGIN_DEPS_JSON" ]]; then
+        warn "openclaw plugins deps lieferte keine Ausgabe"
+        PLUGIN_DEPS_JSON='{}'
+    fi
     PLUGIN_DEPS_MISSING=$(jq -r '.missing // [] | length' <<< "$PLUGIN_DEPS_JSON" 2>/dev/null || echo "error")
     PLUGIN_DEPS_CONFLICTS=$(jq -r '.conflicts // [] | length' <<< "$PLUGIN_DEPS_JSON" 2>/dev/null || echo "error")
     if [[ "$PLUGIN_DEPS_MISSING" == "0" && "$PLUGIN_DEPS_CONFLICTS" == "0" ]]; then
@@ -578,8 +792,8 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
         if [[ "$CURRENT_DESC_VER" == "$VERSION_NOW" && "$CURRENT_ENV_VER" == "$VERSION_NOW" ]]; then
             ok "Service Version bereits aktuell: ${VERSION_NOW}"
         else
-            sed -i "s/Description=OpenClaw Gateway (v[^)]*)/Description=OpenClaw Gateway (v${VERSION_NOW})/" "$SERVICE_FILE"
-            sed -i "s/OPENCLAW_SERVICE_VERSION=.*/OPENCLAW_SERVICE_VERSION=${VERSION_NOW}/" "$SERVICE_FILE"
+            sed -i "s/^Description=OpenClaw Gateway .*/Description=OpenClaw Gateway (v${VERSION_NOW})/" "$SERVICE_FILE"
+            sed -i "s/^Environment=.*OPENCLAW_SERVICE_VERSION=.*/Environment=\"OPENCLAW_SERVICE_VERSION=${VERSION_NOW}\"/" "$SERVICE_FILE"
 
             # ExecStartPre wiederherstellen (openclaw update überschreibt service-Datei)
             if ! grep -q "ExecStartPre" "$SERVICE_FILE"; then
@@ -1059,7 +1273,7 @@ fi
 header "PLUGIN-TRUST (plugins.allow)"
 
 ALLOW_JSON=$(openclaw config get plugins.allow 2>/dev/null || echo '[]')
-REQUIRED_PLUGINS='["before-compact-save","adaptive-learning-loop","memory-lancedb-namespaced","telegram","discord","memory-core","active-memory"]'
+REQUIRED_PLUGINS='["before-compact-save","adaptive-learning-loop","memory-lancedb-namespaced","telegram","memory-core","active-memory"]'
 MISSING_PLUGINS=$(printf '%s\n' "$ALLOW_JSON" | jq -r --argjson required "$REQUIRED_PLUGINS" '($required - (. // []))[]?' 2>/dev/null || true)
 MERGED_ALLOW=$(printf '%s\n' "$ALLOW_JSON" | jq -c --argjson required "$REQUIRED_PLUGINS" '((. // []) + $required) | unique' 2>/dev/null || echo "$REQUIRED_PLUGINS")
 
