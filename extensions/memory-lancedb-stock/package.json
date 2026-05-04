@@ -2,7 +2,7 @@
   "name": "@openclaw/memory-lancedb",
   "version": "2026.3.11",
   "private": true,
-  "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
+  "description": "Dependency-only LanceDB runtime shim for memory-lancedb-namespaced",
   "type": "module",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
@@ -11,7 +11,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./index.js"
     ]
   }
 }

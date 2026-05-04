@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `2.1.20` — getestet mit OpenClaw `2026.4.29`. Die 4.29-Kompatibilität umfasst `~/.openclaw/plugins/installs.json` als primären Install-Record, schema-konforme Message-Policy-Werte, robuste Journal-/Plugin-List-Checks, einen Installer, der bestehende Provider/Modelle respektiert, provider-neutrale optionale LLM-Konfiguration, und den plur1bus User-Hotfix für Tool-Prep/Prompt-Blocking, ActiveMemory-Lane-Isolation, session-isolierte Embedded-Lanes, Startup-Grace, due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Runtime-Deps-Race-Guard gegen parallele `npm install`-Rennen, echte Silent-Replies, Telegram-Direct-/Group-Reply-Delivery und schema-sichere provider-spezifische Modell-Konfiguration.
+**Aktuelle Version:** `2.1.21` — getestet mit OpenClaw `2026.4.29` und lokal validiert mit OpenClaw `2026.5.3-1`. Die Kompatibilität umfasst versionierte 4.29/5.3-Patches, `before_prompt_build` Auto-Recall, Tool-Contract-Metadaten, robuste Journal-/Plugin-List-Checks, einen Installer, der bestehende Provider/Modelle respektiert, provider-neutrale optionale LLM-Konfiguration, ActiveMemory-Lane-Isolation, session-isolierte Embedded-Lanes, Startup-Grace, due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Runtime-Deps-Race-Guard gegen parallele `npm install`-Rennen, echte Silent-Replies, Telegram-Direct-/Group-Reply-Delivery und schema-sichere provider-spezifische Modell-Konfiguration.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer.
 
@@ -82,7 +82,7 @@ Bei mehreren Treffern werden alle IDs aufgelistet — dann `memoryId` angeben.
 
 ## Auto-Recall
 
-Wird beim `before_agent_start`-Hook ausgelöst. Injiziert bis zu 5 relevante Memories als kompakten Kontext:
+Wird beim `before_prompt_build`-Hook ausgelöst. Injiziert bis zu 5 relevante Memories als kompakten Kontext:
 
 ```xml
 <relevant-memories>

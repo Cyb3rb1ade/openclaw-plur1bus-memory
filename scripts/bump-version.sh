@@ -11,6 +11,7 @@
 # Was wird geändert:
 #   extensions/memory-lancedb-namespaced/openclaw.plugin.json (.version)
 #   extensions/memory-lancedb-namespaced/package.json (.version)
+#   extensions/memory-lancedb-namespaced/package-lock.json (.version)
 #
 # Was sollte SEPARAT manuell gepflegt werden:
 #   CHANGELOG.md (neue Section am Anfang mit dem Bump-Grund)
@@ -21,23 +22,27 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$REPO_DIR/extensions/memory-lancedb-namespaced/openclaw.plugin.json"
 PACKAGE="$REPO_DIR/extensions/memory-lancedb-namespaced/package.json"
+PACKAGE_LOCK="$REPO_DIR/extensions/memory-lancedb-namespaced/package-lock.json"
 CHANGELOG="$REPO_DIR/CHANGELOG.md"
 
 [[ -f "$MANIFEST" ]] || { echo "FATAL: Manifest fehlt: $MANIFEST" >&2; exit 1; }
 [[ -f "$PACKAGE"  ]] || { echo "FATAL: Package fehlt: $PACKAGE"   >&2; exit 1; }
+[[ -f "$PACKAGE_LOCK"  ]] || { echo "FATAL: Package-Lock fehlt: $PACKAGE_LOCK"   >&2; exit 1; }
 [[ -f "$CHANGELOG" ]] || { echo "FATAL: CHANGELOG fehlt: $CHANGELOG" >&2; exit 1; }
 
 current_manifest=$(jq -r '.version' "$MANIFEST")
 current_package=$(jq -r '.version' "$PACKAGE")
+current_package_lock=$(jq -r '.version' "$PACKAGE_LOCK")
 current_changelog=$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' "$CHANGELOG" | head -1 | sed 's/^## \[\(.*\)\]/\1/')
 
 echo "Current versions:"
 echo "  manifest:  $current_manifest"
 echo "  package:   $current_package"
+echo "  lockfile:  $current_package_lock"
 echo "  changelog: $current_changelog"
 
 if [[ "${1:-check}" == "check" ]]; then
-  if [[ "$current_manifest" == "$current_package" && "$current_package" == "$current_changelog" ]]; then
+  if [[ "$current_manifest" == "$current_package" && "$current_package" == "$current_package_lock" && "$current_package_lock" == "$current_changelog" ]]; then
     echo
     echo "✓ Alle Versionen identisch ($current_manifest)"
     exit 0
@@ -82,6 +87,11 @@ echo "  ✓ $MANIFEST"
 tmp=$(mktemp)
 jq --arg v "$target" '.version = $v' "$PACKAGE" > "$tmp" && mv "$tmp" "$PACKAGE"
 echo "  ✓ $PACKAGE"
+
+# Package lock
+tmp=$(mktemp)
+jq --arg v "$target" '.version = $v | .packages[""].version = $v' "$PACKAGE_LOCK" > "$tmp" && mv "$tmp" "$PACKAGE_LOCK"
+echo "  ✓ $PACKAGE_LOCK"
 
 echo
 echo "Nächste Schritte (manuell):"

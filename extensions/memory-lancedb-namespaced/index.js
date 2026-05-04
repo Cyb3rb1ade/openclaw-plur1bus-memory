@@ -9,13 +9,13 @@
  *
  * Auto-Capture:
  *   - Plugin-Hook, wenn OpenClaw conversation access erlaubt.
- *     Seit 4.x braucht das Plugin ein allowConversationAccess-Flag, das
- *     vom Runtime-Schema noch nicht gewhitelisted ist (Schema-Mismatch
- *     in OpenClaw selbst, kein Plugin-Bug). Solange daher: Hook geblockt.
+ *     OpenClaw 2026.5.3-1 whitelisted hooks.allowConversationAccess im
+ *     Runtime-Schema; aeltere 4.x Builds brauchen weiterhin den lokalen
+ *     Compat-Patch oder den Cron-Fallback.
  *   - Cron-Fallback via scripts/auto-capture-lancedb.mjs bei Hook-Blockade.
- *     Läuft alle 5 Min, parst Session-JSONLs, schreibt mit voller Provenance.
+ *     Laeuft alle 5 Min, parst Session-JSONLs, schreibt mit voller Provenance.
  *     v1.8.2 hat drei Bugs gefixt (trajectory-Filter, dynamic agent discovery,
- *     byte-offset state — siehe CHANGELOG).
+ *     byte-offset state; siehe CHANGELOG).
  *
  * Recall-Pipeline (v1.8.0+):
  *   Query → Embedding → LanceDB Top-N → Importance-Boost → Cohere Rerank
@@ -1315,11 +1315,11 @@ const plugin = {
     });
 
     // ========================================================================
-    // Auto-Recall: Memories beim Session-Start injizieren
+    // Auto-Recall: Memories before prompt build injecten
     // ========================================================================
 
     if (autoRecall) {
-      api.on("before_agent_start", async (event, ctx) => {
+      api.on("before_prompt_build", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5) return;
         const agentId = ctx?.agentId;
         const db = pool.getDb(agentId);
@@ -1414,7 +1414,7 @@ const plugin = {
       });
     } else if (schicht15Enabled || gcEnabled) {
       // Auto-recall is off — but inject nudges and run GC if applicable
-      api.on("before_agent_start", async (_event, ctx) => {
+      api.on("before_prompt_build", async (_event, ctx) => {
         const agentId = ctx?.agentId;
         const db = pool.getDb(agentId);
         // GC: purge expired memories (non-blocking)

@@ -2,23 +2,25 @@
 
 Safe update path for plur1bus deployments on OpenClaw `2026.4.29+`.
 
+Validated target: OpenClaw `2026.5.3-1` with the local `apply-openclaw-20260503-compat.sh` patch.
+
 ## 1. Check Current State
 
 ```bash
 openclaw --version
 openclaw status
-openclaw plugins deps --json
+test -f /root/.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js
+test -f /root/.openclaw/extensions/memory-lancedb-stock/index.js
+openclaw plugins doctor
 git -C /root/openclaw-memory-system status --short
+/root/openclaw-memory-system/scripts/clawsweeper-gate.sh "$(openclaw --version)" 2026.5.3-1 --no-block
 ```
 
-`openclaw plugins deps --json` should report no missing dependencies before and after the update:
+ClawSweeper is intentionally unbounded (`CLAWSWEEPER_COMPARE_LIMIT=0`) so large ranges such as the 2026.4.29 -> 2026.5.3-1 jump scan every upstream commit, not only the first 250.
 
-```json
-{
-  "missing": [],
-  "conflicts": []
-}
-```
+OpenClaw `2026.5.3-1` no longer exposes `openclaw plugins deps --json`. The local check is now explicit file validation for the LanceDB/OpenAI runtime dependency tree plus `openclaw plugins doctor`.
+
+The healthy `plugins doctor` output should not contain `contracts.tools` diagnostics for `memory-lancedb-namespaced` or `adaptive-learning-loop`.
 
 ## 2. Update OpenClaw
 
@@ -29,6 +31,7 @@ On the production host use:
 ```
 
 The script preserves the systemd drop-in that runs the patch chain before gateway startup.
+Before installing, it unpacks `openclaw@2026.5.3-1`, runs `patches/apply-openclaw-20260503-compat.sh` against that copy, and aborts if the patch or `node --check` validation fails.
 
 ## 3. Reapply plur1bus Patches
 
@@ -38,6 +41,11 @@ After every OpenClaw update:
 bash /root/openclaw-memory-system/patches/apply-memory-patches.sh
 systemctl --user restart openclaw-gateway
 ```
+
+`apply-memory-patches.sh` dispatches by installed OpenClaw version:
+
+- `2026.4.29` -> `apply-openclaw-20260429-compat.sh`
+- `2026.5.3-1` -> `apply-openclaw-20260503-compat.sh`
 
 Wait for:
 
@@ -76,10 +84,10 @@ Native OpenClaw `agents.defaults.memorySearch` is optional and independent from 
 
 ```bash
 cd /root/openclaw-memory-system
-./scripts/bump-version.sh 2.1.20
+./scripts/bump-version.sh 2.1.21
 git add -A
-git commit -m "fix: harden OpenClaw 2026.4.29 runtime deps and docs"
-git tag -a v2.1.20 -m "v2.1.20"
+git commit -m "fix: add OpenClaw 2026.5.3-1 compat patch"
+git tag -a v2.1.21 -m "v2.1.21"
 git push origin main
-git push origin v2.1.20
+git push origin v2.1.21
 ```

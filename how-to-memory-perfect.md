@@ -226,7 +226,7 @@ Vorteile:
 
 OpenClaw verwendet ein Plugin-System. Das Memory-Plugin registriert sich beim Gateway und:
 - Stellt dem Agenten drei Tools bereit (`memory_store`, `memory_recall`, `memory_forget`)
-- Hängt sich in den `before_agent_start`-Hook ein für Auto-Recall
+- Hängt sich in den `before_prompt_build`-Hook ein für Auto-Recall
 - Verwaltet pro Agent eine separate Datenbank (Namespacing)
 
 #### Installation
@@ -415,7 +415,7 @@ Keine manuelle Migration, kein Datenverlust.
 
 ### Wie es funktioniert
 
-Beim `before_agent_start`-Hook (ausgelöst bevor der Agent seinen Turn beginnt) durchsucht das Plugin die Datenbank semantisch nach dem aktuellen Prompt des Nutzers. Die relevantesten Ergebnisse werden als strukturierter XML-Block **vor den eigentlichen Kontext eingefügt**:
+Beim `before_prompt_build`-Hook (ausgelöst bevor der Agent seinen Turn beginnt) durchsucht das Plugin die Datenbank semantisch nach dem aktuellen Prompt des Nutzers. Die relevantesten Ergebnisse werden als strukturierter XML-Block **vor den eigentlichen Kontext eingefügt**:
 
 ```xml
 <relevant-memories>
@@ -685,7 +685,7 @@ Ohne Fallback-Config wirft `embed()` den Original-Fehler. Was dann passiert hän
 |---|---|
 | `memory_store` | Tool gibt Fehler zurück — Agent sieht es, kann reagieren |
 | `memory_recall` | Tool gibt Fehler zurück |
-| Auto-Recall (`before_agent_start`) | Fehler wird geloggt, kein Inject — Session läuft weiter |
+| Auto-Recall (`before_prompt_build`) | Fehler wird geloggt, kein Inject — Session läuft weiter |
 | Auto-Capture (`agent_end`) | Fehler wird geloggt, Memory nicht gespeichert — Session weiter |
 
 Auto-Recall und Auto-Capture sind daher von Natur aus "fire and ignore" — ein Embedding-Ausfall bricht keine Session.
@@ -765,7 +765,7 @@ Intern speichert das Plugin `expiresAt: Date.now() + TTL_MS` (Unix-Timestamp in 
 
 ### Automatisches Aufräumen (GC)
 
-Abgelaufene Memories werden nicht sofort gelöscht — das Plugin wartet bis zum nächsten `before_agent_start`-Hook und räumt dann auf. Der Mechanismus läuft `purgeExpired()` non-blocking:
+Abgelaufene Memories werden nicht sofort gelöscht — das Plugin wartet bis zum nächsten `before_prompt_build`-Hook und räumt dann auf. Der Mechanismus läuft `purgeExpired()` non-blocking:
 
 ```javascript
 // Intern: Löscht alle Memories wo expiresAt > 0 AND expiresAt < jetzt
@@ -839,7 +839,7 @@ Jede Memory trägt `storedBy: agentId` — die ID des Agenten, der sie gespeiche
 
 Das Log ist kein normales Logfile — es ist ein **Audit-Trail**. Einträge sind nicht "abgelaufen", sie warten auf Auflösung.
 
-Wenn das Log > 1 MB wird oder der älteste Eintrag > 30 Tage alt ist, injiziert der `before_agent_start`-Hook:
+Wenn das Log > 1 MB wird oder der älteste Eintrag > 30 Tage alt ist, injiziert der `before_prompt_build`-Hook:
 
 ```xml
 <conflict-review-reminder>
@@ -1251,7 +1251,7 @@ sed -i 's/"id": "memory-lancedb"/"id": "memory-lancedb-stock"/' \
 systemctl --user restart openclaw-gateway.service
 ```
 
-**Wichtig:** Nur `openclaw.plugin.json` ändern — `node_modules` und `index.ts` bleiben unberührt. `memory-lancedb-namespaced` nutzt die node_modules aus `memory-lancedb-stock/` via relativen Pfad (seit 2026-04-03 nicht mehr hardcoded).
+**Wichtig:** `node_modules` und `index.ts` bleiben unberührt. `memory-lancedb-namespaced` nutzt die node_modules aus `memory-lancedb-stock/` via relativen Pfad (seit 2026-04-03 nicht mehr hardcoded). Ab OpenClaw `2026.5.3-1` muss zusätzlich ein kleiner `index.js`-Runtime-Stub vorhanden sein, weil die Plugin-Discovery TypeScript-Manifeste nur noch akzeptiert, wenn ein kompiliertes JS-Ziel existiert.
 
 ---
 
@@ -1265,7 +1265,7 @@ systemctl --user restart openclaw-gateway.service
 
 Drei neue Features im `memory-lancedb-namespaced`-Plugin:
 
-1. **TTL** — `memory_store` akzeptiert `ttl: "session"` (24h) oder `ttl: "short"` (14 Tage). Ohne Angabe: permanent. Abgelaufene Memories werden beim nächsten `before_agent_start` automatisch gelöscht — sowie täglich um 03:00 via `memory-gc.mjs` (System-Cron).
+1. **TTL** — `memory_store` akzeptiert `ttl: "session"` (24h) oder `ttl: "short"` (14 Tage). Ohne Angabe: permanent. Abgelaufene Memories werden beim nächsten `before_prompt_build` automatisch gelöscht — sowie täglich um 03:00 via `memory-gc.mjs` (System-Cron).
 2. **storedBy** — Jede Memory speichert die `agentId` des speichernden Agenten für Traceability.
 3. **Conflict-Log** — `decision`-Memories mit semantischer Ähnlichkeit (Score 0.70–0.94) zu Memories eines anderen Agenten werden in `conflict-log.jsonl` geloggt. Einträge tragen `schemaVersion: 1`. Proaktiver Nudge bei Log > 1 MB oder Alter > 30 Tage.
 4. **System-Cron-GC** — `scripts/memory-gc.mjs` via `/etc/crontab`, 03:00 täglich. Unabhängig vom Gateway, für alle drei Agenten.
@@ -1314,7 +1314,6 @@ Ab Version 2026.3.28 gilt eine strengere Allowlist-Logik: Wenn `plugins.allow` i
     "adaptive-learning-loop",
     "before-compact-save",
     "telegram",
-    "discord",
     "openai"
   ]
 }
@@ -1422,9 +1421,9 @@ cat /root/.openclaw/workspace/memory/KNOWLEDGE.md
 
 - **TTL** — `expiresAt`-Feld im Schema, drei feste Werte: `"session"` (+1 Tag), `"short"` (+14 Tage), kein TTL = permanent
 - **storedBy** — `storedBy`-Feld im Schema, enthält `agentId` des speichernden Agenten
-- **Opportunistic GC** — `purgeExpired()` feuert non-blocking beim `before_agent_start`-Hook (wenn `gc.enabled: true`, Default)
+- **Opportunistic GC** — `purgeExpired()` feuert non-blocking beim `before_prompt_build`-Hook (wenn `gc.enabled: true`, Default)
 - **Conflict-Logging** — bei `decision`-Memories mit semantischer Nähe zu einer fremden Memory (anderer Agent) → Eintrag in `conflict-log.jsonl`
-- **Conflict-Nudge** — wenn Log >1 MB oder ältester Eintrag >30 Tage → `<conflict-review-reminder>` im `before_agent_start`-Context
+- **Conflict-Nudge** — wenn Log >1 MB oder ältester Eintrag >30 Tage → `<conflict-review-reminder>` im `before_prompt_build`-Context
 
 ### Schema-Migration
 
@@ -1604,7 +1603,7 @@ Das Memory-System ist seit 2026-04-03 in einem eigenen Git-Repository unter Vers
     └── memory-gc.mjs
 ```
 
-**Aktueller Stand:** `v2.1.20` (Tag), Branch `main`
+**Aktueller Stand:** `v2.1.21` (Tag), Branch `main`
 
 ### Workflow — Änderungen einpflegen
 
@@ -1629,7 +1628,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag -a v2.1.20 -m "v2.1.20"
+git tag -a v2.1.21 -m "v2.1.21"
 ```
 
 ### Teilen / Veröffentlichen
@@ -1659,7 +1658,7 @@ git merge contrib/main --no-ff
 
 ## Upgrade-Anleitung: 2026-04-06 → 2026-04-13 — Dreaming (nativ via memory-core)
 
-### Aktueller Stand (2026-05-01, OpenClaw 2026.4.29)
+### Aktueller Stand (2026-05-04, OpenClaw 2026.5.3-1 validiert)
 
 Das Dreaming läuft **nativ über OpenClaws `memory-core`** — nicht über externe Bridge-Scripts.
 
@@ -1668,7 +1667,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.20`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`. OpenClaw 2026.4.29 nutzt `~/.openclaw/plugins/installs.json` als primären Install-Record; `update-openclaw.sh` schreibt schema-konforme Message-Werte (`messages.visibleReplies = "automatic"` für Direct-Chat-Finalantworten, `messages.groupChat.visibleReplies = "automatic"` für Gruppen-Finalantworten und sichtbaren Reasoning-Stream, `messages.queue.mode = "steer"`) und verifiziert Memory über `openclaw plugins list` plus Gateway-Journal. ActiveMemory-Embedded-Recalls laufen auf einer eigenen Command-Lane, normale Embedded-Agent-Runs auf session-isolierten Lanes, native Subagent-Dispatch-/Steer-/Send-Runs auf per-child Lanes statt global `subagent`. Startup-/Interval-/Commitment-Heartbeats haben eine Startup-Grace und Backpressure, damit breite Heartbeat-Sweeps nicht den primären Agenten blockieren. Subagent-Completion-Announcements warten bei internen/session-only Zielen nicht mehr auf einen vollständigen Final-Agent-Run. Direct-`NO_REPLY` bleibt silent. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.21`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`; der lokale Patchpfad ist gegen OpenClaw `2026.5.3-1` validiert. `apply-memory-patches.sh` dispatcht versioniert: 4.29 nutzt den historischen `apply-plur1bus-user-hotfix.sh`, 5.3 nutzt `apply-openclaw-20260503-compat.sh`. In 2026.5.3-1 sind `toolsAllow`-Prefiltering und `hooks.allowConversationAccess`-Schema-Support upstream enthalten; der lokale 5.3-Patch hält nur noch die realen Betriebsfixes: ActiveMemory-Empty-Result wartet auf Fallback-Recall, Empty-Result wird nicht gecached, Hook-Budget bleibt kurz, ActiveMemory/Subagents laufen auf isolierten Lanes, Heartbeat-Sweeps bekommen Backpressure, `boot-md` startet non-blocking und der versteckte Pre-Compaction-Flush nutzt keinen leeren Prompt. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
 
 ### Was passiert beim Dreaming?
 
@@ -1961,25 +1960,25 @@ journalctl --user -u openclaw-gateway --no-pager | grep "cohere.*rerank\|rerank.
 
 Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber den plur1bus-Pluginpfad umgehen. Seit `2.1.12` bleibt ActiveMemory auf dem normalen Toolpfad und wird stattdessen über Patch #19 beschleunigt.
 
-## Patch #19 — plur1bus User Hotfix für OpenClaw 2026.4.29
+## Patch #19 — plur1bus Compat-Patches fuer OpenClaw 2026.4.29 und 2026.5.3-1
 
-**Dateien:** `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `openclaw-tools-*.js`, `active-memory/index.js`, `bundled/boot-md/handler.js`, `agent-runner.runtime-*.js`
+**Dateien:** `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `active-memory/index.js`, `subagent-announce-delivery-*.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `heartbeat-runner-*.js`, `bundled/boot-md/handler.js`, `agent-runner.runtime-*.js`
 
-**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. ActiveMemory nutzt Embedded-Recalls mit wenigen Memory-Tools, zahlt aber trotzdem die volle Tool-Factory-Latenz. Zusätzlich blockiert der Hook bis zu `timeoutMs + setupGraceTimeoutMs`. Auf einigen Konfigurationen initialisieren außerdem eingebaute Media-/Web-Tools ihre Provider schon beim Prompt-Build.
+**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. In OpenClaw `2026.5.3-1` ist dieser Teil upstream umgebaut und teilweise gefixt; blindes Weiterlaufen des 4.29-Patches bricht deshalb am `selection toolsAllow prefilter`-Anchor. ActiveMemory braucht lokal weiter kurze Prompt-Build-Budgets, isolierte Lanes und die 5.3-Korrektur, dass ein leeres Terminal-`memory_search` den Fallback-Recall nicht abbricht.
 
-**Fix:** Embedded-Runs verwenden im Gateway-Prozess die bereits aktive Plugin-Registry, statt pro Agent die Runtime-Registry neu zu laden. Zusätzlich wird `toolsAllow` vor `createOpenClawTools()` und vor Plugin-Factory-Aufrufen angewendet. Für volle Embedded-Runs cached der Patch Plugin-Tool-Deskriptoren und ruft teure Factories erst beim tatsächlichen Tool-Call erneut auf. Eingebaute schwere Tools (`image`, `pdf`, `image_generate`, `video_generate`, `music_generate`, `web_search`) bleiben sichtbar, werden aber lazy initialisiert. ActiveMemory bleibt eingeschaltet, aber das Hook-Budget wird begrenzt und der Embedded-Recall nutzt eine isolierte `active-memory`-Command-Lane statt `main`; normale Embedded-Agent-Runs nutzen session-isolierte Lanes (`agent:<sessionKey>`). Native Subagent-Spawns, ACP-Spawns sowie Subagent-Steer/Send nutzen per-child Lanes (`nested:<childSessionKey>`) statt der globalen `subagent`-Lane. Startup-/Interval-/Commitment-Heartbeats bekommen Startup-Grace und Backpressure, sodass breite Heartbeat-Sweeps nur gestaffelt laufen und den primären Agenten nicht blockieren. Subagent-Completion-Announcements bekommen ein 30s Default-Timeout; interne/session-only Announcements warten nicht mehr auf ein finales Agent-Result, externe Zustellung behält aber Final-Wait und Fallback. `boot-md` startet non-blocking; Direct-`NO_REPLY` wird wirklich übersprungen statt als Fülltext ausgeliefert; der versteckte Pre-Compaction-Flush nutzt keinen leeren User-Prompt mehr.
+**Fix:** `apply-memory-patches.sh` erkennt die installierte OpenClaw-Version. 4.29 bleibt auf dem bisherigen umfassenden Hotfix. 5.3.1 retired die upstream-gefixten Tool-Allowlist-Patches und patcht nur ActiveMemory-Fallback/Timeouts, Subagent-Lanes, Heartbeat-Backpressure, Subagent-Completion-Announcements, non-blocking `boot-md` und den nichtleeren Hidden-Flush-Prompt.
 
 **Verifikation:**
 
 ```bash
-bash patches/apply-plur1bus-user-hotfix.sh
+bash patches/apply-memory-patches.sh
 node --check /usr/lib/node_modules/openclaw/dist/selection-*.js
 node --check /usr/lib/node_modules/openclaw/dist/pi-tools-*.js
 journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*before_prompt_build.*timed out"
 openclaw status
 ```
 
-**Erwartung:** Keine `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für konfigurierte Agenten aktiv. `openclaw status` sollte nach Gateway-Ready in deutlich unter einer Sekunde antworten, auch wenn Heartbeats fällig sind.
+**Erwartung:** Keine `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für konfigurierte Agenten aktiv. Auf 2026.5.3-1 darf ein leerer Memory-Suchtreffer nicht mehr den Fallback-Recall abbrechen. `openclaw status` sollte nach Gateway-Ready stabil antworten, auch wenn Heartbeats fällig sind.
 
 ---
 
@@ -2165,7 +2164,7 @@ Voll-automatisch beim nächsten Gateway-Start. Sechs neue LanceDB-Spalten werden
 Auto-Capture (`agent_end`) wird seit OpenClaw 4.x mit Warnung
 `typed hook "agent_end" blocked because non-bundled plugins must set hooks.allowConversationAccess=true` im Log geblockt.
 
-Der Schlüssel `allowConversationAccess` ist im OpenClaw-Runtime-Schema **nicht** gewhitelisted, obwohl die Manifest-Registry ihn erwartet — Schema-Mismatch in OpenClaw selbst, kein Plugin-Bug. Workaround steht aus, bis OpenClaw das Feld in `plugins.entries.*.hooks.properties` ergänzt.
+In OpenClaw `2026.5.3-1` ist `allowConversationAccess` im Runtime-Schema vorhanden. Aeltere 4.x Builds koennen weiterhin Hook-Blockaden zeigen; dort bleiben der 4.29-Compat-Patch und der Cron-Fallback relevant.
 
 **Was funktioniert weiterhin:** Auto-Recall, `memory_store` / `memory_recall` / `memory_forget` / `knowledge_update`, Schicht 1.5, GC, Conflict-Log, Canonical-First, Doctor-CLI. **Was nicht:** Auto-Capture aus Turn-Messages (kann via `memory_store` kompensiert werden, was die Agenten-SOULs ohnehin tun).
 

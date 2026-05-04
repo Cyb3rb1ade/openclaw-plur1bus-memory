@@ -1,6 +1,6 @@
 # System Documentation
 
-Operational notes for plur1bus on OpenClaw `2026.4.29` and newer.
+Operational notes for plur1bus on OpenClaw `2026.4.29` and newer. The local patch chain is validated for OpenClaw `2026.5.3-1` via `patches/apply-openclaw-20260503-compat.sh`.
 
 ## Services
 
@@ -21,10 +21,14 @@ The local production setup uses an `ExecStartPre` patch chain. `apply-memory-pat
 - Stuck-session abort guard.
 - memory-core Cohere rerank patch.
 - Retired active-memory fast-path no-op so plur1bus is not bypassed.
-- `apply-plur1bus-user-hotfix.sh` for OpenClaw `2026.4.29` prompt/tool/subagent/heartbeat regressions.
+- Versioned plur1bus compatibility patches:
+  - `apply-openclaw-20260429-compat.sh` wraps the historical `apply-plur1bus-user-hotfix.sh`.
+  - `apply-openclaw-20260503-compat.sh` keeps only 2026.5.3-1 local fixes: ActiveMemory empty-result fallback, short hook budget, isolated lanes, heartbeat backpressure, non-blocking `boot-md`, non-empty hidden flush prompt and subagent announce caps.
 - Bundled runtime-deps race guard.
 
 The runtime-deps guard prevents repeated `npm install` runs against the same `~/.openclaw/plugin-runtime-deps/openclaw-<version>-<hash>` directory after all required packages are already present. This avoids `ENOTEMPTY` rename failures that can otherwise stop Telegram, Discord or `memory-core` from registering.
+
+`toolsAllow` prefiltering and `hooks.allowConversationAccess` schema support are upstream in OpenClaw `2026.5.3-1`; the 5.3 compat patch deliberately does not reapply the old selection/pi-tools/tool-factory patches.
 
 ## Cron
 
@@ -92,20 +96,16 @@ Do not switch native `memorySearch` to a local provider unless the required runt
 
 ## Runtime-Deps Cache Repair
 
-Check bundled plugin runtime dependencies:
+Check local plugin runtime dependencies. On OpenClaw `2026.5.3-1`, `openclaw plugins deps --json` is no longer available, so validate the local dependency files directly and then run plugin diagnostics:
 
 ```bash
-openclaw plugins deps --json
+test -f /root/.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js
+test -f /root/.openclaw/extensions/memory-lancedb-stock/node_modules/openai/index.js
+test -f /root/.openclaw/extensions/memory-lancedb-stock/index.js
+openclaw plugins doctor
 ```
 
-Healthy state:
-
-```json
-{
-  "missing": [],
-  "conflicts": []
-}
-```
+Healthy state: all `test -f` checks pass and `plugins doctor` has no `contracts.tools` diagnostics for the local memory plugins.
 
 If startup logs show `ENOTEMPTY` under `plugin-runtime-deps`, first ensure no `npm install` is running, then re-run the patch and restart OpenClaw:
 

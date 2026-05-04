@@ -1,3 +1,18 @@
+## [2.1.21] - 2026-05-04
+
+### Fixed
+- Added the versioned OpenClaw `2026.5.3-1` compat patch and kept the existing `2026.4.29` path as a separate wrapper instead of reusing the old hotfix blindly.
+- Replaced the removed `openclaw plugins deps --json` update check with explicit local runtime dependency and manifest contract validation.
+- Added `contracts.tools` metadata for `memory-lancedb-namespaced` so OpenClaw `2026.5.3-1` no longer rejects its registered tool diagnostics.
+- Added a dependency-only `memory-lancedb-stock/index.js` runtime stub so the local LanceDB dependency package can remain installed without TypeScript runtime warnings.
+- Migrated `memory-lancedb-namespaced` Auto-Recall and GC nudges from legacy `before_agent_start` to `before_prompt_build`.
+- Disabled stale Discord channel auto-enable during 5.3 updates when the bundled Discord plugin is not present.
+- Extended `update-openclaw.sh` with target-version validation, tarball patch dry-run, ClawSweeper full-range scan support, post-install patching, and 5.3-specific cleanup.
+
+### Documentation
+- Updated README, `HOW-TO-UPDATE.md`, `SYSTEM-DOCUMENTATION.md`, and `how-to-memory-perfect.md` for the validated OpenClaw `2026.5.3-1` local compat path.
+- Documented that `toolsAllow` prefiltering and `hooks.allowConversationAccess` are upstream in OpenClaw `2026.5.3-1`, so the local 5.3 patch only keeps the remaining operational fixes.
+
 ## [2.1.20] - 2026-05-02
 
 ### Fixed

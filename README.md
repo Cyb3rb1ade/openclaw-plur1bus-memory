@@ -11,11 +11,11 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.20` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+**Aktuelle Version:** `2.1.21` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
-**OpenClaw-2026.4.29-Hotfix:** `patches/apply-plur1bus-user-hotfix.sh` hält plur1bus/ActiveMemory aktiv und reduziert Prompt-Build-Latenz durch frühes `toolsAllow`, Plugin-Registry-Reuse, Plugin-Descriptor-Caching, lazy Media-/Web-Tool-Deskriptoren, eine isolierte ActiveMemory-Command-Lane, session-isolierte Embedded-Agent-Lanes, Startup-Grace sowie due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Stale-Task-Zombie-Reconciliation, provider-sichere Modell-Konfiguration, echte Silent-Replies in Direct-Chats und eine Telegram-Reply-Policy, die Direct-Chat- und Gruppen-Finalantworten automatisch ausliefert.
+**OpenClaw-Compat-Patches:** `patches/apply-memory-patches.sh` dispatcht versioniert. OpenClaw `2026.4.29` nutzt den historischen `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` nutzt `apply-openclaw-20260503-compat.sh`, weil `toolsAllow`-Prefiltering und `hooks.allowConversationAccess` dort upstream enthalten sind. Der 5.3-Patch haelt ActiveMemory-Fallback/Timeouts, isolierte Lanes, Heartbeat-Backpressure, non-blocking `boot-md`, Subagent-Completion-Announce-Caps und den Hidden-Flush-Prompt lokal kompatibel.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -44,8 +44,10 @@ extensions/
   memory-lancedb-namespaced/   ← Hauptplugin (OpenClaw-Gateway-Plugin)
   memory-lancedb-stock/        ← LanceDB-Wrapper (Abhängigkeit, npm install)
 patches/
-  apply-memory-patches.sh      ← OpenClaw-Patches (Stuck-Session, Cohere-Rerank, 4.29-Latenzfix)
-  apply-plur1bus-user-hotfix.sh ← User-Hotfix für OpenClaw 2026.4.29 Tool-Prep/Prompt-Blocking
+  apply-memory-patches.sh      ← OpenClaw-Patches (Stuck-Session, Cohere-Rerank, versionierte Compat-Patches)
+  apply-openclaw-20260429-compat.sh ← Wrapper für den 4.29-Hotfix
+  apply-openclaw-20260503-compat.sh ← Lokaler OpenClaw 2026.5.3-1 Compat-Patch
+  apply-plur1bus-user-hotfix.sh ← Historischer OpenClaw 2026.4.29 Tool-Prep/Prompt-Blocking-Hotfix
 scripts/
   install-memory-system.sh     ← Installation, Update, Registry-Refresh, Rollback + Patches (mit Auto-Discovery)
   bump-version.sh              ← Synchronisiert Versions in Manifest + CHANGELOG
@@ -185,10 +187,10 @@ systemctl --user restart openclaw-gateway.service
 | **#16** Stuck-Session-Abort | `diagnostic-*.js` | SIGUSR1 wenn Session > `stuckSessionAbortMs` (Default 600s) hängt |
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` nach `mergeHybridResults()` — bessere Top-K-Sortierung |
 | **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op auf aktuellen Builds, damit plur1bus nicht umgangen wird |
-| **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `subagent-announce-delivery-*.js`, `openclaw.json` | aktive Gateway-Registry wiederverwenden, `toolsAllow` vor Plugin-Factories, Plugin-Deskriptor-Cache, kürzeres active-memory Hook-Budget, non-blocking `boot-md`, Subagent-Lane-Isolation, Subagent-Completion-Announce ohne internes Final-Wait, Direct-Chat-Reply-Delivery erhalten |
+| **#19** plur1bus Compat | `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `active-memory/index.js`, `subagent-*.js`, `acp-spawn-*.js`, `heartbeat-runner-*.js`, `boot-md`, `agent-runner.runtime-*.js`, `openclaw.json` | versionierter 4.29/5.3-Compat; 5.3 retired upstream-gefixte Tool-Allowlist-Patches und haelt ActiveMemory-Fallback, kurze Hook-Budgets, Lane-Isolation, Heartbeat-Backpressure, non-blocking Boot und Hidden-Flush stabil |
 | **#20** Runtime-Deps Race Guard | `bundled-runtime-deps-*.js` | überspringt redundante `npm install`-Runs, wenn der gemeinsame Plugin-Runtime-Deps-Cache bereits semver-passende Pakete enthält; verhindert `ENOTEMPTY`-Rennen beim Laden von Telegram/Discord/memory-core |
 
-Der 4.29-Latenzfix ist **OpenClaw-Bundle-Namen-unabhängig**: das Script findet die aktuellen `selection-*`, `pi-tools-*` und `tools-*` Bundles per Inhalt. Bei künftigen Updates muss nur `apply-memory-patches.sh` erneut laufen.
+Die Compat-Patches sind **OpenClaw-Bundle-Namen-unabhängig**: die Scripts finden die relevanten Bundles per Inhalt. Bei künftigen Updates muss `apply-memory-patches.sh` erneut laufen; neue OpenClaw-Versionen brauchen einen eigenen versionierten Patch, wenn Anchors oder Upstream-Verhalten abweichen.
 
 ---
 
@@ -279,11 +281,11 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.20` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+**Current version:** `2.1.21` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
-**OpenClaw 2026.4.29 hotfix:** `patches/apply-plur1bus-user-hotfix.sh` keeps plur1bus/ActiveMemory enabled and reduces prompt-build latency through early `toolsAllow`, plugin-registry reuse, plugin-descriptor caching, lazy media/web tool descriptors, an isolated ActiveMemory command lane, session-isolated embedded agent lanes, startup grace plus due-aware and staggered startup/interval/commitment heartbeats, subagent lane isolation, subagent completion announce backpressure, stale task-zombie reconciliation, provider-safe model configuration, real silent replies in direct chats, and a Telegram reply policy that auto-delivers direct-chat and group-chat final replies.
+**OpenClaw compatibility patches:** `patches/apply-memory-patches.sh` dispatches by OpenClaw version. OpenClaw `2026.4.29` uses the historical `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` uses `apply-openclaw-20260503-compat.sh` because `toolsAllow` prefiltering and `hooks.allowConversationAccess` schema support are upstream there. The 5.3 patch keeps ActiveMemory fallback/timeouts, isolated lanes, heartbeat backpressure, non-blocking `boot-md`, subagent completion announce caps, and the hidden flush prompt locally compatible.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
@@ -304,8 +306,10 @@ extensions/
   memory-lancedb-namespaced/   ← Main plugin (OpenClaw Gateway plugin)
   memory-lancedb-stock/        ← LanceDB wrapper (dependency, requires npm install)
 patches/
-  apply-memory-patches.sh      ← OpenClaw patches (stuck-session, cohere-rerank, 4.29 latency fix)
-  apply-plur1bus-user-hotfix.sh ← User hotfix for OpenClaw 2026.4.29 tool-prep/prompt blocking
+  apply-memory-patches.sh      ← OpenClaw patches (stuck-session, cohere-rerank, versioned compat patches)
+  apply-openclaw-20260429-compat.sh ← Wrapper for the 4.29 hotfix
+  apply-openclaw-20260503-compat.sh ← Local OpenClaw 2026.5.3-1 compat patch
+  apply-plur1bus-user-hotfix.sh ← Historical OpenClaw 2026.4.29 tool-prep/prompt-blocking hotfix
 scripts/
   install-memory-system.sh     ← Installation, update, registry refresh, rollback + patches (with auto-discovery)
   bump-version.sh              ← Synchronizes versions in manifest + CHANGELOG
@@ -445,10 +449,10 @@ systemctl --user restart openclaw-gateway.service
 | **#16** Stuck-Session Abort | `diagnostic-*.js` | SIGUSR1 when session exceeds `stuckSessionAbortMs` (default 600s) |
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` after `mergeHybridResults()` — better top-K ranking |
 | **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op on current builds so plur1bus is not bypassed |
-| **#19** plur1bus User Hotfix | `selection-*.js`, `pi-tools-*.js`, `tools-*.js`, `active-memory/index.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `subagent-announce-delivery-*.js`, `openclaw.json` | Reuses the active Gateway registry, applies `toolsAllow` before plugin factories, adds a plugin descriptor cache, caps active-memory hook waits, makes `boot-md` non-blocking, isolates subagent dispatch lanes, avoids internal final-wait for subagent completion announces, preserves direct/group reply delivery, and keeps provider-specific model settings schema-safe |
+| **#19** plur1bus Compat | `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `active-memory/index.js`, `subagent-*.js`, `acp-spawn-*.js`, `heartbeat-runner-*.js`, `boot-md`, `agent-runner.runtime-*.js`, `openclaw.json` | Versioned 4.29/5.3 compat; 5.3 retires upstream-fixed tool allowlist patches and keeps ActiveMemory fallback, short hook budgets, lane isolation, heartbeat backpressure, non-blocking boot and hidden flush stable |
 | **#20** Runtime-Deps Race Guard | `bundled-runtime-deps-*.js` | Skips redundant `npm install` runs when the shared plugin runtime-deps cache already contains semver-compatible packages; prevents `ENOTEMPTY` races while loading Telegram/Discord/memory-core |
 
-The 4.29 latency fix is **OpenClaw bundle-name independent**: the script finds the current `selection-*`, `pi-tools-*` and `tools-*` bundles by content. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores all patches.
+The compat patches are **OpenClaw bundle-name independent**: scripts find the relevant bundles by content. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores known patches; new OpenClaw versions need their own versioned patch when anchors or upstream behavior change.
 
 ---
 
