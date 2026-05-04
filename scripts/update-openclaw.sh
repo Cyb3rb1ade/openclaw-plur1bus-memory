@@ -182,7 +182,7 @@ EOF
     namespaced_manifest="/root/.openclaw/extensions/memory-lancedb-namespaced/openclaw.plugin.json"
     if [[ -f "$namespaced_manifest" ]]; then
         tmp_json=$(mktemp)
-        jq '.contracts.tools = (((.contracts.tools // []) + ["memory_recall"]) | unique)' "$namespaced_manifest" > "$tmp_json"
+        jq '.contracts.tools = (((.contracts.tools // []) + ["memory_recall", "memory_store", "memory_forget", "knowledge_update"]) | unique)' "$namespaced_manifest" > "$tmp_json"
         mv "$tmp_json" "$namespaced_manifest"
         ok "memory-lancedb-namespaced contracts.tools gesetzt"
     fi
@@ -251,8 +251,8 @@ validate_local_plugin_runtime_deps() {
     node --check /root/.openclaw/extensions/memory-lancedb-namespaced/index.js >/dev/null
     node --check /root/.openclaw/extensions/adaptive-learning-loop/index.js >/dev/null
 
-    jq -e '.contracts.tools | index("memory_recall")' /root/.openclaw/extensions/memory-lancedb-namespaced/openclaw.plugin.json >/dev/null || {
-        warn "memory-lancedb-namespaced manifest deklariert memory_recall nicht"
+    jq -e '(.contracts.tools // []) as $tools | all(["memory_recall", "memory_store", "memory_forget", "knowledge_update"][]; $tools | index(.))' /root/.openclaw/extensions/memory-lancedb-namespaced/openclaw.plugin.json >/dev/null || {
+        warn "memory-lancedb-namespaced manifest deklariert nicht alle Runtime-Tools"
         missing=1
     }
     jq -e '.contracts.tools | index("adaptive_learning_log")' /root/.openclaw/extensions/adaptive-learning-loop/openclaw.plugin.json >/dev/null || {

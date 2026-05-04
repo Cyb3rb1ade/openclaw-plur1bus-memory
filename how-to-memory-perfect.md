@@ -225,7 +225,7 @@ Vorteile:
 ### Das Plugin: `memory-lancedb-namespaced`
 
 OpenClaw verwendet ein Plugin-System. Das Memory-Plugin registriert sich beim Gateway und:
-- Stellt dem Agenten drei Tools bereit (`memory_store`, `memory_recall`, `memory_forget`)
+- Stellt dem Agenten vier Tools bereit (`memory_store`, `memory_recall`, `memory_forget`, `knowledge_update`)
 - Hängt sich in den `before_prompt_build`-Hook ein für Auto-Recall
 - Verwaltet pro Agent eine separate Datenbank (Namespacing)
 
@@ -1603,7 +1603,7 @@ Das Memory-System ist seit 2026-04-03 in einem eigenen Git-Repository unter Vers
     └── memory-gc.mjs
 ```
 
-**Aktueller Stand:** `v2.1.21` (Tag), Branch `main`
+**Aktueller Stand:** `v2.1.22` (Tag), Branch `main`
 
 ### Workflow — Änderungen einpflegen
 
@@ -1628,7 +1628,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag -a v2.1.21 -m "v2.1.21"
+git tag -a v2.1.22 -m "v2.1.22"
 ```
 
 ### Teilen / Veröffentlichen
@@ -1667,7 +1667,7 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.21`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`; der lokale Patchpfad ist gegen OpenClaw `2026.5.3-1` validiert. `apply-memory-patches.sh` dispatcht versioniert: 4.29 nutzt den historischen `apply-plur1bus-user-hotfix.sh`, 5.3 nutzt `apply-openclaw-20260503-compat.sh`. In 2026.5.3-1 sind `toolsAllow`-Prefiltering und `hooks.allowConversationAccess`-Schema-Support upstream enthalten; der lokale 5.3-Patch hält nur noch die realen Betriebsfixes: ActiveMemory-Empty-Result wartet auf Fallback-Recall, Empty-Result wird nicht gecached, Hook-Budget bleibt kurz, ActiveMemory/Subagents laufen auf isolierten Lanes, Heartbeat-Sweeps bekommen Backpressure, `boot-md` startet non-blocking und der versteckte Pre-Compaction-Flush nutzt keinen leeren Prompt. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.22`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`; der lokale Patchpfad ist gegen OpenClaw `2026.5.3-1` validiert. `apply-memory-patches.sh` dispatcht versioniert: 4.29 nutzt den historischen `apply-plur1bus-user-hotfix.sh`, 5.3 nutzt `apply-openclaw-20260503-compat.sh`. In 2026.5.3-1 sind `toolsAllow`-Prefiltering und `hooks.allowConversationAccess`-Schema-Support upstream enthalten; der lokale 5.3-Patch hält nur noch die realen Betriebsfixes: ActiveMemory-Empty-Result wartet auf Fallback-Recall, Empty-Result wird nicht gecached, Hook-Budget bleibt kurz, ActiveMemory/Subagents laufen auf isolierten Lanes, Heartbeat-Sweeps bekommen Backpressure, `boot-md` startet non-blocking und der versteckte Pre-Compaction-Flush nutzt keinen leeren Prompt. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
 
 ### Was passiert beim Dreaming?
 

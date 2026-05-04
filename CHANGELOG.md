@@ -1,9 +1,16 @@
+## [2.1.22] - 2026-05-04
+
+### Fixed
+- Declared all `memory-lancedb-namespaced` runtime tools in `contracts.tools`: `memory_recall`, `memory_store`, `memory_forget`, and `knowledge_update`.
+- Updated `update-openclaw.sh` validation so future OpenClaw updates preserve the complete memory tool contract instead of only `memory_recall`.
+- Verified live plur1bus Store+Recall smoke tests on `main`, `bernhardine`, and `heisenberg` after the manifest fix.
+
 ## [2.1.21] - 2026-05-04
 
 ### Fixed
 - Added the versioned OpenClaw `2026.5.3-1` compat patch and kept the existing `2026.4.29` path as a separate wrapper instead of reusing the old hotfix blindly.
 - Replaced the removed `openclaw plugins deps --json` update check with explicit local runtime dependency and manifest contract validation.
-- Added `contracts.tools` metadata for `memory-lancedb-namespaced` so OpenClaw `2026.5.3-1` no longer rejects its registered tool diagnostics.
+- Added initial `contracts.tools` metadata for `memory-lancedb-namespaced`.
 - Added a dependency-only `memory-lancedb-stock/index.js` runtime stub so the local LanceDB dependency package can remain installed without TypeScript runtime warnings.
 - Migrated `memory-lancedb-namespaced` Auto-Recall and GC nudges from legacy `before_agent_start` to `before_prompt_build`.
 - Disabled stale Discord channel auto-enable during 5.3 updates when the bundled Discord plugin is not present.
