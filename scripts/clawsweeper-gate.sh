@@ -36,6 +36,13 @@ ok()     { echo -e "${GREEN}✅  $*${RESET}"; }
 warn()   { echo -e "${YELLOW}⚠️  $*${RESET}"; }
 info()   { echo -e "${CYAN}ℹ️   $*${RESET}"; }
 header() { echo -e "\n${BOLD}${CYAN}━━━  $*  ━━━${RESET}"; }
+skip_gate() {
+    if [[ "${CLAWSWEEPER_OFFLINE_SKIP_OK:-0}" == "1" ]]; then
+        info "$*"
+    else
+        warn "$*"
+    fi
+}
 
 # ─── Args ────────────────────────────────────────────────────────────────────
 NO_BLOCK=0
@@ -87,6 +94,7 @@ need curl
 need jq
 need awk
 need xargs
+need git
 
 mkdir -p "$CACHE_DIR"
 
@@ -98,6 +106,32 @@ curl_get() {
     else
         curl -sfL --max-time "$TIMEOUT_S" "$url"
     fi
+}
+
+resolve_npm_githead() {
+    local v="$1"
+    local sha
+    sha=$(npm view "openclaw@${v}" gitHead 2>/dev/null | tr -d '[:space:]' || true)
+    if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "$sha"
+        return 0
+    fi
+    return 1
+}
+
+resolve_git_ls_remote_tag_sha() {
+    local v="$1"
+    local refs sha
+    refs=$(git ls-remote --tags "https://github.com/${SOURCE_REPO}.git" "refs/tags/v${v}" "refs/tags/v${v}^{}" "refs/tags/${v}" "refs/tags/${v}^{}" 2>/dev/null || true)
+    sha=$(awk '$2 ~ /\^\{\}$/ {print $1; exit}' <<< "$refs")
+    if [[ -z "$sha" ]]; then
+        sha=$(awk '{print $1; exit}' <<< "$refs")
+    fi
+    if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "$sha"
+        return 0
+    fi
+    return 1
 }
 
 # ─── Ziel-Version ermitteln ──────────────────────────────────────────────────
@@ -140,12 +174,12 @@ resolve_tag_sha() {
     return 1
 }
 
-SHA_BEFORE=$(resolve_tag_sha "$VERSION_BEFORE") || {
-    warn "Tag für v${VERSION_BEFORE} nicht in ${SOURCE_REPO} gefunden — Gate übersprungen."
+SHA_BEFORE=$(resolve_tag_sha "$VERSION_BEFORE" || resolve_git_ls_remote_tag_sha "$VERSION_BEFORE" || resolve_npm_githead "$VERSION_BEFORE") || {
+    skip_gate "Version ${VERSION_BEFORE} nicht als GitHub-Tag, git ls-remote Tag oder npm gitHead auflösbar — Gate übersprungen."
     exit 0
 }
-SHA_TARGET=$(resolve_tag_sha "$VERSION_TARGET") || {
-    warn "Tag für v${VERSION_TARGET} nicht in ${SOURCE_REPO} gefunden — Gate übersprungen."
+SHA_TARGET=$(resolve_tag_sha "$VERSION_TARGET" || resolve_git_ls_remote_tag_sha "$VERSION_TARGET" || resolve_npm_githead "$VERSION_TARGET") || {
+    skip_gate "Version ${VERSION_TARGET} nicht als GitHub-Tag, git ls-remote Tag oder npm gitHead auflösbar — Gate übersprungen."
     exit 0
 }
 

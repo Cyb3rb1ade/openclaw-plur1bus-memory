@@ -1,3 +1,16 @@
+## [2.1.24] - 2026-05-05
+
+### Fixed
+- Added the versioned OpenClaw `2026.5.4` compat patch and dispatcher path.
+- Made the 5.4 subagent lane import patch resilient to hashed `lanes-*.js` bundle filenames.
+- Updated the guided OpenClaw updater to default to `2026.5.4`, dry-run the matching tarball patch, preserve 5.4 plugin contracts, and load `OPENAI_API_KEY` from `/root/.openclaw/.env` for the optional memory reindex.
+- Hardened update diagnostics for ClawSweeper tag resolution, cron CLI fallbacks, intentional disabled cron jobs, Docker visibility in sandboxed checks, and plugin runtime drift detection.
+
+### Verified
+- Production OpenClaw upgraded to `2026.5.4`.
+- `openclaw plugins doctor`, `memory-doctor stats`, and external `memory-doctor provider-check` passed after the upgrade.
+- Live ExecStartPre patch chain under `/root/.openclaw/patches` synchronized and verified on gateway restart.
+
 ## [2.1.23] - 2026-05-04
 
 ### Fixed

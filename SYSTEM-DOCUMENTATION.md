@@ -1,6 +1,6 @@
 # System Documentation
 
-Operational notes for plur1bus on OpenClaw `2026.4.29` and newer. The local patch chain is validated for OpenClaw `2026.5.3-1` via `patches/apply-openclaw-20260503-compat.sh`.
+Operational notes for plur1bus on OpenClaw `2026.4.29` and newer. The local patch chain is validated for OpenClaw `2026.5.4` via `patches/apply-openclaw-20260504-compat.sh`.
 
 ## Services
 
@@ -24,11 +24,12 @@ The local production setup uses an `ExecStartPre` patch chain. `apply-memory-pat
 - Versioned plur1bus compatibility patches:
   - `apply-openclaw-20260429-compat.sh` wraps the historical `apply-plur1bus-user-hotfix.sh`.
   - `apply-openclaw-20260503-compat.sh` keeps only 2026.5.3-1 local fixes: ActiveMemory empty-result fallback, short hook budget, isolated lanes, heartbeat backpressure, non-blocking `boot-md`, non-empty hidden flush prompt and subagent announce caps.
+  - `apply-openclaw-20260504-compat.sh` carries those local fixes forward for 2026.5.4 and resolves the hashed `lanes-*.js` import dynamically.
 - Bundled runtime-deps race guard.
 
 The runtime-deps guard prevents repeated `npm install` runs against the same `~/.openclaw/plugin-runtime-deps/openclaw-<version>-<hash>` directory after all required packages are already present. This avoids `ENOTEMPTY` rename failures that can otherwise stop Telegram, Discord or `memory-core` from registering.
 
-`toolsAllow` prefiltering and `hooks.allowConversationAccess` schema support are upstream in OpenClaw `2026.5.3-1`; the 5.3 compat patch deliberately does not reapply the old selection/pi-tools/tool-factory patches.
+`toolsAllow` prefiltering and `hooks.allowConversationAccess` schema support are upstream in OpenClaw `2026.5.3-1+`; the 5.3/5.4 compat patches deliberately do not reapply the old selection/pi-tools/tool-factory patches.
 
 ## Cron
 
@@ -96,7 +97,7 @@ Do not switch native `memorySearch` to a local provider unless the required runt
 
 ## Runtime-Deps Cache Repair
 
-Check local plugin runtime dependencies. On OpenClaw `2026.5.3-1`, `openclaw plugins deps --json` is no longer available, so validate the local dependency files directly and then run plugin diagnostics:
+Check local plugin runtime dependencies. On OpenClaw `2026.5.3-1+`, `openclaw plugins deps --json` is no longer available, so validate the local dependency files directly and then run plugin diagnostics:
 
 ```bash
 test -f /root/.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js

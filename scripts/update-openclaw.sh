@@ -72,14 +72,15 @@ CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 OPENCLAW_JSON="/root/.openclaw/openclaw.json"
 OPENCLAW_INSTALLS_JSON="/root/.openclaw/plugins/installs.json"
-OPENCLAW_UPDATE_TARGET="${OPENCLAW_UPDATE_TARGET:-2026.5.3-1}"
+OPENCLAW_UPDATE_TARGET="${OPENCLAW_UPDATE_TARGET:-2026.5.4}"
 
 validate_openclaw_compat_patch() {
     local target="$1"
-    local tmpdir package_dir tarball check_files f
+    local tmpdir package_dir cache_dir tarball check_files compat_patch f
 
     case "$target" in
-        2026.5.3-1) ;;
+        2026.5.3-1) compat_patch="/root/openclaw-memory-system/patches/apply-openclaw-20260503-compat.sh" ;;
+        2026.5.4) compat_patch="/root/openclaw-memory-system/patches/apply-openclaw-20260504-compat.sh" ;;
         *)
             info "Kein lokaler Compat-Dry-Run für Zielversion $target konfiguriert"
             return 0
@@ -89,10 +90,11 @@ validate_openclaw_compat_patch() {
     header "COMPAT-PATCH DRY-RUN"
     tmpdir="$(mktemp -d /tmp/openclaw-compat-${target//[^A-Za-z0-9]/}-XXXXXX)"
     package_dir="$tmpdir/package"
+    cache_dir="/tmp/openclaw-compat-${target//[^A-Za-z0-9]/}/package"
 
-    if [[ -d /tmp/openclaw-compat-20260503/package/dist ]] && \
-       [[ "$(jq -r '.version // empty' /tmp/openclaw-compat-20260503/package/package.json 2>/dev/null || true)" == "$target" ]]; then
-        cp -a /tmp/openclaw-compat-20260503/package "$package_dir"
+    if [[ -d "$cache_dir/dist" ]] && \
+       [[ "$(jq -r '.version // empty' "$cache_dir/package.json" 2>/dev/null || true)" == "$target" ]]; then
+        cp -a "$cache_dir" "$package_dir"
         ok "Nutze vorhandenes entpacktes openclaw@$target Paket aus /tmp"
     else
         info "Lade openclaw@$target fuer Patch-Dry-Run..."
@@ -102,7 +104,7 @@ validate_openclaw_compat_patch() {
         tar -xzf "$tarball" -C "$tmpdir"
     fi
 
-    OPENCLAW_DIST_DIR="$package_dir/dist" bash /root/openclaw-memory-system/patches/apply-openclaw-20260503-compat.sh
+    OPENCLAW_DIST_DIR="$package_dir/dist" bash "$compat_patch"
 
     check_files=(
         "$package_dir/dist/extensions/active-memory/index.js"
@@ -125,7 +127,7 @@ cleanup_memory_lancedb_stock_manifest_for_20260503() {
     local target="$1"
     local stock_dir stock_manifest tmp_json
 
-    [[ "$target" == "2026.5.3-1" ]] || return 0
+    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" ]] || return 0
 
     stock_dir="/root/.openclaw/extensions/memory-lancedb-stock"
     stock_manifest="$stock_dir/openclaw.plugin.json"
@@ -163,7 +165,7 @@ ensure_20260503_plugin_contracts_and_runtime_stubs() {
     local target="$1"
     local stock_index namespaced_manifest adaptive_manifest tmp_json
 
-    [[ "$target" == "2026.5.3-1" ]] || return 0
+    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" ]] || return 0
 
     stock_index="/root/.openclaw/extensions/memory-lancedb-stock/index.js"
     if [[ ! -f "$stock_index" ]]; then
@@ -200,7 +202,7 @@ cleanup_stale_discord_channel_for_20260503() {
     local target="$1"
     local stock_discord tmp_json
 
-    [[ "$target" == "2026.5.3-1" ]] || return 0
+    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" ]] || return 0
 
     stock_discord="/usr/lib/node_modules/openclaw/dist/extensions/discord"
     if [[ -e "$stock_discord" ]]; then
@@ -310,7 +312,9 @@ pause "Snapshot erstellt? Dann weiter."
 if [[ -x /root/openclaw-memory-system/scripts/clawsweeper-gate.sh ]]; then
     extra_flags=()
     [[ "$CHECK_ONLY" == "1" ]] && extra_flags+=(--no-block)
-    /root/openclaw-memory-system/scripts/clawsweeper-gate.sh "$VERSION_BEFORE" "$OPENCLAW_UPDATE_TARGET" "${extra_flags[@]}" || \
+    clawsweeper_env=()
+    [[ "$CHECK_ONLY" == "1" ]] && clawsweeper_env+=(CLAWSWEEPER_OFFLINE_SKIP_OK=1)
+    env "${clawsweeper_env[@]}" /root/openclaw-memory-system/scripts/clawsweeper-gate.sh "$VERSION_BEFORE" "$OPENCLAW_UPDATE_TARGET" "${extra_flags[@]}" || \
         warn "clawsweeper-gate fehlgeschlagen — Update geht trotzdem weiter"
 fi
 
@@ -347,7 +351,7 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
     # memory-lancedb-stock hatte ebenfalls ID "memory-lancedb" → Duplicate-Plugin-Warning.
     # Fix: openclaw.plugin.json in memory-lancedb-stock auf ID "memory-lancedb-stock" setzen.
     STOCK_MANIFEST="/root/.openclaw/extensions/memory-lancedb-stock/openclaw.plugin.json"
-    if [[ "$OPENCLAW_UPDATE_TARGET" == "2026.5.3-1" ]]; then
+    if [[ "$OPENCLAW_UPDATE_TARGET" == "2026.5.3-1" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.4" ]]; then
         cleanup_memory_lancedb_stock_manifest_for_20260503 "$OPENCLAW_UPDATE_TARGET"
         ensure_20260503_plugin_contracts_and_runtime_stubs "$OPENCLAW_UPDATE_TARGET"
         cleanup_stale_discord_channel_for_20260503 "$OPENCLAW_UPDATE_TARGET"
@@ -1205,7 +1209,15 @@ fi
 header "CRON-JOBS"
 
 info "Aktive Cron-Jobs:"
-openclaw cron list 2>/dev/null | sed 's/^/       /' || warn "openclaw cron list fehlgeschlagen"
+CRON_LIST_OUTPUT=$(timeout 30s openclaw cron list 2>/dev/null || true)
+if [[ -n "$CRON_LIST_OUTPUT" ]]; then
+    echo "$CRON_LIST_OUTPUT" | sed 's/^/       /'
+elif [[ -f /root/.openclaw/cron/jobs.json ]]; then
+    jq -r '.jobs[] | "       \(.enabled | if . then "✓" else "·" end) \(.name) [\(.schedule.kind)]"' /root/.openclaw/cron/jobs.json 2>/dev/null || true
+    ok "Cron-Jobs aus jobs.json gelesen (CLI lieferte keine Ausgabe)"
+else
+    warn "openclaw cron list fehlgeschlagen und jobs.json fehlt"
+fi
 
 echo ""
 info "Delivery-Targets prüfen (müssen bare ChatID sein, KEIN 'telegram:XXXXX'):"
@@ -1225,7 +1237,13 @@ fi
 for JOBNAME in "proactive-agent:heartbeat" "daily-gas-weather-briefing" "morning-gas-weather-briefing"; do
     if cat /root/.openclaw/cron/jobs.json | jq -e ".jobs[] | select(.name == \"$JOBNAME\")" > /dev/null 2>&1; then
         ENABLED=$(cat /root/.openclaw/cron/jobs.json | jq -r ".jobs[] | select(.name == \"$JOBNAME\") | .enabled")
-        [[ "$ENABLED" == "true" ]] && ok "Cron-Job vorhanden & aktiv: $JOBNAME" || warn "Cron-Job vorhanden aber DEAKTIVIERT: $JOBNAME"
+        if [[ "$ENABLED" == "true" ]]; then
+            ok "Cron-Job vorhanden & aktiv: $JOBNAME"
+        elif [[ "$JOBNAME" == "morning-gas-weather-briefing" ]]; then
+            ok "Cron-Job absichtlich deaktiviert: $JOBNAME (ersetzt durch daily-gas-weather-briefing)"
+        else
+            warn "Cron-Job vorhanden aber DEAKTIVIERT: $JOBNAME"
+        fi
     else
         warn "Cron-Job FEHLT: $JOBNAME"
     fi
@@ -1240,17 +1258,27 @@ if [[ ! -f "$YT" ]]; then
     fail "yt-analyze.sh nicht gefunden: $YT"
 else
     # Whisper-Server
-    if docker ps 2>/dev/null | grep -q "faster-whisper"; then
+    DOCKER_PS_OUTPUT=$(docker ps 2>&1 || true)
+    if echo "$DOCKER_PS_OUTPUT" | grep -q "faster-whisper"; then
         ok "Whisper-Container läuft"
         # Richtiges Modell?
         MODEL=$(docker logs faster-whisper 2>&1 | grep -i "turbo\|large-v3\|model" | tail -3 | tr '\n' ' ')
         info "  Modell-Info: ${MODEL:-nicht lesbar}"
+    elif echo "$DOCKER_PS_OUTPUT" | grep -qi "permission denied"; then
+        info "Docker-Status in dieser Umgebung nicht lesbar — Container-Existenz nicht bewertet"
     else
         warn "Whisper-Container läuft NICHT — 'docker ps' zeigt ihn nicht"
     fi
 
-    # VAD aktiv?
-    grep -q 'vad_filter' "$YT" && ok "VAD aktiv in yt-analyze.sh" || warn "VAD nicht gefunden in yt-analyze.sh"
+    # VAD ist nur im alten Faster-Whisper-Pfad relevant. Der aktuelle lokale
+    # Pfad nutzt NVIDIA/Riva/Parakeet und hat keinen vad_filter-Parameter.
+    if grep -q 'vad_filter' "$YT"; then
+        ok "VAD aktiv in yt-analyze.sh"
+    elif grep -q '127.0.0.1:8010/v1/audio/transcriptions' "$YT" && grep -q 'parakeet-1.1b-rnnt-multilingual-asr' "$YT"; then
+        ok "NVIDIA/Riva STT aktiv — VAD-Check für alten Faster-Whisper-Pfad übersprungen"
+    else
+        warn "VAD nicht gefunden in yt-analyze.sh"
+    fi
 
     # Inkrementelles Speichern?
     grep -q 'Zwischenspeichern' "$YT" && ok "Inkrementelles Speichern aktiv" || warn "Inkrementelles Speichern nicht gefunden"
@@ -1297,7 +1325,7 @@ header "PLUGIN-VERIFIKATION"
 if wait_for_plugins_ready; then
     info "Plugin-Registry bereit"
 else
-    warn "Plugin-Registry nicht innerhalb 45s bereit — Checks laufen mit letztem Status"
+    info "Plugin-Registry nicht innerhalb des Status-Timeouts bereit — Checks laufen mit Journal/Plugin-Liste-Fallback"
 fi
 STATUS_OUTPUT="$WAIT_STATUS_OUTPUT"
 JOURNAL_OUTPUT=$(journalctl --user -u openclaw-gateway --since "2 hours ago" --no-pager -n 5000 2>/dev/null || true)
@@ -1394,11 +1422,15 @@ MEM_REPO="/root/openclaw-memory-system"
 if [[ -d "$MEM_REPO/.git" ]]; then
     REPO_COMMIT=$(git -C "$MEM_REPO" log --oneline -1 2>/dev/null | head -c 60)
     ok "Memory-System Git-Repo vorhanden ✓ ($REPO_COMMIT)"
-    # Prüfen ob plugin neuer als letzter commit
-    PLUGIN_MTIME=$(stat -c %Y /root/.openclaw/extensions/memory-lancedb-namespaced/index.js 2>/dev/null || echo 0)
-    REPO_MTIME=$(stat -c %Y "$MEM_REPO/extensions/memory-lancedb-namespaced/index.js" 2>/dev/null || echo 0)
-    if [[ "$PLUGIN_MTIME" -gt "$REPO_MTIME" ]]; then
-        warn "Plugin-Datei neuer als Repo-Kopie — 'rsync + git commit' im Repo nicht vergessen"
+    # MTime kann durch lokale Reinstalls driften; Content ist die Quelle der Wahrheit.
+    PLUGIN_INDEX="/root/.openclaw/extensions/memory-lancedb-namespaced/index.js"
+    REPO_INDEX="$MEM_REPO/extensions/memory-lancedb-namespaced/index.js"
+    if [[ -f "$PLUGIN_INDEX" && -f "$REPO_INDEX" ]]; then
+        if cmp -s "$PLUGIN_INDEX" "$REPO_INDEX"; then
+            ok "memory-lancedb-namespaced Runtime entspricht der Repo-Kopie"
+        else
+            warn "Plugin-Runtime unterscheidet sich von Repo-Kopie — 'rsync + git commit' im Repo nicht vergessen"
+        fi
     fi
 else
     info "Memory-System Git-Repo nicht vorhanden ($MEM_REPO) — optional, aber empfohlen"
@@ -1681,8 +1713,16 @@ fi
 if [[ "$CHECK_ONLY" != "1" ]]; then
     header "MEMORY REINDEX (plur1bus)"
     info "Aktualisiere plur1bus LanceDB-Index via embed-promoted-memories.mjs..."
-    timeout 60s node /root/.openclaw/scripts/embed-promoted-memories.mjs 2>&1 | tail -3 | sed 's/^/       /' || true
-    ok "plur1bus Memory-Index aktualisiert (embed-promoted-memories)"
+    REINDEX_OPENAI_KEY="${OPENAI_API_KEY:-}"
+    if [[ -z "$REINDEX_OPENAI_KEY" && -f /root/.openclaw/.env ]]; then
+        REINDEX_OPENAI_KEY=$(grep '^OPENAI_API_KEY=' /root/.openclaw/.env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+    fi
+    if [[ -n "$REINDEX_OPENAI_KEY" ]]; then
+        OPENAI_API_KEY="$REINDEX_OPENAI_KEY" timeout 60s node /root/.openclaw/scripts/embed-promoted-memories.mjs 2>&1 | tail -3 | sed 's/^/       /' || true
+        ok "plur1bus Memory-Index aktualisiert (embed-promoted-memories)"
+    else
+        reminder "OPENAI_API_KEY nicht in Umgebung oder /root/.openclaw/.env gefunden — Memory-Reindex übersprungen"
+    fi
 
     header "PLUGIN REGISTRY REFRESH (4.25+)"
     info "Aktualisiere Cold Registry für openclaw memory CLI..."

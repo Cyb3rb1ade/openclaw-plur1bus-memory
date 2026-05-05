@@ -1,6 +1,6 @@
 {
   "name": "memory-lancedb-namespaced",
-  "version": "2.1.23",
+  "version": "2.1.24",
   "description": "Per-agent namespaced LanceDB memory — jeder Agent bekommt seine eigene isolierte Datenbank",
   "type": "module",
   "openclaw": {
