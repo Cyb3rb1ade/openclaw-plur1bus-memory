@@ -31,6 +31,21 @@ The runtime-deps guard prevents repeated `npm install` runs against the same `~/
 
 `toolsAllow` prefiltering and `hooks.allowConversationAccess` schema support are upstream in OpenClaw `2026.5.3-1+`; the 5.3/5.4 compat patches deliberately do not reapply the old selection/pi-tools/tool-factory patches.
 
+## Operational Risk Register
+
+ClawSweeper findings are part of the operating state for this deployment. The `2026.5.3-1` -> `2026.5.4` gate reported 527 upstream commits, 104 findings and 180 unreviewed commits.
+
+High findings from that gate:
+
+- `bc0b54e`: missing beta.3 `server-close` compatibility alias. Not currently a plur1bus blocker, but keep it visible for gateway/session-close regressions.
+- `b37fba7`: ClawHub publish workflow references a missing npm runtime-check script. Not runtime-critical for this host, but relevant before publishing plugin packages.
+
+Instance-relevant medium findings:
+
+- `59b5058`: Active Memory partial timeout recovery can still be cut off by the outer hook timeout. Keep local active-memory timeout caps and run `openclaw plugins doctor` after updates.
+- `25b30c9`: bundled runtime tools may bypass narrow runtime allowlists. Keep cron and plugin allowlists explicit for sensitive jobs.
+- `d253392`: explicit web providers can be filtered before restrictive allowlists widen. Recheck web provider routing after OpenClaw updates.
+
 ## Cron
 
 The installer writes user-cron entries, not root-wide `/etc/crontab` entries:
@@ -53,8 +68,10 @@ OpenClaw cron jobs are separate and live in:
 For provider-specific deployments, OpenClaw cron `payload.kind == "agentTurn"` jobs may carry explicit model overrides. plur1bus does not require or change those overrides:
 
 ```bash
-jq '[.jobs[] | select(.payload.kind? == "agentTurn") | {name, model:.payload.model}]' ~/.openclaw/cron/jobs.json
+jq '[.jobs[] | select(.payload.kind? == "agentTurn") | {name, model:.payload.model, fallbacks:.payload.fallbacks, thinking:.payload.thinking}]' ~/.openclaw/cron/jobs.json
 ```
+
+Production cron jobs that must stay on `kimi-coding/kimi-for-coding` should set `payload.fallbacks` to `[]`. Without that explicit empty list, OpenClaw may use `agents.defaults.model.fallbacks`; on this host that can route failed cron turns to a Codex model that is not supported by the active ChatGPT auth account.
 
 ## Session Start
 
