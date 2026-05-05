@@ -18,6 +18,13 @@ git -C /root/openclaw-memory-system status --short
 
 ClawSweeper is intentionally unbounded (`CLAWSWEEPER_COMPARE_LIMIT=0`) so large ranges such as the 2026.4.29 -> 2026.5.4 jump scan every upstream commit, not only the first 250.
 
+Treat ClawSweeper as an update gate, not as a FYI report:
+
+- Copy the commit range, finding counts and high findings into the release notes or compatibility plan.
+- Do not ignore high findings. Mark each one as fixed locally, accepted as not instance-relevant, or blocked upstream.
+- Do not silently accept large unreviewed ranges. If the report includes unreviewed commits, record the count and run the guarded update check before touching production.
+- Recheck model/provider routing after the update. For production cron jobs that must stay on Kimi, set `payload.fallbacks` to `[]`; otherwise default OpenClaw fallbacks can route failed cron turns to an unsupported Codex model.
+
 OpenClaw `2026.5.3-1+` no longer exposes `openclaw plugins deps --json`. The local check is now explicit file validation for the LanceDB/OpenAI runtime dependency tree plus `openclaw plugins doctor`.
 
 The healthy `plugins doctor` output should not contain `contracts.tools` diagnostics for `memory-lancedb-namespaced` or `adaptive-learning-loop`.
@@ -76,7 +83,7 @@ plur1bus does not require a specific OpenClaw chat provider. If the deployment i
 
 ```bash
 jq '.agents.defaults.model' ~/.openclaw/openclaw.json
-jq '[.jobs[] | select(.payload.kind? == "agentTurn") | {name, model:.payload.model}]' ~/.openclaw/cron/jobs.json
+jq '[.jobs[] | select(.payload.kind? == "agentTurn") | {name, model:.payload.model, fallbacks:.payload.fallbacks, thinking:.payload.thinking}]' ~/.openclaw/cron/jobs.json
 ```
 
 Native OpenClaw `agents.defaults.memorySearch` is optional and independent from plur1bus. Disabling it does not disable plur1bus LanceDB Auto-Recall/Auto-Capture.

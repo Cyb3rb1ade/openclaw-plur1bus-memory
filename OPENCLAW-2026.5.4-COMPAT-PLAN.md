@@ -1,13 +1,12 @@
-# OpenClaw 2026.5.4 Compat Plan
+# OpenClaw 2026.5.4 Compat Report
 
 Date: 2026-05-05
 
 ## Current State
 
-- Local OpenClaw: `2026.5.3-1`.
-- npm `latest`: `2026.5.4`.
-- Local plur1bus repo base: `main`, `ad6440707358d404acaf017cad957d79f54bb37f`, tag `v2.1.23`; this working tree is being released as `v2.1.24` for OpenClaw `2026.5.4` compatibility.
-- GitHub `origin/main`: same commit as local `main`.
+- Local OpenClaw: `2026.5.4` (`325df3e`).
+- plur1bus release: `v2.1.24`, commit `866bf089b387a3582e9dba71d45050830d9b918a`.
+- GitHub `origin/main`: published through `v2.1.24`.
 - Clawsweeper script in `/root/.openclaw/scripts/clawsweeper-gate.sh` matches the repo copy.
 - Local `how-to-memory.md` exists in this repo but is gitignored. It has been refreshed to plur1bus `2.1.24` after the 5.4 compatibility work.
 - No file literally named `meta-patch.sh` was found in `/root/openclaw-memory-system` or `/root/.openclaw/patches`. If the intended file is `apply-media-patch.sh`, the live copy is `/root/.openclaw/patches/apply-media-patch.sh`; it is outside the public plur1bus repo and must be audited separately from the memory patch chain.
@@ -16,10 +15,12 @@ Date: 2026-05-05
 
 - `openclaw plugins doctor`: memory plugins registered; only hook-only compatibility info for `before-compact-save` and `tts-status-inject`.
 - Runtime dependency checks passed for `memory-lancedb-stock` LanceDB and runtime stub.
-- `memory-doctor.mjs stats`: completed, total 13,108 memories, about 11.3 GB.
-- `systemctl --user status openclaw-gateway`: service active since 2026-05-04 23:29 CEST.
-- `openclaw status`: completed, but gateway probe from the sandbox reports loopback `EPERM`; systemd view confirms the gateway is actually running.
-- `how-to-memory.md`: present but ignored by Git and stale at `2.1.20`.
+- `memory-doctor.mjs provider-check`: passed outside the sandbox; `text-embedding-3-large`, 3072 dimensions, all 39 agent DBs matched.
+- `memory-doctor.mjs stats`: completed after cron hardening, total 13,135 memories, about 11.4 GB of LanceDB data.
+- `systemctl --user status openclaw-gateway`: service active after the 2026.5.4 update.
+- `openclaw --version`: `OpenClaw 2026.5.4 (325df3e)`.
+- `openclaw cron list`: both repaired jobs now report `ok` after manual validation runs.
+- `how-to-memory.md`: present but ignored by Git; maintained locally outside the public release artifact.
 
 ## Clawsweeper Result
 
@@ -69,7 +70,21 @@ OPENCLAW_DIST_DIR="$tmpdir/package/dist" bash patches/apply-openclaw-20260504-co
 node --check <patched runtime files>
 ```
 
-Conclusion: the local patch chain is no longer the update blocker. Production should still use the guarded `update-openclaw.sh --check` path first because Clawsweeper found broad upstream risk.
+Conclusion: the local patch chain was not the final update blocker. Production is now on `2026.5.4`; future OpenClaw updates must still use the guarded `update-openclaw.sh --check` path first because Clawsweeper found broad upstream risk in this range.
+
+## 2026-05-05 Cron Hardening
+
+Two post-update cron issues were traced to local routing/state, not plur1bus memory structure:
+
+- `daily-gas-weather-briefing` failed on 2026-05-04 because the run fell through to `openai-codex/gpt-5.5-pro`, which is not supported by the active Codex ChatGPT account. The job is pinned to `kimi-coding/kimi-for-coding`, `payload.fallbacks` is `[]`, and `thinking` is `off`.
+- `proactive-agent:heartbeat` failed because a non-critical `proactive-tracker.md` edit failure was treated as the whole cron result. The job prompt now treats already-applied, unnecessary, or rejected tracker edits as warnings when the checklist and final report still complete.
+
+The proactive tracker and recurring-pattern notes now record that gas storage automation exists through `daily-gas-weather-briefing`; the latest failure was model routing, not missing AGSI data.
+
+Manual validation:
+
+- `proactive-agent:heartbeat`: `status=ok`, provider/model `kimi-coding/kimi-for-coding`, Telegram delivery succeeded.
+- `daily-gas-weather-briefing`: `status=ok`, provider/model `kimi-coding/kimi-for-coding`, Telegram delivery succeeded.
 
 ## Live Bug-Reporting Plan
 
@@ -77,22 +92,16 @@ Conclusion: the local patch chain is no longer the update blocker. Production sh
    - Evidence from local logs: `active-memory` starts with `timeoutMs=8000`, but `before_prompt_build` fails after `3000ms`.
    - Link Clawsweeper commit report `59b5058`.
    - Ask for hook timeout headroom or an earlier internal watchdog deadline.
-2. File/update an upstream issue for `2026.5.4` release risk.
+2. File/update an upstream issue for `2026.5.4` release risk if new upstream regressions appear.
    - Include Clawsweeper summary counts and the two high findings.
-   - State that local production upgrade is blocked by 180 unreviewed commits and the 5.4 patch gate.
+   - State that local production is patched and running, but 180 unreviewed commits remain a documented risk for the next update gate.
 3. Keep plur1bus-specific issue separate.
    - Track local 5.4 compat patch work in this repo.
    - Do not mix upstream OpenClaw reports with local deployment config.
 
 ## Local Git Plan
 
-1. Optional branch before publishing:
-
-```bash
-git -C /root/openclaw-memory-system switch -c compat/openclaw-2026.5.4
-```
-
-2. Review and commit the current compat files:
+Review and commit future compat files in small, auditable changes:
 
 - `patches/apply-openclaw-20260504-compat.sh`
 - `patches/apply-memory-patches.sh`
@@ -102,7 +111,7 @@ git -C /root/openclaw-memory-system switch -c compat/openclaw-2026.5.4
 - `README.md`
 - local ignored `how-to-memory.md`, or intentionally retire it in favor of tracked `how-to-memory-perfect.md`
 
-3. Keep explicit validation:
+Keep explicit validation:
 
 - Fail if the target package version is unsupported.
 - Fail if a versioned compat patch silently skips all target files.
@@ -110,8 +119,8 @@ git -C /root/openclaw-memory-system switch -c compat/openclaw-2026.5.4
 
 ## plur1bus GitHub Plan
 
-1. Push only after a successful `OPENCLAW_UPDATE_TARGET=2026.5.4 /root/openclaw-memory-system/scripts/update-openclaw.sh --check` and local plugin diagnostics.
-2. Tag the next release as `v2.1.24` or later.
+1. Push only after a successful guarded update check and local plugin diagnostics.
+2. Tag the next release after `v2.1.24` only when there is a new shipped code/doc delta.
 3. Release notes must say:
    - OpenClaw `2026.5.4` support is validated.
    - Which old local patches are retired because upstream fixed them.
@@ -121,10 +130,10 @@ git -C /root/openclaw-memory-system switch -c compat/openclaw-2026.5.4
 
 ## Recommended Next Action
 
-Run the guarded update check:
+For the next OpenClaw update, start with the guarded update check:
 
 ```bash
-OPENCLAW_UPDATE_TARGET=2026.5.4 /root/openclaw-memory-system/scripts/update-openclaw.sh --check
+OPENCLAW_UPDATE_TARGET=<target-version> /root/openclaw-memory-system/scripts/update-openclaw.sh --check
 ```
 
-Only run the real update after the check path validates the 5.4 tarball, patch anchors, plugin contracts, memory doctor, and service restart plan.
+Only run the real update after the check path validates the target tarball, patch anchors, plugin contracts, memory doctor, Clawsweeper risk notes, and service restart plan.
