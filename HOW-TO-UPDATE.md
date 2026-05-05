@@ -2,7 +2,7 @@
 
 Safe update path for plur1bus deployments on OpenClaw `2026.4.29+`.
 
-Validated target: OpenClaw `2026.5.3-1` with the local `apply-openclaw-20260503-compat.sh` patch.
+Validated target: OpenClaw `2026.5.4` with the local `apply-openclaw-20260504-compat.sh` patch.
 
 ## 1. Check Current State
 
@@ -13,12 +13,12 @@ test -f /root/.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/la
 test -f /root/.openclaw/extensions/memory-lancedb-stock/index.js
 openclaw plugins doctor
 git -C /root/openclaw-memory-system status --short
-/root/openclaw-memory-system/scripts/clawsweeper-gate.sh "$(openclaw --version)" 2026.5.3-1 --no-block
+/root/openclaw-memory-system/scripts/clawsweeper-gate.sh "$(openclaw --version)" 2026.5.4 --no-block
 ```
 
-ClawSweeper is intentionally unbounded (`CLAWSWEEPER_COMPARE_LIMIT=0`) so large ranges such as the 2026.4.29 -> 2026.5.3-1 jump scan every upstream commit, not only the first 250.
+ClawSweeper is intentionally unbounded (`CLAWSWEEPER_COMPARE_LIMIT=0`) so large ranges such as the 2026.4.29 -> 2026.5.4 jump scan every upstream commit, not only the first 250.
 
-OpenClaw `2026.5.3-1` no longer exposes `openclaw plugins deps --json`. The local check is now explicit file validation for the LanceDB/OpenAI runtime dependency tree plus `openclaw plugins doctor`.
+OpenClaw `2026.5.3-1+` no longer exposes `openclaw plugins deps --json`. The local check is now explicit file validation for the LanceDB/OpenAI runtime dependency tree plus `openclaw plugins doctor`.
 
 The healthy `plugins doctor` output should not contain `contracts.tools` diagnostics for `memory-lancedb-namespaced` or `adaptive-learning-loop`.
 
@@ -31,7 +31,7 @@ On the production host use:
 ```
 
 The script preserves the systemd drop-in that runs the patch chain before gateway startup.
-Before installing, it unpacks `openclaw@2026.5.3-1`, runs `patches/apply-openclaw-20260503-compat.sh` against that copy, and aborts if the patch or `node --check` validation fails.
+Before installing, it unpacks `openclaw@2026.5.4`, runs `patches/apply-openclaw-20260504-compat.sh` against that copy, and aborts if the patch or `node --check` validation fails.
 
 ## 3. Reapply plur1bus Patches
 
@@ -46,6 +46,7 @@ systemctl --user restart openclaw-gateway
 
 - `2026.4.29` -> `apply-openclaw-20260429-compat.sh`
 - `2026.5.3-1` -> `apply-openclaw-20260503-compat.sh`
+- `2026.5.4` -> `apply-openclaw-20260504-compat.sh`
 
 Wait for:
 
@@ -84,10 +85,10 @@ Native OpenClaw `agents.defaults.memorySearch` is optional and independent from 
 
 ```bash
 cd /root/openclaw-memory-system
-./scripts/bump-version.sh 2.1.23
+./scripts/bump-version.sh 2.1.24
 git add -A
-git commit -m "fix: add OpenClaw 2026.5.3-1 compat patch"
-git tag -a v2.1.23 -m "v2.1.23"
+git commit -m "fix: add OpenClaw 2026.5.4 compat patch"
+git tag -a v2.1.24 -m "v2.1.24"
 git push origin main
-git push origin v2.1.23
+git push origin v2.1.24
 ```

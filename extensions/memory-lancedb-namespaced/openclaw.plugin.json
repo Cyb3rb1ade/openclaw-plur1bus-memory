@@ -2,14 +2,14 @@
   "id": "memory-lancedb-namespaced",
   "name": "Memory (LanceDB, per-Agent)",
   "description": "LanceDB-backed long-term memory with per-agent isolation. Requires OpenClaw >= 2026.4.29. Each agent gets its own database under {baseDbPath}/{agentId}/.",
-  "version": "2.1.23",
+  "version": "2.1.24",
   "kind": "extension",
   "contracts": {
     "tools": [
-      "memory_recall",
-      "memory_store",
+      "knowledge_update",
       "memory_forget",
-      "knowledge_update"
+      "memory_recall",
+      "memory_store"
     ]
   },
   "configSchema": {

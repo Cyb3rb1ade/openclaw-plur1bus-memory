@@ -11,11 +11,11 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.23` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+**Aktuelle Version:** `2.1.24` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
-**OpenClaw-Compat-Patches:** `patches/apply-memory-patches.sh` dispatcht versioniert. OpenClaw `2026.4.29` nutzt den historischen `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` nutzt `apply-openclaw-20260503-compat.sh`, weil `toolsAllow`-Prefiltering und `hooks.allowConversationAccess` dort upstream enthalten sind. Der 5.3-Patch haelt ActiveMemory-Fallback/Timeouts, isolierte Lanes, Heartbeat-Backpressure, non-blocking `boot-md`, Subagent-Completion-Announce-Caps und den Hidden-Flush-Prompt lokal kompatibel.
+**OpenClaw-Compat-Patches:** `patches/apply-memory-patches.sh` dispatcht versioniert. OpenClaw `2026.4.29` nutzt den historischen `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` nutzt `apply-openclaw-20260503-compat.sh`; OpenClaw `2026.5.4` nutzt `apply-openclaw-20260504-compat.sh`. Die 5.3/5.4-Patches halten ActiveMemory-Fallback/Timeouts, isolierte Lanes, Heartbeat-Backpressure, non-blocking `boot-md`, Subagent-Completion-Announce-Caps und den Hidden-Flush-Prompt lokal kompatibel.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -47,6 +47,7 @@ patches/
   apply-memory-patches.sh      ← OpenClaw-Patches (Stuck-Session, Cohere-Rerank, versionierte Compat-Patches)
   apply-openclaw-20260429-compat.sh ← Wrapper für den 4.29-Hotfix
   apply-openclaw-20260503-compat.sh ← Lokaler OpenClaw 2026.5.3-1 Compat-Patch
+  apply-openclaw-20260504-compat.sh ← Lokaler OpenClaw 2026.5.4 Compat-Patch
   apply-plur1bus-user-hotfix.sh ← Historischer OpenClaw 2026.4.29 Tool-Prep/Prompt-Blocking-Hotfix
 scripts/
   install-memory-system.sh     ← Installation, Update, Registry-Refresh, Rollback + Patches (mit Auto-Discovery)
@@ -187,7 +188,7 @@ systemctl --user restart openclaw-gateway.service
 | **#16** Stuck-Session-Abort | `diagnostic-*.js` | SIGUSR1 wenn Session > `stuckSessionAbortMs` (Default 600s) hängt |
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` nach `mergeHybridResults()` — bessere Top-K-Sortierung |
 | **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op auf aktuellen Builds, damit plur1bus nicht umgangen wird |
-| **#19** plur1bus Compat | `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `active-memory/index.js`, `subagent-*.js`, `acp-spawn-*.js`, `heartbeat-runner-*.js`, `boot-md`, `agent-runner.runtime-*.js`, `openclaw.json` | versionierter 4.29/5.3-Compat; 5.3 retired upstream-gefixte Tool-Allowlist-Patches und haelt ActiveMemory-Fallback, kurze Hook-Budgets, Lane-Isolation, Heartbeat-Backpressure, non-blocking Boot und Hidden-Flush stabil |
+| **#19** plur1bus Compat | `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `apply-openclaw-20260504-compat.sh`, `active-memory/index.js`, `subagent-*.js`, `acp-spawn-*.js`, `heartbeat-runner-*.js`, `boot-md`, `agent-runner.runtime-*.js`, `openclaw.json` | versionierter 4.29/5.3/5.4-Compat; 5.3+ retired upstream-gefixte Tool-Allowlist-Patches und haelt ActiveMemory-Fallback, kurze Hook-Budgets, Lane-Isolation, Heartbeat-Backpressure, non-blocking Boot und Hidden-Flush stabil |
 | **#20** Runtime-Deps Race Guard | `bundled-runtime-deps-*.js` | überspringt redundante `npm install`-Runs, wenn der gemeinsame Plugin-Runtime-Deps-Cache bereits semver-passende Pakete enthält; verhindert `ENOTEMPTY`-Rennen beim Laden von Telegram/Discord/memory-core |
 
 Die Compat-Patches sind **OpenClaw-Bundle-Namen-unabhängig**: die Scripts finden die relevanten Bundles per Inhalt. Bei künftigen Updates muss `apply-memory-patches.sh` erneut laufen; neue OpenClaw-Versionen brauchen einen eigenen versionierten Patch, wenn Anchors oder Upstream-Verhalten abweichen.
@@ -281,11 +282,11 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.23` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+**Current version:** `2.1.24` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
-**OpenClaw compatibility patches:** `patches/apply-memory-patches.sh` dispatches by OpenClaw version. OpenClaw `2026.4.29` uses the historical `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` uses `apply-openclaw-20260503-compat.sh` because `toolsAllow` prefiltering and `hooks.allowConversationAccess` schema support are upstream there. The 5.3 patch keeps ActiveMemory fallback/timeouts, isolated lanes, heartbeat backpressure, non-blocking `boot-md`, subagent completion announce caps, and the hidden flush prompt locally compatible.
+**OpenClaw compatibility patches:** `patches/apply-memory-patches.sh` dispatches by OpenClaw version. OpenClaw `2026.4.29` uses the historical `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` uses `apply-openclaw-20260503-compat.sh`; OpenClaw `2026.5.4` uses `apply-openclaw-20260504-compat.sh`. The 5.3/5.4 patches keep ActiveMemory fallback/timeouts, isolated lanes, heartbeat backpressure, non-blocking `boot-md`, subagent completion announce caps, and the hidden flush prompt locally compatible.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
@@ -309,6 +310,7 @@ patches/
   apply-memory-patches.sh      ← OpenClaw patches (stuck-session, cohere-rerank, versioned compat patches)
   apply-openclaw-20260429-compat.sh ← Wrapper for the 4.29 hotfix
   apply-openclaw-20260503-compat.sh ← Local OpenClaw 2026.5.3-1 compat patch
+  apply-openclaw-20260504-compat.sh ← Local OpenClaw 2026.5.4 compat patch
   apply-plur1bus-user-hotfix.sh ← Historical OpenClaw 2026.4.29 tool-prep/prompt-blocking hotfix
 scripts/
   install-memory-system.sh     ← Installation, update, registry refresh, rollback + patches (with auto-discovery)
@@ -449,7 +451,7 @@ systemctl --user restart openclaw-gateway.service
 | **#16** Stuck-Session Abort | `diagnostic-*.js` | SIGUSR1 when session exceeds `stuckSessionAbortMs` (default 600s) |
 | **#17** Cohere Rerank | `manager-*.js` | `rerank-v3.5` after `mergeHybridResults()` — better top-K ranking |
 | **#18** Active-Memory Fast-Path | `active-memory/index.js` | Retired/no-op on current builds so plur1bus is not bypassed |
-| **#19** plur1bus Compat | `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `active-memory/index.js`, `subagent-*.js`, `acp-spawn-*.js`, `heartbeat-runner-*.js`, `boot-md`, `agent-runner.runtime-*.js`, `openclaw.json` | Versioned 4.29/5.3 compat; 5.3 retires upstream-fixed tool allowlist patches and keeps ActiveMemory fallback, short hook budgets, lane isolation, heartbeat backpressure, non-blocking boot and hidden flush stable |
+| **#19** plur1bus Compat | `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `apply-openclaw-20260504-compat.sh`, `active-memory/index.js`, `subagent-*.js`, `acp-spawn-*.js`, `heartbeat-runner-*.js`, `boot-md`, `agent-runner.runtime-*.js`, `openclaw.json` | Versioned 4.29/5.3/5.4 compat; 5.3+ retires upstream-fixed tool allowlist patches and keeps ActiveMemory fallback, short hook budgets, lane isolation, heartbeat backpressure, non-blocking boot and hidden flush stable |
 | **#20** Runtime-Deps Race Guard | `bundled-runtime-deps-*.js` | Skips redundant `npm install` runs when the shared plugin runtime-deps cache already contains semver-compatible packages; prevents `ENOTEMPTY` races while loading Telegram/Discord/memory-core |
 
 The compat patches are **OpenClaw bundle-name independent**: scripts find the relevant bundles by content. After future OpenClaw updates, re-running `apply-memory-patches.sh` restores known patches; new OpenClaw versions need their own versioned patch when anchors or upstream behavior change.
