@@ -1197,7 +1197,7 @@ table.to_pandas()
 
 ---
 
-*Öffentliche kanonische Dokumentation: `how-to-memory-perfect.md` — aktualisiert: 2026-05-02*
+*Öffentliche kanonische Dokumentation: `how-to-memory-perfect.md` — aktualisiert: 2026-05-06*
 *Lokale Schnell-Referenz (deployment-spezifisch): `how-to-memory.md`*
 *Plugin-README: `extensions/memory-lancedb-namespaced/README.md`*
 *Workspace-Indexer Status: `openclaw memory status --deep`*
@@ -1603,7 +1603,7 @@ Das Memory-System ist seit 2026-04-03 in einem eigenen Git-Repository unter Vers
     └── memory-gc.mjs
 ```
 
-**Aktueller Stand:** `v2.1.24` (Tag), Branch `main`
+**Aktueller Stand:** `v2.1.26` (Tag), Branch `main`
 
 ### Workflow — Änderungen einpflegen
 
@@ -1619,8 +1619,6 @@ rsync -a --exclude='node_modules' \
 
 # Docs synchronisieren
 cp /root/.openclaw/how-to-memory-perfect.md .
-cp /root/.openclaw/how-to-memory.md .
-cp /root/.openclaw/SYSTEM-DOCUMENTATION.md .
 cp /root/.openclaw/HOW-TO-UPDATE.md .
 cp /root/.openclaw/scripts/memory-gc.mjs scripts/
 cp /root/.openclaw/scripts/install-memory-system.sh scripts/
@@ -1628,7 +1626,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag -a v2.1.24 -m "v2.1.24"
+git tag -a v2.1.26 -m "v2.1.26"
 ```
 
 ### Teilen / Veröffentlichen
@@ -1653,12 +1651,13 @@ git merge contrib/main --no-ff
 - API-Keys (`auth-profiles.json`, `auth.json`, `.env`)
 - LanceDB-Daten (`memory/lancedb-namespaced/`) — binär, kein sinnvolles Diff
 - Snapshots (`memory/.snapshots/`) — lokal, deployment-spezifisch
+- Lokale Betriebs-/Schnellreferenzen (`how-to-memory.md`, `SYSTEM-DOCUMENTATION.md`) — deployment-spezifisch; öffentliche Betriebsdoku steht in `how-to-memory-perfect.md`
 
 ---
 
 ## Upgrade-Anleitung: 2026-04-06 → 2026-04-13 — Dreaming (nativ via memory-core)
 
-### Aktueller Stand (2026-05-05, OpenClaw 2026.5.4 validiert)
+### Aktueller Stand (2026-05-06, OpenClaw 2026.5.5 validiert)
 
 Das Dreaming läuft **nativ über OpenClaws `memory-core`** — nicht über externe Bridge-Scripts.
 
@@ -1667,7 +1666,39 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.24`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`; der lokale Patchpfad ist gegen OpenClaw `2026.5.4` validiert. `apply-memory-patches.sh` dispatcht versioniert: 4.29 nutzt den historischen `apply-plur1bus-user-hotfix.sh`, 5.3 nutzt `apply-openclaw-20260503-compat.sh`, 5.4 nutzt `apply-openclaw-20260504-compat.sh`. In 2026.5.3-1+ sind `toolsAllow`-Prefiltering und `hooks.allowConversationAccess`-Schema-Support upstream enthalten; die lokalen 5.3/5.4-Patches halten nur noch die realen Betriebsfixes: ActiveMemory-Empty-Result wartet auf Fallback-Recall, Empty-Result wird nicht gecached, Hook-Budget bleibt kurz, ActiveMemory/Subagents laufen auf isolierten Lanes, Heartbeat-Sweeps bekommen Backpressure, `boot-md` startet non-blocking und der versteckte Pre-Compaction-Flush nutzt keinen leeren Prompt. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.26`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`; der lokale Patchpfad ist gegen OpenClaw `2026.5.5` validiert. `apply-memory-patches.sh` dispatcht versioniert: 4.29 nutzt den historischen `apply-plur1bus-user-hotfix.sh`, 5.3 nutzt `apply-openclaw-20260503-compat.sh`, 5.4 und 5.5 nutzen `apply-openclaw-20260504-compat.sh`. In 2026.5.3-1+ sind `toolsAllow`-Prefiltering und `hooks.allowConversationAccess`-Schema-Support upstream enthalten; die lokalen 5.3/5.4/5.5-Patches halten nur noch die realen Betriebsfixes: ActiveMemory-Empty-Result wartet auf Fallback-Recall, Empty-Result wird nicht gecached, Hook-Budget bleibt kurz, ActiveMemory/Subagents laufen auf isolierten Lanes, Heartbeat-Sweeps bekommen Backpressure, `boot-md` startet non-blocking und der versteckte Pre-Compaction-Flush nutzt keinen leeren Prompt. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
+
+**Update-Gate 2026.5.5:** ClawSweeper prüfte die Range `2026.5.4 -> 2026.5.5` mit 54 Commits. Zum Updatezeitpunkt lagen im State-Repo noch keine Reports für diese Commits vor, daher wurden alle 54 als `unreviewed` dokumentiert. Der Tarball-Dry-Run gegen `openclaw@2026.5.5`, der Live-Patchpfad unter `/root/.openclaw/patches`, `openclaw plugins doctor`, `memory-doctor provider-check`, Gateway-Journal `ready` und `openclaw cron list` waren nach dem finalen Restart grün.
+
+### Betrieb: Systemd, Patch Chain und Update-Gates
+
+Der produktive OpenClaw-Gateway läuft typischerweise als User-Service:
+
+```bash
+systemctl --user status openclaw-gateway
+systemctl --user restart openclaw-gateway
+journalctl --user -u openclaw-gateway -n 200 --no-pager
+```
+
+Der lokale Betrieb nutzt eine `ExecStartPre`-Patchkette. Diese Kette muss idempotent bleiben, weil OpenClaw gebundelte Dateinamen pro Release ändert. Nach jedem Update gilt:
+
+```bash
+bash /root/openclaw-memory-system/patches/apply-memory-patches.sh
+systemctl --user restart openclaw-gateway
+openclaw plugins doctor
+node /root/openclaw-memory-system/scripts/memory-doctor.mjs provider-check
+openclaw cron list
+```
+
+Erwartete Kernaussagen nach einem gesunden Restart:
+
+- Gateway-Journal enthält `[gateway] ready`.
+- `memory-lancedb-namespaced` ist registriert und Auto-Capture/Auto-Recall aktiv.
+- `adaptive-learning-loop` ist registriert.
+- `openclaw plugins doctor` meldet höchstens hook-only Compatibility-Infos, aber keine fehlenden `contracts.tools`.
+- Kimi-only Cron-Jobs, die nicht auf Codex ausweichen dürfen, behalten `payload.fallbacks: []`.
+
+ClawSweeper ist ein Update-Gate, keine FYI-Ausgabe. Große `unreviewed`-Ranges werden dokumentiert und mit einem Tarball-Dry-Run plus Plugin-/Memory-Checks abgesichert, bevor Produktion aktualisiert wird.
 
 ### Was passiert beim Dreaming?
 
@@ -1960,13 +1991,13 @@ journalctl --user -u openclaw-gateway --no-pager | grep "cohere.*rerank\|rerank.
 
 Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber den plur1bus-Pluginpfad umgehen. Seit `2.1.12` bleibt ActiveMemory auf dem normalen Toolpfad und wird stattdessen über Patch #19 beschleunigt.
 
-## Patch #19 — plur1bus Compat-Patches fuer OpenClaw 2026.4.29, 2026.5.3-1 und 2026.5.4
+## Patch #19 — plur1bus Compat-Patches fuer OpenClaw 2026.4.29, 2026.5.3-1, 2026.5.4 und 2026.5.5
 
 **Dateien:** `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `apply-openclaw-20260504-compat.sh`, `active-memory/index.js`, `subagent-announce-delivery-*.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `heartbeat-runner-*.js`, `bundled/boot-md/handler.js`, `agent-runner.runtime-*.js`
 
-**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. In OpenClaw `2026.5.3-1+` ist dieser Teil upstream umgebaut und teilweise gefixt; blindes Weiterlaufen des 4.29-Patches bricht deshalb am `selection toolsAllow prefilter`-Anchor. ActiveMemory braucht lokal weiter kurze Prompt-Build-Budgets, isolierte Lanes und die 5.3-Korrektur, dass ein leeres Terminal-`memory_search` den Fallback-Recall nicht abbricht. OpenClaw `2026.5.4` ändert zusätzlich gebundelte `lanes-*.js` Dateinamen, deshalb erkennt der 5.4-Patch diesen Import per Muster.
+**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. In OpenClaw `2026.5.3-1+` ist dieser Teil upstream umgebaut und teilweise gefixt; blindes Weiterlaufen des 4.29-Patches bricht deshalb am `selection toolsAllow prefilter`-Anchor. ActiveMemory braucht lokal weiter kurze Prompt-Build-Budgets, isolierte Lanes und die 5.3-Korrektur, dass ein leeres Terminal-`memory_search` den Fallback-Recall nicht abbricht. OpenClaw `2026.5.4` und `2026.5.5` ändern zusätzlich gebundelte `lanes-*.js` Dateinamen, deshalb erkennt der 5.4/5.5-Patch diesen Import per Muster.
 
-**Fix:** `apply-memory-patches.sh` erkennt die installierte OpenClaw-Version. 4.29 bleibt auf dem bisherigen umfassenden Hotfix. 5.3/5.4 retired die upstream-gefixten Tool-Allowlist-Patches und patcht nur ActiveMemory-Fallback/Timeouts, Subagent-Lanes, Heartbeat-Backpressure, Subagent-Completion-Announcements, non-blocking `boot-md` und den nichtleeren Hidden-Flush-Prompt.
+**Fix:** `apply-memory-patches.sh` erkennt die installierte OpenClaw-Version. 4.29 bleibt auf dem bisherigen umfassenden Hotfix. 5.3/5.4/5.5 retired die upstream-gefixten Tool-Allowlist-Patches und patcht nur ActiveMemory-Fallback/Timeouts, Subagent-Lanes, Heartbeat-Backpressure, Subagent-Completion-Announcements, non-blocking `boot-md` und den nichtleeren Hidden-Flush-Prompt.
 
 **Verifikation:**
 
@@ -1978,7 +2009,7 @@ journalctl --user -u openclaw-gateway --no-pager | grep "active-memory.*before_p
 openclaw status
 ```
 
-**Erwartung:** Keine `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für konfigurierte Agenten aktiv. Auf 2026.5.3-1+ darf ein leerer Memory-Suchtreffer nicht mehr den Fallback-Recall abbrechen. `openclaw status` sollte nach Gateway-Ready stabil antworten, auch wenn Heartbeats fällig sind.
+**Erwartung:** Keine langen `before_prompt_build ... timed out after 50000ms` Logs mehr; active-memory bleibt für konfigurierte Agenten aktiv. Auf 2026.5.3-1+ darf ein leerer Memory-Suchtreffer nicht mehr den Fallback-Recall abbrechen. `openclaw plugins doctor` sollte nach Gateway-Ready keine `contracts.tools`-Warnungen fuer `memory-lancedb-namespaced` oder `adaptive-learning-loop` melden.
 
 ---
 
