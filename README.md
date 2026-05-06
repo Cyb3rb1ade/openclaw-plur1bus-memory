@@ -11,7 +11,7 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.25` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+**Aktuelle Version:** `2.1.26` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
@@ -59,8 +59,7 @@ scripts/
   embed-promoted-memories.mjs  ← Bridge Dreaming-Promotionen → LanceDB (alle 30 Min)
   migrate-memory-md-to-lancedb.mjs  ← Einmalige MEMORY.md → LanceDB Migration
   cleanup-session-history.mjs  ← Bereinigt aufgeblähte OpenClaw-Session-Transcripts
-how-to-memory-perfect.md       ← öffentliche/kanonische Dokumentation (Architektur, Upgrades, Patches)
-SYSTEM-DOCUMENTATION.md        ← systemd, Cron, Session-Start, Runtime-Deps und provider-neutraler Betrieb
+how-to-memory-perfect.md       ← öffentliche/kanonische Dokumentation (Architektur, Upgrades, Patches, Betrieb)
 HOW-TO-UPDATE.md               ← sicherer OpenClaw/plur1bus Update- und Release-Ablauf
 CHANGELOG.md                   ← Versionshistorie
 ```
@@ -253,9 +252,7 @@ memory-lancedb-namespaced.kind = "extension"      ← Auto-Capture/Recall per Ag
 
 ## Öffentliche Dokumentation
 
-→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — öffentliche kanonische Dokumentation: vollständige Architektur, Konfigurations-Referenz, Upgrade-Anleitungen, Security-Audits, Troubleshooting.
-
-→ [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, Cron, Session-Start, Runtime-Deps-Cache und provider-neutrale Betriebsnotizen.
+→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — öffentliche kanonische Dokumentation: vollständige Architektur, Konfigurations-Referenz, Upgrade-Anleitungen, Betrieb, Security-Audits, Troubleshooting.
 
 → [`HOW-TO-UPDATE.md`](HOW-TO-UPDATE.md) — sichere Update- und Release-Checkliste.
 
@@ -282,7 +279,7 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.25` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+**Current version:** `2.1.26` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
@@ -322,8 +319,7 @@ scripts/
   embed-promoted-memories.mjs  ← Bridge dreaming promotions → LanceDB (every 30 min)
   migrate-memory-md-to-lancedb.mjs  ← One-shot MEMORY.md → LanceDB migration
   cleanup-session-history.mjs  ← Cleans bloated OpenClaw session transcripts
-how-to-memory-perfect.md       ← public/canonical documentation (architecture, upgrades, patches)
-SYSTEM-DOCUMENTATION.md        ← systemd, cron, session-start, runtime deps and provider-neutral ops notes
+how-to-memory-perfect.md       ← public/canonical documentation (architecture, upgrades, patches, operations)
 HOW-TO-UPDATE.md               ← safe OpenClaw/plur1bus update and release flow
 CHANGELOG.md                   ← Version history
 ```
@@ -540,9 +536,7 @@ branch, writes backups to `.history-cleanup-backups/`, and ignores archived
 
 ## Public Documentation
 
-→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — public canonical documentation: full architecture, configuration reference, upgrade guides, security audits, troubleshooting.
-
-→ [`SYSTEM-DOCUMENTATION.md`](SYSTEM-DOCUMENTATION.md) — systemd, cron, session-start, runtime-deps cache and provider-neutral operational notes.
+→ [`how-to-memory-perfect.md`](how-to-memory-perfect.md) — public canonical documentation: full architecture, configuration reference, upgrade guides, operations, security audits, troubleshooting.
 
 → [`HOW-TO-UPDATE.md`](HOW-TO-UPDATE.md) — safe update and release checklist.
 

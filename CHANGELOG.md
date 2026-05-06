@@ -1,3 +1,10 @@
+## [2.1.26] - 2026-05-06
+
+### Fixed
+- Removed deployment-specific `SYSTEM-DOCUMENTATION.md` from the public Git release scope and added it to `.gitignore`.
+- Moved current systemd, ExecStartPre patch-chain, ClawSweeper, provider-check, cron and OpenClaw `2026.5.5` operational notes into the canonical public `how-to-memory-perfect.md`.
+- Updated README links so the GitHub landing page points to `how-to-memory-perfect.md` as the single public operations document.
+
 ## [2.1.25] - 2026-05-06
 
 ### Fixed

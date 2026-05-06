@@ -92,10 +92,10 @@ Native OpenClaw `agents.defaults.memorySearch` is optional and independent from 
 
 ```bash
 cd /root/openclaw-memory-system
-./scripts/bump-version.sh 2.1.25
+./scripts/bump-version.sh 2.1.26
 git add -A
-git commit -m "fix: support OpenClaw 2026.5.5"
-git tag -a v2.1.25 -m "v2.1.25"
+git commit -m "docs(v2.1.26): keep system docs local"
+git tag -a v2.1.26 -m "v2.1.26"
 git push origin main
-git push origin v2.1.25
+git push origin v2.1.26
 ```
