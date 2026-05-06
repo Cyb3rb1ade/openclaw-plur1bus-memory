@@ -1,3 +1,16 @@
+## [2.1.25] - 2026-05-06
+
+### Fixed
+- Added OpenClaw `2026.5.5` support to the guarded updater, ClawSweeper gate, runtime patch dispatcher, and ExecStartPre patch path.
+- Taught ClawSweeper to resolve the local short commit from `openclaw --version` when the installed version has no GitHub tag or npm `gitHead`.
+- Extended the `2026.5.4` compatibility patch to cover `2026.5.5`; tarball dry-run and live marker verification passed.
+- Kept Kimi-only cron jobs pinned with `payload.fallbacks: []` after the update while preserving normal agent fallbacks.
+
+### Verified
+- Production OpenClaw upgraded to `2026.5.5`.
+- ClawSweeper checked `2026.5.4 -> 2026.5.5`: 54 commits, 54 unreviewed reports, no state-repo findings available yet.
+- `openclaw plugins doctor`, external `memory-doctor provider-check`, gateway journal readiness, and `openclaw cron list` passed after the final restart.
+
 ## [2.1.24] - 2026-05-05
 
 ### Fixed
