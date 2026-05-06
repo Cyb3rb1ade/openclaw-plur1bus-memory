@@ -72,7 +72,7 @@ CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
 OPENCLAW_JSON="/root/.openclaw/openclaw.json"
 OPENCLAW_INSTALLS_JSON="/root/.openclaw/plugins/installs.json"
-OPENCLAW_UPDATE_TARGET="${OPENCLAW_UPDATE_TARGET:-2026.5.5}"
+OPENCLAW_UPDATE_TARGET="${OPENCLAW_UPDATE_TARGET:-2026.5.6}"
 
 validate_openclaw_compat_patch() {
     local target="$1"
@@ -80,7 +80,7 @@ validate_openclaw_compat_patch() {
 
     case "$target" in
         2026.5.3-1) compat_patch="/root/openclaw-memory-system/patches/apply-openclaw-20260503-compat.sh" ;;
-        2026.5.4|2026.5.5) compat_patch="/root/openclaw-memory-system/patches/apply-openclaw-20260504-compat.sh" ;;
+        2026.5.4|2026.5.5|2026.5.6) compat_patch="/root/openclaw-memory-system/patches/apply-openclaw-20260504-compat.sh" ;;
         *)
             info "Kein lokaler Compat-Dry-Run für Zielversion $target konfiguriert"
             return 0
@@ -127,7 +127,7 @@ cleanup_memory_lancedb_stock_manifest_for_20260503() {
     local target="$1"
     local stock_dir stock_manifest tmp_json
 
-    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" || "$target" == "2026.5.5" ]] || return 0
+    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" || "$target" == "2026.5.5" || "$target" == "2026.5.6" ]] || return 0
 
     stock_dir="/root/.openclaw/extensions/memory-lancedb-stock"
     stock_manifest="$stock_dir/openclaw.plugin.json"
@@ -165,7 +165,7 @@ ensure_20260503_plugin_contracts_and_runtime_stubs() {
     local target="$1"
     local stock_index namespaced_manifest adaptive_manifest tmp_json
 
-    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" || "$target" == "2026.5.5" ]] || return 0
+    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" || "$target" == "2026.5.5" || "$target" == "2026.5.6" ]] || return 0
 
     stock_index="/root/.openclaw/extensions/memory-lancedb-stock/index.js"
     if [[ ! -f "$stock_index" ]]; then
@@ -202,7 +202,7 @@ cleanup_stale_discord_channel_for_20260503() {
     local target="$1"
     local stock_discord tmp_json
 
-    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" || "$target" == "2026.5.5" ]] || return 0
+    [[ "$target" == "2026.5.3-1" || "$target" == "2026.5.4" || "$target" == "2026.5.5" || "$target" == "2026.5.6" ]] || return 0
 
     stock_discord="/usr/lib/node_modules/openclaw/dist/extensions/discord"
     if [[ -e "$stock_discord" ]]; then
@@ -351,7 +351,7 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
     # memory-lancedb-stock hatte ebenfalls ID "memory-lancedb" → Duplicate-Plugin-Warning.
     # Fix: openclaw.plugin.json in memory-lancedb-stock auf ID "memory-lancedb-stock" setzen.
     STOCK_MANIFEST="/root/.openclaw/extensions/memory-lancedb-stock/openclaw.plugin.json"
-    if [[ "$OPENCLAW_UPDATE_TARGET" == "2026.5.3-1" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.4" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.5" ]]; then
+    if [[ "$OPENCLAW_UPDATE_TARGET" == "2026.5.3-1" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.4" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.5" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.6" ]]; then
         cleanup_memory_lancedb_stock_manifest_for_20260503 "$OPENCLAW_UPDATE_TARGET"
         ensure_20260503_plugin_contracts_and_runtime_stubs "$OPENCLAW_UPDATE_TARGET"
         cleanup_stale_discord_channel_for_20260503 "$OPENCLAW_UPDATE_TARGET"
