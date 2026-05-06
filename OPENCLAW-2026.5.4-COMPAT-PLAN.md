@@ -1,14 +1,14 @@
-# OpenClaw 2026.5.4 Compat Report
+# OpenClaw 2026.5.4/2026.5.5 Compat Report
 
-Date: 2026-05-05
+Date: 2026-05-06
 
 ## Current State
 
-- Local OpenClaw: `2026.5.4` (`325df3e`).
-- plur1bus release: `v2.1.24`, commit `866bf089b387a3582e9dba71d45050830d9b918a`.
-- GitHub `origin/main`: published through `v2.1.24`.
+- Local OpenClaw: `2026.5.5` (`b1abf9d`).
+- plur1bus release: `v2.1.25`.
+- GitHub `origin/main`: update commit pending at the time this report was edited.
 - Clawsweeper script in `/root/.openclaw/scripts/clawsweeper-gate.sh` matches the repo copy.
-- Local `how-to-memory.md` exists in this repo but is gitignored. It has been refreshed to plur1bus `2.1.24` after the 5.4 compatibility work.
+- Local `how-to-memory.md` exists in this repo but is gitignored. It was last refreshed after the 5.4 compatibility work and remains outside the public release artifact.
 - No file literally named `meta-patch.sh` was found in `/root/openclaw-memory-system` or `/root/.openclaw/patches`. If the intended file is `apply-media-patch.sh`, the live copy is `/root/.openclaw/patches/apply-media-patch.sh`; it is outside the public plur1bus repo and must be audited separately from the memory patch chain.
 
 ## Test Results
@@ -17,8 +17,8 @@ Date: 2026-05-05
 - Runtime dependency checks passed for `memory-lancedb-stock` LanceDB and runtime stub.
 - `memory-doctor.mjs provider-check`: passed outside the sandbox; `text-embedding-3-large`, 3072 dimensions, all 39 agent DBs matched.
 - `memory-doctor.mjs stats`: completed after cron hardening, total 13,135 memories, about 11.4 GB of LanceDB data.
-- `systemctl --user status openclaw-gateway`: service active after the 2026.5.4 update.
-- `openclaw --version`: `OpenClaw 2026.5.4 (325df3e)`.
+- `systemctl --user status openclaw-gateway`: service active after the final 2026.5.5 restart.
+- `openclaw --version`: `OpenClaw 2026.5.5 (b1abf9d)`.
 - `openclaw cron list`: both repaired jobs now report `ok` after manual validation runs.
 - `how-to-memory.md`: present but ignored by Git; maintained locally outside the public release artifact.
 
@@ -49,6 +49,22 @@ Relevant medium findings for this instance:
 - `25b30c9`: bundled runtime tools can bypass narrow runtime allowlists.
 - `d253392`: explicit web providers can be filtered before auto-enable widens restrictive plugin allowlists.
 
+## 2026.5.5 Clawsweeper Result
+
+Command:
+
+```bash
+/root/.openclaw/scripts/clawsweeper-gate.sh "OpenClaw 2026.5.4 (325df3e)" 2026.5.5 --no-block
+```
+
+Result:
+
+- 54 commits in range.
+- 0 clean reports.
+- 54 unreviewed commits with no report.
+
+The first gate attempt exposed a local gate issue: installed `2026.5.4` was visible as `OpenClaw 2026.5.4 (325df3e)` but was not resolvable as a GitHub tag or npm `gitHead`. `clawsweeper-gate.sh` now resolves the short commit hint from `openclaw --version` via the GitHub commits API.
+
 ## 2026.5.4 Local Compatibility Work
 
 The old local patch chain was version-gated to `2026.5.3-1`.
@@ -71,6 +87,22 @@ node --check <patched runtime files>
 ```
 
 Conclusion: the local patch chain was not the final update blocker. Production is now on `2026.5.4`; future OpenClaw updates must still use the guarded `update-openclaw.sh --check` path first because Clawsweeper found broad upstream risk in this range.
+
+## 2026.5.5 Local Compatibility Work
+
+The existing `apply-openclaw-20260504-compat.sh` patch was extended to accept `2026.5.5`. Clean tarball validation passed against `openclaw@2026.5.5`; all expected anchors applied and the patched bundle files passed `node --check`.
+
+The production update initially installed `2026.5.5`, but the live ExecStartPre copy under `/root/.openclaw/patches` still routed only `2026.5.4` to the versioned compat patch. That routing was synchronized with the repo, the patch chain was re-run, and the gateway was restarted.
+
+Final verification:
+
+- `openclaw --version`: `OpenClaw 2026.5.5 (b1abf9d)`.
+- `systemctl --user status openclaw-gateway`: active.
+- Gateway journal: `[gateway] ready`.
+- `openclaw plugins doctor`: memory plugins registered; only expected hook-only compatibility info.
+- `memory-doctor.mjs provider-check`: passed outside the sandbox; 39 agent DBs matched 3072 dimensions.
+- `openclaw cron list`: active production jobs show `ok`.
+- Live bundle marker scan found the `plur1bus-openclaw-20260504-*` markers in the 2026.5.5 runtime files.
 
 ## 2026-05-05 Cron Hardening
 
@@ -120,9 +152,9 @@ Keep explicit validation:
 ## plur1bus GitHub Plan
 
 1. Push only after a successful guarded update check and local plugin diagnostics.
-2. Tag the next release after `v2.1.24` only when there is a new shipped code/doc delta.
+2. Tag `v2.1.25` after the 2026.5.5 support commit lands.
 3. Release notes must say:
-   - OpenClaw `2026.5.4` support is validated.
+   - OpenClaw `2026.5.5` support is validated.
    - Which old local patches are retired because upstream fixed them.
    - Which local patches remain necessary.
    - Clawsweeper high/medium risks reviewed or accepted.

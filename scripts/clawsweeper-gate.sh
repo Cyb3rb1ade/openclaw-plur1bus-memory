@@ -134,6 +134,31 @@ resolve_git_ls_remote_tag_sha() {
     return 1
 }
 
+extract_commit_hint() {
+    echo "$1" | grep -oE '\([0-9a-f]{7,40}\)' | tr -d '()' | head -1
+}
+
+resolve_github_commit_sha() {
+    local ref="$1"
+    local body sha
+    [[ "$ref" =~ ^[0-9a-f]{7,40}$ ]] || return 1
+    body=$(curl_get "${API_BASE}/commits/${ref}" || true)
+    sha=$(echo "$body" | jq -r '.sha // empty' 2>/dev/null)
+    if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "$sha"
+        return 0
+    fi
+    return 1
+}
+
+resolve_raw_commit_sha() {
+    local raw="$1"
+    local hint
+    hint=$(extract_commit_hint "$raw")
+    [[ -n "$hint" ]] || return 1
+    resolve_github_commit_sha "$hint"
+}
+
 # ─── Ziel-Version ermitteln ──────────────────────────────────────────────────
 if [[ -z "$VERSION_TARGET" ]]; then
     VERSION_TARGET=$(npm view openclaw version 2>/dev/null | tr -d '[:space:]' || true)
@@ -174,11 +199,11 @@ resolve_tag_sha() {
     return 1
 }
 
-SHA_BEFORE=$(resolve_tag_sha "$VERSION_BEFORE" || resolve_git_ls_remote_tag_sha "$VERSION_BEFORE" || resolve_npm_githead "$VERSION_BEFORE") || {
+SHA_BEFORE=$(resolve_tag_sha "$VERSION_BEFORE" || resolve_git_ls_remote_tag_sha "$VERSION_BEFORE" || resolve_npm_githead "$VERSION_BEFORE" || resolve_raw_commit_sha "$VERSION_BEFORE_RAW") || {
     skip_gate "Version ${VERSION_BEFORE} nicht als GitHub-Tag, git ls-remote Tag oder npm gitHead auflösbar — Gate übersprungen."
     exit 0
 }
-SHA_TARGET=$(resolve_tag_sha "$VERSION_TARGET" || resolve_git_ls_remote_tag_sha "$VERSION_TARGET" || resolve_npm_githead "$VERSION_TARGET") || {
+SHA_TARGET=$(resolve_tag_sha "$VERSION_TARGET" || resolve_git_ls_remote_tag_sha "$VERSION_TARGET" || resolve_npm_githead "$VERSION_TARGET" || resolve_raw_commit_sha "$VERSION_TARGET_RAW") || {
     skip_gate "Version ${VERSION_TARGET} nicht als GitHub-Tag, git ls-remote Tag oder npm gitHead auflösbar — Gate übersprungen."
     exit 0
 }

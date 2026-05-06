@@ -96,8 +96,9 @@ try:
     pkg_version = json.loads(read(pkg_path)).get("version", "")
 except Exception:
     pass
-if pkg_version and pkg_version != "2026.5.4":
-    print(f"[patch] OpenClaw 2026.5.4 compat: package version is {pkg_version}, skipping dist patch")
+supported_versions = {"2026.5.4", "2026.5.5"}
+if pkg_version and pkg_version not in supported_versions:
+    print(f"[patch] OpenClaw 2026.5.4/2026.5.5 compat: package version is {pkg_version}, skipping dist patch")
     raise SystemExit(0)
 
 active_memory = os.path.join(dist, "extensions/active-memory/index.js")
