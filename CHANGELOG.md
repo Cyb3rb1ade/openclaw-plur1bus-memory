@@ -1,3 +1,16 @@
+## [2.1.27] - 2026-05-07
+
+### Fixed
+- Added OpenClaw `2026.5.6` support to the guarded updater, runtime patch dispatcher, and ExecStartPre patch path.
+- Extended the `2026.5.4+` compatibility patch to cover `2026.5.6`; tarball dry-run and live marker verification passed.
+- Repaired local YAAWC patch drift: `contentUtils.ts` preserves `AIMessage.additional_kwargs`, `reranker.ts` provides Cohere reranking, and `simpleWebSearchTool.ts` calls `rerank()`.
+
+### Verified
+- Production OpenClaw upgraded to `2026.5.6`.
+- ClawSweeper checked `2026.5.5 -> 2026.5.6`: 17 commits, 17 unreviewed reports, no state-repo findings available yet.
+- `update-openclaw.sh --check`, live update patch verification, YAAWC Docker rebuild, gateway restart, memory health checks, plugin registry refresh, and cron delivery-target checks passed.
+- One known warning remains: the Whisper container is stopped, while NVIDIA/Riva STT is active and the old Faster-Whisper VAD path is intentionally skipped.
+
 ## [2.1.26] - 2026-05-06
 
 ### Fixed

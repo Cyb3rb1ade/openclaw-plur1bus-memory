@@ -1603,7 +1603,7 @@ Das Memory-System ist seit 2026-04-03 in einem eigenen Git-Repository unter Vers
     └── memory-gc.mjs
 ```
 
-**Aktueller Stand:** `v2.1.26` (Tag), Branch `main`
+**Aktueller Stand:** `v2.1.27` (Tag), Branch `main`
 
 ### Workflow — Änderungen einpflegen
 
@@ -1626,7 +1626,7 @@ cp /root/.openclaw/scripts/install-memory-system.sh scripts/
 # Commit + Tag
 git add -p
 git commit -m "fix: ..."
-git tag -a v2.1.26 -m "v2.1.26"
+git tag -a v2.1.27 -m "v2.1.27"
 ```
 
 ### Teilen / Veröffentlichen
@@ -1657,7 +1657,7 @@ git merge contrib/main --no-ff
 
 ## Upgrade-Anleitung: 2026-04-06 → 2026-04-13 — Dreaming (nativ via memory-core)
 
-### Aktueller Stand (2026-05-06, OpenClaw 2026.5.5 validiert)
+### Aktueller Stand (2026-05-07, OpenClaw 2026.5.6 validiert)
 
 Das Dreaming läuft **nativ über OpenClaws `memory-core`** — nicht über externe Bridge-Scripts.
 
@@ -1666,9 +1666,9 @@ plugins.slots.memory = "memory-core"            ← Slot-Owner, übernimmt Dream
 memory-lancedb-namespaced.kind = "extension"    ← liefert LanceDB-Tools + Auto-Capture/Recall
 ```
 
-**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.26`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`; der lokale Patchpfad ist gegen OpenClaw `2026.5.5` validiert. `apply-memory-patches.sh` dispatcht versioniert: 4.29 nutzt den historischen `apply-plur1bus-user-hotfix.sh`, 5.3 nutzt `apply-openclaw-20260503-compat.sh`, 5.4 und 5.5 nutzen `apply-openclaw-20260504-compat.sh`. In 2026.5.3-1+ sind `toolsAllow`-Prefiltering und `hooks.allowConversationAccess`-Schema-Support upstream enthalten; die lokalen 5.3/5.4/5.5-Patches halten nur noch die realen Betriebsfixes: ActiveMemory-Empty-Result wartet auf Fallback-Recall, Empty-Result wird nicht gecached, Hook-Budget bleibt kurz, ActiveMemory/Subagents laufen auf isolierten Lanes, Heartbeat-Sweeps bekommen Backpressure, `boot-md` startet non-blocking und der versteckte Pre-Compaction-Flush nutzt keinen leeren Prompt. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
+**plur1bus Memory:** `memory-lancedb-namespaced` `2.1.27`, Auto-Capture und Auto-Recall aktiv. Mindestversion ist OpenClaw `2026.4.29`; der lokale Patchpfad ist gegen OpenClaw `2026.5.6` validiert. `apply-memory-patches.sh` dispatcht versioniert: 4.29 nutzt den historischen `apply-plur1bus-user-hotfix.sh`, 5.3 nutzt `apply-openclaw-20260503-compat.sh`, 5.4/5.5/5.6 nutzen `apply-openclaw-20260504-compat.sh`. In 2026.5.3-1+ sind `toolsAllow`-Prefiltering und `hooks.allowConversationAccess`-Schema-Support upstream enthalten; die lokalen 5.3/5.4/5.5/5.6-Patches halten nur noch die realen Betriebsfixes: ActiveMemory-Empty-Result wartet auf Fallback-Recall, Empty-Result wird nicht gecached, Hook-Budget bleibt kurz, ActiveMemory/Subagents laufen auf isolierten Lanes, Heartbeat-Sweeps bekommen Backpressure, `boot-md` startet non-blocking und der versteckte Pre-Compaction-Flush nutzt keinen leeren Prompt. Der OpenClaw-Haupt-LLM-Provider ist frei und wird von plur1bus nicht vorgegeben. plur1bus benötigt einen OpenAI-kompatiblen Embedding-Endpunkt oder OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell. Native OpenClaw-`memorySearch` ist optional und kann unabhängig von plur1bus deaktiviert werden.
 
-**Update-Gate 2026.5.5:** ClawSweeper prüfte die Range `2026.5.4 -> 2026.5.5` mit 54 Commits. Zum Updatezeitpunkt lagen im State-Repo noch keine Reports für diese Commits vor, daher wurden alle 54 als `unreviewed` dokumentiert. Der Tarball-Dry-Run gegen `openclaw@2026.5.5`, der Live-Patchpfad unter `/root/.openclaw/patches`, `openclaw plugins doctor`, `memory-doctor provider-check`, Gateway-Journal `ready` und `openclaw cron list` waren nach dem finalen Restart grün.
+**Update-Gate 2026.5.6:** ClawSweeper prüfte die Range `2026.5.5 -> 2026.5.6` mit 17 Commits. Zum Updatezeitpunkt lagen im State-Repo noch keine Reports für diese Commits vor, daher wurden alle 17 als `unreviewed` dokumentiert. Der Tarball-Dry-Run gegen `openclaw@2026.5.6`, der Live-Patchpfad unter `/root/.openclaw/patches`, YAAWC-Patch-Verifikation, Gateway-Journal `ready`, Plugin-Registry-Refresh und `openclaw cron list` waren nach dem finalen Restart grün. Die einzige Restwarnung ist der gestoppte Whisper-Container; NVIDIA/Riva STT ist aktiv und der alte Faster-Whisper-VAD-Pfad wird deshalb bewusst übersprungen.
 
 ### Betrieb: Systemd, Patch Chain und Update-Gates
 
@@ -1991,13 +1991,13 @@ journalctl --user -u openclaw-gateway --no-pager | grep "cohere.*rerank\|rerank.
 
 Der alte Fast-Path rief `memory-core` direkt auf. Das war schnell, konnte aber den plur1bus-Pluginpfad umgehen. Seit `2.1.12` bleibt ActiveMemory auf dem normalen Toolpfad und wird stattdessen über Patch #19 beschleunigt.
 
-## Patch #19 — plur1bus Compat-Patches fuer OpenClaw 2026.4.29, 2026.5.3-1, 2026.5.4 und 2026.5.5
+## Patch #19 — plur1bus Compat-Patches fuer OpenClaw 2026.4.29, 2026.5.3-1, 2026.5.4, 2026.5.5 und 2026.5.6
 
 **Dateien:** `apply-openclaw-20260429-compat.sh`, `apply-openclaw-20260503-compat.sh`, `apply-openclaw-20260504-compat.sh`, `active-memory/index.js`, `subagent-announce-delivery-*.js`, `subagent-spawn-*.js`, `acp-spawn-*.js`, `subagent-control-*.js`, `heartbeat-runner-*.js`, `bundled/boot-md/handler.js`, `agent-runner.runtime-*.js`
 
-**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. In OpenClaw `2026.5.3-1+` ist dieser Teil upstream umgebaut und teilweise gefixt; blindes Weiterlaufen des 4.29-Patches bricht deshalb am `selection toolsAllow prefilter`-Anchor. ActiveMemory braucht lokal weiter kurze Prompt-Build-Budgets, isolierte Lanes und die 5.3-Korrektur, dass ein leeres Terminal-`memory_search` den Fallback-Recall nicht abbricht. OpenClaw `2026.5.4` und `2026.5.5` ändern zusätzlich gebundelte `lanes-*.js` Dateinamen, deshalb erkennt der 5.4/5.5-Patch diesen Import per Muster.
+**Problem:** OpenClaw `2026.4.29` baut bei Embedded-Runs trotz `toolsAllow` zuerst den kompletten Plugin-Tool-Stack. In OpenClaw `2026.5.3-1+` ist dieser Teil upstream umgebaut und teilweise gefixt; blindes Weiterlaufen des 4.29-Patches bricht deshalb am `selection toolsAllow prefilter`-Anchor. ActiveMemory braucht lokal weiter kurze Prompt-Build-Budgets, isolierte Lanes und die 5.3-Korrektur, dass ein leeres Terminal-`memory_search` den Fallback-Recall nicht abbricht. OpenClaw `2026.5.4`, `2026.5.5` und `2026.5.6` ändern zusätzlich gebundelte `lanes-*.js` Dateinamen, deshalb erkennt der 5.4+ Patch diesen Import per Muster.
 
-**Fix:** `apply-memory-patches.sh` erkennt die installierte OpenClaw-Version. 4.29 bleibt auf dem bisherigen umfassenden Hotfix. 5.3/5.4/5.5 retired die upstream-gefixten Tool-Allowlist-Patches und patcht nur ActiveMemory-Fallback/Timeouts, Subagent-Lanes, Heartbeat-Backpressure, Subagent-Completion-Announcements, non-blocking `boot-md` und den nichtleeren Hidden-Flush-Prompt.
+**Fix:** `apply-memory-patches.sh` erkennt die installierte OpenClaw-Version. 4.29 bleibt auf dem bisherigen umfassenden Hotfix. 5.3/5.4/5.5/5.6 retired die upstream-gefixten Tool-Allowlist-Patches und patcht nur ActiveMemory-Fallback/Timeouts, Subagent-Lanes, Heartbeat-Backpressure, Subagent-Completion-Announcements, non-blocking `boot-md` und den nichtleeren Hidden-Flush-Prompt.
 
 **Verifikation:**
 
