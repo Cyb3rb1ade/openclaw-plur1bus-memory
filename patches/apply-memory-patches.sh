@@ -167,7 +167,7 @@ patch_plur1bus_openclaw_compat() {
   version_raw="$(openclaw --version 2>/dev/null || true)"
   version="$(sed -n 's/^OpenClaw \([0-9][^ ]*\).*/\1/p' <<< "$version_raw")"
   case "$version" in
-    2026.5.4|2026.5.5|2026.5.6)
+    2026.5.4|2026.5.5|2026.5.6|2026.5.7)
       bash "$script_dir/apply-openclaw-20260504-compat.sh"
       ;;
     2026.5.3-1)

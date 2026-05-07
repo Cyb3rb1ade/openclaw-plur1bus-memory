@@ -2,7 +2,7 @@
 
 Safe update path for plur1bus deployments on OpenClaw `2026.4.29+`.
 
-Validated target: OpenClaw `2026.5.6` with the local `apply-openclaw-20260504-compat.sh` patch.
+Validated target: OpenClaw `2026.5.7` with the local `apply-openclaw-20260504-compat.sh` patch.
 
 ## 1. Check Current State
 
@@ -13,7 +13,7 @@ test -f /root/.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/la
 test -f /root/.openclaw/extensions/memory-lancedb-stock/index.js
 openclaw plugins doctor
 git -C /root/openclaw-memory-system status --short
-/root/openclaw-memory-system/scripts/clawsweeper-gate.sh "$(openclaw --version)" 2026.5.6 --no-block
+/root/openclaw-memory-system/scripts/clawsweeper-gate.sh "$(openclaw --version)" 2026.5.7 --no-block
 ```
 
 ClawSweeper is intentionally unbounded (`CLAWSWEEPER_COMPARE_LIMIT=0`) so large ranges scan every upstream commit, not only the first 250. If an installed version is not available as a GitHub tag or npm `gitHead`, the gate can resolve the short commit shown by `openclaw --version`.
@@ -53,7 +53,7 @@ systemctl --user restart openclaw-gateway
 
 - `2026.4.29` -> `apply-openclaw-20260429-compat.sh`
 - `2026.5.3-1` -> `apply-openclaw-20260503-compat.sh`
-- `2026.5.4`, `2026.5.5`, `2026.5.6` -> `apply-openclaw-20260504-compat.sh`
+- `2026.5.4`, `2026.5.5`, `2026.5.6`, `2026.5.7` -> `apply-openclaw-20260504-compat.sh`
 
 Wait for:
 
@@ -92,10 +92,10 @@ Native OpenClaw `agents.defaults.memorySearch` is optional and independent from 
 
 ```bash
 cd /root/openclaw-memory-system
-./scripts/bump-version.sh 2.1.27
+./scripts/bump-version.sh 2.1.28
 git add -A
-git commit -m "fix(v2.1.27): support openclaw 2026.5.6"
-git tag -a v2.1.27 -m "v2.1.27"
+git commit -m "fix(v2.1.28): support openclaw 2026.5.7"
+git tag -a v2.1.28 -m "v2.1.28"
 git push origin main
-git push origin v2.1.27
+git push origin v2.1.28
 ```

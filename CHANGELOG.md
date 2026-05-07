@@ -1,3 +1,16 @@
+## [2.1.28] - 2026-05-07
+
+### Fixed
+- Added OpenClaw `2026.5.7` support to the guarded updater, runtime patch dispatcher, and ExecStartPre patch path.
+- Extended the `2026.5.4+` compatibility patch to cover `2026.5.7`; tarball dry-run and live marker verification passed.
+- Repaired local YAAWC patch drift by restoring the Kimi `maxTokens` default to `32768` and rebuilding the YAAWC Docker stack.
+
+### Verified
+- Production OpenClaw upgraded to `2026.5.7`.
+- ClawSweeper checked `2026.5.6 -> 2026.5.7`: 76 commits, 76 unreviewed reports, no state-repo findings available yet.
+- `openclaw plugins doctor`, external `memory-doctor provider-check`, gateway restart/probe, YAAWC Docker rebuild, and HTTP readiness on `127.0.0.1:3020` passed.
+- One known warning remains: the gateway read-diagnostic probe times out after the WebSocket connection is accepted; local loopback connect is OK.
+
 ## [2.1.27] - 2026-05-07
 
 ### Fixed

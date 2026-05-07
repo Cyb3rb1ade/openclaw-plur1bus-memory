@@ -11,11 +11,11 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.27` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+**Aktuelle Version:** `2.1.28` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
-**OpenClaw-Compat-Patches:** `patches/apply-memory-patches.sh` dispatcht versioniert. OpenClaw `2026.4.29` nutzt den historischen `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` nutzt `apply-openclaw-20260503-compat.sh`; OpenClaw `2026.5.4`, `2026.5.5` und `2026.5.6` nutzen `apply-openclaw-20260504-compat.sh`. Die 5.3/5.4/5.5/5.6-Patches halten ActiveMemory-Fallback/Timeouts, isolierte Lanes, Heartbeat-Backpressure, non-blocking `boot-md`, Subagent-Completion-Announce-Caps und den Hidden-Flush-Prompt lokal kompatibel.
+**OpenClaw-Compat-Patches:** `patches/apply-memory-patches.sh` dispatcht versioniert. OpenClaw `2026.4.29` nutzt den historischen `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` nutzt `apply-openclaw-20260503-compat.sh`; OpenClaw `2026.5.4`, `2026.5.5`, `2026.5.6` und `2026.5.7` nutzen `apply-openclaw-20260504-compat.sh`. Die 5.3/5.4/5.5/5.6/5.7-Patches halten ActiveMemory-Fallback/Timeouts, isolierte Lanes, Heartbeat-Backpressure, non-blocking `boot-md`, Subagent-Completion-Announce-Caps und den Hidden-Flush-Prompt lokal kompatibel.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -47,7 +47,7 @@ patches/
   apply-memory-patches.sh      ← OpenClaw-Patches (Stuck-Session, Cohere-Rerank, versionierte Compat-Patches)
   apply-openclaw-20260429-compat.sh ← Wrapper für den 4.29-Hotfix
   apply-openclaw-20260503-compat.sh ← Lokaler OpenClaw 2026.5.3-1 Compat-Patch
-  apply-openclaw-20260504-compat.sh ← Lokaler OpenClaw 2026.5.4/2026.5.5/2026.5.6 Compat-Patch
+  apply-openclaw-20260504-compat.sh ← Lokaler OpenClaw 2026.5.4/2026.5.5/2026.5.6/2026.5.7 Compat-Patch
   apply-plur1bus-user-hotfix.sh ← Historischer OpenClaw 2026.4.29 Tool-Prep/Prompt-Blocking-Hotfix
 scripts/
   install-memory-system.sh     ← Installation, Update, Registry-Refresh, Rollback + Patches (mit Auto-Discovery)
@@ -279,11 +279,11 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.27` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+**Current version:** `2.1.28` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
-**OpenClaw compatibility patches:** `patches/apply-memory-patches.sh` dispatches by OpenClaw version. OpenClaw `2026.4.29` uses the historical `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` uses `apply-openclaw-20260503-compat.sh`; OpenClaw `2026.5.4`, `2026.5.5` and `2026.5.6` use `apply-openclaw-20260504-compat.sh`. The 5.3/5.4/5.5/5.6 patches keep ActiveMemory fallback/timeouts, isolated lanes, heartbeat backpressure, non-blocking `boot-md`, subagent completion announce caps, and the hidden flush prompt locally compatible.
+**OpenClaw compatibility patches:** `patches/apply-memory-patches.sh` dispatches by OpenClaw version. OpenClaw `2026.4.29` uses the historical `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` uses `apply-openclaw-20260503-compat.sh`; OpenClaw `2026.5.4`, `2026.5.5`, `2026.5.6` and `2026.5.7` use `apply-openclaw-20260504-compat.sh`. The 5.3/5.4/5.5/5.6/5.7 patches keep ActiveMemory fallback/timeouts, isolated lanes, heartbeat backpressure, non-blocking `boot-md`, subagent completion announce caps, and the hidden flush prompt locally compatible.
 
 ```
 Layer 1    Flat-File Memory     workspace/memory/YYYY-MM-DD.md — human-readable
@@ -307,7 +307,7 @@ patches/
   apply-memory-patches.sh      ← OpenClaw patches (stuck-session, cohere-rerank, versioned compat patches)
   apply-openclaw-20260429-compat.sh ← Wrapper for the 4.29 hotfix
   apply-openclaw-20260503-compat.sh ← Local OpenClaw 2026.5.3-1 compat patch
-  apply-openclaw-20260504-compat.sh ← Local OpenClaw 2026.5.4/2026.5.5/2026.5.6 compat patch
+  apply-openclaw-20260504-compat.sh ← Local OpenClaw 2026.5.4/2026.5.5/2026.5.6/2026.5.7 compat patch
   apply-plur1bus-user-hotfix.sh ← Historical OpenClaw 2026.4.29 tool-prep/prompt-blocking hotfix
 scripts/
   install-memory-system.sh     ← Installation, update, registry refresh, rollback + patches (with auto-discovery)
