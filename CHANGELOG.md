@@ -7,9 +7,9 @@
 
 ### Verified
 - Production OpenClaw upgraded to `2026.5.7`.
-- ClawSweeper checked `2026.5.6 -> 2026.5.7`: 76 commits, 76 unreviewed reports, no state-repo findings available yet.
-- `openclaw plugins doctor`, external `memory-doctor provider-check`, gateway restart/probe, YAAWC Docker rebuild, and HTTP readiness on `127.0.0.1:3020` passed.
-- One known warning remains: the gateway read-diagnostic probe times out after the WebSocket connection is accepted; local loopback connect is OK.
+- ClawSweeper checked `2026.5.6 -> 2026.5.7`: 76 commits, 76 unreviewed reports, no state-repo findings available yet; the local manual review is documented in `reviews/openclaw-2026.5.7-manual-review.md`.
+- `openclaw plugins doctor`, external `memory-doctor provider-check`, gateway restart/probe, YAAWC Docker rebuild, HTTP readiness on `127.0.0.1:3020`, channel CLI checks, and cron JSON status checks passed.
+- One watchpoint remains: heavy gateway status calls can starve the event loop temporarily; an outside-sandbox gateway probe was healthy.
 
 ## [2.1.27] - 2026-05-07
 
