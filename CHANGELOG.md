@@ -1,3 +1,15 @@
+## [2.1.30] - 2026-05-10
+
+### Fixed
+- Reworked `maintain-knowledge-md.mjs` Kimi-for-Coding calls to use direct SSE streaming for the Kimi Code endpoint instead of OpenAI SDK streaming.
+- Kept maintainer backfill Thinking enabled for Kimi, raised Kimi Thinking output budget to 32768 tokens, and avoided the invalid `thinking: { budget_tokens: 0 }` disable pattern.
+- Improved maintainer LLM diagnostics with model/BaseURL/Thinking/token/stream metadata and compacted audit arrays to avoid huge failure log lines.
+
+### Verified
+- Raw `/coding/v1/models` check returned `kimi-for-coding` for the configured key/base URL.
+- Raw Kimi streaming chat succeeded with the configured coding-agent User-Agent.
+- Live `--backfill --agent main --max 1 --batch-size 1` integrated one historical memory, wrote a `KNOWLEDGE.md` backup, and recorded composite state key `main:3bf43509-11e0-432d-95ff-5fbf956094c8`.
+
 ## [2.1.29] - 2026-05-10
 
 ### Added
