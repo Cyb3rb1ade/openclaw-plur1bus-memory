@@ -1,3 +1,14 @@
+## [2.1.29] - 2026-05-10
+
+### Added
+- Added `maintain-knowledge-md.mjs`, a workspace-scoped Schicht 1.5 maintainer for checking, dry-running, fresh-pending integration, and manual historical `KNOWLEDGE.md` backfills.
+- Added composite integrated-memory state keyed by `sourceAgent:memoryId`, with backups, audit logging, workspace locks, and stricter LLM output validation before canonical `KNOWLEDGE.md` writes.
+- Added source-aware, race-safe Schema 2 `knowledge-pending.json` handling with short pending-file locks, tmp+rename writes, and fresh-only cleanup after successful `KNOWLEDGE.md` writes.
+- Integrated the maintainer into `install-memory-system.sh`, including explicit script installation, interactive bootstrap, and a fresh-only daily cron.
+
+### Changed
+- Updated `memory-doctor pending` to use the same workspace-scoped coverage model as the maintainer, including integrated state, recent frontmatter provenance, and heuristic fallback.
+
 ## [2.1.28] - 2026-05-07
 
 ### Fixed
