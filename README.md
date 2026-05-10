@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Latest Release](https://img.shields.io/badge/release-v2.1.32-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v2.1.32)
+[![Latest Release](https://img.shields.io/badge/release-v3.0.0--neo-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/tree/neo-arch)
 
 ---
 
@@ -11,7 +11,9 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.32` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+**Aktuelle Version:** `3.0.0` (Branch `neo-arch`) — führt die **Neo-Arch-Kognitionsschicht** ein: 24 Kategorien, 6 Trust-Levels, 14 Recall-Lanes und ein Turn-Journal mit provenanzierter Status-Maschine (`pending → curated → canonical → archived`). Kompatibel mit OpenClaw ≥ `2026.4.29`. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+
+> **Branch-Übersicht:** `main` = stabile v2.1.x (ohne Neo-Arch). `neo-arch` = v3.0.0 mit erweitertem kognitiven Modell. Wer nur das bewährte LanceDB-Plugin braucht, kann auf `main` bleiben.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
@@ -280,7 +282,9 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.32` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+**Current version:** `3.0.0` (branch `neo-arch`) — introduces the **Neo-Arch cognition layer**: 24 categories, 6 trust levels, 14 recall lanes, and a turn journal with provenance-tracked status machine (`pending → curated → canonical → archived`). Compatible with OpenClaw ≥ `2026.4.29`. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+
+> **Branch overview:** `main` = stable v2.1.x (without Neo-Arch). `neo-arch` = v3.0.0 with extended cognitive model. If you only need the battle-tested LanceDB plugin, `main` is the safe default.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
