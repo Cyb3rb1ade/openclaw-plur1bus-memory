@@ -75,7 +75,7 @@ export const NEO_RECALL_LANES = [
   "knowledge_md",
 ];
 
-const PROMPT_INJECTION_RE = /\b(ignore previous|disregard (all )?(prior|previous)|system prompt|developer message|tool_call|<tool|<\/tool|<system|<\/system)\b/i;
+const PROMPT_INJECTION_RE = /\b(ignore (all )?(previous|prior|above|instructions?)|disregard (all )?(prior|previous|instructions?)|system prompt|developer message|tool_call|act as|pretend (to be|you are)|you are now|new (role|persona|instruction)|forget (?:\w+\s+){0,3}(previous|prior|above|instructions?)|jailbreak|prompt injection)\b|<\/?(?:tool|system|s|assistant|human|prompt)[^>]{0,30}>|<\|im_start\||<\|im_end\||#{3,}\s*(system|assistant|user)\b/i;
 
 export function sanitizePathPart(value) {
   const s = String(value || "default").trim();
@@ -104,6 +104,20 @@ export function escapeMemoryText(text) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+/**
+ * Sanitizes memory text before prompt injection — HTML-escapes, strips control
+ * chars, and truncates to maxChars. Use for display content, not IDs.
+ */
+export function sanitizeMemoryTextForPrompt(text, maxChars = 400) {
+  let s = String(text || "").slice(0, maxChars);
+  s = s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Strip control characters (keep tab + newline only)
+  s = s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+  // Collapse excessive whitespace to prevent format manipulation
+  s = s.replace(/\n{3,}/g, "\n\n").replace(/ {5,}/g, "    ");
+  return s;
 }
 
 export function looksLikePromptInjection(text) {
