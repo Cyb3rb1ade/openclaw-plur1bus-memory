@@ -18,13 +18,16 @@
  *   node memory-doctor.mjs eval main
  */
 
-import { existsSync, readFileSync, statSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync, statSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
+import { parseSourceMemoryIds, stripFrontmatter } from "../extensions/memory-lancedb-namespaced/lib/frontmatter.js";
+
 const __dir = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(homedir(), ".openclaw", "openclaw.json");
+const INTEGRATED_IDS_FILE = "knowledge-integrated-memory-ids.json";
 
 let _lancedb = null;
 async function getLanceDB() {
@@ -50,7 +53,7 @@ function loadConfig() {
   const plugin = cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.config || {};
   let baseDbPath = plugin.baseDbPath || join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
   if (baseDbPath.startsWith("~/")) baseDbPath = join(homedir(), baseDbPath.slice(2));
-  return { plugin, baseDbPath, agents: cfg?.agents?.list || [] };
+  return { raw: cfg, plugin, baseDbPath, agents: cfg?.agents?.list || [] };
 }
 
 function resolveStockDependency(...parts) {
@@ -74,10 +77,101 @@ function discoverAgents(baseDbPath, filter) {
   return all;
 }
 
+function expandPath(p) {
+  if (!p) return p;
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+
+function normalizePath(p) {
+  const expanded = expandPath(p);
+  const absolute = isAbsolute(expanded) ? expanded : join(homedir(), expanded);
+  try { return realpathSync(absolute); } catch (_) { return resolve(absolute); }
+}
+
 function workspaceDirFor(agentId, cfg) {
   const ag = cfg.agents.find(a => a.id === agentId);
-  if (ag?.workspace) return ag.workspace.startsWith("/") ? ag.workspace : join(homedir(), ag.workspace);
-  return join(homedir(), ".openclaw", `workspace-${agentId}`);
+  if (ag?.workspace) return normalizePath(ag.workspace);
+  if (ag) return normalizePath(cfg.raw?.agents?.defaults?.workspace || join(homedir(), ".openclaw", "workspace"));
+  return normalizePath(join(homedir(), ".openclaw", `workspace-${agentId}`));
+}
+
+function hyphenCount(s) {
+  return (s.match(/-/g) || []).length;
+}
+
+function betterPrimary(candidate, existing) {
+  if (!existing) return true;
+  if (hyphenCount(candidate) !== hyphenCount(existing)) return hyphenCount(candidate) < hyphenCount(existing);
+  return candidate.length < existing.length;
+}
+
+function discoverWorkspaceGroups(cfg, filter) {
+  const dbIds = new Set(discoverAgents(cfg.baseDbPath, null));
+  const groups = new Map();
+  for (const entry of cfg.agents) {
+    if (!entry?.id || !dbIds.has(entry.id)) continue;
+    const ws = workspaceDirFor(entry.id, cfg);
+    if (!groups.has(ws)) groups.set(ws, { workspace: ws, primaryAgent: entry.id, agentIds: [] });
+    const group = groups.get(ws);
+    group.agentIds.push(entry.id);
+    if (betterPrimary(entry.id, group.primaryAgent)) group.primaryAgent = entry.id;
+  }
+  for (const id of dbIds) {
+    if (cfg.agents.some(a => a?.id === id)) continue;
+    const ws = workspaceDirFor(id, cfg);
+    groups.set(ws, { workspace: ws, primaryAgent: id, agentIds: [id] });
+  }
+  const result = [...groups.values()].map(g => ({ ...g, agentIds: [...new Set(g.agentIds)].sort() }));
+  if (!filter) return result;
+  return result.filter(g => g.primaryAgent === filter || g.agentIds.includes(filter));
+}
+
+function readJson(path, fallback) {
+  try {
+    if (existsSync(path)) return JSON.parse(readFileSync(path, "utf8"));
+  } catch (_) {}
+  return fallback;
+}
+
+function readKnowledgeCoverage(workspaceDir) {
+  const knowledgePath = join(workspaceDir, "memory", "KNOWLEDGE.md");
+  const content = existsSync(knowledgePath) ? readFileSync(knowledgePath, "utf8") : "";
+  const { frontmatter } = stripFrontmatter(content);
+  const statePath = join(workspaceDir, ".adaptive-learning", INTEGRATED_IDS_FILE);
+  const state = readJson(statePath, { integrated: {} });
+  const integrated = state && typeof state.integrated === "object" && !Array.isArray(state.integrated) ? state.integrated : {};
+  return {
+    knowledge: content.toLowerCase(),
+    integratedKeys: new Set(Object.keys(integrated)),
+    frontmatterIds: new Set(parseSourceMemoryIds(frontmatter)),
+  };
+}
+
+function readFreshPendingKeys(workspaceDir) {
+  const state = readJson(join(workspaceDir, ".adaptive-learning", "knowledge-pending.json"), { pending: [], pendingMemoryIds: [] });
+  const keys = new Set();
+  const legacyIds = new Set();
+  if (Array.isArray(state.pending)) {
+    for (const item of state.pending) {
+      if (item?.sourceAgent && item?.memoryId) keys.add(`${item.sourceAgent}:${item.memoryId}`);
+      else if (item?.memoryId) legacyIds.add(item.memoryId);
+    }
+  }
+  if (Array.isArray(state.pendingMemoryIds)) {
+    for (const id of state.pendingMemoryIds.filter(Boolean)) legacyIds.add(id);
+  }
+  return { keys, legacyIds };
+}
+
+function coverageReason(agentId, memory, coverage) {
+  if (memory.id && coverage.integratedKeys.has(`${agentId}:${memory.id}`)) return "id-state";
+  if (memory.id && coverage.frontmatterIds.has(memory.id)) return "frontmatter";
+  const tokens = [...tokenize(memory.summary || memory.text)].slice(0, 6);
+  const matches = tokens.filter(t => coverage.knowledge.includes(t)).length;
+  if (matches >= 3) return "heuristic";
+  return null;
 }
 
 function dirSize(p) {
@@ -232,27 +326,39 @@ async function cmdOrphans(args) {
 async function cmdPending(args) {
   const cfg = loadConfig();
   const minImp = cfg.plugin?.schicht15?.minImportance ?? 0.7;
-  const agents = discoverAgents(cfg.baseDbPath, args[0]);
-  console.log(`\nHigh-importance memories (≥${minImp}, decision/fact) NOT in KNOWLEDGE.md:\n`);
-  for (const ag of agents) {
-    const tbl = await openTable(cfg.baseDbPath, ag);
-    if (!tbl) continue;
-    const rows = await (await tbl.query()).toArray();
-    const high = rows.filter(r => (r.importance ?? 0) >= minImp && (r.category === "decision" || r.category === "fact"));
-
-    const wsDir = workspaceDirFor(ag, cfg);
-    const knowledgePath = join(wsDir, "memory", "KNOWLEDGE.md");
-    let knowledge = "";
-    if (existsSync(knowledgePath)) knowledge = readFileSync(knowledgePath, "utf8").toLowerCase();
-
-    // Heuristik: ein Memory gilt als "in KNOWLEDGE.md" wenn ≥3 seiner Tokens im KNOWLEDGE.md vorkommen
+  const groups = discoverWorkspaceGroups(cfg, args[0]);
+  console.log(`\nWorkspace high-importance memories (≥${minImp}, decision/fact) NOT in KNOWLEDGE.md:\n`);
+  for (const group of groups) {
+    let totalRows = 0;
+    let totalHigh = 0;
+    const coverage = readKnowledgeCoverage(group.workspace);
+    const fresh = readFreshPendingKeys(group.workspace);
     let notIn = 0;
-    for (const m of high) {
-      const tokens = [...tokenize(m.summary || m.text)].slice(0, 6);
-      const matches = tokens.filter(t => knowledge.includes(t)).length;
-      if (matches < 3) notIn++;
+    let freshNotIn = 0;
+    const covered = { "id-state": 0, frontmatter: 0, heuristic: 0 };
+    for (const ag of group.agentIds) {
+      const tbl = await openTable(cfg.baseDbPath, ag);
+      if (!tbl) continue;
+      const rows = await (await tbl.query()).toArray();
+      const high = rows.filter(r => (r.importance ?? 0) >= minImp && (r.category === "decision" || r.category === "fact"));
+      totalRows += rows.length;
+      totalHigh += high.length;
+      for (const m of high) {
+        const reason = coverageReason(ag, m, coverage);
+        if (reason) covered[reason]++;
+        else {
+          notIn++;
+          if (fresh.keys.has(`${ag}:${m.id}`) || fresh.legacyIds.has(m.id)) freshNotIn++;
+        }
+      }
     }
-    console.log(`  ${ag}: ${notIn} pending / ${high.length} high-importance (${rows.length} total)`);
+    console.log(`  ${group.primaryAgent} (${group.workspace})`);
+    console.log(`    agents: ${group.agentIds.join(", ")}`);
+    console.log(`    fresh pending: ${freshNotIn}`);
+    console.log(`    historical pending: ${notIn} / ${totalHigh} high-importance (${totalRows} total)`);
+    console.log(`    covered by state: ${covered["id-state"]}`);
+    console.log(`    covered by frontmatter: ${covered.frontmatter}`);
+    console.log(`    covered by heuristic: ${covered.heuristic}`);
   }
 }
 

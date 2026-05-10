@@ -1122,6 +1122,8 @@ fi
 step "Schritt 6: TTL-GC-Cron einrichten"
 
 TARGET_GC_SCRIPT="$TARGET_DIR/scripts/memory-gc.mjs"
+MAINTAIN_SRC="$SOURCE_DIR/scripts/maintain-knowledge-md.mjs"
+TARGET_MAINTAIN_SCRIPT="$TARGET_DIR/scripts/maintain-knowledge-md.mjs"
 
 # GC-Script mit angepassten Pfaden erstellen
 GC_CONTENT=$(cat << GCEOF
@@ -1190,6 +1192,23 @@ else
       warn "Manuell eintragen: $CRON_LINE"
     fi
   fi
+fi
+
+# ─── Schritt 6b: KNOWLEDGE.md-Maintainer kopieren ────────────────────────────
+
+step "Schritt 6b: KNOWLEDGE.md-Maintainer installieren"
+
+if [[ -f "$MAINTAIN_SRC" ]]; then
+  if [[ "$DRY_RUN" == "0" ]]; then
+    run_target "mkdir -p '$TARGET_DIR/scripts'"
+    copy_to_target "$MAINTAIN_SRC" "$TARGET_DIR/scripts/"
+    run_target "chmod +x '$TARGET_MAINTAIN_SCRIPT'"
+    ok "maintain-knowledge-md.mjs installiert: $TARGET_MAINTAIN_SCRIPT"
+  else
+    dryrun "Würde $MAINTAIN_SRC nach $TARGET_MAINTAIN_SCRIPT kopieren"
+  fi
+else
+  warn "maintain-knowledge-md.mjs nicht gefunden in $SOURCE_DIR/scripts — übersprungen"
 fi
 
 # ─── Schritt 7: Dokumentation kopieren ────────────────────────────────────────
@@ -1278,6 +1297,61 @@ else
   warn "patches/apply-memory-patches.sh nicht gefunden — übersprungen"
 fi
 
+# ─── Schritt 9b: KNOWLEDGE.md Bootstrap ──────────────────────────────────────
+
+step "Schritt 9b: KNOWLEDGE.md Bootstrap"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  dryrun "Würde prüfen: node '$TARGET_MAINTAIN_SCRIPT' --check"
+  if confirm "  Historischen KNOWLEDGE.md-Backfill starten? (optional; empfohlen erst nach --dry-run Review)" "n"; then
+    dryrun "Würde ausführen: node '$TARGET_MAINTAIN_SCRIPT' --backfill --max 100 --batch-size 10"
+  else
+    info "Historischer Backfill übersprungen. Erst prüfen: node $TARGET_MAINTAIN_SCRIPT --backfill --max 100 --batch-size 10 --dry-run"
+    info "Manuell starten: node $TARGET_MAINTAIN_SCRIPT --backfill --max 100 --batch-size 10"
+  fi
+elif ! run_target "test -f '$TARGET_MAINTAIN_SCRIPT' && echo yes || echo no" 2>/dev/null | grep -q yes; then
+  warn "maintain-knowledge-md.mjs nicht gefunden — Bootstrap übersprungen"
+else
+  PENDING_OUTPUT=$(run_target "node '$TARGET_MAINTAIN_SCRIPT' --check 2>&1" || true)
+  HAS_PENDING=$(printf '%s\n' "$PENDING_OUTPUT" | grep -cE "fresh pending: [1-9][0-9]*|historical pending: [1-9][0-9]*" || true)
+
+  if [[ "$HAS_PENDING" -gt 0 ]]; then
+    printf '%s\n\n' "$PENDING_OUTPUT"
+    warn "Historischer Backfill kann bestehende KNOWLEDGE.md-Inhalte per LLM ergänzen/verdichten."
+    warn "Empfohlen: zuerst prüfen mit node $TARGET_MAINTAIN_SCRIPT --backfill --max 100 --batch-size 10 --dry-run"
+    if confirm "  Historischen KNOWLEDGE.md-Backfill jetzt starten?" "n"; then
+      run_target "node '$TARGET_MAINTAIN_SCRIPT' --backfill --max 100 --batch-size 10"
+      ok "KNOWLEDGE.md Bootstrap abgeschlossen"
+    else
+      info "Historischer Backfill übersprungen."
+      info "Manuell starten: node $TARGET_MAINTAIN_SCRIPT --backfill --max 100 --batch-size 10"
+    fi
+  else
+    ok "KNOWLEDGE.md aktuell — kein Backfill nötig"
+  fi
+fi
+
+# ─── Schritt 9c: KNOWLEDGE.md Fresh-Cron ─────────────────────────────────────
+
+step "Schritt 9c: KNOWLEDGE.md Fresh-Cron"
+
+BACKFILL_CRON="30 4 * * * /usr/bin/node $TARGET_MAINTAIN_SCRIPT --fresh --max 10 >> $TARGET_DIR/logs/knowledge-backfill.log 2>&1"
+CRON_MARKER="maintain-knowledge-md"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  dryrun "Würde Cron einrichten: $BACKFILL_CRON"
+else
+  run_target "mkdir -p '$TARGET_DIR/logs'"
+  CRON_EXISTS=$(run_target "crontab -l 2>/dev/null | grep -c '$CRON_MARKER' || true")
+  if [[ "$CRON_EXISTS" -gt 0 ]]; then
+    ok "KNOWLEDGE.md Fresh-Cron bereits eingerichtet"
+  elif run_target "(crontab -l 2>/dev/null || true; echo '$BACKFILL_CRON') | crontab -" 2>/dev/null; then
+    ok "KNOWLEDGE.md Fresh-Cron eingerichtet (täglich 04:30, --fresh --max 10)"
+  else
+    warn "Cron konnte nicht gesetzt werden. Manuell einrichten: $BACKFILL_CRON"
+  fi
+fi
+
 # ─── Schritt 10: OpenClaw Plugin-Registry aktualisieren ──────────────────────
 
 step "Schritt 10: OpenClaw Plugin-Registry aktualisieren"
@@ -1314,6 +1388,9 @@ fi
 echo
 echo "  3. GC-Script testen:"
 echo "     node $TARGET_GC_SCRIPT"
+echo
+echo "  3b. KNOWLEDGE.md-Status prüfen:"
+echo "     node $TARGET_MAINTAIN_SCRIPT --check"
 echo
 echo "  4. Erster Memory-Store und Recall testen (via Agent-Chat):"
 echo "     memory_store: {text: 'Testfakt', category: 'fact', importance: 0.5}"

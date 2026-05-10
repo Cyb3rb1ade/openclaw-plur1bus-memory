@@ -28,7 +28,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -551,39 +551,163 @@ async function callMergeCheck(existingText, newText, llmCfg) {
 // ============================================================================
 
 const KNOWLEDGE_PENDING_FILE = "knowledge-pending.json";
+const KNOWLEDGE_PENDING_LOCK_FILE = "knowledge-pending.lock";
 const KNOWLEDGE_LOCK_FILE    = "knowledge-update.lock";
 const KNOWLEDGE_MD_FILE      = "memory/KNOWLEDGE.md";
+const KNOWLEDGE_PENDING_CAP  = 200;
+
+function pendingKey(sourceAgent, memoryId) {
+  return `${sourceAgent}:${memoryId}`;
+}
+
+function normalizeKnowledgePending(raw) {
+  const now = new Date().toISOString();
+  const pending = [];
+  if (Array.isArray(raw?.pending)) {
+    for (const item of raw.pending) {
+      if (!item?.sourceAgent || !item?.memoryId) continue;
+      pending.push({
+        key: item.key || pendingKey(item.sourceAgent, item.memoryId),
+        sourceAgent: item.sourceAgent,
+        memoryId: item.memoryId,
+        queuedAt: item.queuedAt || raw.lastStoreAt || now,
+        reason: item.reason || "schicht15-store-pending",
+        category: item.category || "fact",
+        importance: Number(item.importance ?? 0.5),
+      });
+    }
+  }
+  if (Array.isArray(raw?.pendingMemoryIds)) {
+    for (const id of raw.pendingMemoryIds.filter(Boolean)) {
+      pending.push({
+        key: id,
+        sourceAgent: null,
+        memoryId: id,
+        queuedAt: raw.lastStoreAt || now,
+        reason: "legacy-pending-id",
+        category: "fact",
+        importance: 0.5,
+      });
+    }
+  }
+  const deduped = new Map();
+  for (const item of pending) deduped.set(item.key, item);
+  const sorted = [...deduped.values()].sort((a, b) => {
+    const imp = (b.importance ?? 0) - (a.importance ?? 0);
+    if (imp !== 0) return imp;
+    return String(b.queuedAt || "").localeCompare(String(a.queuedAt || ""));
+  });
+  return {
+    schema: 2,
+    pending: sorted.slice(0, KNOWLEDGE_PENDING_CAP),
+    pendingCount: Math.min(sorted.length, KNOWLEDGE_PENDING_CAP),
+    pendingOverflowCount: Math.max(0, sorted.length - KNOWLEDGE_PENDING_CAP),
+    lastStoreAt: raw?.lastStoreAt || null,
+    lastUpdateAt: raw?.lastUpdateAt || null,
+  };
+}
+
+function acquireKnowledgePendingLock(workspaceDir) {
+  const dir = join(workspaceDir, ".adaptive-learning");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const lockPath = join(dir, KNOWLEDGE_PENDING_LOCK_FILE);
+  if (existsSync(lockPath)) {
+    const lockAge = Date.now() - statSync(lockPath).mtimeMs;
+    if (lockAge > 60 * 1000) unlinkSync(lockPath);
+    else throw new Error("knowledge pending lock held");
+  }
+  const fd = openSync(lockPath, "wx");
+  writeFileSync(fd, new Date().toISOString());
+  closeSync(fd);
+  return lockPath;
+}
+
+function releaseKnowledgePendingLock(lockPath) {
+  try { if (lockPath && existsSync(lockPath)) unlinkSync(lockPath); } catch (_) {}
+}
+
+function readKnowledgePendingUnlocked(workspaceDir) {
+  try {
+    const p = join(workspaceDir, ".adaptive-learning", KNOWLEDGE_PENDING_FILE);
+    if (existsSync(p)) return normalizeKnowledgePending(JSON.parse(readFileSync(p, "utf8")));
+  } catch (_) {}
+  return normalizeKnowledgePending({});
+}
+
+function writeKnowledgePendingUnlocked(workspaceDir, state) {
+  const dir = join(workspaceDir, ".adaptive-learning");
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const p = join(dir, KNOWLEDGE_PENDING_FILE);
+  const normalized = normalizeKnowledgePending(state);
+  const tmpPath = p + ".tmp";
+  writeFileSync(tmpPath, JSON.stringify(normalized, null, 2), "utf8");
+  renameSync(tmpPath, p);
+  return normalized;
+}
 
 function readKnowledgePending(workspaceDir) {
+  let lockPath = null;
   try {
-    const p = join(workspaceDir, ".adaptive-learning", KNOWLEDGE_PENDING_FILE);
-    if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8"));
-  } catch (_) {}
-  return { pendingCount: 0, pendingMemoryIds: [], lastUpdateAt: null, lastStoreAt: null };
+    lockPath = acquireKnowledgePendingLock(workspaceDir);
+    return readKnowledgePendingUnlocked(workspaceDir);
+  } catch (_) {
+    return normalizeKnowledgePending({});
+  } finally {
+    releaseKnowledgePendingLock(lockPath);
+  }
 }
 
-function trackKnowledgePending(workspaceDir, memoryId) {
+function readKnowledgePendingSnapshot(workspaceDir) {
+  return readKnowledgePending(workspaceDir);
+}
+
+function trackKnowledgePending(workspaceDir, memory) {
+  let lockPath = null;
   try {
-    const dir  = join(workspaceDir, ".adaptive-learning");
-    const p    = join(dir, KNOWLEDGE_PENDING_FILE);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    const state = readKnowledgePending(workspaceDir);
-    state.pendingCount = Math.min((state.pendingCount || 0) + 1, 1000);
-    state.pendingMemoryIds = [...(state.pendingMemoryIds || []), memoryId].slice(-50);
+    if (!memory?.sourceAgent || !memory?.memoryId) return;
+    lockPath = acquireKnowledgePendingLock(workspaceDir);
+    const state = readKnowledgePendingUnlocked(workspaceDir);
+    const entry = {
+      key: pendingKey(memory.sourceAgent, memory.memoryId),
+      sourceAgent: memory.sourceAgent,
+      memoryId: memory.memoryId,
+      queuedAt: new Date().toISOString(),
+      reason: memory.reason || "schicht15-store-pending",
+      category: memory.category || "fact",
+      importance: Number(memory.importance ?? 0.5),
+    };
+    state.pending = [...state.pending.filter(it => it.key !== entry.key), entry];
     state.lastStoreAt = new Date().toISOString();
-    writeFileSync(p, JSON.stringify(state, null, 2), "utf8");
+    const written = writeKnowledgePendingUnlocked(workspaceDir, state);
+    if ((written.pendingOverflowCount || 0) > 0) {
+      appendCurationLog(workspaceDir, memory.sourceAgent, {
+        event: "knowledge_pending.overflow",
+        timestamp: new Date().toISOString(),
+        agentId: memory.sourceAgent,
+        memoryId: memory.memoryId,
+        text: "",
+        category: memory.category || "fact",
+        origin: "system",
+        reason: `pending_cap:${KNOWLEDGE_PENDING_CAP}, overflow:${written.pendingOverflowCount}`,
+        relatedId: null,
+      });
+    }
   } catch (_) {}
+  finally { releaseKnowledgePendingLock(lockPath); }
 }
 
-function clearKnowledgePending(workspaceDir) {
+function removeKnowledgePending(workspaceDir, removeKeys, removeLegacyIds = []) {
+  let lockPath = null;
   try {
-    const p = join(workspaceDir, ".adaptive-learning", KNOWLEDGE_PENDING_FILE);
-    const state = readKnowledgePending(workspaceDir);
-    state.pendingCount      = 0;
-    state.pendingMemoryIds  = [];
-    state.lastUpdateAt      = new Date().toISOString();
-    writeFileSync(p, JSON.stringify(state, null, 2), "utf8");
+    const keys = new Set(removeKeys || []);
+    const legacy = new Set(removeLegacyIds || []);
+    lockPath = acquireKnowledgePendingLock(workspaceDir);
+    const state = readKnowledgePendingUnlocked(workspaceDir);
+    state.pending = state.pending.filter(item => !keys.has(item.key) && !(item.sourceAgent === null && legacy.has(item.memoryId)));
+    state.lastUpdateAt = new Date().toISOString();
+    writeKnowledgePendingUnlocked(workspaceDir, state);
   } catch (_) {}
+  finally { releaseKnowledgePendingLock(lockPath); }
 }
 
 // ============================================================================
@@ -1087,7 +1211,7 @@ const plugin = {
                     await db.store(mergedEntry);
                     if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
                     if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
-                      trackKnowledgePending(ctx.workspaceDir, mergedEntry.id);
+                      trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
                     }
                     return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
                   }
@@ -1108,7 +1232,7 @@ const plugin = {
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
               if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
-                trackKnowledgePending(ctx.workspaceDir, entry.id);
+                trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: entry.id, category, importance });
               }
               return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id } };
             } catch (err) {
@@ -1171,6 +1295,12 @@ const plugin = {
               return { content: [{ type: "text", text: "knowledge_update: workspaceDir not available." }] };
             }
 
+            // Pending snapshot: hold only the short pending-file lock, then release
+            // before attempting the KNOWLEDGE.md lock.
+            const pendingSnapshot = readKnowledgePendingSnapshot(ctx.workspaceDir);
+            const agentPending = pendingSnapshot.pending.filter(p => p.sourceAgent === agentId);
+            const pendingIds = agentPending.map(p => p.memoryId);
+
             // Mutex via lock file — atomic acquire with wx flag (exclusive create)
             const lockPath = join(ctx.workspaceDir, ".adaptive-learning", KNOWLEDGE_LOCK_FILE);
             // Staleness check: remove lock files older than 5 minutes (crash recovery)
@@ -1209,9 +1339,6 @@ const plugin = {
                 return { content: [{ type: "text", text: "knowledge_update: could not acquire lock after 5 attempts. Try again later." }] };
               }
 
-              const pending = readKnowledgePending(ctx.workspaceDir);
-              const pendingIds = pending.pendingMemoryIds || [];
-
               // Fetch pending memories from DB
               let pendingTexts = [];
               if (pendingIds.length > 0) {
@@ -1222,7 +1349,8 @@ const plugin = {
                     api.logger.warn(`memory-lancedb-namespaced: knowledge_update — keine valid UUIDs in ${pendingIds.length} pending IDs`);
                   } else {
                     const rows = await db.table.query().where(`id IN (${inList})`).toArray();
-                    pendingTexts = rows.map(r => ({ id: r.id, text: r.text, category: r.category || "fact", importance: r.importance ?? 0.5 }));
+                    const keyById = new Map(agentPending.map(p => [p.memoryId, p.key]));
+                    pendingTexts = rows.map(r => ({ id: r.id, text: r.text, category: r.category || "fact", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
                   }
                 } catch (fetchErr) {
                   api.logger.warn(`memory-lancedb-namespaced: knowledge_update DB fetch failed: ${String(fetchErr)}`);
@@ -1230,7 +1358,6 @@ const plugin = {
               }
 
               if (pendingTexts.length === 0 && !params?.note) {
-                clearKnowledgePending(ctx.workspaceDir);
                 return { content: [{ type: "text", text: "No pending memories to integrate into KNOWLEDGE.md." }] };
               }
 
@@ -1262,7 +1389,7 @@ const plugin = {
               const updated = await callLlm([
                 {
                   role: "user",
-                  content: `Here is the current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memories to integrate (date=${today}):\n${newEntriesBlock}${params?.note ? `\n\nCurator note: ${params.note}` : ""}\n\nIntegrate these into the KNOWLEDGE.md body.\n- Add entries under appropriate sections with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.`,
+                  content: `Current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memories to integrate (date=${today}):\n${newEntriesBlock}${params?.note ? `\n\nCurator note: ${params.note}` : ""}\n\nIntegrate these into the KNOWLEDGE.md body.\n- Do not rewrite the document from scratch.\n- Preserve existing wording unless merging an exact duplicate or lightly compacting closely related points.\n- Only add or merge knowledge that is directly supported by the new memories.\n- Add entries under appropriate sections with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Return ONLY the Markdown body, NO YAML frontmatter, NO explanation, NO code block wrapper.`,
                 },
               ], { ...schicht15LlmCfg, maxTokens: 3000 });
 
@@ -1299,7 +1426,9 @@ const plugin = {
               writeFileSync(tmpPath, finalContent, "utf8");
               renameSync(tmpPath, knowledgePath);
 
-              clearKnowledgePending(ctx.workspaceDir);
+              // Pending cleanup: under the KNOWLEDGE lock, briefly re-lock pending,
+              // re-read current state, and subtract only successfully integrated keys.
+              removeKnowledgePending(ctx.workspaceDir, pendingTexts.map(m => m.pendingKey).filter(Boolean));
 
               const lineCount = finalContent.split("\n").length;
               return { content: [{ type: "text", text: `KNOWLEDGE.md updated (${pendingTexts.length} memories integrated, ${lineCount} lines total).` }] };
