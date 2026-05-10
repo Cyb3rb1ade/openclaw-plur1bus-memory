@@ -1,9 +1,8 @@
 {
   "id": "memory-lancedb-namespaced",
   "name": "Memory (LanceDB, per-Agent)",
-  "description": "LanceDB-backed long-term memory with per-agent isolation. Requires OpenClaw >= 2026.4.29. Each agent gets its own database under {baseDbPath}/{agentId}/.",
-  "version": "2.1.32",
-  "kind": "extension",
+  "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory and OpenClaw-native turn journal, provenance, curation, and recall.",
+  "version": "3.0.0-neo.0",
   "contracts": {
     "tools": [
       "knowledge_update",
@@ -54,6 +53,30 @@
       },
       "baseDbPath": {
         "type": "string"
+      },
+      "neo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "augment",
+              "slot"
+            ],
+            "default": "augment"
+          },
+          "statePath": {
+            "type": "string"
+          },
+          "corpusDefaultWorkspaceKey": {
+            "type": "string"
+          }
+        }
       },
       "autoCapture": {
         "type": "boolean"

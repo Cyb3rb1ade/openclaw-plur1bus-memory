@@ -1,7 +1,7 @@
 {
   "name": "memory-lancedb-namespaced",
-  "version": "2.1.32",
-  "description": "Per-agent namespaced LanceDB memory — jeder Agent bekommt seine eigene isolierte Datenbank",
+  "version": "3.0.0-neo.0",
+  "description": "PLUR1BUS neo-arch cognitive memory augment for OpenClaw",
   "type": "module",
   "openclaw": {
     "extensions": [
