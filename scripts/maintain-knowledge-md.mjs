@@ -44,6 +44,12 @@ const PENDING_FILE = "knowledge-pending.json";
 const AUDIT_FILE = "knowledge-maintainer.jsonl";
 const PENDING_CAP = 200;
 const KNOWLEDGE_BACKUP_RETENTION = 30;
+const PROMPT_SUMMARY_LIMIT = 900;
+const PROMPT_TEXT_LIMIT = 1200;
+const AUDIT_ARRAY_LIMIT = 50;
+const LLM_MAX_ATTEMPTS = 3;
+const DEFAULT_LLM_MAX_TOKENS = 8192;
+const KIMI_THINKING_MAX_TOKENS = 32768;
 
 const FALLBACK_AGENTS = [
   { id: "main", workspace: join(BASE, "workspace") },
@@ -506,11 +512,27 @@ function printCandidates(label, candidates) {
   }
 }
 
+function compactAuditArray(value) {
+  if (!Array.isArray(value) || value.length <= AUDIT_ARRAY_LIMIT) return value;
+  return value.slice(0, AUDIT_ARRAY_LIMIT);
+}
+
+function compactAuditEntry(entry) {
+  const normalized = { ...entry };
+  for (const key of ["integrated", "skipped"]) {
+    if (Array.isArray(entry[key])) {
+      normalized[`${key}Count`] = entry[key].length;
+      normalized[key] = compactAuditArray(entry[key]);
+    }
+  }
+  return normalized;
+}
+
 function appendAudit(workspace, entry) {
   try {
     const path = adaptivePath(workspace, AUDIT_FILE);
     mkdirSync(dirname(path), { recursive: true });
-    appendFileSync(path, JSON.stringify({ timestamp: new Date().toISOString(), ...entry }) + "\n", "utf8");
+    appendFileSync(path, JSON.stringify({ timestamp: new Date().toISOString(), ...compactAuditEntry(entry) }) + "\n", "utf8");
   } catch (_) {}
 }
 
@@ -535,20 +557,179 @@ function releaseLock(lockPath) {
   } catch (_) {}
 }
 
-async function callLlm(messages, llmCfg) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableLlmError(err) {
+  return /connection|timeout|timed out|socket|econn|fetch failed|network|empty content/i.test(String(err?.message || err));
+}
+
+function isKimiCoding(llmCfg) {
+  return String(llmCfg.baseUrl || "").includes("api.kimi.com/coding/v1")
+    || String(llmCfg.model || "").includes("kimi-for-coding");
+}
+
+function llmMaxTokens(llmCfg) {
+  if (llmCfg.maxTokens) return llmCfg.maxTokens;
+  return isKimiCoding(llmCfg) ? KIMI_THINKING_MAX_TOKENS : DEFAULT_LLM_MAX_TOKENS;
+}
+
+function maintainerDisablesThinking(llmCfg) {
+  return llmCfg.maintainerDisableThinking === true;
+}
+
+function llmTemperature(llmCfg) {
+  if (typeof llmCfg.temperature === "number") return llmCfg.temperature;
+  return maintainerDisablesThinking(llmCfg) ? 0.6 : 1;
+}
+
+function llmStreamEnabled(llmCfg) {
+  if (typeof llmCfg.stream === "boolean") return llmCfg.stream;
+  return isKimiCoding(llmCfg);
+}
+
+function llmDescriptor(llmCfg) {
+  return `model=${llmCfg.model} baseUrl=${llmCfg.baseUrl} thinking=${maintainerDisablesThinking(llmCfg) ? "disabled" : "enabled"} max_tokens=${llmMaxTokens(llmCfg)} stream=${llmStreamEnabled(llmCfg)}`;
+}
+
+async function callKimiFetchStream(body, llmCfg) {
+  const headers = {
+    Authorization: `Bearer ${llmCfg.apiKey}`,
+    "Content-Type": "application/json",
+    ...(llmCfg.headers || {}),
+  };
+  const response = await fetch(`${String(llmCfg.baseUrl).replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+  if (!response.ok || !response.body) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Kimi stream request failed (${llmDescriptor(llmCfg)}; status=${response.status}; body=${errorText.slice(0, 500)})`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+  let reasoningChars = 0;
+  let finishReason = null;
+  let events = 0;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf("\n\n")) >= 0) {
+      const event = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 2);
+      for (const line of event.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        events++;
+        let chunk = null;
+        try {
+          chunk = JSON.parse(data);
+        } catch (err) {
+          throw new Error(`Kimi stream returned invalid JSON event (${String(err?.message || err)})`);
+        }
+        const choice = chunk.choices?.[0];
+        if (choice?.finish_reason) finishReason = choice.finish_reason;
+        const delta = choice?.delta || {};
+        const reasoning = delta.reasoning_content ?? delta.reasoningContent;
+        if (reasoning) reasoningChars += String(reasoning).length;
+        if (delta.content) content += delta.content;
+      }
+    }
+  }
+
+  const trimmed = content.trim();
+  if (!trimmed) {
+    throw new Error(`LLM returned empty streamed content (${llmDescriptor(llmCfg)}; events=${events}; finish_reason=${finishReason || "unknown"}; reasoning_chars=${reasoningChars})`);
+  }
+  return trimmed;
+}
+
+async function callLlmOnce(messages, llmCfg) {
+  const body = {
+    model: llmCfg.model,
+    temperature: llmTemperature(llmCfg),
+    max_tokens: llmMaxTokens(llmCfg),
+    messages,
+  };
+  if (maintainerDisablesThinking(llmCfg)) {
+    body.thinking = isKimiCoding(llmCfg) ? { type: "disabled" } : { budget_tokens: 0 };
+  }
+
+  if (llmStreamEnabled(llmCfg)) {
+    if (isKimiCoding(llmCfg)) return await callKimiFetchStream(body, llmCfg);
+
+    const OpenAI = await getOpenAI();
+    const clientOpts = { apiKey: llmCfg.apiKey, baseURL: llmCfg.baseUrl };
+    if (llmCfg.headers) clientOpts.defaultHeaders = llmCfg.headers;
+    const client = new OpenAI(clientOpts);
+    let content = "";
+    let reasoningChars = 0;
+    let finishReason = null;
+    let usage = null;
+    const stream = await client.chat.completions.create({
+      ...body,
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+    for await (const chunk of stream) {
+      if (chunk.usage) usage = chunk.usage;
+      const choice = chunk.choices?.[0];
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      const delta = choice?.delta;
+      if (!delta) continue;
+      const reasoning = delta.reasoning_content ?? delta.reasoningContent;
+      if (reasoning) reasoningChars += String(reasoning).length;
+      if (delta.content) content += delta.content;
+    }
+    const trimmed = content.trim();
+    if (!trimmed) {
+      const tokenInfo = usage
+        ? `; tokens prompt=${usage.prompt_tokens ?? "?"} completion=${usage.completion_tokens ?? "?"}`
+        : "";
+      throw new Error(`LLM returned empty streamed content (${llmDescriptor(llmCfg)}; finish_reason=${finishReason || "unknown"}; reasoning_chars=${reasoningChars}${tokenInfo})`);
+    }
+    return trimmed;
+  }
+
   const OpenAI = await getOpenAI();
   const clientOpts = { apiKey: llmCfg.apiKey, baseURL: llmCfg.baseUrl };
   if (llmCfg.headers) clientOpts.defaultHeaders = llmCfg.headers;
   const client = new OpenAI(clientOpts);
-  const body = {
-    model: llmCfg.model,
-    temperature: 0,
-    max_tokens: llmCfg.maxTokens || 3000,
-    messages,
-  };
-  if (llmCfg.disableThinking) body.thinking = { budget_tokens: 0 };
   const response = await client.chat.completions.create(body);
-  return response.choices[0]?.message?.content?.trim() || "";
+  const choice = response.choices[0];
+  const content = choice?.message?.content?.trim() || "";
+  if (!content) {
+    const reasoningChars = String(choice?.message?.reasoning_content || choice?.message?.reasoningContent || "").length;
+    const usage = response.usage
+      ? `; tokens prompt=${response.usage.prompt_tokens ?? "?"} completion=${response.usage.completion_tokens ?? "?"}`
+      : "";
+    throw new Error(`LLM returned empty content (${llmDescriptor(llmCfg)}; finish_reason=${choice?.finish_reason || "unknown"}; reasoning_chars=${reasoningChars}${usage})`);
+  }
+  return content;
+}
+
+async function callLlm(messages, llmCfg) {
+  let lastError = null;
+  console.error(`[maintain-knowledge-md] LLM ${llmDescriptor(llmCfg)}`);
+  for (let attempt = 1; attempt <= LLM_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await callLlmOnce(messages, llmCfg);
+    } catch (err) {
+      lastError = err;
+      if (attempt >= LLM_MAX_ATTEMPTS || !isRetryableLlmError(err)) break;
+      await sleep(attempt * 1500);
+    }
+  }
+  throw lastError;
 }
 
 function requireSchicht15Config(cfg) {
@@ -640,11 +821,18 @@ function writeKnowledge(knowledgePath, body, agentId, sourceMemoryIds) {
   renameSync(tmpPath, knowledgePath);
 }
 
+function truncateForPrompt(value, limit) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit - 15).trimEnd()} ... [truncated]`;
+}
+
 function buildPrompt(currentBody, batch, today) {
   const list = batch.map((m, i) => {
-    const summary = String(m.summary || "").trim() || shortText(m, 160);
-    const text = String(m.text || "").replace(/\s+/g, " ").trim();
-    return `${i + 1}. ID=${m.id} | sourceAgent=${m._sourceAgent} | category=${m.category} | importance=${(m.importance ?? 0).toFixed(2)}\nSummary: ${summary}\nText: ${text}`;
+    const summary = truncateForPrompt(String(m.summary || "").trim() || shortText(m, 160), PROMPT_SUMMARY_LIMIT);
+    const text = truncateForPrompt(m.text || "", PROMPT_TEXT_LIMIT);
+    const excerpt = text && text !== summary ? `\nText excerpt: ${text}` : "";
+    return `${i + 1}. ID=${m.id} | sourceAgent=${m._sourceAgent} | category=${m.category} | importance=${(m.importance ?? 0).toFixed(2)}\nSummary: ${summary}${excerpt}`;
   }).join("\n\n");
   return `Current KNOWLEDGE.md body (empty = not yet created):
 ${currentBody || "(empty)"}
@@ -772,7 +960,7 @@ async function integrateWorkspace(cfg, summary, candidates, args) {
     for (const batch of chunks(selected, args.batchSize)) {
       const updated = await callLlm([
         { role: "user", content: buildPrompt(body, batch, today) },
-      ], { ...llmCfg, maxTokens: 3000 });
+      ], llmCfg);
       let finalBody = validateLlmBody(updated, body, batch);
       finalBody = await compactIfNeeded(finalBody, llmCfg);
       body = validateLlmBody(finalBody, body, batch);
