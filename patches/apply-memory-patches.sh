@@ -5,7 +5,6 @@
 # Patches:
 # 16) stuck-session-abort: SIGUSR1 when session stuck > stuckSessionAbortMs
 # 17) memory-core-cohere-rerank: Cohere rerank-v3.5 after mergeHybridResults()
-# 18) active-memory-fast-path: retired; preserved as no-op for older installs
 # 19) plur1bus-user OpenClaw compatibility hotfixes
 # 20) bundled-runtime-deps race guard: skip npm installs when all packages are
 #     already semver-satisfied, even if plugin install manifests differ
@@ -70,7 +69,7 @@ old = (
     '\t\tif (strict.length > 0 || keywordResults.length === 0) return strict.slice(0, maxResults);'
 )
 new = (
-    '\t\tlet __cohereKey = ""; try { __cohereKey = (await import("node:fs")).readFileSync("/root/.openclaw/.env","utf8").match(/COHERE_API_KEY=([^\\n]+)/)?.[1]?.trim() ?? ""; } catch {} /* memory-core-cohere-rerank-patch */\n'
+    '\t\tlet __cohereKey = ""; try { const __ocDir = process.env.OPENCLAW_STATE_DIR || (await import("node:os")).homedir() + "/.openclaw"; __cohereKey = (await import("node:fs")).readFileSync(__ocDir + "/.env","utf8").match(/COHERE_API_KEY=([^\\n]+)/)?.[1]?.trim() ?? ""; } catch {} /* memory-core-cohere-rerank-patch */\n'
     '\t\tlet strict;\n'
     '\t\tif (__cohereKey && merged.length > 1) {\n'
     '\t\t\ttry {\n'
@@ -96,67 +95,6 @@ print(f"[patch] memory-core-cohere-rerank: applied ({os.path.basename(target)})"
 PYEOF
 }
 patch_memory_core_cohere_rerank || rc=1
-
-# 18) Active-Memory Fast Path
-patch_active_memory_fast_path() {
-  echo "[patch] active-memory-fast-path: retired (plur1bus-user hotfix keeps active-memory on the plugin tool path)"
-  return 0
-  python3 - << 'PYEOF'
-import os, glob
-
-dist = "/usr/lib/node_modules/openclaw/dist"
-target = os.path.join(dist, "extensions/active-memory/index.js")
-if not os.path.exists(target):
-    print("[patch] active-memory-fast-path: target not found"); raise SystemExit(1)
-
-with open(target) as f: code = f.read()
-if "/* active-memory-fast-path-patch */" in code:
-    print("[patch] active-memory-fast-path: already patched"); raise SystemExit(0)
-
-anchor = 'return cached;\n\t}\n\tif (params.config.logging) params.api.logger.info?.(`${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(params.query.length)}`);'
-if anchor not in code:
-    print("[patch] active-memory-fast-path: anchor not found"); raise SystemExit(1)
-
-# Find correct memory module name (changes with each OpenClaw version)
-mem_module = next(
-    (os.path.basename(f) for f in glob.glob(os.path.join(dist, "memory-*.js"))
-     if 'getMemorySearchManager' in open(f).read() and 'export { getMemorySearchManager as n' in open(f).read()),
-    None
-)
-if not mem_module:
-    print("[patch] active-memory-fast-path: memory module not found"); raise SystemExit(1)
-
-js = f'''
-\t\t/* active-memory-fast-path-patch */
-\t\tlet __am_fp_result = null;
-\t\ttry {{
-\t\t\tconst {{ n: __gsm }} = await import("../../{mem_module}");
-\t\t\tconst __am_cfg = params.api.config ?? params.config;
-\t\t\tconst {{ manager: __mm }} = await __gsm({{ cfg: __am_cfg, agentId: params.agentId }});
-\t\t\tif (__mm) {{
-\t\t\t\tconst __sr = await __mm.search(params.query, {{
-\t\t\t\t\tmaxResults: params.config.maxResults ?? 6,
-\t\t\t\t\tsessionKey: params.sessionKey
-\t\t\t\t}}).catch(() => null);
-\t\t\t\tif (__sr?.length) {{
-\t\t\t\t\tconst __sum = __sr.map(r => r.text ?? "").join("\\n---\\n");
-\t\t\t\t\tconst __prefix = buildPromptPrefix(__sum);
-\t\t\t\t\tif (__prefix) {{
-\t\t\t\t\t\t__am_fp_result = {{ status: "ok", elapsedMs: Date.now() - startedAt, summary: truncateSummary(__sum, params.config.maxSummaryChars), searchDebug: {{ backend: __mm.status?.().backend ?? "unknown", searchMs: 0, hits: __sr.length }} }};
-\t\t\t\t\t\tif (params.config.logging) params.api.logger.info?.(`${{logPrefix}} done status=ok elapsedMs=${{String(__am_fp_result.elapsedMs)}} summaryChars=${{String(__sum.length)}} [fast-path]`);
-\t\t\t\t\t\tawait persistPluginStatusLines({{ api: params.api, agentId: params.agentId, sessionKey: params.sessionKey, statusLine: buildPluginStatusLine({{ result: __am_fp_result, config: params.config }}), debugSummary: __sum, searchDebug: __am_fp_result.searchDebug }});
-\t\t\t\t\t\tsetCachedResult(cacheKey, __am_fp_result, params.config.cacheTtlMs);
-\t\t\t\t\t\treturn __am_fp_result;
-\t\t\t\t\t}}
-\t\t\t\t}}
-\t\t\t}}
-\t\t}} catch {{}} /* active-memory-fast-path-patch */'''
-
-open(target, "w").write(code.replace(anchor, anchor + js, 1))
-print(f"[patch] active-memory-fast-path: applied ({os.path.basename(target)}, module={mem_module})")
-PYEOF
-}
-patch_active_memory_fast_path || rc=1
 
 # 19) Versioned OpenClaw compatibility hotfixes for plur1bus users
 patch_plur1bus_openclaw_compat() {
