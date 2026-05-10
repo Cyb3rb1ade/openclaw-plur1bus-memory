@@ -1,0 +1,301 @@
+# OpenClaw 2026.5.9-beta.1 Findings vs Live Git
+
+Beta tag: 0d3141ee2438
+
+Live Git main: 98543edd3d (98543edd3d6e5c5bd3c09456ebd36fbdf78bc9cd)
+
+Merge base: 13f498f38286
+
+Divergence v2026.5.9-beta.1...main: 3 left / 1143 right commits.
+
+## Operator conclusion
+
+Live Git `main` is not a linear continuation of `v2026.5.9-beta.1`; the branch has diverged heavily. Treat the beta review as an input, not as the current mainline risk list.
+
+Against our installation, Live Git removes several beta blockers: the fs-safe symlink high finding, the beta TypeScript compile break, the Mantis/Discord web evidence candidate, the Google Chat typecheck break, and the PLUR1BUS orphan/session filename risks are not present on current `main`.
+
+The remaining local gates before installing from Live Git are:
+
+- `openai-codex/*` route repair: Live Git has follow-up fixes that preserve Codex auth routing, but current tests still cover legacy route rewrites. Snapshot `openclaw.json`, run `openclaw doctor --fix` in a dry-run/update sandbox, and verify our Codex OAuth/native routes stay usable.
+- Assistant-prefill failover: no direct Live Git fix was found for the high-risk retry behavior. Keep this as a manual smoke blocker for any Live Git rollout.
+- Trusted-proxy auth: Live Git still contains trusted-proxy/password test coverage. Probe the local gateway/Tailscale caller path before installing.
+- PLUR1BUS/QMD: the destructive beta findings are absent, but QMD conflict handling now warns/refuses unverified rebinds instead of blindly repairing. Verify memory startup, `memory-doctor`, and a QMD indexed-search smoke after any Live Git test install.
+- Arcee Trinity: still listed as high without an obvious follow-up, but Arcee is disabled in this local installation, so this is not a local blocker unless Arcee is re-enabled.
+
+## Summary
+
+- needs-manual-recheck-followups-present: 63
+- not-in-live-main: 55
+- still-risk-no-obvious-followup: 5
+
+## High Findings
+
+- 07b972c test: tighten backup manifest callback assertions
+  - Live Git status: needs-manual-recheck-followups-present
+  - Finding: High: Backup test no longer typechecks
+  - File follow-ups: 6eb633b29e	test: tighten backup json assertion; 9eaca28ef7	fix(backup): retry tar EOF races and skip live volatile files; 95b936fd46	test: tighten backup asset kind assertion; 1b23bf16c0	test: tighten backup manifest assertions; 2083d25e31	test: tighten core primitive assertions; 2f26025085	fix(active-memory): allow active-memory to support custom recall tools (#77906); 2cd44d864a	test: tighten backup asset assertions; c223fa61cd	test: fix backup callback narrowing; de850f44f5	test: require command helper results
+- 538605f [codex] Extract filesystem safety primitives (#77918)
+  - Live Git status: not-in-live-main
+  - Finding: High: Default fs-safe write fallback can clobber files outside the root during a symlink-retarget race
+- 398dd6e fix(failover): stop retrying assistant-prefill format failures
+  - Live Git status: needs-manual-recheck-followups-present
+  - Finding: High: Assistant-prefill format errors still opt into retry
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics; a3a5a8052d	build(macos): update peekaboo dependency; d4b7fa6903	test(context): cover context map media (#79867); 12520e71e7	docs(changelog): credit stale reply fix author; 7308f404d5	fix(auto-reply): suppress stale foreground replies; 4774aeda27	fix(telegram): handle list spacing code blocks; 1ed50b0ced	fix: expose active-run queue failure reasons
+- 057d3a4 feat(mantis): capture logged-in discord web evidence
+  - Live Git status: not-in-live-main
+  - Finding: High: Candidate worktree code inherits the new Discord viewer and Crabbox secrets
+- 90b69ca test(perf): slim channel directory contracts
+  - Live Git status: not-in-live-main
+  - Finding: High: Google Chat plugin no longer typechecks
+- 5f60479 fix: scope async model runtime hooks
+  - Live Git status: not-in-live-main
+  - Finding: High: Core TypeScript no longer compiles
+- 3a901b5 Revert "Install Codex plugin on OpenAI model selection (#78799)" (#78878)
+  - Live Git status: needs-manual-recheck-followups-present
+  - Finding: High: `doctor --fix` still rewrites valid Codex OAuth PI routes to direct OpenAI PI routes
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; f072835b55	test: clear setup wizard broad matchers; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics; a3a5a8052d	build(macos): update peekaboo dependency; d4b7fa6903	test(context): cover context map media (#79867); 12520e71e7	docs(changelog): credit stale reply fix author; 7308f404d5	fix(auto-reply): suppress stale foreground replies; 4774aeda27	fix(telegram): handle list spacing code blocks
+- 7ad53ce fix(ci): account for canvas a2ui deps
+  - Live Git status: needs-manual-recheck-followups-present
+  - Finding: High: Expanded JS/MJS Knip project glob breaks `check-dependencies`
+  - File follow-ups: 955b025697	feat: add native sqlite Kysely dialect
+  - Keyword follow-ups: a39c05559b	fix: preserve Codex auth during route repair; 38456f5f03	fix(gateway): scope chat session list refreshes; 50690605bd	fix(control-ui): show Sessions live status; ed6b030a43	feat(process): show input-wait hints in log and poll; 9e7acd4b2b	fix: tighten stale plugin diagnostic registry checks (#80134); d160f82719	fix(doctor): invalidate persisted plugin registry when a diagnostic source path no longer exists; e37a3050d9	fix(agents): clean false-live session locks (#76854); c919702b8f	fix(moonshot): resolve moonshotai direct model refs; be22a541ce	fix(agents): reject blank model tool names before dispatch; 328952c6f5	fix(release): drop missing bundled runtime deps pack entry; d580ec474c	fix(telegram): show full OpenRouter model labels; 2796eebb03	fix(installer): avoid literal path shellcheck suppression
+- dd09e6f fix(arcee): disable tools for Trinity thinking
+  - Live Git status: still-risk-no-obvious-followup
+  - Finding: High: Existing Arcee configs are not repaired, so stale Trinity entries still enable tools
+  - File follow-ups: 5871350356	test: tighten provider choice assertions
+- 84dd9c7 fix(gateway): fail closed for trusted-proxy auth
+  - Live Git status: needs-manual-recheck-followups-present
+  - Finding: High: Trusted-proxy local password callers still send an auth path the server now rejects
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics; a3a5a8052d	build(macos): update peekaboo dependency; d4b7fa6903	test(context): cover context map media (#79867); 12520e71e7	docs(changelog): credit stale reply fix author; 7308f404d5	fix(auto-reply): suppress stale foreground replies; 4774aeda27	fix(telegram): handle list spacing code blocks; 1ed50b0ced	fix: expose active-run queue failure reasons
+
+## PLUR1BUS / Memory Findings
+
+- MEDIUM ea791b3 fix: prune orphan session artifacts
+  - Live Git status: not-in-live-main
+  - Finding: Medium: QMD-indexed orphan transcripts can now be deleted by cleanup
+- MEDIUM 5a0d6c7 fix(gateway): keep reset and refresh paths responsive (#77701)
+  - Live Git status: not-in-live-main
+  - Finding: Medium: Default session-memory filenames can overwrite earlier captures from the same minute
+- MEDIUM 631c655 test: tighten memory watcher manager assertions
+  - Live Git status: needs-manual-recheck-followups-present
+  - Finding: Medium: CLI watcher test no longer typechecks
+  - File follow-ups: 9202e74b11	test: tighten memory watcher error assertion; ce6fca41d8	test: require codex block reply text
+- MEDIUM 17c57b7 test: tighten memory multimodal assertions
+  - Live Git status: needs-manual-recheck-followups-present
+  - Finding: Medium: Tightened multimodal assertion breaks package test typecheck
+  - File follow-ups: a6b01a6d71	test: tighten memory host sdk assertions; f7189a4139	test: tighten memory host package assertions; 57c82f4ca5	test: require cli runner async callbacks
+- MEDIUM 49db190 fix(memory): verify qmd conflict before rebind
+  - Live Git status: needs-manual-recheck-followups-present
+  - Finding: Medium: Current QMD stderr-only path conflicts can no longer auto-repair
+  - File follow-ups: 827b0de0ce	refactor: reduce plugin sdk surface; c39f85822a	fix(memory): warn on unverified qmd conflict
+  - Keyword follow-ups: 176ea3ff87	test: clear active memory broad matchers; 482af6de69	fix(memory): yield while parsing session transcripts; f10faa8f04	Add changelog credit for memory sync fix; 82bc6025bc	fix(memory): yield during session indexing; c61abfab30	docs(memory): clarify memory maintenance expectations; 5f0eb12442	test: tighten diagnostics memory assertions; eda0316af3	fix: classify active memory no-relevant status (#80015); 9a454509f5	test: speed up memory host remote client tests; 7c27a51788	test: reuse memory post json imports; 483075ddd4	fix(memory): preserve atomic reindex cleanup cause; 53a97fe0a7	fix(memory): harden atomic reindex cleanup; 3cb2651295	test: tighten memory dreaming assertions
+- MEDIUM 2016331 fix: resolve fs-safe post-land fallout
+  - Live Git status: not-in-live-main
+  - Finding: Medium: QQ Bot chunked-upload tests no longer mock COS PUTs
+- MEDIUM 8294229 test: refresh fs-safe boundary expectations
+  - Live Git status: not-in-live-main
+  - Finding: Medium: Archive test now expects behavior the locked fs-safe implementation rejects
+- MEDIUM ebb8bed fix: cap memory wiki filenames for safe writes
+  - Live Git status: not-in-live-main
+  - Finding: Medium: Long synthesis titles still exceed the fs-safe temp filename budget
+
+## Still-Risk / Manual Recheck Matrix
+
+- MEDIUM still-risk-no-obvious-followup 02fe0d8 Keep OpenAI Codex migrations on automatic runtime routing (#79238)
+  - Finding: Medium: Raw OpenAI model runs no longer force the PI path | Medium: Doctor can rewrite legacy Codex refs onto a custom OpenAI endpoint without preserving Codex runtime
+- MEDIUM needs-manual-recheck-followups-present c307a61 feat(reply): add reply-chain prompt context
+  - Finding: Medium: Reply-chain metadata survives UI transcript stripping
+  - File follow-ups: 5b3e2497bd	fix(cron): diagnose isolated pre-model stalls; 1367ec7461	fix(telegram): use partial stream deltas; e06988196b	test: tighten runtime context queue assertion; 176d0126cd	fix(reply): unify current turn context
+- MEDIUM needs-manual-recheck-followups-present ac75d6f fix(reply): render hydrated reply chain in inbound prompt
+  - Finding: Medium: Reply-chain metadata can leak into user-visible chat history
+  - File follow-ups: 59326c8e3b	fix(slack): wake interactive reply sessions (#79836); 7d00183d44	fix(telegram): clean chat window prompt context; 40fd42206f	perf(reply): compact chat window context; 5c39e2da3a	test: accept utc timestamp label; 048a50cfe1	test: tighten auto reply timestamps; 472a7a6abd	test: clarify gateway hook resilience assertions
+- MEDIUM needs-manual-recheck-followups-present 10bbed8 fix(telegram): chain over-limit stream previews
+  - Finding: Medium: Retained overflow draft pages survive unfinali
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present c238a51 fix(config): keep Gemini 3.1 model writes canonical
+  - Finding: Medium: Legacy Gemini params can bypass unset/include ownership during config writes
+  - File follow-ups: 2e400c5b76	fix(config): persist explicit default values; f82deaff04	fix: normalize retired gemini config writes
+- MEDIUM needs-manual-recheck-followups-present 5534233 test: tighten qa channel media context assertion
+  - Finding: Medium: Null guard removal breaks strict test typecheck
+  - File follow-ups: 47bf21a798	test: tighten qianfan provider assertions; 2e29090c37	test: wire qa channel turn fixture; a6dee24c3f	test: tighten qa channel context assertion; 8bf721f307	test: tighten extension media assertions; 2f17faf4c7	test: tighten extension context assertions
+- HIGH needs-manual-recheck-followups-present 07b972c test: tighten backup manifest callback assertions
+  - Finding: High: Backup test no longer typechecks
+  - File follow-ups: 6eb633b29e	test: tighten backup json assertion; 9eaca28ef7	fix(backup): retry tar EOF races and skip live volatile files; 95b936fd46	test: tighten backup asset kind assertion; 1b23bf16c0	test: tighten backup manifest assertions; 2083d25e31	test: tighten core primitive assertions; 2f26025085	fix(active-memory): allow active-memory to support custom recall tools (#77906)
+- MEDIUM needs-manual-recheck-followups-present b0f481b test: tighten web provider fast path assertions
+  - Finding: Medium: Test typecheck fails because helper excludes resolver `null` returns
+  - File follow-ups: 26644d3e9d	test: require plugin inspect reports
+- MEDIUM needs-manual-recheck-followups-present 631c655 test: tighten memory watcher manager assertions
+  - Finding: Medium: CLI watcher test no longer typechecks
+  - File follow-ups: 9202e74b11	test: tighten memory watcher error assertion; ce6fca41d8	test: require codex block reply text
+- MEDIUM needs-manual-recheck-followups-present 2844eb0 test: tighten openrouter video assertions
+  - Finding: Medium: New video assertions fail extension test typecheck
+  - File follow-ups: 957ed70501	test: clear openrouter video broad matchers; 311e4608d1	feat: unify model catalog registration; 4cdb9dfe8b	test: tighten openrouter video fetch assertions; 15217b2857	test: tighten provider media helper assertions; 73faa75be1	test: require browser async callbacks
+- MEDIUM needs-manual-recheck-followups-present 17c57b7 test: tighten memory multimodal assertions
+  - Finding: Medium: Tightened multimodal assertion breaks package test typecheck
+  - File follow-ups: a6b01a6d71	test: tighten memory host sdk assertions; f7189a4139	test: tighten memory host package assertions; 57c82f4ca5	test: require cli runner async callbacks
+- MEDIUM needs-manual-recheck-followups-present f8187ca fix: canonicalize gemini configured catalog ids
+  - Finding: Medium: Bare retired Gemini IDs no longer infer the configured Google provider
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 68f9710 Relay ACP exec approval permissions
+  - Finding: Medium: Raw approval broadcasts can be relayed to the wrong same-session ACP turn
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present c6d4f1f fix(runtime): preserve reviewed routing and transcript behavior (#79076)
+  - Finding: Medium: Bare numeric Discord channel IDs now fail target resolution
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 3ba2ce6 fix(plugins): avoid managed npm prefix on Windows
+  - Finding: Medium: Managed npm commands can target a parent npm workspace
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present ebd59f1 fix(cli): clarify startup failures
+  - Finding: Medium: Existing uncaught-exit test still expects the old CLI error line
+  - File follow-ups: 09cffbdfbf	fix(cli): avoid plugin allowlist hints for unknown commands; d0bba218e4	fix(gateway): redact fast-path console logs; e855b9c8d9	fix(cli): skip proxy config for help; 6811ef058b	fix(cli): keep help paths configless; 0c50957dbb	fix(cli): clarify plugin tool command mistakes; b81414be45	fix: expose safe restart deferral bypass (#78658)
+- MEDIUM needs-manual-recheck-followups-present 146ca95 test: dedupe openshell mirror absence assertions
+  - Finding: Medium: Symlink absence assertions now follow dangling symlinks
+- MEDIUM needs-manual-recheck-followups-present ad943ec fix(cli): guide auth and gateway setup errors
+  - Finding: Medium: Updated gateway-token-ref error text breaks the adjacent test | Low: Non-TTY auth errors point automation to an interactive-only command
+  - File follow-ups: e5fe9bdef0	fix: reread config on in-process gateway restart (#80161); a0fb7fb045	refactor: centralize channel ingress access; c7c7e2b94e	fix(cli): restore terminal guidance typecheck; be1c38e692	fix(cli): improve terminal error guidance; 346e327586	fix(cli): guide onboarding option errors; e45b9d7a74	fix(cli): clarify remaining required options
+- MEDIUM needs-manual-recheck-followups-present e45b9d7 fix(cli): clarify remaining required options
+  - Finding: Medium: Changed CLI diagnostics leave focused CLI tests red | Medium: Devices token diagnostic test still expects the old required-option text
+  - File follow-ups: a0fb7fb045	refactor: centralize channel ingress access; c7c7e2b94e	fix(cli): restore terminal guidance typecheck; be1c38e692	fix(cli): improve terminal error guidance
+- MEDIUM needs-manual-recheck-followups-present 00a44b0 fix(gateway): preserve active agent dedupe retries
+  - Finding: Medium: Active chat.send run can suppress a distinct agent request with the same idempotency key
+  - File follow-ups: 8f4e9c841c	refactor: isolate exec approval followup handoff; 6ee55398e5	Preserve elevated exec followup defaults; 47326513d2	test: clear agent server method broad matchers; 86c1622a3a	fix(acp): propagate AcpRuntimeError detail through lifecycle boundary; 0889223a07	fix: validate inline images against session agent model (#79416); b30ead9ca8	fix: hide subagent announce handoff prompts (#79618)
+- MEDIUM needs-manual-recheck-followups-present b30ead9 fix: hide subagent announce handoff prompts (#79618)
+  - Finding: Medium: Public agent callers can spoof subagent announce metadata to suppress transcript persistence
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 3af8148 fix(google): retry stalled Gemini first response (#79668)
+  - Finding: Medium: Header-only SSE stalls can be treated as an empty successful response instead of triggering the retry
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 2945948 feat(gateway): add SDK task ledger RPCs (#74847)
+  - Finding: Medium: `tasks.cancel` bypasses the existing registered-runtime fallback
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 335e5456d0	fix(agent): respect delivery status evidence; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity
+- MEDIUM needs-manual-recheck-followups-present 311e460 feat: unify model catalog registration
+  - Finding: Medium: OpenRouter live video capabilities turn reference images into a two-frame limit | Low: Ollama discovery caching makes the existing provider-discovery tests fail
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; f50ece6d62	fix(cli): expose gateway delivery status; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity
+- MEDIUM needs-manual-recheck-followups-present 7cfa12f feat: inject runtime model identity into prompts
+  - Finding: Medium: raw gateway model probes no longer send only the supplied prompt
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present b621663 fix: annotate message-tool-only replies in Codex tool spec
+  - Finding: Medium: Resumed Codex threads can keep the stale generic message tool spec
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 089d777 fix(markdown): trim blockquote separator spans
+  - Finding: Medium: Blockquoted code blocks can render malformed Telegram HTML
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 49db190 fix(memory): verify qmd conflict before rebind
+  - Finding: Medium: Current QMD stderr-only path conflicts can no longer auto-repair
+  - File follow-ups: 827b0de0ce	refactor: reduce plugin sdk surface; c39f85822a	fix(memory): warn on unverified qmd conflict
+- MEDIUM needs-manual-recheck-followups-present cc4a596 fix(discord): make realtime barge-in guard tunable
+  - Finding: Medium: A skipped early barge-in consumes the only same-speaker retry | Medium: Non-OpenAI realtime providers can no longer stop Discord playback on barge-in
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 7236d64 fix(agents): classify stream_read_error as transient (#79692)
+  - Finding: Medium: `assistant-failover.test.ts` hangs after profile-marking became awaited
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 8d70f7e feat(mistral): add mistral-medium-3-5 model with reasoning support
+  - Finding: Medium: Default thinking off still sends Mistral high reasoning
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- HIGH needs-manual-recheck-followups-present 398dd6e fix(failover): stop retrying assistant-prefill format failures
+  - Finding: High: Assistant-prefill format errors still opt into retry
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present cfb0c34 feat: add realtime consult overrides
+  - Finding: Medium: `talk.consultFastMode` is computed but never used for the agent run | Low: `talk.consultThinkingLevel: "off"` can still enable model-default reasoning
+  - File follow-ups: 827b0de0ce	refactor: reduce plugin sdk surface; 751423299b	fix: keep heartbeat fallback cleanup scoped; 662b9d2f5d	fix: clear stale heartbeat fallback overrides; 93acb38159	feat: add PI tool search runtime; b2bc1e9a56	test: clear talk server method broad matchers; 7f5728b4b2	fix: align wildcard model allowlist selection
+- MEDIUM still-risk-no-obvious-followup 8f56484 chore: remove stale unused imports
+  - Finding: Medium: Public plugin SDK context readers no longer accept their documented generic call form
+  - File follow-ups: 827b0de0ce	refactor: reduce plugin sdk surface
+- MEDIUM needs-manual-recheck-followups-present 0a09a8f fix: propagate image generation SSRF policy (#79765) (thanks @hclsys)
+  - Finding: Medium: Vydra image generation still drops SSRF policy after job creation
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present a35067f fix(media): avoid provider listing for exact media defaults
+  - Finding: Medium: Exact provider refs can be rerouted to another provider's model catalog entry | Low: Disabling auto fallback now drops model-only explicit defaults
+- MEDIUM needs-manual-recheck-followups-present d4e04f3 fix(sessions): retire stale direct dm rows after dmscope changes
+  - Finding: Medium: `--fix-dm-scope` leaves retired-session trajectory artifacts behind | Low: Applied cleanup counts exclude the rows removed by `--fix-dm-scope`
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; a59bccb509	test: clear cli status registration broad matchers; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity
+- MEDIUM needs-manual-recheck-followups-present 330ba1f refactor: move canvas to plugin surfaces
+  - Finding: Medium: Built-in compaction can request more output tokens than the model supports
+- MEDIUM needs-manual-recheck-followups-present 1dd9a15 fix: preserve deferred channel setup contracts
+  - Finding: Medium: Explicit Discord channel targets can still resolve to a user directory hit
+  - File follow-ups: 827b0de0ce	refactor: reduce plugin sdk surface; 04a414de20	test: clear plugin loader broad matchers; df4aaaecfa	test: tighten plugin loader empty array assertions; fa83925fab	test: tighten plugin empty state assertions; 594abbd44b	test: tighten plugin loader transform assertions; 5bec7022c7	test: tighten plugin loader hook assertion
+- MEDIUM needs-manual-recheck-followups-present 66b02c9 fix: build canvas assets for docker package build
+  - Finding: Medium: `build:docker` bypasses the Dockerfile A2UI fallback on cross-arch builds
+  - File follow-ups: fcc042559f	build(deps): refresh workspace dependencies; 3363528720	fix: keep provider auth login sdk compat; 827b0de0ce	refactor: reduce plugin sdk surface; 3168230371	chore(canvas): refresh a2ui bundle hash; ecb7ea19a5	feat(telegram): add real user crabbox proof; 711e09c9aa	fix(discord): make native opus opt-in
+- HIGH needs-manual-recheck-followups-present 3a901b5 Revert "Install Codex plugin on OpenAI model selection (#78799)" (#78878)
+  - Finding: High: `doctor --fix` still rewrites valid Codex OAuth PI routes to direct OpenAI PI routes
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; f072835b55	test: clear setup wizard broad matchers; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity
+- MEDIUM needs-manual-recheck-followups-present 8e17910 fix: treat aws sdk auth profiles as config metadata
+  - Finding: Medium: Config-only AWS SDK auth profiles are reported as missing by model status/list surfaces
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present e1fec3c fix(config): remove core BlueBubbles schema (#78612)
+  - Finding: Medium: BlueBubbles policy refinements are bypassed by real config validation | Medium: Plugin SDK API baseline hash is stale
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; f50ece6d62	fix(cli): expose gateway delivery status; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity
+- MEDIUM needs-manual-recheck-followups-present b165c0d fix(ci): restore main validation
+  - Finding: Medium: Prompt snapshots were updated from a Vitest-only tool set and fail the standalone generator check
+- HIGH needs-manual-recheck-followups-present 7ad53ce fix(ci): account for canvas a2ui deps
+  - Finding: High: Expanded JS/MJS Knip project glob breaks `check-dependencies`
+  - File follow-ups: 955b025697	feat: add native sqlite Kysely dialect
+- MEDIUM needs-manual-recheck-followups-present f2bf925 fix: guard sandbox move cleanup identity
+  - Finding: Medium: Regular-file EXDEV fallback can delete a replacement source file
+  - File follow-ups: ce09e594cd	test: tighten sandbox assertions; d8537bffac	test: tighten agent runtime array assertions; 74a644b340	test: dedupe sandbox mutation absence assertions
+- MEDIUM needs-manual-recheck-followups-present 01dd593 test: stabilize prompt snapshot plugin tools
+  - Finding: Medium: Duplicate `config` key breaks lint for the touched helper
+  - File follow-ups: b79de62b3c	fix(codex): remove dynamic tools profile option; 3f217964d1	Defer Codex dynamic tools behind search
+- MEDIUM needs-manual-recheck-followups-present 772034d fix: strip tools for no-tool completions models
+  - Finding: Medium: `parallel_tool_calls` can survive `supportsTools=false`
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present a852619 fix(cli): fall back to sips for HEIC infer inputs
+  - Finding: Medium: macOS HEIC fallback can bypass the input pixel limit
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- HIGH still-risk-no-obvious-followup dd09e6f fix(arcee): disable tools for Trinity thinking
+  - Finding: High: Existing Arcee configs are not repaired, so stale Trinity entries still enable tools
+  - File follow-ups: 5871350356	test: tighten provider choice assertions
+- MEDIUM needs-manual-recheck-followups-present 3a89e20 fix(infra): support hardlink-safe package moves
+  - Finding: Medium: EXDEV fallback drops the hardlink rejection option after the pre-scan
+  - File follow-ups: 8f56484b12	chore: remove stale unused imports; 01741f81f8	test: remove stale unused imports; eabae023eb	perf: lazy load memory embedding runtime
+- MEDIUM needs-manual-recheck-followups-present 9b279ef fix(agents): reclaim reported stale session locks
+  - Finding: Medium: Stale-lock reclamation can delete a fresh holder's lock
+  - File follow-ups: e37a3050d9	fix(agents): clean false-live session locks (#76854); e7c784f7a8	fix(agents): preserve active exec references across compaction (#79307); bbd6d9e254	test: stabilize node 26 full-suite edge cases; 9ef37d1907	test: tighten assertions and harness coverage
+- MEDIUM still-risk-no-obvious-followup dd0a9bf lint: replace raw socket guard with codeql
+  - Finding: Medium: Raw socket allowlist now permits new callsites inside allowed functions
+- MEDIUM needs-manual-recheck-followups-present c97998c chore(channels): remove bluebubbles bundled surface
+  - Finding: Medium: Cron delivery regression test now registers `imessage:` as a provider prefix
+  - File follow-ups: fcc042559f	build(deps): refresh workspace dependencies; 1ed50b0ced	fix: expose active-run queue failure reasons; 9a7778d8aa	fix: declare extension runtime deps; 3363528720	fix: keep provider auth login sdk compat; 827b0de0ce	refactor: reduce plugin sdk surface; ecb7ea19a5	feat(telegram): add real user crabbox proof
+- MEDIUM still-risk-no-obvious-followup fa8a855 ci(release): create GitHub release during publish
+  - Finding: Medium: GitHub Contents API returns empty content for the current changelog si
+  - File follow-ups: d832ad214c	[Feat] Add upload archive install RPC (#74430); 3a452a029c	ci(release): automate stable appcast handoff
+- MEDIUM needs-manual-recheck-followups-present 5a4676b fix(byteplus): align Kimi catalog metadata
+  - Finding: Medium: `#54149` remains broken for Volcengine after being marked fixed
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 3683559 feat: log discord voice transcripts
+  - Finding: Medium: Voice transcript preview can print unredacted secrets in verbose console logs
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- HIGH needs-manual-recheck-followups-present 84dd9c7 fix(gateway): fail closed for trusted-proxy auth
+  - Finding: High: Trusted-proxy local password callers still send an auth path the server now rejects
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present f3c9203 fix(mistral): normalize structured completion content
+  - Finding: Medium: Structured thinking replay overwrites assistant answer content
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present e29f4ff fix: keep npm telegram e2e on package runtime
+  - Finding: Medium: Package Telegram live tooling test still asserts removed harness wiring
+  - File follow-ups: d7bbff2185	feat(telegram): default Crabbox proof GIFs to 1080p; a9bf94c62d	feat(telegram): harden Crabbox real-user proof; 984174fb9d	feat(telegram): publish crabbox proof gif by default; 32e1236cb7	feat(telegram): hold crabbox user sessions; ecb7ea19a5	feat(telegram): add real user crabbox proof; 378da8b9d3	feat: add telegram mantis evidence builder
+- MEDIUM needs-manual-recheck-followups-present 029ca8c feat(agents): implement state-aware failover and lane suspension
+  - Finding: Medium: persisted suspension is not enforced after gateway restart | Medium: all multi-candidate fallback failures suspend the lane as `circuit_open` | Low: resume handoff usually injects no recovery briefing
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 83aad86 Clarify exec filesystem policy drift (#79153)
+  - Finding: Medium: Exec filesystem drift warning misses `profile` + `alsoAllow` configs | Medium: Non-main sandbox tool policy drift is not checked
+  - File follow-ups: a0fb7fb045	refactor: centralize channel ingress access; fec1c3f696	test: sandbox audit-exec-surface under HOME tempdir (#79885); 01741f81f8	test: remove stale unused imports; f5c7465dac	test: tighten telegram media assertions; bffa43df09	test: tighten exec surface assertion
+- MEDIUM needs-manual-recheck-followups-present 2265786 fix(agents): enable codex for openai overrides
+  - Finding: Medium: Scoped Codex activation can replace the active plugin registry mid-run
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present e259751 feat(imessage): private-API support via imsg JSON-RPC [AI-assisted] (#78317)
+  - Finding: Medium: Disabled iMessage private actions can still execute through direct dispatch
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present b1eedb2 Add ACP session load event ledger (#79093)
+  - Finding: Medium: `loadSession` can replay partial or stale ledger history as complete
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present f62618f fix: respect Codex requirements for app-server defaults (#79151)
+  - Finding: Medium: Remote sandbox defaults can miss FQDN-only host matches and still send YOLO
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present fe79d85 feat(imessage): add native imsg message actions
+  - Finding: Medium: iMessage group-management actions are enabled without sender authori
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics
+- MEDIUM needs-manual-recheck-followups-present 6eae017 fix(agents): route pi default streams through transport (#79201)
+  - Finding: Medium: Production PI default stream still falls through as custom
+  - File follow-ups: 98543edd3d	fix(slack): clarify formatting hints; e71ef41c95	fix(slack): refresh inbound file urls; 94d923c055	fix(cli): surface durable delivery status; fcc042559f	build(deps): refresh workspace dependencies; 8654144606	fix(slack): improve bot parity; 3616d5b81a	docs(changelog): note Codex native diagnostics

@@ -1,0 +1,711 @@
+# OpenClaw 2026.5.9-beta.1 High/Medium ClawSweeper Instance Review
+
+Target: openclaw@2026.5.9-beta.1
+
+Live instance: OpenClaw 2026.5.7 (eeef486), stable channel. Beta not installed.
+
+Counts: 123 high/medium reports (10 high, 113 medium).
+
+Enabled local plugins observed: active-memory, google, kimi, memory-core, moonshot, nvidia, openai, searxng, telegram, xai, adaptive-learning-loop, before-compact-save, memory-lancedb-namespaced, tts-status-inject, kimi-claw.
+
+Current PLUR1BUS state: memory-lancedb-namespaced 2.1.32 is installed and provider-check passed against text-embedding-3-large with 39 agent DBs at 3072 dimensions.
+
+Beta compat state: the existing 20260504 compat patch applies cleanly to the beta tarball when temporarily allowed for 2026.5.9-beta.1, and node --check passed on the patched runtime files. The repository updater still intentionally has no beta dry-run route.
+
+## Instance impact summary
+
+- active-risk: Telegram is enabled: 7
+- active-risk: local memory plugins are enabled: 3
+- core-risk: touches active gateway/agent/plugin substrate: 48
+- not-active: affected plugin/channel/provider is disabled here: 38
+- not-applicable: ci/docs/tests only: 19
+- not-applicable: no active local component match: 7
+- review-needed: runtime-adjacent but no active local component match: 1
+
+## Breaking changes and solution proposals
+
+- MEDIUM ea791b3 fix: prune orphan session artifacts
+  - Finding: Medium: QMD-indexed orphan transcripts can now be deleted by cleanup
+  - Impact on this installation: PLUR1BUS/QMD risk: orphan transcript cleanup can delete primary .jsonl transcripts that QMD indexing treats as memory source material.
+  - Proposed fix/workaround: Disable destructive session cleanup during beta rollout. Patch cleanup to skip QMD-indexed transcript paths, then add a fixture where a QMD-indexed orphan survives cleanup.
+  - Commit: https://github.com/openclaw/openclaw/commit/ea791b379290d1490d6b671db4682114d936b6df
+- MEDIUM 5a0d6c7 fix(gateway): keep reset and refresh paths responsive (#77701)
+  - Finding: Medium: Default session-memory filenames can overwrite earlier captures from the same minute
+  - Impact on this installation: PLUR1BUS/session-memory risk: repeated reset/new commands in the same minute can overwrite session-memory captures.
+  - Proposed fix/workaround: Patch the beta filename generator to include seconds plus a stable short run/session id, or a monotonic suffix. Add a two-captures-same-minute regression test.
+  - Commit: https://github.com/openclaw/openclaw/commit/5a0d6c7ad86b8d9906571142ecb48ac06144b7a1
+- MEDIUM 10bbed8 fix(telegram): chain over-limit stream previews
+  - Finding: Medium: Retained overflow draft pages survive unfinali
+  - Impact on this installation: Telegram preview cleanup risk. Telegram is enabled here.
+  - Proposed fix/workaround: Keep beta blocked until a Telegram smoke verifies long streaming replies finalize without retained overflow drafts.
+  - Commit: https://github.com/openclaw/openclaw/commit/10bbed8a6d303b2a61512dc7ca446863bca5429b
+- HIGH 538605f [codex] Extract filesystem safety primitives (#77918)
+  - Finding: High: Default fs-safe write fallback can clobber files outside the root during a symlink-retarget race
+  - Impact on this installation: Breaking security risk for local writes if beta uses the Node fs-safe fallback. This matters here because agents have broad file/write capability.
+  - Proposed fix/workaround: Do not install beta unless the Python fs-safe helper is forced/enabled or the bundled Node fallback is patched to reject symlink retarget races before writing. Add an update-gate smoke that attempts a symlink-retarget write in a temp root and fails the beta if the outside file changes.
+  - Commit: https://github.com/openclaw/openclaw/commit/538605ff44d23e4e57ecfd72a8f0b20159ffebbf
+- MEDIUM 089d777 fix(markdown): trim blockquote separator spans
+  - Finding: Medium: Blockquoted code blocks can render malformed Telegram HTML
+  - Impact on this installation: Telegram HTML rendering risk for blockquoted code blocks. Telegram is enabled here.
+  - Proposed fix/workaround: Add a Telegram markdown render smoke with blockquote plus fenced code and verify Bot API-safe HTML.
+  - Commit: https://github.com/openclaw/openclaw/commit/089d7774133c5282d4cf67d2c7e3f402ed694417
+- MEDIUM 49db190 fix(memory): verify qmd conflict before rebind
+  - Finding: Medium: Current QMD stderr-only path conflicts can no longer auto-repair
+  - Impact on this installation: PLUR1BUS/QMD repair risk: stale QMD path-pattern conflicts can remain unrepaired when the current QMD CLI only exposes conflict details on stderr.
+  - Proposed fix/workaround: Patch memory-core QMD conflict verification to parse the current stderr-only path conflict output before deciding a rebind is unsafe. Add a mocked stderr-only conflict test.
+  - Commit: https://github.com/openclaw/openclaw/commit/49db1908f3f5a8ae7661f9dee3c0f786e0e54d24
+- HIGH 398dd6e fix(failover): stop retrying assistant-prefill format failures
+  - Finding: High: Assistant-prefill format errors still opt into retry
+  - Impact on this installation: Model failover can keep retrying assistant-prefill format failures. This is relevant with Kimi/OpenClaw Pi default routes because format failures can consume retries and mask the real error.
+  - Proposed fix/workaround: Patch the beta failover classifier so assistant-prefill format errors are terminal before broad Cloud Code Assist retry matching. Add a focused failover smoke using a mocked prefill format error.
+  - Commit: https://github.com/openclaw/openclaw/commit/398dd6e0b0915f6abd779cdfdba1ac11fc2dc47f
+- MEDIUM ebb8bed fix: cap memory wiki filenames for safe writes
+  - Finding: Medium: Long synthesis titles still exceed the fs-safe temp filename budget
+  - Impact on this installation: Memory-wiki filename-budget bug. Not active on this installation because memory-wiki is disabled, but it becomes relevant if the wiki plugin is enabled later.
+  - Proposed fix/workaround: If enabling memory-wiki, patch all page-write filename paths to budget for fs-safe temp suffixes, not only createWikiPageFilename.
+  - Commit: https://github.com/openclaw/openclaw/commit/ebb8bed78f909365e8c5b557908bc0ee89244b41
+- MEDIUM b6ae0b8 fix(telegram): honor access group allowlists
+  - Finding: Medium: Access-group-authori
+  - Impact on this installation: Telegram access-group callback/reaction authorization gap. Telegram is enabled and group policies are already a local audit concern.
+  - Proposed fix/workaround: Patch callback/reaction authorization to reuse the same access-group gate as inbound messages, then test unauthorized callback/reaction paths.
+  - Commit: https://github.com/openclaw/openclaw/commit/b6ae0b83a61a1f779ee41b5d639b6049bfd422ce
+- MEDIUM 440111f fix(telegram): keep polling watchdog on getUpdates liveness (#78646)
+  - Finding: Medium: repeated getUpdates errors still reset the watchdog clock
+  - Impact on this installation: Telegram polling liveness gap: repeated getUpdates errors can reset the watchdog clock.
+  - Proposed fix/workaround: Patch watchdog accounting so repeated getUpdates failures age the poller toward restart instead of refreshing liveness.
+  - Commit: https://github.com/openclaw/openclaw/commit/440111ff6f991ff450696a3b3289d93f7899f059
+- MEDIUM 447182a fix(telegram): avoid fallback after message tool send (#78726) (thanks @neeravmakwana)
+  - Finding: Medium: Telegram message-tool sends still miss same-chat delivery after target normali
+  - Impact on this installation: Telegram same-chat delivery correlation can miss normalized targets.
+  - Proposed fix/workaround: Normalize both active inbound chat id and send target before comparison; smoke with numeric and telegram: prefixed targets.
+  - Commit: https://github.com/openclaw/openclaw/commit/447182a8520beec3b15e802225debd3ba901652c
+- HIGH 5f60479 fix: scope async model runtime hooks
+  - Finding: High: Core TypeScript no longer compiles
+  - Impact on this installation: Upstream core TypeScript no longer compiles. The published tarball can still run, but this blocks source-based rebuilds and is a strong release-quality gate.
+  - Proposed fix/workaround: Treat as an install blocker for beta unless upstream publishes a follow-up or we carry a minimal source patch in a beta-only compat patch and verify the changed model runtime hook files with the upstream type lane.
+  - Commit: https://github.com/openclaw/openclaw/commit/5f60479f18c505018bb3350efddf82b66ce0dbc4
+- MEDIUM 16b0a62 perf(reply): avoid queue churn in dedupe paths
+  - Finding: Medium: Stripping duplicate `mediaUrl` can drop unrelated `mediaUrls`
+  - Impact on this installation: Telegram/media dedupe can drop unrelated mediaUrls.
+  - Proposed fix/workaround: Patch dedupe to strip only the exact duplicate media URL and preserve distinct mediaUrls; add a multi-media payload regression test.
+  - Commit: https://github.com/openclaw/openclaw/commit/16b0a6202c69046f8c17885929b858c11fed488d
+- HIGH 3a901b5 Revert "Install Codex plugin on OpenAI model selection (#78799)" (#78878)
+  - Finding: High: `doctor --fix` still rewrites valid Codex OAuth PI routes to direct OpenAI PI routes
+  - Impact on this installation: doctor --fix can rewrite valid openai-codex PI OAuth routes to direct OpenAI routes. This is highly relevant: our config has many openai-codex/gpt-5.5 fallback refs and the current 2026.5.7 doctor explicitly preserves them.
+  - Proposed fix/workaround: Add a beta post-check that runs doctor in dry/no-write mode if available, or snapshots openclaw.json before/after any doctor --fix. If beta is installed, add a local guard restoring openai-codex refs and failing the update if they are rewritten.
+  - Commit: https://github.com/openclaw/openclaw/commit/3a901b5e953971166a8404534178cc6f1dbde74f
+- HIGH 84dd9c7 fix(gateway): fail closed for trusted-proxy auth
+  - Finding: High: Trusted-proxy local password callers still send an auth path the server now rejects
+  - Impact on this installation: Trusted-proxy auth changes can reject local/internal callers that still send gateway.auth.password. Our gateway is exposed through Tailscale serve and the security audit reports trustedProxies missing, so auth path behavior needs explicit verification.
+  - Proposed fix/workaround: Before beta install, verify gateway probe and WebSocket client auth through the actual Tailscale route. If it fails, either configure gateway.trustedProxies precisely for the proxy path or patch local callers to use the accepted token auth path.
+  - Commit: https://github.com/openclaw/openclaw/commit/84dd9c73953b7c5a953f7bb90d2c3a0f6b6ca175
+
+## Rollout decision
+
+Do not install 2026.5.9-beta.1 on the live instance yet. The beta is technically patchable for the current PLUR1BUS compat anchors, but the combined core/fs-safe/Codex/trusted-proxy/Telegram/QMD risks need either upstream follow-ups or a beta-only local compat layer plus passing gates.
+
+## active-risk: Telegram is enabled (7)
+
+- MEDIUM 10bbed8 fix(telegram): chain over-limit stream previews
+  - Findings: Medium: Retained overflow draft pages survive unfinali
+  - Summary: Found one cleanup regression in the new retained overflow preview path.
+  - Files: CHANGELOG.md, extensions/telegram/src/bot-message-dispatch.test.ts, extensions/telegram/src/bot-message-dispatch.ts, extensions/telegram/src/draft-stream.test.ts, extensions/telegram/src/draft-stream.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/10bbed8a6d303b2a61512dc7ca446863bca5429b
+- MEDIUM 089d777 fix(markdown): trim blockquote separator spans
+  - Findings: Medium: Blockquoted code blocks can render malformed Telegram HTML
+  - Summary: Found one regression in the new blockquote span trimming. It fixes the reported paragraph case, but blockquotes ending in fenced or indented code can now produce crossing style spans, which the shared marker renderer cannot close correctly.
+  - Files: CHANGELOG.md, src/markdown/ir.blockquote-spacing.test.ts, src/markdown/ir.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/089d7774133c5282d4cf67d2c7e3f402ed694417
+- MEDIUM b6ae0b8 fix(telegram): honor access group allowlists
+  - Findings: Medium: Access-group-authori
+  - Summary: The main Telegram inbound DM/group message paths now honor `accessGroup:*` allowlists, and the added focused tests pass. I found one remaining callback/reaction authori
+  - Files: CHANGELOG.md, extensions/telegram/src/bot-access.ts, extensions/telegram/src/bot-handlers.runtime.ts, extensions/telegram/src/bot-message-context.ts, extensions/telegram/src/bot-native-commands.ts, extensions/telegram/src/bot.create-telegram-bot.test.ts, extensions/telegram/src/bot/helpers.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/b6ae0b83a61a1f779ee41b5d639b6049bfd422ce
+- MEDIUM 440111f fix(telegram): keep polling watchdog on getUpdates liveness (#78646)
+  - Findings: Medium: repeated getUpdates errors still reset the watchdog clock
+  - Summary: The commit fixes the main reported suppression path: recent or in-flight non-`getUpdates` Telegram API calls no longer prevent the polling watchdog from restarting a stale inbound poller. I found one remaining concrete liveness gap in the same touched tracker: repeated `getUpdates` errors still refresh the stall clock, so the watchdog can stay quiet while grammY retries internally for up to the configured 1 hour.
+  - Files: CHANGELOG.md, extensions/telegram/src/polling-liveness.ts, extensions/telegram/src/polling-liveness.test.ts, extensions/telegram/src/polling-session.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/440111ff6f991ff450696a3b3289d93f7899f059
+- MEDIUM 447182a fix(telegram): avoid fallback after message tool send (#78726) (thanks @neeravmakwana)
+  - Findings: Medium: Telegram message-tool sends still miss same-chat delivery after target normali
+  - Summary: The commit adds Telegram inbound delivery correlation, but the main `sendMessage` path still compares the active inbound chat id against the pre-send target string. Real message-tool targets are commonly normali
+  - Files: CHANGELOG.md, extensions/telegram/src/action-runtime.ts, extensions/telegram/src/bot-message-dispatch.ts, extensions/telegram/src/channel-actions.ts, extensions/telegram/src/inbound-turn-delivery.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/447182a8520beec3b15e802225debd3ba901652c
+- MEDIUM 16b0a62 perf(reply): avoid queue churn in dedupe paths
+  - Findings: Medium: Stripping duplicate `mediaUrl` can drop unrelated `mediaUrls`
+  - Summary: Found one media-dedupe regression in the copy-on-write rewrite. The other queue-index/splice changes appear behavior-preserving.
+  - Files: extensions/telegram/src/fetch.ts, src/auto-reply/reply/agent-runner-execution.ts, src/auto-reply/reply/history.ts, src/auto-reply/reply/reply-payloads-dedupe.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/16b0a6202c69046f8c17885929b858c11fed488d
+- MEDIUM e29f4ff fix: keep npm telegram e2e on package runtime
+  - Findings: Medium: Package Telegram live tooling test still asserts removed harness wiring
+  - Summary: Found one concrete regression: the commit changed the npm Telegram Docker wrapper but left its adjacent tooling test asserting the old full-`extensions` mount behavior, so the focused test is now red on current `main`.
+  - Files: docs/help/testing.md, scripts/e2e/npm-telegram-live-docker.sh
+  - Commit: https://github.com/openclaw/openclaw/commit/e29f4ff6b8ac37ca226fe0b337ba25fe52b8be22
+
+## active-risk: local memory plugins are enabled (3)
+
+- MEDIUM ea791b3 fix: prune orphan session artifacts
+  - Findings: Medium: QMD-indexed orphan transcripts can now be deleted by cleanup
+  - Summary: Found one actionable cross-feature regression: the new orphan transcript sweep can delete primary `.jsonl` transcripts that QMD session indexing currently treats as memory source material.
+  - Files: CHANGELOG.md, docs/cli/sessions.md, docs/reference/session-management-compaction.md, src/commands/sessions-cleanup.test.ts, src/commands/sessions-cleanup.ts, src/config/sessions/cleanup-service.ts, src/config/sessions/disk-budget.ts, src/config/sessions/store.pruning.integration.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/ea791b379290d1490d6b671db4682114d936b6df
+- MEDIUM 5a0d6c7 fix(gateway): keep reset and refresh paths responsive (#77701)
+  - Findings: Medium: Default session-memory filenames can overwrite earlier captures from the same minute
+  - Summary: Found one concrete regression in the session-memory filename change. The new default filename uses only minute precision, so repeated `/new` or `/reset` commands in the same minute can silently overwrite earlier memory captures.
+  - Commit: https://github.com/openclaw/openclaw/commit/5a0d6c7ad86b8d9906571142ecb48ac06144b7a1
+- MEDIUM 49db190 fix(memory): verify qmd conflict before rebind
+  - Findings: Medium: Current QMD stderr-only path conflicts can no longer auto-repair
+  - Summary: Found one actionable regression risk in the QMD collection conflict repair path. The reviewed commit avoids unsafe rebinding, but the verification it now requires is not available from the currently published QMD CLI list output, so a real stale path-pattern conflict can remain unrepaired and block OpenClaw’s managed QMD collection creation.
+  - Files: extensions/memory-core/src/memory/qmd-manager.ts, extensions/memory-core/src/memory/qmd-manager.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/49db1908f3f5a8ae7661f9dee3c0f786e0e54d24
+
+## core-risk: touches active gateway/agent/plugin substrate (48)
+
+- MEDIUM 2de0113 test(update): cover authenticated restart updates
+  - Findings: Medium: `GatewayClient.env` does not control the device identity path | Low: `update-restart-auth` can pass without proving a new gateway process
+  - Summary: Found two actionable issues: one runtime env/state-dir mismatch in the new `GatewayClient.env` contract, and one Docker-lane test gap that can miss a restart regression.
+  - Commit: https://github.com/openclaw/openclaw/commit/2de0113608cf264decf1427223de0fd5f6d2ddab
+- MEDIUM 02fe0d8 Keep OpenAI Codex migrations on automatic runtime routing (#79238)
+  - Findings: Medium: Raw OpenAI model runs no longer force the PI path | Medium: Doctor can rewrite legacy Codex refs onto a custom OpenAI endpoint without preserving Codex runtime
+  - Summary: Found two medium-confidence-to-high-confidence routing regressions in the runtime policy migration. Both are current on `main`.
+  - Commit: https://github.com/openclaw/openclaw/commit/02fe0d8978dbf5b7acc4529d505b31f044fdf481
+- MEDIUM c307a61 feat(reply): add reply-chain prompt context
+  - Findings: Medium: Reply-chain metadata survives UI transcript stripping
+  - Summary: Found one current regression: the new reply-chain prompt block can leak into user-visible transcript/UI text because the existing inbound metadata stripper does not recogni
+  - Files: src/agents/pi-embedded-runner/run/params.ts, src/agents/pi-embedded-runner/run/runtime-context-prompt.test.ts, src/agents/pi-embedded-runner/run/runtime-context-prompt.ts, src/auto-reply/reply/get-reply-run.ts, src/auto-reply/templating.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/c307a61264e8c7ea1b46d26ea4c4b28318699fd0
+- MEDIUM c238a51 fix(config): keep Gemini 3.1 model writes canonical
+  - Findings: Medium: Legacy Gemini params can bypass unset/include ownership during config writes
+  - Summary: Found one concrete regression in the canonical Gemini model-key preservation logic. The new path normali
+  - Files: src/config/io.write-prepare.ts, src/config/io.write-prepare.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/c238a51f59d5622e6ac1e77b588acdd77810b6b4
+- MEDIUM f8187ca fix: canonicalize gemini configured catalog ids
+  - Findings: Medium: Bare retired Gemini IDs no longer infer the configured Google provider
+  - Summary: Found one regression in configured-provider inference for bare legacy Gemini IDs.
+  - Files: CHANGELOG.md, src/agents/model-selection-shared.ts, src/agents/model-selection.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/f8187cadc8979b1b16e0bfb93372d64baf74f600
+- MEDIUM 68f9710 Relay ACP exec approval permissions
+  - Findings: Medium: Raw approval broadcasts can be relayed to the wrong same-session ACP turn
+  - Summary: Found one concrete permission-routing bug in the new raw ACP approval relay path. The focused tests pass, but the raw `exec.approval.requested` broadcast can be matched to the wrong active ACP prompt when another run uses the same Gateway session key.
+  - Files: CHANGELOG.md, docs/cli/acp.md, src/acp/permission-relay.ts, src/acp/server.ts, src/acp/translator.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/68f9710f47052e17048eb5a556548df5ec74bed6
+- MEDIUM 35da7d2 refactor: remove legacy agent dir resolver
+  - Findings: Medium: Implicit main auth store no longer honors `OPENCLAW_AGENT_DIR`
+  - Summary: Found one auth-profile regression that still matters on current `main`.
+  - Commit: https://github.com/openclaw/openclaw/commit/35da7d2c992cd4dc6640bf17e6997a4963e69d8a
+- MEDIUM b3ab3cd fix(agents): filter runtime context from context engines
+  - Findings: Medium: Context-engine loop hook bypasses runtime-context filtering
+  - Summary: Found one incomplete-fix path: the new saniti
+  - Files: CHANGELOG.md, src/agents/harness/context-engine-lifecycle.ts, src/agents/harness/context-engine-lifecycle.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/b3ab3cde96e7b21f01d6d9cf6727c3d14cef3214
+- MEDIUM bca6709 fix(doctor): repair legacy Codex route config
+  - Findings: Medium: Doctor can permanently repin valid Codex sessions to PI
+  - Summary: Found one medium-confidence regression in the new Codex session repair path: it can repin valid native Codex sessions to PI when Codex is temporarily not considered ready, even when the session contains no legacy `openai-codex/*` route state.
+  - Files: CHANGELOG.md, docs/cli/doctor.md, docs/gateway/doctor.md, docs/plugins/codex-harness.md, src/commands/doctor/repair-sequencing.test.ts, src/commands/doctor/repair-sequencing.ts, src/commands/doctor/shared/codex-route-warnings.test.ts, src/commands/doctor/shared/codex-route-warnings.ts, src/config/model-refs.ts, src/flows/doctor-health-contributions.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/bca67092036273b4f4a660eab40208a111f5235c
+- HIGH 538605f [codex] Extract filesystem safety primitives (#77918)
+  - Findings: High: Default fs-safe write fallback can clobber files outside the root during a symlink-retarget race
+  - Summary: Found one high-confidence filesystem safety regression. OpenClaw now disables the `@openclaw/fs-safe` Python helper by default, which makes `root.write()` use the package's Node fallback. That fallback can follow a parent symlink after validation and overwrite a file outside the root before post-write verification rejects.
+  - Files: @openclaw/fs-safe
+  - Commit: https://github.com/openclaw/openclaw/commit/538605ff44d23e4e57ecfd72a8f0b20159ffebbf
+- MEDIUM 3ba2ce6 fix(plugins): avoid managed npm prefix on Windows
+  - Findings: Medium: Managed npm commands can target a parent npm workspace
+  - Summary: Found one regression risk in the `--prefix .` removal: npm can now climb to a parent workspace when the managed npm root is nested under one, so plugin install/uninstall/prune may operate on the wrong npm project.
+  - Files: CHANGELOG.md, docs/plugins/dependency-resolution.md, src/infra/npm-managed-root.ts, src/infra/npm-managed-root.test.ts, src/plugins/install.ts, src/plugins/install.npm-spec.test.ts, src/plugins/uninstall.ts, src/plugins/uninstall.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/3ba2ce6694d2b1a4e97c9455cbd11474baaea0b3
+- MEDIUM ad943ec fix(cli): guide auth and gateway setup errors
+  - Findings: Medium: Updated gateway-token-ref error text breaks the adjacent test | Low: Non-TTY auth errors point automation to an interactive-only command
+  - Summary: Found two actionable regressions in the new CLI guidance: one definite changed-lane test failure, and one misleading non-TTY remediation path for model auth.
+  - Files: src/cli/gateway-cli/run.ts, src/cli/plugins-inspect-command.ts, src/commands/models/auth-order.ts, src/commands/models/auth.ts, src/commands/onboard-non-interactive.ts, src/commands/onboard-non-interactive/local/daemon-install.ts, src/commands/onboard-non-interactive/local/gateway-config.ts, src/commands/onboard-non-interactive/local/skills-config.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/ad943ec30c74d24950c35669d2c5c11a7e1ff63c
+- MEDIUM 00a44b0 fix(gateway): preserve active agent dedupe retries
+  - Findings: Medium: Active chat.send run can suppress a distinct agent request with the same idempotency key
+  - Summary: Found one regression in the new active-run fallback: it treats any active abort-controller entry with the same run id as an active `agent` retry, including `chat.send` entries.
+  - Files: src/gateway/server-maintenance.ts, src/gateway/server-maintenance.test.ts, src/gateway/server-methods/agent.ts, src/gateway/server-methods/agent.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/00a44b08ed9c09d8c0b82977ccbd33681f143fff
+- MEDIUM b30ead9 fix: hide subagent announce handoff prompts (#79618)
+  - Findings: Medium: Public agent callers can spoof subagent announce metadata to suppress transcript persistence
+  - Summary: Found two actionable issues in the new hiding/suppression path. The intended trusted subagent announce handoff is fixed, but the new trust decision is based on request fields that the public `agent` RPC schema accepts, and the display fallback can hide ordinary user messages by substring.
+  - Files: CHANGELOG.md, src/agents/agent-command.ts, src/agents/command/types.ts, src/gateway/chat-display-projection.ts, src/gateway/server-methods/agent.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/b30ead9ca8336660a9c34b6602bb78b4750c3965
+- MEDIUM 2945948 feat(gateway): add SDK task ledger RPCs (#74847)
+  - Findings: Medium: `tasks.cancel` bypasses the existing registered-runtime fallback
+  - Summary: Found one concrete cancellation regression in the new `tasks.cancel` RPC path. The list/get/read surfaces otherwise matched the protocol and SDK tests I reviewed.
+  - Commit: https://github.com/openclaw/openclaw/commit/2945948a5ee4843d5640724dd1265b6841e68eb8
+- MEDIUM b621663 fix: annotate message-tool-only replies in Codex tool spec
+  - Findings: Medium: Resumed Codex threads can keep the stale generic message tool spec
+  - Summary: Found one concrete issue: the new Codex `message_tool_only` hint is only in the dynamic tool description, but existing bound Codex threads are explicitly reused when only dynamic tool descriptions change. That means the new hint is not delivered for resumed threads, which leaves the reported failure mode in place for existing sessions.
+  - Files: CHANGELOG.md, extensions/codex/src/app-server/run-attempt.ts, src/agents/openclaw-tools.ts, src/agents/pi-embedded-runner/compact.ts, src/agents/pi-embedded-runner/run/attempt.ts, src/agents/pi-tools.create-openclaw-coding-tools.test.ts, src/agents/pi-tools.ts, src/agents/tools/message-tool.test.ts, src/agents/tools/message-tool.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/b62166301efd36d53ee93aa38cbeec200ad7a9eb
+- MEDIUM 7236d64 fix(agents): classify stream_read_error as transient (#79692)
+  - Findings: Medium: `assistant-failover.test.ts` hangs after profile-marking became awaited
+  - Summary: The `stream_read_error` classifier/fallback change looks narrow and its focused coverage passes. I found one concrete regression in an adjacent current-main test: this commit changed `handleAssistantFailover` to await auth-profile failure marking, but the existing rotate-profile test still waits for `handleAssistantFailover` to return before releasing that mocked mark, so the test now hangs.
+  - Files: CHANGELOG.md, src/agents/model-fallback.run-embedded.e2e.test.ts, src/agents/model-fallback.test.ts, src/agents/pi-embedded-helpers.isbillingerrormessage.test.ts, src/agents/pi-embedded-helpers/failover-matches.ts, src/agents/pi-embedded-runner/run/assistant-failover.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/7236d6487e722291088523f3f7d7a17ccccb84f9
+- HIGH 398dd6e fix(failover): stop retrying assistant-prefill format failures
+  - Findings: High: Assistant-prefill format errors still opt into retry
+  - Summary: Found one regression: the new assistant-prefill format strings are also picked up by the broad Cloud Code Assist retry flag, so the exact error this commit is meant to make terminal still rotates profiles and can fall through to model fallback.
+  - Files: CHANGELOG.md, apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift
+  - Commit: https://github.com/openclaw/openclaw/commit/398dd6e0b0915f6abd779cdfdba1ac11fc2dc47f
+- MEDIUM 2016331 fix: resolve fs-safe post-land fallout
+  - Findings: Medium: QQ Bot chunked-upload tests no longer mock COS PUTs
+  - Summary: Found one concrete regression: the QQ Bot chunked-upload unit tests now make real DNS/network attempts after the production code switched COS PUTs from `fetch` to `fetchWithSsrFGuard`.
+  - Commit: https://github.com/openclaw/openclaw/commit/20163313afc5f2b67197160c1269b9100ee20b73
+- MEDIUM 3110c62 fix(gateway): preserve mixed assistant history text
+  - Findings: Medium: Mixed tool projection revives commentary when a final answer exists
+  - Summary: Found one regression in the new mixed tool/text projection: when a stored assistant message contains commentary text, a tool call, and final-answer text in the same turn, `chat.history` now returns both text blocks without phase metadata. The Control UI then renders the commentary alongside the final answer, violating the existing final-answer preference contract.
+  - Files: CHANGELOG.md, src/gateway/chat-display-projection.ts, src/gateway/server-methods/server-methods.test.ts, src/gateway/server.chat.gateway-server-chat-b.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/3110c621df1460cc7fcd806084fe44d192e8b2b4
+- MEDIUM 7544bee fix: preserve embedded dispatcher timeouts
+  - Findings: Medium: Embedded timeout setup overwrites custom Undici dispatchers
+  - Summary: Found one compatibility regression in the new explicit embedded dispatcher timeout path: it can replace existing custom Undici dispatchers on normal no-proxy embedded runs.
+  - Files: src/agents/pi-embedded-runner/run/attempt-http-runtime.ts, src/agents/pi-embedded-runner/run/attempt.spawn-workspace.test-support.ts, src/agents/pi-embedded-runner/run/attempt.spawn-workspace.timeout.test.ts, src/infra/net/undici-global-dispatcher.test.ts, src/infra/net/undici-global-dispatcher.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/7544beea17943fa16b43bba670ffe089ba00091f
+- MEDIUM 58f81b0 fix(codex): honor OAuth contextTokens in native harness
+  - Findings: Medium: `/status` can still report the stale OpenAI cap for native Codex runs
+  - Summary: Found one concrete status-path regression risk: the runtime Codex context cap can still be shadowed by the older selected-provider context value in the normal `/status` command path.
+  - Commit: https://github.com/openclaw/openclaw/commit/58f81b0e04ef0304fc604f378fbcee6be01b1cde
+- MEDIUM 329580c fix(onboard): recover externalized channel plugin from stale config (#78328)
+  - Findings: Medium: Catalog fallback can bypass plugin-id disables for external channel plugins
+  - Summary: Found one regression in the new stale-config reinstall fallback: the disabled-config guard only checks the channel id, but catalog installs enable the catalog/plugin manifest id. That can re-enable a plugin explicitly disabled under `plugins.entries.<pluginId>.enabled=false` when `pluginId !== channelId`.
+  - Files: src/flows/channel-setup.ts, src/flows/channel-setup.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/329580c64d13657592c3fabb97ff567c2e292bb6
+- MEDIUM a24d5fe perf(config): avoid duplicate plugin auto-enable channel probes
+  - Findings: Medium: Plugin config entries suppress channel auto-enable candidates
+  - Summary: Found one regression in the cached channel-probe path. Configs that have both a configured channel and a material plugin entry can now skip channel auto-enable candidate generation.
+  - Files: src/config/plugin-auto-enable.detect.ts, src/config/plugin-auto-enable.shared.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/a24d5fe79066acfa56288244b3852f4f322cdea1
+- MEDIUM e437763 fix(agents): deliver agent TTS audio when block streaming is off (#78355)
+  - Findings: Medium: Captioned media blocks can synthesi
+  - Summary: Found one conditional regression in the new non-streaming direct media-block path: captioned media blocks can now trigger an extra final-mode auto-TTS send after the media block was already delivered.
+  - Files: CHANGELOG.md, src/auto-reply/reply/agent-runner.media-paths.test.ts, src/auto-reply/reply/reply-delivery.test.ts, src/auto-reply/reply/reply-delivery.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/e437763246ded44704de92bacf268d654d590ef1
+- MEDIUM 1c29156 fix: recognize custom compaction conversation (#78390)
+  - Findings: Medium: Branch fallback can resummari
+  - Summary: Found one concrete follow-up risk in the new session-branch fallback.
+  - Files: CHANGELOG.md, src/agents/compaction-real-conversation.ts, src/agents/pi-embedded-runner/compact.hooks.test.ts, src/agents/pi-hooks/compaction-safeguard.test.ts, src/agents/pi-hooks/compaction-safeguard.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/1c2915677bdfdabda55ea7e9ca2d4b5bbb8c2cae
+- MEDIUM 6aafdf1 fix(cron): repair bad persisted model sentinels (#78641)
+  - Findings: Medium: Doctor can delete a valid explicit `default` model override
+  - Summary: Found one regression risk in the doctor repair: it treats every bare `payload.model: "default"` as an invalid sentinel even though cron runtime can resolve a bare model id named `default` as a valid explicit override.
+  - Files: CHANGELOG.md, docs/automation/cron-jobs.md, docs/cli/cron.md, docs/gateway/doctor.md, src/commands/doctor-cron-store-migration.test.ts, src/commands/doctor-cron-store-migration.ts, src/commands/doctor-cron.test.ts, src/commands/doctor-cron.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/6aafdf121ac468ed31f5278916732cc6605be952
+- MEDIUM 372e270 fix(delivery): require outbound send result for success
+  - Findings: Medium: Terminal hook cancellations now keep final delivery pending
+  - Summary: The commit fixes the reported false-positive send telemetry for empty outbound results, but it also makes every terminal no-send path look retryable to the main-session pending-final-delivery cleanup. Documented `message_sending` cancellations return `[]` without an adapter result, so the reviewed change can leave an intentionally blocked final reply stuck as pending.
+  - Files: CHANGELOG.md, src/agents/command/delivery.ts, src/agents/command/delivery.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/372e270871a2e45be1484df57651f1a1891610bb
+- MEDIUM a74894a fix(agents): fail fast on session lock fallback (#78633)
+  - Findings: Medium: Explicit provider failover errors can be blocked by a nested session-lock cause
+  - Summary: Found one edge-case regression in the new fail-fast guard. The direct session-lock case is fixed and covered, but the guard can also reject errors that the existing failover classifier intentionally treats as provider failover when explicit provider metadata is present.
+  - Files: CHANGELOG.md, src/agents/failover-error.ts, src/agents/model-fallback.test.ts, src/agents/model-fallback.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/a74894a9540133ebe7695c1335a724455b531530
+- MEDIUM 7d5d01b chore(deps): bump @openclaw/fs-safe pin to 3412e03 (#78670)
+  - Findings: Medium: fs-safe bump breaks media-store failure/retry tests | Low: fs-safe race test no longer accepts the dependency’s boundary error code
+  - Summary: The dependency bump installs cleanly and the upstream `openclaw/fs-safe` test suite passes, but current OpenClaw `main` has focused test regressions after the pin change. The failures are in OpenClaw tests that still assume the old fs-safe write/error behavior.
+  - Files: package.json, pnpm-lock.yaml
+  - Commit: https://github.com/openclaw/openclaw/commit/7d5d01b4f98d45e0f1499af1453e017e79a8d83f
+- MEDIUM 32c1356 fix(cli): normalize heic model-run files
+  - Findings: Medium: HEIC model-run conversion fails before `sips` can run on Bun/macOS
+  - Summary: Found two actionable gaps in the HEIC normali
+  - Files: src/cli/capability-cli.ts, src/cli/capability-cli.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/32c135692657fcf7372af19148027053856ca44f
+- MEDIUM c22f414 fix(codex): keep app-server alive after turn activity
+  - Findings: Medium: timeout diagnostics can log raw assistant text before current-turn filtering
+  - Summary: The watchdog fix is covered by focused tests and matches the #77984 failure mode, but the new timeout diagnostic stores raw assistant text before filtering notifications to the active turn. With the shared app-server client, that can put assistant text from the wrong concurrent Codex turn into another run's warn logs and trajectory timeout event.
+  - Files: CHANGELOG.md, docs/plugins/codex-harness.md, extensions/codex/openclaw.plugin.json, extensions/codex/src/app-server/config.ts, extensions/codex/src/app-server/run-attempt.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/c22f414c6976f66652aa7174838b7121673e810f
+- HIGH 5f60479 fix: scope async model runtime hooks
+  - Findings: High: Core TypeScript no longer compiles
+  - Summary: The commit breaks the core TypeScript gate. The new transport-normali
+  - Files: src/agents/pi-embedded-runner/model.skip-pi-discovery-hooks.test.ts, src/agents/pi-embedded-runner/model.ts, src/agents/pi-embedded-runner/run.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/5f60479f18c505018bb3350efddf82b66ce0dbc4
+- MEDIUM 1235f7f perf: reuse compatible auto-enable metadata
+  - Findings: Medium: Auto-enable can reuse a stale manifest registry after plugin load paths or roots change
+  - Summary: Found one regression in the new metadata reuse fast path. It can reuse a current plugin manifest registry after plugin discovery inputs change, because the fallback compares only the installed-plugin policy hash and bypasses the existing control-plane fingerprint check.
+  - Files: src/config/plugin-auto-enable.shared.ts, src/config/plugin-auto-enable.core.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/1235f7f981683497ec59bb3f583601ed12ba2fa1
+- MEDIUM a35067f fix(media): avoid provider listing for exact media defaults
+  - Findings: Medium: Exact provider refs can be rerouted to another provider's model catalog entry | Low: Disabling auto fallback now drops model-only explicit defaults
+  - Summary: Found two media model resolution regressions in the shared candidate resolver.
+  - Files: src/media-generation/runtime-shared.ts, src/media-generation/runtime-shared.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/a35067f872499797446000a229c16e92847868df
+- MEDIUM d4e04f3 fix(sessions): retire stale direct dm rows after dmscope changes
+  - Findings: Medium: `--fix-dm-scope` leaves retired-session trajectory artifacts behind | Low: Applied cleanup counts exclude the rows removed by `--fix-dm-scope`
+  - Summary: Found two concrete issues in the new `--fix-dm-scope` applied-cleanup path: retired sessions leave trajectory sidecars behind, and applied JSON summaries misreport entry counts.
+  - Commit: https://github.com/openclaw/openclaw/commit/d4e04f33a65f555adb7ac41a617b6d9ff8ff1926
+- HIGH 3a901b5 Revert "Install Codex plugin on OpenAI model selection (#78799)" (#78878)
+  - Findings: High: `doctor --fix` still rewrites valid Codex OAuth PI routes to direct OpenAI PI routes
+  - Summary: Found one high-confidence regression. The revert claims to restore `openai-codex/*` as a valid PI OAuth route, but it also restores doctor code/tests that still rewrite that route to `openai/*` plus PI. That reproduces the production lockout and possible unexpected OpenAI API billing described in #78407.
+  - Commit: https://github.com/openclaw/openclaw/commit/3a901b5e953971166a8404534178cc6f1dbde74f
+- MEDIUM f2bf925 fix: guard sandbox move cleanup identity
+  - Findings: Medium: Regular-file EXDEV fallback can delete a replacement source file
+  - Summary: Found one concrete data-loss gap in the same cleanup path this commit hardens: directory EXDEV fallback now identity-checks copied entries before removing them, but top-level regular-file EXDEV fallback still unlinks the source name without checking that it is the same file copied from the pinned fd.
+  - Files: src/agents/sandbox/fs-bridge-mutation-helper.ts, src/agents/sandbox/fs-bridge-mutation-helper.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/f2bf925a387fc15988d9e3bde2a83f30438b7b36
+- MEDIUM 772034d fix: strip tools for no-tool completions models
+  - Findings: Medium: `parallel_tool_calls` can survive `supportsTools=false`
+  - Summary: Found one concrete edge case in the new stripping wrapper: `parallel_tool_calls` can be re-added after the stripper runs when it is configured through extra params.
+  - Files: CHANGELOG.md, src/agents/pi-embedded-runner/extra-params.ts, src/agents/pi-embedded-runner/openai-stream-wrappers.ts, src/agents/pi-embedded-runner/openai-stream-wrappers.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/772034d741078e9e1692ab845ad963bc2111decb
+- MEDIUM 3a89e20 fix(infra): support hardlink-safe package moves
+  - Findings: Medium: EXDEV fallback drops the hardlink rejection option after the pre-scan
+  - Summary: Found one concrete hardlink-policy bypass in the new wrapper. The pre-scan closes the same-filesystem gap, but the wrapper stops forwarding `sourceHardlinks: "reject"` to the upstream EXDEV fallback, so a hardlink introduced after the pre-scan can still be copied and published.
+  - Files: src/infra/replace-file.ts, src/infra/replace-file.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/3a89e20b7b5f47031498955f0d7cabff36e0f4b8
+- MEDIUM 9b279ef fix(agents): reclaim reported stale session locks
+  - Findings: Medium: Stale-lock reclamation can delete a fresh holder's lock
+  - Summary: Found one concurrency regression in the new stale session lock reclamation path. The issue is still present on current `main`.
+  - Files: src/agents/session-write-lock.ts, src/agents/pi-embedded-runner/run.overflow-compaction.harness.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/9b279ef17332c2a8533892e24b810de0e61aac05
+- HIGH 84dd9c7 fix(gateway): fail closed for trusted-proxy auth
+  - Findings: High: Trusted-proxy local password callers still send an auth path the server now rejects
+  - Summary: The commit closes the trusted-proxy password fallback at the server auth gate, but the rest of the current `main` contract still treats `gateway.auth.password` as the local/internal credential for trusted-proxy deployments. That leaves documented internal Gateway callers resolving and sending a password that the server now always rejects.
+  - Files: CHANGELOG.md, src/gateway/auth.test.ts, src/gateway/auth.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/84dd9c73953b7c5a953f7bb90d2c3a0f6b6ca175
+- MEDIUM 029ca8c feat(agents): implement state-aware failover and lane suspension
+  - Findings: Medium: persisted suspension is not enforced after gateway restart | Medium: all multi-candidate fallback failures suspend the lane as `circuit_open` | Low: resume handoff usually injects no recovery briefing
+  - Summary: Found four actionable issues in the new suspension and handoff flow. The focused changed-file tests pass, but they do not cover restart persistence, broad non-quota suspension, or the missing recovery-summary/diagnostic paths.
+  - Commit: https://github.com/openclaw/openclaw/commit/029ca8c268848d9ff805afb7bc2830282f75bcbb
+- MEDIUM 83aad86 Clarify exec filesystem policy drift (#79153)
+  - Findings: Medium: Exec filesystem drift warning misses `profile` + `alsoAllow` configs | Medium: Non-main sandbox tool policy drift is not checked
+  - Summary: Found security-audit/doctor false negatives in the new exec filesystem drift helper. The added warning does not fully match the runtime tool-policy chain, so some real read-only-looking configs still produce no warning.
+  - Commit: https://github.com/openclaw/openclaw/commit/83aad863fd779b70d1a82a6d5f68d0e382de90eb
+- MEDIUM 2265786 fix(agents): enable codex for openai overrides
+  - Findings: Medium: Scoped Codex activation can replace the active plugin registry mid-run
+  - Summary: Found one medium-confidence regression risk in the new Codex auto-activation helper. The code change is still present on current `main`; only `CHANGELOG.md` changed after this commit.
+  - Files: CHANGELOG.md, src/agents/agent-command.ts, src/agents/harness/runtime-plugin.ts, src/agents/pi-embedded-runner/run.ts, src/commands/agent.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/22657861c8760a0d76148daa88e77adf6a142607
+- MEDIUM b1eedb2 Add ACP session load event ledger (#79093)
+  - Findings: Medium: `loadSession` can replay partial or stale ledger history as complete
+  - Summary: Found one concrete ACP ledger correctness regression. The new ledger can keep a session marked complete while the stored event history is partial or stale, so `loadSession` trusts the ledger and skips the safer Gateway transcript fallback.
+  - Files: src/acp/event-ledger.ts, src/acp/translator.ts, src/acp/session.ts, src/acp/server.ts, src/acp/types.ts, docs/cli/acp.md, CHANGELOG.md
+  - Commit: https://github.com/openclaw/openclaw/commit/b1eedb2fc8a1036f0fa534bd0a90f3685a1b984e
+- MEDIUM f62618f fix: respect Codex requirements for app-server defaults (#79151)
+  - Findings: Medium: Remote sandbox defaults can miss FQDN-only host matches and still send YOLO
+  - Summary: Found one compatibility/reliability bug in the new hostname-scoped remote sandbox handling.
+  - Files: CHANGELOG.md, docs/plugins/codex-harness.md, extensions/codex/src/app-server/config.ts, extensions/codex/src/app-server/config.test.ts, extensions/codex/src/app-server/run-attempt.test.ts, extensions/codex/test-api.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/f62618f805fcae22693d2590e42460fb6958b3da
+- MEDIUM 6eae017 fix(agents): route pi default streams through transport (#79201)
+  - Findings: Medium: Production PI default stream still falls through as custom
+  - Summary: Found one concrete issue: the new detection covers PI API-provider function identities, but the production PI Coding Agent default stream is an anonymous wrapper around `streamSimple`, so default embedded sessions can still be classified as `session-custom` and bypass the boundary-aware transport path this commit intended to restore.
+  - Files: CHANGELOG.md, src/agents/pi-embedded-runner/stream-resolution.ts, src/agents/pi-embedded-runner/stream-resolution.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/6eae017dd6142abe10c550b6a24d85cb652d176b
+
+## not-active: affected plugin/channel/provider is disabled here (38)
+
+- MEDIUM 58c4f9e fix: slack keep resumed sends in thread (#77620)
+  - Findings: Medium: Prefixed Slack currentChannelId prevents ambient thread injection
+  - Summary: Found one concrete bug: the Slack thread fallback added by this commit can still fail for resumed/gateway paths where the current Slack target is stored as `channel:C123`.
+  - Files: CHANGELOG.md, src/agents/openclaw-tools.ts, src/agents/subagent-announce-output.ts, src/agents/tools/message-tool.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/58c4f9e190bc72b451cc95d1c991b1e118172cd9
+- MEDIUM d02fbc6 fix(sandbox): support Windows drive-letter bind sources
+  - Findings: Medium: Windows drive roots can be bind-mounted despite root-mount blocking
+  - Summary: Found one sandbox host-path policy regression in the new Windows drive-letter support: Windows drive roots are not treated like POSIX `/`, and `..` traversal above a drive root can normali
+  - Files: CHANGELOG.md, extensions/whatsapp/src/setup-finalize.ts, src/agents/sandbox/host-paths.ts, src/agents/sandbox/validate-sandbox-security.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/d02fbc6116ed9cbd501ad6a1e4d08f3fc71c1dd8
+- MEDIUM 5fae1c3 fix(plugins): forward install records to channel catalog registry (#77269)
+  - Findings: Medium: Bundled plugin metadata test now expects Discord startup without matching metadata
+  - Summary: Found one concrete regression: the commit changes a bundled plugin metadata test expectation to include `discord` in empty-config Gateway startup, but current metadata and runtime behavior still exclude it. The focused test suite now fails on current `main`.
+  - Files: CHANGELOG.md, scripts/lib/official-external-channel-catalog.json, src/commands/doctor/shared/stale-plugin-config.test.ts, src/plugins/bundled-plugin-metadata.test.ts, src/plugins/channel-catalog-registry.test.ts, src/plugins/channel-catalog-registry.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/5fae1c32b5f8e33c9fabcad0cc3cbdbc6e899051
+- MEDIUM 84e8e09 Add WhatsApp live QA lane (#77704)
+  - Findings: Medium: WhatsApp auth archives can plant symlinks that Baileys later writes through
+  - Summary: Found three actionable issues in the new QA/live-check plumbing. The highest-risk one is unsafe extraction of WhatsApp auth archives before handing the directory to Baileys.
+  - Commit: https://github.com/openclaw/openclaw/commit/84e8e0972570c58067b6aaff443374bc92fcb7d8
+- MEDIUM 79dd65e feat(voice-call): improve realtime Meet voice agent
+  - Findings: Medium: Google Meet Twilio intro can be silently dropped before the realtime bridge is ready
+  - Summary: Found one actionable regression in the delegated Google Meet Twilio flow: intro speech is no longer reliably attached to the call startup path.
+  - Commit: https://github.com/openclaw/openclaw/commit/79dd65e208894f2bc8bef8fc627aa43e2bd04488
+- MEDIUM d94e7f5 fix(discord): show reasoning text in progress drafts (#78050)
+  - Findings: Medium: Discord progress drafts can expose Codex reasoning when reasoning visibility is off
+  - Summary: Found one medium-confidence privacy regression in the Discord progress draft path. The changed Discord code displays reasoning stream payload text whenever a draft stream exists, but the Codex app-server harness can emit those callbacks without checking that the session requested `/reasoning stream`.
+  - Files: CHANGELOG.md
+  - Commit: https://github.com/openclaw/openclaw/commit/d94e7f5114dcf4ee5dccb99eee5938d6355eb692
+- MEDIUM 466f718 feat: wire talk handoff into native nodes
+  - Findings: Medium: Failed iOS PTT start can leave Voice Wake suspended
+  - Summary: One actionable regression risk found: the commit makes native Talk PTT node commands reachable, but the iOS `pttStart` failure path can leave Voice Wake suspended.
+  - Commit: https://github.com/openclaw/openclaw/commit/466f7183207d7bbea206e061d4d1afc5c7a734eb
+- MEDIUM c6d4f1f fix(runtime): preserve reviewed routing and transcript behavior (#79076)
+  - Findings: Medium: Bare numeric Discord channel IDs now fail target resolution
+  - Summary: Found one concrete regression in the Discord target resolver bridge. Bare numeric Discord channel IDs, which the plugin normali
+  - Files: CHANGELOG.md, extensions/discord/src/channel.loaders.ts, extensions/discord/src/channel.test.ts, extensions/discord/src/channel.ts, src/gateway/server-methods/agent.test.ts, src/gateway/server-methods/agent.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/c6d4f1fab806f6c15a81d4d84758297a7fb265b8
+- MEDIUM ebd59f1 fix(cli): clarify startup failures
+  - Findings: Medium: Existing uncaught-exit test still expects the old CLI error line
+  - Summary: Found one concrete regression: the commit changed uncaught CLI error output but left an adjacent existing test asserting the old log shape. The product behavior appears intentional, but the committed tree now has a focused CLI test failure.
+  - Files: src/cli/failure-output.test.ts, src/cli/failure-output.ts, src/cli/run-main.ts, src/entry.ts, src/index.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/ebd59f1e01dab26bdb8c3a90b6645d12e11a82b1
+- MEDIUM 311e460 feat: unify model catalog registration
+  - Findings: Medium: OpenRouter live video capabilities turn reference images into a two-frame limit | Low: Ollama discovery caching makes the existing provider-discovery tests fail
+  - Summary: Found two actionable regressions: one OpenRouter video capability overlay bug that can incorrectly skip valid reference-image requests, and one Ollama discovery cache regression that breaks the existing provider-discovery test file.
+  - Commit: https://github.com/openclaw/openclaw/commit/311e4608d17326965012881def74c25bfa161cd8
+- MEDIUM 7cfa12f feat: inject runtime model identity into prompts
+  - Findings: Medium: raw gateway model probes no longer send only the supplied prompt
+  - Summary: Found one regression in the embedded raw model-run path: the new model identity line is reintroduced after raw runs explicitly clear the system prompt.
+  - Files: CHANGELOG.md, src/agents/system-prompt.ts, src/agents/cli-runner/prepare.ts, src/agents/pi-embedded-runner/run/attempt-system-prompt.ts, src/agents/pi-embedded-runner/run/attempt.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/7cfa12fd2bb6fc6aabef69269f9896c99e642115
+- MEDIUM cc4a596 fix(discord): make realtime barge-in guard tunable
+  - Findings: Medium: A skipped early barge-in consumes the only same-speaker retry | Medium: Non-OpenAI realtime providers can no longer stop Discord playback on barge-in
+  - Summary: Found two actionable regressions in the realtime Discord barge-in path. Existing targeted tests pass, but they do not cover the affected sequences.
+  - Files: CHANGELOG.md, docs/channels/discord.md
+  - Commit: https://github.com/openclaw/openclaw/commit/cc4a596be2f296bfc9f99b5545ac6704928328f6
+- MEDIUM 8d70f7e feat(mistral): add mistral-medium-3-5 model with reasoning support
+  - Findings: Medium: Default thinking off still sends Mistral high reasoning
+  - Summary: Found one runtime regression: the new Mistral Medium 3.5 reasoning catalog flag makes the default “off” thinking profile send `reasoning_effort=high` unless a caller explicitly passes `reasoning: "off"`.
+  - Files: CHANGELOG.md, docs/providers/mistral.md, extensions/mistral/api.test.ts, extensions/mistral/api.ts, extensions/mistral/index.ts, extensions/mistral/model-definitions.test.ts, extensions/mistral/openclaw.plugin.json
+  - Commit: https://github.com/openclaw/openclaw/commit/8d70f7e90fbe7d39e936ae2d69e3c2478b8b6b9e
+- MEDIUM cfb0c34 feat: add realtime consult overrides
+  - Findings: Medium: `talk.consultFastMode` is computed but never used for the agent run | Low: `talk.consultThinkingLevel: "off"` can still enable model-default reasoning
+  - Summary: Found two actionable bugs in the Control UI Talk consult override path. The voice-call plugin path is separately wired and covered by tests, but the core `chat.send` path used by browser realtime Talk does not fully honor the new one-shot overrides.
+  - Commit: https://github.com/openclaw/openclaw/commit/cfb0c34ff6bda189defa3152e8dce15d93cb1afb
+- MEDIUM 8f56484 chore: remove stale unused imports
+  - Findings: Medium: Public plugin SDK context readers no longer accept their documented generic call form
+  - Summary: Found one public SDK compatibility regression. The runtime behavior still passes the focused contract tests, but the commit changes typed plugin-facing APIs and breaks existing TypeScript callers that supplied the previously supported type argument.
+  - Files: extensions/matrix/src/matrix/config-update.ts, extensions/xai/api.ts, src/infra/replace-file.ts, src/plugins/hook-types.ts, src/plugins/types.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/8f56484b125c01c69d196bd30f993df8581cd2d4
+- MEDIUM 0a09a8f fix: propagate image generation SSRF policy (#79765) (thanks @hclsys)
+  - Findings: Medium: Vydra image generation still drops SSRF policy after job creation
+  - Summary: The main OpenAI/Google/MiniMax/OpenRouter/OpenAI-compatible propagation looks covered by source inspection and targeted tests. One Vydra image-generation path remains incomplete: only the initial job POST receives the new `ssrfPolicy`; the follow-up job poll and provider-returned asset download still use unguarded `fetchWithTimeout`.
+  - Commit: https://github.com/openclaw/openclaw/commit/0a09a8f02fcd1b407eee17d7f31bf93d1890c88f
+- MEDIUM 9e6f38f feat: unify browser realtime talk clients
+  - Findings: Medium: Streaming audio chunks can prevent gateway-relay barge-in from ever reaching the speech-frame threshold
+  - Summary: Found one actionable reliability issue in the new gateway-relay browser barge-in logic. The follow-up `f1636d5e28` renamed the relay RPC/event surface on current `main`, but the same counter reset remains in the current source, so the issue still matters.
+  - Commit: https://github.com/openclaw/openclaw/commit/9e6f38f4e1a29b4787c0742919eb9ea4649b3f29
+- MEDIUM f1636d5 refactor: unify talk session runtime
+  - Findings: Medium: `talk.session.create` accepts unsupported managed-room modes | Low: documented realtime Talk live smoke still uses removed RPC/event names
+  - Summary: Found two actionable issues still present on current `main`: one protocol handler accepts unsupported Talk session mode/transport combinations, and one documented maintainer smoke script is stale after the RPC/event rename.
+  - Commit: https://github.com/openclaw/openclaw/commit/f1636d5e2831a6c935a3dab7fe56ac061b68bb94
+- HIGH 057d3a4 feat(mantis): capture logged-in discord web evidence
+  - Findings: High: Candidate worktree code inherits the new Discord viewer and Crabbox secrets
+  - Summary: Found three actionable issues in the new logged-in Discord Web capture path: secret-bearing env is exposed to candidate worktree code, documented `$HOME`/`~/` profile paths do not expand on the remote machine, and raw Discord UI metadata is published despite metadata redaction.
+  - Commit: https://github.com/openclaw/openclaw/commit/057d3a43c049602326a475ff197f9f3593cdab75
+- MEDIUM 36df0d9 fix: repair iOS LAN pairing
+  - Findings: Medium: Private-LAN iOS bootstrap pairing drops handed-off device tokens | Low: Setup-code `.local` allowance is not supported by Android parser
+  - Summary: Found two actionable compatibility/reliability issues in the landed LAN pairing repair. The main iOS path now accepts private-LAN bootstrap setup codes, but the Swift session persistence gate still treats those `ws://` endpoints as untrusted, so successful bootstrap handoff tokens are dropped.
+  - Commit: https://github.com/openclaw/openclaw/commit/36df0d93b93a9e734ff0d0c6a82451308a0c6aba
+- MEDIUM ebb8bed fix: cap memory wiki filenames for safe writes
+  - Findings: Medium: Long synthesis titles still exceed the fs-safe temp filename budget
+  - Summary: Found one current-main bug: the new cap only budgets one fs-safe temp suffix and only applies to `createWikiPageFilename`. Other memory-wiki page writes can still generate filenames that fit the final `.md` component but fail when fs-safe creates its sibling temp file.
+  - Files: extensions/memory-wiki/src/markdown.ts, extensions/memory-wiki/src/markdown.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/ebb8bed78f909365e8c5b557908bc0ee89244b41
+- MEDIUM 5e05052 fix(line): require wildcard for open dm policy
+  - Findings: Medium: Named LINE accounts cannot inherit the wildcard allowlist for open DMs
+  - Summary: Found one regression in the new LINE account-level validation: it rejects a named-account `dmPolicy: "open"` config even when the effective account config inherits `allowFrom: ["*"]` from `channels.line`, which current runtime resolution supports.
+  - Files: CHANGELOG.md, docs/channels/line.md, extensions/line/src/config-schema.test.ts, extensions/line/src/config-schema.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/5e05052bb9ab84288f1ea92cb7e3a771979d83b4
+- MEDIUM e2501b2 fix(diagnostics): export Talk metrics after SDK refactor
+  - Findings: Medium: Prometheus session recovery metrics never record real recovery events | Medium: Runtime Talk events are not included in stability snapshots
+  - Summary: Found two observability regressions in the new diagnostics export paths. The focused tests added by the commit pass, but they do not exercise the real trust metadata paths used at runtime.
+  - Commit: https://github.com/openclaw/openclaw/commit/e2501b2d6db23ff942d0519e949a8ec323a28dc4
+- HIGH 90b69ca test(perf): slim channel directory contracts
+  - Findings: High: Google Chat plugin no longer typechecks
+  - Summary: The commit breaks the extension production typecheck in the changed Google Chat entrypoint.
+  - Files: extensions/googlechat/src/channel.ts, src/channels/plugins/contracts/test-helpers/threading-directory-contract-suites.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/90b69cac02e36cb50633bedce3180a18faabb97a
+- MEDIUM 71a6260 fix(googlechat): remove duplicate channel import
+  - Findings: Medium: Google Chat channel still fails extension typecheck on missing type export
+  - Summary: The deleted duplicate `listGoogleChatAccountIds` import itself is safe: current `extensions/googlechat/src/channel.ts` still imports and uses that symbol. However, the same import block still leaves Google Chat failing the extension type lane because it imports `ChannelMessageActionName` from a barrel that does not export it.
+  - Files: extensions/googlechat/src/channel.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/71a626003495ba6c302c0a6eeef1b29b0e09e9df
+- MEDIUM 4647400 fix(discord): default to progress previews
+  - Findings: Medium: Default Discord progress previews can duplicate tool progress messages
+  - Summary: Found one regression in the new default Discord progress-preview path: default previews start, but the default path does not suppress standalone text-only tool progress messages, so tool-heavy Discord replies can produce both a preview message and separate tool-result messages.
+  - Files: CHANGELOG.md, docs/channels/discord.md, docs/gateway/config-channels.md, extensions/discord/src/monitor/message-handler.process.test.ts, extensions/discord/src/preview-streaming.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/4647400c2246442f4967521a035e88099fab3146
+- MEDIUM 330ba1f refactor: move canvas to plugin surfaces
+  - Findings: Medium: Built-in compaction can request more output tokens than the model supports
+  - Summary: Found one current-main regression from the reviewed commit. Several other risky areas from the commit have follow-up fixes on `main`; this compaction regression still remains.
+  - Commit: https://github.com/openclaw/openclaw/commit/330ba1fa319407315d5173cffd318cf123361fe3
+- MEDIUM 1dd9a15 fix: preserve deferred channel setup contracts
+  - Findings: Medium: Explicit Discord channel targets can still resolve to a user directory hit
+  - Summary: Found one concrete follow-up issue in the Discord target-resolution path: the new explicit `discord:channel:<id>` parse can still be overridden by a live user directory hit before sending.
+  - Files: extensions/discord/src/target-parsing.ts, extensions/discord/src/targets.test.ts, src/plugins/loader-channel-setup.ts, src/plugins/loader.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/1dd9a15eb85061cf149ae47b6f66915ed6aa4fdb
+- MEDIUM 66b02c9 fix: build canvas assets for docker package build
+  - Findings: Medium: `build:docker` bypasses the Dockerfile A2UI fallback on cross-arch builds
+  - Summary: Found one regression in the Docker build fallback path: the commit re-runs A2UI asset bundling inside `build:docker`, after `Dockerfile` has already caught a bundling failure and written a stub for QEMU cross-arch builds.
+  - Files: package.json, extensions/canvas/src/host/a2ui/.bundle.hash
+  - Commit: https://github.com/openclaw/openclaw/commit/66b02c91b11287e128cf3b06477923feb9f70aa3
+- MEDIUM 8e17910 fix: treat aws sdk auth profiles as config metadata
+  - Findings: Medium: Config-only AWS SDK auth profiles are reported as missing by model status/list surfaces
+  - Summary: Found one regression in the status/listing surfaces for the new config-only AWS SDK auth profiles. Runtime auth resolution accepts these profiles, but `models status --check` still reports the provider as missing because the overview/probe/list availability code only counts persisted store credentials or explicit AWS env vars.
+  - Commit: https://github.com/openclaw/openclaw/commit/8e179101914eb7966fa68e611a5cd3b62e9cb5bb
+- MEDIUM e1fec3c fix(config): remove core BlueBubbles schema (#78612)
+  - Findings: Medium: BlueBubbles policy refinements are bypassed by real config validation | Medium: Plugin SDK API baseline hash is stale
+  - Summary: Found two concrete issues: the new BlueBubbles Zod refinement is not reached by the real plugin-aware config validator, and the committed Plugin SDK API baseline hash is stale.
+  - Files: CHANGELOG.md, docs/.generated/plugin-sdk-api-baseline.sha256
+  - Commit: https://github.com/openclaw/openclaw/commit/e1fec3c892a0362d1c4c28d7c7198e20cf60a4ba
+- HIGH dd09e6f fix(arcee): disable tools for Trinity thinking
+  - Findings: High: Existing Arcee configs are not repaired, so stale Trinity entries still enable tools
+  - Summary: Found one concrete gap: the new `supportsTools: false` metadata only reaches newly built Arcee catalog entries. Existing users who already onboarded Arcee can keep stale `trinity-large-thinking` model entries without the compat flag, so the reported main-session tool/request-shape failure remains reachable for exactly the users this fix is meant to protect.
+  - Files: extensions/arcee/models.ts, extensions/arcee/index.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/dd09e6fe40e10a37cebc55d2197641485b1d5f82
+- MEDIUM c97998c chore(channels): remove bluebubbles bundled surface
+  - Findings: Medium: Cron delivery regression test now registers `imessage:` as a provider prefix
+  - Summary: Found one concrete regression: a focused cron test now fails on current `main`.
+  - Commit: https://github.com/openclaw/openclaw/commit/c97998ce21f323f1c8d0d42cd39290eb73a00295
+- MEDIUM 5a4676b fix(byteplus): align Kimi catalog metadata
+  - Findings: Medium: `#54149` remains broken for Volcengine after being marked fixed
+  - Summary: The BytePlus catalog rows added by this commit look internally consistent and the focused provider tests pass. The regression is that the commit claims `Fixes #54149`, and that issue is now closed, but #54149 explicitly covers both BytePlus and Volcano Engine/Doubao while the Volcengine Kimi rows on current `main` still have the old `reasoning: false`/`maxTokens: 4096` metadata. citeturn8view0
+  - Files: CHANGELOG.md, extensions/byteplus/index.test.ts, extensions/byteplus/openclaw.plugin.json
+  - Commit: https://github.com/openclaw/openclaw/commit/5a4676bd6407bf39d7b39223319dba89af23b060
+- MEDIUM 3683559 feat: log discord voice transcripts
+  - Findings: Medium: Voice transcript preview can print unredacted secrets in verbose console logs
+  - Summary: Found one privacy regression: the new Discord voice transcript preview is sent through the verbose console path without applying OpenClaw’s documented sensitive-token redaction.
+  - Files: CHANGELOG.md, docs/channels/discord.md, extensions/discord/src/voice/manager.e2e.test.ts, extensions/discord/src/voice/segment.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/36835592df4c2e1b48db55be772bbc18cbdc6b84
+- MEDIUM f3c9203 fix(mistral): normalize structured completion content
+  - Findings: Medium: Structured thinking replay overwrites assistant answer content
+  - Summary: Found one replay regression in the fix. The streamed reply no longer persists `[object Object]`, but the new synthetic `thinkingSignature: "content"` collides with the OpenAI-compatible replay converter’s use of `thinkingSignature` as an outbound message field name.
+  - Files: CHANGELOG.md, src/agents/openai-transport-stream.test.ts, src/agents/openai-transport-stream.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/f3c9203631d39125027ef70c366657a3360ad476
+- MEDIUM e259751 feat(imessage): private-API support via imsg JSON-RPC [AI-assisted] (#78317)
+  - Findings: Medium: Disabled iMessage private actions can still execute through direct dispatch
+  - Summary: Found one actionable issue: the new iMessage action toggles are enforced only during message-tool discovery, not during action execution.
+  - Commit: https://github.com/openclaw/openclaw/commit/e259751ec9c9ed10b292ce3e0b987c4b18b19a0c
+- MEDIUM fe79d85 feat(imessage): add native imsg message actions
+  - Findings: Medium: iMessage group-management actions are enabled without sender authori
+  - Summary: Found one actionable security boundary issue: iMessage group-management actions are advertised and executable by default without an owner/trusted-sender check.
+  - Commit: https://github.com/openclaw/openclaw/commit/fe79d85ae0cba72a8931884f325091e88736a0a3
+
+## not-applicable: ci/docs/tests only (19)
+
+- MEDIUM 1c924c3 ci: link Mantis status reaction videos
+  - Findings: Medium: Workflow requires an optional desktop MP4 artifact
+  - Summary: Found one reliability regression in the Mantis workflow: the workflow now treats MP4 output as mandatory, but the command it calls still defines video as optional and can pass with only a screenshot.
+  - Files: .github/workflows/mantis-discord-status-reactions.yml, docs/concepts/mantis.md
+  - Commit: https://github.com/openclaw/openclaw/commit/1c924c3c126df2c93d286b8d3533183b25ead763
+- MEDIUM 5534233 test: tighten qa channel media context assertion
+  - Findings: Medium: Null guard removal breaks strict test typecheck
+  - Summary: Found one concrete regression: the test-only assertion change breaks the extension test typecheck lane on current `main`.
+  - Files: extensions/qa-channel/src/channel.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/5534233b0812aff56d62529b67e67cd8eadcf8a9
+- HIGH 07b972c test: tighten backup manifest callback assertions
+  - Findings: High: Backup test no longer typechecks
+  - Summary: Found one concrete regression: the test still passes at runtime, but the committed assertion rewrite breaks the core test TypeScript lane.
+  - Files: src/commands/backup.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/07b972ca077131820d2c2c8e81bccc35bb09d33a
+- MEDIUM b0f481b test: tighten web provider fast path assertions
+  - Findings: Medium: Test typecheck fails because helper excludes resolver `null` returns
+  - Summary: The test-only assertion tightening introduces TypeScript errors in the source-test type lane. Runtime Vitest passes, but `pnpm tsgo:test:src` now fails on all three calls to the new helper.
+  - Files: src/plugins/web-provider-public-artifacts.explicit-fast-path.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/b0f481bdf1e3eefa4b8d96457efc4e10c1fb17a8
+- MEDIUM 631c655 test: tighten memory watcher manager assertions
+  - Findings: Medium: CLI watcher test no longer typechecks
+  - Summary: Found one concrete test typecheck regression in the changed file. The runtime test still passes, but the extension test type lane fails on the newly changed assignment.
+  - Files: extensions/memory-core/src/memory/manager.watcher-config.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/631c655db77361dfa1fae3426a8693e7a26d4d11
+- MEDIUM 2844eb0 test: tighten openrouter video assertions
+  - Findings: Medium: New video assertions fail extension test typecheck
+  - Summary: The test-only commit breaks the extension test typecheck. Runtime behavior is unchanged, and the focused Vitest test still passes, but `tsgo:extensions:test` fails on the new direct `video.buffer.toString()` assertions because `GeneratedVideoAsset.buffer` is optional.
+  - Files: extensions/openrouter/video-generation-provider.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/2844eb0f7b4aaaaca1fdbb6a5e0b0084b60ca698
+- MEDIUM 17c57b7 test: tighten memory multimodal assertions
+  - Findings: Medium: Tightened multimodal assertion breaks package test typecheck
+  - Summary: Found one CI/typecheck regression in the tightened test assertion. The runtime test still passes, but the package test type gate fails on current `main`.
+  - Files: packages/memory-host-sdk/src/host/internal.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/17c57b7ba321653875bbdf40d3e8cd77c5f1002e
+- MEDIUM 67fe209 ci(mantis): add discord thread attachment workflow
+  - Findings: Medium: QA lanes pass a relative repo root after `pnpm --dir`, resolving to the wrong checkout | Low: Generic Mantis dispatcher mislabels the synthetic baseline
+  - Summary: Found two actionable issues in the new Mantis workflow wiring. The main one makes the new Discord thread attachment workflow fail when it reaches the QA run step.
+  - Files: .github/workflows/mantis-discord-thread-attachment.yml, .github/workflows/mantis-scenario.yml
+  - Commit: https://github.com/openclaw/openclaw/commit/67fe2097f387e782d91694c8d79840a27d17d1e9
+- MEDIUM 0022c28 ci(mantis): fix discord thread workflow paths
+  - Findings: Medium: Absolute QA output path makes the Mantis workflow fail before running
+  - Summary: Found one regression in the workflow path fix: the Mantis Discord thread attachment lane now passes an absolute `--output-dir`, but the QA CLI rejects absolute output directories before running the scenario.
+  - Files: .github/workflows/mantis-discord-thread-attachment.yml
+  - Commit: https://github.com/openclaw/openclaw/commit/0022c28b6d717d1a30dff6cfed3418cae7630cb3
+- MEDIUM 146ca95 test: dedupe openshell mirror absence assertions
+  - Findings: Medium: Symlink absence assertions now follow dangling symlinks
+  - Summary: Found one test regression. Current `extensions/openshell/src/mirror.ts` still skips copied symlinks, so I did not find a current runtime bug. The commit does weaken the security-relevant symlink absence assertions enough that a future symlink-copy regression could pass.
+  - Files: extensions/openshell/src/mirror.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/146ca9519efce17aceb4066885a1c198c789d219
+- MEDIUM 8294229 test: refresh fs-safe boundary expectations
+  - Findings: Medium: Archive test now expects behavior the locked fs-safe implementation rejects
+  - Summary: Found one commit-caused test regression. The archive symlink-rebind expectation was changed from rejection to success, but the current locked `@openclaw/fs-safe@0.1.1` implementation still rejects that path as `destination-symlink-traversal`.
+  - Files: extensions/memory-core/src/memory/manager.read-file.test.ts, extensions/zalouser/src/zalo-js.credentials.test.ts, src/agents/apply-patch.test.ts, src/agents/subagent-registry.persistence.test.ts, src/infra/archive.test.ts, src/plugins/contracts/extension-package-project-boundaries.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/82942295921eb98da0c697e046b409431e072c4d
+- MEDIUM 6ad601d test: align archive hardlink guard expectation
+  - Findings: Medium: archive hardlink guard test now expects the wrong error code
+  - Summary: The commit changes one archive hardlink test expectation, but the current locked archive implementation still returns the previous `destination-symlink-traversal` archive error. The focused test fails on current `main`.
+  - Files: src/infra/archive.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/6ad601d195beeadce2cffa2b93fbee0415f9e73f
+- MEDIUM 5d7262c test: align telegram reply assertions with streaming defaults
+  - Findings: Medium: Default Telegram streaming is no longer testing `replyToMode="all"` for long replies
+  - Summary: Found one concrete test gap: this commit makes the threaded-reply test opt out of Telegram’s default preview streaming path, but that default path drops reply metadata from follow-up chunks of long final replies.
+  - Files: extensions/telegram/src/bot.create-telegram-bot.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/5d7262c41033d8618593aa3b018e5b22aa8a841c
+- MEDIUM 95fd321 test: mock web provider fast-path artifacts
+  - Findings: Medium: Google web-search fast-path test no longer exercises the real artifact that is failing
+  - Summary: Found one actionable test-gap regression: the new fixture mock makes the explicit Google web-search artifact test pass while the real no-mock public-artifact path currently throws.
+  - Files: src/plugins/web-provider-public-artifacts.explicit-fast-path.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/95fd321b68f9e3588a42cade3230b82ef9ffd6e0
+- MEDIUM e59890e test: speed up gateway cron history case
+  - Findings: Medium: Direct cron helper type no longer includes the method the test calls
+  - Summary: Found one CI/typecheck regression in the test-only change. The targeted Vitest file passes, but the core test type lane now fails on the updated helper type.
+  - Files: src/gateway/server.cron.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/e59890eff0ff5ba123e56b7236d4f334214a2018
+- MEDIUM b165c0d fix(ci): restore main validation
+  - Findings: Medium: Prompt snapshots were updated from a Vitest-only tool set and fail the standalone generator check
+  - Summary: Found one CI/regression issue: the committed Codex prompt snapshots no longer match the standalone snapshot generator.
+  - Commit: https://github.com/openclaw/openclaw/commit/b165c0d10a8dd7ee6e4b816eb9475cc859a6ef82
+- HIGH 7ad53ce fix(ci): account for canvas a2ui deps
+  - Findings: High: Expanded JS/MJS Knip project glob breaks `check-dependencies`
+  - Summary: The dependency half of the Knip CI check is fixed for the A2UI packages, but the same config change now breaks the unused-file guard.
+  - Files: config/knip.config.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/7ad53cefeef963b204785c0214e037bc5c7f5e47
+- MEDIUM 01dd593 test: stabilize prompt snapshot plugin tools
+  - Findings: Medium: Duplicate `config` key breaks lint for the touched helper
+  - Summary: Found one actionable regression: the commit adds a second `config` key to the same `createOpenClawCodingTools` options object, which breaks the repo oxlint gate.
+  - Files: test/helpers/agents/happy-path-prompt-snapshots.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/01dd593cfd3dba32e4e88805072943fc4f453b62
+- MEDIUM fa8a855 ci(release): create GitHub release during publish
+  - Findings: Medium: GitHub Contents API returns empty content for the current changelog si
+  - Summary: Found two concrete release-publish regressions in the new GitHub release creation step. The first currently breaks release note extraction for the repo’s `CHANGELOG.md` si
+  - Files: .github/workflows/openclaw-release-publish.yml, docs/reference/RELEASING.md
+  - Commit: https://github.com/openclaw/openclaw/commit/fa8a85586c007d6741843e872e2a63cd25be2b29
+
+## not-applicable: no active local component match (7)
+
+- MEDIUM f126f72 fix(windows): resolve Gmail helper PATHEXT shims
+  - Findings: Medium: Windows Gmail watcher can leave `gog serve` running after shutdown | Medium: Resolver ignores PATH precedence by preferring any `.cmd` over earlier `.exe`
+  - Summary: Found two concrete Windows regressions in the new executable resolution paths: long-lived Gmail `.cmd` watcher processes are now tracked as `cmd.exe` without process-tree shutdown, and the resolver can promote a lower-priority `.cmd` from later in `PATH` over an earlier `.exe`.
+  - Files: CHANGELOG.md, src/hooks/gmail-ops.ts, src/hooks/gmail-setup-utils.ts, src/hooks/gmail-watcher.ts, src/infra/executable-path.test.ts, src/infra/executable-path.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/f126f72d6388be6b7dfa528fc5e4ab3f3c7d1710
+- MEDIUM ac75d6f fix(reply): render hydrated reply chain in inbound prompt
+  - Findings: Medium: Reply-chain metadata can leak into user-visible chat history
+  - Summary: Found one regression: the new reply-chain prompt block is not recogni
+  - Files: src/auto-reply/reply/inbound-meta.ts, src/auto-reply/reply/inbound-meta.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/ac75d6f76e2f11e5885c2797a62f118088c14b97
+- MEDIUM e45b9d7 fix(cli): clarify remaining required options
+  - Findings: Medium: Changed CLI diagnostics leave focused CLI tests red | Medium: Devices token diagnostic test still expects the old required-option text
+  - Summary: The runtime changes are message-only, but two adjacent CLI tests still assert the old wording. Targeted test runs fail on current `main`.
+  - Commit: https://github.com/openclaw/openclaw/commit/e45b9d7a748bfe397a0ea7fd51ea46c11297218c
+- MEDIUM a1b49c4 fix: stabilize google meet twilio joins
+  - Findings: Medium: Intro speech can fire before the new default DTMF wait finishes
+  - Summary: Found one actionable timing regression in the Google Meet Twilio path. The commit adds a 12-second PIN-derived DTMF wait, but the intro speech request still fires after only the fixed post-DTMF speech delay from `voicecall.start`, not after the pre-connect DTMF TwiML has actually completed.
+  - Commit: https://github.com/openclaw/openclaw/commit/a1b49c4b20027c42abbfeeeafbc34fa4379d3ef0
+- MEDIUM c385361 ci: add runner fallback timing telemetry
+  - Findings: Medium: Changed CI helper scripts fail oxlint
+  - Summary: Found one CI-blocking regression: the commit adds/changes scripts that fail the repo lint gate.
+  - Files: .github/workflows/ci.yml, docs/ci.md, scripts/ci-run-timings.mjs, scripts/ci-runner-labels.mjs, scripts/test-projects.test-support.mjs, test/scripts/ci-runner-labels.test.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/c3853611eefd7106e902b5bd87a1b3d3af769d94
+- MEDIUM a852619 fix(cli): fall back to sips for HEIC infer inputs
+  - Findings: Medium: macOS HEIC fallback can bypass the input pixel limit
+  - Summary: Found one actionable regression risk in the new macOS `sips` fallback: it can bypass the existing HEIC image pixel budget when Sharp fails before conversion.
+  - Files: CHANGELOG.md, src/media/image-ops.input-guard.test.ts, src/media/image-ops.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/a85261932e89aa93db3e45694fb94b3754b95176
+- MEDIUM dd0a9bf lint: replace raw socket guard with codeql
+  - Findings: Medium: Raw socket allowlist now permits new callsites inside allowed functions
+  - Summary: Found one still-present guard regression in the CodeQL replacement. The old raw-socket guard allowed exact callsites; the new query allows entire owner functions, so future raw socket egress added inside an already-allowed function can land unclassified.
+  - Commit: https://github.com/openclaw/openclaw/commit/dd0a9bf8693083841cb195dfdf15e87a2f371b4b
+
+## review-needed: runtime-adjacent but no active local component match (1)
+
+- MEDIUM 3af8148 fix(google): retry stalled Gemini first response (#79668)
+  - Findings: Medium: Header-only SSE stalls can be treated as an empty successful response instead of triggering the retry
+  - Summary: Found one concrete retry-path bug. The new Gemini first-response retry handles the case where `fetch()` itself stalls, but can miss the case where Google returns SSE headers and then stalls before the first event.
+  - Files: CHANGELOG.md, extensions/google/gemini-cli-provider.ts, extensions/google/index.test.ts, extensions/google/provider-hooks.ts, extensions/google/transport-stream.test.ts, extensions/google/transport-stream.ts
+  - Commit: https://github.com/openclaw/openclaw/commit/3af81481b4833d5331710bca6c06474ce12c2ef9
+
