@@ -570,7 +570,7 @@ function isRetryableLlmError(err) {
     err?.cause?.code,
     String(err || ""),
   ].filter(Boolean).join(" ");
-  return /connection|timeout|timed out|socket|econn|fetch failed|network|empty content|terminated|aborted|und_err/i.test(text);
+  return /connection|timeout|timedout|timed out|etimedout|socket|econn|fetch failed|network|empty content|terminated|aborted|und_err/i.test(text);
 }
 
 function isKimiCoding(llmCfg) {

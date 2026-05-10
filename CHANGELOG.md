@@ -1,3 +1,12 @@
+## [2.1.32] - 2026-05-10
+
+### Fixed
+- Explicitly match `ETIMEDOUT`/`timedout` Kimi stream read failures as retryable maintainer LLM errors.
+
+### Verified
+- Live `--backfill --agent main --max 2 --batch-size 2` completed successfully after the retry matcher update.
+- Integrated-memory state reached 32 composite backfill keys.
+
 ## [2.1.31] - 2026-05-10
 
 ### Fixed
