@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Latest Release](https://img.shields.io/github/v/tag/Cyb3rb1ade/openclaw-plur1bus-memory)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/tags)
+[![Latest Release](https://img.shields.io/badge/release-v2.1.31-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v2.1.31)
 
 ---
 
