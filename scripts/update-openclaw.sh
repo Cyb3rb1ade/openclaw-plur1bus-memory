@@ -80,6 +80,7 @@ validate_openclaw_compat_patch() {
 
     case "$target" in
         2026.5.3-1) compat_patch="/root/openclaw-memory-system/patches/apply-openclaw-20260503-compat.sh" ;;
+        2026.5.10-beta.1) compat_patch="/root/openclaw-memory-system/patches/apply-openclaw-20260510-beta1-compat.sh" ;;
         2026.5.4|2026.5.5|2026.5.6|2026.5.7) compat_patch="/root/openclaw-memory-system/patches/apply-openclaw-20260504-compat.sh" ;;
         *)
             info "Kein lokaler Compat-Dry-Run für Zielversion $target konfiguriert"
@@ -351,7 +352,7 @@ if [[ "$CHECK_ONLY" != "1" ]]; then
     # memory-lancedb-stock hatte ebenfalls ID "memory-lancedb" → Duplicate-Plugin-Warning.
     # Fix: openclaw.plugin.json in memory-lancedb-stock auf ID "memory-lancedb-stock" setzen.
     STOCK_MANIFEST="/root/.openclaw/extensions/memory-lancedb-stock/openclaw.plugin.json"
-    if [[ "$OPENCLAW_UPDATE_TARGET" == "2026.5.3-1" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.4" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.5" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.6" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.7" ]]; then
+    if [[ "$OPENCLAW_UPDATE_TARGET" == "2026.5.3-1" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.4" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.5" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.6" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.7" || "$OPENCLAW_UPDATE_TARGET" == "2026.5.10-beta.1" ]]; then
         cleanup_memory_lancedb_stock_manifest_for_20260503 "$OPENCLAW_UPDATE_TARGET"
         ensure_20260503_plugin_contracts_and_runtime_stubs "$OPENCLAW_UPDATE_TARGET"
         cleanup_stale_discord_channel_for_20260503 "$OPENCLAW_UPDATE_TARGET"
@@ -1611,7 +1612,7 @@ fi
 	with open(path) as f: d = json.load(f)
 	p = d.setdefault('models', {}).setdefault('providers', {}).setdefault('kimi-coding', {})
 	p['baseUrl'] = 'https://api.kimi.com/coding/'
-	p['headers'] = {**(p.get('headers') or {}), 'User-Agent': (p.get('headers') or {}).get('User-Agent') or 'claude-code/0.1.0'}
+	p['headers'] = {**(p.get('headers') or {}), 'User-Agent': (p.get('headers') or {}).get('User-Agent') or 'claude-code/1.0'}
 	with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
 	"
 	        ok "  → kimi-coding anthropic baseUrl auf https://api.kimi.com/coding/ gesetzt"
@@ -1625,7 +1626,7 @@ fi
 	with open(path) as f: d = json.load(f)
 	p = d.setdefault('models', {}).setdefault('providers', {}).setdefault('kimi-coding', {})
 	p['baseUrl'] = 'https://api.kimi.com/coding/v1'
-	p['headers'] = {**(p.get('headers') or {}), 'User-Agent': (p.get('headers') or {}).get('User-Agent') or 'claude-code/0.1.0'}
+	p['headers'] = {**(p.get('headers') or {}), 'User-Agent': (p.get('headers') or {}).get('User-Agent') or 'claude-code/1.0'}
 	with open(path, 'w') as f: json.dump(d, f, indent=2, ensure_ascii=False); f.write('\n')
 	"
 	        ok "  → kimi-coding openai baseUrl auf https://api.kimi.com/coding/v1 gesetzt"
