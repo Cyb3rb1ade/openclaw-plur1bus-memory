@@ -11,7 +11,7 @@
  *         → Top-N Result-Pakete
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { distanceToScore } from "./score.js";
@@ -100,7 +100,10 @@ function writeKnowledgeCache(workspaceDir, cache) {
   try {
     const dir = join(workspaceDir, ".adaptive-learning");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, KNOWLEDGE_CACHE_FILE), JSON.stringify(cache), "utf8");
+    const p = join(dir, KNOWLEDGE_CACHE_FILE);
+    const tmp = p + ".tmp";
+    writeFileSync(tmp, JSON.stringify(cache), "utf8");
+    renameSync(tmp, p);
   } catch (_) {}
 }
 

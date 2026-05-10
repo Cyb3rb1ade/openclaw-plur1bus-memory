@@ -54,5 +54,8 @@ export function appendDestructiveOpLog(workspaceDir, entry) {
     const dir = join(workspaceDir, ".adaptive-learning");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     appendFileSync(join(dir, "destructive-ops.jsonl"), JSON.stringify(entry) + "\n", "utf8");
-  } catch (_) { /* non-blocking */ }
+  } catch (e) {
+    // Non-blocking but visible — audit-log gaps must not be silent
+    console.warn(`[memory-lancedb-namespaced] destructive-ops log write failed: ${e?.message}`);
+  }
 }
