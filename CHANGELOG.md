@@ -1,3 +1,13 @@
+## [2.1.31] - 2026-05-10
+
+### Fixed
+- Treat Kimi/undici stream `terminated`, abort, socket, and `UND_ERR_*` failures as retryable maintainer LLM errors.
+- Added Kimi stream read diagnostics with event count, finish reason, reasoning character count, and partial content length before retrying.
+
+### Verified
+- Live `--backfill --agent main --max 4 --batch-size 2` completed successfully after the retry hardening.
+- Integrated-memory state reached 20 composite backfill keys and `--check --agent main` reported `covered by id-state: 20`.
+
 ## [2.1.30] - 2026-05-10
 
 ### Fixed

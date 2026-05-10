@@ -562,7 +562,15 @@ function sleep(ms) {
 }
 
 function isRetryableLlmError(err) {
-  return /connection|timeout|timed out|socket|econn|fetch failed|network|empty content/i.test(String(err?.message || err));
+  const text = [
+    err?.message,
+    err?.code,
+    err?.name,
+    err?.cause?.message,
+    err?.cause?.code,
+    String(err || ""),
+  ].filter(Boolean).join(" ");
+  return /connection|timeout|timed out|socket|econn|fetch failed|network|empty content|terminated|aborted|und_err/i.test(text);
 }
 
 function isKimiCoding(llmCfg) {
@@ -617,33 +625,37 @@ async function callKimiFetchStream(body, llmCfg) {
   let finishReason = null;
   let events = 0;
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) >= 0) {
-      const event = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 2);
-      for (const line of event.split("\n")) {
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === "[DONE]") continue;
-        events++;
-        let chunk = null;
-        try {
-          chunk = JSON.parse(data);
-        } catch (err) {
-          throw new Error(`Kimi stream returned invalid JSON event (${String(err?.message || err)})`);
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) >= 0) {
+        const event = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 2);
+        for (const line of event.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (!data || data === "[DONE]") continue;
+          events++;
+          let chunk = null;
+          try {
+            chunk = JSON.parse(data);
+          } catch (err) {
+            throw new Error(`Kimi stream returned invalid JSON event (${String(err?.message || err)})`);
+          }
+          const choice = chunk.choices?.[0];
+          if (choice?.finish_reason) finishReason = choice.finish_reason;
+          const delta = choice?.delta || {};
+          const reasoning = delta.reasoning_content ?? delta.reasoningContent;
+          if (reasoning) reasoningChars += String(reasoning).length;
+          if (delta.content) content += delta.content;
         }
-        const choice = chunk.choices?.[0];
-        if (choice?.finish_reason) finishReason = choice.finish_reason;
-        const delta = choice?.delta || {};
-        const reasoning = delta.reasoning_content ?? delta.reasoningContent;
-        if (reasoning) reasoningChars += String(reasoning).length;
-        if (delta.content) content += delta.content;
       }
     }
+  } catch (err) {
+    throw new Error(`Kimi stream read failed (${llmDescriptor(llmCfg)}; events=${events}; finish_reason=${finishReason || "unknown"}; reasoning_chars=${reasoningChars}; content_chars=${content.length}; cause=${err?.cause?.code || err?.code || err?.message || err})`);
   }
 
   const trimmed = content.trim();
