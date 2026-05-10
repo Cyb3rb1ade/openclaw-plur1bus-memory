@@ -49,7 +49,12 @@ async function getOpenAI() {
 }
 
 function loadConfig() {
-  const cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  let cfg;
+  try {
+    cfg = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  } catch (e) {
+    throw new Error(`loadConfig: cannot parse ${CONFIG_PATH}: ${e.message}`);
+  }
   const plugin = cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.config || {};
   let baseDbPath = plugin.baseDbPath || join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
   if (baseDbPath.startsWith("~/")) baseDbPath = join(homedir(), baseDbPath.slice(2));
@@ -92,9 +97,15 @@ function normalizePath(p) {
 
 function workspaceDirFor(agentId, cfg) {
   const ag = cfg.agents.find(a => a.id === agentId);
-  if (ag?.workspace) return normalizePath(ag.workspace);
-  if (ag) return normalizePath(cfg.raw?.agents?.defaults?.workspace || join(homedir(), ".openclaw", "workspace"));
-  return normalizePath(join(homedir(), ".openclaw", `workspace-${agentId}`));
+  let resolved;
+  if (ag?.workspace) resolved = normalizePath(ag.workspace);
+  else if (ag) resolved = normalizePath(cfg.raw?.agents?.defaults?.workspace || join(homedir(), ".openclaw", "workspace"));
+  else resolved = normalizePath(join(homedir(), ".openclaw", `workspace-${agentId}`));
+  const home = homedir();
+  if (!resolved.startsWith(home + "/") && resolved !== home) {
+    throw new Error(`workspaceDirFor: "${agentId}" resolved outside home dir: ${resolved}`);
+  }
+  return resolved;
 }
 
 function hyphenCount(s) {
@@ -237,7 +248,6 @@ async function cmdStats(args) {
   for (const ag of agents) {
     const tbl = await openTable(cfg.baseDbPath, ag);
     if (!tbl) { console.log(`${ag.padEnd(35)} ${"---".padStart(10)} (no table)`); continue; }
-    const rows = await tbl.toArrow ? null : null;
     const df = await (await tbl.query()).toArray();
     const sz = dirSize(join(cfg.baseDbPath, ag));
     const hi = df.filter(r => (r.importance ?? 0) >= 0.85).length;
@@ -260,12 +270,14 @@ async function cmdDupes(args) {
   const threshold = parseFloat(args[1]) || 0.85;
   const agents = discoverAgents(cfg.baseDbPath, agentFilter);
   console.log(`\nDuplicate clusters per agent (Jaccard ≥ ${threshold}):\n`);
+  const ROW_CAP = 5000;
   for (const ag of agents) {
     const tbl = await openTable(cfg.baseDbPath, ag);
     if (!tbl) continue;
-    const rows = await (await tbl.query()).toArray();
-    if (rows.length < 2) continue;
-    // Jaccard auf text/summary — billig genug für tausende Memories, skaliert O(n²).
+    const allRows = await (await tbl.query()).toArray();
+    if (allRows.length < 2) continue;
+    const rows = allRows.length > ROW_CAP ? allRows.slice(0, ROW_CAP) : allRows;
+    if (allRows.length > ROW_CAP) console.log(`  ${ag}: capped at ${ROW_CAP}/${allRows.length} rows for O(n²) Jaccard`);
     const clusters = [];
     const seen = new Set();
     for (let i = 0; i < rows.length; i++) {
@@ -382,12 +394,13 @@ async function cmdEval(args) {
     process.exit(1);
   }
   const evalData = JSON.parse(readFileSync(activePath, "utf8"));
-  const apiKey = cfg.plugin?.embedding?.apiKey;
+  let apiKey = cfg.plugin?.embedding?.apiKey;
+  if (apiKey?.startsWith("${")) apiKey = process.env[apiKey.replace(/^\$\{|}$/g, "")] || "";
   const model = cfg.plugin?.embedding?.model || "text-embedding-3-small";
   const dimensions = cfg.plugin?.embedding?.dimensions;
 
-  if (!apiKey || apiKey.startsWith("${")) {
-    console.error("API-Key (OPENAI/OPENROUTER) nicht direkt in openclaw.json — eval braucht echten Key.");
+  if (!apiKey) {
+    console.error("API-Key (OPENAI/OPENROUTER) fehlt — stelle sicher dass openclaw.json einen direkten Key oder eine gesetzte ENV-Variable enthält.");
     process.exit(1);
   }
 

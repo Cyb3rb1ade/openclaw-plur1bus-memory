@@ -1,3 +1,14 @@
+## [2.1.34] - 2026-05-11
+
+### Fixed
+- **Reliability:** `loadConfig()` in `scripts/memory-doctor.mjs` now wraps JSON.parse in try/catch — malformed `openclaw.json` produces a clear error instead of an uncaught exception.
+- **Security:** `workspaceDirFor()` in `scripts/memory-doctor.mjs` validates that the resolved workspace path stays within `$HOME` — prevents path-traversal via crafted agent workspace config.
+- **Correctness:** Removed dead code `const rows = await tbl.toArrow ? null : null;` in `cmdStats()` (unreachable ternary, result was never used).
+- **Performance:** `cmdDupes()` caps row scan at 5 000 entries and emits a warning when truncating — prevents O(n²) Jaccard hang on large DBs.
+- **Correctness:** `cmdEval()` now resolves `${ENV_VAR}` patterns in `embedding.apiKey` (matching `provider-check` behavior) — eval no longer fails when the key is stored as an env reference.
+- **Security:** `write_target_file()` in `scripts/install-memory-system.sh` escapes the remote path via `printf '%q'` — prevents shell injection if path contains single-quotes. Local branch switched from `echo` to `printf '%s'` to avoid backslash/`-n` interpretation.
+- **Correctness:** `run_target()` local branch changed from `bash -c "$*"` to `bash -c "$1"` — `$*` joined multi-word args into one string causing word-splitting; `$1` correctly forwards the single command string callers always pass.
+
 ## [2.1.33] - 2026-05-11
 
 ### Fixed

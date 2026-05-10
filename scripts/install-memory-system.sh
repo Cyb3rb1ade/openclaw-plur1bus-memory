@@ -157,7 +157,7 @@ run_target() {
   if [[ "$IS_REMOTE" == "1" ]]; then
     ssh "$SSH_HOST" "$@"
   else
-    bash -c "$*"
+    bash -c "$1"
   fi
 }
 
@@ -183,9 +183,11 @@ write_target_file() {
     return 0
   fi
   if [[ "$IS_REMOTE" == "1" ]]; then
-    ssh "$SSH_HOST" "cat > '$path'" <<< "$content"
+    local escaped_path
+    escaped_path=$(printf '%q' "$path")
+    ssh "$SSH_HOST" "cat > $escaped_path" <<< "$content"
   else
-    echo "$content" > "$path"
+    printf '%s' "$content" > "$path"
   fi
 }
 

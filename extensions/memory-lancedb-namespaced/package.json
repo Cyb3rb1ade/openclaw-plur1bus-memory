@@ -1,6 +1,6 @@
 {
   "name": "memory-lancedb-namespaced",
-  "version": "3.0.0-neo.1",
+  "version": "3.0.0-neo.2",
   "description": "PLUR1BUS neo-arch cognitive memory augment for OpenClaw",
   "type": "module",
   "openclaw": {
