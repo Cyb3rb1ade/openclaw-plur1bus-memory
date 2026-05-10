@@ -11,7 +11,7 @@
 
 Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)-Agenten mit **vier Memory-Schichten**, **nativem Dreaming**, **Canonical-First Recall** und voller **Provenance**.
 
-**Aktuelle Version:** `2.1.28` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
+**Aktuelle Version:** `2.1.29` — OpenClaw `2026.4.29` ist die Mindestversion; Installer erhält bestehende Provider/Modelle oder konfiguriert Fresh-Installs explizit per User-Entscheidung. Der Haupt-LLM-Provider von OpenClaw ist frei wählbar.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
@@ -54,6 +54,7 @@ scripts/
   bump-version.sh              ← Synchronisiert Versions in Manifest + CHANGELOG
   memory-gc.mjs                ← TTL-Garbage-Collector (täglich via Cron, 03:00)
   memory-doctor.mjs            ← Health-CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
+  maintain-knowledge-md.mjs    ← Workspace-scoped KNOWLEDGE.md Check/Fresh/Backfill-Maintainer
   recall-eval.sample.json      ← Vorlage für recall-eval.json (echte Test-Datei in .gitignore)
   auto-capture-lancedb.mjs     ← Cron-Fallback für Auto-Capture (alle 5 Min)
   embed-promoted-memories.mjs  ← Bridge Dreaming-Promotionen → LanceDB (alle 30 Min)
@@ -279,7 +280,7 @@ Built and battle-tested in production across 38 agents over several months.
 
 This package solves the core problem of LLM agents: **amnesia between sessions.**
 
-**Current version:** `2.1.28` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
+**Current version:** `2.1.29` — OpenClaw `2026.4.29` is the minimum version; the installer preserves existing providers/models or configures fresh installs by explicit user choice. OpenClaw's primary chat LLM provider is not constrained by plur1bus.
 
 **Minimum version:** OpenClaw `2026.4.29` or newer. Older versions are not supported by the current installer.
 
@@ -314,6 +315,7 @@ scripts/
   bump-version.sh              ← Synchronizes versions in manifest + CHANGELOG
   memory-gc.mjs                ← TTL garbage collector (daily via cron at 03:00)
   memory-doctor.mjs            ← Health CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
+  maintain-knowledge-md.mjs    ← Workspace-scoped KNOWLEDGE.md check/fresh/backfill maintainer
   recall-eval.sample.json      ← Template for recall-eval.json (real test file in .gitignore)
   auto-capture-lancedb.mjs     ← Cron fallback for auto-capture (every 5 minutes)
   embed-promoted-memories.mjs  ← Bridge dreaming promotions → LanceDB (every 30 min)
