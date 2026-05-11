@@ -5,7 +5,9 @@ Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
 **Aktuelle Version:** `3.0.0-beta.2` — Neo-Arch-Beta fuer OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
 
-**Mindestversion:** OpenClaw `2026.4.29` oder neuer.
+**Mindestversion:** OpenClaw `2026.5.10-beta.5` oder neuer. PLUR1BUS v3 setzt
+den OpenClaw-native Memory-Stack dieser Beta-Linie voraus; ältere OpenClaw
+Versionen bleiben beim v2.1.x-Zweig.
 
 ---
 

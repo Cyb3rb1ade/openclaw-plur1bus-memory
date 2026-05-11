@@ -16,9 +16,14 @@ Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen
 
 **Aktuelle Version:** `3.0.0-beta.2`<br>
 **Branch:** `neo-arch`<br>
-**Mindestversion:** OpenClaw `2026.4.29` oder neuer<br>
+**Mindestversion:** OpenClaw `2026.5.10-beta.5` oder neuer<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
 `systemctl`-Recovery-Hack, kein root-/host-cron als Primärpfad.
+
+**Kompatibilitätsgrenze:** PLUR1BUS `3.0.0-beta.2` und neuer setzt den
+OpenClaw-native Memory-Stack aus `2026.5.10-beta.5` voraus. Ältere OpenClaw
+Versionen werden fuer v3 nicht unterstützt; für diese Installationen bleibt
+PLUR1BUS v2.1.x der kompatible Zweig.
 
 ## Was v3 leistet
 
@@ -206,13 +211,14 @@ Danach im Workspace:
 v3 ist ein additiver In-Place-Upgrade, kein Reimport und kein Ersatz fuer
 `memory-core`.
 
-1. `neo-arch` auschecken.
-2. Vorher `openclaw plugins doctor` und `node scripts/memory-doctor.mjs provider-check` ausführen.
-3. Installer zuerst mit `--dry-run` laufen lassen.
-4. Bestehenden `baseDbPath`, Embedding-Modell und Dimensionen beibehalten.
-5. Hook-Rechte setzen: `allowConversationAccess`, `allowPromptInjection`, Timeouts.
-6. Gateway neu starten.
-7. Pro produktivem Workspace `/plur1bus doctor`, `memory_recall`, `memory_search corpus=all` und einen echten `agent_end`-Capture prüfen.
+1. OpenClaw zuerst auf `2026.5.10-beta.5` oder neuer aktualisieren.
+2. `neo-arch` auschecken.
+3. Vorher `openclaw plugins doctor` und `node scripts/memory-doctor.mjs provider-check` ausführen.
+4. Installer zuerst mit `--dry-run` laufen lassen.
+5. Bestehenden `baseDbPath`, Embedding-Modell und Dimensionen beibehalten.
+6. Hook-Rechte setzen: `allowConversationAccess`, `allowPromptInjection`, Timeouts.
+7. Gateway neu starten.
+8. Pro produktivem Workspace `/plur1bus doctor`, `memory_recall`, `memory_search corpus=all` und einen echten `agent_end`-Capture prüfen.
 
 Bestehende v2-LanceDBs bleiben lesbar, solange `baseDbPath`, Embedding-Modell
 und Dimensionen kompatibel bleiben.
@@ -278,7 +284,7 @@ embeddings and dreaming through native plugin APIs.
 
 **Current version:** `3.0.0-beta.2`<br>
 **Branch:** `neo-arch`<br>
-**Minimum OpenClaw:** `2026.4.29`<br>
+**Minimum OpenClaw:** `2026.5.10-beta.5`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
 recovery hack and no host cron as the primary runtime path.
 
@@ -287,5 +293,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Existing v2 LanceDB data remains readable when `baseDbPath`, embedding model
-and vector dimensions stay compatible.
+PLUR1BUS `3.0.0-beta.2` and newer requires the OpenClaw-native memory stack
+from OpenClaw `2026.5.10-beta.5` or newer. Existing v2 LanceDB data remains
+readable when `baseDbPath`, embedding model and vector dimensions stay
+compatible.

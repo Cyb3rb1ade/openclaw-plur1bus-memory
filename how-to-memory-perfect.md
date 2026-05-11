@@ -13,6 +13,9 @@ entfernt.
 
 PLUR1BUS v3 ist ein kognitiver Memory-Layer fuer OpenClaw:
 
+- PLUR1BUS `3.0.0-beta.2` und neuer benötigt OpenClaw `2026.5.10-beta.5`
+  oder neuer. Ältere OpenClaw-Versionen haben nicht den vorausgesetzten
+  OpenClaw-native Memory-Stack fuer v3.
 - `memory-core` bleibt der exklusive OpenClaw-Memory-Slot.
 - `memory-lancedb-namespaced` läuft default als additives Augment.
 - Die stabilen Tools bleiben erhalten: `memory_store`, `memory_recall`,
@@ -647,32 +650,38 @@ Ja und nein:
    node scripts/memory-doctor.mjs provider-check
    ```
 
-2. Snapshot per Installer-Dryrun:
+2. OpenClaw aktualisieren:
+
+   PLUR1BUS v3 funktioniert nur mit OpenClaw `2026.5.10-beta.5` oder neuer.
+   Vor dem Plugin-Upgrade muss die OpenClaw-Instanz auf diese Version oder eine
+   neuere Version aktualisiert sein.
+
+3. Snapshot per Installer-Dryrun:
 
    ```bash
    ./scripts/install-memory-system.sh --dry-run /pfad/zu/.openclaw
    ```
 
-3. Installation:
+4. Installation:
 
    ```bash
    ./scripts/install-memory-system.sh /pfad/zu/.openclaw
    ```
 
-4. Config beibehalten:
+5. Config beibehalten:
 
    - `baseDbPath` aus v2 übernehmen.
    - Embedding `model` und `dimensions` unverändert lassen.
    - Reranker-Key optional setzen.
 
-5. Hook-Rechte aktivieren:
+6. Hook-Rechte aktivieren:
 
    - `hooks.allowConversationAccess: true`
    - `hooks.allowPromptInjection: true`
    - `hooks.timeouts.before_prompt_build: 90000`
    - `hooks.timeouts.agent_end: 60000`
 
-6. Workspace fuer Workspace initialisieren:
+7. Workspace fuer Workspace initialisieren:
 
    - kurze echte Agent-Interaktion laufen lassen
    - `/plur1bus doctor`
@@ -680,7 +689,7 @@ Ja und nein:
    - `memory_search corpus=all`
    - `knowledge_update` fuer eine stabile Entscheidung
 
-7. Neue Session starten und Auto-Recall prüfen.
+8. Neue Session starten und Auto-Recall prüfen.
 
 ### Rollback
 
