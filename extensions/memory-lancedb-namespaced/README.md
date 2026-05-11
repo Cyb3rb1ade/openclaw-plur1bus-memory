@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `2.1.24` — getestet mit OpenClaw `2026.4.29` und lokal validiert mit OpenClaw `2026.5.4`. Die Kompatibilität umfasst versionierte 4.29/5.3/5.4-Patches, `before_prompt_build` Auto-Recall, vollstaendige Tool-Contract-Metadaten fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, updatefeste Tool-Contract-Validierung fuer `adaptive-learning-loop`, robuste Journal-/Plugin-List-Checks, einen Installer, der bestehende Provider/Modelle respektiert, provider-neutrale optionale LLM-Konfiguration, ActiveMemory-Lane-Isolation, session-isolierte Embedded-Lanes, Startup-Grace, due-aware und gestaffelte Startup-/Interval-/Commitment-Heartbeats, Subagent-Lane-Isolation, Subagent-Completion-Announce-Backpressure, Runtime-Deps-Race-Guard gegen parallele `npm install`-Rennen, echte Silent-Replies, Telegram-Direct-/Group-Reply-Delivery und schema-sichere provider-spezifische Modell-Konfiguration.
+**Aktuelle Version:** `3.0.0-beta.2` — Neo-Arch-Beta fuer OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer.
 
