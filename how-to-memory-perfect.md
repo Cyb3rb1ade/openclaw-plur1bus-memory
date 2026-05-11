@@ -1185,7 +1185,7 @@ table.to_pandas()
 - [ ] In `openclaw.json` aktivieren mit Embedding-Konfiguration (API-Key, Modell, Dimensionen)
 - [ ] `baseDbPath` festlegen (idealerweise außerhalb des Workspace, in einem stabilen Pfad)
 - [ ] `autoRecall: true` setzen
-- [ ] `autoCapture` je nach Präferenz — für Anfänger `false`, dann über SOUL.md manuell instruieren
+- [ ] `autoCapture: true` setzen oder bewusst `autoCapture:false` nur als Opt-out fuer automatische Hook-Capture verwenden
 - [ ] Re-Ranker konfigurieren: Cohere API Key, `reranker`-Block in Plugin-Config
 - [ ] LLM-Merging aktivieren: `merging.enabled: true`, explizites Modell + API-Key; `disableThinking: true` nur bei Reasoning-Modellen, die es unterstützen
 - [ ] Schicht 1.5 aktivieren: `schicht15.enabled: true`, explizites Modell + API-Key oder bewusst `merging.model` erben
@@ -1205,6 +1205,113 @@ table.to_pandas()
 *Lokale Schnell-Referenz (deployment-spezifisch): `how-to-memory.md`*
 *Plugin-README: `extensions/memory-lancedb-namespaced/README.md`*
 *Workspace-Indexer Status: `openclaw memory status --deep`*
+
+---
+
+## Migration: PLUR1BUS v2.1.x → Neo-Arch v3
+
+### Grundsatz
+
+Neo-Arch v3 ist kein Ersatz fuer `memory-core` und kein Reimport der alten Daten. Es ist ein additiver OpenClaw-nativer Augment-Layer:
+
+- `memory-core` bleibt der OpenClaw Memory-Slot.
+- `memory-lancedb-namespaced` bleibt der PLUR1BUS-LanceDB-Speicher mit den stabilen Tools `memory_store`, `memory_recall`, `memory_forget`, `knowledge_update`.
+- Neo-Arch schreibt zusaetzlich workspace-scoped Daten: Turn Journal, MemoryCandidates, Reaction Ledger, BehaviorCards, Embedding Queue, Hook-State und Curation-Status.
+- Bestehende v2-LanceDBs bleiben lesbar, solange `baseDbPath`, Embedding-Modell und Dimensionen kompatibel bleiben.
+
+### Muss v3 in jedem Workspace eingerichtet werden?
+
+Ja und nein:
+
+- **Nein fuer API-Keys und Plugin-Installation.** Die Provider-Konfiguration liegt zentral in `openclaw.json` unter `plugins.entries.memory-lancedb-namespaced.config`. Ein Embedding-Key und ein optionaler Reranker-Key reichen fuer die OpenClaw-Instanz.
+- **Ja fuer Workspace-Wahrheit.** Jeder Workspace bekommt eigene Neo-Dateien und ein eigenes `memory/KNOWLEDGE.md`. Das ist gewollt: Projektwissen, BehaviorCards und Reaction-Ledger duerfen nicht zwischen Workspaces leaken.
+- **Ja fuer Smoke-Tests.** Nach dem Upgrade sollte jeder produktive Workspace einmal durch `memory_recall`, `memory_search corpus=all`, `knowledge_update` oder `/plur1bus doctor` geprueft werden.
+
+### Wo liegen API-Keys fuer Embedding und Reranking?
+
+In `openclaw.json`, nicht in jedem Workspace:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-lancedb-namespaced": {
+        "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true,
+          "allowPromptInjection": true,
+          "timeouts": {
+            "before_prompt_build": 90000,
+            "agent_end": 60000
+          }
+        },
+        "config": {
+          "embedding": {
+            "apiKey": "${OPENAI_API_KEY}",
+            "model": "text-embedding-3-large",
+            "dimensions": 3072
+          },
+          "reranker": {
+            "enabled": true,
+            "apiKey": "${COHERE_API_KEY}",
+            "model": "rerank-v3.5",
+            "candidates": 20
+          },
+          "baseDbPath": "~/.openclaw/memory/lancedb-namespaced",
+          "autoCapture": true,
+          "autoRecall": true
+        }
+      }
+    }
+  }
+}
+```
+
+Empfohlen ist `${ENV_VAR}`-Syntax. Der Installer schreibt dann keine Secrets in die Workspace-Dateien. Wichtig: `dimensions` muss zur bestehenden LanceDB passen. Wer von `text-embedding-3-large` 3072d auf ein anderes Embedding-Modell wechselt, braucht einen neuen `baseDbPath` oder eine Fresh-DB-Migration.
+
+### Migrationsszenario
+
+1. **Ist-Zustand sichern**
+   - `git status --short --branch` im PLUR1BUS-Repo pruefen.
+   - `openclaw --version` und `openclaw plugins doctor` notieren.
+   - `node scripts/memory-doctor.mjs provider-check` ausfuehren.
+
+2. **Snapshot**
+   - `./scripts/install-memory-system.sh --dry-run /pfad/zu/.openclaw`
+   - Danach ohne `--dry-run`; der Installer erstellt vor der Installation einen LanceDB-Snapshot.
+
+3. **Config beibehalten**
+   - `baseDbPath` aus v2 uebernehmen.
+   - Embedding `model` und `dimensions` unveraendert lassen.
+   - Reranker-Key optional setzen; ohne Cohere-Key bleibt Vector-only Recall aktiv.
+
+4. **Neo-Hooks aktivieren**
+   - `hooks.allowConversationAccess: true`
+   - `hooks.allowPromptInjection: true`
+   - `hooks.timeouts.before_prompt_build: 90000`
+   - `hooks.timeouts.agent_end: 60000`
+
+5. **Workspace fuer Workspace initialisieren**
+   - In jedem produktiven Workspace eine kurze echte Agent-Interaktion laufen lassen, damit `agent_end` das Turn Journal initialisiert.
+   - `/plur1bus doctor` im Workspace ausfuehren.
+   - Falls `memory/KNOWLEDGE.md` fehlt: eine stabile Entscheidung per `knowledge_update` anlegen oder den Maintainer/Backfill bewusst starten.
+
+6. **Recall pruefen**
+   - `memory_recall` mit einem bekannten v2-Fakt testen.
+   - `memory_search corpus=all` testen, damit OpenClaw `memory-core` plus PLUR1BUS CorpusSupplement erreicht.
+   - Neue Session starten und Auto-Recall vor dem Model-Call pruefen.
+
+7. **Opt-outs verstehen**
+   - `autoCapture:false` stoppt nur automatische Hook-Capture. Es deaktiviert nicht `memory_store`, `knowledge_update`, Curation oder bestehenden State.
+   - `autoRecall:false` stoppt nur automatische Prompt-Injection. Es deaktiviert nicht `memory_recall`, `memory_search corpus=all/wiki`, CorpusSupplement oder manuelle Recalls.
+
+### Rollback
+
+Rollback ist einfach, solange `baseDbPath` nicht gewechselt wurde:
+
+- Plugin-Dateien auf v2.1.x zurueckrollen oder Branch `main` installieren.
+- Den vorherigen LanceDB-Snapshot wiederherstellen, falls waehrend des Upgrades Daten geschrieben wurden, die du nicht behalten willst.
+- `memory-core` bleibt davon unberuehrt, weil v3 nicht als Memory-Slot installiert wird.
 
 ---
 

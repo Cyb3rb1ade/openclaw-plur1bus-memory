@@ -122,6 +122,57 @@ plur1bus setzt kein Chat-Modell für OpenClaw voraus. Bestehende Agent-, Subagen
 
 Die native OpenClaw-Workspace-Suche `agents.defaults.memorySearch` ist optional und unabhängig von plur1bus. Sie kann aktiv bleiben, wenn ein passender Embedding-Provider konfiguriert ist. Sie kann auch deaktiviert werden, ohne Auto-Recall/Auto-Capture von `memory-lancedb-namespaced` abzuschalten.
 
+### Migration von v2.1.x auf Neo-Arch v3
+
+Ein Upgrade von v2.1.x auf `neo-arch`/v3 ist ein **additiver In-Place-Upgrade**. Das Plugin wird zentral in der OpenClaw-Installation aktualisiert; die Neo-Arch-Daten entstehen danach **workspace-scoped** unter dem bestehenden `baseDbPath`. Du musst also nicht fuer jeden Agenten einen eigenen API-Key einrichten. Was pro Workspace entsteht, sind Turn-Journal, Candidates, Reaction Ledger, BehaviorCards, Embedding Queue und optional `memory/KNOWLEDGE.md`.
+
+Empfohlener Ablauf:
+
+1. `neo-arch` auschecken und vorab einen Snapshot der bestehenden LanceDB erstellen lassen: `./scripts/install-memory-system.sh --dry-run /pfad/zu/.openclaw`, danach ohne `--dry-run`.
+2. Den bestehenden `baseDbPath` beibehalten, z.B. `~/.openclaw/memory/lancedb-namespaced`. Dadurch bleiben v2-Memories fuer `memory_recall` und Auto-Recall lesbar.
+3. Embedding-Modell und `dimensions` unveraendert lassen, sofern du bestehende LanceDBs weiterverwenden willst. Ein Provider-/Dimensionswechsel braucht einen neuen `baseDbPath` oder einen Fresh-DB-Rebuild.
+4. Hook-Rechte setzen: `hooks.allowConversationAccess=true`, `hooks.allowPromptInjection=true`, plus Timeouts fuer `before_prompt_build` und `agent_end`.
+5. Pro Workspace pruefen, ob `memory/KNOWLEDGE.md` existiert oder per `knowledge_update`/Maintainer aufgebaut werden soll. Das ist workspace-spezifisch; die Provider-Keys bleiben zentral.
+6. Nach dem Gateway-Restart verifizieren: `node scripts/memory-doctor.mjs provider-check`, `openclaw plugins doctor`, `/plur1bus doctor`, manueller `memory_recall`, `memory_search corpus=all`, ein realer `agent_end`-Capture.
+
+Provider-Keys liegen in `openclaw.json` unter:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-lancedb-namespaced": {
+        "hooks": {
+          "allowConversationAccess": true,
+          "allowPromptInjection": true,
+          "timeouts": {
+            "before_prompt_build": 90000,
+            "agent_end": 60000
+          }
+        },
+        "config": {
+          "embedding": {
+            "apiKey": "${OPENAI_API_KEY}",
+            "model": "text-embedding-3-large",
+            "dimensions": 3072
+          },
+          "reranker": {
+            "enabled": true,
+            "apiKey": "${COHERE_API_KEY}",
+            "model": "rerank-v3.5"
+          },
+          "baseDbPath": "~/.openclaw/memory/lancedb-namespaced",
+          "autoCapture": true,
+          "autoRecall": true
+        }
+      }
+    }
+  }
+}
+```
+
+`autoCapture:false` schaltet nur automatische Hook-Capture aus, nicht `memory_store`, `knowledge_update` oder vorhandenen State. `autoRecall:false` schaltet nur automatische Prompt-Injection aus, nicht `memory_recall`, `memory_search corpus=all/wiki` oder das CorpusSupplement.
+
 ---
 
 ## Update / Rollback
@@ -232,7 +283,7 @@ memory-lancedb-namespaced.kind = "extension"      ← Auto-Capture/Recall per Ag
 │  Agent antwortet                                                   │
 │      │                                                             │
 │      ▼                                                             │
-│  Auto-Capture (Plugin-Hook oder 5-Min-Cron):                       │
+│  Auto-Capture (agent_end-Hook, default-on):                        │
 │      → Provenance-Felder erfasst (turnId, role, timestamp, URL)    │
 │      → >15K Zeichen? LLM-Summarize                                 │
 │      → Duplicate-Check (≥0.95) skip                                │
@@ -246,11 +297,11 @@ memory-lancedb-namespaced.kind = "extension"      ← Auto-Capture/Recall per Ag
 │  → embed-promoted-memories.mjs bridged neue Promotionen → LanceDB  │
 └────────────────────────────────────────────────────────────────────┘
 
-┌── Wartung (System-Cron) ──────────────────────────────────────────┐
-│  03:00  memory-gc.mjs                — TTL-Purge                   │
-│  alle 5 Min  auto-capture-lancedb    — Capture-Fallback            │
-│  alle 30 Min embed-promoted-memories — Dreaming-Bridge             │
-│  on-demand   memory-doctor           — Health, Eval, Wartung       │
+┌── Wartung (OpenClaw-native / Operator-Jobs) ──────────────────────┐
+│  Plugin-Service                     — leichte Neo-Wartung          │
+│  OpenClaw-Agent-Crons               — schwere Dreaming/Backfills   │
+│  Legacy-Scripts                     — nur Operator-Fallback        │
+│  on-demand memory-doctor            — Health, Eval, Wartung        │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
