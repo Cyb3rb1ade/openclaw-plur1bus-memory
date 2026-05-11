@@ -976,7 +976,14 @@ JQ_PATCH=$(cat <<'JQEOF'
 . as $root
 | .plugins.allow = ((.plugins.allow // []) | if index("memory-lancedb-namespaced") then . else . + ["memory-lancedb-namespaced"] end)
 | .plugins.slots.memory = (.plugins.slots.memory // "memory-core")
-| .plugins.entries["memory-lancedb-namespaced"] = (($plugin_config) + {"hooks": ((.plugins.entries["memory-lancedb-namespaced"].hooks // {}) + {"allowConversationAccess": true})})
+| .plugins.entries["memory-lancedb-namespaced"] = (($plugin_config) + {"hooks": ((.plugins.entries["memory-lancedb-namespaced"].hooks // {}) + {
+    "allowConversationAccess": true,
+    "allowPromptInjection": true,
+    "timeouts": (((.plugins.entries["memory-lancedb-namespaced"].hooks.timeouts // {}) + {
+      "before_prompt_build": 90000,
+      "agent_end": 60000
+    }))
+  })})
 | if .plugins.entries["memory-lancedb"] then .plugins.entries["memory-lancedb"].enabled = false else . end
 JQEOF
 )
@@ -985,8 +992,9 @@ if [[ "$DRY_RUN" == "1" ]]; then
   dryrun "Würde openclaw.json mit Plugin-Config patchen"
   dryrun "  - plugins.allow += memory-lancedb-namespaced"
   dryrun "  - plugins.slots.memory bleibt '${EXISTING_MEMORY_SLOT:-memory-core}'"
+  dryrun "  - hooks.allowConversationAccess/allowPromptInjection + Hook-Timeouts werden sichergestellt"
   if [[ "$KEEP_EXISTING_MEMORY_CONFIG" == "1" ]]; then
-    dryrun "  - plugins.entries.memory-lancedb-namespaced bleibt inhaltlich erhalten; hooks.allowConversationAccess wird sichergestellt"
+    dryrun "  - plugins.entries.memory-lancedb-namespaced bleibt inhaltlich erhalten; Hook-Rechte werden sichergestellt"
   else
     dryrun "  - plugins.entries.memory-lancedb-namespaced wird aus User-Auswahl neu geschrieben"
   fi
@@ -1011,7 +1019,16 @@ cfg.plugins.slots = cfg.plugins.slots || {};
 cfg.plugins.slots.memory = cfg.plugins.slots.memory || 'memory-core';
 cfg.plugins.entries = cfg.plugins.entries || {};
 const existing = cfg.plugins.entries['memory-lancedb-namespaced'] || {};
-plugin.hooks = { ...(existing.hooks || {}), allowConversationAccess: true };
+plugin.hooks = {
+  ...(existing.hooks || {}),
+  allowConversationAccess: true,
+  allowPromptInjection: true,
+  timeouts: {
+    ...((existing.hooks && existing.hooks.timeouts) || {}),
+    before_prompt_build: 90000,
+    agent_end: 60000,
+  },
+};
 cfg.plugins.entries['memory-lancedb-namespaced'] = plugin;
 if (cfg.plugins.entries['memory-lancedb']) cfg.plugins.entries['memory-lancedb'].enabled = false;
 writeFileSync('${TARGET_CONFIG}', JSON.stringify(cfg, null, 2) + '\n', 'utf8');
@@ -1023,7 +1040,14 @@ NODEOF
     jq --argjson plugin_config "$PLUGIN_CONFIG" \
       '(. | .plugins.allow = ((.plugins.allow // []) | if index("memory-lancedb-namespaced") then . else . + ["memory-lancedb-namespaced"] end))
        | .plugins.slots.memory = (.plugins.slots.memory // "memory-core")
-       | .plugins.entries["memory-lancedb-namespaced"] = (($plugin_config) + {"hooks": ((.plugins.entries["memory-lancedb-namespaced"].hooks // {}) + {"allowConversationAccess": true})})
+       | .plugins.entries["memory-lancedb-namespaced"] = (($plugin_config) + {"hooks": ((.plugins.entries["memory-lancedb-namespaced"].hooks // {}) + {
+           "allowConversationAccess": true,
+           "allowPromptInjection": true,
+           "timeouts": (((.plugins.entries["memory-lancedb-namespaced"].hooks.timeouts // {}) + {
+             "before_prompt_build": 90000,
+             "agent_end": 60000
+           }))
+         })})
        | if .plugins.entries["memory-lancedb"] then .plugins.entries["memory-lancedb"].enabled = false else . end
       ' \
       "$TARGET_CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$TARGET_CONFIG"

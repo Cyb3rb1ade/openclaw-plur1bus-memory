@@ -3,6 +3,10 @@
 
 > **Zielgruppe:** Alle, die OpenClaw betreiben — unabhängig von Installationspfad, Betriebssystem oder Anzahl der Agenten. Dieses Dokument beschreibt Konzepte, Architektur und Implementierung von Grund auf.
 
+> **Neo-Arch 3.0 Hinweis:** Der aktuelle `neo-arch`-Branch integriert PLUR1BUS nativ in OpenClaw. `memory-core` bleibt Slot-Owner; PLUR1BUS arbeitet als Augment/Supplement/Fallback über `agent_end`, `before_prompt_build`/`agent_turn_prepare`, Memory Prompt-/Corpus-Supplements und Gateway-Lifecycle-Hooks. Root-/User-Cron, `systemctl`, `ExecStartPre` und OpenClaw-dist-Patches sind nur Legacy-/Operator-Fallbacks, nicht der Normalbetrieb.
+
+> **Opt-out Semantik:** `autoCapture:false` deaktiviert nur automatische Hook-Capture; `memory_store`, `knowledge_update`, manuelle Curation und bestehender PLUR1BUS-State bleiben aktiv. `autoRecall:false` deaktiviert nur automatische Prompt-Injection; `memory_recall`, `memory_search corpus=all/wiki`, CorpusSupplement und manuelle Recalls bleiben aktiv. Dynamic Auto-Recall darf pro Turn nur einmal injiziert werden.
+
 ---
 
 ## Das Problem: KI-Agenten leiden unter Amnesie
