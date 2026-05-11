@@ -17,7 +17,9 @@ Produktionsreifes Gedächtnissystem für [OpenClaw](https://github.com/openclaw)
 
 **Mindestversion:** OpenClaw `2026.4.29` oder neuer. Ältere Versionen werden vom aktuellen Installer nicht unterstützt.
 
-**OpenClaw-Compat-Patches:** `patches/apply-memory-patches.sh` dispatcht versioniert. OpenClaw `2026.4.29` nutzt den historischen `apply-plur1bus-user-hotfix.sh`; OpenClaw `2026.5.3-1` nutzt `apply-openclaw-20260503-compat.sh`; OpenClaw `2026.5.4`, `2026.5.5`, `2026.5.6` und `2026.5.7` nutzen `apply-openclaw-20260504-compat.sh`. Die 5.3/5.4/5.5/5.6/5.7-Patches halten ActiveMemory-Fallback/Timeouts, isolierte Lanes, Heartbeat-Backpressure, non-blocking `boot-md`, Subagent-Completion-Announce-Caps und den Hidden-Flush-Prompt lokal kompatibel.
+**Neo-Arch Runtime-Regel:** Im Branch `neo-arch` ist PLUR1BUS ein OpenClaw-natives Augment/Supplement. `memory-core` bleibt Slot-Owner; PLUR1BUS registriert Tools, Hooks, Prompt-/Corpus-Supplements und Gateway-Lifecycle-Handler. OpenClaw-dist-Patches, `ExecStartPre`, root/user-cron und `systemctl` sind kein Primaerpfad.
+
+**Legacy/OpenClaw-Compat-Patches:** `patches/apply-memory-patches.sh` bleibt als historischer Operator-Fallback erhalten. Der neo-arch-Normalbetrieb darf davon nicht abhaengen.
 
 Entwickelt und erprobt im produktiven Einsatz mit 38 Agenten über mehrere Monate.
 
@@ -58,7 +60,7 @@ scripts/
   memory-doctor.mjs            ← Health-CLI (stats/dupes/stale/orphans/pending/eval/provider-check)
   maintain-knowledge-md.mjs    ← Workspace-scoped KNOWLEDGE.md Check/Fresh/Backfill-Maintainer
   recall-eval.sample.json      ← Vorlage für recall-eval.json (echte Test-Datei in .gitignore)
-  auto-capture-lancedb.mjs     ← Cron-Fallback für Auto-Capture (alle 5 Min)
+  auto-capture-lancedb.mjs     ← Legacy/Operator-Fallback; neo-arch nutzt agent_end
   embed-promoted-memories.mjs  ← Bridge Dreaming-Promotionen → LanceDB (alle 30 Min)
   migrate-memory-md-to-lancedb.mjs  ← Einmalige MEMORY.md → LanceDB Migration
   cleanup-session-history.mjs  ← Bereinigt aufgeblähte OpenClaw-Session-Transcripts
@@ -93,7 +95,7 @@ Das Skript:
 - Setzt bei optionalem Merging kein Chat-Modell heimlich voraus; der User muss das Merging-Modell explizit wählen
 - **Pre-Flight-Check** (v2.1.1+) — vergleicht neue Dim mit bestehenden Agent-DBs, warnt bei Mismatch (Provider-Wechsel braucht fresh DB!)
 - Erstellt LanceDB-Snapshot vor Änderungen
-- Richtet Cron-Job für täglichen GC ein
+- Konfiguriert OpenClaw-native Hook-Rechte (`allowConversationAccess`, `allowPromptInjection`) und Hook-Timeouts
 
 ### ⚠️ Provider-Wechsel: Wichtige Warnung
 
@@ -147,8 +149,9 @@ systemctl --user restart openclaw-gateway.service
 
 ### Capture-Pipeline
 
-- **Auto-Capture** — speichert automatisch relevante Gesprächsinhalte nach jedem Turn (Plugin-Hook + Cron-Fallback).
-- **Cron-Fallback** (`auto-capture-lancedb.mjs`) — verarbeitet Sessions wenn Plugin-Hook geblockt ist (OpenClaw 4.x Schema-Issue). v1.8.2: Trajectory-Filter, Dynamic Agent Discovery, Byte-Offset-State-Tracking, Multi-File-Sweep.
+- **Auto-Capture** — default-on via `agent_end`, solange `autoCapture !== false`. `autoCapture:false` deaktiviert nur automatische Hook-Capture; `memory_store`, `knowledge_update`, Curation und bestehender PLUR1BUS-State bleiben nutzbar.
+- **Auto-Recall** — default-on via genau einem Prompt-Injection-Pfad pro Turn. `autoRecall:false` deaktiviert nur automatische Prompt-Injection; `memory_recall`, `memory_search corpus=all/wiki`, CorpusSupplement und manuelle Recalls bleiben nutzbar.
+- **Legacy-Fallback** (`auto-capture-lancedb.mjs`) — verarbeitet Sessions nur als expliziter Operator-Fallback, nicht als neo-arch-Primärpfad.
 - **LLM-Summarization** — überlange Nachrichten (>15K Zeichen) werden via LLM zusammengefasst statt verworfen.
 - **URL- und Attachment-Priorisierung** — Links und Dateianhänge gehen nie verloren.
 - **Provenance-Tracking** (v1.8.0+) — jede Memory bekommt `sourceTurnId`, `sourceMessageRole`, `sourceTimestamp`, `sourceUrl`, `evidenceQuote`, `scope`.

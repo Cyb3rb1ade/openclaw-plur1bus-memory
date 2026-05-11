@@ -54,6 +54,26 @@
       "baseDbPath": {
         "type": "string"
       },
+      "hooks": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowConversationAccess": {
+            "type": "boolean",
+            "default": true
+          },
+          "allowPromptInjection": {
+            "type": "boolean",
+            "default": true
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "timeouts": {
+            "type": "object"
+          }
+        }
+      },
       "neo": {
         "type": "object",
         "additionalProperties": false,
