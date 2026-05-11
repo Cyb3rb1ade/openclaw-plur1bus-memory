@@ -1,3 +1,9 @@
+## [3.0.0-beta.2] - 2026-05-11
+
+### Changed
+- Marked the Neo-Arch branch and `memory-lancedb-namespaced` package as `3.0.0-beta.2`.
+- Aligned README, plugin README, manifest, package metadata, and lockfile version labels for the v3 beta line.
+
 ## [2.1.34] - 2026-05-11
 
 ### Fixed
