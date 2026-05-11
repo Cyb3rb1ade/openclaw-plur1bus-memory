@@ -3,6 +3,7 @@
 ### Changed
 - Marked the Neo-Arch branch and `memory-lancedb-namespaced` package as `3.0.0-beta.2`.
 - Aligned README, plugin README, manifest, package metadata, and lockfile version labels for the v3 beta line.
+- Documented OpenClaw `2026.5.10-beta.5` as the minimum supported version for PLUR1BUS v3+ because v3 depends on the OpenClaw-native memory stack changes in that line.
 
 ## [2.1.34] - 2026-05-11
 
