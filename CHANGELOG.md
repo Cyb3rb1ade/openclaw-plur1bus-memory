@@ -1,5 +1,8 @@
 ## [3.0.0-beta.2] - 2026-05-11
 
+### Fixed
+- Updated `scripts/install-memory-system.sh` to enforce OpenClaw `2026.5.10-beta.5` as the PLUR1BUS v3 minimum and compare beta/stable OpenClaw versions correctly.
+
 ### Changed
 - Marked the Neo-Arch branch and `memory-lancedb-namespaced` package as `3.0.0-beta.2`.
 - Aligned README, plugin README, manifest, package metadata, and lockfile version labels for the v3 beta line.

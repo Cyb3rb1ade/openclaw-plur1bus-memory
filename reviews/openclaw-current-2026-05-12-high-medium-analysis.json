@@ -1,0 +1,530 @@
+{
+  "generatedAt": "2026-05-12T17:41:06.724Z",
+  "target": "OpenClaw origin/main snapshot",
+  "refs": {
+    "originMain": "62fff1f738ab310d9d9f845925c79ee2557af818",
+    "beta5": "1ba689376acc91f38c2e6b782f3f0f6859b517d8",
+    "beta12": "1824464bf23e37b63eedce75f5c87f9ff9df1fae",
+    "mergeBase_10_12": "f80db586896fba604a45d55bd09c03354b8b600d",
+    "mergeBase_12_main": "067e83d121ddb05181b8c97cf8587e591059d6c4",
+    "highestGithubBetaTag": "v2026.5.12-beta.1",
+    "npmBeta": "2026.5.12-beta.1"
+  },
+  "ranges": {
+    "beta12Only": {
+      "name": "beta.12-only",
+      "range": "f80db586896fba604a45d55bd09c03354b8b600d..v2026.5.12-beta.1",
+      "commitCount": 1051,
+      "reviewed": 605,
+      "unreviewed": 446,
+      "findings": 29,
+      "high": 0,
+      "medium": 11,
+      "low": 11,
+      "unweighted": 7,
+      "highMediumCount": 11,
+      "relevantClassCounts": {
+        "cron-wake:no-direct-plur1bus-impact": 8,
+        "gateway-exec-security:no-direct-plur1bus-impact": 101,
+        "plugin-loader-sdk:smoke-required": 386,
+        "cron-wake:backlog-only": 55,
+        "memory/plur1bus:smoke-required": 32,
+        "session-transcript:no-direct-plur1bus-impact": 72,
+        "hooks-lifecycle:smoke-required": 25,
+        "task-flow:no-direct-plur1bus-impact": 10,
+        "session-transcript:backlog-only": 7,
+        "gateway-exec-security:backlog-only": 2,
+        "task-flow:backlog-only": 1
+      }
+    },
+    "beta5Only": {
+      "name": "beta.5-only",
+      "range": "f80db586896fba604a45d55bd09c03354b8b600d..v2026.5.10-beta.5",
+      "commitCount": 24,
+      "reviewed": 0,
+      "unreviewed": 24,
+      "findings": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "unweighted": 0,
+      "highMediumCount": 0,
+      "relevantClassCounts": {
+        "plugin-loader-sdk:smoke-required": 7,
+        "gateway-exec-security:backlog-only": 1,
+        "memory/plur1bus:smoke-required": 4,
+        "gateway-exec-security:no-direct-plur1bus-impact": 1
+      }
+    },
+    "symmetricBetaDrift": {
+      "name": "symmetric beta drift",
+      "range": "v2026.5.10-beta.5...v2026.5.12-beta.1",
+      "commitCount": 1075,
+      "reviewed": 605,
+      "unreviewed": 470,
+      "findings": 29,
+      "high": 0,
+      "medium": 11,
+      "low": 11,
+      "unweighted": 7,
+      "highMediumCount": 11,
+      "relevantClassCounts": {
+        "plugin-loader-sdk:smoke-required": 393,
+        "gateway-exec-security:backlog-only": 3,
+        "memory/plur1bus:smoke-required": 36,
+        "gateway-exec-security:no-direct-plur1bus-impact": 102,
+        "cron-wake:no-direct-plur1bus-impact": 8,
+        "cron-wake:backlog-only": 55,
+        "session-transcript:no-direct-plur1bus-impact": 72,
+        "hooks-lifecycle:smoke-required": 25,
+        "task-flow:no-direct-plur1bus-impact": 10,
+        "session-transcript:backlog-only": 7,
+        "task-flow:backlog-only": 1
+      }
+    },
+    "mainOnly": {
+      "name": "main-only after beta.12",
+      "range": "067e83d121ddb05181b8c97cf8587e591059d6c4..origin/main",
+      "commitCount": 396,
+      "reviewed": 193,
+      "unreviewed": 203,
+      "findings": 5,
+      "high": 1,
+      "medium": 2,
+      "low": 2,
+      "unweighted": 0,
+      "highMediumCount": 3,
+      "relevantClassCounts": {
+        "plugin-loader-sdk:smoke-required": 122,
+        "memory/plur1bus:smoke-required": 14,
+        "cron-wake:backlog-only": 19,
+        "gateway-exec-security:no-direct-plur1bus-impact": 47,
+        "session-transcript:no-direct-plur1bus-impact": 20,
+        "cron-wake:no-direct-plur1bus-impact": 5,
+        "hooks-lifecycle:smoke-required": 1,
+        "gateway-exec-security:blocker-for-live-update": 1
+      }
+    },
+    "beta12OnlyVsMain": {
+      "name": "beta.12-only vs main",
+      "range": "067e83d121ddb05181b8c97cf8587e591059d6c4..v2026.5.12-beta.1",
+      "commitCount": 9,
+      "reviewed": 0,
+      "unreviewed": 9,
+      "findings": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "unweighted": 0,
+      "highMediumCount": 0,
+      "relevantClassCounts": {
+        "plugin-loader-sdk:smoke-required": 3
+      }
+    },
+    "symmetricReleaseMainDrift": {
+      "name": "symmetric release/main drift",
+      "range": "v2026.5.12-beta.1...origin/main",
+      "commitCount": 405,
+      "reviewed": 193,
+      "unreviewed": 212,
+      "findings": 5,
+      "high": 1,
+      "medium": 2,
+      "low": 2,
+      "unweighted": 0,
+      "highMediumCount": 3,
+      "relevantClassCounts": {
+        "plugin-loader-sdk:smoke-required": 125,
+        "memory/plur1bus:smoke-required": 14,
+        "cron-wake:backlog-only": 19,
+        "gateway-exec-security:no-direct-plur1bus-impact": 47,
+        "session-transcript:no-direct-plur1bus-impact": 20,
+        "cron-wake:no-direct-plur1bus-impact": 5,
+        "hooks-lifecycle:smoke-required": 1,
+        "gateway-exec-security:blocker-for-live-update": 1
+      }
+    },
+    "overviewBeta5ToMain": {
+      "name": "overview beta.5 to main",
+      "range": "v2026.5.10-beta.5..origin/main",
+      "commitCount": 1438,
+      "reviewed": 798,
+      "unreviewed": 640,
+      "findings": 34,
+      "high": 1,
+      "medium": 13,
+      "low": 13,
+      "unweighted": 7,
+      "highMediumCount": 14,
+      "relevantClassCounts": {
+        "cron-wake:no-direct-plur1bus-impact": 13,
+        "gateway-exec-security:no-direct-plur1bus-impact": 148,
+        "plugin-loader-sdk:smoke-required": 505,
+        "cron-wake:backlog-only": 74,
+        "memory/plur1bus:smoke-required": 46,
+        "session-transcript:no-direct-plur1bus-impact": 92,
+        "hooks-lifecycle:smoke-required": 26,
+        "task-flow:no-direct-plur1bus-impact": 10,
+        "session-transcript:backlog-only": 7,
+        "gateway-exec-security:backlog-only": 2,
+        "task-flow:backlog-only": 1,
+        "gateway-exec-security:blocker-for-live-update": 1
+      }
+    }
+  },
+  "compatibilityFixes": [
+    {
+      "file": "scripts/install-memory-system.sh",
+      "change": "Raise MIN_OPENCLAW_VERSION to 2026.5.10-beta.5 and use beta-aware version_rank comparison.",
+      "reason": "PLUR1BUS v3 depends on OpenClaw-native memory stack behavior from 2026.5.10-beta.5+."
+    }
+  ],
+  "packagingAssessment": {
+    "runtimeEntry": "extensions/memory-lancedb-namespaced/package.json declares openclaw.extensions [\"./index.js\"].",
+    "sourceFallback": "No TypeScript source fallback dependency found for PLUR1BUS package runtime loading.",
+    "manifestContracts": [
+      "knowledge_update",
+      "memory_forget",
+      "memory_recall",
+      "memory_store"
+    ],
+    "memorySlot": "memory-core remains slot owner; PLUR1BUS stays augment and does not call registerMemoryCapability by default."
+  },
+  "isolatedBetaCliCheck": {
+    "openclawBetaVersion": "OpenClaw 2026.5.12-beta.1 (1824464)",
+    "home": "/tmp/openclaw-beta-home-2026-05-12",
+    "profile": "plur1bus-compat",
+    "liveInstanceUpdated": false,
+    "preInstallDoctor": "No plugin issues detected.",
+    "install": "plugins install --link accepted /root/openclaw-memory-system/extensions/memory-lancedb-namespaced; runtime registration without embedding config failed only because OPENAI_API_KEY was absent.",
+    "hookPolicy": {
+      "allowConversationAccess": true,
+      "allowPromptInjection": true,
+      "timeouts": {
+        "before_prompt_build": 90000,
+        "agent_end": 60000
+      }
+    },
+    "runtimeInspect": {
+      "typedHooks": [
+        "agent_end",
+        "before_prompt_build",
+        "gateway_start",
+        "gateway_stop"
+      ],
+      "diagnostics": []
+    },
+    "postInstallDoctor": "No plugin issues detected."
+  },
+  "highMediumAll": [
+    {
+      "sha": "5171c2654af4093f0c519776d1126a97b1d2078c",
+      "short": "5171c2654a",
+      "subject": "fix(models/auth): preserve primary when login omits --set-default",
+      "severity": "medium",
+      "result": "findings",
+      "area": "plugin-loader-sdk",
+      "decision": "smoke-required",
+      "finding": "Medium: Raw model restore can undo `replaceDefaultModels` migrations",
+      "summary": "Found one compatibility regression in the new restore step. It preserves the old `agents.defaults.model` even when the provider patch is explicitly replacing/renaming the model allowlist, which can leave a legacy primary outside the rewritten allowlist.",
+      "files": [
+        "CHANGELOG.md",
+        "docs/concepts/model-providers.md",
+        "src/commands/models/auth.test.ts",
+        "src/commands/models/auth.ts",
+        "src/plugins/provider-auth-choice-helpers.ts"
+      ]
+    },
+    {
+      "sha": "f142bb0d6b4e00e581b4af087803d3e3abaee6a0",
+      "short": "f142bb0d6b",
+      "subject": "test(extensions): type mocked calls explicitly",
+      "severity": "medium",
+      "result": "findings",
+      "area": "plugin-loader-sdk",
+      "decision": "smoke-required",
+      "finding": "Medium: OpenRouter provider test assertion no longer matches the typed fixture",
+      "summary": "Found one concrete regression: the OpenRouter image generation test now fails because the new typed fixture includes `models: []`, but the expected mocked auth call was not updated to match the actual config forwarded by production code.",
+      "files": [
+        "extensions/openrouter/image-generation-provider.test.ts",
+        "extensions/zalouser/src/zca-client.test.ts"
+      ]
+    },
+    {
+      "sha": "678b2510b22cfc0b97904886dee0711ebab41d1c",
+      "short": "678b2510b2",
+      "subject": "fix: abort generic no-progress tool loops",
+      "severity": "medium",
+      "result": "findings",
+      "area": "other",
+      "decision": "no-direct-plur1bus-impact",
+      "finding": "Medium: Generic loop blocks are not sticky after the first critical block",
+      "summary": "Found one reliability bug: the new generic critical loop block fires once, but an immediate retry of the same tool call is allowed because the blocked result is recorded into loop history and breaks the identical-outcome streak.",
+      "files": [
+        "CHANGELOG.md",
+        "docs/tools/loop-detection.md",
+        "src/agents/pi-tools.before-tool-call.e2e.test.ts",
+        "src/agents/tool-loop-detection.test.ts",
+        "src/agents/tool-loop-detection.ts"
+      ]
+    },
+    {
+      "sha": "530b892f0684f3d3703fcb7ef300b3b30c3e9141",
+      "short": "530b892f06",
+      "subject": "feat(tools): add per-sender tool policies (#66933)",
+      "severity": "medium",
+      "result": "findings",
+      "area": "gateway-exec-security",
+      "decision": "no-direct-plur1bus-impact",
+      "finding": "Medium: Channel-scoped group sender policies are ignored in plugin-owned group adapters",
+      "summary": "Found one actionable issue. The new `channel:<channelId>:<senderId>` sender-key support works in the generic resolver, but several plugin-owned group policy adapters still call `resolveToolsBySender` without a channel/provider value, so channel-scoped group policies silently miss.",
+      "files": [
+        "CHANGELOG.md",
+        "docs/.generated/config-baseline.sha256",
+        "docs/channels/groups.md",
+        "docs/channels/msteams.md",
+        "docs/channels/slack.md",
+        "docs/gateway/config-tools.md",
+        "src/agents/pi-embedded-runner/effective-tool-policy.test.ts",
+        "src/agents/pi-embedded-runner/effective-tool-policy.ts",
+        "src/agents/pi-tools-agent-config.test.ts",
+        "src/agents/pi-tools.policy.ts",
+        "src/agents/pi-tools.ts",
+        "src/agents/sender-tool-policy.ts",
+        "src/agents/tool-policy-pipeline.ts",
+        "src/config/group-policy.test.ts",
+        "src/config/group-policy.ts",
+        "src/config/types.tools.ts",
+        "src/config/zod-schema.agent-runtime.ts"
+      ]
+    },
+    {
+      "sha": "a17277d9b4f1c71791545624e9a4a9de083d7579",
+      "short": "a17277d9b4",
+      "subject": "test: verify auto-reply payloads",
+      "severity": "medium",
+      "result": "findings",
+      "area": "other",
+      "decision": "no-direct-plur1bus-impact",
+      "finding": "Medium: New metadata assertion fails core test typecheck",
+      "summary": "Found one concrete test typecheck regression. Runtime Vitest passes, but the repo’s core test tsgo lane fails on the changed assertion.",
+      "files": [
+        "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
+        "src/auto-reply/reply/agent-runner-payloads.test.ts",
+        "src/auto-reply/reply/directive-handling.model.test.ts"
+      ]
+    },
+    {
+      "sha": "efc864139340c9e119f01732ce2ae2f0edcc1afc",
+      "short": "efc8641393",
+      "subject": "fix: add channel status filtering (#80706)",
+      "severity": "medium",
+      "result": "findings",
+      "area": "gateway-exec-security",
+      "decision": "no-direct-plur1bus-impact",
+      "finding": "Medium: Stopped-Gateway migration probe cannot produce live iMessage probe results",
+      "summary": "Found three actionable issues: one medium docs/runtime mismatch in the BlueBubbles migration path, one low CLI fallback bug for invalid filters, and one low compatibility risk in the generated Swift protocol init.",
+      "files": [
+        "CHANGELOG.md",
+        "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+        "docs/.i18n/glossary.zh-CN.json",
+        "docs/announcements/bluebubbles-imessage.md",
+        "docs/channels/imessage-from-bluebubbles.md",
+        "docs/channels/imessage.md",
+        "docs/cli/channels.md",
+        "docs/docs.json",
+        "docs/gateway/config-channels.md",
+        "src/cli/channels-cli.ts",
+        "src/cli/program/route-args.ts",
+        "src/cli/program/routes.test.ts",
+        "src/commands/channels.status.command-flow.test.ts",
+        "src/commands/channels/status-config-format.ts",
+        "src/commands/channels/status.ts",
+        "src/gateway/protocol/schema/channels.ts",
+        "src/gateway/server-methods/channels.status.test.ts",
+        "src/gateway/server-methods/channels.ts"
+      ]
+    },
+    {
+      "sha": "ce2eb4c367974365ea7eb058a047f895d08ec5cb",
+      "short": "ce2eb4c367",
+      "subject": "fix: Fix the build: annotate provider-http test-helper exports for portable dts (#80781)",
+      "severity": "medium",
+      "result": "findings",
+      "area": "plugin-loader-sdk",
+      "decision": "smoke-required",
+      "finding": "Medium: SDK provider HTTP mock helper now fails lint",
+      "summary": "The commit fixes portable declaration typing for provider HTTP test helpers, but introduces a lint regression in the public SDK test helper.",
+      "files": [
+        "extensions/minimax/provider-http.test-helpers.ts",
+        "src/plugin-sdk/test-helpers/provider-http-mocks.ts"
+      ]
+    },
+    {
+      "sha": "f7ab8c26b1e7b96c456fa67b963cc546934cc572",
+      "short": "f7ab8c26b1",
+      "subject": "fix(codex): scale context engine projection (#80761)",
+      "severity": "medium",
+      "result": "findings",
+      "area": "plugin-loader-sdk",
+      "decision": "smoke-required",
+      "finding": "Medium: Floor-only reserve config removes Codex projection headroom",
+      "summary": "Found one concrete regression in the new Codex context projection reserve mapping. The main scaling fix works in the focused tests, but a floor-only compaction config is now interpreted as the whole projection reserve instead of as a floor guard.",
+      "files": [
+        "extensions/codex/src/app-server/context-engine-projection.test.ts",
+        "extensions/codex/src/app-server/context-engine-projection.ts",
+        "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
+        "extensions/codex/src/app-server/run-attempt.ts"
+      ]
+    },
+    {
+      "sha": "db57da50c994bdfd133b1ffce6cd40b6267f0abf",
+      "short": "db57da50c9",
+      "subject": "fix: reintroduce partial-fragment drop for clean timeouts",
+      "severity": "medium",
+      "result": "findings",
+      "area": "other",
+      "decision": "no-direct-plur1bus-impact",
+      "finding": "Medium: Completed timeout-edge replies can be discarded as partial fragments",
+      "summary": "Found one plausible regression in the timeout payload synthesis. The new partial-fragment drop treats any non-empty assistant text on a prompt timeout as partial, even when the attempt has a completed assistant message.",
+      "files": [
+        "src/agents/pi-embedded-runner/run.ts"
+      ]
+    },
+    {
+      "sha": "e1795256d5a27b56e9e9284d1897007ae46332bd",
+      "short": "e1795256d5",
+      "subject": "fix(docker): avoid external Dockerfile frontend pull",
+      "severity": "medium",
+      "result": "findings",
+      "area": "other",
+      "decision": "no-direct-plur1bus-impact",
+      "finding": "Medium: Root Dockerfile can fail on older bundled Dockerfile frontends",
+      "summary": "Found one compatibility regression risk: removing the external Dockerfile frontend pin makes the root Dockerfile depend on the builder’s bundled frontend, but the file still uses `RUN --mount` variable expansion that older Dockerfile frontends do not support.",
+      "files": [
+        "Dockerfile",
+        "scripts/docker/sandbox/Dockerfile",
+        "src/dockerfile.test.ts"
+      ]
+    },
+    {
+      "sha": "7624b0d16dcbde01b5dace9d5ce49dfbbb377da6",
+      "short": "7624b0d16d",
+      "subject": "fix(imessage): surface Full Disk Access probe failures",
+      "severity": "medium",
+      "result": "findings",
+      "area": "plugin-loader-sdk",
+      "decision": "smoke-required",
+      "finding": "Medium: EPIPE can still hide stored Full Disk Access diagnostics",
+      "summary": "Found one remaining failure path in the iMessage RPC client: the new public Full Disk Access diagnostic is only used when the child `close` handler rejects pending requests. If an earlier stdin/write EPIPE path wins the race, health still receives a generic EPIPE and can omit the failed probe from non-sensitive status output.",
+      "files": [
+        "CHANGELOG.md",
+        "extensions/imessage/src/client.ts",
+        "extensions/imessage/src/status.test.ts",
+        "scripts/pre-commit/pnpm-audit-prod.mjs",
+        "src/commands/health.snapshot.test.ts",
+        "src/commands/health.test.ts",
+        "src/commands/health.ts",
+        "test/scripts/pnpm-audit-prod.test.ts"
+      ]
+    },
+    {
+      "sha": "50f4440c96637f5d2c244f9a7b1119be378b15f3",
+      "short": "50f4440c96",
+      "subject": "Enforce inline shell wrapper payload matching [AI] (#80978)",
+      "severity": "medium",
+      "result": "findings",
+      "area": "gateway-exec-security",
+      "decision": "no-direct-plur1bus-impact",
+      "finding": "Medium: Shell multiplexer allowlist entries still bypass inline payload matching",
+      "summary": "The commit hardens inline shell-wrapper approval, but the new guard still lets a bare `busybox` or `toybox` allowlist entry approve arbitrary shell applet payloads without evaluating the extracted `sh -c` command.",
+      "files": [
+        "CHANGELOG.md",
+        "src/infra/exec-approvals-allow-always.test.ts",
+        "src/infra/exec-approvals-allowlist.ts",
+        "src/infra/exec-approvals-analysis.test.ts",
+        "src/infra/exec-approvals-analysis.ts",
+        "src/infra/exec-wrapper-resolution.test.ts",
+        "src/infra/shell-inline-command.test.ts",
+        "src/infra/shell-inline-command.ts",
+        "src/infra/shell-wrapper-resolution.ts",
+        "src/infra/system-run-command.test.ts"
+      ]
+    },
+    {
+      "sha": "65d7232218a9524c6b92cac0d96538bc2b3c7f53",
+      "short": "65d7232218",
+      "subject": "fix: detect carried exec command forms [AI] (#81000)",
+      "severity": "high",
+      "result": "findings",
+      "area": "gateway-exec-security",
+      "decision": "blocker-for-live-update",
+      "finding": "High: Unquoted `$*` positional carriers still bypass strict inline-eval approval",
+      "summary": "The commit adds recursive inline-eval detection for shell positional carriers, but it still misses an allowlisted unquoted `$*` carrier that the allowlist accepts as direct positional argv. In strict inline-eval mode, that leaves a command-executing `find -exec` form approval-free when the carried executable is already allowlisted.",
+      "files": [
+        "CHANGELOG.md",
+        "src/infra/command-analysis/risks.test.ts",
+        "src/infra/command-analysis/risks.ts"
+      ]
+    },
+    {
+      "sha": "9ac4272b35e93342170c486a5995f0275b032438",
+      "short": "9ac4272b35",
+      "subject": "fix: harden safe-bin argument validation [AI] (#80999)",
+      "severity": "medium",
+      "result": "findings",
+      "area": "gateway-exec-security",
+      "decision": "no-direct-plur1bus-impact",
+      "finding": "Medium: Nested safe-bin chain rewrite literalizes allowlisted segments too",
+      "summary": "Found one concrete regression in the new nested inline-chain rewrite path. The safe-bin hardening is broadly scoped correctly, and the targeted tests pass, but nested `sh -c` chains that mix explicit allowlist commands with safe-bin commands can now silently execute different argv for the allowlisted segment.",
+      "files": [
+        "CHANGELOG.md",
+        "src/infra/exec-approvals-allowlist.ts",
+        "src/infra/exec-approvals-analysis.ts",
+        "src/infra/exec-approvals-safe-bins.test.ts",
+        "src/infra/exec-safe-bin-policy-validator.ts",
+        "src/node-host/invoke-system-run-allowlist.ts",
+        "src/node-host/invoke-system-run.test.ts",
+        "src/node-host/invoke-system-run.ts"
+      ]
+    }
+  ],
+  "backlog": [
+    {
+      "surface": "session_end shutdown/restart",
+      "benefit": "Can close/flush PLUR1BUS turn state on clean gateway stop/restart.",
+      "risk": "Double capture if combined naively with agent_end.",
+      "decision": "Backlog only; no compatibility gap because current PLUR1BUS capture is agent_end-based."
+    },
+    {
+      "surface": "transcript update subscription",
+      "benefit": "Could replace legacy JSONL polling and reduce stale cron fallback assumptions.",
+      "risk": "Large sqlite transcript migration surface; easy to duplicate captures.",
+      "decision": "Backlog; do not mix into compat branch."
+    },
+    {
+      "surface": "keyed runtime state",
+      "benefit": "Could move sessionWorkspaceKeys and small hook state into OpenClaw-owned persistent keyed stores.",
+      "risk": "New API adoption creates hard dependency and migration burden.",
+      "decision": "Backlog; current in-plugin state remains compatible."
+    },
+    {
+      "surface": "cron/session wake",
+      "benefit": "Could drain embedding/curation queues without external cron scripts.",
+      "risk": "Behavior promotion and duplicate capture if wake turns are treated as memory evidence.",
+      "decision": "Backlog; only smoke cron/heartbeat does not double-capture."
+    },
+    {
+      "surface": "task flow",
+      "benefit": "Potential durable long-running curation/dreaming workflow carrier.",
+      "risk": "New orchestration semantics, not required for plugin load or tools.",
+      "decision": "Backlog only."
+    },
+    {
+      "surface": "public artifacts",
+      "benefit": "Useful for exported memory evidence/reports.",
+      "risk": "Privacy and provenance policy work needed.",
+      "decision": "Backlog only."
+    }
+  ]
+}
