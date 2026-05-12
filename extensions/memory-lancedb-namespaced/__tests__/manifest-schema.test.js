@@ -26,3 +26,11 @@ test("installer writes both hook permissions and per-hook timeouts", () => {
   assert.match(installer, /before_prompt_build/);
   assert.match(installer, /agent_end/);
 });
+
+test("installer enforces the v3 OpenClaw beta-aware minimum", () => {
+  const installer = readFileSync(resolve(repoRoot, "scripts/install-memory-system.sh"), "utf8");
+  assert.match(installer, /MIN_OPENCLAW_VERSION="2026\.5\.10-beta\.5"/);
+  assert.match(installer, /version_rank\(\)/);
+  assert.match(installer, /-beta\\\.\[0-9\]\+/);
+  assert.doesNotMatch(installer, /sort -V/);
+});
