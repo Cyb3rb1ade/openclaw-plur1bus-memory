@@ -1,0 +1,217 @@
+{
+  "review": "openclaw-2026-05-13-beta3-plur1bus-v3",
+  "generatedAt": "2026-05-13",
+  "target": {
+    "openclawVersion": "2026.5.12-beta.3",
+    "releaseTag": "v2026.5.12-beta.3",
+    "releaseUrl": "https://github.com/openclaw/openclaw/releases/tag/v2026.5.12-beta.3",
+    "prerelease": true,
+    "publishedAt": "2026-05-12T23:38:26Z",
+    "beta3Commit": "cc46ca9bee27776a84fc585a28f6cec56e22a03e",
+    "beta2Commit": "fdb6e92ff57fce02be6d967d915623dd1d327fdb",
+    "originMain": "e64a9a05078e7e601a2b1211e68ed5b0ff60738f",
+    "mergeBaseBeta3Main": "067e83d121ddb05181b8c97cf8587e591059d6c4",
+    "beta2ToBeta3CommitCount": 3,
+    "beta3ToOriginMainCommitCount": 873,
+    "symmetricBeta3MainLeftRight": {
+      "beta3Only": 30,
+      "mainOnly": 873
+    },
+    "npmExact": "2026.5.12-beta.3",
+    "npmBeta": "2026.5.12-beta.3"
+  },
+  "plur1busPreflight": {
+    "branch": "neo-arch-openclaw-current-compat",
+    "head": "a2531e7f5f343fa3b6156e07e25ab30bb01a7fbd",
+    "diffStatAgainstNeoArch": [
+      "CHANGELOG.md | 3 +",
+      "extensions/memory-lancedb-namespaced/__tests__/manifest-schema.test.js | 8 +",
+      "reviews/openclaw-current-2026-05-12-high-medium-analysis.json | 530 +++++++++++++++++++++",
+      "reviews/openclaw-current-2026-05-12-plur1bus-v3.md | 96 ++++",
+      "scripts/install-memory-system.sh | 32 +-"
+    ]
+  },
+  "compatibilityDecision": {
+    "status": "compatible",
+    "codeFixRequired": false,
+    "breakingChangeFound": false,
+    "summary": "OpenClaw 2026.5.12-beta.3 loads PLUR1BUS v3 as a linked non-root plugin through manifest discovery, package.json openclaw.extensions runtime entry, runtime inspect, and plugins doctor. Functional embedding smokes are blocked without a real key or local embedding stub and are not counted as beta3 failures."
+  },
+  "releaseNotesAssessment": {
+    "method": "Release notes were used as context, but beta3-only novelty was classified from git compare/show/diff.",
+    "beta3OnlyScope": "3 commits between v2026.5.12-beta.2 and v2026.5.12-beta.3",
+    "broaderReleaseNoteSurfaces": [
+      "OPENCLAW_HOME precedence over HOME/USERPROFILE",
+      "linked plugin runtime facade and SDK alias fixes",
+      "plugin-inspector advisory behavior",
+      "dynamic/per-sender tool policies",
+      "cron.get",
+      "session actions",
+      "provider and gateway diagnostics",
+      "memory-wiki scope hardening"
+    ]
+  },
+  "commits": [
+    {
+      "sha": "b251a74b1c35f91778551e60a280e0695a70fab5",
+      "short": "b251a74b1c",
+      "title": "fix(plugins): alias codex native runtime for managed installs",
+      "category": "smoke-required",
+      "likelyImpact": "positive/fix",
+      "affectedPath": "linked external native plugin runtime facade and private runtime aliasing",
+      "plur1busRelevance": "direct for the linked-plugin smoke path, although PLUR1BUS does not import the Codex private runtime subpath",
+      "requiredTest": [
+        "plugins install --link <plur1bus-plugin-dir>",
+        "plugins inspect memory-lancedb-namespaced --json",
+        "plugins inspect memory-lancedb-namespaced --json --runtime",
+        "plugins doctor after install"
+      ],
+      "result": "pass",
+      "plur1busFixRequired": false
+    },
+    {
+      "sha": "9fd79d7b69e55404997d79c17f941259912511ef",
+      "short": "9fd79d7b69",
+      "title": "fix(plugins): keep codex runtime alias in packages",
+      "category": "smoke-required",
+      "likelyImpact": "positive/fix",
+      "affectedPath": "installed package private runtime aliasing",
+      "plur1busRelevance": "adjacent/direct to plugin runtime loading reliability; no PLUR1BUS import change needed",
+      "requiredTest": [
+        "plugins inspect memory-lancedb-namespaced --json --runtime",
+        "plugins doctor after runtime import"
+      ],
+      "result": "pass",
+      "plur1busFixRequired": false
+    },
+    {
+      "sha": "cc46ca9bee27776a84fc585a28f6cec56e22a03e",
+      "short": "cc46ca9bee",
+      "title": "chore(release): bump beta 3",
+      "category": "smoke-required",
+      "likelyImpact": "version/package metadata only",
+      "affectedPath": "package metadata",
+      "plur1busRelevance": "confirms exact beta3 release/install target",
+      "requiredTest": [
+        "npm view openclaw@2026.5.12-beta.3 version",
+        "openclaw --version"
+      ],
+      "result": "pass",
+      "plur1busFixRequired": false
+    }
+  ],
+  "manifestAndRuntime": {
+    "manifestPurpose": "discovery, config schema, and contracts",
+    "manifestRuntimeEntryPresent": false,
+    "packageRuntimeEntry": {
+      "source": "extensions/memory-lancedb-namespaced/package.json",
+      "field": "openclaw.extensions",
+      "value": [
+        "./index.js"
+      ]
+    },
+    "contractsTools": [
+      "knowledge_update",
+      "memory_forget",
+      "memory_recall",
+      "memory_store"
+    ],
+    "beta3LoaderResult": "pass"
+  },
+  "nonRoot": {
+    "executed": true,
+    "user": "kimi",
+    "uid": "1000",
+    "gid": "1000",
+    "home": "/tmp/openclaw-beta3-nonroot-d9S9Px/home",
+    "userprofile": "/tmp/openclaw-beta3-nonroot-d9S9Px/home",
+    "openclawHome": "/tmp/openclaw-beta3-nonroot-d9S9Px/home/.openclaw",
+    "prefix": "/tmp/openclaw-beta3-nonroot-d9S9Px/prefix",
+    "openclawVersion": "OpenClaw 2026.5.12-beta.3 (cc46ca9)",
+    "pluginInstall": "pass",
+    "doctor": "pass",
+    "inspect": "pass",
+    "runtimeInspect": "pass",
+    "functionalSmokes": "blocked",
+    "linkedRuntimeFacade": "pass",
+    "bundledFallbackDependency": "not-required",
+    "rootEscapes": [],
+    "environment": {
+      "openclawAllowRoot": "unset",
+      "xdgConfigHome": "/tmp/openclaw-beta3-nonroot-d9S9Px/home/.config",
+      "xdgCacheHome": "/tmp/openclaw-beta3-nonroot-d9S9Px/home/.cache",
+      "xdgDataHome": "/tmp/openclaw-beta3-nonroot-d9S9Px/home/.local/share",
+      "tmpdir": "/tmp/openclaw-beta3-nonroot-d9S9Px/tmp",
+      "npmConfigPrefix": "/tmp/openclaw-beta3-nonroot-d9S9Px/npm-global",
+      "npmConfigCache": "/tmp/openclaw-beta3-nonroot-d9S9Px/npm-cache"
+    },
+    "notes": [
+      "All counted OpenClaw smoke commands ran under the non-root user kimi.",
+      "The source repo was extracted under /tmp and the sibling memory-lancedb-stock dependencies were installed under the non-root user.",
+      "The root/system-path escape scan in the isolated OpenClaw home returned no hits.",
+      "OpenClaw created nested .openclaw profile/workspace paths below OPENCLAW_HOME; these stayed inside the isolated base.",
+      "No daemon install, onboarding, live gateway, /usr/local, /opt, or /root/.openclaw path was used."
+    ]
+  },
+  "verification": {
+    "static": {
+      "nodeCheckIndex": "pass",
+      "nodeCheckNeoArch": "pass",
+      "bashNInstaller": "pass",
+      "nodeTestPlugin": "pass",
+      "nodeTestPluginTests": "9/9 pass",
+      "npmPack": {
+        "status": "pass",
+        "tarball": "memory-lancedb-namespaced-3.0.0-beta.2.tgz",
+        "shasum": "ff857c53953dc85fd8bf07688d64c03394739f08"
+      }
+    },
+    "openclaw": {
+      "installCliExactBeta3": "pass",
+      "pluginsDoctorBeforeInstall": "pass",
+      "pluginsInstallLink": "pass",
+      "pluginsInspectJson": "pass",
+      "pluginsInspectJsonRuntime": "pass",
+      "pluginsDoctorAfterRuntime": "pass"
+    },
+    "functional": {
+      "memory_store": "blocked-no-real-embedding-key-or-local-stub",
+      "memory_recall": "blocked-no-real-embedding-key-or-local-stub",
+      "memory_forget": "blocked-no-real-embedding-key-or-local-stub",
+      "knowledge_update": "blocked-no-real-embedding-key-or-local-stub",
+      "baseDbPath": "/tmp/openclaw-beta3-nonroot-d9S9Px/home/.openclaw/memory/lancedb-namespaced"
+    }
+  },
+  "integrationBacklog": [
+    {
+      "surface": "session_end shutdown/restart",
+      "value": "cleaner final journal flush and state compaction",
+      "risk": "medium; duplicate capture with agent_end if not deduped",
+      "recommendation": "backlog"
+    },
+    {
+      "surface": "cron.get",
+      "value": "read-only heartbeat/status diagnostics for memory maintenance",
+      "risk": "low",
+      "recommendation": "backlog"
+    },
+    {
+      "surface": "dynamic/per-sender tool policies",
+      "value": "context-sensitive memory tool exposure",
+      "risk": "medium; policy mistakes can hide tools",
+      "recommendation": "backlog after policy tests"
+    },
+    {
+      "surface": "plugin SDK session actions and scheduled turns",
+      "value": "deferred consolidation or review turns",
+      "risk": "medium/high; behavior promotion risk",
+      "recommendation": "backlog only"
+    },
+    {
+      "surface": "active model metadata",
+      "value": "model/provider provenance on memory writes",
+      "risk": "low/medium",
+      "recommendation": "backlog"
+    }
+  ]
+}
