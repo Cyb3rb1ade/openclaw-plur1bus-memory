@@ -1,0 +1,148 @@
+{
+  "generatedAt": "2026-05-13T00:45:00+02:00",
+  "target": {
+    "releaseUrl": "https://github.com/openclaw/openclaw/releases/tag/v2026.5.12-beta.2",
+    "tag": "v2026.5.12-beta.2",
+    "commit": "fdb6e92ff57fce02be6d967d915623dd1d327fdb",
+    "previousBeta": "v2026.5.12-beta.1",
+    "previousBetaCommit": "1824464bf23e37b63eedce75f5c87f9ff9df1fae",
+    "originMainAtReview": "f96cfeeb73012465152d3472ff813cfeabc5bfa8",
+    "npmExact": "2026.5.12-beta.2",
+    "npmBetaDistTagAtReview": "2026.5.12-beta.3"
+  },
+  "preflight": {
+    "repoHead": "a2531e7f5f343fa3b6156e07e25ab30bb01a7fbd",
+    "branch": "neo-arch-openclaw-current-compat",
+    "diffStatNeoArchToCompat": "5 files changed, 666 insertions(+), 3 deletions(-)",
+    "exactBeta2Resolvable": true,
+    "usedDistTagFallback": false
+  },
+  "ranges": {
+    "beta1ToBeta2": {
+      "range": "v2026.5.12-beta.1..v2026.5.12-beta.2",
+      "commitCount": 18
+    },
+    "beta2ToOriginMain": {
+      "range": "v2026.5.12-beta.2..origin/main",
+      "commitCount": 785,
+      "use": "forward-look only"
+    }
+  },
+  "compatibilityDecision": {
+    "status": "compatible",
+    "plur1busFixRequired": false,
+    "notes": [
+      "Beta2 accepts the package-level runtime entry from package.json openclaw.extensions [\"./index.js\"].",
+      "openclaw.plugin.json remains discovery/config/contracts only and does not need a runtime entry.",
+      "Non-root loader, inspect, runtime inspect, and doctor passed in an isolated /tmp prefix.",
+      "Functional embedding smokes are blocked without a real test key or local embedding stub."
+    ]
+  },
+  "releaseNotesClassification": [
+    {
+      "area": "codex-auth-profile-media-tools",
+      "decision": "no-direct-impact",
+      "summary": "Keeps auth-profile-backed Codex media tools available. Useful auth-profile pattern, no PLUR1BUS memory loader break."
+    },
+    {
+      "area": "dynamic-per-sender-tool-policies",
+      "decision": "smoke-required",
+      "summary": "Operators can restrict tools by sender identity. PLUR1BUS should be smoke-tested under representative policies before live rollout."
+    },
+    {
+      "area": "gateway-token-caps",
+      "decision": "integration-opportunity",
+      "summary": "Gateway OpenAI HTTP now honors max_completion_tokens/max_tokens. Useful for future bounded PLUR1BUS curation/report jobs."
+    },
+    {
+      "area": "provider-stream-diagnostics",
+      "decision": "no-direct-impact",
+      "summary": "Split SSE/JSON draining and bounded Azure first-event diagnostics reduce host-side stalled turns before agent_end capture."
+    },
+    {
+      "area": "provider-error-surfacing",
+      "decision": "no-direct-impact",
+      "summary": "Improves user-facing backend failure text. No PLUR1BUS API break."
+    },
+    {
+      "area": "cron.get",
+      "decision": "integration-opportunity",
+      "summary": "Could support future PLUR1BUS cron/curation introspection without promoting cron output to memory evidence."
+    },
+    {
+      "area": "memory-wiki-scope-hardening",
+      "decision": "smoke-required",
+      "summary": "Admin/write scope hardening requires memory_search corpus=wiki/all smokes before live update."
+    },
+    {
+      "area": "plugin-inspector-advisory",
+      "decision": "no-direct-impact",
+      "summary": "Reinforces plugins inspect/doctor as release gates."
+    },
+    {
+      "area": "plugin-sdk-subpaths",
+      "decision": "no-direct-impact",
+      "summary": "No removed/deprecated SDK subpath import was found in PLUR1BUS current code."
+    },
+    {
+      "area": "pnpm11-source-install",
+      "decision": "smoke-required",
+      "summary": "Source install behavior tightened. Non-root test installed PLUR1BUS stock deps with npm in isolated /tmp."
+    }
+  ],
+  "commits": [
+    {"sha": "fdb6e92ff57fce02be6d967d915623dd1d327fdb", "short": "fdb6e92ff5", "decision": "no-direct-impact", "subject": "test(auth): type model check auth profile mocks"},
+    {"sha": "7f0fc0bab46c4e8b76c1986dc17b9e771d849f5e", "short": "7f0fc0bab4", "decision": "no-direct-impact", "subject": "build(canvas): refresh a2ui bundle hash"},
+    {"sha": "8f212d0b6f4cba6e5534426de4f1778520de86ba", "short": "8f212d0b6f", "decision": "smoke-required", "subject": "chore(release): bump beta 2"},
+    {"sha": "b86c387d6c9dce16dc20f741de6c0d985d37aa85", "short": "b86c387d6c", "decision": "no-direct-impact", "subject": "Handle generic provider internal errors (#49401)"},
+    {"sha": "23dc2bfcd8dd3ca01a3b1a8daa66935f4f24d9db", "short": "23dc2bfcd8", "decision": "smoke-required", "subject": "fix(azure):Drain split provider stream frames (#80927)"},
+    {"sha": "985bc40711e0e4eebfce8fd98537046566b176a2", "short": "985bc40711", "decision": "no-direct-impact", "subject": "fix: surface silent model fallback failures (#80917)"},
+    {"sha": "eab66220f85e9dd6431bc4b8460ca888d2c785e8", "short": "eab66220f8", "decision": "integration-opportunity", "subject": "fix(gateway): wire max_completion_tokens/max_tokens through openai-http (#81013)"},
+    {"sha": "22a6717e11c6c9d94cefab868e486dbf2ab25f55", "short": "22a6717e11", "decision": "no-direct-impact", "subject": "Keep Codex media tools backed by auth profiles (#81059)"},
+    {"sha": "a4743ad1809dc24c69b7a7e0a87b9df6316b029d", "short": "a4743ad180", "decision": "no-direct-impact", "subject": "fix(codex): gate migration on app readiness (#80815)"},
+    {"sha": "1df4df6eed7adcd1e4ba321c71835a587c3b81af", "short": "1df4df6eed", "decision": "no-direct-impact", "subject": "fix(docker): persist auth profile key mount"},
+    {"sha": "ca8bc5500dfcc8fd817f70022a2ffc2536c50c12", "short": "ca8bc5500d", "decision": "no-direct-impact", "subject": "fix(onboard): short-circuit model auth check"},
+    {"sha": "930046df049ca3ab888fc17ecc1f8f6bfbc0c9d6", "short": "930046df04", "decision": "no-direct-impact", "subject": "fix(onboard): accept Codex auth in model check"},
+    {"sha": "03e4b035f1a788d0a4f1582142ee4d16268792be", "short": "03e4b035f1", "decision": "smoke-required", "subject": "fix(matrix): stop runtime npm install from parent-derived cwd"},
+    {"sha": "6115eada6d96d19cacdb900f944df388c7f288f7", "short": "6115eada6d", "decision": "smoke-required", "subject": "docs: note baileys install policy"},
+    {"sha": "84a2060a64c04f2a5827de4f8bed6e8c869a7b18", "short": "84a2060a64", "decision": "no-direct-impact", "subject": "fix(codex): backport auth profiles to dynamic tools"},
+    {"sha": "bc6090502cef4638d20dea2160d414ebc0fcd360", "short": "bc6090502c", "decision": "no-direct-impact", "subject": "ci: allow focused media video live reruns"},
+    {"sha": "d3a8a45119bbe610baab2db8ea559ca406f63fa8", "short": "d3a8a45119", "decision": "no-direct-impact", "subject": "ci: run advisory live wrappers with bash"},
+    {"sha": "b12cd4358d05c6e184ae6383e6de6f04818aafc5", "short": "b12cd4358d", "decision": "no-direct-impact", "subject": "ci: keep Docker CLI backend live test noninteractive"}
+  ],
+  "nonRoot": {
+    "executed": true,
+    "uid": "1000",
+    "gid": "1000",
+    "user": "kimi",
+    "home": "/tmp/openclaw-beta2-nonroot-qisz30/home",
+    "prefix": "/tmp/openclaw-beta2-nonroot-qisz30/prefix",
+    "openclawVersion": "OpenClaw 2026.5.12-beta.2 (fdb6e92)",
+    "pluginInstall": "pass",
+    "doctor": "pass",
+    "inspect": "pass",
+    "runtimeInspect": "pass",
+    "functionalSmokes": "blocked",
+    "rootEscapes": [],
+    "notes": [
+      "OpenClaw commands ran under uid 1000 without OPENCLAW_ALLOW_ROOT.",
+      "Initial plugin candidate was blocked because the copied testbed path was world-writable; permissions were tightened and the runtime inspect then passed.",
+      "PLUR1BUS was linked from a full /tmp repo copy with memory-lancedb-stock node_modules installed.",
+      "Functional embedding smokes are blocked because no real embedding key or local embedding stub was available."
+    ]
+  },
+  "verification": {
+    "nodeCheckIndex": "pass",
+    "nodeCheckNeoArch": "pass",
+    "bashNInstaller": "pass",
+    "nodeTests": "pass: 9/9",
+    "npmPack": "pass: memory-lancedb-namespaced-3.0.0-beta.2.tgz sha1 ff857c53953dc85fd8bf07688d64c03394739f08"
+  },
+  "integrationBacklog": [
+    {"surface": "session_end shutdown/restart", "decision": "backlog", "reason": "Could flush state on gateway stop but risks double capture with agent_end."},
+    {"surface": "cron.get", "decision": "backlog", "reason": "Useful for curation schedule introspection without behavior promotion."},
+    {"surface": "per-sender tool policies", "decision": "backlog", "reason": "Can restrict memory tools for public/sandboxed senders; needs policy-aware smoke tests."},
+    {"surface": "Plugin SDK session actions and scheduleSessionTurn", "decision": "backlog", "reason": "Potential native curation workflow carrier; not needed for beta2 compatibility."},
+    {"surface": "active model metadata", "decision": "backlog", "reason": "Could improve diagnostics; avoid coupling PLUR1BUS to host model internals now."}
+  ]
+}
