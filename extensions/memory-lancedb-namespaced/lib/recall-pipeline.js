@@ -6,7 +6,7 @@
  * Recall-Komponenten an EINER Stelle:
  *
  *   Query → Embedding → LanceDB Vektorsuche → Importance-Boost
- *         → Cohere Rerank (optional) → Inter-Result-Dedup
+ *         → provider-aware Rerank (optional) → Inter-Result-Dedup
  *         → kombiniert mit Canonical-First (KNOWLEDGE.md)
  *         → Top-N Result-Pakete
  */
@@ -200,7 +200,9 @@ export async function runRecallPipeline({
   logger = console,
 }) {
   // 1. Embedding
-  const vector = await embeddings.embed(query);
+  const vector = typeof embeddings.embedQuery === "function"
+    ? await embeddings.embedQuery(query)
+    : await embeddings.embed(query);
 
   // 2. LanceDB Vektorsuche
   const fetchLimit = reranker ? Math.max(rerankCandidates, topN * 3) : topN;
@@ -235,7 +237,7 @@ export async function runRecallPipeline({
   // 4. Importance-Boost auf vector results
   const boosted = applyImportanceBoost(results, importanceBoost);
 
-  // 5. Cohere Rerank (optional)
+  // 5. Provider-aware Rerank (optional)
   let ordered = boosted;
   if (reranker && boosted.length > 1) {
     try {

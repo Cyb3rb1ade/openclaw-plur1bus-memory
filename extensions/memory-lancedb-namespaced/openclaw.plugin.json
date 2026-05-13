@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "Memory (LanceDB, per-Agent)",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory and OpenClaw-native turn journal, provenance, curation, and recall.",
-  "version": "3.0.0-beta.2",
+  "version": "3.1.0-beta.1",
   "contracts": {
     "tools": [
       "knowledge_update",
@@ -22,6 +22,14 @@
           "apiKey": {
             "type": "string"
           },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "openai-compatible",
+              "local-transformers"
+            ]
+          },
           "model": {
             "type": "string"
           },
@@ -30,6 +38,27 @@
           },
           "dimensions": {
             "type": "number"
+          },
+          "local": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "dimensions": {
+                "type": "number"
+              },
+              "queryPrefix": {
+                "type": "string"
+              },
+              "passagePrefix": {
+                "type": "string"
+              },
+              "cacheDir": {
+                "type": "string"
+              }
+            }
           },
           "fallback": {
             "type": "object",
@@ -47,9 +76,7 @@
             }
           }
         },
-        "required": [
-          "apiKey"
-        ]
+        "required": []
       },
       "baseDbPath": {
         "type": "string"
@@ -134,6 +161,14 @@
           "enabled": {
             "type": "boolean"
           },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "cohere",
+              "local-transformers",
+              "disabled"
+            ]
+          },
           "apiKey": {
             "type": "string"
           },
@@ -142,11 +177,21 @@
           },
           "candidates": {
             "type": "number"
+          },
+          "local": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "cacheDir": {
+                "type": "string"
+              }
+            }
           }
         },
-        "required": [
-          "apiKey"
-        ]
+        "required": []
       },
       "merging": {
         "type": "object",

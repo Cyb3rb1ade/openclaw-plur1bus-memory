@@ -68,6 +68,33 @@ test("plugin registers without embedding secrets for inspect and doctor flows", 
   }
 });
 
+test("plugin registers local-transformers config without api keys or model imports", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi({
+      baseDbPath: join(tmp, "db"),
+      embedding: {
+        provider: "local-transformers",
+        local: {
+          model: "intfloat/multilingual-e5-small",
+          dimensions: 384,
+        },
+      },
+      reranker: {
+        provider: "local-transformers",
+        enabled: true,
+        local: {
+          model: "Alibaba-NLP/gte-reranker-modernbert-base",
+        },
+      },
+    });
+    assert.ok(registered.tools.length > 0);
+    assert.ok(registered.commands.some(command => command.name === "plur1bus"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("autoRecall false disables dynamic prompt recall but leaves manual and corpus recall available", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
   try {

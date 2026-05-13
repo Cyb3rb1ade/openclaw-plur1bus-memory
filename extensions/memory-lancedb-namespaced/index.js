@@ -18,7 +18,7 @@
  *     byte-offset state; siehe CHANGELOG).
  *
  * Recall-Pipeline (v1.8.0+):
- *   Query → Embedding → LanceDB Top-N → Importance-Boost → Cohere Rerank
+ *   Query → Embedding → LanceDB Top-N → Importance-Boost → optional Rerank
  *   → Inter-Result-Dedup → kombiniert mit Canonical-First (KNOWLEDGE.md)
  *   → Top-5 als <relevant-memories> injiziert.
  *
@@ -53,6 +53,12 @@ import {
   transitionRecordStatus,
   workspaceKeyFromContext,
 } from "./lib/neo-arch.js";
+import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
+import { EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
+import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
+import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
+import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
+import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -61,12 +67,7 @@ const LANCEDB_PATH = join(__pluginDir, "../memory-lancedb-stock/node_modules/@la
 const OPENAI_PATH  = join(__pluginDir, "../memory-lancedb-stock/node_modules/openai/index.js");
 
 const DEFAULT_BASE_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
-const DEFAULT_MODEL = "text-embedding-3-small";
-
-const EMBEDDING_DIMENSIONS = {
-  "text-embedding-3-small": 1536,
-  "text-embedding-3-large": 3072,
-};
+const DEFAULT_MODEL = LEGACY_DEFAULT_MODEL;
 
 const TABLE_NAME = "memories";
 
@@ -75,7 +76,7 @@ let _lancedb = null;
 let _OpenAI = null;
 
 // ============================================================================
-// Reranker — Cohere Rerank API v2
+// Legacy Reranker — Cohere Rerank API v2 (kept for old local test imports)
 // ============================================================================
 
 class Reranker {
@@ -893,19 +894,20 @@ const plugin = {
     const cfg = api.pluginConfig || {};
 
     const embeddingCfg = cfg.embedding || {};
-    const apiKey = embeddingCfg.apiKey
-      ? resolveEnvVars(embeddingCfg.apiKey)
-      : resolveOptionalEnvVars("${OPENAI_API_KEY}");
-    const model = embeddingCfg.model || DEFAULT_MODEL;
-    const baseUrl = embeddingCfg.baseUrl;
-    const dimensions = embeddingCfg.dimensions;
-    const fallbackEmbeddingCfg = embeddingCfg.fallback
+    const normalizedEmbeddingCfg = normalizeEmbeddingConfig(embeddingCfg, { mode: "existing" });
+    const apiKey = normalizedEmbeddingCfg.provider === "local-transformers"
+      ? undefined
+      : (normalizedEmbeddingCfg.apiKey ? resolveEnvVars(normalizedEmbeddingCfg.apiKey) : resolveOptionalEnvVars("${OPENAI_API_KEY}"));
+    const model = normalizedEmbeddingCfg.model || DEFAULT_MODEL;
+    const baseUrl = normalizedEmbeddingCfg.baseUrl;
+    const dimensions = normalizedEmbeddingCfg.dimensions;
+    const fallbackEmbeddingCfg = normalizedEmbeddingCfg.fallback
       ? {
-          apiKey: embeddingCfg.fallback.apiKey
-            ? resolveEnvVars(embeddingCfg.fallback.apiKey)
+          apiKey: normalizedEmbeddingCfg.fallback.apiKey
+            ? resolveEnvVars(normalizedEmbeddingCfg.fallback.apiKey)
             : resolveOptionalEnvVars("${OPENAI_API_KEY_FALLBACK}"),
-          model: embeddingCfg.fallback.model || model,
-          baseUrl: embeddingCfg.fallback.baseUrl,
+          model: normalizedEmbeddingCfg.fallback.model || model,
+          baseUrl: normalizedEmbeddingCfg.fallback.baseUrl,
         }
       : null;
     if (fallbackEmbeddingCfg) api.logger.info(`memory-lancedb-namespaced: embedding fallback configured (${fallbackEmbeddingCfg.model} @ ${fallbackEmbeddingCfg.baseUrl || "openai"})`);
@@ -1050,7 +1052,9 @@ const plugin = {
     };
 
     const pool = new AgentDbPool(baseDbPath, vectorDim);
-    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions || vectorDim, fallbackEmbeddingCfg);
+    const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
+      ? new LocalTransformersEmbeddingProvider({ ...normalizedEmbeddingCfg.local, dimensions: dimensions || vectorDim })
+      : new OpenAIEmbeddingProvider({ ...normalizedEmbeddingCfg, apiKey: embeddingCfg.apiKey, fallback: embeddingCfg.fallback, dimensions: dimensions || vectorDim });
 
     // Per-agent capture queue — serializes concurrent agent_end events to prevent DB race conditions
     const captureQueues = new Map(); // agentId → Promise (tail of queue)
@@ -1062,17 +1066,20 @@ const plugin = {
       next.then(() => { if (captureQueues.get(agentId) === next) captureQueues.delete(agentId); });
     }
 
-    // Reranker (optional — nur wenn konfiguriert)
-    const rerankerCfg = cfg.reranker || {};
-    const rerankerEnabled = rerankerCfg.enabled !== false && !!rerankerCfg.apiKey;
-    const reranker = rerankerEnabled
-      ? new Reranker(resolveEnvVars(rerankerCfg.apiKey), rerankerCfg.model)
-      : null;
+    // Reranker (optional — provider-aware since v3.1)
+    const rerankerCfg = normalizeRerankerConfig(cfg.reranker || {});
+    let reranker = null;
+    if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
+      reranker = new CohereRerankerProvider(rerankerCfg);
+    } else if (rerankerCfg.provider === "local-transformers" && rerankerCfg.enabled) {
+      reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
+    }
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
     const rerankCandidates = rerankerCfg.candidates ?? 20;
 
     if (reranker) {
-      api.logger.info(`memory-lancedb-namespaced: reranker enabled (model: ${rerankerCfg.model || "rerank-v3.5"})`);
+      const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
+      api.logger.info(`memory-lancedb-namespaced: reranker enabled (${rerankerCfg.provider}${experimental}, model: ${reranker.model})`);
     }
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
@@ -1602,7 +1609,9 @@ const plugin = {
                 return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten.` }] };
               }
               if (params.query) {
-                const vector = await embeddings.embed(params.query);
+                const vector = typeof embeddings.embedQuery === "function"
+                  ? await embeddings.embedQuery(params.query)
+                  : await embeddings.embed(params.query);
                 const results = await db.search(vector, 5, forgetThreshold);
                 if (results.length === 0) return { content: [{ type: "text", text: "No matching memory found." }] };
                 if (results.length > 1) {
