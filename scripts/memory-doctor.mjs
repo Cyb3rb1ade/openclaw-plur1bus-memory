@@ -24,6 +24,9 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 import { parseSourceMemoryIds, stripFrontmatter } from "../extensions/memory-lancedb-namespaced/lib/frontmatter.js";
+import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "../extensions/memory-lancedb-namespaced/lib/providers/config-normalize.js";
+import { LocalTransformersEmbeddingProvider } from "../extensions/memory-lancedb-namespaced/lib/providers/embedding-local-transformers.js";
+import { LocalTransformersRerankerProvider } from "../extensions/memory-lancedb-namespaced/lib/providers/reranker-local-transformers.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = join(homedir(), ".openclaw", "openclaw.json");
@@ -532,40 +535,57 @@ async function cmdProviderCheck(args) {
   const emb = cfg.plugin?.embedding;
   if (!emb) { console.error("Keine embedding-Config gefunden."); process.exit(1); }
 
-  const apiKey = emb.apiKey?.startsWith("${")
-    ? process.env[emb.apiKey.replace(/^\$\{|}$/g, "")]
-    : emb.apiKey;
-  const baseUrl = emb.baseUrl || null;
-  const model = emb.model;
-  const configDim = emb.dimensions;
+  const embCfg = normalizeEmbeddingConfig(emb, { mode: "existing" });
+  const rrCfg = normalizeRerankerConfig(cfg.plugin?.reranker || {});
+  const baseUrl = embCfg.baseUrl || null;
+  const model = embCfg.model;
+  const configDim = embCfg.dimensions;
 
   console.log(`\n=== Embedding-Provider-Check ===\n`);
-  console.log(`Endpoint:      ${baseUrl || "https://api.openai.com/v1 (default)"}`);
+  console.log(`Provider:      ${embCfg.provider}`);
+  console.log(`Endpoint:      ${embCfg.provider === "local-transformers" ? "(local transformers)" : (baseUrl || "https://api.openai.com/v1 (default)")}`);
   console.log(`Modell:        ${model}`);
   console.log(`Config-Dim:    ${configDim || "(nicht gesetzt — wird aus EMBEDDING_DIMENSIONS-Map default)"}`);
-  console.log(`API-Key:       ${apiKey ? `${apiKey.slice(0, 8)}…${apiKey.slice(-4)}` : "(fehlt!)"}`);
+  const apiKey = embCfg.apiKey?.startsWith("${")
+    ? process.env[embCfg.apiKey.replace(/^\$\{|}$/g, "")]
+    : embCfg.apiKey;
+  console.log(`API-Key:       ${embCfg.provider === "local-transformers" ? "(nicht erforderlich)" : (apiKey ? `${apiKey.slice(0, 8)}…${apiKey.slice(-4)}` : "(fehlt!)")}`);
   console.log();
 
-  if (!apiKey) {
+  if (embCfg.provider !== "local-transformers" && !apiKey) {
     console.error("✗ API-Key fehlt oder ENV-Variable nicht gesetzt.");
     process.exit(1);
   }
 
   // Test 1: Embedding-Call
   console.log("[1/3] Test-Embedding-Call …");
-  const OpenAI = await getOpenAI();
-  const client = new OpenAI({ apiKey, ...(baseUrl ? { baseURL: baseUrl } : {}) });
-  const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
-  const req = { model, input: "provider-check probe", encoding_format: "float" };
-  if (isOpenAi && configDim) req.dimensions = configDim;
   let actualDim;
-  try {
-    const r = await client.embeddings.create(req);
-    actualDim = r.data[0].embedding.length;
-    console.log(`     ✓ Modell antwortet, ${actualDim}-dim Vektoren`);
-  } catch (e) {
-    console.error(`     ✗ Embedding-Call fehlgeschlagen: ${e.message}`);
-    process.exit(1);
+  if (embCfg.provider === "local-transformers") {
+    try {
+      const provider = new LocalTransformersEmbeddingProvider(embCfg.local);
+      const q = await provider.embedQuery("provider-check probe");
+      const p = await provider.embedPassage("provider-check passage");
+      actualDim = q.length;
+      if (p.length !== actualDim) throw new Error(`Query-Dim ${actualDim}, Passage-Dim ${p.length}`);
+      console.log(`     ✓ Local feature-extraction antwortet, query/passage ${actualDim}-dim`);
+    } catch (e) {
+      console.error(`     ✗ Local embedding failed: ${e.message}`);
+      process.exit(1);
+    }
+  } else {
+    const OpenAI = await getOpenAI();
+    const client = new OpenAI({ apiKey, ...(baseUrl ? { baseURL: baseUrl } : {}) });
+    const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
+    const req = { model, input: "provider-check probe", encoding_format: "float" };
+    if (isOpenAi && configDim) req.dimensions = configDim;
+    try {
+      const r = await client.embeddings.create(req);
+      actualDim = r.data[0].embedding.length;
+      console.log(`     ✓ Modell antwortet, ${actualDim}-dim Vektoren`);
+    } catch (e) {
+      console.error(`     ✗ Embedding-Call fehlgeschlagen: ${e.message}`);
+      process.exit(1);
+    }
   }
 
   // Test 2: Config-Dim vs. tatsächliche Dim
@@ -612,7 +632,36 @@ async function cmdProviderCheck(args) {
     console.error(`  2. Fresh-DB pro Agent: rm -r /pfad/zu/lancedb-namespaced/<agent>/ — Dreaming/Migrate/embed-promoted füllt sie wieder`);
     process.exit(1);
   }
-  console.log(`✓ Provider-Check bestanden (${agents.length} Agenten geprüft, alle DB-Dim = ${actualDim})`);
+  console.log(`✓ Embedding-Check bestanden (${agents.length} Agenten geprüft, alle DB-Dim = ${actualDim})`);
+
+  console.log(`\n=== Reranker-Provider-Check ===\n`);
+  console.log(`Provider:      ${rrCfg.provider}`);
+  console.log(`Modell:        ${rrCfg.model || rrCfg.local?.model || "(none)"}`);
+  if (rrCfg.provider === "disabled" || rrCfg.enabled === false) {
+    console.log("     ℹ Reranker deaktiviert — Vector-only Recall bleibt aktiv.");
+  } else if (rrCfg.provider === "local-transformers") {
+    try {
+      const reranker = new LocalTransformersRerankerProvider(rrCfg.local || rrCfg);
+      const rows = await reranker.rerank("provider check query", ["irrelevant document", "provider check query relevant document"], 2);
+      if (!Array.isArray(rows) || rows.length === 0 || typeof rows[0].index !== "number" || typeof rows[0].relevance_score !== "number") {
+        throw new Error("local reranker returned unsupported result shape");
+      }
+      console.log(`     ✓ Local reranker smoke passed (${rows.map(r => `${r.index}:${r.relevance_score.toFixed(4)}`).join(", ")})`);
+    } catch (e) {
+      console.error(`     ✗ Local reranker blocked/experimental pending smoke: ${e.message}`);
+      process.exit(1);
+    }
+  } else if (rrCfg.provider === "cohere") {
+    const rrKey = rrCfg.apiKey?.startsWith("${")
+      ? process.env[rrCfg.apiKey.replace(/^\$\{|}$/g, "")]
+      : rrCfg.apiKey;
+    if (!rrKey) {
+      console.log("     ⚠ Cohere API-Key fehlt — Reranker wird im Runtime-Pfad nicht aktiv sein.");
+    } else {
+      console.log("     ✓ Cohere config present (network probe intentionally omitted unless eval/pipeline uses it).");
+    }
+  }
+  console.log(`✓ Provider-Check beendet.`);
 }
 
 async function cmdAll() {

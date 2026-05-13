@@ -559,11 +559,14 @@ ACTIVE_MEMORY_MODE=""
 # versehentlich Keys, Pfade oder moderne 4.x-Konfigurationen überschreiben.
 EXISTING_PLUGIN_ENTRY=$(run_target "jq -c '.plugins.entries[\"memory-lancedb-namespaced\"] // null' '$TARGET_CONFIG' 2>/dev/null" || echo "null")
 EXISTING_EMBEDDING_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_EMBEDDING_PROVIDER=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.provider // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_EMBEDDING_MODEL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_EMBEDDING_BASE_URL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.baseUrl // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_EMBEDDING_DIMS=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.embedding.dimensions // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_BASE_DB_PATH=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.baseDbPath // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_COHERE_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.reranker.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_RERANKER_PROVIDER=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.reranker.provider // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+EXISTING_RERANKER_MODEL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.reranker.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 EXISTING_MEMORY_SLOT=$(run_target "jq -r '.plugins.slots.memory // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 MEMORY_SEARCH_EMBEDDING_KEY=$(run_target "jq -r '.agents.defaults.memorySearch.remote.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 MEMORY_SEARCH_EMBEDDING_MODEL=$(run_target "jq -r '.agents.defaults.memorySearch.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
@@ -613,86 +616,85 @@ else
   [[ "$ACTIVE_MEMORY_MODE" == "yes" ]] && USE_ACTIVE_MEMORY="y"
 fi
 
-USE_OPENROUTER="n"
+EMBEDDING_PROVIDER="openai"
 EMBEDDING_BASE_URL=""
 EMBEDDING_DIMENSIONS=""
+EMBEDDING_LOCAL_MODEL="intfloat/multilingual-e5-small"
+EMBEDDING_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
+RERANKER_PROVIDER="cohere"
+RERANKER_MODEL="rerank-v3.5"
+RERANKER_LOCAL_MODEL="Alibaba-NLP/gte-reranker-modernbert-base"
+RERANKER_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
 
 if [[ "$KEEP_EXISTING_MEMORY_CONFIG" != "1" ]]; then
 echo ""
 info "Embedding-Provider-Auswahl:"
-info "  → Der User entscheidet den Provider."
-info "  → Defaults kommen aus bestehender OpenClaw-MemorySearch-Config, falls vorhanden."
-info "  → OpenRouter (v2.1+, opt-in) — 20+ Embedding-Modelle (BAAI/BGE, Mistral, Gemini, Qwen, NVIDIA-free, …)"
-info "Hinweis: Reranker (Cohere) wird unten separat gefragt — nicht von dieser Auswahl betroffen."
+info "  1) OpenAI text-embedding-3-large — empfohlen, remote, API-Key erforderlich."
+info "  2) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
+info "  3) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
+prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=lokal, custom=OpenAI-kompatibel" "openai" "openai" "local" "custom"
 
-prompt_choice EMBEDDING_PROVIDER_MODE "Embedding-Provider: default=OpenAI-kompatibel/manuell, openrouter=OpenRouter" "default" "default" "openrouter"
+case "$EMBEDDING_PROVIDER_MODE" in
+  openai)
+    EMBEDDING_PROVIDER="openai"
+    OPENAI_KEY="${EMBEDDING_KEY_DEFAULT}"
+    prompt_input OPENAI_KEY "OpenAI API Key" "$OPENAI_KEY"
+    EMBEDDING_MODEL="text-embedding-3-large"
+    EMBEDDING_DIMENSIONS=3072
+    ;;
+  local)
+    EMBEDDING_PROVIDER="local-transformers"
+    EMBEDDING_MODEL="$EMBEDDING_LOCAL_MODEL"
+    EMBEDDING_DIMENSIONS=384
+    info "Lokaler Provider nutzt $EMBEDDING_MODEL (384d) mit query/passage Prefixing."
+    info "Erster echter Local-Smoke/Call lädt das Modell nach $EMBEDDING_LOCAL_CACHE_DIR."
+    ;;
+  custom)
+    EMBEDDING_PROVIDER="openai-compatible"
+    prompt_input OPENAI_KEY "Embedding API Key" "$EMBEDDING_KEY_DEFAULT"
+    prompt_input EMBEDDING_BASE_URL "Embedding Base-URL" "${EXISTING_EMBEDDING_BASE_URL:-}"
+    EMBEDDING_MODEL="$EMBEDDING_MODEL_DEFAULT"
+    prompt_input EMBEDDING_MODEL "Embedding-Modell" "$EMBEDDING_MODEL"
+    EMBEDDING_DIMENSIONS="${EXISTING_EMBEDDING_DIMS:-}"
+    if [[ -z "$EMBEDDING_DIMENSIONS" && "$EMBEDDING_MODEL" == *"text-embedding-3-large"* ]]; then
+      EMBEDDING_DIMENSIONS=3072
+    elif [[ -z "$EMBEDDING_DIMENSIONS" && ( "$EMBEDDING_MODEL" == *"small"* || "$EMBEDDING_MODEL" == *"ada"* ) ]]; then
+      EMBEDDING_DIMENSIONS=1536
+    elif [[ -z "$EMBEDDING_DIMENSIONS" ]]; then
+      EMBEDDING_DIMENSIONS=1024
+    fi
+    prompt_input EMBEDDING_DIMENSIONS "Embedding-Dimension (muss zur DB passen)" "$EMBEDDING_DIMENSIONS"
+    ;;
+esac
 
-if [[ "$EMBEDDING_PROVIDER_MODE" == "openrouter" ]]; then
-  USE_OPENROUTER="y"
-  prompt_input OPENAI_KEY "OpenRouter API Key" "\${OPENROUTER_API_KEY}"
-  EMBEDDING_BASE_URL="https://openrouter.ai/api/v1"
-
-  echo ""
-  info "Lade verfügbare Embedding-Modelle von OpenRouter…"
-  OR_MODELS_JSON=$(curl -sf --max-time 15 "https://openrouter.ai/api/v1/embeddings/models" 2>/dev/null || echo "")
-  if [[ -z "$OR_MODELS_JSON" ]]; then
-    warn "OpenRouter-API nicht erreichbar — falle auf manuelle Modell-Eingabe zurück."
-    EMBEDDING_MODEL="openai/text-embedding-3-large"
-    prompt_input EMBEDDING_MODEL "OpenRouter Embedding-Modell" "$EMBEDDING_MODEL"
-  else
-    # Parse + zeige als Tabelle
-    echo "$OR_MODELS_JSON" | jq -r '
-      .data[] |
-      [.id, (.context_length // 0 | tostring), (.pricing.prompt // "0"), (.description // "" | .[0:70])] |
-      @tsv
-    ' | nl -w3 -s'. ' | awk -F'\t' '{ printf "  %s%-50s %8s ctx  $%-12s %s\n", $1, $2, $3, $4, $5 }' | head -40
-    echo ""
-    info "Tipp: openai/text-embedding-3-large (3072d, multi-lingual, beste Qualität) ist Standard."
-    EMBEDDING_MODEL="openai/text-embedding-3-large"
-    prompt_input EMBEDDING_MODEL "OpenRouter-Modell-ID (z.B. baai/bge-m3, mistralai/mistral-embed-2312)" "$EMBEDDING_MODEL"
-  fi
-
-  # Test-Embedding-Call → Dimension automatisch ermitteln
-  echo ""
-  info "Test-Embedding-Call → ermittle echte Vektor-Dimension…"
-  RESOLVED_KEY="$OPENAI_KEY"
-  [[ "$RESOLVED_KEY" == *'${'* ]] && RESOLVED_KEY=$(eval echo "$RESOLVED_KEY")
-  TEST_RESP=$(curl -sf --max-time 30 -X POST "https://openrouter.ai/api/v1/embeddings" \
-    -H "Authorization: Bearer $RESOLVED_KEY" \
-    -H "Content-Type: application/json" \
-    -d "{\"model\":\"$EMBEDDING_MODEL\",\"input\":\"dimension test\",\"encoding_format\":\"float\"}" 2>/dev/null || echo "")
-  if [[ -n "$TEST_RESP" ]]; then
-    EMBEDDING_DIMENSIONS=$(echo "$TEST_RESP" | python3 -c "
-import json, sys
-try:
-  d = json.load(sys.stdin)
-  if 'data' in d and d['data']:
-    print(len(d['data'][0]['embedding']))
-  else:
-    sys.exit(1)
-except:
-  sys.exit(1)
-" 2>/dev/null || echo "")
-  fi
-
-  if [[ -z "$EMBEDDING_DIMENSIONS" ]]; then
-    warn "Test-Call fehlgeschlagen — bitte Dimension manuell angeben (z.B. 1024 für BGE/Mistral, 3072 für OpenAI-large, 1536 für OpenAI-small)."
-    prompt_input EMBEDDING_DIMENSIONS "Embedding-Dimension" "1024"
-  else
-    info "  ✓ Modell '$EMBEDDING_MODEL' liefert $EMBEDDING_DIMENSIONS-dimensionale Vektoren."
-  fi
-else
-  prompt_input OPENAI_KEY "Embedding API Key" "$EMBEDDING_KEY_DEFAULT"
-  prompt_input EMBEDDING_BASE_URL "Embedding Base-URL (leer = Provider-Default)" "${EXISTING_EMBEDDING_BASE_URL:-}"
-fi
-
-prompt_input COHERE_KEY "Cohere API Key (für Re-Ranker, leer = Re-Ranker deaktiviert)" "${EXISTING_COHERE_KEY:-}"
+echo ""
+info "Reranker-Auswahl:"
+info "  1) Cohere rerank — remote, API-Key erforderlich, stabiler Default."
+info "  2) Local gte-reranker-modernbert-base — lokal, English-primary, beta1 experimental."
+info "  3) Disabled — Vector-only Recall."
+prompt_choice RERANKER_PROVIDER_MODE "Reranker provider: cohere=remote, local=lokal experimental, disabled=aus" "cohere" "cohere" "local" "disabled"
+case "$RERANKER_PROVIDER_MODE" in
+  cohere)
+    RERANKER_PROVIDER="cohere"
+    prompt_input COHERE_KEY "Cohere API Key" "${EXISTING_COHERE_KEY:-\${COHERE_API_KEY}}"
+    RERANKER_MODEL="${EXISTING_RERANKER_MODEL:-rerank-v3.5}"
+    prompt_input RERANKER_MODEL "Cohere Rerank-Modell" "$RERANKER_MODEL"
+    ;;
+  local)
+    RERANKER_PROVIDER="local-transformers"
+    RERANKER_MODEL="$RERANKER_LOCAL_MODEL"
+    warn "Local Reranker ist in 3.1-beta.1 experimental und English-primary; Pass erst nach grünem Node/Transformers.js-Smoke."
+    ;;
+  disabled)
+    RERANKER_PROVIDER="disabled"
+    ;;
+esac
 
 # Embedding-Fallback
 echo ""
-info "Embedding-Fallback: zweiter Endpunkt falls Primary nicht erreichbar (z.B. zweiter OpenAI-Key oder Azure)."
+info "Embedding-Fallback: zweiter OpenAI/OpenAI-kompatibler Endpunkt falls Primary nicht erreichbar."
 warn "  ⚠️  Fallback MUSS dasselbe Modell / dieselbe Dimension verwenden — LanceDB hat fixes Schema."
-if confirm "Embedding-Fallback konfigurieren?" "n"; then
+if [[ "$EMBEDDING_PROVIDER" != "local-transformers" ]] && confirm "Embedding-Fallback konfigurieren?" "n"; then
   USE_EMBEDDING_FALLBACK="y"
   prompt_input EMBEDDING_FALLBACK_KEY     "Fallback API Key" "\${OPENAI_API_KEY_FALLBACK}"
   prompt_input EMBEDDING_FALLBACK_BASEURL "Fallback Base-URL (leer = Provider-Default)" ""
@@ -723,24 +725,14 @@ if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM —
   fi
 fi
 
-# Embedding-Modell (nur fragen wenn nicht via OpenRouter schon gesetzt)
-if [[ "$USE_OPENROUTER" != "y" ]]; then
-  EMBEDDING_MODEL="$EMBEDDING_MODEL_DEFAULT"
-  prompt_input EMBEDDING_MODEL "Embedding-Modell" "$EMBEDDING_MODEL"
-  EMBEDDING_DIMENSIONS="${EXISTING_EMBEDDING_DIMS:-}"
-  if [[ -z "$EMBEDDING_DIMENSIONS" && "$EMBEDDING_MODEL" == *"text-embedding-3-large"* ]]; then
-    EMBEDDING_DIMENSIONS=3072
-  elif [[ -z "$EMBEDDING_DIMENSIONS" && ( "$EMBEDDING_MODEL" == *"small"* || "$EMBEDDING_MODEL" == *"ada"* ) ]]; then
-    EMBEDDING_DIMENSIONS=1536
-  elif [[ -z "$EMBEDDING_DIMENSIONS" ]]; then
-    EMBEDDING_DIMENSIONS=1024
-  fi
-  prompt_input EMBEDDING_DIMENSIONS "Embedding-Dimension (muss zur DB passen)" "$EMBEDDING_DIMENSIONS"
-fi
 else
+  EMBEDDING_PROVIDER="${EXISTING_EMBEDDING_PROVIDER:-openai-compatible}"
   EMBEDDING_MODEL="${EXISTING_EMBEDDING_MODEL:-}"
   EMBEDDING_DIMENSIONS="${EXISTING_EMBEDDING_DIMS:-3072}"
   EMBEDDING_BASE_URL="${EXISTING_EMBEDDING_BASE_URL:-}"
+  RERANKER_PROVIDER="${EXISTING_RERANKER_PROVIDER:-}"
+  [[ -z "$RERANKER_PROVIDER" && -n "$EXISTING_COHERE_KEY" ]] && RERANKER_PROVIDER="cohere"
+  [[ -z "$RERANKER_PROVIDER" ]] && RERANKER_PROVIDER="disabled"
 fi
 
 # v2.1.1: Pre-Flight-Check — vergleiche neue Dim mit bestehenden LanceDBs.
@@ -885,13 +877,27 @@ if [[ "$KEEP_EXISTING_MEMORY_CONFIG" == "1" ]]; then
   PLUGIN_CONFIG="$EXISTING_PLUGIN_ENTRY"
 else
   # Reranker-Block aufbauen
-  if [[ -n "$COHERE_KEY" && "$COHERE_KEY" != "" ]]; then
-    RERANKER_BLOCK=$(jq -n \
-      --arg key "$COHERE_KEY" \
-      '{"enabled": true, "apiKey": $key, "model": "rerank-v3.5", "candidates": 20}')
-  else
-    RERANKER_BLOCK='{"enabled": false}'
-  fi
+  case "$RERANKER_PROVIDER" in
+    cohere)
+      if [[ -n "$COHERE_KEY" && "$COHERE_KEY" != "" ]]; then
+        RERANKER_BLOCK=$(jq -n \
+          --arg key "$COHERE_KEY" \
+          --arg model "${RERANKER_MODEL:-rerank-v3.5}" \
+          '{"provider": "cohere", "enabled": true, "apiKey": $key, "model": $model, "candidates": 20}')
+      else
+        RERANKER_BLOCK='{"provider": "disabled", "enabled": false}'
+      fi
+      ;;
+    local-transformers)
+      RERANKER_BLOCK=$(jq -n \
+        --arg model "$RERANKER_LOCAL_MODEL" \
+        --arg cacheDir "$RERANKER_LOCAL_CACHE_DIR" \
+        '{"provider": "local-transformers", "enabled": true, "local": {"model": $model, "cacheDir": $cacheDir}, "candidates": 20}')
+      ;;
+    *)
+      RERANKER_BLOCK='{"provider": "disabled", "enabled": false}'
+      ;;
+  esac
 
   # Merging-Block aufbauen
   if [[ "$USE_MERGING" == "y" ]]; then
@@ -950,10 +956,13 @@ else
 
   # Plugin-Config-Objekt
   PLUGIN_CONFIG=$(jq -n \
+    --arg embedding_provider "$EMBEDDING_PROVIDER" \
     --arg openai_key "$OPENAI_KEY" \
     --arg embedding_model "$EMBEDDING_MODEL" \
     --arg embedding_base_url "${EMBEDDING_BASE_URL:-}" \
     --argjson embedding_dims "${EMBEDDING_DIMENSIONS:-3072}" \
+    --arg embedding_local_model "$EMBEDDING_LOCAL_MODEL" \
+    --arg embedding_local_cache_dir "$EMBEDDING_LOCAL_CACHE_DIR" \
     --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
     --argjson reranker "$RERANKER_BLOCK" \
     --argjson merging "$MERGING_BLOCK" \
@@ -963,11 +972,25 @@ else
       "enabled": true,
       "config": {
         "embedding": (
-          {
-            "apiKey": $openai_key,
-            "model": $embedding_model,
-            "dimensions": $embedding_dims
-          }
+          if $embedding_provider == "local-transformers" then
+            {
+              "provider": "local-transformers",
+              "local": {
+                "model": $embedding_local_model,
+                "dimensions": $embedding_dims,
+                "queryPrefix": "query: ",
+                "passagePrefix": "passage: ",
+                "cacheDir": $embedding_local_cache_dir
+              }
+            }
+          else
+            {
+              "provider": $embedding_provider,
+              "apiKey": $openai_key,
+              "model": $embedding_model,
+              "dimensions": $embedding_dims
+            }
+          end
           | if $embedding_base_url != "" then . + {"baseUrl": $embedding_base_url} else . end
           | if $embedding_fallback != null then . + {"fallback": $embedding_fallback} else . end
         ),

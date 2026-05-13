@@ -41,10 +41,22 @@ test("plugin package is self-contained for native OpenClaw install", () => {
   assert.deepEqual(pkg.openclaw.extensions, ["./index.js"]);
   assert.ok(pkg.dependencies["@lancedb/lancedb"]);
   assert.ok(pkg.dependencies.openai);
+  assert.equal(pkg.optionalDependencies["@huggingface/transformers"], "4.2.0");
   assert.deepEqual(pkg.files, [
     "index.js",
     "lib/",
     "openclaw.plugin.json",
     "README.md",
   ]);
+});
+
+test("manifest schema permits local providers and disabled reranker without apiKey", () => {
+  const manifest = JSON.parse(readFileSync(resolve(pluginDir, "openclaw.plugin.json"), "utf8"));
+  const embedding = manifest.configSchema.properties.embedding;
+  const reranker = manifest.configSchema.properties.reranker;
+  assert.deepEqual(embedding.required, []);
+  assert.deepEqual(reranker.required, []);
+  assert.ok(embedding.properties.provider.enum.includes("local-transformers"));
+  assert.ok(reranker.properties.provider.enum.includes("disabled"));
+  assert.ok(reranker.properties.provider.enum.includes("local-transformers"));
 });

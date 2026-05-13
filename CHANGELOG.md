@@ -1,3 +1,19 @@
+## [3.1.0-beta.1] - 2026-05-13
+
+### implemented
+- Added provider-aware embedding and reranker configuration for PLUR1BUS v3.1.
+- Added `embedding.provider=openai|openai-compatible|local-transformers` and `reranker.provider=cohere|local-transformers|disabled`.
+- Kept OpenAI `text-embedding-3-large` as fresh-install recommendation while preserving legacy missing-model behavior for existing configs.
+- Added provider adapters, config normalization, provider-aware manifest schema, installer choices, and provider-check handling.
+- Kept direct `@lancedb/lancedb` and `openai` dependencies as the primary plugin path; the sibling stock dependency fallback remains legacy-only.
+
+### experimental
+- Added `local-transformers` embedding support for `intfloat/multilingual-e5-small` with 384 dimensions and E5 query/passage prefixing.
+- Added optional `@huggingface/transformers@4.2.0`; remote-only install/inspect paths do not import it or download models.
+
+### blocked pending local model smoke
+- Added a local reranker adapter for `Alibaba-NLP/gte-reranker-modernbert-base`, but it remains beta1 experimental and must not be marked as passed until a real Node/Transformers.js smoke loads the model and scores query/document pairs.
+
 ## [3.0.0-beta.2] - 2026-05-11
 
 ### Fixed

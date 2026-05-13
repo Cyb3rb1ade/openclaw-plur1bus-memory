@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `3.0.0-beta.2` — Neo-Arch-Beta fuer OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
+**Aktuelle Version:** `3.1.0-beta.1` — Neo-Arch-Beta fuer OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
 
 **Mindestversion:** OpenClaw `2026.5.10-beta.5` oder neuer. PLUR1BUS v3 setzt
 den OpenClaw-native Memory-Stack dieser Beta-Linie voraus; ältere OpenClaw
@@ -15,12 +15,12 @@ Versionen bleiben beim v2.1.x-Zweig.
 
 - **Auto-Recall** — injiziert relevante Memories als `<relevant-memories>` vor jedem Turn (Summaries, nicht Volltext)
 - **Auto-Capture** — speichert relevante Nachrichten automatisch nach jedem Turn
-- **Re-Ranker** — Cohere Rerank API v2 sortiert Vektor-Kandidaten neu, bevor sie injiziert oder zurückgegeben werden
+- **Re-Ranker** — provider-aware: Cohere ist stabiler Remote-Default, disabled bleibt Vector-only, lokaler GTE-Reranker ist beta1-experimental bis zum grünen Local-Model-Smoke
 - **LLM-Summaries** — automatische ≤150-Wort-Kurzfassung via LLM bei Store und Recall
 - **TTL** — optionale Lebensdauer (`session` = 1 Tag, `short` = 14 Tage, default = permanent)
 - **Conflict-Logging** — widersprüchliche `decision`-Memories verschiedener Agenten werden in `conflict-log.jsonl` protokolliert
 - **Merging** — semantisch ähnliche Memories (Score 0.70–0.94) werden via LLM zusammengeführt
-- **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings brauchen OpenAI-kompatible API/OpenRouter, optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
+- **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings nutzen OpenAI/OpenAI-kompatible Provider oder experimentell lokal `intfloat/multilingual-e5-small`; optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
 - **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei wählbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
 - **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
 - **Schema-Migration** — bestehende DBs erhalten neue Spalten automatisch beim ersten Zugriff
@@ -97,7 +97,7 @@ Wird beim `before_prompt_build`-Hook ausgelöst. Injiziert bis zu 5 relevante Me
 
 **Ablauf mit Re-Ranker:**
 1. Vektorsuche holt bis zu `candidates` (Standard: 20) Treffer über `autoRecallMinScore`
-2. Cohere Rerank sortiert diese 20 nach tatsächlicher semantischer Relevanz
+2. Der konfigurierte Reranker sortiert diese 20 nach tatsächlicher semantischer Relevanz
 3. Die Top-5 werden injiziert
 
 Ohne Re-Ranker: direkt Top-5 per Vektor-Score.
@@ -113,6 +113,7 @@ Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
   "plugins": {
     "memory-lancedb-namespaced": {
       "embedding": {
+        "provider": "openai",
         "apiKey": "${OPENAI_API_KEY}",
         "model": "text-embedding-3-large",
         "dimensions": 3072
@@ -137,6 +138,7 @@ Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
       },
 
       "reranker": {
+        "provider":   "cohere",
         "enabled":    true,
         "apiKey":     "${COHERE_API_KEY}",
         "model":      "rerank-v3.5",
@@ -162,12 +164,13 @@ Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
 
 | Key | Default | Beschreibung |
 |-----|---------|--------------|
+| `reranker.provider` | `cohere` | `cohere`, `local-transformers` oder `disabled` |
 | `reranker.enabled` | `true` | An/Aus (fehlt `apiKey`, automatisch deaktiviert) |
 | `reranker.apiKey` | — | Cohere API Key (`${COHERE_API_KEY}` empfohlen) |
 | `reranker.model` | `rerank-v3.5` | Cohere Rerank-Modell |
 | `reranker.candidates` | `20` | Vektor-Kandidaten vor dem Re-Ranking |
 
-**Fallback:** Schlägt Cohere fehl (Netzwerk, Rate-Limit), wird automatisch auf Vektor-Reihenfolge zurückgefallen. Kein Absturz.
+**Fallback:** Schlägt der Reranker fehl (Netzwerk, Rate-Limit, lokaler Model-Smoke), wird automatisch auf Vektor-Reihenfolge zurückgefallen. Kein Absturz. `local-transformers` fuer `Alibaba-NLP/gte-reranker-modernbert-base` ist in beta1 experimental und English-primary.
 
 ---
 

@@ -1,7 +1,7 @@
 # PLUR1BUS Neo-Arch v3 Memory Guide
 
-Stand: 2026-05-11<br>
-Version: `3.0.0-beta.2`<br>
+Stand: 2026-05-13<br>
+Version: `3.1.0-beta.1`<br>
 Branch: `neo-arch`
 
 Dieses Dokument beschreibt nur noch den v3-Normalbetrieb und den v2→v3
@@ -47,6 +47,36 @@ Plugin-Services sind fuer kleine und mittlere Jobs gedacht:
 - Capture Reconcile
 - Curation Metrics
 - leichte Wartung
+
+## 1.1 Provider-Modell ab v3.1.0-beta.1
+
+PLUR1BUS ist nicht mehr hart an einen einzelnen Embedding- oder Rerank-Anbieter
+gebunden. OpenAI `text-embedding-3-large` bleibt die empfohlene Remote-Option,
+aber der Installer bietet lokale Alternativen an.
+
+Status:
+
+- **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
+- **experimental:** `embedding.provider=local-transformers` mit `intfloat/multilingual-e5-small` (`384d`, `query: ` / `passage: ` Prefixing, Cache unter `${OPENCLAW_HOME}/models/plur1bus`).
+- **blocked pending local model smoke:** `reranker.provider=local-transformers` mit `Alibaba-NLP/gte-reranker-modernbert-base`. Diese Option ist English-primary und darf erst als pass gelten, wenn `memory-doctor provider-check` oder der explizite Local-Smoke in Node/Transformers.js grün war.
+
+API-Keys:
+
+- OpenAI: `${OPENAI_API_KEY}`
+- OpenAI-compatible/OpenRouter/lokales Gateway: eigener Key und `baseUrl`
+- Cohere: `${COHERE_API_KEY}`
+- Local Transformers: kein API-Key; Modell-Download erst bei Provider-Check oder erstem lokalen Call
+
+Dimensionsschutz:
+
+- OpenAI large: `3072`
+- OpenAI small/ada: `1536`
+- E5 small: `384`
+
+Bei Dimensionswechsel niemals in dieselbe LanceDB schreiben. Entweder alten
+Provider beibehalten oder neuen `baseDbPath` verwenden, zum Beispiel
+`lancedb-namespaced-openai-large-3072` oder `lancedb-namespaced-e5-small-384`,
+danach explizit reindexen/backfillen. Die alte DB bleibt erhalten.
 
 ## 2. Architektur
 
@@ -111,11 +141,13 @@ nicht pro Workspace:
         },
         "config": {
           "embedding": {
+            "provider": "openai",
             "apiKey": "${OPENAI_API_KEY}",
             "model": "text-embedding-3-large",
             "dimensions": 3072
           },
           "reranker": {
+            "provider": "cohere",
             "enabled": true,
             "apiKey": "${COHERE_API_KEY}",
             "model": "rerank-v3.5",
@@ -142,6 +174,13 @@ Empfehlungen:
 - `baseDbPath` stabil halten.
 - `embedding.model` und `embedding.dimensions` bei bestehender LanceDB nicht
   still wechseln.
+- Bei lokaler Embedding-Wahl statt OpenAI `embedding.provider` auf
+  `local-transformers` setzen und `local.model=intfloat/multilingual-e5-small`,
+  `local.dimensions=384`, `local.cacheDir=${OPENCLAW_HOME}/models/plur1bus`
+  konfigurieren.
+- Bei lokalem Reranker `reranker.provider=local-transformers` nur als
+  experimental behandeln; English-primary und blocked pending local model smoke,
+  solange der Node/Transformers.js-Smoke nicht grün war.
 - `hooks.allowConversationAccess` ist fuer raw conversation hooks erforderlich.
 - `hooks.allowPromptInjection` ist fuer Auto-Recall per prompt-mutierendem Hook
   erforderlich.
