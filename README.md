@@ -189,6 +189,51 @@ Provider-Status in `3.1.0-beta.1`:
 - **experimental:** `embedding.provider=local-transformers` mit `intfloat/multilingual-e5-small`; lokaler Modell-Download/Load erfolgt erst bei `memory-doctor provider-check` oder beim ersten lokalen Call.
 - **blocked pending local model smoke:** `reranker.provider=local-transformers` mit `Alibaba-NLP/gte-reranker-modernbert-base`, solange der echte Node/Transformers.js-Smoke nicht grün war. Cohere und disabled bleiben passfähig.
 
+### Lokale Provider-Konfiguration
+
+Wenn OpenAI beim Deployment abgelehnt wird, kann der Installer lokal
+`intfloat/multilingual-e5-small` konfigurieren:
+
+```json
+{
+  "embedding": {
+    "provider": "local-transformers",
+    "local": {
+      "model": "intfloat/multilingual-e5-small",
+      "dimensions": 384,
+      "queryPrefix": "query: ",
+      "passagePrefix": "passage: ",
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
+    }
+  },
+  "reranker": {
+    "provider": "disabled",
+    "enabled": false
+  }
+}
+```
+
+Der lokale GTE-Reranker kann testweise aktiviert werden, bleibt aber bis zum
+echten Node/Transformers.js-Smoke experimental:
+
+```json
+{
+  "reranker": {
+    "provider": "local-transformers",
+    "enabled": true,
+    "local": {
+      "model": "Alibaba-NLP/gte-reranker-modernbert-base",
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
+    },
+    "candidates": 20
+  }
+}
+```
+
+Bei Wechsel von OpenAI-large `3072d` oder OpenAI-small `1536d` auf E5-small
+`384d` muss ein neuer Index oder ein expliziter Reindex verwendet werden. Nicht
+in dieselbe bestehende LanceDB-Tabelle schreiben.
+
 ## Workspace-Einrichtung
 
 Die Plugin-Installation und API-Keys sind zentral. Workspace-spezifisch sind:

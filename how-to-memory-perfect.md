@@ -185,6 +185,71 @@ Empfehlungen:
 - `hooks.allowPromptInjection` ist fuer Auto-Recall per prompt-mutierendem Hook
   erforderlich.
 
+### 3.1 Deployment-Entscheidung
+
+Fresh Install:
+
+1. **OpenAI recommended**
+   - `embedding.provider=openai`
+   - `model=text-embedding-3-large`
+   - `dimensions=3072`
+   - API-Key: `${OPENAI_API_KEY}`
+2. **Local multilingual**
+   - `embedding.provider=local-transformers`
+   - `local.model=intfloat/multilingual-e5-small`
+   - `local.dimensions=384`
+   - kein API-Key
+   - erster `provider-check` oder erster Local-Call lädt das Modell in
+     `${OPENCLAW_HOME}/models/plur1bus`
+3. **Custom OpenAI-compatible**
+   - `embedding.provider=openai-compatible`
+   - eigenes `model`, `baseUrl`, `apiKey`, `dimensions`
+
+Reranker:
+
+1. **Cohere**
+   - `reranker.provider=cohere`
+   - `model=rerank-v3.5`
+   - API-Key: `${COHERE_API_KEY}`
+   - stabiler Remote-Default
+2. **Local GTE**
+   - `reranker.provider=local-transformers`
+   - `local.model=Alibaba-NLP/gte-reranker-modernbert-base`
+   - English-primary, beta1 experimental
+   - blocked pending local model smoke, solange kein echter Node/Transformers.js
+     Smoke grün war
+3. **Disabled**
+   - `reranker.provider=disabled`
+   - Vector-only Recall bleibt aktiv
+
+Existing Install:
+
+- Default ist `keep`.
+- Keine bestehende Installation wird automatisch auf OpenAI-large oder E5-small
+  migriert.
+- Bestehende v3-Konfig ohne `embedding.provider` wird normalisiert:
+  `embedding.apiKey` bedeutet `openai-compatible`; `reranker.apiKey` bedeutet
+  `cohere`; `reranker.enabled=false` bedeutet `disabled`.
+
+### 3.2 Providerwechsel und Reindex
+
+PLUR1BUS darf bei Dimensionswechsel nicht in-place weiterschreiben:
+
+| Provider/Modell | Dimension | Empfehlung |
+| --- | ---: | --- |
+| `text-embedding-3-large` | 3072 | Fresh-Install-Default |
+| `text-embedding-3-small` / ada | 1536 | Legacy-kompatibel |
+| `intfloat/multilingual-e5-small` | 384 | lokaler Experimental-Pfad |
+
+Sicheres Szenario:
+
+1. alten `baseDbPath` unverändert lassen.
+2. neuen Pfad wählen, z. B. `lancedb-namespaced-e5-small-384`.
+3. `memory-doctor provider-check` ausführen.
+4. Reindex/Backfill aus Turn Journal, vorhandenen Memory-Texten und
+   `KNOWLEDGE.md` explizit starten.
+5. alte DB erst nach erfolgreichem Smoke archivieren oder unverändert behalten.
+
 ## 4. Workspace-Modell
 
 Die Installation ist zentral, aber v3-State ist workspace-scoped.
