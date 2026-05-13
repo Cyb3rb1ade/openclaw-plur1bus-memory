@@ -54,6 +54,20 @@ test("plugin keeps autoCapture default-on and autoCapture false only disables ho
   }
 });
 
+test("plugin registers without embedding secrets for inspect and doctor flows", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi({
+      baseDbPath: join(tmp, "db"),
+      embedding: { dimensions: 1536 },
+    });
+    assert.ok(registered.tools.length > 0);
+    assert.ok(registered.commands.some(command => command.name === "plur1bus"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("autoRecall false disables dynamic prompt recall but leaves manual and corpus recall available", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
   try {

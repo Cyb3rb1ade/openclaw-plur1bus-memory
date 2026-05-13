@@ -1,0 +1,185 @@
+{
+  "reviewId": "openclaw-2026-05-13-beta5-plur1bus-v3",
+  "generatedAt": "2026-05-13T20:45:00+02:00",
+  "targets": {
+    "githubBetaTag": {
+      "tag": "v2026.5.12-beta.5",
+      "commit": "2cdd69a303e311da587b7c6a5913fb7ff8039299",
+      "evidenceSource": "git ls-remote and local git rev-parse"
+    },
+    "npmBeta": {
+      "exact": "2026.5.12-beta.5",
+      "distTagBeta": "2026.5.12-beta.5",
+      "evidenceSource": "npm view preflight"
+    },
+    "forwardLookMain": {
+      "commit": "433bafa55bc725c73557ac7164855264c76c529e",
+      "role": "forward-look-only"
+    }
+  },
+  "sourceSeparation": {
+    "localDiffAndFileAnalysis": [
+      "git log/name-only/stat/diff for v2026.5.12-beta.4...v2026.5.12-beta.5",
+      "PLUR1BUS package.json, openclaw.plugin.json, index.js, tests",
+      "OpenClaw install-security-scan and plugin install/runtime files",
+      "isolated non-root install/inspect/doctor smoke"
+    ],
+    "githubMetadataOnly": [
+      "GitHub release API for v2026.5.12-beta.5 release body and tag page URL"
+    ],
+    "npmPreflightOnly": [
+      "npm view openclaw@2026.5.12-beta.5 version",
+      "npm view openclaw@beta version"
+    ],
+    "clawSweeperState": [
+      "local clawsweeper-gate reported 47 unreviewed and 0 clean reports; this is not a full diff substitute"
+    ]
+  },
+  "ranges": {
+    "beta4ToBeta5": {
+      "range": "v2026.5.12-beta.4...v2026.5.12-beta.5",
+      "commits": 47,
+      "filesChanged": 248,
+      "basis": "primary beta5 compatibility gate"
+    },
+    "beta5ToMain": {
+      "range": "v2026.5.12-beta.5...origin/main",
+      "leftRight": "108 1340",
+      "basis": "forward-look only"
+    },
+    "beta5SinceMinimum": {
+      "range": "v2026.5.10-beta.5..v2026.5.12-beta.5",
+      "commits": 1150,
+      "basis": "overview only"
+    }
+  },
+  "verdict": {
+    "beta5CodeReview": "pass-with-known-risk",
+    "npmExactInstallCli": "pass",
+    "normalPluginTarballInstall": "blocked-by-openclaw-beta5-dependency-security-scan",
+    "forcedRuntimeInspectDoctor": "pass",
+    "beta5GoNoGo": "no-full-runtime-go-until-dependency-scan-policy-is-resolved"
+  },
+  "plur1busFixesApplied": [
+    {
+      "area": "package-shape",
+      "findingSource": "localFileAnalysis and npm pack",
+      "change": "package now declares main, files, and direct @lancedb/lancedb/openai dependencies; npm pack contains runtime files only"
+    },
+    {
+      "area": "runtime-loader",
+      "findingSource": "non-root plugin install/inspect smoke",
+      "change": "plugin now imports direct package dependencies first and keeps memory-lancedb-stock only as a legacy local fallback"
+    },
+    {
+      "area": "secretless-inspect",
+      "findingSource": "non-root forced plugin install smoke",
+      "change": "missing OPENAI_API_KEY no longer fails register; embedding calls fail only when a memory operation needs embeddings"
+    }
+  ],
+  "blockingFindings": [
+    {
+      "id": "BETA5-PLUGIN-DEPENDENCY-SCAN",
+      "severity": "high",
+      "source": "local non-root plugin install smoke",
+      "commits": ["8b840b28e5", "1415c06fc4", "a8f03295c4"],
+      "summary": "OpenClaw beta5 scans installed dependency runtime code and blocks PLUR1BUS when direct LanceDB/OpenAI dependencies are installed.",
+      "details": "Normal tarball install failed on child_process/dynamic-code findings in openai helpers, apache-arrow, @types/node, and @lancedb/lancedb.",
+      "impact": "Packaged PLUR1BUS v3 cannot be considered a clean normal third-party plugin install on beta5 without an OpenClaw trust/allowlist strategy or a different dependency architecture.",
+      "mitigation": "Forced install proves runtime load/doctor can pass, but force is not a release-quality normal path. Best next step is an OpenClaw-side trusted native dependency policy for known heavy native packages or a PLUR1BUS split package with operator-approved dependency lane."
+    }
+  ],
+  "smokeResults": {
+    "static": {
+      "nodeCheckIndex": "pass",
+      "nodeCheckNeoArch": "pass",
+      "unitTests": "pass 9/9"
+    },
+    "packaging": {
+      "npmPackDryRun": "pass",
+      "entryCount": 11,
+      "runtimeFilesOnly": true
+    },
+    "nonRootInstallCli": {
+      "user": "kimi",
+      "version": "OpenClaw 2026.5.12-beta.5 (2cdd69a)",
+      "status": "pass"
+    },
+    "normalPluginInstall": {
+      "status": "blocked",
+      "reason": "OpenClaw beta5 dependency security scan"
+    },
+    "forcedPluginInstall": {
+      "status": "pass-with-warning",
+      "inspectRuntime": "pass",
+      "pluginDoctor": "pass",
+      "typedHooksAfterPermissions": ["agent_end", "before_prompt_build", "gateway_start", "gateway_stop"]
+    },
+    "rootEscapeCheck": {
+      "status": "inconclusive-for-live-root-tree",
+      "isolatedBaseWrites": "under /tmp/openclaw-beta5-smoke-mLd3MS",
+      "note": "Concurrent live host cron/log activity wrote under /root/.openclaw during the same window, so root mtime scan is polluted. Smoke commands used kimi plus explicit HOME/USERPROFILE/OPENCLAW_HOME/XDG/TMP/NPM paths under BASE."
+    }
+  },
+  "commitClassifications": [
+    {"sha":"2cdd69a303","summary":"test(plugins): fix scoped config fixture types","classification":"smoke-required","impact":"plugin runtime config tests only; confirms scoped config path"},
+    {"sha":"f084cf2335","summary":"fix(plugins): keep scoped config compat guard-clean","classification":"smoke-required","impact":"runtime config compat guard; no PLUR1BUS code change required"},
+    {"sha":"b6c34ab055","summary":"fix(plugins): satisfy release lint","classification":"no-direct-impact","impact":"lint/test only"},
+    {"sha":"95582f03de","summary":"fix(agents): wire subagent announce gateway dependency","classification":"no-direct-impact","impact":"subagent announcement path only"},
+    {"sha":"d3950fbd64","summary":"chore(canvas): refresh a2ui bundle hash","classification":"no-direct-impact","impact":"canvas asset hash only"},
+    {"sha":"2906fb833f","summary":"chore(release): refresh plugin sdk api baseline","classification":"smoke-required","impact":"SDK baseline changed; plugin APIs still load PLUR1BUS"},
+    {"sha":"a6d878376b","summary":"fix(tui): emit v4 embedded chat deltas","classification":"smoke-required","impact":"chat delta protocol; no PLUR1BUS hook break found"},
+    {"sha":"38cb3d0041","summary":"docs(changelog): note v4 chat delta protocol","classification":"no-direct-impact","impact":"documentation"},
+    {"sha":"bdbc224841","summary":"fix(gateway): avoid duplicate v4 deltas","classification":"smoke-required","impact":"relevant to transcript consumers; PLUR1BUS agent_end still loads"},
+    {"sha":"02ae92cade","summary":"fix(gateway): require v4 chat deltas","classification":"smoke-required","impact":"SDK/gateway protocol; no plugin hook API removal found"},
+    {"sha":"9375a72d56","summary":"fix(sdk): preserve replayed chat snapshots","classification":"smoke-required","impact":"transcript/replay semantics; future incremental capture should consider deltaText"},
+    {"sha":"7e8b2d48ce","summary":"fix(gateway): add incremental chat delta payloads","classification":"smoke-required","impact":"new deltaText/replace fields; useful future capture integration"},
+    {"sha":"a56727d8fe","summary":"fix(plugins): prune managed peers on uninstall","classification":"smoke-required","impact":"managed npm lifecycle; PLUR1BUS uninstall/update should be smoke-tested"},
+    {"sha":"4165893843","summary":"fix(plugins): attribute runtime config deprecations","classification":"smoke-required","impact":"plugin config API warnings now plugin-scoped; no PLUR1BUS break"},
+    {"sha":"bf0a5fe5dc","summary":"fix: preserve owned plugin dependencies during peer repair","classification":"smoke-required","impact":"directly relevant to packaged PLUR1BUS dependencies"},
+    {"sha":"033d74ce2e","summary":"fix: harden managed plugin peer recovery","classification":"smoke-required","impact":"managed dependency repair; no code fix beyond packaging"},
+    {"sha":"d0796a9b13","summary":"fix: avoid rescanning repaired plugin peers","classification":"smoke-required","impact":"managed dependency scan behavior"},
+    {"sha":"1b572f2fe","summary":"fix: preserve managed plugin peer dependencies","classification":"smoke-required","impact":"managed dependency preservation"},
+    {"sha":"1415c06fc4","summary":"fix(plugins): scan installed dependency runtime code","classification":"blocker","impact":"normal PLUR1BUS tarball install blocked by LanceDB/OpenAI dependency scan"},
+    {"sha":"8b840b28e5","summary":"fix: scan plugin runtime entries during install","classification":"plur1bus-fix-required","impact":"required package cleanup; PLUR1BUS package now limits runtime files"},
+    {"sha":"c949a35534","summary":"test: keep release queue settings expectations","classification":"no-direct-impact","impact":"test only"},
+    {"sha":"159d6a610b","summary":"test: fix queue settings session fixtures","classification":"no-direct-impact","impact":"test only"},
+    {"sha":"2d088b2c55","summary":"test: add live subagent steering proof","classification":"no-direct-impact","impact":"test only"},
+    {"sha":"e0c744869c","summary":"fix: use in-process subagent announce handoff","classification":"no-direct-impact","impact":"subagent delivery path only"},
+    {"sha":"d513271bb6","summary":"fix(channel): refresh wecom onboarding install","classification":"no-direct-impact","impact":"channel onboarding only"},
+    {"sha":"0f24a78b24","summary":"fix(channel): refresh wecom onboarding install","classification":"no-direct-impact","impact":"changelog/context duplicate"},
+    {"sha":"70bce0d9ed","summary":"style(agents): format array schema normalization","classification":"no-direct-impact","impact":"formatting around schema normalization"},
+    {"sha":"a50d65f63a","summary":"fix(config): normalize gemini subagent model writes","classification":"no-direct-impact","impact":"Gemini config writes only"},
+    {"sha":"6a64f05bcc","summary":"fix(cli): normalize Gemini config mutation refs","classification":"no-direct-impact","impact":"Gemini config writes only"},
+    {"sha":"32487b4906","summary":"fix(config): normalize per-agent Gemini preview refs","classification":"no-direct-impact","impact":"Gemini config writes only"},
+    {"sha":"798ba972ea","summary":"fix(agents): normalize array tool schemas","classification":"smoke-required","impact":"tool schemas touched; PLUR1BUS existing tool contracts still registered in unit tests"},
+    {"sha":"a8f03295c4","summary":"fix(plugins): raise default install scan file limit to 25k","classification":"blocker","impact":"enables deeper dependency scan that blocks LanceDB/OpenAI package tree"},
+    {"sha":"552c575a5c","summary":"Allow pnpm source updates to build OpenClaw","classification":"smoke-required","impact":"source lane positive; no PLUR1BUS break"},
+    {"sha":"f96e0ff23c","summary":"fix(installer): honor git install versions","classification":"smoke-required","impact":"exact beta5 install-cli smoke passed"},
+    {"sha":"2873631873","summary":"fix(update): suppress handoff newer-config warning","classification":"no-direct-impact","impact":"update health only"},
+    {"sha":"9ca2f075c4","summary":"revert(cli): remove global root refusal","classification":"smoke-required","impact":"non-root discipline must be enforced by PLUR1BUS tests, not OpenClaw root guard"},
+    {"sha":"6a8dac800d","summary":"build(whatsapp): keep audio deps external","classification":"no-direct-impact","impact":"WhatsApp packaging only"},
+    {"sha":"e427846225","summary":"build(pnpm): restore exotic subdependency blocking","classification":"no-direct-impact","impact":"pnpm workspace policy"},
+    {"sha":"a57b646af4","summary":"build(whatsapp): externalize whatsapp plugin","classification":"no-direct-impact","impact":"WhatsApp packaging only"},
+    {"sha":"0e324f6d2b","summary":"build(pnpm): restore exotic subdependency blocking","classification":"no-direct-impact","impact":"pnpm workspace policy duplicate"},
+    {"sha":"3c62ebddb6","summary":"chore(release): bump beta 5","classification":"smoke-required","impact":"memory package versions bumped to beta5; PLUR1BUS min host remains beta5+"},
+    {"sha":"e88f8476c1","summary":"ci(release): extend npm telegram e2e timeout","classification":"no-direct-impact","impact":"CI only"},
+    {"sha":"daff6d8797","summary":"cherry-pick migrate selection changes","classification":"no-direct-impact","impact":"migration UI only"},
+    {"sha":"6926481646","summary":"test(ci): update install smoke pull retry guard","classification":"no-direct-impact","impact":"test only"},
+    {"sha":"55b7d0c181","summary":"test(docker): stabilize update channel fixture install","classification":"no-direct-impact","impact":"test only"},
+    {"sha":"05b23f8fb8","summary":"ci(release): retry root smoke image pulls","classification":"no-direct-impact","impact":"CI only"},
+    {"sha":"b27f0899e4","summary":"test(telegram): stabilize topic serialization test","classification":"no-direct-impact","impact":"Telegram test only"}
+  ],
+  "forwardLook": {
+    "status": "not-beta5-verdict",
+    "mainCommit": "433bafa55bc725c73557ac7164855264c76c529e",
+    "notableOptions": [
+      {"surface":"session_end shutdown/restart","value":"high","risk":"medium","note":"flush/finalizer candidate with duplicate-capture guard"},
+      {"surface":"onSessionTranscriptUpdate","value":"high","risk":"medium","note":"incremental capture candidate if public SDK surface is stable"},
+      {"surface":"api.runtime.state.openKeyedStore","value":"medium-high","risk":"medium","note":"leases/idempotency migration candidate"},
+      {"surface":"cron.get / scheduleSessionTurn","value":"medium","risk":"medium-high","note":"Dreaming/Promote/Prune follow-up behind flag"},
+      {"surface":"per-sender tool policies","value":"high","risk":"low-medium","note":"safety defaults for memory_store/forget/update"},
+      {"surface":"registerMemoryCapability","value":"low-default","risk":"high","note":"do not use by default; memory-core remains slot owner"}
+    ]
+  }
+}

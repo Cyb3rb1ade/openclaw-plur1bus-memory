@@ -54,7 +54,8 @@ import {
   workspaceKeyFromContext,
 } from "./lib/neo-arch.js";
 
-// Pfade relativ zum Plugin-Verzeichnis auflösen — funktioniert unabhängig vom Installations-Prefix
+// Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
+// als Legacy-Fallback für lokale Repo-Setups erhalten.
 const __pluginDir = dirname(fileURLToPath(import.meta.url));
 const LANCEDB_PATH = join(__pluginDir, "../memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js");
 const OPENAI_PATH  = join(__pluginDir, "../memory-lancedb-stock/node_modules/openai/index.js");
@@ -115,6 +116,18 @@ class Reranker {
 
 async function getLanceDB() {
   if (!_lancedb) {
+    try {
+      _lancedb = await import("@lancedb/lancedb");
+      return _lancedb;
+    } catch (directErr) {
+      if (!existsSync(LANCEDB_PATH)) {
+        throw new Error(
+          `memory-lancedb-namespaced: LanceDB dependency not found. ` +
+          `Install the plugin package dependencies or run: cd extensions/memory-lancedb-stock && npm install. ` +
+          `Direct import failed: ${directErr?.message || String(directErr)}`
+        );
+      }
+    }
     if (!existsSync(LANCEDB_PATH)) {
       throw new Error(
         `memory-lancedb-namespaced: LanceDB not found at ${LANCEDB_PATH}. ` +
@@ -128,6 +141,19 @@ async function getLanceDB() {
 
 async function getOpenAI() {
   if (!_OpenAI) {
+    try {
+      const m = await import("openai");
+      _OpenAI = m.default;
+      return _OpenAI;
+    } catch (directErr) {
+      if (!existsSync(OPENAI_PATH)) {
+        throw new Error(
+          `memory-lancedb-namespaced: openai dependency not found. ` +
+          `Install the plugin package dependencies or run: cd extensions/memory-lancedb-stock && npm install. ` +
+          `Direct import failed: ${directErr?.message || String(directErr)}`
+        );
+      }
+    }
     if (!existsSync(OPENAI_PATH)) {
       throw new Error(
         `memory-lancedb-namespaced: openai package not found at ${OPENAI_PATH}. ` +
@@ -147,6 +173,14 @@ function resolveEnvVars(value) {
     // Strip control chars that could corrupt HTTP headers or JSON strings
     return v.replace(/[\r\n\t\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").trim();
   });
+}
+
+function resolveOptionalEnvVars(value) {
+  try {
+    return resolveEnvVars(value);
+  } catch (_) {
+    return undefined;
+  }
 }
 
 // generateSummary kommt jetzt aus lib/text-utils.js — re-export für Tests
@@ -407,6 +441,12 @@ class Embeddings {
   }
 
   async getClient() {
+    if (!this.apiKey) {
+      throw new Error(
+        "memory-lancedb-namespaced: embedding API key is not configured. " +
+        "Set plugins.entries.memory-lancedb-namespaced.config.embedding.apiKey or OPENAI_API_KEY."
+      );
+    }
     if (!this._client) {
       const OpenAI = await getOpenAI();
       this._client = new OpenAI({
@@ -419,6 +459,9 @@ class Embeddings {
 
   async getFallbackClient() {
     if (!this._fallbackClient && this._fallbackCfg) {
+      if (!this._fallbackCfg.apiKey) {
+        return null;
+      }
       const OpenAI = await getOpenAI();
       this._fallbackClient = new OpenAI({
         apiKey: this._fallbackCfg.apiKey,
@@ -850,13 +893,17 @@ const plugin = {
     const cfg = api.pluginConfig || {};
 
     const embeddingCfg = cfg.embedding || {};
-    const apiKey = resolveEnvVars(embeddingCfg.apiKey || "${OPENAI_API_KEY}");
+    const apiKey = embeddingCfg.apiKey
+      ? resolveEnvVars(embeddingCfg.apiKey)
+      : resolveOptionalEnvVars("${OPENAI_API_KEY}");
     const model = embeddingCfg.model || DEFAULT_MODEL;
     const baseUrl = embeddingCfg.baseUrl;
     const dimensions = embeddingCfg.dimensions;
     const fallbackEmbeddingCfg = embeddingCfg.fallback
       ? {
-          apiKey: resolveEnvVars(embeddingCfg.fallback.apiKey || "${OPENAI_API_KEY_FALLBACK}"),
+          apiKey: embeddingCfg.fallback.apiKey
+            ? resolveEnvVars(embeddingCfg.fallback.apiKey)
+            : resolveOptionalEnvVars("${OPENAI_API_KEY_FALLBACK}"),
           model: embeddingCfg.fallback.model || model,
           baseUrl: embeddingCfg.fallback.baseUrl,
         }

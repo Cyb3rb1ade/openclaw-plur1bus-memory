@@ -34,3 +34,17 @@ test("installer enforces the v3 OpenClaw beta-aware minimum", () => {
   assert.match(installer, /-beta\\\.\[0-9\]\+/);
   assert.doesNotMatch(installer, /sort -V/);
 });
+
+test("plugin package is self-contained for native OpenClaw install", () => {
+  const pkg = JSON.parse(readFileSync(resolve(pluginDir, "package.json"), "utf8"));
+  assert.equal(pkg.main, "./index.js");
+  assert.deepEqual(pkg.openclaw.extensions, ["./index.js"]);
+  assert.ok(pkg.dependencies["@lancedb/lancedb"]);
+  assert.ok(pkg.dependencies.openai);
+  assert.deepEqual(pkg.files, [
+    "index.js",
+    "lib/",
+    "openclaw.plugin.json",
+    "README.md",
+  ]);
+});
