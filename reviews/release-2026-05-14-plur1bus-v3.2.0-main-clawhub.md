@@ -4,9 +4,9 @@ Date: 2026-05-14
 
 ## Verdict
 
-PLUR1BUS v3.2.0 is promoted to `main`, v2 is preserved on `legacy/v2`, and the ClawHub code-plugin release is dry-run ready.
+PLUR1BUS v3.2.0 is promoted to `main`, v2 is preserved on `legacy/v2`, and the ClawHub code-plugin release is published.
 
-No real ClawHub publish was performed. No tag was created or pushed.
+The real ClawHub publish was performed after explicit user confirmation. No tag was created or pushed.
 
 ## Branches and Commits
 
@@ -17,6 +17,7 @@ No real ClawHub publish was performed. No tag was created or pushed.
 - v3.2 release commit: `ba342a15e34de9951cd4a68ad15deee5d9cc6db7`
 - main promotion: fast-forward, no force push.
 - main release commit used for ClawHub dry-run: `ba342a15e34de9951cd4a68ad15deee5d9cc6db7`
+- final documented main commit: `1aa59d9fefe38dbc2cbf57d45f84f297a0375e49`
 
 ## Package
 
@@ -90,11 +91,34 @@ Final main dry-run:
 
 - tarball dry-run: pass
 - source ref: `main`
-- source commit: `ba342a15e34de9951cd4a68ad15deee5d9cc6db7`
+- source commit: `1aa59d9fefe38dbc2cbf57d45f84f297a0375e49`
 - family: `code-plugin`
 - name: `@cyb3rb1ade/plur1bus-memory`
 - version: `3.2.0`
 - tag advertised by dry-run: `latest`
+
+Publish:
+
+- publish result: pass
+- source ref: `main`
+- source commit: `1aa59d9fefe38dbc2cbf57d45f84f297a0375e49`
+- package: `@cyb3rb1ade/plur1bus-memory@3.2.0`
+- ClawHub publish id: `rd71zvvz3k3qcsg6j2kn3an6ys86qv4s`
+
+Published install smoke:
+
+- install command source: `clawhub:@cyb3rb1ade/plur1bus-memory`
+- OpenClaw version: `2026.5.12`
+- profile: `plur1bus-3-2-0-clawhub-published`
+- install: pass
+- `plugins inspect --json`: pass
+- `plugins inspect --json --runtime`: pass
+- `plugins doctor`: pass
+- `memory-core` slot owner: pass
+- PLUR1BUS runtime kind: `extension`
+- provider bridge runtime-visible: pass
+- no model cache after inspect/register: pass
+- security audit: pass command execution; config warnings are profile-level, and the plugin code warning is the known static `node:fs` heuristic at `index.js:31`.
 
 ## Known Caveats
 
@@ -105,7 +129,7 @@ Final main dry-run:
 
 ## Publish and Tag Status
 
-- publish result: `not-run`
+- publish result: `pass`
 - tag result: `not-run`
 
-Stop state: ready for explicit user confirmation. The exact phrase expected before real publish is `Publish jetzt ausführen`.
+Stop state: published. Tag remains uncreated/unpushed pending separate approval.
