@@ -1,0 +1,123 @@
+{
+  "date": "2026-05-14",
+  "verdict": "ready-for-explicit-publish-confirmation",
+  "v2": {
+    "branch": "legacy/v2",
+    "commit": "fd36dcce2c7e58962fb098179dfdeb643b31f43a",
+    "evidence": "main and tag v2.1.32 both pointed to this commit before promotion",
+    "created": true,
+    "pushed": true
+  },
+  "v3": {
+    "sourceBranch": "neo-arch-openclaw-current-compat",
+    "releaseCommit": "ba342a15e34de9951cd4a68ad15deee5d9cc6db7",
+    "packageName": "@cyb3rb1ade/plur1bus-memory",
+    "packageVersion": "3.2.0",
+    "pluginId": "memory-lancedb-namespaced",
+    "mainPromoted": true,
+    "mainPromotionMode": "fast-forward",
+    "forcePushUsed": false
+  },
+  "openclaw": {
+    "stableTarget": "2026.5.12",
+    "stableCommit": "f066dd2f31c231f38fbcaacd6f6dfce0801143b3",
+    "betaRecheckTarget": "2026.5.12-beta.8",
+    "betaRecheckCommit": "097daf917d98f20678e3ac39ce6b7fa1ebf96e62",
+    "build": {
+      "openclawVersion": "2026.5.12",
+      "pluginSdkVersion": "2026.5.12"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.12-beta.6",
+      "minGatewayVersion": "2026.5.12-beta.6"
+    }
+  },
+  "guardrails": {
+    "plur1busKind": "extension",
+    "memoryCoreSlotOwner": "pass",
+    "kindMemoryInPlur1bus": false,
+    "memoryCapabilityRegistrationLiteralPresent": false,
+    "autoSelectPriorityPresent": false,
+    "allowExplicitWhenConfiguredAutoPresent": false,
+    "providerBridgeIds": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "localE5Status": "experimental-pending-real-local-model-smoke",
+    "localGteRerankerStatus": "experimental-pending-real-local-model-smoke"
+  },
+  "validation": {
+    "static": {
+      "indexCheck": "pass",
+      "adapterCheck": "pass",
+      "nodeTests": "pass",
+      "nodeTestCount": 11,
+      "npmPack": "pass"
+    },
+    "stable2026512": {
+      "installCli": "pass",
+      "linkLane": "pass",
+      "npmPackLane": "pass",
+      "linkedProfile": "plur1bus-3-2-0-stable-link",
+      "tarballProfile": "plur1bus-3-2-0-stable-tarball",
+      "memoryCoreSlotOwner": "pass",
+      "providerBridgeRuntimeVisible": "pass",
+      "modelCacheCreated": false
+    },
+    "beta8Recheck": {
+      "installCli": "pass",
+      "linkLane": "pass",
+      "npmPackLane": "pass",
+      "linkedProfile": "plur1bus-3-2-0-beta8-link",
+      "tarballProfile": "plur1bus-3-2-0-beta8-tarball",
+      "memoryCoreSlotOwner": "pass",
+      "providerBridgeRuntimeVisible": "pass",
+      "modelCacheCreated": false
+    }
+  },
+  "clawhub": {
+    "publisherWhoami": "Cyb3rb1ade",
+    "family": "code-plugin",
+    "folderDryRun": {
+      "result": "blocked",
+      "reason": "Path must be a folder or ClawPack .tgz"
+    },
+    "preMainDryRun": {
+      "result": "pass",
+      "sourceRepo": "Cyb3rb1ade/openclaw-plur1bus-memory",
+      "sourceRef": "neo-arch-openclaw-current-compat",
+      "sourceCommit": "ba342a15e34de9951cd4a68ad15deee5d9cc6db7",
+      "packageName": "@cyb3rb1ade/plur1bus-memory",
+      "version": "3.2.0"
+    },
+    "finalMainDryRun": {
+      "result": "pass",
+      "sourceRepo": "Cyb3rb1ade/openclaw-plur1bus-memory",
+      "sourceRef": "main",
+      "sourceCommit": "ba342a15e34de9951cd4a68ad15deee5d9cc6db7",
+      "packageName": "@cyb3rb1ade/plur1bus-memory",
+      "version": "3.2.0",
+      "advertisedTags": [
+        "latest"
+      ]
+    },
+    "publishResult": "not-run"
+  },
+  "tag": {
+    "name": "v3.2.0",
+    "created": false,
+    "pushed": false,
+    "result": "not-run"
+  },
+  "knownCaveats": [
+    "Local E5 experimental unless real local model smoke passes.",
+    "Local GTE reranker experimental unless real local reranker smoke passes.",
+    "Capability CLI provider visibility may differ from runtime inspect.",
+    "memory-core remains Slot-Owner and PLUR1BUS remains extension/augment."
+  ],
+  "publishGate": {
+    "requiresExplicitUserConfirmation": true,
+    "expectedConfirmationPhrase": "Publish jetzt ausführen"
+  }
+}
