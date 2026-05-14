@@ -1,0 +1,351 @@
+{
+  "reviewId": "openclaw-2026-05-13-beta6-plur1bus-v3.1",
+  "generatedAt": "2026-05-14T01:51:10+02:00",
+  "targets": {
+    "githubBetaTag": {
+      "tag": "v2026.5.12-beta.6",
+      "commit": "c4292e053d7c86361700b3acb59cb51e4a310f2d",
+      "evidenceSource": "local git fetch, git rev-parse"
+    },
+    "npmBeta": {
+      "exact": "2026.5.12-beta.6",
+      "distTagBeta": "2026.5.12-beta.6",
+      "evidenceSource": "npm view preflight"
+    },
+    "forwardLookMain": {
+      "commit": "b10b946b125d3147b4237e46033d9ae48f4af88e",
+      "role": "forward-look-only"
+    }
+  },
+  "sourceSeparation": {
+    "localDiffAndFileAnalysis": [
+      "git log v2026.5.12-beta.5..v2026.5.12-beta.6",
+      "git diff --stat v2026.5.12-beta.5..v2026.5.12-beta.6",
+      "focused diff of src/plugins/install-security-scan.runtime.ts, src/plugins/install.test.ts, src/security/skill-scanner.ts",
+      "OpenClaw docs/plugins/sdk-overview.md and docs/plugins/manifest.md for memory embedding provider contracts",
+      "PLUR1BUS package, manifest, provider files, unit tests, and npm pack"
+    ],
+    "npmPreflightOnly": [
+      "npm view openclaw@2026.5.12-beta.6 version",
+      "npm view openclaw@beta version"
+    ],
+    "clawSweeperState": [
+      "local clawsweeper-gate reported 0 clean findings and 10 unreviewed commits; this is not a full diff substitute"
+    ],
+    "runtimeSmoke": [
+      "isolated non-root OpenClaw install-cli under kimi",
+      "linked dev plugin lane",
+      "managed tarball plugin lane",
+      "runtime inspect after hook permissions",
+      "direct dependency import check from managed plugin install"
+    ]
+  },
+  "ranges": {
+    "beta5ToBeta6": {
+      "range": "v2026.5.12-beta.5..v2026.5.12-beta.6",
+      "mergeBase": "2cdd69a303e311da587b7c6a5913fb7ff8039299",
+      "commits": 10,
+      "filesChanged": 151,
+      "basis": "primary beta6 compatibility gate"
+    },
+    "beta6ToMain": {
+      "range": "v2026.5.12-beta.6...origin/main",
+      "mergeBase": "067e83d121ddb05181b8c97cf8587e591059d6c4",
+      "basis": "forward-look only"
+    }
+  },
+  "clawSweeper": {
+    "command": "/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.12-beta.5 2026.5.12-beta.6 --no-block",
+    "clean": 0,
+    "unreviewed": 10,
+    "blockingFindings": []
+  },
+  "commitClassification": [
+    {
+      "commit": "c4292e053d",
+      "title": "fix(plugins): scope install scanner to runtime graph",
+      "classification": "plur1bus-compatibility-positive",
+      "impact": "OpenClaw now scans plugin-owned runtime graph instead of all installed dependency runtime code. This removes the beta5 PLUR1BUS tarball install blocker while still scanning imported local plugin runtime files.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "ab8b4eacce",
+      "title": "fix(plugins): allow benign LanceDB runtime shims",
+      "classification": "plur1bus-compatibility-positive",
+      "impact": "Known LanceDB native-loader and ESM interop patterns no longer block managed plugin install.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "e2c32243e9",
+      "title": "fix(plugins): satisfy lance shim lint",
+      "classification": "no-direct-fix-required",
+      "impact": "Lint-only companion to the LanceDB scanner fix.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "1f18e8864d",
+      "title": "fix(codex): project user MCP servers into app-server threads",
+      "classification": "smoke-required",
+      "impact": "No direct PLUR1BUS API break. Keep runner/provider hook-firing smokes in future runtime tests.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "bd840af600",
+      "title": "fix(codex): rotate incompatible context-engine threads",
+      "classification": "smoke-required",
+      "impact": "No direct PLUR1BUS plugin break. Relevant only for Codex-runner session behavior.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "485dbeb5ba",
+      "title": "fix(imessage): make inbound image attachments readable by agents",
+      "classification": "no-direct-impact",
+      "impact": "Channel/media specific. PLUR1BUS only sees normal hook context if present.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "5f9249b059",
+      "title": "fix(imessage): avoid visible media placeholder text",
+      "classification": "no-direct-impact",
+      "impact": "Channel/media specific, no Memory/Plugin/Gateway/Hook breaking change for PLUR1BUS.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "7470221401",
+      "title": "chore(release): bump beta 6",
+      "classification": "no-runtime-impact",
+      "impact": "Release metadata.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "bde26a965c",
+      "title": "build(pnpm): restore source fixture release-age exemptions",
+      "classification": "no-runtime-impact",
+      "impact": "Build/pnpm policy only.",
+      "evidence": "localDiff"
+    },
+    {
+      "commit": "a44012c087",
+      "title": "build(pnpm): exempt direct oxlint release age",
+      "classification": "no-runtime-impact",
+      "impact": "Build/pnpm policy only.",
+      "evidence": "localDiff"
+    }
+  ],
+  "smokeResults": {
+    "static": {
+      "nodeCheckIndex": "pass",
+      "nodeCheckMemoryDoctor": "pass",
+      "bashNInstallMemorySystem": "pass",
+      "unitTests": "pass 10/10"
+    },
+    "packaging": {
+      "npmPack": "pass",
+      "packageVersion": "3.1.0-beta.1",
+      "tarballFiles": 17,
+      "providerFilesIncluded": true,
+      "modelCacheIncluded": false
+    },
+    "nonRootInstallCli": {
+      "user": "kimi",
+      "installCommandRanUnderKimi": true,
+      "version": "OpenClaw 2026.5.12-beta.6 (c4292e0)",
+      "prefixBinary": "/tmp/openclaw-beta6-plur1bus-v31-STpLvI/prefix/bin/openclaw",
+      "status": "pass"
+    },
+    "linkedPluginLane": {
+      "profile": "plur1bus-beta6-v31-link",
+      "openclawHome": "/tmp/openclaw-beta6-plur1bus-v31-STpLvI/home-link/.openclaw",
+      "install": "pass",
+      "runtimeInspect": "pass-with-hook-permission-warning",
+      "pluginDoctor": "pass",
+      "notes": "Linked dev lane does not install dependencies and is not first-class plugin evidence."
+    },
+    "tarballPluginLane": {
+      "profile": "plur1bus-beta6-v31-tarball",
+      "openclawHome": "/tmp/openclaw-beta6-plur1bus-v31-STpLvI/home-tarball/.openclaw",
+      "install": "pass",
+      "runtimeInspectBeforeHookPermissions": "pass-with-agent_end-blocked",
+      "runtimeInspectAfterHookPermissions": "pass",
+      "pluginDoctor": "pass",
+      "typedHooksAfterPermissions": [
+        "agent_end",
+        "before_prompt_build",
+        "gateway_start",
+        "gateway_stop"
+      ]
+    },
+    "functionalSmokes": {
+      "status": "blocked",
+      "reason": "No OpenAI/OpenAI-compatible test key, no deterministic mock embedding provider, and no local E5 model smoke was run.",
+      "countsAsBeta6Breaking": false
+    }
+  },
+  "nonRoot": {
+    "sourcePath": "/tmp/openclaw-beta6-plur1bus-v31-STpLvI/src/openclaw-memory-system",
+    "linkedInstallPath": "/tmp/openclaw-beta6-plur1bus-v31-STpLvI/src/openclaw-memory-system/extensions/memory-lancedb-namespaced",
+    "tarballInstall": "pass",
+    "rootPathDependency": false,
+    "rootEscapes": []
+  },
+  "pluginStatus": {
+    "linkedProfile": "plur1bus-beta6-v31-link",
+    "tarballProfile": "plur1bus-beta6-v31-tarball",
+    "linkedOpenclawHome": "/tmp/openclaw-beta6-plur1bus-v31-STpLvI/home-link/.openclaw",
+    "tarballOpenclawHome": "/tmp/openclaw-beta6-plur1bus-v31-STpLvI/home-tarball/.openclaw",
+    "usedIsolatedPrefixBinary": true,
+    "bareOpenclawUsed": false,
+    "linkedInstallReady": "pass",
+    "tarballInstallReady": "pass",
+    "selfContainedDependencies": "pass",
+    "siblingFallbackUsed": false,
+    "firstClassPluginReady": "pass",
+    "remainingBlockers": [
+      "Functional memory operation smokes require a real/test embedding provider."
+    ]
+  },
+  "functionalRegression": [
+    {
+      "feature": "memory_store",
+      "status": "blocked",
+      "reason": "provider unavailable"
+    },
+    {
+      "feature": "memory_recall",
+      "status": "blocked",
+      "reason": "provider unavailable"
+    },
+    {
+      "feature": "memory_forget",
+      "status": "blocked",
+      "reason": "end-to-end provider-backed path not run"
+    },
+    {
+      "feature": "knowledge_update",
+      "status": "blocked",
+      "reason": "end-to-end provider-backed path not run"
+    },
+    {
+      "feature": "Auto-Capture via agent_end",
+      "status": "pass",
+      "reason": "runtime hook registered after allowConversationAccess"
+    },
+    {
+      "feature": "Auto-Recall via before_prompt_build / PromptSupplement",
+      "status": "pass",
+      "reason": "runtime hook registered"
+    },
+    {
+      "feature": "CorpusSupplement / memory_search corpus=all",
+      "status": "pass-registration-blocked-runtime",
+      "reason": "native surface registered; end-to-end memory_search not run without provider"
+    },
+    {
+      "feature": "Turn Journal",
+      "status": "pass-unit-blocked-runtime",
+      "reason": "unit coverage pass; no real agent turn smoke"
+    },
+    {
+      "feature": "Candidates",
+      "status": "pass-unit"
+    },
+    {
+      "feature": "Reaction Ledger",
+      "status": "pass-unit"
+    },
+    {
+      "feature": "BehaviorCards",
+      "status": "pass-unit"
+    },
+    {
+      "feature": "Embedding Queue",
+      "status": "pass-unit-blocked-provider"
+    },
+    {
+      "feature": "Categories",
+      "status": "pass-unit"
+    },
+    {
+      "feature": "Origins",
+      "status": "pass-unit"
+    },
+    {
+      "feature": "Trust-Level",
+      "status": "pass-unit"
+    },
+    {
+      "feature": "Status-Machine",
+      "status": "pass-unit"
+    },
+    {
+      "feature": "Recall-Lanes",
+      "status": "pass-unit"
+    },
+    {
+      "feature": "Dreaming",
+      "status": "not-applicable",
+      "reason": "no beta6 breaking change found; no dreaming job smoke run"
+    },
+    {
+      "feature": "OpenAI provider",
+      "status": "implemented-blocked-key"
+    },
+    {
+      "feature": "OpenAI-compatible provider",
+      "status": "implemented-blocked-key"
+    },
+    {
+      "feature": "Cohere reranker",
+      "status": "implemented-blocked-key"
+    },
+    {
+      "feature": "disabled reranker",
+      "status": "implemented"
+    },
+    {
+      "feature": "E5 local embedding",
+      "status": "experimental-not-smoked"
+    },
+    {
+      "feature": "GTE local reranker",
+      "status": "blocked-experimental-pending-local-model-smoke"
+    }
+  ],
+  "integrationOpportunities": [
+    {
+      "name": "registerMemoryEmbeddingProvider plus contracts.memoryEmbeddingProviders",
+      "availability": "beta6-public-docs-and-tests",
+      "value": "high",
+      "risk": "medium",
+      "recommendation": "feature-flagged follow-up; do not make PLUR1BUS the default memory slot owner"
+    },
+    {
+      "name": "session_end shutdown/restart",
+      "availability": "beta6-public-hook-docs",
+      "value": "high",
+      "risk": "medium",
+      "recommendation": "future finalizer with duplicate-capture guard"
+    },
+    {
+      "name": "onSessionTranscriptUpdate",
+      "availability": "runtime exports/docs",
+      "value": "high",
+      "risk": "medium",
+      "recommendation": "future incremental capture path only after public SDK stability check"
+    },
+    {
+      "name": "scheduleSessionTurn",
+      "availability": "sdk docs/contracts",
+      "value": "medium-high",
+      "risk": "medium",
+      "recommendation": "future Dreaming/Promote/Prune scheduler behind feature flag"
+    }
+  ],
+  "verdict": {
+    "beta6CodeCompatibility": "pass",
+    "firstClassManagedPluginInstall": "pass",
+    "fullFunctionalRuntime": "blocked-by-missing-provider",
+    "plur1busCompatibilityFixRequired": false,
+    "recommendedNextWork": "optional beta6-native memoryEmbeddingProviders integration branch"
+  }
+}
