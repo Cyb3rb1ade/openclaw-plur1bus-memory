@@ -3,7 +3,9 @@
     "packageVersion": "3.2.0-beta.1",
     "openclawTarget": "2026.5.12-beta.8",
     "family": "code-plugin",
-    "realPublishAttempted": false
+    "realPublishAttempted": false,
+    "committedHead": "501dd558564d76c8beb7c211b5862a55da5ec52f",
+    "pushed": true
   },
   "publisher": {
     "clawhubWhoami": "Cyb3rb1ade",
@@ -16,8 +18,7 @@
     "packageJsonName": "@cyb3rb1ade/plur1bus-memory",
     "proposedPackageName": "@cyb3rb1ade/plur1bus-memory",
     "recommendedAlternates": [
-      "@cyb3rb1ade/openclaw-plur1bus-memory",
-      "@<controlled-owner>/plur1bus-memory"
+      "@cyb3rb1ade/openclaw-plur1bus-memory"
     ],
     "existingNameConflicts": {
       "@plur-ai/claw": "not ours; not used",
@@ -107,12 +108,12 @@
       "path": "/root/openclaw-memory-system/tmp-clawhub-pack/cyb3rb1ade-plur1bus-memory-3.2.0-beta.1.tgz",
       "name": "@cyb3rb1ade/plur1bus-memory",
       "version": "3.2.0-beta.1",
-      "size": 50252,
+      "size": 50191,
       "files": 18,
-      "sha256": "edeb36dc793161aed4a9999fcc72c2c58e57b4374a0f1d9e53e2e4fe006f448b",
-      "npmIntegrity": "sha512-ZyiF1zWB6uw6UXZBTNHDazw6QlE/j54nm5bVdgsGFPHv2/nRa4sEJmh33XtYZRmx3s6Cn1Fl4/a+0lRc9R1rlg==",
-      "npmShasum": "93927324fb4e2d14f670734d7314ca392729cacf",
-      "cleanup": "local generated artifact removed after dry-run"
+      "sha256": "335b3e2eaca13a8b2cad39166e4a93fbb22dd82ef23945dc907e023fd7560205",
+      "npmIntegrity": "sha512-T0BcF+j0sb0mjOYhduaOdJOiXNYtIsWkUV09bcz6708YV0ZYwDBPF9AiUQ18CYv6pOJMikwGTkUNRUGdCirMsQ==",
+      "npmShasum": "a3666c1997a4e97412209cf32d33cd3124b79e4b",
+      "cleanup": "local generated artifact removed after final dry-run"
     }
   },
   "beta8Smoke": {
@@ -166,6 +167,9 @@
     },
     "clawPackDryRun": {
       "status": "pass",
+      "dryRunSourceCommit": "501dd558564d76c8beb7c211b5862a55da5ec52f",
+      "dryRunPackageName": "@cyb3rb1ade/plur1bus-memory",
+      "dryRunResult": "pass",
       "commandShape": "clawhub package publish <clawpack.tgz> --family code-plugin --source-repo Cyb3rb1ade/openclaw-plur1bus-memory --source-commit <commit> --source-ref neo-arch-openclaw-current-compat --source-path extensions/memory-lancedb-namespaced --dry-run --json",
       "output": {
         "source": "github:Cyb3rb1ade/openclaw-plur1bus-memory@neo-arch-openclaw-current-compat:extensions/memory-lancedb-namespaced",
@@ -173,16 +177,16 @@
         "displayName": "Memory (LanceDB, per-Agent)",
         "family": "code-plugin",
         "version": "3.2.0-beta.1",
-        "commit": "39cb9fe844897c6fa2ebcce400a3cfe50f2f9ea4",
+        "commit": "501dd558564d76c8beb7c211b5862a55da5ec52f",
         "files": 18,
-        "totalBytes": 50252
+        "totalBytes": 50191
       }
     }
   },
   "finalVerdict": "ready-with-caveats",
   "caveats": [
     "No real publish was attempted.",
-    "The dry-run source commit is the current committed branch head; commit and push the package-name/readiness changes before any real publish so source metadata matches the artifact.",
+    "The final dry-run source commit points at the pushed release-readiness commit.",
     "Local E5/GTE model smoke remains experimental/blocked pending real local model execution.",
     "Capability CLI lists only the core local provider; runtime inspect is the provider bridge evidence."
   ]
