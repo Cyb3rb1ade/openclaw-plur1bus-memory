@@ -1,0 +1,111 @@
+{
+  "date": "2026-05-15 Europe/Berlin",
+  "verdict": "completed-with-caveats",
+  "backupPath": "/root/.openclaw-backups/pre-2026-5-12-plur1bus-3-2-0-20260515-002201",
+  "openclaw": {
+    "before": "2026.5.7 (eeef486)",
+    "after": "2026.5.12 (f066dd2)",
+    "gatewayActive": true,
+    "health": {
+      "ok": true,
+      "status": "live"
+    }
+  },
+  "plur1bus": {
+    "pluginId": "memory-lancedb-namespaced",
+    "beforeVersion": "2.1.32",
+    "afterPackageName": "@cyb3rb1ade/plur1bus-memory",
+    "afterVersion": "3.2.0",
+    "requestedInstallMode": "npm-pack managed",
+    "artifact": "/tmp/openclaw-live-upgrade-artifacts/cyb3rb1ade-plur1bus-memory-3.2.0.tgz",
+    "artifactSha256": "f33b8951aa8fe2da43c9b132ae81f52f778103bec59273fc282e9d003eb60b0e",
+    "effectiveOpenClawInstallRecord": {
+      "source": "archive",
+      "note": "OpenClaw 2026.5.12 direct local tgz install succeeded, while npm-pack:<path> failed metadata parsing."
+    }
+  },
+  "issueMitigation": {
+    "pr": 68685,
+    "issue": 68664,
+    "obsoleteMemorySearchHits": [],
+    "gatewayStartedAfterMitigation": true
+  },
+  "providerIndexPreservation": {
+    "pass": true,
+    "violations": [],
+    "baseDbPath": "~/.openclaw/memory/lancedb-namespaced",
+    "effectiveEmbeddingProvider": "openai-compatible",
+    "embeddingModel": "text-embedding-3-large",
+    "embeddingDimensions": 3072,
+    "rerankerProvider": "cohere",
+    "rerankerModel": "rerank-v3.5",
+    "rerankerCandidates": 20,
+    "localE5Activated": false,
+    "localGteActivated": false,
+    "agentDbDimensionCheck": {
+      "pass": true,
+      "agentsChecked": 39,
+      "dimension": 3072
+    }
+  },
+  "runtimeChecks": {
+    "nodeCheckIndex": "pass",
+    "nodeCheckProviderBridge": "pass",
+    "unitTests": {
+      "pass": true,
+      "count": 11
+    },
+    "tarballLeakScan": "pass",
+    "pluginsInspectJson": "pass",
+    "pluginsInspectRuntime": "pass",
+    "pluginsDoctor": "pass-no-hard-errors",
+    "memoryCoreKind": "memory",
+    "memoryCoreSlotOwnerConfigured": true,
+    "plur1busKind": "extension",
+    "allowConversationAccess": true,
+    "typedHooks": [
+      "agent_end",
+      "before_prompt_build",
+      "gateway_start",
+      "gateway_stop"
+    ],
+    "memoryEmbeddingProviders": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ]
+  },
+  "gateway": {
+    "systemdActive": true,
+    "execStartPreStatus": "success",
+    "httpHealth": "pass",
+    "gatewayProbe": {
+      "reachable": true,
+      "capability": "admin-capable",
+      "readProbe": "timeout-once"
+    }
+  },
+  "clawsweeper": {
+    "range": "2026.5.7 -> 2026.5.12",
+    "commits": 5200,
+    "clean": 2703,
+    "nonCodeSkipped": 177,
+    "findings": 365,
+    "high": 13,
+    "medium": 180,
+    "low": 106,
+    "unweighted": 66,
+    "unreviewed": 1955,
+    "treatedAsCleanGate": false
+  },
+  "functionalMemorySmoke": {
+    "memoryStoreWrite": "not-run",
+    "reason": "No deliberate memory write was performed during this live upgrade. Provider and DB dimension checks passed."
+  },
+  "caveats": [
+    "systemd unit description and OPENCLAW_SERVICE_VERSION still mention 2026.5.7",
+    "OpenClaw records the local npm-pack artifact install as archive source",
+    "ClawSweeper broad range was not clean",
+    "old pending Telegram voice delivery retries failed due caption length"
+  ]
+}
