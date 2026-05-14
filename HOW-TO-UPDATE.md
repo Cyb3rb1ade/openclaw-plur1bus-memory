@@ -2,8 +2,8 @@
 
 Safe update workflow for PLUR1BUS on OpenClaw.
 
-Current validated target: OpenClaw `2026.5.12-beta.8` with
-`memory-lancedb-namespaced@3.2.0-beta.1`.
+Current validated target: OpenClaw `2026.5.12` with
+`@cyb3rb1ade/plur1bus-memory@3.2.0`.
 
 ## Update Rules
 
@@ -48,7 +48,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
   bash -lc '
     curl -fsSL --proto "=https" --tlsv1.2 https://openclaw.ai/install-cli.sh \
-      | bash -s -- --prefix "$BASE/prefix" --version 2026.5.12-beta.8 --no-onboard --json
+      | bash -s -- --prefix "$BASE/prefix" --version 2026.5.12 --no-onboard --json
   '
 ```
 
@@ -69,7 +69,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   "$BASE/prefix/bin/openclaw" --version
 ```
 
-Expected version includes `2026.5.12-beta.8`.
+Expected version includes `2026.5.12`.
 
 ## 3. Run PLUR1BUS Static Checks
 
@@ -86,7 +86,7 @@ caches.
 
 ## 4. Lane A: Linked Plugin
 
-Profile: `plur1bus-beta8-v32-link`
+Profile: `plur1bus-3-2-0-stable-link`
 
 Every command must use the full non-root environment:
 
@@ -101,7 +101,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   TMPDIR="$BASE/tmp" \
   NPM_CONFIG_PREFIX="$BASE/npm-global" \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
-  "$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link \
+  "$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link \
     plugins install --link "$BASE/src/openclaw-memory-system/extensions/memory-lancedb-namespaced"
 ```
 
@@ -137,11 +137,11 @@ Set the isolated profile config:
 Then run, again with the same wrapper:
 
 ```bash
-"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link plugins inspect memory-lancedb-namespaced --json
-"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link plugins inspect memory-lancedb-namespaced --json --runtime
-"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link plugins doctor
-"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link plugins inspect memory-core --json --runtime
-"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link capability embedding providers --json
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link plugins inspect memory-lancedb-namespaced --json
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link plugins inspect memory-lancedb-namespaced --json --runtime
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link plugins doctor
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link plugins inspect memory-core --json --runtime
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link capability embedding providers --json
 ```
 
 The short commands above are only readable examples. Execute them through
@@ -149,7 +149,7 @@ The short commands above are only readable examples. Execute them through
 
 ## 5. Lane B: Managed npm-pack Install
 
-Profile: `plur1bus-beta8-v32-tarball`
+Profile: `plur1bus-3-2-0-stable-tarball`
 
 Create the package as `kimi`:
 
@@ -177,8 +177,8 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   TMPDIR="$BASE/tmp" \
   NPM_CONFIG_PREFIX="$BASE/npm-global" \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
-  "$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-tarball \
-    plugins install "npm-pack:$BASE/artifacts/memory-lancedb-namespaced-3.2.0-beta.1.tgz"
+  "$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-tarball \
+    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-3.2.0.tgz"
 ```
 
 If `npm-pack:<path>` syntax changes, check:
@@ -232,7 +232,7 @@ Known blocked smokes:
 For a new OpenClaw target, compare from the last validated tag:
 
 ```bash
-/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.12-beta.6 2026.5.12-beta.8 --no-block
+/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.12-beta.8 2026.5.12 --no-block
 ```
 
 ClawSweeper is a gate input, not a substitute for local review. Classify every

@@ -1,8 +1,8 @@
 # PLUR1BUS Neo-Arch v3 Memory Guide
 
 Stand: 2026-05-14<br>
-Version: `3.2.0-beta.1`<br>
-Branch: `neo-arch`
+Version: `3.2.0`<br>
+Branch: `main`
 
 Dieses Dokument beschreibt nur noch den v3-Normalbetrieb und den v2→v3
 Migrationspfad. Historische v2-only Upgrade-Notizen, OpenClaw-dist-Patchketten,
@@ -13,7 +13,7 @@ entfernt.
 
 PLUR1BUS v3 ist ein kognitiver Memory-Layer fuer OpenClaw:
 
-- PLUR1BUS `3.0.0-beta.2` und neuer benötigt OpenClaw `2026.5.10-beta.5`
+- PLUR1BUS `3.2.0` benötigt OpenClaw `2026.5.12-beta.6`
   oder neuer. Ältere OpenClaw-Versionen haben nicht den vorausgesetzten
   OpenClaw-native Memory-Stack fuer v3.
 - `memory-core` bleibt der exklusive OpenClaw-Memory-Slot.
@@ -78,7 +78,7 @@ Provider beibehalten oder neuen `baseDbPath` verwenden, zum Beispiel
 `lancedb-namespaced-openai-large-3072` oder `lancedb-namespaced-e5-small-384`,
 danach explizit reindexen/backfillen. Die alte DB bleibt erhalten.
 
-## 1.2 OpenClaw-native Embedding-Provider-Bridge ab v3.2.0-beta.1
+## 1.2 OpenClaw-native Embedding-Provider-Bridge ab v3.2.0
 
 PLUR1BUS deklariert zusaetzlich zu den bestehenden Tools drei optionale
 OpenClaw-native Embedding-Provider:
@@ -158,7 +158,7 @@ OpenClaw Gateway
 ```
 
 Default ist `neo.mode = "augment"`. `registerMemoryCapability` wird in
-`3.2.0-beta.1` nicht genutzt; auch ein versehentlich gesetztes
+`3.2.0` nicht genutzt; auch ein versehentlich gesetztes
 `neo.mode="slot"` darf PLUR1BUS nicht zum OpenClaw-Memory-Slot machen.
 
 ## 3. Zentrale Konfiguration
@@ -257,7 +257,7 @@ Reranker:
 2. **Local GTE**
    - `reranker.provider=local-transformers`
    - `local.model=Alibaba-NLP/gte-reranker-modernbert-base`
-   - English-primary, beta1 experimental
+   - English-primary, experimental
    - blocked pending local model smoke, solange kein echter Node/Transformers.js
      Smoke grün war
 3. **Disabled**
@@ -798,7 +798,7 @@ Ja und nein:
 
 2. OpenClaw aktualisieren:
 
-   PLUR1BUS v3 funktioniert nur mit OpenClaw `2026.5.10-beta.5` oder neuer.
+   PLUR1BUS v3.2 funktioniert nur mit OpenClaw `2026.5.12-beta.6` oder neuer.
    Vor dem Plugin-Upgrade muss die OpenClaw-Instanz auf diese Version oder eine
    neuere Version aktualisiert sein.
 
