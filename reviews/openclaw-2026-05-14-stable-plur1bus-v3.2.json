@@ -1,0 +1,260 @@
+{
+  "target": {
+    "openclawVersion": "2026.5.12",
+    "tag": "v2026.5.12",
+    "commit": "f066dd2f31c231f38fbcaacd6f6dfce0801143b3",
+    "npmLatest": "2026.5.12",
+    "npmBeta": "2026.5.12-beta.8",
+    "range": "v2026.5.12-beta.8..v2026.5.12",
+    "baselineTag": "v2026.5.12-beta.8",
+    "baselineCommit": "097daf917d98f20678e3ac39ce6b7fa1ebf96e62",
+    "commitCount": 7,
+    "releasePublishedAt": "2026-05-14T18:26:44.431Z"
+  },
+  "plur1bus": {
+    "commit": "70f8c2b1fc5979e458ccfae122b5aaef70991830",
+    "packageName": "@cyb3rb1ade/plur1bus-memory",
+    "version": "3.2.0-beta.1",
+    "pluginId": "memory-lancedb-namespaced",
+    "buildMetadata": {
+      "openclawVersion": "2026.5.12-beta.8",
+      "pluginSdkVersion": "2026.5.12-beta.8",
+      "changedInThisReview": false,
+      "reason": "User required fresh pack/link/npm-pack/beta-stable harness and ClawHub dry-run after any release metadata update. This review records stable compatibility without silently changing release metadata."
+    }
+  },
+  "nonRoot": {
+    "base": "/tmp/plur1bus-oc2026512-ChdWBA",
+    "user": "kimi",
+    "usedInstallCli": true,
+    "usedIsolatedPrefixBinary": true,
+    "prefixBinary": "/tmp/plur1bus-oc2026512-ChdWBA/prefix/bin/openclaw",
+    "versionOutput": "OpenClaw 2026.5.12 (f066dd2)",
+    "bareOpenclawUsed": false,
+    "rootEscapes": [
+      {
+        "command": "npm install --omit=dev",
+        "scope": "temporary link-lane source dependency preparation",
+        "reason": "sandbox rejected chown; dependencies were installed into the temp source tree and permissions were tightened before OpenClaw runtime checks"
+      }
+    ]
+  },
+  "pluginStatus": {
+    "linkedProfile": "plur1bus-2026-5-12-v32-link",
+    "tarballProfile": "plur1bus-2026-5-12-v32-tarball",
+    "npmPackManagedInstall": "pass",
+    "plainArchiveInstall": "not-run",
+    "memoryCoreSlotOwner": "pass",
+    "memoryCoreEvidence": {
+      "kind": "memory",
+      "memorySlotSelected": true,
+      "activationReason": "selected memory slot"
+    },
+    "plur1busKind": "extension",
+    "registerMemoryCapabilityUsed": false,
+    "providerBridgeVisible": "pass-runtime-inspect",
+    "capabilityCliProviderVisibility": "limited-built-in-local-only",
+    "firstClassPluginReady": "pass",
+    "metadataStableUpdate": "deferred"
+  },
+  "staticUnitPack": {
+    "nodeCheckIndex": "pass",
+    "nodeCheckAdapter": "pass",
+    "nodeTest": {
+      "status": "pass",
+      "tests": 11,
+      "fail": 0
+    },
+    "npmPack": {
+      "status": "pass",
+      "filename": "cyb3rb1ade-plur1bus-memory-3.2.0-beta.1.tgz",
+      "totalFiles": 18,
+      "contains": [
+        "package/package.json",
+        "package/openclaw.plugin.json",
+        "package/README.md",
+        "package/index.js",
+        "package/lib/providers/openclaw-memory-embedding-adapters.js"
+      ],
+      "forbiddenContentFound": false
+    }
+  },
+  "lanes": {
+    "link": {
+      "status": "pass",
+      "profile": "plur1bus-2026-5-12-v32-link",
+      "install": "plugins install --link",
+      "inspectJson": "pass",
+      "inspectRuntime": "pass",
+      "doctor": "pass",
+      "runtimeImported": true,
+      "kind": "extension",
+      "hooks": [
+        "agent_end",
+        "before_prompt_build",
+        "gateway_start",
+        "gateway_stop"
+      ],
+      "allowConversationAccess": true,
+      "memorySearchProviderConfig": "plur1bus-e5-small",
+      "memoryEmbeddingProviderIds": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ],
+      "notes": [
+        "Initial world-writable temp source path was blocked by OpenClaw. Permissions were tightened and the lane passed.",
+        "Temporary link-lane dependencies were installed before runtime import."
+      ]
+    },
+    "npmPack": {
+      "status": "pass",
+      "profile": "plur1bus-2026-5-12-v32-tarball",
+      "install": "plugins install npm-pack:/tmp/plur1bus-oc2026512-ChdWBA/artifacts/cyb3rb1ade-plur1bus-memory-3.2.0-beta.1.tgz",
+      "artifactKind": "npm-pack",
+      "artifactFormat": "tgz",
+      "inspectJson": "pass",
+      "inspectRuntime": "pass",
+      "doctor": "pass",
+      "runtimeImported": true,
+      "kind": "extension",
+      "hooks": [
+        "agent_end",
+        "before_prompt_build",
+        "gateway_start",
+        "gateway_stop"
+      ],
+      "allowConversationAccess": true,
+      "memorySearchProviderConfig": "plur1bus-e5-small",
+      "memoryEmbeddingProviderIds": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ]
+    }
+  },
+  "clawsweeper": {
+    "command": "/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.12-beta.8 2026.5.12 --no-block",
+    "status": "review-required",
+    "commitCount": 7,
+    "clean": 0,
+    "unreviewed": 7,
+    "blocker": 0
+  },
+  "commitClassification": [
+    {
+      "commit": "df70248eae15187d4f260538880eb2e7fe47cb91",
+      "subject": "ci(release): retry ClawHub publish verification errors",
+      "classification": "integration-opportunity",
+      "impact": "No runtime impact. Useful for PLUR1BUS release pipeline expectations because ClawHub verification now retries transient errors."
+    },
+    {
+      "commit": "c230b08e745138969c0133c5aeafce73c2aa233f",
+      "subject": "fix(telegram): avoid worker postMessage lint suppression",
+      "classification": "no-direct-impact",
+      "impact": "Telegram worker lint/runtime cleanup only."
+    },
+    {
+      "commit": "cfab2228cb7b512619a2aad0c423dc91a735808c",
+      "subject": "fix(doctor): respect runtime message tool grants",
+      "classification": "smoke-required",
+      "impact": "Doctor output changed around runtime message grants. PLUR1BUS plugins doctor was re-smoked and passed."
+    },
+    {
+      "commit": "31f0c9b82f54219dea384407509b0bbb1b888bb4",
+      "subject": "Fix/weixin catalog update 2.4.3 (#81730)",
+      "classification": "no-direct-impact",
+      "impact": "External Weixin catalog only."
+    },
+    {
+      "commit": "7a0548ee96d8aeeffeee342f0c5fcf0658d74782",
+      "subject": "docs(changelog): mention Weixin catalog bump",
+      "classification": "no-direct-impact",
+      "impact": "Changelog only."
+    },
+    {
+      "commit": "2f27dcbb9f55a718e42d5955810b16a1efa3f9f8",
+      "subject": "fix(config): stabilize heartbeat target help",
+      "classification": "no-direct-impact",
+      "impact": "Config help/schema baseline change only; PLUR1BUS config set/get still passed."
+    },
+    {
+      "commit": "f066dd2f31c231f38fbcaacd6f6dfce0801143b3",
+      "subject": "chore(release): prepare 2026.5.12",
+      "classification": "smoke-required",
+      "impact": "Version bump across bundled packages including memory packages. Link and managed npm-pack lanes passed against the final release build."
+    }
+  ],
+  "releaseNotesSurface": [
+    {
+      "area": "Plugins/install externalization and runtime dependency cones",
+      "assessment": "pass",
+      "note": "Managed npm-pack lane passed. No PLUR1BUS dependency regression observed."
+    },
+    {
+      "area": "Doctor runtime message grants",
+      "assessment": "pass",
+      "note": "plugins doctor passed in link and npm-pack lanes."
+    },
+    {
+      "area": "Plugin SDK memory-core alias restored",
+      "assessment": "no-direct-impact",
+      "note": "Compatible with PLUR1BUS staying augment-only while memory-core owns the memory slot."
+    },
+    {
+      "area": "Models config/auth structured SecretRefs",
+      "assessment": "pass",
+      "note": "PLUR1BUS inspect/register required no secret resolution."
+    },
+    {
+      "area": "Gateway/session history message sequence",
+      "assessment": "no-direct-impact",
+      "note": "No install/inspect/doctor regression observed."
+    },
+    {
+      "area": "Rich replies/channelData",
+      "assessment": "no-direct-impact",
+      "note": "No PLUR1BUS runtime registration impact found."
+    },
+    {
+      "area": "Agents/subagents model precedence",
+      "assessment": "no-direct-impact",
+      "note": "No PLUR1BUS install/runtime regression found."
+    },
+    {
+      "area": "OpenAI-compatible schema fixes",
+      "assessment": "pass",
+      "note": "No provider bridge registration regression observed."
+    }
+  ],
+  "functionalRegression": [],
+  "integrationBacklog": [
+    {
+      "item": "Stable build metadata update",
+      "status": "deferred",
+      "reason": "Changing build metadata to 2026.5.12 requires fresh pack, beta/stable link lane, beta/stable npm-pack lane, and ClawHub dry-run on the final commit/artifact."
+    },
+    {
+      "item": "Capability CLI provider visibility",
+      "status": "watch",
+      "reason": "Runtime inspect shows PLUR1BUS providers, but capability embedding providers CLI only shows built-in local provider in 2026.5.12."
+    },
+    {
+      "item": "Upcoming plugin JSON and install hardening on main",
+      "status": "integration-opportunity",
+      "reason": "Targeted main scan shows parseable plugin JSON output, runtime graph install scanning, managed peer repair, and plugin SDK hook type export improvements after the stable release."
+    }
+  ],
+  "securityAudit": {
+    "pluginInstallWarning": "OpenClaw reported one suspicious code pattern and suggested security audit.",
+    "auditCommand": "openclaw security audit --json",
+    "auditScope": "global profile, not plugin-scoped in 2026.5.12",
+    "findings": [
+      "gateway.loopback_no_auth",
+      "gateway.trusted_proxies_missing"
+    ],
+    "assessment": "harness-config-warning-not-plugin-blocker"
+  },
+  "finalVerdict": "go-compatible-with-openclaw-2026.5.12",
+  "publishOrTagPerformed": false
+}
