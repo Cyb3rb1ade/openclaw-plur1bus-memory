@@ -5,9 +5,19 @@ Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
 **Aktuelle Version:** `3.2.0-beta.1` — Neo-Arch-Beta fuer OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
 
-**Mindestversion:** OpenClaw `2026.5.10-beta.5` oder neuer. PLUR1BUS v3 setzt
-den OpenClaw-native Memory-Stack dieser Beta-Linie voraus; ältere OpenClaw
-Versionen bleiben beim v2.1.x-Zweig.
+**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
+gegen OpenClaw `2026.5.12-beta.8` validiert; ältere OpenClaw-Versionen bleiben
+beim v2.1.x-Zweig.
+
+**ClawHub-Installationsbeispiel:**
+
+```bash
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory
+```
+
+PLUR1BUS bleibt ein Augment-Plugin. `memory-core` bleibt OpenClaw-Memory-Slot-
+Owner; PLUR1BUS setzt kein `kind:"memory"` und nutzt nicht
+`registerMemoryCapability`.
 
 ---
 
@@ -149,6 +159,46 @@ Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
   }
 }
 ```
+
+Für Auto-Capture muss das OpenClaw-Profil Conversation Access erlauben:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-lancedb-namespaced": {
+        "hooks": {
+          "allowConversationAccess": true,
+          "allowPromptInjection": true
+        }
+      }
+    }
+  }
+}
+```
+
+### Embedding-Provider
+
+| Provider-ID | Status | Beschreibung |
+|-------------|--------|--------------|
+| `plur1bus-openai` | empfohlen | OpenAI `text-embedding-3-large` mit Remote-Auth über OpenClaw/PLUR1BUS-Konfiguration |
+| `plur1bus-openai-compatible` | stabil | OpenAI-kompatible Base URL, API-Key und Headers aus expliziter Remote-Konfiguration |
+| `plur1bus-e5-small` | experimental | lokales `intfloat/multilingual-e5-small`; bleibt blocked/experimental bis ein echter Local-Model-Smoke grün ist |
+
+Inspect/Register-Sicherheit:
+
+- kein Modell-Download bei `plugins inspect` oder Provider-Registrierung
+- kein Hugging-Face-Import bei `plugins inspect` oder Provider-Registrierung
+- keine Secret-Auflösung bei `plugins inspect` oder Provider-Registrierung
+- E5 wird erst bei echter `embedQuery`/`embedBatch`-Nutzung lazy geladen
+
+### Reranker
+
+| Provider | Status | Beschreibung |
+|----------|--------|--------------|
+| `cohere` | stabil | Remote-Reranker, empfohlen für produktive Re-Ranking-Pfade |
+| `disabled` | stabil | Vector-only Recall ohne Re-Ranking |
+| `local-transformers` | experimental | lokaler GTE-Reranker; blocked/experimental bis Local-Model-Smoke grün ist |
 
 ### Threshold-Referenz
 
