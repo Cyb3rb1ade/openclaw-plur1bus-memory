@@ -1,3 +1,17 @@
+## [3.2.0-beta.1] - 2026-05-14
+
+### implemented
+- Added the optional OpenClaw-native memory embedding provider bridge via `contracts.memoryEmbeddingProviders` and `api.registerMemoryEmbeddingProvider`.
+- Added runtime adapters for `plur1bus-openai`, `plur1bus-openai-compatible`, and `plur1bus-e5-small`.
+- Kept PLUR1BUS as an augment plugin: no `kind:"memory"`, no `registerMemoryCapability`, and `memory-core` remains the OpenClaw memory slot owner.
+- Kept the existing PLUR1BUS v3.1 internal embedding/reranker path unchanged for tools, auto-capture, auto-recall, corpus supplements, turn journal, candidates, reaction ledger, BehaviorCards, queues, categories, origins, trust levels, and status state.
+
+### experimental
+- Exposed `plur1bus-e5-small` for explicit OpenClaw-native `agents.defaults.memorySearch.provider` use. It lazy-loads `@huggingface/transformers` only on first embedding call and remains experimental until a real local model smoke is green.
+
+### blocked pending local model smoke
+- Local E5 is structurally registered and unit-tested for lazy setup, but a real model-download/load smoke is still required before treating the local path as production-passed.
+
 ## [3.1.0-beta.1] - 2026-05-13
 
 ### implemented

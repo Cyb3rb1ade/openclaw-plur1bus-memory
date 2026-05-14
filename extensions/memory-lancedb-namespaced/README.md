@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `3.1.0-beta.1` — Neo-Arch-Beta fuer OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
+**Aktuelle Version:** `3.2.0-beta.1` — Neo-Arch-Beta fuer OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
 
 **Mindestversion:** OpenClaw `2026.5.10-beta.5` oder neuer. PLUR1BUS v3 setzt
 den OpenClaw-native Memory-Stack dieser Beta-Linie voraus; ältere OpenClaw
@@ -21,6 +21,7 @@ Versionen bleiben beim v2.1.x-Zweig.
 - **Conflict-Logging** — widersprüchliche `decision`-Memories verschiedener Agenten werden in `conflict-log.jsonl` protokolliert
 - **Merging** — semantisch ähnliche Memories (Score 0.70–0.94) werden via LLM zusammengeführt
 - **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings nutzen OpenAI/OpenAI-kompatible Provider oder experimentell lokal `intfloat/multilingual-e5-small`; optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
+- **OpenClaw-native Provider-Bridge** — `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` exponieren `plur1bus-openai`, `plur1bus-openai-compatible` und experimental `plur1bus-e5-small`, ohne `kind:"memory"` zu setzen oder `registerMemoryCapability` zu nutzen; `memory-core` bleibt Slot-Owner
 - **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei wählbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
 - **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
 - **Schema-Migration** — bestehende DBs erhalten neue Spalten automatisch beim ersten Zugriff
