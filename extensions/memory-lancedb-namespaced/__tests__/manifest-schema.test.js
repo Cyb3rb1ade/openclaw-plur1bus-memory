@@ -50,6 +50,22 @@ test("plugin package is self-contained for native OpenClaw install", () => {
   ]);
 });
 
+test("manifest declares PLUR1BUS memory embedding providers without memory kind", () => {
+  const manifest = JSON.parse(readFileSync(resolve(pluginDir, "openclaw.plugin.json"), "utf8"));
+  assert.deepEqual(manifest.contracts.tools, [
+    "knowledge_update",
+    "memory_forget",
+    "memory_recall",
+    "memory_store",
+  ]);
+  assert.deepEqual(manifest.contracts.memoryEmbeddingProviders, [
+    "plur1bus-openai",
+    "plur1bus-openai-compatible",
+    "plur1bus-e5-small",
+  ]);
+  assert.equal(manifest.kind, undefined);
+});
+
 test("manifest schema permits local providers and disabled reranker without apiKey", () => {
   const manifest = JSON.parse(readFileSync(resolve(pluginDir, "openclaw.plugin.json"), "utf8"));
   const embedding = manifest.configSchema.properties.embedding;

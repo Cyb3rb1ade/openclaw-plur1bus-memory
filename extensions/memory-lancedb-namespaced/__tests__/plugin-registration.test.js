@@ -12,6 +12,7 @@ function makeApi(pluginConfig) {
     tools: [],
     commands: [],
     services: [],
+    memoryEmbeddingProviders: [],
     promptSupplements: [],
     corpusSupplements: [],
   };
@@ -23,6 +24,7 @@ function makeApi(pluginConfig) {
     registerTool(factory) { registered.tools.push(factory); },
     registerCommand(command) { registered.commands.push(command); },
     registerService(service) { registered.services.push(service); },
+    registerMemoryEmbeddingProvider(adapter) { registered.memoryEmbeddingProviders.push(adapter); },
     registerMemoryPromptSupplement(builder) { registered.promptSupplements.push(builder); },
     registerMemoryCorpusSupplement(supplement) { registered.corpusSupplements.push(supplement); },
     on(name, handler, opts) { registered.hooks.push({ name, handler, opts }); },
@@ -49,6 +51,65 @@ test("plugin keeps autoCapture default-on and autoCapture false only disables ho
     const disabledRegistered = makeApi(baseConfig(tmp, { autoCapture: false }));
     assert.ok(!disabledRegistered.hooks.some(h => h.name === "agent_end"));
     assert.ok(disabledRegistered.tools.length > 0, "autoCapture false must not disable manual memory tools");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugin registers OpenClaw-native memory embedding providers without becoming the memory slot owner", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    let memoryCapabilityCalls = 0;
+    const registered = makeApi(baseConfig(tmp, {
+      neo: { enabled: true, mode: "slot" },
+      embedding: { dimensions: 1536 },
+    }));
+    assert.deepEqual(
+      registered.memoryEmbeddingProviders.map(adapter => adapter.id),
+      ["plur1bus-openai", "plur1bus-openai-compatible", "plur1bus-e5-small"]
+    );
+
+    const api = {
+      pluginConfig: baseConfig(tmp, { embedding: { dimensions: 1536 } }),
+      runtime: {},
+      logger: { info() {}, warn() {}, debug() {} },
+      resolvePath(value) { return value; },
+      registerTool() {},
+      registerCommand() {},
+      registerService() {},
+      registerMemoryEmbeddingProvider() {},
+      registerMemoryPromptSupplement() {},
+      registerMemoryCorpusSupplement() {},
+      registerMemoryCapability() { memoryCapabilityCalls += 1; },
+      on() {},
+    };
+    plugin.register(api);
+    assert.equal(memoryCapabilityCalls, 0, "PLUR1BUS must not call registerMemoryCapability");
+    assert.equal(plugin.kind, "extension");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("missing registerMemoryEmbeddingProvider API is a warned no-op", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const warnings = [];
+    const api = {
+      pluginConfig: baseConfig(tmp, { embedding: { dimensions: 1536 } }),
+      runtime: {},
+      logger: { info() {}, warn(message) { warnings.push(message); }, debug() {} },
+      resolvePath(value) { return value; },
+      registerTool() {},
+      registerCommand() {},
+      registerService() {},
+      registerMemoryPromptSupplement() {},
+      registerMemoryCorpusSupplement() {},
+      registerMemoryCapability() { throw new Error("registerMemoryCapability must not be called"); },
+      on() {},
+    };
+    plugin.register(api);
+    assert.ok(warnings.some(message => String(message).includes("registerMemoryEmbeddingProvider API unavailable")));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

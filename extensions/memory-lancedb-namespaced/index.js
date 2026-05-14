@@ -57,6 +57,7 @@ import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/provide
 import { EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
+import { registerOpenClawMemoryEmbeddingProviders } from "./lib/providers/openclaw-memory-embedding-adapters.js";
 import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
 
@@ -892,6 +893,7 @@ const plugin = {
 
   register(api) {
     const cfg = api.pluginConfig || {};
+    registerOpenClawMemoryEmbeddingProviders(api, cfg);
 
     const embeddingCfg = cfg.embedding || {};
     const normalizedEmbeddingCfg = normalizeEmbeddingConfig(embeddingCfg, { mode: "existing" });

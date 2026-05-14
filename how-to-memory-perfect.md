@@ -1,7 +1,7 @@
 # PLUR1BUS Neo-Arch v3 Memory Guide
 
-Stand: 2026-05-13<br>
-Version: `3.1.0-beta.1`<br>
+Stand: 2026-05-14<br>
+Version: `3.2.0-beta.1`<br>
 Branch: `neo-arch`
 
 Dieses Dokument beschreibt nur noch den v3-Normalbetrieb und den v2→v3
@@ -78,6 +78,47 @@ Provider beibehalten oder neuen `baseDbPath` verwenden, zum Beispiel
 `lancedb-namespaced-openai-large-3072` oder `lancedb-namespaced-e5-small-384`,
 danach explizit reindexen/backfillen. Die alte DB bleibt erhalten.
 
+## 1.2 OpenClaw-native Embedding-Provider-Bridge ab v3.2.0-beta.1
+
+PLUR1BUS deklariert zusaetzlich zu den bestehenden Tools drei optionale
+OpenClaw-native Embedding-Provider:
+
+- `plur1bus-openai`
+- `plur1bus-openai-compatible`
+- `plur1bus-e5-small`
+
+Die Manifest-Fläche ist `contracts.memoryEmbeddingProviders`; die Runtime-Fläche
+ist `api.registerMemoryEmbeddingProvider`. Das ist keine Memory-Slot-Übernahme:
+PLUR1BUS bleibt `augment`, `memory-core` bleibt Slot-Owner, und PLUR1BUS setzt
+weder `kind:"memory"` noch `registerMemoryCapability`.
+
+Explizite Provider-Wahl:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "memorySearch": {
+        "provider": "plur1bus-e5-small"
+      }
+    }
+  }
+}
+```
+
+Es gibt keine automatische Provider-Selektion. `plur1bus-openai` und
+`plur1bus-openai-compatible` sind Remote-Provider; Keys, Base URLs und Header
+werden erst bei `create()` beziehungsweise beim ersten Embedding-Call
+ausgewertet. `plur1bus-e5-small` ist lokal und experimental; Transformers.js
+wird erst beim ersten `embedQuery`/`embedBatch` importiert, der Modell-Cache
+liegt bevorzugt unter `memorySearch.local.modelCacheDir`, dann unter
+`embedding.local.cacheDir`, sonst unter `${OPENCLAW_HOME}/models/plur1bus`.
+
+Wenn `agents.defaults.memorySearch.provider = "plur1bus-e5-small"` die
+PLUR1BUS-Runtime nicht lädt, ist das als Manifest-/Contract-Activation oder
+Inspect-Visibility-Limit zu debuggen. Nicht durch `kind:"memory"` oder
+`registerMemoryCapability` umgehen.
+
 ## 2. Architektur
 
 ```text
@@ -116,8 +157,9 @@ OpenClaw Gateway
             └─ OpenClaw-Agent-Crons fuer schwere Jobs
 ```
 
-Default ist `neo.mode = "augment"`. `registerMemoryCapability` darf nur in
-einem expliziten Slot-Modus genutzt werden und ist nicht der v3-Standard.
+Default ist `neo.mode = "augment"`. `registerMemoryCapability` wird in
+`3.2.0-beta.1` nicht genutzt; auch ein versehentlich gesetztes
+`neo.mode="slot"` darf PLUR1BUS nicht zum OpenClaw-Memory-Slot machen.
 
 ## 3. Zentrale Konfiguration
 
