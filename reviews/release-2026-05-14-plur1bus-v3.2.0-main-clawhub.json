@@ -1,6 +1,6 @@
 {
   "date": "2026-05-14",
-  "verdict": "ready-for-explicit-publish-confirmation",
+  "verdict": "published",
   "v2": {
     "branch": "legacy/v2",
     "commit": "fd36dcce2c7e58962fb098179dfdeb643b31f43a",
@@ -16,7 +16,8 @@
     "pluginId": "memory-lancedb-namespaced",
     "mainPromoted": true,
     "mainPromotionMode": "fast-forward",
-    "forcePushUsed": false
+    "forcePushUsed": false,
+    "documentedMainCommit": "1aa59d9fefe38dbc2cbf57d45f84f297a0375e49"
   },
   "openclaw": {
     "stableTarget": "2026.5.12",
@@ -95,14 +96,42 @@
       "result": "pass",
       "sourceRepo": "Cyb3rb1ade/openclaw-plur1bus-memory",
       "sourceRef": "main",
-      "sourceCommit": "ba342a15e34de9951cd4a68ad15deee5d9cc6db7",
+      "sourceCommit": "1aa59d9fefe38dbc2cbf57d45f84f297a0375e49",
       "packageName": "@cyb3rb1ade/plur1bus-memory",
       "version": "3.2.0",
       "advertisedTags": [
         "latest"
       ]
     },
-    "publishResult": "not-run"
+    "publish": {
+      "result": "pass",
+      "sourceRepo": "Cyb3rb1ade/openclaw-plur1bus-memory",
+      "sourceRef": "main",
+      "sourceCommit": "1aa59d9fefe38dbc2cbf57d45f84f297a0375e49",
+      "packageName": "@cyb3rb1ade/plur1bus-memory",
+      "version": "3.2.0",
+      "publishId": "rd71zvvz3k3qcsg6j2kn3an6ys86qv4s"
+    },
+    "publishResult": "pass",
+    "publishedInstallSmoke": {
+      "result": "pass",
+      "openclawVersion": "2026.5.12",
+      "profile": "plur1bus-3-2-0-clawhub-published",
+      "spec": "clawhub:@cyb3rb1ade/plur1bus-memory",
+      "install": "pass",
+      "inspectJson": "pass",
+      "inspectRuntimeJson": "pass",
+      "doctor": "pass",
+      "memoryCoreSlotOwner": "pass",
+      "plur1busKind": "extension",
+      "providerBridgeRuntimeVisible": "pass",
+      "modelCacheCreated": false,
+      "securityAudit": {
+        "command": "pass",
+        "profileLevelWarnings": true,
+        "pluginCodeWarning": "known static node:fs heuristic at index.js:31"
+      }
+    }
   },
   "tag": {
     "name": "v3.2.0",
@@ -118,6 +147,7 @@
   ],
   "publishGate": {
     "requiresExplicitUserConfirmation": true,
-    "expectedConfirmationPhrase": "Publish jetzt ausführen"
+    "confirmationReceived": true,
+    "confirmationPhrase": "Publish jetzt ausführen"
   }
 }
