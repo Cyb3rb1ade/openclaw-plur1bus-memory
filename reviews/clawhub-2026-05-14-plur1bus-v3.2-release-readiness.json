@@ -1,0 +1,189 @@
+{
+  "target": {
+    "packageVersion": "3.2.0-beta.1",
+    "openclawTarget": "2026.5.12-beta.8",
+    "family": "code-plugin",
+    "realPublishAttempted": false
+  },
+  "publisher": {
+    "clawhubWhoami": "Cyb3rb1ade",
+    "confirmedPublisherOwner": "Cyb3rb1ade",
+    "githubRemote": "git@github.com:Cyb3rb1ade/openclaw-plur1bus-memory.git",
+    "controlledScope": "@cyb3rb1ade"
+  },
+  "packageIdentity": {
+    "previousPackageJsonName": "memory-lancedb-namespaced",
+    "packageJsonName": "@cyb3rb1ade/plur1bus-memory",
+    "proposedPackageName": "@cyb3rb1ade/plur1bus-memory",
+    "recommendedAlternates": [
+      "@cyb3rb1ade/openclaw-plur1bus-memory",
+      "@<controlled-owner>/plur1bus-memory"
+    ],
+    "existingNameConflicts": {
+      "@plur-ai/claw": "not ours; not used",
+      "clawhub:plur1bus": "not ours; not used"
+    }
+  },
+  "openclawPlugin": {
+    "id": "memory-lancedb-namespaced",
+    "idChanged": false,
+    "version": "3.2.0-beta.1",
+    "kind": "extension",
+    "kindMemoryUsed": false,
+    "registerMemoryCapabilityUsed": false,
+    "contracts": {
+      "tools": [
+        "knowledge_update",
+        "memory_forget",
+        "memory_recall",
+        "memory_store"
+      ],
+      "memoryEmbeddingProviders": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ]
+    }
+  },
+  "compatMetadata": {
+    "openclaw.extensions": [
+      "./index.js"
+    ],
+    "openclaw.compat.pluginApi": ">=2026.5.12-beta.6",
+    "openclaw.compat.minGatewayVersion": "2026.5.12-beta.6",
+    "openclaw.build.openclawVersion": "2026.5.12-beta.8",
+    "openclaw.build.pluginSdkVersion": "2026.5.12-beta.8",
+    "fieldNameStatus": "matches requested fields; ClawHub CLI accepted package pack and publish dry-run with these fields"
+  },
+  "readme": {
+    "containsClawHubPlaceholder": false,
+    "installExample": "openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory",
+    "forbiddenReferences": {
+      "@plur-ai/claw": false,
+      "clawhub:plur1bus": false
+    },
+    "documents": {
+      "augmentMode": true,
+      "memoryCoreSlotOwner": true,
+      "minOpenClawVersion": "2026.5.12-beta.6",
+      "hooksAllowConversationAccess": true,
+      "providers": [
+        "OpenAI text-embedding-3-large recommended",
+        "OpenAI-compatible",
+        "plur1bus-e5-small experimental",
+        "Cohere reranker",
+        "disabled reranker"
+      ],
+      "noModelDownloadsAtInspectRegister": true,
+      "noSecretResolutionAtInspectRegister": true,
+      "localE5GteStatus": "experimental/blocked pending real local model smoke"
+    }
+  },
+  "tarball": {
+    "npmPack": {
+      "status": "pass",
+      "filename": "cyb3rb1ade-plur1bus-memory-3.2.0-beta.1.tgz",
+      "name": "@cyb3rb1ade/plur1bus-memory",
+      "version": "3.2.0-beta.1",
+      "files": [
+        "package/package.json",
+        "package/openclaw.plugin.json",
+        "package/index.js",
+        "package/README.md",
+        "package/lib/",
+        "package/lib/providers/openclaw-memory-embedding-adapters.js"
+      ],
+      "forbiddenContent": {
+        "modelCaches": false,
+        ".env": false,
+        "apiKeys": false,
+        "/root paths": false,
+        "oldReviewArtifacts": false,
+        "testTempfiles": false
+      }
+    },
+    "clawPack": {
+      "status": "pass",
+      "path": "/root/openclaw-memory-system/tmp-clawhub-pack/cyb3rb1ade-plur1bus-memory-3.2.0-beta.1.tgz",
+      "name": "@cyb3rb1ade/plur1bus-memory",
+      "version": "3.2.0-beta.1",
+      "size": 50252,
+      "files": 18,
+      "sha256": "edeb36dc793161aed4a9999fcc72c2c58e57b4374a0f1d9e53e2e4fe006f448b",
+      "npmIntegrity": "sha512-ZyiF1zWB6uw6UXZBTNHDazw6QlE/j54nm5bVdgsGFPHv2/nRa4sEJmh33XtYZRmx3s6Cn1Fl4/a+0lRc9R1rlg==",
+      "npmShasum": "93927324fb4e2d14f670734d7314ca392729cacf",
+      "cleanup": "local generated artifact removed after dry-run"
+    }
+  },
+  "beta8Smoke": {
+    "base": "/tmp/plur1bus-clawhub-beta8-1faPmT",
+    "installCli": {
+      "status": "pass",
+      "version": "OpenClaw 2026.5.12-beta.8 (097daf9)",
+      "bareOpenclawUsed": false,
+      "runuserEnvWrappedCommands": true
+    },
+    "linkLane": {
+      "profile": "plur1bus-clawhub-v32-link",
+      "install": "pass",
+      "inspectJson": "pass",
+      "inspectRuntime": "pass",
+      "doctor": "pass",
+      "pluginKind": "extension",
+      "packageName": "@cyb3rb1ade/plur1bus-memory",
+      "pluginId": "memory-lancedb-namespaced",
+      "providerBridgeVisible": true,
+      "typedHooks": [
+        "agent_end",
+        "before_prompt_build",
+        "gateway_start",
+        "gateway_stop"
+      ]
+    },
+    "npmPackLane": {
+      "profile": "plur1bus-clawhub-v32-tarball",
+      "install": "pass",
+      "artifactKind": "npm-pack",
+      "inspectJson": "pass",
+      "inspectRuntime": "pass",
+      "doctor": "pass",
+      "pluginKind": "extension",
+      "packageName": "@cyb3rb1ade/plur1bus-memory",
+      "pluginId": "memory-lancedb-namespaced",
+      "providerBridgeVisible": true,
+      "memoryCoreSlotOwner": "pass"
+    },
+    "capabilityCliProviderVisibility": "limited-to-local; runtime inspect shows PLUR1BUS providers"
+  },
+  "clawhubDryRun": {
+    "folderDryRun": {
+      "status": "blocked-cli-source-validation",
+      "error": "Path must be a folder or ClawPack .tgz"
+    },
+    "npmTarballDryRun": {
+      "status": "blocked-cli-source-validation",
+      "error": "Path must be a folder or ClawPack .tgz"
+    },
+    "clawPackDryRun": {
+      "status": "pass",
+      "commandShape": "clawhub package publish <clawpack.tgz> --family code-plugin --source-repo Cyb3rb1ade/openclaw-plur1bus-memory --source-commit <commit> --source-ref neo-arch-openclaw-current-compat --source-path extensions/memory-lancedb-namespaced --dry-run --json",
+      "output": {
+        "source": "github:Cyb3rb1ade/openclaw-plur1bus-memory@neo-arch-openclaw-current-compat:extensions/memory-lancedb-namespaced",
+        "name": "@cyb3rb1ade/plur1bus-memory",
+        "displayName": "Memory (LanceDB, per-Agent)",
+        "family": "code-plugin",
+        "version": "3.2.0-beta.1",
+        "commit": "39cb9fe844897c6fa2ebcce400a3cfe50f2f9ea4",
+        "files": 18,
+        "totalBytes": 50252
+      }
+    }
+  },
+  "finalVerdict": "ready-with-caveats",
+  "caveats": [
+    "No real publish was attempted.",
+    "The dry-run source commit is the current committed branch head; commit and push the package-name/readiness changes before any real publish so source metadata matches the artifact.",
+    "Local E5/GTE model smoke remains experimental/blocked pending real local model execution.",
+    "Capability CLI lists only the core local provider; runtime inspect is the provider bridge evidence."
+  ]
+}

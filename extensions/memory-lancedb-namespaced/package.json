@@ -1,5 +1,5 @@
 {
-  "name": "memory-lancedb-namespaced",
+  "name": "@cyb3rb1ade/plur1bus-memory",
   "version": "3.2.0-beta.1",
   "description": "PLUR1BUS neo-arch cognitive memory augment for OpenClaw",
   "type": "module",
@@ -7,7 +7,15 @@
   "openclaw": {
     "extensions": [
       "./index.js"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.12-beta.6",
+      "minGatewayVersion": "2026.5.12-beta.6"
+    },
+    "build": {
+      "openclawVersion": "2026.5.12-beta.8",
+      "pluginSdkVersion": "2026.5.12-beta.8"
+    }
   },
   "files": [
     "index.js",
