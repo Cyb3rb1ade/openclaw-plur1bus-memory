@@ -1,107 +1,271 @@
 # How To Update
 
-Safe update path for plur1bus deployments on OpenClaw `2026.4.29+`.
+Safe update workflow for PLUR1BUS on OpenClaw.
 
-Validated target: OpenClaw `2026.5.7` with the local `apply-openclaw-20260504-compat.sh` patch.
+Current validated target: OpenClaw `2026.5.12-beta.8` with
+`memory-lancedb-namespaced@3.2.0-beta.1`.
 
-## 1. Check Current State
+## Update Rules
 
-```bash
-openclaw --version
-openclaw status
-test -f ~/.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js
-test -f ~/.openclaw/extensions/memory-lancedb-stock/index.js
-openclaw plugins doctor
-git -C /path/to/openclaw-plur1bus-memory status --short
-./scripts/clawsweeper-gate.sh "$(openclaw --version)" 2026.5.7 --no-block
-```
+- Do not update the live OpenClaw instance before an isolated compatibility pass.
+- Do not use bare `openclaw` in compatibility lanes; use the exact isolated prefix binary.
+- Do not install OpenClaw with `npm install -g` for compatibility validation.
+- PLUR1BUS must stay an augment plugin: no `kind: "memory"` and no `registerMemoryCapability`.
+- `memory-core` remains the memory slot owner.
+- The first-class plugin evidence is an OpenClaw managed `npm-pack:` install, not a plain archive install.
 
-ClawSweeper is intentionally unbounded (`CLAWSWEEPER_COMPARE_LIMIT=0`) so large ranges scan every upstream commit, not only the first 250. If an installed version is not available as a GitHub tag or npm `gitHead`, the gate can resolve the short commit shown by `openclaw --version`.
-
-Treat ClawSweeper as an update gate, not as a FYI report:
-
-- Copy the commit range, finding counts and high findings into the release notes or compatibility plan.
-- Do not ignore high findings. Mark each one as fixed locally, accepted as not instance-relevant, or blocked upstream.
-- Do not silently accept large unreviewed ranges. If the report includes unreviewed commits, record the count and run the guarded update check before touching production.
-- Recheck model/provider routing after the update. For production cron jobs that must stay on a specific model, set `payload.fallbacks` to `[]`; otherwise default OpenClaw fallbacks can route failed cron turns to an unsupported model.
-
-OpenClaw `2026.5.3-1+` no longer exposes `openclaw plugins deps --json`. The local check is now explicit file validation for the LanceDB/OpenAI runtime dependency tree plus `openclaw plugins doctor`.
-
-The healthy `plugins doctor` output should not contain `contracts.tools` diagnostics for `memory-lancedb-namespaced`.
-
-## 2. Update OpenClaw
+## 1. Prepare Isolated Test Base
 
 ```bash
-npm i -g openclaw@<target-version>
+BASE="$(mktemp -d /tmp/plur1bus-update-XXXXXX)"
+runuser -u kimi -- mkdir -p "$BASE/src" "$BASE/artifacts" "$BASE/tmp"
 ```
 
-## 3. Update plur1bus Plugin
-
-Pull the latest plur1bus sources, then re-run the installer in plugin-only mode:
-
-```bash
-git -C /path/to/openclaw-plur1bus-memory pull
-./scripts/install-memory-system.sh --update-plugin-only
-```
-
-This syncs `memory-lancedb-namespaced` to the running OpenClaw installation and refreshes the plugin registry. No API-key prompts, no config changes.
-
-## 4. Reapply plur1bus Patches
-
-After every OpenClaw update:
-
-```bash
-bash /path/to/openclaw-plur1bus-memory/patches/apply-memory-patches.sh
-systemctl --user restart openclaw-gateway
-```
-
-`apply-memory-patches.sh` dispatches by installed OpenClaw version:
-
-- `2026.4.29` → `apply-openclaw-20260429-compat.sh`
-- `2026.5.3-1` → `apply-openclaw-20260503-compat.sh`
-- `2026.5.4`, `2026.5.5`, `2026.5.6`, `2026.5.7` → `apply-openclaw-20260504-compat.sh`
-
-Wait for:
+Copy or archive the current repo into:
 
 ```text
-[gateway] agent model: ...
-[gateway] http server listening ...
-[gateway] ready
+$BASE/src/openclaw-memory-system
 ```
 
-## 5. Verify Memory
+The test paths must be owned by the non-root test user. OpenClaw blocks unsafe
+world-writable plugin paths.
+
+## 2. Install Exact OpenClaw Target
+
+Use `install-cli.sh` in the isolated prefix:
 
 ```bash
-openclaw plugins list
-openclaw status
-node /path/to/openclaw-plur1bus-memory/scripts/memory-doctor.mjs stats
+runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
+  BASE="$BASE" \
+  HOME="$BASE/home-install" \
+  USERPROFILE="$BASE/home-install" \
+  OPENCLAW_HOME="$BASE/home-install/.openclaw" \
+  XDG_CONFIG_HOME="$BASE/home-install/.config" \
+  XDG_CACHE_HOME="$BASE/home-install/.cache" \
+  XDG_DATA_HOME="$BASE/home-install/.local/share" \
+  TMPDIR="$BASE/tmp" \
+  NPM_CONFIG_PREFIX="$BASE/npm-global" \
+  NPM_CONFIG_CACHE="$BASE/npm-cache" \
+  bash -lc '
+    curl -fsSL --proto "=https" --tlsv1.2 https://openclaw.ai/install-cli.sh \
+      | bash -s -- --prefix "$BASE/prefix" --version 2026.5.12-beta.8 --no-onboard --json
+  '
 ```
 
-Expected plugins include:
-
-- `active-memory`
-- `memory-core`
-- `memory-lancedb-namespaced`
-
-## 6. Verify Provider Routing
-
-plur1bus does not require a specific OpenClaw chat provider. If the deployment intentionally uses explicit agent/session/cron model routes, verify that the update preserved them:
+Verify:
 
 ```bash
-jq '.agents.defaults.model' ~/.openclaw/openclaw.json
-jq '[.jobs[] | select(.payload.kind? == "agentTurn") | {name, model:.payload.model, fallbacks:.payload.fallbacks, thinking:.payload.thinking}]' ~/.openclaw/cron/jobs.json
+runuser -u kimi -- test -x "$BASE/prefix/bin/openclaw"
+runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
+  HOME="$BASE/home-install" \
+  USERPROFILE="$BASE/home-install" \
+  OPENCLAW_HOME="$BASE/home-install/.openclaw" \
+  XDG_CONFIG_HOME="$BASE/home-install/.config" \
+  XDG_CACHE_HOME="$BASE/home-install/.cache" \
+  XDG_DATA_HOME="$BASE/home-install/.local/share" \
+  TMPDIR="$BASE/tmp" \
+  NPM_CONFIG_PREFIX="$BASE/npm-global" \
+  NPM_CONFIG_CACHE="$BASE/npm-cache" \
+  "$BASE/prefix/bin/openclaw" --version
 ```
 
-Native OpenClaw `agents.defaults.memorySearch` is optional and independent from plur1bus. Disabling it does not disable plur1bus LanceDB Auto-Recall/Auto-Capture.
+Expected version includes `2026.5.12-beta.8`.
 
-## 7. Publish a plur1bus Release
+## 3. Run PLUR1BUS Static Checks
 
 ```bash
-cd /path/to/openclaw-plur1bus-memory
-./scripts/bump-version.sh 2.1.28
-git add -A
-git commit -m "fix(v2.1.28): support openclaw 2026.5.7"
-git tag -a v2.1.28 -m "v2.1.28"
-git push origin main
-git push origin v2.1.28
+node --check extensions/memory-lancedb-namespaced/index.js
+node --check extensions/memory-lancedb-namespaced/lib/providers/openclaw-memory-embedding-adapters.js
+node --test extensions/memory-lancedb-namespaced/__tests__/*.test.js
+npm pack ./extensions/memory-lancedb-namespaced
+```
+
+The tarball must include
+`lib/providers/openclaw-memory-embedding-adapters.js` and must not include model
+caches.
+
+## 4. Lane A: Linked Plugin
+
+Profile: `plur1bus-beta8-v32-link`
+
+Every command must use the full non-root environment:
+
+```bash
+runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
+  HOME="$BASE/home-link" \
+  USERPROFILE="$BASE/home-link" \
+  OPENCLAW_HOME="$BASE/home-link/.openclaw" \
+  XDG_CONFIG_HOME="$BASE/home-link/.config" \
+  XDG_CACHE_HOME="$BASE/home-link/.cache" \
+  XDG_DATA_HOME="$BASE/home-link/.local/share" \
+  TMPDIR="$BASE/tmp" \
+  NPM_CONFIG_PREFIX="$BASE/npm-global" \
+  NPM_CONFIG_CACHE="$BASE/npm-cache" \
+  "$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link \
+    plugins install --link "$BASE/src/openclaw-memory-system/extensions/memory-lancedb-namespaced"
+```
+
+Set the isolated profile config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-lancedb-namespaced": {
+        "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true,
+          "allowPromptInjection": true,
+          "timeouts": {
+            "before_prompt_build": 90000,
+            "agent_end": 60000
+          }
+        }
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "memorySearch": {
+        "provider": "plur1bus-e5-small"
+      }
+    }
+  }
+}
+```
+
+Then run, again with the same wrapper:
+
+```bash
+"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link plugins inspect memory-lancedb-namespaced --json
+"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link plugins inspect memory-lancedb-namespaced --json --runtime
+"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link plugins doctor
+"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link plugins inspect memory-core --json --runtime
+"$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-link capability embedding providers --json
+```
+
+The short commands above are only readable examples. Execute them through
+`runuser -u kimi -- env ...`, as shown in the install command.
+
+## 5. Lane B: Managed npm-pack Install
+
+Profile: `plur1bus-beta8-v32-tarball`
+
+Create the package as `kimi`:
+
+```bash
+cd "$BASE/src/openclaw-memory-system/extensions/memory-lancedb-namespaced"
+runuser -u kimi -- env \
+  HOME="$BASE/home-tarball" \
+  USERPROFILE="$BASE/home-tarball" \
+  OPENCLAW_HOME="$BASE/home-tarball/.openclaw" \
+  NPM_CONFIG_PREFIX="$BASE/npm-global" \
+  NPM_CONFIG_CACHE="$BASE/npm-cache" \
+  npm pack --pack-destination "$BASE/artifacts"
+```
+
+Install through OpenClaw managed npm-pack:
+
+```bash
+runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
+  HOME="$BASE/home-tarball" \
+  USERPROFILE="$BASE/home-tarball" \
+  OPENCLAW_HOME="$BASE/home-tarball/.openclaw" \
+  XDG_CONFIG_HOME="$BASE/home-tarball/.config" \
+  XDG_CACHE_HOME="$BASE/home-tarball/.cache" \
+  XDG_DATA_HOME="$BASE/home-tarball/.local/share" \
+  TMPDIR="$BASE/tmp" \
+  NPM_CONFIG_PREFIX="$BASE/npm-global" \
+  NPM_CONFIG_CACHE="$BASE/npm-cache" \
+  "$BASE/prefix/bin/openclaw" --profile plur1bus-beta8-v32-tarball \
+    plugins install "npm-pack:$BASE/artifacts/memory-lancedb-namespaced-3.2.0-beta.1.tgz"
+```
+
+If `npm-pack:<path>` syntax changes, check:
+
+```bash
+"$BASE/prefix/bin/openclaw" plugins install --help
+```
+
+Do not count a plain archive install as managed plugin evidence.
+
+Apply the same hook policy as Lane A, then run the same inspect, runtime,
+doctor, `memory-core`, and embedding-provider checks.
+
+## 6. Expected Results
+
+PLUR1BUS:
+
+- `kind` is absent in `openclaw.plugin.json`.
+- Runtime inspect reports `kind: "extension"`.
+- No `registerMemoryCapability` call exists.
+- Runtime inspect lists:
+  - `agent_end`
+  - `before_prompt_build`
+  - `gateway_start`
+  - `gateway_stop`
+- Runtime inspect lists memory embedding providers:
+  - `plur1bus-openai`
+  - `plur1bus-openai-compatible`
+  - `plur1bus-e5-small`
+
+`memory-core`:
+
+- Runtime inspect reports `kind: "memory"`.
+- Runtime inspect reports `memorySlotSelected: true`.
+- Tools remain `memory_search` and `memory_get`.
+
+Known visibility limit:
+
+- `capability embedding providers --json` may list only OpenClaw's core `local`
+  provider. This is acceptable only if `plugins inspect --json --runtime` shows
+  the three PLUR1BUS provider IDs.
+
+Known blocked smokes:
+
+- `plur1bus-e5-small` remains experimental until a real local model smoke runs.
+- Remote functional memory smokes require a real or deterministic
+  OpenAI-compatible test provider.
+
+## 7. Upstream Review Gate
+
+For a new OpenClaw target, compare from the last validated tag:
+
+```bash
+/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.12-beta.6 2026.5.12-beta.8 --no-block
+```
+
+ClawSweeper is a gate input, not a substitute for local review. Classify every
+high, medium, and unreviewed relevant finding as:
+
+- `blocker`
+- `plur1bus-fix-required`
+- `smoke-required`
+- `no-direct-impact`
+- `integration-opportunity`
+
+Also classify every commit in the exact Git range. The beta8 review found 78
+commits from beta6 to beta8.
+
+## 8. Publish PLUR1BUS
+
+Only publish after:
+
+- Static/unit/pack checks pass.
+- Isolated install-cli target install passes.
+- Link lane passes.
+- Managed `npm-pack:` lane passes or is clearly blocked by OpenClaw syntax.
+- `hooks.allowConversationAccess=true` is verified.
+- `memory-core` remains slot owner.
+- Provider Bridge is visible in runtime inspect or the visibility limit is
+  documented.
+- Existing v3.1/v3.2 behavior is pass or provider-blocked.
+
+Then commit intentionally:
+
+```bash
+git status --short
+git add <changed-files>
+git commit -m "docs: update OpenClaw update workflow"
+git push
 ```

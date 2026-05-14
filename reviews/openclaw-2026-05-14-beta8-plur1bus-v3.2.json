@@ -1,0 +1,347 @@
+{
+  "target": {
+    "openclawVersion": "2026.5.12-beta.8",
+    "tag": "v2026.5.12-beta.8",
+    "commit": "097daf917d98f20678e3ac39ce6b7fa1ebf96e62",
+    "npmExact": "2026.5.12-beta.8",
+    "npmBeta": "2026.5.12-beta.8",
+    "range": "v2026.5.12-beta.6..v2026.5.12-beta.8",
+    "commitCount": 78,
+    "plannedCommitCount": 75,
+    "commitCountMismatch": true,
+    "mainAtReview": "83b8289ee274fa826fe633f0ba96ff0112001ab9",
+    "mergeBase": "c4292e053d7c86361700b3acb59cb51e4a310f2d"
+  },
+  "nonRoot": {
+    "base": "/tmp/plur1bus-v32-beta8-eReoBI",
+    "usedInstallCli": true,
+    "usedIsolatedPrefixBinary": true,
+    "prefixBinary": "/tmp/plur1bus-v32-beta8-eReoBI/prefix/bin/openclaw",
+    "prefixVersion": "OpenClaw 2026.5.12-beta.8 (097daf9)",
+    "bareOpenclawUsed": false,
+    "runuserEnvWrappedOpenclawCommands": true,
+    "rootEscapes": [],
+    "notes": [
+      "An initial root-owned temp base was discarded because chmod 0777 made the linked plugin path world-writable and OpenClaw blocked it.",
+      "The final base was created by runuser -u kimi and all lane OpenClaw commands used isolated HOME, OPENCLAW_HOME, XDG_*, TMPDIR, NPM_CONFIG_PREFIX and NPM_CONFIG_CACHE."
+    ]
+  },
+  "staticUnitPack": {
+    "nodeCheckIndex": "pass",
+    "nodeCheckAdapters": "pass",
+    "nodeTest": {
+      "status": "pass",
+      "tests": 11,
+      "failures": 0
+    },
+    "npmPack": {
+      "status": "pass",
+      "filename": "memory-lancedb-namespaced-3.2.0-beta.1.tgz",
+      "containsAdapter": true,
+      "containsModelCaches": false
+    }
+  },
+  "pluginStatus": {
+    "linkedProfile": "plur1bus-beta8-v32-link",
+    "tarballProfile": "plur1bus-beta8-v32-tarball",
+    "npmPackManagedInstall": "pass",
+    "plainArchiveInstall": "not-run",
+    "memoryCoreSlotOwner": "pass",
+    "plur1busKind": "extension",
+    "registerMemoryCapabilityUsed": false,
+    "providerBridgeVisible": "pass-runtime-inspect",
+    "firstClassPluginReady": "pass",
+    "hookConversationAccess": "pass",
+    "capabilityCliVisibility": "limited-to-local",
+    "securityAudit": {
+      "status": "not-plugin-blocking",
+      "critical": 1,
+      "warn": 2,
+      "reason": "Isolated profile had no gateway auth configured; plugin doctor still passed and the finding is not a PLUR1BUS install/runtime issue."
+    }
+  },
+  "lanes": {
+    "link": {
+      "profile": "plur1bus-beta8-v32-link",
+      "home": "/tmp/plur1bus-v32-beta8-eReoBI/home-link",
+      "openclawHome": "/tmp/plur1bus-v32-beta8-eReoBI/home-link/.openclaw",
+      "install": "pass",
+      "runtimeInspect": "pass",
+      "doctor": "pass",
+      "typedHooks": ["agent_end", "before_prompt_build", "gateway_start", "gateway_stop"],
+      "policy": {
+        "allowConversationAccess": true,
+        "allowPromptInjection": true,
+        "timeouts": {
+          "before_prompt_build": 90000,
+          "agent_end": 60000
+        }
+      },
+      "memoryEmbeddingProviderIds": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ],
+      "memorySearchProviderConfig": "plur1bus-e5-small",
+      "notes": [
+        "Static inspect reports dependencies missing for link mode, as expected for a dev link lane.",
+        "Runtime inspect imports the plugin and registers the Provider Bridge."
+      ]
+    },
+    "npmPackTarball": {
+      "profile": "plur1bus-beta8-v32-tarball",
+      "home": "/tmp/plur1bus-v32-beta8-eReoBI/home-tarball",
+      "openclawHome": "/tmp/plur1bus-v32-beta8-eReoBI/home-tarball/.openclaw",
+      "artifactKind": "npm-pack",
+      "artifact": "/tmp/plur1bus-v32-beta8-eReoBI/artifacts/memory-lancedb-namespaced-3.2.0-beta.1.tgz",
+      "install": "pass",
+      "runtimeInspect": "pass",
+      "doctor": "pass",
+      "typedHooks": ["agent_end", "before_prompt_build", "gateway_start", "gateway_stop"],
+      "policy": {
+        "allowConversationAccess": true,
+        "allowPromptInjection": true,
+        "timeouts": {
+          "before_prompt_build": 90000,
+          "agent_end": 60000
+        }
+      },
+      "memoryEmbeddingProviderIds": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ],
+      "memorySearchProviderConfig": "plur1bus-e5-small",
+      "managedDependencies": {
+        "@lancedb/lancedb": "installed",
+        "openai": "installed",
+        "@huggingface/transformers": "installed-optional"
+      },
+      "modelCacheDirsFound": [],
+      "notes": [
+        "npm-pack:<path> syntax worked and install metadata reports artifactKind npm-pack.",
+        "Capability CLI lists only the core local provider, but runtime inspect exposes the three PLUR1BUS providers."
+      ]
+    }
+  },
+  "providerBridge": {
+    "manifestContracts": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "runtimeRegisterApi": "api.registerMemoryEmbeddingProvider",
+    "runtimeVisibleInInspect": true,
+    "capabilityCliVisible": false,
+    "inspectVisibilityLimit": "capability embedding providers --json listed only memory-core local; plugins inspect --json --runtime listed the three PLUR1BUS providers in both lanes.",
+    "registerMemoryCapabilityUsed": false,
+    "kindMemoryUsed": false,
+    "noInspectModelDownload": true,
+    "noInspectModelCache": true,
+    "localE5Status": "experimental-no-local-model-smoke"
+  },
+  "memoryCore": {
+    "slotOwner": "memory-core",
+    "kind": "memory",
+    "memorySlotSelected": true,
+    "tools": ["memory_search", "memory_get"],
+    "memoryEmbeddingProviderIds": ["local"],
+    "plur1busMode": "augment",
+    "plur1busKind": "extension"
+  },
+  "clawSweeper": {
+    "command": "/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.12-beta.6 2026.5.12-beta.8 --no-block",
+    "status": "pass-no-block",
+    "clean": 0,
+    "unreviewed": 78,
+    "findingClassification": {
+      "blocker": 0,
+      "plur1bus-fix-required": 0,
+      "smoke-required": 9,
+      "no-direct-impact": 59,
+      "integration-opportunity": 10
+    }
+  },
+  "releaseNotesMatrix": [
+    {
+      "surface": "Plugins/install scan limited to plugin-owned runtime entrypoints",
+      "status": "pass",
+      "classification": "no-direct-impact",
+      "evidence": "npm-pack install completed; suspicious code warning remained non-blocking and plugin doctor passed."
+    },
+    {
+      "surface": "Plugins/install managed peer reconciliation / preserve third-party peer deps",
+      "status": "pass",
+      "classification": "smoke-required",
+      "evidence": "npm-pack install created a managed npm root and installed required plus optional dependencies."
+    },
+    {
+      "surface": "Plugins/memory prefer npm-installed memory-lancedb over bundled fallback",
+      "status": "pass",
+      "classification": "no-direct-impact",
+      "evidence": "memory-core stayed slot owner; PLUR1BUS tools/contracts did not compete for the memory slot."
+    },
+    {
+      "surface": "Plugin SDK deprecated openclaw/plugin-sdk/memory-core alias restored",
+      "status": "pass",
+      "classification": "integration-opportunity",
+      "evidence": "Alias exists, but new PLUR1BUS integration should prefer memory-host-core or current runtime APIs."
+    },
+    {
+      "surface": "Models config/auth structured env SecretRefs only",
+      "status": "pass",
+      "classification": "smoke-required",
+      "evidence": "Provider bridge inspect/register did not resolve provider secrets; no runtime crash without keys."
+    },
+    {
+      "surface": "Gateway/session history monotonic transcript messageSeq",
+      "status": "pass",
+      "classification": "integration-opportunity",
+      "evidence": "No current PLUR1BUS break; could improve Turn Journal ordering when exposed through plugin events."
+    },
+    {
+      "surface": "Replies rich presentation / interactive / channelData payloads",
+      "status": "pass",
+      "classification": "integration-opportunity",
+      "evidence": "No current break; PLUR1BUS capture can be enhanced later to preserve richer reply evidence."
+    },
+    {
+      "surface": "Agents/subagents default model precedence",
+      "status": "pass",
+      "classification": "smoke-required",
+      "evidence": "No PLUR1BUS subagent regression observed in plugin lanes; configs using agent primary model for child jobs should be reviewed before relying on old precedence."
+    },
+    {
+      "surface": "OpenAI-compatible schema fix for array tool parameters without items",
+      "status": "pass",
+      "classification": "no-direct-impact",
+      "evidence": "No PLUR1BUS schema failure surfaced in runtime inspect or plugin doctor."
+    }
+  ],
+  "commitClassification": [
+    {"sha":"f86e092e2d","summary":"test(whatsapp): allow audio runtime dependency","classification":"no-direct-impact","impact":"WhatsApp test-only dependency coverage."},
+    {"sha":"b8bc73aea2","summary":"test(e2e): cover root-managed VPS upgrades","classification":"no-direct-impact","impact":"Upgrade test coverage only."},
+    {"sha":"a7fdf60d0d","summary":"docs(clawhub): remove missing security route","classification":"no-direct-impact","impact":"Docs only."},
+    {"sha":"38a8068954","summary":"fix(codex): preserve user home for app-server launches","classification":"no-direct-impact","impact":"Codex app-server home handling; no PLUR1BUS runtime effect."},
+    {"sha":"bde31cbb7b","summary":"ci(release): fail full validation on child failure","classification":"no-direct-impact","impact":"CI only."},
+    {"sha":"f5393b6be9","summary":"test(plugin-install): align npm peer scan expectations","classification":"smoke-required","impact":"Related to managed plugin install; npm-pack lane passed."},
+    {"sha":"f730f969b1","summary":"test(plugins): isolate capability provider runtime mocks","classification":"no-direct-impact","impact":"Test isolation only."},
+    {"sha":"dc7d9a9168","summary":"test(agents): surface live OpenAI replay auth failures","classification":"no-direct-impact","impact":"Agent auth test coverage only."},
+    {"sha":"e0698db057","summary":"fix(plugin-sdk): export codex runtime helpers","classification":"no-direct-impact","impact":"Reserved Codex helper export; PLUR1BUS must not import it."},
+    {"sha":"5cd8ef8f91","summary":"test(agents): fix live profile lint","classification":"no-direct-impact","impact":"Test lint only."},
+    {"sha":"89f641a005","summary":"chore(plugin-sdk): refresh release API baseline","classification":"smoke-required","impact":"SDK surface changed; reviewed for memory-host-core and reserved Codex subpaths."},
+    {"sha":"d1b5b243ae","summary":"fix: load Codex for selectable OpenAI agent models","classification":"no-direct-impact","impact":"Codex model selection; no PLUR1BUS plugin break."},
+    {"sha":"f561768a7c","summary":"fix(agents): preserve reply metadata through tool media","classification":"integration-opportunity","impact":"May improve future PLUR1BUS evidence capture of media/tool replies."},
+    {"sha":"c70e4fea7b","summary":"fix: sync codex cli package pin","classification":"no-direct-impact","impact":"Codex package pin only."},
+    {"sha":"2fea235f62","summary":"Backport Codex internal UI message replies to release 2026.5.12 (#81626)","classification":"no-direct-impact","impact":"Codex internal UI replies."},
+    {"sha":"944b21e6b8","summary":"docs: backport reserved codex sdk subpaths","classification":"no-direct-impact","impact":"Docs; avoid reserved Codex SDK imports."},
+    {"sha":"049573f276","summary":"docs: sync release sdk subpath docs","classification":"integration-opportunity","impact":"Documents memory-host-core and memory SDK subpaths useful for future deeper integration."},
+    {"sha":"7e5943a62b","summary":"fix(codex): backport app-server auth refresh failures","classification":"no-direct-impact","impact":"Codex auth handling."},
+    {"sha":"015ec8baf2","summary":"test(matrix): guard externalized runtime deps","classification":"no-direct-impact","impact":"Matrix dependency tests only."},
+    {"sha":"86885ccc24","summary":"fix(replies): preserve rich outbound content","classification":"integration-opportunity","impact":"Future capture should preserve rich reply payloads, but current PLUR1BUS hooks still load."},
+    {"sha":"0904505071","summary":"fix(cli): preserve multiline table colors","classification":"no-direct-impact","impact":"CLI rendering only."},
+    {"sha":"a03a6e3f13","summary":"fix(auth): backport Codex OAuth refresh spam fix","classification":"no-direct-impact","impact":"Codex OAuth only."},
+    {"sha":"91a8fdd079","summary":"fix(cli): keep plugin parent help lightweight","classification":"no-direct-impact","impact":"CLI help path; no plugin runtime break."},
+    {"sha":"f40326301a","summary":"fix(plugins): prefer installed memory tool owners","classification":"smoke-required","impact":"Memory ownership-sensitive; memory-core stayed slot owner and PLUR1BUS stayed extension."},
+    {"sha":"e15754c7a7","summary":"fix(plugin-sdk): restore memory core alias","classification":"integration-opportunity","impact":"Compatibility alias restored; prefer vendor-neutral memory-host-core for new work."},
+    {"sha":"fbc8ed2da9","summary":"fix(plugin-sdk): classify memory core alias","classification":"integration-opportunity","impact":"Public/deprecated alias classification reviewed; no PLUR1BUS import change required."},
+    {"sha":"2b8ddd77b5","summary":"fix(gateway): suppress startup liveness warnings (#81699)","classification":"no-direct-impact","impact":"Gateway diagnostics only."},
+    {"sha":"a18a8d5b72","summary":"fix(browser): request admin scope for CLI control (#81716)","classification":"no-direct-impact","impact":"Browser CLI auth only."},
+    {"sha":"1d3eb9f1c7","summary":"fix(agents): forward explicit per-run timeout to LLM idle watchdog (#79426)","classification":"integration-opportunity","impact":"Useful for future PLUR1BUS long-running jobs if moved onto OpenClaw cron/subagent surfaces."},
+    {"sha":"f9652c7b09","summary":"Fix Telegram polling ingress under event-loop stalls (#81746)","classification":"no-direct-impact","impact":"Telegram ingress only."},
+    {"sha":"ddb205822e","summary":"fix: use managed codex binary for source migration (#81582)","classification":"no-direct-impact","impact":"Codex migration only."},
+    {"sha":"9363bd2706","summary":"fix(update): preserve config during update repair","classification":"no-direct-impact","impact":"Update repair path; no isolated plugin break."},
+    {"sha":"e714cacb87","summary":"fix: preserve pending subagent sessions during maintenance (#81498)","classification":"integration-opportunity","impact":"May help future PLUR1BUS subagent jobs if integrated with OpenClaw subagent registry."},
+    {"sha":"f09d067a5e","summary":"fix(update): allow update config size drops","classification":"no-direct-impact","impact":"Update path only."},
+    {"sha":"833b9627b5","summary":"fix: route plugin LLM completions through Codex runtime (#81511)","classification":"smoke-required","impact":"Plugin LLM auth/runtime routing changed; no PLUR1BUS runtime break observed."},
+    {"sha":"59d7f03eaa","summary":"fix(codex): preserve MCP servers in app-server harness (#81551)","classification":"no-direct-impact","impact":"Codex MCP config only."},
+    {"sha":"2f8db8ea03","summary":"fix(plugins): discover setup provider env vars (#81542)","classification":"smoke-required","impact":"Provider discovery/auth surface; PLUR1BUS provider bridge inspect stayed keyless and non-crashing."},
+    {"sha":"93ce22b632","summary":"fix(ci): restore control ui locale refresh","classification":"no-direct-impact","impact":"CI only."},
+    {"sha":"c66a8bfa3b","summary":"fix(ci): prefer valid locale refresh provider","classification":"no-direct-impact","impact":"CI/provider selection only."},
+    {"sha":"e91d682b22","summary":"fix(replies): preserve rich coalesced block replies (#81689)","classification":"integration-opportunity","impact":"Future richer capture opportunity; no current hook regression."},
+    {"sha":"e0dfdb9184","summary":"fix(onboard): forward provider auth flags through wizard (#81669)","classification":"no-direct-impact","impact":"Onboarding only."},
+    {"sha":"4e0fd50012","summary":"fix(ci): skip locale refresh on invalid provider auth","classification":"no-direct-impact","impact":"CI only."},
+    {"sha":"6e3b13e14","summary":"[codex] externalize amazon bedrock providers (#81687)","classification":"no-direct-impact","impact":"Provider externalization trend; no PLUR1BUS runtime break."},
+    {"sha":"89738fa9ef","summary":"build(deps): consume fs-safe 0.2.3","classification":"no-direct-impact","impact":"Dependency maintenance."},
+    {"sha":"79101b50ff","summary":"build: externalize slack openshell vertex plugins","classification":"no-direct-impact","impact":"Externalization trend; no PLUR1BUS break."},
+    {"sha":"e07e2e6e16","summary":"test(release): align external plugin package checks","classification":"no-direct-impact","impact":"Release tests only."},
+    {"sha":"64b9eaacdb","summary":"fix(codex): keep post-tool watchdog armed","classification":"no-direct-impact","impact":"Codex watchdog only."},
+    {"sha":"03d9f84d84","summary":"fix: reference codex watchdog changelog entry","classification":"no-direct-impact","impact":"Changelog only."},
+    {"sha":"a79e4d81f3","summary":"fix(auth): reclaim stale file locks","classification":"no-direct-impact","impact":"Auth lock robustness."},
+    {"sha":"f2182ac3ba","summary":"refactor(infra): centralize stale lock cleanup","classification":"no-direct-impact","impact":"Infra refactor."},
+    {"sha":"885bdb8a4b","summary":"fix(auth): fail closed on unreadable stale locks","classification":"no-direct-impact","impact":"Auth lock behavior."},
+    {"sha":"3f156b30da","summary":"fix(auth): preserve non-signalable lock owners","classification":"no-direct-impact","impact":"Auth lock behavior."},
+    {"sha":"fe3460c895","summary":"fix(auth): reclaim zombie-owned stale locks","classification":"no-direct-impact","impact":"Auth lock behavior."},
+    {"sha":"bb70396682","summary":"refactor(auth): use fs-safe stale lock recovery","classification":"no-direct-impact","impact":"Auth lock refactor."},
+    {"sha":"fab7ad8dc9","summary":"fix(build): keep slack dependencies extension-owned","classification":"no-direct-impact","impact":"Slack packaging only."},
+    {"sha":"c2ae792c32","summary":"test(wizard): include openshell optional plugin","classification":"no-direct-impact","impact":"Wizard test only."},
+    {"sha":"3729ea5769","summary":"fix(process): normalize Windows child env keys","classification":"no-direct-impact","impact":"Windows process env only."},
+    {"sha":"dfc5746b53","summary":"fix(gateway): suppress startup liveness warnings (#81699)","classification":"no-direct-impact","impact":"Gateway diagnostics only."},
+    {"sha":"6d421be4f1","summary":"fix(slack): ignore malformed media redirects","classification":"no-direct-impact","impact":"Slack media only."},
+    {"sha":"177ca55589","summary":"build: keep external provider deps out of core dist","classification":"no-direct-impact","impact":"Core dist dependency hygiene; plugin lanes passed."},
+    {"sha":"0958ee1e94","summary":"fix(ci): restore main build","classification":"no-direct-impact","impact":"CI only."},
+    {"sha":"50969b50a3","summary":"test: align release check with external slack package","classification":"no-direct-impact","impact":"Release tests only."},
+    {"sha":"f158cc77db","summary":"chore(release): refresh generated baselines","classification":"no-direct-impact","impact":"Generated release baselines."},
+    {"sha":"cd0d3a1d84","summary":"fix(gateway): carry transcript update sequence","classification":"integration-opportunity","impact":"messageSeq can improve future PLUR1BUS turn journal ordering."},
+    {"sha":"09d3b643a1","summary":"fix: carry transcript update sequence","classification":"integration-opportunity","impact":"messageSeq can improve future PLUR1BUS turn journal ordering."},
+    {"sha":"55791151bf","summary":"chore(release): bump beta 7 versions","classification":"no-direct-impact","impact":"Release version bump."},
+    {"sha":"31f7eff71a","summary":"fix telegram ingress worker dist entry","classification":"no-direct-impact","impact":"Telegram packaging only."},
+    {"sha":"21aa8b5bd7","summary":"test(release): allow externalized slack runtime chunks","classification":"no-direct-impact","impact":"Release test only."},
+    {"sha":"ad5efe9e9e","summary":"test(cli): prove lazy sender preserves html formatting","classification":"no-direct-impact","impact":"CLI test only."},
+    {"sha":"df43026427","summary":"fix(cli): preserve lazy sender formatting","classification":"no-direct-impact","impact":"CLI formatting only."},
+    {"sha":"7286513910","summary":"docs(changelog): note telegram cron html fix","classification":"no-direct-impact","impact":"Docs only."},
+    {"sha":"6a8c966546","summary":"fix(telegram): skip unmentioned group media before download (#81785)","classification":"no-direct-impact","impact":"Telegram behavior only."},
+    {"sha":"9ce0f4a6d0","summary":"Fix subagent default model precedence (#81783)","classification":"smoke-required","impact":"Subagent model precedence changed; no current PLUR1BUS plugin lane break, but configs using child model defaults should be reviewed."},
+    {"sha":"6104c0cc79","summary":"fix: require heartbeat tool replies","classification":"smoke-required","impact":"Heartbeat/tool reply behavior changed; no PLUR1BUS runtime inspect or doctor issue."},
+    {"sha":"2e6916571","summary":"fix: resolve SecretRef catalog auth","classification":"smoke-required","impact":"Auth/SecretRef surface; PLUR1BUS provider bridge still keyless at inspect/register."},
+    {"sha":"7d6ba4c602","summary":"fix: honor git no-update installs","classification":"no-direct-impact","impact":"Installer source checkout behavior only."},
+    {"sha":"9798e95786","summary":"fix: reconcile managed plugin peers","classification":"smoke-required","impact":"Managed plugin dependency surface; npm-pack lane passed."},
+    {"sha":"097daf917d","summary":"chore(release): bump beta 8 versions","classification":"no-direct-impact","impact":"Release version bump."}
+  ],
+  "functionalRegression": [
+    {"feature":"contracts.tools memory_store/memory_recall/memory_forget/knowledge_update","status":"pass","reason":"Manifest contracts unchanged and visible in inspect."},
+    {"feature":"Auto-Capture via agent_end","status":"pass","reason":"Runtime inspect shows agent_end after allowConversationAccess=true in both lanes."},
+    {"feature":"Auto-Recall via before_prompt_build / PromptSupplement","status":"pass","reason":"Runtime inspect shows before_prompt_build and allowPromptInjection=true in both lanes."},
+    {"feature":"Provider Bridge registration","status":"pass","reason":"Runtime inspect shows three PLUR1BUS memoryEmbeddingProviderIds in link and npm-pack lanes."},
+    {"feature":"memory-core Slot-Owner","status":"pass","reason":"memory-core inspect shows kind memory and memorySlotSelected true; PLUR1BUS remains extension."},
+    {"feature":"Local E5 model smoke","status":"blocked","reason":"No model download/local model execution was run; E5 remains experimental."},
+    {"feature":"Remote memory operation smoke","status":"blocked","reason":"No OpenAI/OpenAI-compatible test key or deterministic beta8 provider harness was used."},
+    {"feature":"PLUR1BUS CLI command","status":"not-a-cli-command","reason":"Runtime inspect exposes command plur1bus, but openclaw plur1bus is not a top-level CLI command in beta8; plugin doctor passes."}
+  ],
+  "integrationBacklog": [
+    {
+      "item": "memory-host-core",
+      "classification": "integration-opportunity",
+      "recommendation": "Use vendor-neutral memory-host-core for any future memory-host SDK imports; do not depend on deprecated memory-core alias."
+    },
+    {
+      "item": "messageSeq",
+      "classification": "integration-opportunity",
+      "recommendation": "Evaluate Turn Journal ordering/dedupe with transcript messageSeq once available in plugin events."
+    },
+    {
+      "item": "rich reply payload capture",
+      "classification": "integration-opportunity",
+      "recommendation": "Extend capture schema later to preserve presentation, interactive and channelData evidence without dropping text capture."
+    },
+    {
+      "item": "subagent maintenance preservation",
+      "classification": "integration-opportunity",
+      "recommendation": "Use OpenClaw subagent registry maintenance only if PLUR1BUS moves long-running jobs to native subagents."
+    },
+    {
+      "item": "explicit run timeout forwarding",
+      "classification": "integration-opportunity",
+      "recommendation": "Use native cron/subagent timeout propagation for future PLUR1BUS deep maintenance jobs."
+    }
+  ],
+  "goNoGo": {
+    "status": "go-with-documented-limits",
+    "limits": [
+      "Commit count is 78, not the stale planned value 75.",
+      "Capability CLI does not list PLUR1BUS providers; runtime inspect does.",
+      "Local E5 remains experimental because no real local model smoke was run.",
+      "Remote functional memory operation smoke remained provider/key blocked."
+    ]
+  }
+}
