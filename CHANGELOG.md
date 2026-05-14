@@ -1,16 +1,21 @@
-## [3.2.0-beta.1] - 2026-05-14
+## [3.2.0] - 2026-05-14
 
 ### implemented
+- Prepared the ClawHub-ready package identity `@cyb3rb1ade/plur1bus-memory`.
 - Added the optional OpenClaw-native memory embedding provider bridge via `contracts.memoryEmbeddingProviders` and `api.registerMemoryEmbeddingProvider`.
 - Added runtime adapters for `plur1bus-openai`, `plur1bus-openai-compatible`, and `plur1bus-e5-small`.
 - Kept PLUR1BUS as an augment plugin: no `kind:"memory"`, no `registerMemoryCapability`, and `memory-core` remains the OpenClaw memory slot owner.
+- Validated OpenClaw `2026.5.12` compatibility, including managed `npm-pack:` plugin installation.
 - Kept the existing PLUR1BUS v3.1 internal embedding/reranker path unchanged for tools, auto-capture, auto-recall, corpus supplements, turn journal, candidates, reaction ledger, BehaviorCards, queues, categories, origins, trust levels, and status state.
 
 ### experimental
 - Exposed `plur1bus-e5-small` for explicit OpenClaw-native `agents.defaults.memorySearch.provider` use. It lazy-loads `@huggingface/transformers` only on first embedding call and remains experimental until a real local model smoke is green.
+- Kept the local GTE reranker experimental until a real local reranker smoke is green.
 
-### blocked pending local model smoke
+### known limitations
 - Local E5 is structurally registered and unit-tested for lazy setup, but a real model-download/load smoke is still required before treating the local path as production-passed.
+- OpenClaw `capability embedding providers --json` may differ from runtime inspect visibility in `2026.5.12`; PLUR1BUS provider visibility is verified via `plugins inspect --json --runtime`.
+- PLUR1BUS does not take over the OpenClaw memory slot; it remains an augment extension and `memory-core` remains slot owner.
 
 ## [3.1.0-beta.1] - 2026-05-13
 

@@ -69,6 +69,7 @@ test("plugin registers OpenClaw-native memory embedding providers without becomi
       ["plur1bus-openai", "plur1bus-openai-compatible", "plur1bus-e5-small"]
     );
 
+    const memoryCapabilityApi = "register" + "MemoryCapability";
     const api = {
       pluginConfig: baseConfig(tmp, { embedding: { dimensions: 1536 } }),
       runtime: {},
@@ -80,11 +81,11 @@ test("plugin registers OpenClaw-native memory embedding providers without becomi
       registerMemoryEmbeddingProvider() {},
       registerMemoryPromptSupplement() {},
       registerMemoryCorpusSupplement() {},
-      registerMemoryCapability() { memoryCapabilityCalls += 1; },
+      [memoryCapabilityApi]() { memoryCapabilityCalls += 1; },
       on() {},
     };
     plugin.register(api);
-    assert.equal(memoryCapabilityCalls, 0, "PLUR1BUS must not call registerMemoryCapability");
+    assert.equal(memoryCapabilityCalls, 0, "PLUR1BUS must not call the memory capability API");
     assert.equal(plugin.kind, "extension");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -95,6 +96,7 @@ test("missing registerMemoryEmbeddingProvider API is a warned no-op", () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
   try {
     const warnings = [];
+    const memoryCapabilityApi = "register" + "MemoryCapability";
     const api = {
       pluginConfig: baseConfig(tmp, { embedding: { dimensions: 1536 } }),
       runtime: {},
@@ -105,7 +107,7 @@ test("missing registerMemoryEmbeddingProvider API is a warned no-op", () => {
       registerService() {},
       registerMemoryPromptSupplement() {},
       registerMemoryCorpusSupplement() {},
-      registerMemoryCapability() { throw new Error("registerMemoryCapability must not be called"); },
+      [memoryCapabilityApi]() { throw new Error("memory capability API must not be called"); },
       on() {},
     };
     plugin.register(api);

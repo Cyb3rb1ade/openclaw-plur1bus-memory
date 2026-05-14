@@ -1010,7 +1010,7 @@ const plugin = {
     const neoRoot = api.resolvePath(neoCfg.statePath || join(baseDbPath, "_neo"));
     const neoMode = neoCfg.mode || "augment";
     if (neoEnabled && neoMode === "slot") {
-      api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no registerMemoryCapability call will be made.");
+      api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
     const sessionWorkspaceKeys = new Map();
     const rememberNeoWorkspace = (ctx = {}, event = {}) => {

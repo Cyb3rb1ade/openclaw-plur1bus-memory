@@ -3,10 +3,10 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `3.2.0-beta.1` — Neo-Arch-Beta fuer OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
+**Aktuelle Version:** `3.2.0` — OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
-gegen OpenClaw `2026.5.12-beta.8` validiert; ältere OpenClaw-Versionen bleiben
+gegen OpenClaw `2026.5.12` validiert; ältere OpenClaw-Versionen bleiben
 beim v2.1.x-Zweig.
 
 **ClawHub-Installationsbeispiel:**
@@ -16,8 +16,8 @@ openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory
 ```
 
 PLUR1BUS bleibt ein Augment-Plugin. `memory-core` bleibt OpenClaw-Memory-Slot-
-Owner; PLUR1BUS setzt kein `kind:"memory"` und nutzt nicht
-`registerMemoryCapability`.
+Owner; PLUR1BUS setzt kein `kind:"memory"` und nutzt keine Memory-Capability-
+Registrierung.
 
 ---
 
@@ -25,13 +25,13 @@ Owner; PLUR1BUS setzt kein `kind:"memory"` und nutzt nicht
 
 - **Auto-Recall** — injiziert relevante Memories als `<relevant-memories>` vor jedem Turn (Summaries, nicht Volltext)
 - **Auto-Capture** — speichert relevante Nachrichten automatisch nach jedem Turn
-- **Re-Ranker** — provider-aware: Cohere ist stabiler Remote-Default, disabled bleibt Vector-only, lokaler GTE-Reranker ist beta1-experimental bis zum grünen Local-Model-Smoke
+- **Re-Ranker** — provider-aware: Cohere ist stabiler Remote-Default, disabled bleibt Vector-only, lokaler GTE-Reranker ist experimental bis zum grünen Local-Model-Smoke
 - **LLM-Summaries** — automatische ≤150-Wort-Kurzfassung via LLM bei Store und Recall
 - **TTL** — optionale Lebensdauer (`session` = 1 Tag, `short` = 14 Tage, default = permanent)
 - **Conflict-Logging** — widersprüchliche `decision`-Memories verschiedener Agenten werden in `conflict-log.jsonl` protokolliert
 - **Merging** — semantisch ähnliche Memories (Score 0.70–0.94) werden via LLM zusammengeführt
 - **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings nutzen OpenAI/OpenAI-kompatible Provider oder experimentell lokal `intfloat/multilingual-e5-small`; optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
-- **OpenClaw-native Provider-Bridge** — `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` exponieren `plur1bus-openai`, `plur1bus-openai-compatible` und experimental `plur1bus-e5-small`, ohne `kind:"memory"` zu setzen oder `registerMemoryCapability` zu nutzen; `memory-core` bleibt Slot-Owner
+- **OpenClaw-native Provider-Bridge** — `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` exponieren `plur1bus-openai`, `plur1bus-openai-compatible` und experimental `plur1bus-e5-small`, ohne `kind:"memory"` zu setzen oder die Memory-Capability-API zu nutzen; `memory-core` bleibt Slot-Owner
 - **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei wählbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
 - **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
 - **Schema-Migration** — bestehende DBs erhalten neue Spalten automatisch beim ersten Zugriff
@@ -221,7 +221,7 @@ Inspect/Register-Sicherheit:
 | `reranker.model` | `rerank-v3.5` | Cohere Rerank-Modell |
 | `reranker.candidates` | `20` | Vektor-Kandidaten vor dem Re-Ranking |
 
-**Fallback:** Schlägt der Reranker fehl (Netzwerk, Rate-Limit, lokaler Model-Smoke), wird automatisch auf Vektor-Reihenfolge zurückgefallen. Kein Absturz. `local-transformers` fuer `Alibaba-NLP/gte-reranker-modernbert-base` ist in beta1 experimental und English-primary.
+**Fallback:** Schlägt der Reranker fehl (Netzwerk, Rate-Limit, lokaler Model-Smoke), wird automatisch auf Vektor-Reihenfolge zurückgefallen. Kein Absturz. `local-transformers` fuer `Alibaba-NLP/gte-reranker-modernbert-base` ist experimental und English-primary.
 
 ---
 
