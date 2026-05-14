@@ -4,6 +4,10 @@ Date: 2026-05-14
 
 Verdict: **ready-with-caveats**. No real publish was attempted.
 
+Final source commit for the ClawHub dry-run:
+`501dd558564d76c8beb7c211b5862a55da5ec52f`, pushed to
+`origin/neo-arch-openclaw-current-compat` before the final dry-run.
+
 ## Publisher and Package Identity
 
 - `clawhub whoami`: `Cyb3rb1ade`
@@ -110,9 +114,9 @@ Forbidden content absent:
 ClawPack:
 
 - `clawhub package pack` produced a valid ClawPack tarball
-- size: `50252`
-- sha256: `edeb36dc793161aed4a9999fcc72c2c58e57b4374a0f1d9e53e2e4fe006f448b`
-- local generated pack artifact was removed after the dry-run
+- size: `50191`
+- sha256: `335b3e2eaca13a8b2cad39166e4a93fbb22dd82ef23945dc907e023fd7560205`
+- local generated pack artifact was removed after the final dry-run
 
 ## Beta8 Smoke
 
@@ -176,7 +180,7 @@ ClawPack dry-run:
 clawhub package publish <clawpack.tgz> \
   --family code-plugin \
   --source-repo Cyb3rb1ade/openclaw-plur1bus-memory \
-  --source-commit 39cb9fe844897c6fa2ebcce400a3cfe50f2f9ea4 \
+  --source-commit 501dd558564d76c8beb7c211b5862a55da5ec52f \
   --source-ref neo-arch-openclaw-current-compat \
   --source-path extensions/memory-lancedb-namespaced \
   --dry-run --json
@@ -193,18 +197,17 @@ Dry-run output:
   "displayName": "Memory (LanceDB, per-Agent)",
   "family": "code-plugin",
   "version": "3.2.0-beta.1",
-  "commit": "39cb9fe844897c6fa2ebcce400a3cfe50f2f9ea4",
+  "commit": "501dd558564d76c8beb7c211b5862a55da5ec52f",
   "files": 18,
-  "totalBytes": 50252
+  "totalBytes": 50191
 }
 ```
 
 ## Caveats Before Real Publish
 
 - Do not publish without explicit release approval.
-- Commit and push the package-name/readiness changes before a real publish; the
-  dry-run source commit currently points to the previous committed branch head.
-- Recreate the ClawPack from the committed tree before publish.
+- The final dry-run source commit points at the pushed release-readiness commit.
+- Recreate the ClawPack from the then-current committed tree before publish.
 - Local E5/GTE remains experimental until real local model smoke passes.
 - Capability CLI provider listing remains limited; runtime inspect is the
   provider bridge evidence.
