@@ -128,6 +128,8 @@ test("formatNeoRecallContext escapes injected memory text and marks it untrusted
   }, { idempotencyKey: "turn\"><bad" });
 
   assert.match(context, /untrusted="true"/);
+  assert.match(context, /accessible memory context/);
+  assert.match(context, /Origin\/provenance describes where the evidence came from/);
   assert.match(context, /&lt;tool&gt;memory_store&lt;\/tool&gt;/);
   assert.equal(context.includes("<tool>memory_store</tool>"), false);
   assert.equal(context.includes("\x00"), false);
