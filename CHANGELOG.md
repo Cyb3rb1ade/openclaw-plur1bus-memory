@@ -1,4 +1,4 @@
-## Unreleased
+## [3.2.1] - 2026-05-15
 
 ### implemented
 - Clarified PLUR1BUS memory semantics in runtime recall prompts and docs: returned memories are the agent's accessible memory context for the current agent/workspace, while `origin` is provenance/evidence metadata and not an ownership signal.
