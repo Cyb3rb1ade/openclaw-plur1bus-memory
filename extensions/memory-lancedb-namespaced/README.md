@@ -232,11 +232,17 @@ Inspect/Register-Sicherheit:
 ```
 
 - `summary` — LLM-generierte Kurzfassung (≤`summaryMaxWords` Wörter)
-- `origin` — `"dm"` (Default) oder `"group"` (Gruppen-Chat)
+- `origin` — Herkunft/Evidenz, z. B. `"dm"` (Default), `"group"` (Gruppen-Chat),
+  `"cron"` oder `"internal"`; kein Besitzsignal
 - `expiresAt` — Unix-Timestamp (ms), `0` = permanent (TTL-Feld)
 - `storedBy` — agentId des speichernden Agenten (Traceability)
 - `mergedFrom` — IDs der zusammengeführten Quell-Memories
 - Migration erfolgt automatisch beim ersten Zugriff auf bestehende DBs
+
+Wenn PLUR1BUS Memories an einen Agenten zurückliefert, sind sie sein
+zugänglicher Memory-Kontext fuer den aktuellen Agenten/Workspace. Ob ein
+Memory agent-private, workspace-shared oder global-user sichtbar ist, ergibt
+sich aus `scope`, `storedBy`, `agentId` und Namespace, nicht aus `origin`.
 
 ---
 
