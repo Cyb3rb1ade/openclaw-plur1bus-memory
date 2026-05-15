@@ -1,0 +1,44 @@
+{
+  "date": "2026-05-15",
+  "packageName": "@cyb3rb1ade/plur1bus-memory",
+  "packageVersion": "3.2.1",
+  "pluginId": "memory-lancedb-namespaced",
+  "verdict": "published",
+  "changeType": "patch",
+  "migrationRequired": false,
+  "summary": "Clarifies runtime and documentation memory semantics: returned PLUR1BUS memories are accessible agent/workspace memory context; origin is provenance/evidence metadata, not ownership.",
+  "guardrails": {
+    "plur1busKind": "extension",
+    "memoryCoreSlotOwner": "unchanged",
+    "kindMemoryAdded": false,
+    "registerMemoryCapabilityDefaultAdded": false,
+    "providerBridgeChanged": false
+  },
+  "validation": {
+    "nodeCheckIndex": "pass",
+    "nodeCheckNeoArch": "pass",
+    "nodeTests": "pass",
+    "nodeTestCount": 11,
+    "npmPack": "pass",
+    "artifact": "cyb3rb1ade-plur1bus-memory-3.2.1.tgz",
+    "artifactBytes": 50622
+  },
+  "clawhub": {
+    "publisherWhoami": "Cyb3rb1ade",
+    "dryRun": "pass",
+    "publish": "pass",
+    "publishId": "rd751a8ckvk227vtqy1s3354w586sx0t",
+    "sourceRepo": "Cyb3rb1ade/openclaw-plur1bus-memory",
+    "sourceRef": "main",
+    "sourceCommit": "ef139522654ab7ab0ec4060d411b35f832b5fc38",
+    "publishedInstallSmoke": "not-rerun-patch-only"
+  },
+  "github": {
+    "tag": "v3.2.1",
+    "tagCommit": "ef139522654ab7ab0ec4060d411b35f832b5fc38",
+    "release": "pass",
+    "releaseUrl": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v3.2.1",
+    "asset": "cyb3rb1ade-plur1bus-memory-3.2.1.tgz",
+    "assetUrl": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v3.2.1/cyb3rb1ade-plur1bus-memory-3.2.1.tgz"
+  }
+}
