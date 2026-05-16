@@ -1,0 +1,1749 @@
+{
+  "target": {
+    "openclawVersion": "2026.5.16-beta.2",
+    "openclawTag": "v2026.5.16-beta.2",
+    "openclawTagCommit": "dba00cba6fd2177b1524f080b4b1a6157e287b1f",
+    "openclawMain": "e6d04550cac74f9a2b2e80a751443335bbbf0713",
+    "npmBeta": "2026.5.16-beta.2",
+    "npmExact": "2026.5.16-beta.2",
+    "plur1busVersion": "3.2.2-beta.1",
+    "plur1busCommit": "c89fff5711b7ca258a109c9424551f2bdd9ea152",
+    "date": "2026-05-16"
+  },
+  "openclawRange": {
+    "baseTag": "v2026.5.16-beta.1",
+    "targetTag": "v2026.5.16-beta.2",
+    "mergeBase": "6921d9072e91df4761edc37048f990c97774026b",
+    "beta2OnlyCount": 149,
+    "beta1OnlyCount": 10,
+    "symmetricAheadBehind": "10\t149",
+    "mainAheadOfBeta2Count": 39,
+    "sourceOfTruth": "local git clone /tmp/openclaw-beta2-range-EOOaF6/openclaw"
+  },
+  "plur1busSource": {
+    "version": "3.2.2-beta.1",
+    "commit": "c89fff5711b7ca258a109c9424551f2bdd9ea152",
+    "workingTreeDirty": true,
+    "dirtyFiles": [
+      "patches/apply-memory-patches.sh",
+      "patches/apply-plur1bus-user-hotfix.sh"
+    ],
+    "sourceMode": "git-archive-head",
+    "dirtyIncludedInArtifact": false
+  },
+  "nonRoot": {
+    "executed": true,
+    "user": "kimi",
+    "base": "/var/tmp/openclaw-beta2-plur1bus-v322-JI2ibN",
+    "initialSandboxIssues": [
+      "/tmp was root-only in sandbox",
+      "/home/kimi was not usable for harness writes",
+      "/var/tmp required escalated setup for correct ownership"
+    ],
+    "usedIsolatedPrefixBinary": true,
+    "bareOpenclawUsed": false,
+    "rootPathDependency": false,
+    "rootEscapes": [],
+    "notes": [
+      "config-audit logs record cwd=/root/openclaw-memory-system because commands were launched from the repo; plugin install paths, OPENCLAW_HOME and prefix stayed under BASE.",
+      "grep hits under node_modules for /usr/local are dependency documentation/source examples, not writes or runtime install paths."
+    ]
+  },
+  "staticGates": {
+    "nodeCheck": [
+      "index.js",
+      "lib/neo-arch.js",
+      "lib/providers/openclaw-memory-embedding-adapters.js"
+    ],
+    "nodeTest": "pass: 11/11",
+    "npmPackDryRun": {
+      "status": "pass",
+      "filename": "cyb3rb1ade-plur1bus-memory-3.2.2-beta.1.tgz",
+      "shasum": "064f4d571d90fbb6c27b3e9faee918e8058773e4",
+      "integrity": "sha512-sWPYhvNf75YFAIe6hjnY2nNyfxRPcBkFSsuHBg4R4cqyZkFSb87kJccS4FjsUgctx5g/BnTd4BEpbE1oPavG3A==",
+      "entryCount": 18
+    }
+  },
+  "pluginStatus": {
+    "linkedProfile": "plur1bus-beta2-v322-link",
+    "tarballProfile": "plur1bus-beta2-v322-tarball",
+    "linkedOpenclawHome": "/var/tmp/openclaw-beta2-plur1bus-v322-JI2ibN/home-link/.openclaw",
+    "tarballOpenclawHome": "/var/tmp/openclaw-beta2-plur1bus-v322-JI2ibN/home-tarball/.openclaw",
+    "linkedInstallReady": "pass",
+    "tarballInstallReady": "pass",
+    "selfContainedDependencies": "pass",
+    "siblingFallbackUsed": false,
+    "firstClassPluginReady": "pass",
+    "remainingBlockers": [],
+    "notes": [
+      "Tarball managed install installed direct dependencies inside the managed extension root.",
+      "ClawHub latest was 3.2.1, so ClawHub lane for 3.2.2-beta.1 is not applicable."
+    ]
+  },
+  "runtimeInspect": {
+    "tools": [
+      "memory_recall",
+      "memory_store",
+      "memory_forget",
+      "knowledge_update"
+    ],
+    "typedHooksAfterPermissions": [
+      "agent_end",
+      "before_prompt_build",
+      "gateway_start",
+      "gateway_stop"
+    ],
+    "commands": [
+      "plur1bus"
+    ],
+    "memoryEmbeddingProviderIds": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "kind": "extension",
+    "capabilityMode": "none",
+    "diagnosticsAfterPermissions": [],
+    "doctor": "No plugin issues detected.",
+    "capabilityEmbeddingProvidersCli": {
+      "status": "partial",
+      "observedIds": [
+        "local"
+      ],
+      "note": "OpenClaw infer/capability embedding providers CLI listed memory-core local only; plugin runtime inspect exposes the three PLUR1BUS provider ids."
+    }
+  },
+  "functionalRegression": [
+    {
+      "feature": "memory_store",
+      "status": "blocked",
+      "reason": "No OpenAI/OpenAI-compatible key, local E5 model smoke, or deterministic mock provider was configured for this audit.",
+      "breaking": false
+    },
+    {
+      "feature": "memory_recall",
+      "status": "blocked",
+      "reason": "No OpenAI/OpenAI-compatible key, local E5 model smoke, or deterministic mock provider was configured for this audit.",
+      "breaking": false
+    },
+    {
+      "feature": "memory_forget",
+      "status": "blocked",
+      "reason": "No OpenAI/OpenAI-compatible key, local E5 model smoke, or deterministic mock provider was configured for this audit.",
+      "breaking": false
+    },
+    {
+      "feature": "knowledge_update",
+      "status": "blocked",
+      "reason": "No OpenAI/OpenAI-compatible key, local E5 model smoke, or deterministic mock provider was configured for this audit.",
+      "breaking": false
+    },
+    {
+      "feature": "Auto-Capture via agent_end",
+      "status": "pass",
+      "evidence": "runtime inspect shows agent_end after hooks.allowConversationAccess=true",
+      "breaking": false
+    },
+    {
+      "feature": "Auto-Recall via before_prompt_build",
+      "status": "pass",
+      "evidence": "runtime inspect shows before_prompt_build and allowPromptInjection=true",
+      "breaking": false
+    },
+    {
+      "feature": "PromptSupplement/CorpusSupplement",
+      "status": "pass",
+      "evidence": "plugin runtime loaded without diagnostics; PLUR1BUS remains augment/non-capability",
+      "breaking": false
+    },
+    {
+      "feature": "Turn Journal/Candidates/Reaction Ledger/BehaviorCards/Embedding Queue/Categories/Origins/Trust-Level/Status-Machine/Recall-Lanes/Dreaming",
+      "status": "static-pass/runtime-load-pass",
+      "evidence": "unit tests pass and plugin runtime loads; deep provider-backed behavior not exercised",
+      "breaking": false
+    },
+    {
+      "feature": "OpenAI/OpenAI-compatible/Cohere/disabled provider states",
+      "status": "implemented-not-called",
+      "evidence": "provider files packed and direct dependencies installed",
+      "breaking": false
+    },
+    {
+      "feature": "Local E5/GTE",
+      "status": "experimental-blocked",
+      "evidence": "@huggingface/transformers installed as optional dependency in tarball lane, but no model download/load smoke was run",
+      "breaking": false
+    }
+  ],
+  "clawSweeper": {
+    "range": "2026.5.16-beta.1 -> 2026.5.16-beta.2",
+    "commits": 149,
+    "clean": 60,
+    "skipped": 12,
+    "findings": {
+      "high": 0,
+      "medium": 13,
+      "low": 8,
+      "unweighted": 0
+    },
+    "unreviewed": 56,
+    "mediumFindingShas": [
+      "a1e208e",
+      "3064d61",
+      "7206811",
+      "111b65a",
+      "80ca484",
+      "202dd75",
+      "f784349",
+      "af8d2f2",
+      "0642b00",
+      "9aec920",
+      "2bdbf24",
+      "23f73b3",
+      "89a3b9a"
+    ],
+    "impact": "No high findings. Medium findings reviewed against plugin/memory/hook surfaces; only package runtime-file validation and provider/session hardening are directly relevant and were covered by tarball/runtime inspect."
+  },
+  "securityAudit": {
+    "status": "non-blocking",
+    "critical": 1,
+    "warn": 3,
+    "info": 1,
+    "notes": [
+      "Critical is isolated loopback gateway auth missing; no live gateway was started and this is not a PLUR1BUS package issue.",
+      "Warns are trusted proxies, plugins.allow not set, and permissive tool policy in isolated test profile."
+    ]
+  },
+  "integrationBacklog": [
+    {
+      "feature": "openclaw cron run --wait",
+      "value": "high",
+      "risk": "low",
+      "action": "Use in future tests for deterministic Dreaming/Promote/Prune job execution."
+    },
+    {
+      "feature": "MCP plugin tool AbortSignal forwarding",
+      "value": "medium",
+      "risk": "low",
+      "action": "Add cancellation handling in long PLUR1BUS tool/provider paths in a follow-up."
+    },
+    {
+      "feature": "stricter package runtime-entry validation",
+      "value": "high",
+      "risk": "low",
+      "action": "Already compatible; keep npm pack file list guarded."
+    },
+    {
+      "feature": "provider/embedding malformed response hardening",
+      "value": "medium",
+      "risk": "medium",
+      "action": "Align PLUR1BUS OpenAI-compatible adapter error normalization in a future provider-hardening patch."
+    },
+    {
+      "feature": "embedding provider capability CLI",
+      "value": "medium",
+      "risk": "medium",
+      "action": "Runtime inspect shows PLUR1BUS providers, but infer/capability provider CLI lists only memory-core local. Track as OpenClaw discovery/UI limitation unless explicit provider selection needs it."
+    }
+  ],
+  "commitClassification": [
+    {
+      "sha": "dba00cba6fd2177b1524f080b4b1a6157e287b1f",
+      "title": "test(telegram): stabilize live claim spool test",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c7b774414a83c057b53ec1199122786d49806725",
+      "title": "test(azure-speech): isolate speech env",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "9cf58b0c58fdecc065724ba415fac934ae54d3df",
+      "title": "test(extensions): align prerelease mocks",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "14d59b7fe9af51aea53bda2f3a7a98ade03a151e",
+      "title": "fix(cron): narrow scheduled payload assertions",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "96cfbe20ce28cad8ca4b17c8155e09aad3b90a38",
+      "title": "fix(cron): reject empty scheduled payloads",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "e8fe9f416d127af369189f468593eb200bf6211f",
+      "title": "chore(release): prepare 2026.5.16 beta 2",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "60a46eb4e848364187863f6091f54754a320bdec",
+      "title": "test(config): use synthetic external channel schema fixture",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "bf0342583fc2379b973c74f9ae238176c6f6adb0",
+      "title": "fix(release): preserve external channel validation metadata",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "6e4301fc3e3ded3017cfe964fbc1b47e0e611376",
+      "title": "test(codex): avoid runtime normalization in option forwarding check",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "e1a0a018284e60e10ec9cad9e9bf6d9c1612bfbe",
+      "title": "test(codex): make tool-search filter check deterministic",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "2cecc2ebe30dbbe8400d4d3265ca0ec1d664753b",
+      "title": "test(release): stabilize beta validation gates",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "8971df8ee2ee5436b2bea50f992e91b727312af0",
+      "title": "fix(codex): filter tool search controls from app-server tools",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "757dd86ba4a4dcc376c6615eb3fcdc2272b8f594",
+      "title": "fix(release): repair beta validation regressions",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "9c5acb7ea3630da165a8b729d958645995974547",
+      "title": "chore: release 2026.5.17",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "832b65ccea330682a8805d191041101c6a23ecd1",
+      "title": "fix(agents): preserve Pi tool result error flags (#81546) (#81564)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "adca6e9c5515f43470fb649e5e752358824bbbd6",
+      "title": "fix(gateway): abort gmail watcher reload starts (#82499)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "aedcf0f897d4da2c5cbffd15fbbf94c68e83cb7f",
+      "title": "fix(telegram): recover polling spool after restart (#82256) (thanks @VACInc)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "89a3b9a07edc5ddfc1ec88caf86e7a87a271b34c",
+      "title": "fix(telegram): avoid stealing live spool claims",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "784ee941080d201c3f65b206f68ece38ca91bb6b",
+      "title": "test(telegram): align spooled claim expectations",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "494517a99054fa5e7c3ed6b58474dc14869b0e34",
+      "title": "refactor(telegram): simplify spool claim recovery",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "59d2f88e415a04eff69718cc6b627439ecc57ef2",
+      "title": "fix(telegram): recover restart spool claims",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c5b33523266c62eb8a1c886dc2a9916e1162e2bf",
+      "title": "Fix doctor repair for disabled Codex runtime plugin (#82502)",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "e57b137aef41de76791ee5cd28e6600348e4b16c",
+      "title": "fix(codex): enforce native tool policy (#82496)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "23f73b3ecfd9588b5be87f19a2226e4bd825500c",
+      "title": "Fix session reset files and ACPX orphan reaping (#82459)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "2fa853dce5ca66b001332126314e5ef9809ea64b",
+      "title": "fix(gateway): isolate gmail watcher restart and abort handling (#82395)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "e975c3b212a5e73f62eeeb3cc1b47a8b72c1ca17",
+      "title": "changelog: dedupe MCP cancellation bullets, add Fixes #82424",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "df0d061c7a9c1316875e857fe0c40e85851912c2",
+      "title": "docs: add mcp tool cancellation changelog",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "916234977a7ce657b74aa52008443e3b9f6a3236",
+      "title": "fix(telegram): drop expired approval callbacks (#82455)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "e650f8930d9d8452911496ec53d820a3d690ce96",
+      "title": "fix(test): avoid scanning plugin archive entries",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "31bbe6eb0fc86597b8170fa528aea1fc8655a767",
+      "title": "fix(test): avoid scanning status runtime bundles",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "f1f7525aa511bdf43b5eeceaafef539d968ec753",
+      "title": "fix(test): avoid scanning legacy config ownership",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "2be9abfb1c1274fe4673fb7d8f656cb706c3f88b",
+      "title": "fix(test): avoid scanning bundled plugin metadata",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "4b940f66fda022c346dd3b88b8cb3616210511b5",
+      "title": "fix(test): avoid scanning live shard roots",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "41b4eb97f0b3b1cfe555a933751b1768f8c1a618",
+      "title": "fix(test): avoid scanning prompt snapshots",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "8b7d28354e31ebc20b246cd71dc75f877391fc25",
+      "title": "fix(test): avoid scanning plugin docs examples",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "2bcb0abbb8f40fec6ee103226389c66d58878a8a",
+      "title": "fix(test): avoid scanning channel docs examples",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "f9d015346ed4d2a5cb5b421bd1b762c374c81928",
+      "title": "fix(test): avoid scanning fs-safe import boundary",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "2bdbf240a92de26a46dd176acdb85f0c4e7e7bc3",
+      "title": "fix(media): avoid staged image extensions for containers",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "6920ec6c54d12f84ffdb5c24ad038f2c9411f6f3",
+      "title": "fix(config): preserve include writes with plugin validation skip",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "5d4166a368451cba2e922702ed806c3a3a46e8bf",
+      "title": "fix(test): avoid scanning publishable plugin packages",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "306ca4d3ebd3ce6e2ade611e5997d1b9febffa34",
+      "title": "fix(media): distrust image hints for container bytes",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "3bc7d4061b4eeb240b1b9ff98866ea7456036daf",
+      "title": "fix(gateway): preserve partial transcript branches",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "ae42768e5fc4ce0b72a48bf98a2614bb474e998c",
+      "title": "fix(test): avoid scanning bundled plugin naming guardrails",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c98ccbe5136e140d6c81925843c624d4b08d43a7",
+      "title": "fix(test): avoid scanning runtime registry boundary",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "bd81a0323c518d257d702d2285eaec9367647c16",
+      "title": "fix(pairing): skip malformed pending pairing requests",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "bf7bd8dcd11441546b91596c538d9c041629a8cd",
+      "title": "fix(test): avoid scanning outbound threading guardrails",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "4159a11ea3e0aceb84d515549e2faab9db26c356",
+      "title": "Fix stale bootstrap file breaking channel agent turns (#82463)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "da8c11aaae5fab3d18d9a47a278ea8695c05d746",
+      "title": "fix(test): avoid scanning tool boundary modules",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "dccf5f6842119600fc2fee7601b5e62e916b59d7",
+      "title": "fix(gateway): fire session:patch hooks for model changes (#82257)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "8c9ec0724ef5a0023631aeb0802a6d5ff05a2f37",
+      "title": "fix(agents): honor disabled reasoning in thinking policy (#81454)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "9aec9200f1666eadde272993be62c5adfb00abc8",
+      "title": "fix(agents): honor OPENCLAW_WORKSPACE_DIR fallback (#81447)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "d7d85d1eb6616d0415f97c81f55f80b233259d81",
+      "title": "fix(cron): bootstrap external channel delivery targets (#82371)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "0642b0033bf28ab24c50527c1c7d7f9473adb5aa",
+      "title": "fix(plugins): reject omitted package runtime files",
+      "category": "plur1bus-fix-required",
+      "action": "verified-tarball-files",
+      "impact": "Package runtime-file validation is directly relevant; PLUR1BUS tarball contains index.js, manifest, package.json and lib provider files.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "7f46876a5d40e759574cf2660f3500683b6e12a3",
+      "title": "fix(auth): sanitize persisted device auth tokens",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "29951fdbb7294895a855d384ccfcb727f194107a",
+      "title": "fix(test): avoid scanning bundled channel shape roots",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "51f4a5e8a040a6774a09765b3ad9ed490ba5456b",
+      "title": "Fix Telegram presentation-only payload sends (#82449)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "92492ecdd00e84ca9fc6cca176161c5d49f88d8b",
+      "title": "fix(gateway): skip malformed compaction checkpoints",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "ba48d162af5a9deef6ed94e88e69f139278b711e",
+      "title": "fix(commitments): sanitize persisted reminder metadata",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "af8d2f2948d365d498cd9df0d3303b93157689ed",
+      "title": "fix(config): harden persisted boundary repair",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "37ba583b05ee68ad22a68ad8b00102a8b674b2f0",
+      "title": "fix(sessions): validate persisted entry metadata",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "05b3774c28bc7d8ec902b6ab5ff519cefb14ad29",
+      "title": "fix(cron): skip malformed persisted jobs",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "24e4dc68b74d331ed58f39a932f6fd3282fa667c",
+      "title": "fix(tasks): validate persisted requester origins",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "2c9f284c1e0cc44913a3e4a83c90c6d9b559dd8d",
+      "title": "fix(test): avoid walking plugin boundary invariant scans",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "80a563b4e4cff7e09e5fe12fa945c19cf136e9e0",
+      "title": "changelog: credit MCP plugin tool abort-signal forwarding (#82443)",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "b7d61c8daffc7d7993295d7d85841559726bc4e5",
+      "title": "fix: forward MCP tool abort signals (#82443)",
+      "category": "integration-opportunity",
+      "action": "backlog-abort-signal-support",
+      "impact": "Not a breaking change for current tools, but PLUR1BUS long-running tool paths should accept cancellation in a follow-up.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c8bec518698b75a9e34a0261cab3ab5e6bf05d24",
+      "title": "OC Path: add dry-run diff output (#81437)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "f436b4310a0c00e348e8dfc15fd2fd343c75b9f9",
+      "title": "fix(feishu): stream CardKit text deltas (#82419)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "f78434985af9bd76cd5dea6489e18881c2b359da",
+      "title": "fix(update): skip plugin validation during package repair reads",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "33685e14748b57afb66134dff4d4cfb147082e28",
+      "title": "fix(codex): remove redundant context text coercion",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "abf78a0727614fa26a17719a8ca9342a13d71753",
+      "title": "fix(providers): reject malformed poll status payloads",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "bc81d243ba5d5ae2c6f017f261caab67ed7c3824",
+      "title": "fix(providers): harden model catalog response schemas",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c8c6df73a94a201fc1cd7b047c220ea1e1053c96",
+      "title": "fix(providers): harden embedding response schemas",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "202dd7590d1cbbb2ecf762bab31a7707f6da7900",
+      "title": "fix(providers): harden audio response schemas",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "639107b7db559c4d937fdcd05ac7d78a88dc4555",
+      "title": "fix: repair codex context-engine test typing",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "872e068470d733da7adc31955582edea9a32450e",
+      "title": "fix(test): avoid walking plugin sdk subpath scans",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "0eef4c49f6501fc323b90a80c55520336341ceb9",
+      "title": "fix(plugins): ignore malformed catalog metadata",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "0240cc578c2c4491a4c8fd2f09942439179e7f3d",
+      "title": "fix: repair source-only official plugin installs (#82425)",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "80ca48418a21d2d1882912e4c48d3b1336b0aed5",
+      "title": "feat(codex): bind context-engine projections to codex threads (#82351)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "90ae151154bf5eefbeaeb0b05a13c8fe41bbb6ad",
+      "title": "fix: prevent barnacle vetoing clawsweeper proof",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "372a8e4d2274b0477b148b04d328897a1439d885",
+      "title": "Add wait mode for manual cron runs (#81929)",
+      "category": "integration-opportunity",
+      "action": "backlog-cron-run-wait",
+      "impact": "Useful for deterministic Dreaming/Promote/Prune job tests; not needed for compatibility.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "9aa9c57625fc5f28b9e5ce721bb049eaf8f6c561",
+      "title": "fix(doctor): skip unsupported group allowFrom repair",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c2c7396ffb69d5659bf78c2539f0137919631ef6",
+      "title": "fix(test): avoid walking core extension facade scans",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "bb07cbc2be202c45640dd7371bb6ad69b7317df7",
+      "title": "fix(config): sanitize plugin session hydration",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "72581fbb48fffa06e21063df6f65186cb3560ae1",
+      "title": "fix(test): avoid walking package boundary scans",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "9c7e36bf813d9898d8de98888f72a7192679ae6c",
+      "title": "fix(test): avoid walking extension runtime dependency scans",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "aa6ea4510ca90789e3768d24f77ab35cdbcec751",
+      "title": "fix(test): avoid walking channel import guardrails",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "445c7d050ad1e2be43f715cd683bbe870f1bc3b8",
+      "title": "changelog: note foreign-bot /stop topic-lane scoping in #82162 entry",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "f1c8570e0c8d6444a52fe6eaea8fc916d29b247b",
+      "title": "fix(test): avoid walking plugin sdk package guardrails",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "069ad23b74b24994949e68b4f6da3773f0b71b78",
+      "title": "fix(test): avoid scanning bundled capability metadata",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "81d1424ad94f9bb4cecaf44ab0515cf541563c05",
+      "title": "fix(update): allow plugin convergence after package doctor repairs",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "0d215247367aaa8809165e6f0699992a8af0f64c",
+      "title": "test(telegram): type targeted stop metadata stubs",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "84c9286434d3bfb458afa53cc2551ab634de90a4",
+      "title": "fix(telegram): keep foreign stop commands on topic lanes",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "12d3ebe1e000be00e80db51cf4fad1678a5b50e7",
+      "title": "chore: credit stop abort fix",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "9f7d606469ec020c87b8311c54ce5530013494ff",
+      "title": "fix(gateway): match stop by stored session id",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "b72f0081836e9f820c955c22f1f3eccfeb2b6f63",
+      "title": "fix: stop active turns reliably",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "37799a143711a662c1ae29c78bf01397b0a6d0f9",
+      "title": "fix(test): avoid walking plugin tool contracts",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "d095319b08b02bf77ca1e375ceac986115ba7e1a",
+      "title": "fix(test): avoid walking provider catalog guard",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "dc6528f9ff9f6b6e72a688a1eafe0d5636954dc1",
+      "title": "fix(config): warn for stale web search providers",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "111b65a6fb4cdf1065ff78e0de843ee7c9a22f91",
+      "title": "fix(providers): harden video response schemas",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "e01a885d1833a0339741ed82521f393e308c5839",
+      "title": "fix: complete ended subagent cleanup after helper failures",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "b3ede775284ac4e32f81fdbeca685d365e6743bb",
+      "title": "fix(test): avoid walking provider family scans",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "6c8f49386cec62424fba59b1d1f9db44d9fc5138",
+      "title": "fix(config): sanitize pending delivery hydration",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "cf7c46dff69e3b0e6fc726d75413290f07ae4eb1",
+      "title": "docs(codex): clarify raw tool output watchdog",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "5d93fb3ed83990baa2a2d4c9ae9b29908f507e8e",
+      "title": "docs(changelog): add codex watchdog entry",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "44a3301e5067266c93a82a1ac1073a4629a79353",
+      "title": "fix(codex): keep raw tool output watchdog armed",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "3b663ad1c17d9abc509333746cdf6d78cd7e91e2",
+      "title": "fix(gateway): harden image-named attachment sniffing",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "7206811b80c469502adec9d54291dbda2beb6440",
+      "title": "fix: start xai oauth callback before browser",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "8bc927b2947e61bb472b67b6b8c44c8ddd5847cc",
+      "title": "docs: clarify xai oauth coverage",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "6208f2b67829fc2c4266ec81298451c5a4e78eea",
+      "title": "fix: satisfy xai oauth lint",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "af2b31319422cb66505b1a2f0e0a7ddec7884bba",
+      "title": "feat: add xai grok oauth",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "2754dc895afb4cc04eeb92438b94cc5985650835",
+      "title": "fix(update): skip plugin schema validation during package doctor writes",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "ae594d263c9b90c15093a0cc48e36ffadf208e8e",
+      "title": "fix(test): avoid walking message turn guardrails",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "48b3a1cff97e972e3c5adfa0805c81acb30e81b8",
+      "title": "fix(plugins): reject escaped package metadata",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "1ea48edeff268f0b1517e5978cb707d085a37c54",
+      "title": "docs: add changelog for web search startup fix",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "37f8507b4bbab346a0b5ee40212aef93ffcb4389",
+      "title": "fix: start configured web search providers",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "4d2acd94816a3429a68f9d2abb36d5f82f3eea4a",
+      "title": "fix(test): avoid walking lint suppression scans",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "5f85e6b692134454662b29af4f282faa3705078a",
+      "title": "fix(lint): remove redundant unknown unions",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "89a9b4e75acdea448958c52bb98032aac7bc007d",
+      "title": "fix(plugins): preserve host package during managed peer repair",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "56aec53dde70c7cfb06774322e921afb6cb421a5",
+      "title": "fix(test): avoid walking extension boundary scans",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "e403af2d859d355aca843983475945b72f2f61d2",
+      "title": "fix(test): avoid walking CI node shard plans",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "31cc26230f3568849d9f60c65a4c22855b4b0835",
+      "title": "fix(test): avoid scanning bundled source metadata",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "721fb6570ea27228729dc7f59a439a6c13c99272",
+      "title": "fix(agents): skip malformed gap-fill tails",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "a70c90a52bf13f8864c5270778227086d6698744",
+      "title": "test(plugins): cover malformed npm package metadata",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "3064d6181d18c4d0448f4cdf018ae169c5ee27e6",
+      "title": "fix(test): avoid scanning static asset metadata",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "783ef1d22b7c6ec6a5da5dd54fca4a60d1565581",
+      "title": "Merge branch 'main' of https://github.com/openclaw/openclaw",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "eb7a082b777dd3df0a66d66a931cba269ab05128",
+      "title": "fix(providers): harden image response schemas",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "859286b95e51a3ccd31a216f91e56477f1e0fb32",
+      "title": "Merge branch 'main' of https://github.com/openclaw/openclaw",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "b436927a430d6fbd6f50dd3bff53f813fce0e53a",
+      "title": "fix(msteams): sniff inline image attachments",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "46b0fc0c0aae98d863df68621bbe2dec8c9494c3",
+      "title": "fix(providers): harden image response schemas",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "14142a927db7faf35cbe78af6e9f8082410ed129",
+      "title": "fix(msteams): sniff inline image attachments",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "7d96d1f41adb179c85194e0d5d2bfd64f41dd7cb",
+      "title": "fix(test): avoid scanning bundled build entries",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c320da79edd173c06b0be08228e891bcd0457dca",
+      "title": "fix(test): avoid scanning extension ids",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c8cee2dce4e3e813f71eef8138839f5ab6864cb4",
+      "title": "fix(voice-call): persist rejected replay keys",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "7ccd3b8e8e178b130a3dd07bfe946bbdefb0702c",
+      "title": "fix(test): avoid walking extension test plans",
+      "category": "smoke-required",
+      "action": "covered-by-inspect-packaging",
+      "impact": "Touches plugin/package/config/update surfaces; covered by static, pack, link and tarball install lanes.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "c4810e33f47dc93e5fca4bc9e78b314aa423ac54",
+      "title": "Merge branch 'main' of https://github.com/openclaw/openclaw",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "f553dad560ab47d822d62d1e43d1f293de6df09c",
+      "title": "Reapply \"chore(release): set 2026.5.16 version\"",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "2ee856985b896c55fd1065e54ecf7925c1a57289",
+      "title": "fix(test): avoid walking contract shard plans",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "0e7cc1ca53b9b78561a3ca9eb6c6be4a1df57dbb",
+      "title": "fix(test): avoid walking gateway suite targets",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "efabae2f9bf03a5ef1be8915ee235cce6f8d8106",
+      "title": "fix(test): avoid walking unit-fast candidate roots",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "a1e208ee26b9aebce7ff24a13a5d4edda7a53921",
+      "title": "Recover stale embedded tool calls during gateway diagnostics (#82369)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "9a1fa5f23fbc36ca0cf2972d3f149218bb11d9f0",
+      "title": "fix(test): defer unit coverage source discovery",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "9c2044d3b7b4238bdae7bdfcf0134d9c19f3f5dc",
+      "title": "changelog: credit reporters for #82239, #65867, #82167, #47444 follow-up",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "73aab6abd835c38f962d0b283a8d6726fb33ae40",
+      "title": "Revert \"chore(release): set 2026.5.16 version\"",
+      "category": "no-direct-impact",
+      "action": "context-only",
+      "impact": "Non-runtime or context change unless paired with implementation commit.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "1dac68c0bbe75a78df75d500ea86c7f13aca91bc",
+      "title": "fix fallback provenance across reloads (#82363)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "b08e0da25b8a217b55393cac22d6709b0c8d6672",
+      "title": "fix: clarify provider timeout ceiling",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "49e9382cc05a33d12a79cfbe9f00a6d31908f689",
+      "title": "fix(configure): unify OpenAI auth provider picker (#82324)",
+      "category": "smoke-required",
+      "action": "covered-by-provider-contract-inspect",
+      "impact": "Touches provider or embedding behavior; PLUR1BUS provider contracts were inspected and functional provider calls remain blocked without a provider smoke.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "8d3b5c2d19d66b9dc33f546539de4a6be639dd24",
+      "title": "fix(auto-reply): abort active text stop runs",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "64b94daf92c4d80ac39f5fd5eb70d3458dce6ec8",
+      "title": "Fix gateway auth logout aborting active runs (#82346)",
+      "category": "smoke-required",
+      "action": "covered-by-runtime-inspect-or-forward-look",
+      "impact": "Touches hook/gateway/session/cron/agent surfaces; runtime inspect verified PLUR1BUS hooks and tools after explicit hook permissions.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    },
+    {
+      "sha": "ea16a5e9e10c5b2be28ed46ea77ba5a7aa787d8c",
+      "title": "fix(codex): yield app-server notification projection (#82333)",
+      "category": "no-direct-impact",
+      "action": "none",
+      "impact": "No direct PLUR1BUS runtime impact found in title-level beta2 triage.",
+      "evidence": [
+        "localCommitLog"
+      ]
+    }
+  ],
+  "verdict": {
+    "beta2Compatibility": "pass",
+    "firstClassPluginReadiness": "pass",
+    "functionalRuntimeMemory": "blocked-provider-smoke",
+    "breakingChanges": "none found for PLUR1BUS v3.2.2-beta.1",
+    "liveInstanceTouched": false,
+    "goNoGo": "Go for package/plugin compatibility against OpenClaw 2026.5.16-beta.2; not a full provider-backed memory-store runtime pass."
+  }
+}
