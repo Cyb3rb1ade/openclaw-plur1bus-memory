@@ -1,0 +1,307 @@
+{
+  "target": {
+    "openclawVersion": "2026.5.16-beta.1",
+    "tag": "v2026.5.16-beta.1",
+    "commit": "dc8790d3b4091bef59b6f1327fc6fe5e9cccdb4f",
+    "npmExact": "2026.5.16-beta.1",
+    "npmBeta": "2026.5.16-beta.1",
+    "baselineTag": "v2026.5.12",
+    "baselineCommit": "f066dd2f31c231f38fbcaacd6f6dfce0801143b3",
+    "commitRangeCount": 1963,
+    "diffStats": {
+      "filesChanged": 2966,
+      "insertions": 134026,
+      "deletions": 28924
+    }
+  },
+  "plur1bus": {
+    "version": "3.2.1",
+    "repoCommit": "467f330874d7f463433a67e191e8591a09a36ba9",
+    "package": "@cyb3rb1ade/plur1bus-memory",
+    "tarball": "cyb3rb1ade-plur1bus-memory-3.2.1.tgz",
+    "tarballShasum": "28d55abe0336481498d17b6268d28f323546056e",
+    "tarballIntegrity": "sha512-EO7m7Q2EWhtnwqNFUBgF3laP5rAExlqdk7Ruhqbw1wNWJifOptFD60LK0yB7wlvi6Tc5qqh9wLgwxI55lVckwA=="
+  },
+  "evidence": {
+    "localDiffAndFiles": true,
+    "githubReleaseUi": true,
+    "npmPreflight": true,
+    "githubCompareAsDiffSubstitute": false,
+    "notes": [
+      "Release notes were used only as context; compatibility conclusions come from local git log/grep/diff and isolated OpenClaw CLI smokes.",
+      "OpenClaw release UI was not treated as a complete diff source."
+    ]
+  },
+  "nonRoot": {
+    "executed": true,
+    "uid": "1000",
+    "gid": "1000",
+    "base": "/home/kimi/plur1bus-321-beta16-20260516041520",
+    "prefixBinary": "/home/kimi/plur1bus-321-beta16-20260516041520/prefix/bin/openclaw",
+    "usedIsolatedPrefixBinary": true,
+    "bareOpenclawUsed": false,
+    "installCliRanAsNonRoot": true,
+    "tmpFallbackReason": "/tmp was not writable for kimi in this environment, so the isolated base was created under /home/kimi.",
+    "rootEscapes": [],
+    "rootPathDependency": false
+  },
+  "liveGatewayGate": {
+    "gatewayStarted": false,
+    "reason": "Compatibility audit only. Live gateway start remains blocked until live config cleanup is explicitly performed.",
+    "liveChecks": {
+      "memoryCoreSlotOwner": "pass",
+      "plur1busConfigured": "pass",
+      "hooksAllowConversationAccess": "pass",
+      "baseDbPathUnchanged": "pass",
+      "embeddingModelUnchanged": "pass",
+      "embeddingDimensionsUnchanged": "pass",
+      "cohereRerankerUnchanged": "pass",
+      "agentsListMemorySearch": "pass-none-found",
+      "agentsDefaultsMemorySearch": "present-disabled-not-modified"
+    }
+  },
+  "staticAndUnit": {
+    "nodeCheckIndex": "pass",
+    "nodeCheckNeoArch": "pass",
+    "nodeCheckEmbeddingAdapters": "pass",
+    "nodeTest": {
+      "status": "pass",
+      "tests": 11,
+      "failures": 0
+    },
+    "npmPack": "pass"
+  },
+  "pluginStatus": {
+    "clawhubProfile": "plur1bus-beta16-v321-clawhub",
+    "linkedProfile": "plur1bus-beta16-v321-link",
+    "tarballProfile": "plur1bus-beta16-v321-tarball",
+    "clawhubInstallReady": "pass",
+    "linkedInstallReady": "pass-after-permission-fix",
+    "tarballInstallReady": "pass",
+    "tarballManagedInstall": "pass",
+    "selfContainedDependencies": "pass",
+    "siblingFallbackUsed": false,
+    "firstClassPluginReady": "pass-for-augment-plugin-after-local-fix",
+    "remainingBlockers": [
+      "Functional memory_store/memory_recall/memory_forget smoke was blocked because no isolated embedding provider key, local E5 smoke, or mock embedding provider was configured."
+    ]
+  },
+  "postReviewFixes": [
+    {
+      "fix": "Pass explicit names to api.registerTool factory registration.",
+      "files": [
+        "extensions/memory-lancedb-namespaced/index.js",
+        "extensions/memory-lancedb-namespaced/__tests__/plugin-registration.test.js"
+      ],
+      "status": "implemented-in-working-tree",
+      "verification": {
+        "nodeCheckIndex": "pass",
+        "nodeTest": "pass",
+        "beta16RuntimeInspect": {
+          "status": "pass",
+          "tools": [
+            "memory_recall",
+            "memory_store",
+            "memory_forget",
+            "knowledge_update"
+          ]
+        }
+      },
+      "releaseStatus": "not-published"
+    }
+  ],
+  "openclawRuntime": {
+    "typedHooks": [
+      "agent_end",
+      "before_prompt_build",
+      "gateway_start",
+      "gateway_stop"
+    ],
+    "commands": [
+      "plur1bus"
+    ],
+    "memoryEmbeddingProviders": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "contractsTools": [
+      "knowledge_update",
+      "memory_forget",
+      "memory_recall",
+      "memory_store"
+    ],
+    "doctor": "pass-no-plugin-issues",
+    "shape": "non-capability",
+    "capabilityMode": "none"
+  },
+  "clawSweeper": {
+    "range": "v2026.5.12..v2026.5.16-beta.1",
+    "clean": 866,
+    "skipped": 52,
+    "findings": 79,
+    "high": 3,
+    "medium": 46,
+    "low": 29,
+    "unweighted": 1,
+    "unreviewed": 966,
+    "highFindings": [
+      {
+        "commit": "65d7232218a9524c6b92cac0d96538bc2b3c7f53",
+        "title": "fix: detect carried exec command forms [AI] (#81000)",
+        "plur1busImpact": "no-direct-impact",
+        "reason": "Exec-command sandbox hardening; PLUR1BUS v3.2.1 runtime does not require shell fallback as primary path."
+      },
+      {
+        "commit": "dc7fab4dc5f604d8e84be4df07ee38b4c73b1a4a",
+        "title": "perf: cache pi model discovery",
+        "plur1busImpact": "smoke-required",
+        "reason": "Provider/model discovery cache can affect runtime provider visibility; isolated plugin inspect stayed green."
+      },
+      {
+        "commit": "2f2563314a8de3170c6f6adaee04f809f43b2a66",
+        "title": "fix(codex): handle delayed plugin marketplace (#81625)",
+        "plur1busImpact": "smoke-required",
+        "reason": "Plugin marketplace timing can affect ClawHub installation; ClawHub managed install passed."
+      }
+    ]
+  },
+  "commitClassification": [
+    {
+      "area": "plugin-loader",
+      "commits": [
+        "d2e0a8231f",
+        "dea6207dd1",
+        "b21d3e5362",
+        "39bcd1e088",
+        "18ca285ed6",
+        "87eb450047",
+        "93b9223bee"
+      ],
+      "classification": "smoke-required",
+      "result": "pass",
+      "evidence": "ClawHub, tarball and link lanes loaded PLUR1BUS v3.2.1 under OpenClaw 2026.5.16-beta.1."
+    },
+    {
+      "area": "memory",
+      "commits": [
+        "b04e42812e",
+        "f0803c576f",
+        "c589680e95",
+        "b79c41d252",
+        "30e2654ac2"
+      ],
+      "classification": "smoke-required",
+      "result": "partial",
+      "evidence": "Memory slot ownership and supplement/provider registration stayed intact; provider-backed store/recall was not run."
+    },
+    {
+      "area": "hooks-session",
+      "commits": [
+        "66f89540c2",
+        "eb4e20ca1d",
+        "65dd71d42d",
+        "3fa9658b39",
+        "c20224688c"
+      ],
+      "classification": "plur1bus-integration-opportunity",
+      "result": "pass-for-current-hooks",
+      "evidence": "agent_end, before_prompt_build, gateway_start and gateway_stop are registered in Runtime Inspect."
+    },
+    {
+      "area": "cron-heartbeat",
+      "commits": [
+        "0ad3d25fb7",
+        "e22a7e45a4",
+        "686b93e5c7",
+        "f3403708a3"
+      ],
+      "classification": "smoke-required",
+      "result": "no-direct-break",
+      "evidence": "No cron/heartbeat functional run was performed; no load-time break observed."
+    }
+  ],
+  "functionalRegression": [
+    { "feature": "memory_store", "status": "blocked", "reason": "Needs isolated embedding provider key, local E5 smoke, or mock embedding provider for end-to-end invocation." },
+    { "feature": "memory_recall", "status": "blocked", "reason": "Deep recall requires populated isolated index/provider-backed setup for meaningful pass." },
+    { "feature": "memory_forget", "status": "blocked", "reason": "Depends on provider-backed memory_store fixture in isolated runtime." },
+    { "feature": "knowledge_update", "status": "registered", "reason": "Manifest contract preserved and Runtime Inspect shows the tool name after the local registerTool names fix; invocation not run against a real workspace knowledge target." },
+    { "feature": "Auto-Capture via agent_end", "status": "pass-registration", "reason": "Runtime Inspect shows agent_end typed hook." },
+    { "feature": "Auto-Recall via before_prompt_build / PromptSupplement", "status": "pass-registration", "reason": "Runtime Inspect shows before_prompt_build typed hook; PromptSupplement path present in source." },
+    { "feature": "CorpusSupplement / memory_search corpus=all", "status": "pass-source-partial-runtime", "reason": "Source registers MemoryCorpusSupplement; memory_search end-to-end was not run." },
+    { "feature": "Turn Journal", "status": "pass-unit-source", "reason": "neo-arch unit tests passed; no runtime conversation smoke." },
+    { "feature": "Candidates", "status": "pass-unit-source" },
+    { "feature": "Reaction Ledger", "status": "pass-unit-source" },
+    { "feature": "BehaviorCards", "status": "pass-unit-source" },
+    { "feature": "Embedding Queue", "status": "pass-unit-source" },
+    { "feature": "Categories", "status": "pass-unit-source" },
+    { "feature": "Origins", "status": "pass-unit-source" },
+    { "feature": "Trust-Level", "status": "pass-unit-source" },
+    { "feature": "Status-Machine", "status": "pass-unit-source" },
+    { "feature": "Recall-Lanes", "status": "pass-unit-source" },
+    { "feature": "Dreaming", "status": "not-run", "reason": "No heavy scheduled jobs were started in compatibility harness." },
+    { "feature": "OpenAI provider", "status": "implemented-not-called" },
+    { "feature": "OpenAI-compatible provider", "status": "implemented-not-called" },
+    { "feature": "Cohere reranker", "status": "implemented-not-called" },
+    { "feature": "disabled reranker", "status": "implemented" },
+    { "feature": "E5 local provider", "status": "experimental-blocked-pending-local-model-smoke" },
+    { "feature": "GTE local reranker", "status": "experimental-blocked-pending-local-model-smoke" }
+  ],
+  "integrationBacklog": [
+    {
+      "feature": "session_end shutdown/restart",
+      "status": "integration-opportunity",
+      "value": "high",
+      "risk": "medium",
+      "reason": "Beta16 documents bounded session_end during shutdown/restart; PLUR1BUS can use it for final capture/flush with duplicate-capture guards."
+    },
+    {
+      "feature": "runtime.events.onSessionTranscriptUpdate",
+      "status": "integration-opportunity",
+      "value": "high",
+      "risk": "medium",
+      "reason": "Public docs expose transcript update events; useful for incremental Turn Journal capture without whole-file JSONL scanning."
+    },
+    {
+      "feature": "runtime.state.openKeyedStore",
+      "status": "integration-opportunity",
+      "value": "medium",
+      "risk": "medium",
+      "reason": "Public runtime docs expose keyed state; useful for leases/idempotency instead of ad-hoc JSONL/lockfile state."
+    },
+    {
+      "feature": "session.workflow.scheduleSessionTurn",
+      "status": "integration-opportunity",
+      "value": "medium",
+      "risk": "medium",
+      "reason": "Cron-backed scheduled turns are documented; useful for Dreaming/Promote/Prune behind a feature flag."
+    },
+    {
+      "feature": "contracts.memoryEmbeddingProviders/registerMemoryEmbeddingProvider",
+      "status": "already-integrated",
+      "value": "high",
+      "risk": "low",
+      "reason": "PLUR1BUS v3.2.1 registers three provider IDs and Beta16 inspect surfaces them."
+    },
+    {
+      "feature": "gateway methods / admin HTTP RPC",
+      "status": "defer",
+      "value": "medium",
+      "risk": "high",
+      "reason": "Useful for operator diagnostics later, but not needed for compatibility and should not broaden PLUR1BUS runtime authority now."
+    }
+  ],
+  "verdict": {
+    "betaCompatibility": "partial-pass",
+    "firstClassPluginReadiness": "pass-for-augment-plugin-after-local-fix",
+    "runtimePass": "not-claimed",
+    "breakingChanges": [
+      "Beta16 rejects plugins.entries.<id>.kind in config. This is correct OpenClaw behavior; PLUR1BUS kind must be manifest-level if added.",
+      "OpenClaw Beta16 blocks linked plugins from world-writable paths. This is a harness/security condition; after chmod go-w, Link-Lane passed."
+    ],
+    "plur1busFixRecommended": [
+      "Add a deterministic mock embedding provider runtime smoke so memory_store -> memory_recall -> memory_forget can pass without real API keys or local model downloads.",
+      "Publish the local registerTool names fix in the next patch release if it should reach PLUR1BUS users."
+    ]
+  }
+}

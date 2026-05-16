@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v3.2.1-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/tree/main)
+[![Release](https://img.shields.io/badge/release-v3.2.2--beta.1-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/tree/main)
 
 ---
 
@@ -14,9 +14,9 @@ PLUR1BUS v3 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `3.2.1`<br>
+**Aktuelle Version:** `3.2.2-beta.1` (`3.2.2-beta1` Vorabversion)<br>
 **Branch:** `main`<br>
-**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`<br>
+**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12` und `2026.5.16-beta.1`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
 `systemctl`-Recovery-Hack, kein root-/host-cron als Primärpfad.
 
@@ -51,6 +51,7 @@ PLUR1BUS memory-lancedb-namespaced
     memory_recall
     memory_forget
     knowledge_update
+    Beta16-compatible factory names metadata
 
   contracts.memoryEmbeddingProviders / registerMemoryEmbeddingProvider
     plur1bus-openai
@@ -209,10 +210,11 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `3.2.1`:
+Provider-Status in `3.2.2-beta.1`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
+- **implemented:** OpenClaw `2026.5.16-beta.1` Runtime-Inspect-Kompatibilitaet fuer Tool-Factories. `plugins inspect --json --runtime` sieht `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, weil PLUR1BUS die Factory-Namen explizit per `registerTool(..., { names })` deklariert.
 - **experimental:** `embedding.provider=local-transformers` mit `intfloat/multilingual-e5-small`; lokaler Modell-Download/Load erfolgt erst bei `memory-doctor provider-check` oder beim ersten lokalen Call.
 - **experimental:** `agents.defaults.memorySearch.provider = "plur1bus-e5-small"` fuer OpenClaw-native Memory-Search. Wenn diese Einstellung die Plugin-Runtime nicht lädt, ist das ein Manifest-/Contract-Activation-Problem; nicht durch `kind:"memory"` oder `registerMemoryCapability` umgehen.
 - **blocked pending local model smoke:** `reranker.provider=local-transformers` mit `Alibaba-NLP/gte-reranker-modernbert-base`, solange der echte Node/Transformers.js-Smoke nicht grün war. Cohere und disabled bleiben passfähig.
@@ -383,9 +385,9 @@ runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `3.2.1`<br>
+**Current version:** `3.2.2-beta.1` (`3.2.2-beta1` prerelease)<br>
 **Branch:** `main`<br>
-**Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`<br>
+**Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12` and `2026.5.16-beta.1`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
 recovery hack and no host cron as the primary runtime path.
 
@@ -394,14 +396,16 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `3.2.1`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `3.2.2-beta.1`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental
 `plur1bus-e5-small` without making PLUR1BUS `kind:"memory"` and without calling
 `registerMemoryCapability`; `memory-core` remains the slot owner. Local E5
 embeddings and the local GTE reranker remain blocked pending real local model
-smokes where noted.
+smokes where noted. OpenClaw `2026.5.16-beta.1` runtime inspect compatibility is
+also implemented for the stable PLUR1BUS tools by declaring tool-factory names
+with `registerTool(..., { names })`.
 
 PLUR1BUS `3.0.0-beta.2` and newer requires the OpenClaw-native memory stack
 from OpenClaw `2026.5.12-beta.6` or newer. Existing v2 LanceDB data remains

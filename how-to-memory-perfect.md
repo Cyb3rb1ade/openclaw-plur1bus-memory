@@ -1,7 +1,7 @@
 # PLUR1BUS Neo-Arch v3 Memory Guide
 
-Stand: 2026-05-14<br>
-Version: `3.2.0`<br>
+Stand: 2026-05-16<br>
+Version: `3.2.2-beta.1` (`3.2.2-beta1` Vorabversion)<br>
 Branch: `main`
 
 Dieses Dokument beschreibt nur noch den v3-Normalbetrieb und den v2→v3
@@ -13,7 +13,7 @@ entfernt.
 
 PLUR1BUS v3 ist ein kognitiver Memory-Layer fuer OpenClaw:
 
-- PLUR1BUS `3.2.0` benötigt OpenClaw `2026.5.12-beta.6`
+- PLUR1BUS `3.2.2-beta.1` benötigt OpenClaw `2026.5.12-beta.6`
   oder neuer. Ältere OpenClaw-Versionen haben nicht den vorausgesetzten
   OpenClaw-native Memory-Stack fuer v3.
 - `memory-core` bleibt der exklusive OpenClaw-Memory-Slot.
@@ -119,6 +119,29 @@ PLUR1BUS-Runtime nicht lädt, ist das als Manifest-/Contract-Activation oder
 Inspect-Visibility-Limit zu debuggen. Nicht durch `kind:"memory"` oder
 `registerMemoryCapability` umgehen.
 
+## 1.3 OpenClaw Beta16 Tool-Factory-Metadaten ab v3.2.2-beta.1
+
+OpenClaw `2026.5.16-beta.1` inspiziert Tool-Factories zuverlässiger, wenn die
+Namen explizit bei `api.registerTool(factory, { names })` deklariert sind.
+PLUR1BUS `3.2.2-beta.1` setzt deshalb die Namen der stabilen Tools an beiden
+Stellen:
+
+- Manifest: `contracts.tools`
+- Runtime: `api.registerTool(..., { names: [...] })`
+
+Erwartetes Runtime-Inspect-Ergebnis:
+
+```text
+memory_recall
+memory_store
+memory_forget
+knowledge_update
+```
+
+Das ist keine Funktionsänderung der Tools, sondern ein OpenClaw-native
+Discovery-/Inspect-Kompatibilitätsfix. `memory-core` bleibt weiterhin
+Slot-Owner; PLUR1BUS setzt weiterhin kein `kind:"memory"`.
+
 ## 2. Architektur
 
 ```text
@@ -158,7 +181,7 @@ OpenClaw Gateway
 ```
 
 Default ist `neo.mode = "augment"`. `registerMemoryCapability` wird in
-`3.2.0` nicht genutzt; auch ein versehentlich gesetztes
+`3.2.2-beta.1` nicht genutzt; auch ein versehentlich gesetztes
 `neo.mode="slot"` darf PLUR1BUS nicht zum OpenClaw-Memory-Slot machen.
 
 ## 3. Zentrale Konfiguration

@@ -1797,6 +1797,8 @@ const plugin = {
           },
         },
       ];
+    }, {
+      names: ["memory_recall", "memory_store", "memory_forget", "knowledge_update"],
     });
 
     // ========================================================================
