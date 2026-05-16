@@ -21,7 +21,7 @@ function makeApi(pluginConfig) {
     runtime: {},
     logger: { info() {}, warn() {}, debug() {} },
     resolvePath(value) { return value; },
-    registerTool(factory) { registered.tools.push(factory); },
+    registerTool(factory, opts) { registered.tools.push({ factory, opts }); },
     registerCommand(command) { registered.commands.push(command); },
     registerService(service) { registered.services.push(service); },
     registerMemoryEmbeddingProvider(adapter) { registered.memoryEmbeddingProviders.push(adapter); },
@@ -87,6 +87,19 @@ test("plugin registers OpenClaw-native memory embedding providers without becomi
     plugin.register(api);
     assert.equal(memoryCapabilityCalls, 0, "PLUR1BUS must not call the memory capability API");
     assert.equal(plugin.kind, "extension");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugin declares factory tool names for OpenClaw runtime inspect", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi(baseConfig(tmp));
+    assert.deepEqual(
+      registered.tools[0]?.opts?.names,
+      ["memory_recall", "memory_store", "memory_forget", "knowledge_update"],
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
