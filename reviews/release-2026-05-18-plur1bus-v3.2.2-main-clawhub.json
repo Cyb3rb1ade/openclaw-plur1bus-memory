@@ -1,0 +1,88 @@
+{
+  "date": "2026-05-18",
+  "packageName": "@cyb3rb1ade/plur1bus-memory",
+  "packageVersion": "3.2.2",
+  "pluginId": "memory-lancedb-namespaced",
+  "verdict": "published",
+  "changeType": "patch",
+  "migrationRequired": false,
+  "summary": "PLUR1BUS v3.2.2 validates the v3.2.x memory augment against OpenClaw 2026.5.18 stable while preserving the memory-core slot-owner boundary and existing PLUR1BUS functionality.",
+  "source": {
+    "repo": "Cyb3rb1ade/openclaw-plur1bus-memory",
+    "commit": "3a61e4c0833954184c4ce00c9d3de077d4b02ad7",
+    "tag": "v3.2.2",
+    "branch": "main"
+  },
+  "compatibilityAudit": {
+    "artifactMarkdown": "reviews/openclaw-2026-05-18-stable-plur1bus-v3.2.2-beta.1.md",
+    "artifactJson": "reviews/openclaw-2026-05-18-stable-plur1bus-v3.2.2-beta.1.json",
+    "openclawVersion": "2026.5.18",
+    "openclawTag": "v2026.5.18",
+    "openclawCommit": "50a2481652b6a62d573ece3cead60400dc77020d",
+    "npmExact": "2026.5.18",
+    "stableCompatibility": "pass",
+    "plur1busBreaking": false,
+    "firstClassPluginReady": "pass",
+    "managedNpmPackInstall": "pass"
+  },
+  "guardrails": {
+    "plur1busKind": "extension",
+    "memoryCoreSlotOwner": "unchanged",
+    "kindMemoryAdded": false,
+    "registerMemoryCapabilityDefaultAdded": false,
+    "providerBridgeChanged": false,
+    "baseDbPathChanged": false,
+    "providerChanged": false,
+    "modelChanged": false,
+    "dimensionsChanged": false,
+    "rerankerChanged": false
+  },
+  "validation": {
+    "nodeCheckIndex": "pass",
+    "nodeCheckNeoArch": "pass",
+    "nodeCheckEmbeddingAdapters": "pass",
+    "nodeTests": "pass",
+    "nodeTestCount": 117,
+    "npmPackDryRun": "pass",
+    "npmPack": "pass",
+    "finalOpenClawManagedInstall": "pass",
+    "runtimeInspect": "pass",
+    "pluginsDoctor": "pass",
+    "artifact": "cyb3rb1ade-plur1bus-memory-3.2.2.tgz",
+    "artifactBytes": 50796
+  },
+  "clawhub": {
+    "publisherWhoami": "Cyb3rb1ade",
+    "dryRun": "pass",
+    "publish": "pass",
+    "releaseId": "rd74qqtkaaj769kd58ka6pqbxh86yvdr",
+    "package": "@cyb3rb1ade/plur1bus-memory@3.2.2",
+    "latestVersion": "3.2.2",
+    "sourceRepo": "Cyb3rb1ade/openclaw-plur1bus-memory",
+    "sourceRef": "v3.2.2",
+    "sourceCommit": "3a61e4c0833954184c4ce00c9d3de077d4b02ad7",
+    "artifact": {
+      "name": "cyb3rb1ade-plur1bus-memory-3.2.2.tgz",
+      "kind": "npm-pack",
+      "size": 50796,
+      "sha256": "7571f91a73930fd9b1b76bd47d6645daa78ad170b2ee0e2539b0e16e51f40ee6",
+      "npmShasum": "dc2ba7bde687d8b9060f6893eda6ce451b2772ba",
+      "npmIntegrity": "sha512-oINrs69WvqUSacVOhci0ycfZ87HTBDAKkoj/nIKonAJgaSv+B/1IpBBY/NIbWShzYNAbZPNaNXmnu6+JqouURA=="
+    },
+    "scanStatusAtVerification": "pending"
+  },
+  "github": {
+    "tag": "v3.2.2",
+    "tagCommit": "3a61e4c0833954184c4ce00c9d3de077d4b02ad7",
+    "release": "pass",
+    "releaseUrl": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v3.2.2",
+    "asset": "cyb3rb1ade-plur1bus-memory-3.2.2.tgz",
+    "assetUrl": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v3.2.2/cyb3rb1ade-plur1bus-memory-3.2.2.tgz",
+    "assetBytes": 50796
+  },
+  "knownCaveats": [
+    "Provider-backed memory tool runtime smokes need a real OpenAI/OpenAI-compatible key, a local E5 smoke, or a deterministic mock provider.",
+    "Local E5 remains experimental until a real local model load/embed smoke is green.",
+    "Local GTE reranker remains experimental/blocked until a real local reranker smoke is green."
+  ]
+}
