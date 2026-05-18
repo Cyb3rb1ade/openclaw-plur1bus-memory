@@ -1,7 +1,7 @@
 # PLUR1BUS Neo-Arch v3 Memory Guide
 
-Stand: 2026-05-16<br>
-Version: `3.2.2-beta.1` (`3.2.2-beta1` Vorabversion)<br>
+Stand: 2026-05-18<br>
+Version: `3.2.2`<br>
 Branch: `main`
 
 Dieses Dokument beschreibt nur noch den v3-Normalbetrieb und den v2→v3
@@ -13,9 +13,11 @@ entfernt.
 
 PLUR1BUS v3 ist ein kognitiver Memory-Layer fuer OpenClaw:
 
-- PLUR1BUS `3.2.2-beta.1` benötigt OpenClaw `2026.5.12-beta.6`
+- PLUR1BUS `3.2.2` benötigt OpenClaw `2026.5.12-beta.6`
   oder neuer. Ältere OpenClaw-Versionen haben nicht den vorausgesetzten
   OpenClaw-native Memory-Stack fuer v3.
+- PLUR1BUS `3.2.2` wurde zusätzlich gegen OpenClaw `2026.5.18` mit
+  isolierter managed `npm-pack:`-Installation geprüft.
 - `memory-core` bleibt der exklusive OpenClaw-Memory-Slot.
 - `memory-lancedb-namespaced` läuft default als additives Augment.
 - Die stabilen Tools bleiben erhalten: `memory_store`, `memory_recall`,
@@ -119,11 +121,11 @@ PLUR1BUS-Runtime nicht lädt, ist das als Manifest-/Contract-Activation oder
 Inspect-Visibility-Limit zu debuggen. Nicht durch `kind:"memory"` oder
 `registerMemoryCapability` umgehen.
 
-## 1.3 OpenClaw Beta16 Tool-Factory-Metadaten ab v3.2.2-beta.1
+## 1.3 OpenClaw Beta16/2026.5.18 Tool-Factory-Metadaten ab v3.2.2
 
-OpenClaw `2026.5.16-beta.1` inspiziert Tool-Factories zuverlässiger, wenn die
+OpenClaw `2026.5.16-beta.1` und `2026.5.18` inspizieren Tool-Factories zuverlässiger, wenn die
 Namen explizit bei `api.registerTool(factory, { names })` deklariert sind.
-PLUR1BUS `3.2.2-beta.1` setzt deshalb die Namen der stabilen Tools an beiden
+PLUR1BUS `3.2.2` setzt deshalb die Namen der stabilen Tools an beiden
 Stellen:
 
 - Manifest: `contracts.tools`
@@ -181,7 +183,7 @@ OpenClaw Gateway
 ```
 
 Default ist `neo.mode = "augment"`. `registerMemoryCapability` wird in
-`3.2.2-beta.1` nicht genutzt; auch ein versehentlich gesetztes
+`3.2.2` nicht genutzt; auch ein versehentlich gesetztes
 `neo.mode="slot"` darf PLUR1BUS nicht zum OpenClaw-Memory-Slot machen.
 
 ## 3. Zentrale Konfiguration

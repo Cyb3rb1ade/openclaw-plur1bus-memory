@@ -1,0 +1,1569 @@
+{
+  "target": {
+    "kind": "stable-release",
+    "openclawVersion": "2026.5.18",
+    "tag": "v2026.5.18",
+    "tagCommit": "50a2481652b6a62d573ece3cead60400dc77020d",
+    "npmExact": "2026.5.18",
+    "npmLatest": "2026.5.18",
+    "npmTarball": "https://registry.npmjs.org/openclaw/-/openclaw-2026.5.18.tgz",
+    "source": "local git + npm preflight + GitHub release page"
+  },
+  "forwardLook": {
+    "beta": {
+      "version": "2026.5.18-beta.1",
+      "tagCommit": "4eebca1d74b24906e87e33765c8295f96dc3e8c5"
+    },
+    "main": {
+      "commit": "424c6d0a5f4665b803ad6768d08b0be7659deaf4",
+      "verdictScope": "not used for stable Go/No-Go"
+    }
+  },
+  "plur1busSource": {
+    "version": "3.2.2-beta.1",
+    "commit": "2cb8c75457cb945e3286000021372434979f3320",
+    "workingTreeDirty": true,
+    "sourceMode": "git-archive-head",
+    "dirtyWorkingTreeExcluded": true,
+    "finalReleaseAllowed": "If audit remains green, bump and release as 3.2.2 per user instruction."
+  },
+  "openclawRange": {
+    "baseTag": "v2026.5.16-beta.7",
+    "targetTag": "v2026.5.18",
+    "baseTagCommit": "fff4532d69d77fe1a8ca3baeaea4b7306cc40456",
+    "targetTagCommit": "50a2481652b6a62d573ece3cead60400dc77020d",
+    "beta7ToStable": {
+      "mergeBase": "e0bb46b93a7078dbff303ac920bcad975a6c07c8",
+      "leftOnly": 40,
+      "rightOnly": 83,
+      "symmetric": "40/83"
+    },
+    "beta4ToBeta7": {
+      "mergeBase": "9b5f5b86510b87e393bff3335d0c192200412b5d",
+      "leftOnly": 27,
+      "rightOnly": 444,
+      "symmetric": "27/444"
+    },
+    "adjacent": {
+      "beta4ToBeta5": {
+        "mergeBase": "9b5f5b86510b87e393bff3335d0c192200412b5d",
+        "leftOnly": 27,
+        "rightOnly": 305,
+        "symmetric": "27/305"
+      },
+      "beta5ToBeta6": {
+        "mergeBase": "893f5800727ee8df73acb2aa5a48f253da64deaf",
+        "leftOnly": 35,
+        "rightOnly": 74,
+        "symmetric": "35/74"
+      },
+      "beta6ToBeta7": {
+        "mergeBase": "91266fa9288a791b23efeb1281c6770597718234",
+        "leftOnly": 38,
+        "rightOnly": 138,
+        "symmetric": "38/138"
+      }
+    },
+    "stableToMain": {
+      "mergeBase": "d1fa0f96287aa38b214c62e35d10f018a24fd805",
+      "leftOnly": 8,
+      "rightOnly": 88,
+      "symmetric": "8/88"
+    },
+    "locallyVerified": true
+  },
+  "nonRoot": {
+    "executed": true,
+    "user": "kimi",
+    "base": "/var/tmp/openclaw-stable-20260518-plur1bus-v322-5CpvGk",
+    "usedIsolatedPrefixBinary": true,
+    "bareOpenclawUsed": false,
+    "linkedOpenclawHome": "/var/tmp/openclaw-stable-20260518-plur1bus-v322-5CpvGk/home-link/.openclaw",
+    "tarballOpenclawHome": "/var/tmp/openclaw-stable-20260518-plur1bus-v322-5CpvGk/home-tarball/.openclaw",
+    "rootPathDependency": false,
+    "rootEscapes": []
+  },
+  "staticGates": {
+    "nodeCheck": "pass",
+    "unitTests": "pass",
+    "unitTestCount": 117,
+    "npmPackDryRun": "pass",
+    "tarball": "cyb3rb1ade-plur1bus-memory-3.2.2-beta.1.tgz",
+    "tarballSize": 50794,
+    "tarballSha256": "c6ffb0abbb41c3aa23d96f616b650b9616b581860119d6998dde34750dba7f24",
+    "tarballContents": [
+      "package/README.md",
+      "package/index.js",
+      "package/lib/categorize.js",
+      "package/lib/frontmatter.js",
+      "package/lib/neo-arch.js",
+      "package/lib/providers/config-normalize.js",
+      "package/lib/providers/dimensions.js",
+      "package/lib/providers/embedding-local-transformers.js",
+      "package/lib/providers/embedding-openai.js",
+      "package/lib/providers/openclaw-memory-embedding-adapters.js",
+      "package/lib/providers/reranker-cohere.js",
+      "package/lib/providers/reranker-local-transformers.js",
+      "package/lib/recall-pipeline.js",
+      "package/lib/score.js",
+      "package/lib/sql-safety.js",
+      "package/lib/text-utils.js",
+      "package/openclaw.plugin.json",
+      "package/package.json"
+    ],
+    "tarballHygiene": {
+      "noReviewArtifacts": true,
+      "noModelCache": true,
+      "noDotEnv": true,
+      "noNodeModules": true,
+      "noRootPaths": true
+    }
+  },
+  "pluginStatus": {
+    "kind": "extension",
+    "memoryCoreSlotOwner": "pass",
+    "memoryCoreActivationReason": "selected memory slot",
+    "registerMemoryCapabilityUsed": false,
+    "linkedInstallReady": "pass",
+    "managedNpmPackInstall": "pass",
+    "tarballInstallReady": "pass",
+    "selfContainedDependencies": "pass",
+    "siblingFallbackUsed": false,
+    "firstClassPluginReady": "pass",
+    "remainingBlockers": []
+  },
+  "runtimeInspect": {
+    "tools": [
+      "memory_recall",
+      "memory_store",
+      "memory_forget",
+      "knowledge_update"
+    ],
+    "hooks": {
+      "hookCount": 4,
+      "agent_end": true,
+      "before_prompt_build": true
+    },
+    "commands": [
+      "plur1bus"
+    ],
+    "memoryEmbeddingProviderIds": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "contracts": {
+      "memoryEmbeddingProviders": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ],
+      "tools": [
+        "knowledge_update",
+        "memory_forget",
+        "memory_recall",
+        "memory_store"
+      ]
+    },
+    "doctor": {
+      "link": "[plugins] memory-lancedb-namespaced: registered (baseDbPath: /var/tmp/openclaw-stable-20260518-plur1bus-v322-5CpvGk/home-link/.openclaw/memory/lancedb-namespaced)\n[plugins] memory-lancedb-namespaced: enabling autoCapture\nNo plugin issues detected.",
+      "tarball": "[plugins] memory-lancedb-namespaced: registered (baseDbPath: /var/tmp/openclaw-stable-20260518-plur1bus-v322-5CpvGk/home-tarball/.openclaw/memory/lancedb-namespaced)\n[plugins] memory-lancedb-namespaced: enabling autoCapture\nNo plugin issues detected."
+    },
+    "securityAuditDeep": "OpenClaw security audit\nSummary: 1 critical · 2 warn · 1 info\nRun deeper: openclaw --profile plur1bus-stable-20260518-v322-tarball security audit --deep\n\nCRITICAL\ngateway.loopback_no_auth Gateway auth missing on loopback\n  gateway.bind is loopback but no gateway auth secret is configured. If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.\n  Fix: Set gateway.auth (token recommended) or keep the Control UI local-only.\n\nWARN\ngateway.trusted_proxies_missing Reverse proxy headers are not trusted\n  gateway.bind is loopback and gateway.trustedProxies is empty. If you expose the Control UI through a reverse proxy, configure trusted proxies so local-client checks cannot be spoofed.\n  Fix: Set gateway.trustedProxies to your proxy IPs or keep the Control UI local-only.\ngateway.probe_failed Gateway probe failed (deep)\n  device identity required\n  Fix: Run \"openclaw --profile plur1bus-stable-20260518-v322-tarball status --all\" to debug connectivity/auth, then re-run \"openclaw --profile plur1bus-stable-20260518-v322-tarball security audit --deep\".\n\nINFO\nsummary.attack_surface Attack surface summary\n  groups: open=0, allowlist=0\ntools.elevated: enabled\nhooks.webhooks: disabled\nhooks.internal: disabled\nbrowser control: enabled\ntrust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway",
+    "inferEmbeddingProviders": {
+      "status": "partial-timeout",
+      "observed": [
+        {
+          "available": true,
+          "configured": false,
+          "selected": false,
+          "id": "local",
+          "defaultModel": "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+          "transport": "local",
+          "autoSelectPriority": 10
+        }
+      ],
+      "note": "CLI list emitted bundled local provider first but was interrupted after hanging; runtime inspect is primary evidence for PLUR1BUS provider ids."
+    }
+  },
+  "functionalRegression": [
+    {
+      "feature": "memory_store",
+      "status": "blocked",
+      "evidence": "No OpenAI/OpenAI-compatible key, local E5 smoke, or mock embedding provider configured; registration preserved."
+    },
+    {
+      "feature": "memory_recall",
+      "status": "blocked",
+      "evidence": "Provider-backed recall not executed without embedding provider; tool contract preserved."
+    },
+    {
+      "feature": "memory_forget",
+      "status": "blocked",
+      "evidence": "No provider-backed memory store created in this isolated lane; tool contract preserved."
+    },
+    {
+      "feature": "knowledge_update",
+      "status": "blocked",
+      "evidence": "Manual tool contract registered; no live workspace knowledge write performed."
+    },
+    {
+      "feature": "Auto-Capture via agent_end",
+      "status": "pass",
+      "evidence": "Runtime inspect shows agent_end hook registration with conversation access policy set."
+    },
+    {
+      "feature": "Auto-Recall via before_prompt_build / PromptSupplement",
+      "status": "pass",
+      "evidence": "Runtime inspect shows before_prompt_build hook; dynamic prompt injection policy enabled."
+    },
+    {
+      "feature": "CorpusSupplement / memory_search corpus=all visibility",
+      "status": "pass",
+      "evidence": "Plugin runtime loaded with additive memory corpus/prompt integration path; no memory slot takeover."
+    },
+    {
+      "feature": "Turn Journal",
+      "status": "pass",
+      "evidence": "Unit tests passed and runtime plugin loaded."
+    },
+    {
+      "feature": "Candidates",
+      "status": "pass",
+      "evidence": "Unit tests passed and runtime plugin loaded."
+    },
+    {
+      "feature": "Reaction Ledger",
+      "status": "pass",
+      "evidence": "Unit tests passed and runtime plugin loaded."
+    },
+    {
+      "feature": "BehaviorCards",
+      "status": "pass",
+      "evidence": "Unit tests passed and runtime plugin loaded."
+    },
+    {
+      "feature": "Embedding Queue",
+      "status": "pass",
+      "evidence": "Unit tests passed and provider bridge visible."
+    },
+    {
+      "feature": "Categories",
+      "status": "pass",
+      "evidence": "Unit tests passed."
+    },
+    {
+      "feature": "Origins",
+      "status": "pass",
+      "evidence": "Unit tests passed."
+    },
+    {
+      "feature": "Trust-Level",
+      "status": "pass",
+      "evidence": "Unit tests passed."
+    },
+    {
+      "feature": "Status-Machine",
+      "status": "pass",
+      "evidence": "Unit tests passed."
+    },
+    {
+      "feature": "Recall-Lanes",
+      "status": "pass",
+      "evidence": "Unit tests passed."
+    },
+    {
+      "feature": "Dreaming",
+      "status": "pass",
+      "evidence": "No OpenClaw breaking detected; scheduled dreaming not executed without live gateway."
+    },
+    {
+      "feature": "Provider bridge: plur1bus-openai",
+      "status": "pass",
+      "evidence": "Runtime inspect exposes provider id."
+    },
+    {
+      "feature": "Provider bridge: plur1bus-openai-compatible",
+      "status": "pass",
+      "evidence": "Runtime inspect exposes provider id."
+    },
+    {
+      "feature": "Provider bridge: plur1bus-e5-small",
+      "status": "pass",
+      "evidence": "Runtime inspect exposes provider id; local model smoke not executed."
+    },
+    {
+      "feature": "OpenAI provider state",
+      "status": "implemented",
+      "evidence": "Direct dependency is installed in managed npm-pack lane."
+    },
+    {
+      "feature": "OpenAI-compatible provider state",
+      "status": "implemented",
+      "evidence": "Adapter and config schema are installed in managed npm-pack lane."
+    },
+    {
+      "feature": "Cohere reranker state",
+      "status": "implemented",
+      "evidence": "Provider file packaged; no key-backed rerank call executed."
+    },
+    {
+      "feature": "disabled reranker state",
+      "status": "implemented",
+      "evidence": "Config normalizer tests passed."
+    },
+    {
+      "feature": "E5 local state",
+      "status": "experimental",
+      "evidence": "Transformers optional dependency installed; no model download/load smoke performed."
+    },
+    {
+      "feature": "GTE local reranker state",
+      "status": "experimental-blocked",
+      "evidence": "No local reranker model smoke performed; not counted as pass."
+    }
+  ],
+  "clawSweeper": {
+    "range": "2026.5.16-beta.7 -> 2026.5.18",
+    "summary": {
+      "clean": 27,
+      "skipped": 8,
+      "findings": 8,
+      "high": 0,
+      "medium": 3,
+      "low": 4,
+      "unweighted": 1,
+      "unreviewed": 40
+    },
+    "rawExcerpt": "\u001b[1m\u001b[0;36m━━━  CLAWSWEEPER UPSTREAM REVIEW  ━━━\u001b[0m\n\u001b[0;36mℹ️   Vergleich: \u001b[1m2026.5.16-beta.7\u001b[0m\u001b[0;36m → \u001b[1m2026.5.18\u001b[0m\u001b[0m\n\u001b[0;36mℹ️   Commit-Range umfasst 83 Commits.\u001b[0m\n\n\u001b[0;32m✅  27 clean (nothing_found)\u001b[0m\n\u001b[0;36mℹ️   8 skipped (non-code commits)\u001b[0m\n\u001b[1;33m⚠️  8 findings  (high: 0, medium: 3, low: 4, ungewichtet: 1)\u001b[0m\n\u001b[0;36mℹ️   40 unreviewed (kein Report im state-repo)\u001b[0m\n\n\u001b[1mBefunde:\u001b[0m\n  • b7735f8  result: findings, severity: low  joshavant  „fix(telegram): recover stalled isolated spool handlers (#83505)\"\n    https://github.com/openclaw/openclaw/commit/b7735f88fa2772b3103ed55eb1294ca4685f122a\n  • bd69510  result: inconclusive, severity: none  steipete  „feat(macos): add Dock menu shortcuts\"\n    https://github.com/openclaw/openclaw/commit/bd69510662c2e02897ff4ee562dd90610d7259b3\n  • a792068  result: findings, severity: low  Eva (agent)  „fix: harden release stability diagnostics\"\n    https://github.com/openclaw/openclaw/commit/a792068d9da16d8e7e8c9cde33797c99da8173b6\n  • 0f4ecce  result: findings, severity: low  steipete  „ci: use node24 artifact actions\"\n    https://github.com/openclaw/openclaw/commit/0f4eccefd4f39e9198fe5319e51752e8c8f1d042\n  • e6e1696  result: findings, severity: medium  sliverp  „fix(qqbot): shorten typing keepalive window (#83469)\"\n    https://github.com/openclaw/openclaw/commit/e6e1696c28b2a2f5c1ad01579d0c74bc11027a56\n  • 8e9d5c4  result: findings, severity: medium  steipete  „fix(messages): apply tts before message-tool sends (#83543)\"\n    https://github.com/openclaw/openclaw/commit/8e9d5c43d227287814f360f4ac5c72014669c49c\n  • 419eea2  result: findings, severity: low  steipete  „fix(codex): stop forcing code-mode-only turns (#83561)\"\n    https://github.com/openclaw/openclaw/commit/419eea24622b8649dd98155734a01f972463e300\n  • 6e80294  result: findings, severity: medium  Solvely-Colin  „Fix Discord realtime voice playback stability\"\n    https://github.com/openclaw/openclaw/commit/6e8029407919405b125d93dc1cae1e4e74e0ba86"
+  },
+  "commitClassification": {
+    "total": 83,
+    "smokeRequired": 43,
+    "noDirectImpact": 40,
+    "items": [
+      {
+        "sha": "27adbf9a1f7c06ec8ece0c4a1407879ea1e97342",
+        "title": "[Test] Add gateway restart benchmark tooling (#83299)",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "package.json",
+          "scripts/bench-gateway-restart.ts",
+          "test/scripts/bench-gateway-restart.test.ts"
+        ],
+        "fileCount": 4
+      },
+      {
+        "sha": "3b5d30b5fdfd2d9e1e2f1c97242444467dce53c0",
+        "title": "chore(autoreview): route OpenClaw validation to Testbox",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/SKILL.md",
+          ".agents/skills/autoreview/scripts/autoreview"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "9e00234d2d1dc76280931a01824d4c46236956d7",
+        "title": "ci: split cron runtime shard",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "docs/ci.md",
+          "scripts/lib/ci-node-test-plan.mjs",
+          "test/scripts/ci-node-test-plan.test.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "a9407d2f65cef6d3de9e564140be809956981ac6",
+        "title": "[codex] Fix Discord progress mode dropping final replies (#83443)",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "extensions/discord/src/monitor/message-handler.process.test.ts",
+          "extensions/discord/src/monitor/message-handler.process.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "81b9058cc36a7ada843e8609057b489289e0efbf",
+        "title": "chore(autoreview): scope Testbox policy to maintainers",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/SKILL.md",
+          ".agents/skills/autoreview/scripts/autoreview"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "4c613fbfe05f4dc7ee66dfffa5bc48dc3f370816",
+        "title": "refactor(cron): centralize source delivery plan",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "src/agents/pi-embedded-messaging.types.ts",
+          "src/agents/pi-embedded-subscribe.tools.extract.test.ts",
+          "src/agents/pi-embedded-subscribe.tools.ts",
+          "src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts",
+          "src/cron/isolated-agent/delivery-dispatch.named-agent.test.ts",
+          "src/cron/isolated-agent/delivery-dispatch.ts",
+          "src/cron/isolated-agent/run-delivery.runtime.ts",
+          "src/cron/isolated-agent/run-executor.ts",
+          "src/cron/isolated-agent/run.message-tool-policy.test.ts",
+          "src/cron/isolated-agent/run.test-harness.ts",
+          "src/cron/isolated-agent/run.ts",
+          "src/infra/outbound/source-delivery-plan.test.ts",
+          "src/infra/outbound/source-delivery-plan.ts"
+        ],
+        "fileCount": 13
+      },
+      {
+        "sha": "3c36ea0dd7c26d0a30fbe949f99ab70812f6d5d5",
+        "title": "docs: clarify lean refactor guidance",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "AGENTS.md",
+          "CHANGELOG.md"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "adc37670e87a6b5d9923a615f3da0f3554a35f6b",
+        "title": "fix(codex): preserve sandbox egress for app-server turns",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "docs/gateway/config-agents.md",
+          "docs/gateway/sandboxing.md",
+          "docs/plugins/codex-harness-reference.md",
+          "docs/plugins/codex-harness.md",
+          "extensions/codex/src/app-server/run-attempt.test.ts",
+          "extensions/codex/src/app-server/run-attempt.ts",
+          "extensions/codex/src/app-server/thread-lifecycle.test.ts",
+          "extensions/codex/src/app-server/thread-lifecycle.ts"
+        ],
+        "fileCount": 9
+      },
+      {
+        "sha": "b7735f88fa2772b3103ed55eb1294ca4685f122a",
+        "title": "fix(telegram): recover stalled isolated spool handlers (#83505)",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "extensions/telegram/src/bot-message-dispatch.test.ts",
+          "extensions/telegram/src/bot-message-dispatch.ts",
+          "extensions/telegram/src/polling-session.test.ts",
+          "extensions/telegram/src/polling-session.ts",
+          "extensions/telegram/src/status-issues.ts",
+          "extensions/telegram/src/status.test.ts",
+          "extensions/telegram/src/telegram-ingress-spool.test.ts",
+          "extensions/telegram/src/telegram-ingress-spool.ts",
+          "extensions/telegram/src/telegram-reply-fence.ts"
+        ],
+        "fileCount": 10
+      },
+      {
+        "sha": "856a1692ff24450f3883c11bd2de70cb00978414",
+        "title": "fix(qa): use final telegram replies for rtt runs",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "scripts/e2e/npm-telegram-rtt-config.mjs",
+          "test/scripts/rtt-harness.test.ts"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "4a1745281ec775626f00b4b61fe33053c12749b8",
+        "title": "fix(qa): decode OTLP smoke traces without generated internals",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "scripts/qa-otel-smoke.ts"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "bd69510662c2e02897ff4ee562dd90610d7259b3",
+        "title": "feat(macos): add Dock menu shortcuts",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "apps/macos/Sources/OpenClaw/AppNavigationActions.swift",
+          "apps/macos/Sources/OpenClaw/MenuBar.swift",
+          "apps/macos/Sources/OpenClaw/MenuContentView.swift",
+          "apps/macos/Tests/OpenClawIPCTests/MenuContentSmokeTests.swift"
+        ],
+        "fileCount": 4
+      },
+      {
+        "sha": "46bad8676c003c99cfc0289d04d56729a4b7d641",
+        "title": "fix(macos): polish settings channel config",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "apps/macos/Sources/OpenClaw/ChannelConfigForm.swift",
+          "apps/macos/Sources/OpenClaw/ChannelsSettings+ChannelSections.swift",
+          "apps/macos/Sources/OpenClaw/ChannelsSettings+View.swift",
+          "apps/macos/Sources/OpenClaw/ConfigSettings.swift",
+          "apps/macos/Sources/OpenClaw/SelectableRow.swift",
+          "apps/macos/Sources/OpenClaw/SettingsComponents.swift",
+          "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
+          "apps/macos/Sources/OpenClaw/SettingsSidebarCard.swift",
+          "apps/macos/Sources/OpenClaw/SettingsSidebarScroll.swift"
+        ],
+        "fileCount": 10
+      },
+      {
+        "sha": "ac1b48efbcec73efb777907ef6acc91d4fcae8da",
+        "title": "fix(macos): satisfy channel config swiftformat",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "apps/macos/Sources/OpenClaw/ChannelConfigForm.swift"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "3a58621e72a53b745859899ae183884a3a910386",
+        "title": "fix(qa): use supported telegram streaming config in rtt",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "scripts/e2e/npm-telegram-rtt-config.mjs",
+          "test/scripts/rtt-harness.test.ts"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "491ce8b7535baadbb73191587453ac1124c9b6c2",
+        "title": "fix(native-pi): pass Telegram images to Ollama (#83516)",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "src/agents/pi-embedded-runner/run/images.test.ts",
+          "src/agents/pi-embedded-runner/run/images.ts",
+          "src/auto-reply/reply/agent-runner-execution.ts",
+          "src/auto-reply/reply/agent-runner.media-paths.test.ts",
+          "src/auto-reply/reply/agent-turn-attachments.ts",
+          "src/auto-reply/reply/history-media.ts"
+        ],
+        "fileCount": 7
+      },
+      {
+        "sha": "5a7d31108ee3413cb5ced78cdefa41f0e020430d",
+        "title": "Load provider owner for Codex harness runtime (#83519)",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "src/agents/harness/runtime-plugin.test.ts",
+          "src/agents/harness/runtime-plugin.ts",
+          "src/commands/agent.test.ts"
+        ],
+        "fileCount": 4
+      },
+      {
+        "sha": "1e5450f23e1c770912bc1eb0b4eaa7b6d1ba94e3",
+        "title": "fix(messages): keep group visible replies automatic by default (#83498)",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "docs/channels/ambient-room-events.md",
+          "docs/channels/discord.md",
+          "docs/channels/group-messages.md",
+          "docs/channels/groups.md",
+          "docs/channels/slack.md",
+          "docs/channels/troubleshooting.md",
+          "docs/gateway/config-channels.md",
+          "docs/gateway/configuration-examples.md",
+          "docs/gateway/configuration.md",
+          "docs/gateway/doctor.md",
+          "src/auto-reply/reply/completion-delivery-policy.test.ts",
+          "src/auto-reply/reply/dispatch-from-config.test.ts",
+          "src/auto-reply/reply/dispatch-from-config.ts",
+          "src/auto-reply/reply/source-reply-delivery-mode.test.ts",
+          "src/auto-reply/reply/source-reply-delivery-mode.ts"
+        ],
+        "fileCount": 23
+      },
+      {
+        "sha": "4b4f71a2ccf38f48fda009231a6c4daa13605689",
+        "title": "fix(ui): polish reasoning labels and settings margins",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift",
+          "ui/src/ui/thinking-labels.ts",
+          "ui/src/ui/views/chat.test.ts",
+          "ui/src/ui/views/sessions.test.ts"
+        ],
+        "fileCount": 5
+      },
+      {
+        "sha": "3553aa3763eba95b4d0d1dc94b67c426657a7730",
+        "title": "fix(tui): bound standalone exit",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "src/cli/program.smoke.test.ts",
+          "src/cli/tui-cli.ts",
+          "src/tui/tui-command-handlers.test.ts",
+          "src/tui/tui-types.ts",
+          "src/tui/tui.test.ts",
+          "src/tui/tui.ts"
+        ],
+        "fileCount": 7
+      },
+      {
+        "sha": "8725364cf0be867b040469dfe68e83a3a0d3436a",
+        "title": "fix(codex): hydrate queued inbound images",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "src/auto-reply/reply/agent-runner-execution.ts",
+          "src/auto-reply/reply/current-turn-images.ts",
+          "src/auto-reply/reply/get-reply-run.media-only.test.ts",
+          "src/auto-reply/reply/get-reply-run.ts"
+        ],
+        "fileCount": 5
+      },
+      {
+        "sha": "a51ee5b02dbd45165ef2c61b4725f192b57dffab",
+        "title": "chore(lint): enable no-underscore-dangle",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".oxlintrc.json",
+          "scripts/lib/local-heavy-check-runtime.mjs",
+          "test/scripts/local-heavy-check-runtime.test.ts",
+          "test/scripts/mantis-publish-pr-evidence.test.ts"
+        ],
+        "fileCount": 4
+      },
+      {
+        "sha": "a792068d9da16d8e7e8c9cde33797c99da8173b6",
+        "title": "fix: harden release stability diagnostics",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "src/commands/models/list.status-command.ts",
+          "src/commands/models/list.status.test.ts",
+          "src/commands/sessions-table.ts",
+          "src/commands/sessions.test.ts",
+          "src/commands/sessions.ts",
+          "src/logging/diagnostic-session-attention.test.ts",
+          "src/logging/diagnostic-session-attention.ts",
+          "src/logging/diagnostic.test.ts",
+          "src/logging/diagnostic.ts"
+        ],
+        "fileCount": 9
+      },
+      {
+        "sha": "6062f90d8b9a88232ae3329b8c14c5ce4715106c",
+        "title": "refactor(models): simplify codex auth route handling",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "src/commands/models/list.status-command.ts"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "54f87184f0c5c38f1434ff80679beaabe5d573fe",
+        "title": "fix: recover stale release-stability stalls and auth loops",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "src/agents/auth-profiles/oauth.openai-codex-refresh-fallback.test.ts",
+          "src/agents/auth-profiles/oauth.ts",
+          "src/agents/auth-profiles/profiles.test.ts",
+          "src/agents/auth-profiles/profiles.ts",
+          "src/logging/diagnostic-run-activity.ts",
+          "src/logging/diagnostic-session-recovery-coordinator.ts",
+          "src/logging/diagnostic-session-recovery.ts",
+          "src/logging/diagnostic-stuck-session-recovery.runtime.test.ts",
+          "src/logging/diagnostic-stuck-session-recovery.runtime.ts",
+          "src/logging/diagnostic.test.ts",
+          "src/logging/diagnostic.ts"
+        ],
+        "fileCount": 11
+      },
+      {
+        "sha": "08ecc518ecb1c3d4054e3e3d1190b43b871cb4cc",
+        "title": "fix: close adversarial release stability gaps",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "src/agents/auth-profiles/oauth.openai-codex-refresh-fallback.test.ts",
+          "src/agents/auth-profiles/oauth.ts",
+          "src/agents/model-auth.ts",
+          "src/commands/models/list.status-command.ts",
+          "src/commands/models/list.status.test.ts",
+          "src/logging/diagnostic.test.ts",
+          "src/logging/diagnostic.ts"
+        ],
+        "fileCount": 7
+      },
+      {
+        "sha": "826eb7c5523fcfcd9cd25f4f5f8a54f741d7782d",
+        "title": "fix: harden release stability recovery (#83503) (thanks @100yenadmin)",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "4e3e659a209a451996b8ee3e25e4a32df0f7e971",
+        "title": "fix: echo xai oauth pkce token fields (#83499)",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "extensions/xai/xai-oauth.test.ts",
+          "extensions/xai/xai-oauth.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "25a4a620d112d1120c11c2e25283e5e9af9cb1c2",
+        "title": "chore: dedupe legacy OAuth sidecar helpers",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "src/agents/auth-profiles/legacy-oauth-sidecar.ts",
+          "src/commands/doctor-auth-oauth-sidecar.ts"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "9eda9d11147d179487e366ea30efca4caca875f1",
+        "title": "docs: clarify autoreview base prompt fallback",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/SKILL.md"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "0f4eccefd4f39e9198fe5319e51752e8c8f1d042",
+        "title": "ci: use node24 artifact actions",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".github/workflows/mantis-discord-smoke.yml",
+          ".github/workflows/mantis-discord-status-reactions.yml",
+          ".github/workflows/mantis-discord-thread-attachment.yml",
+          ".github/workflows/mantis-slack-desktop-smoke.yml",
+          ".github/workflows/mantis-telegram-desktop-proof.yml",
+          ".github/workflows/mantis-telegram-live.yml",
+          ".github/workflows/npm-telegram-beta-e2e.yml",
+          ".github/workflows/openclaw-release-checks.yml",
+          ".github/workflows/opengrep-precise-full.yml",
+          ".github/workflows/opengrep-precise.yml",
+          ".github/workflows/qa-live-transports-convex.yml"
+        ],
+        "fileCount": 11
+      },
+      {
+        "sha": "f85534fc52352f55d6443b90425742c9bee16cad",
+        "title": "chore: auto-run offline package checks in autoreview",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/SKILL.md",
+          ".agents/skills/autoreview/scripts/autoreview"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "53773ccee47217ba5ec52b0233c3dc5785619b2a",
+        "title": "fix: keep autoreview checks offline",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/SKILL.md",
+          ".agents/skills/autoreview/scripts/autoreview"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "3015eeca94b0e9dd94cdf6cc62eec6cea232440a",
+        "title": "fix: preserve autoreview maintainer policy",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/scripts/autoreview"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "b4cf06b0d78d6a108318b3baa620d94dbd8e66fa",
+        "title": "fix: preserve autoreview prompt review status",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/scripts/autoreview"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "f14a0ed6cf341f9a9b9b8e52bcc2e34b4c0b2c76",
+        "title": "fix: run autoreview checks from repo root",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/scripts/autoreview"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "8bfdffad32acd6ac3fea3969bcb5b2e3e9c7c640",
+        "title": "fix: keep autoreview pnpm checks local",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".agents/skills/autoreview/SKILL.md",
+          ".agents/skills/autoreview/scripts/autoreview"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "018a6db1322e66a0190186559c59702f02f9db51",
+        "title": "ci: use node24 artifact action tags",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".github/workflows/mantis-discord-smoke.yml",
+          ".github/workflows/mantis-discord-status-reactions.yml",
+          ".github/workflows/mantis-discord-thread-attachment.yml",
+          ".github/workflows/mantis-slack-desktop-smoke.yml",
+          ".github/workflows/mantis-telegram-desktop-proof.yml",
+          ".github/workflows/mantis-telegram-live.yml",
+          ".github/workflows/npm-telegram-beta-e2e.yml",
+          ".github/workflows/openclaw-release-checks.yml",
+          ".github/workflows/opengrep-precise-full.yml",
+          ".github/workflows/opengrep-precise.yml",
+          ".github/workflows/qa-live-transports-convex.yml"
+        ],
+        "fileCount": 11
+      },
+      {
+        "sha": "6c6bc7fff5878ef9caa6d379cda28b50b86760e6",
+        "title": "ci: update performance artifact action",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          ".github/workflows/openclaw-performance.yml"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "e6e1696c28b2a2f5c1ad01579d0c74bc11027a56",
+        "title": "fix(qqbot): shorten typing keepalive window (#83469)",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "extensions/qqbot/src/engine/gateway/typing-keepalive.test.ts",
+          "extensions/qqbot/src/engine/gateway/typing-keepalive.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "957d50ad496c9a4b56856bee746e25f37590da9d",
+        "title": "fix: hide unsupported video audio refs",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "docs/plugins/manifest.md",
+          "extensions/fal/openclaw.plugin.json",
+          "extensions/openai/openclaw.plugin.json",
+          "src/agents/tools/manifest-capability-availability.ts",
+          "src/agents/tools/video-generate-tool.test.ts",
+          "src/agents/tools/video-generate-tool.ts",
+          "src/plugins/manifest.ts"
+        ],
+        "fileCount": 8
+      },
+      {
+        "sha": "8e9d5c43d227287814f360f4ac5c72014669c49c",
+        "title": "fix(messages): apply tts before message-tool sends (#83543)",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "src/infra/outbound/message-action-runner.core-send.test.ts",
+          "src/infra/outbound/message-action-runner.plugin-dispatch.test.ts",
+          "src/infra/outbound/message-action-runner.ts",
+          "src/infra/outbound/message-action-tts.ts"
+        ],
+        "fileCount": 5
+      },
+      {
+        "sha": "d831b8e7bdb9cb192d3f30c7b8505a295f272c85",
+        "title": "chore: dedupe non-interactive setup prompters",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "src/commands/non-interactive-prompter.ts",
+          "src/commands/onboard-non-interactive.ts",
+          "src/commands/onboard-non-interactive/local/auth-choice.plugin-providers.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "5e33bb6458e8b5f051ba159e7c319fd4af63e706",
+        "title": "fix(gateway): defer update check startup",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "src/gateway/server-startup-post-attach.test.ts",
+          "src/gateway/server-startup-post-attach.ts"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "253b24445ea84f7e921400140fbb014758b349ce",
+        "title": "docs: update changelog for gateway update check (#83520)",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "3a5627d911586b8f2dfc635331209d84fe4989df",
+        "title": "fix(macos): avoid duplicate channel config heading",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "apps/macos/Sources/OpenClaw/ChannelConfigForm.swift"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "76ce72cbe53c200c5b978d82a3508ebcddd8d587",
+        "title": "fix empty cli response handling",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "src/agents/cli-runner.before-agent-reply-cron.test.ts",
+          "src/agents/cli-runner.context-engine.test.ts",
+          "src/agents/cli-runner.ts",
+          "src/agents/pi-embedded-runner/run/auth-profile-failure-policy.test.ts",
+          "src/agents/pi-embedded-runner/run/auth-profile-failure-policy.ts"
+        ],
+        "fileCount": 5
+      },
+      {
+        "sha": "9536d66a355541df0a492f8c70a9fe8bb4ea37de",
+        "title": "add changelog for empty cli response fix",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "419eea24622b8649dd98155734a01f972463e300",
+        "title": "fix(codex): stop forcing code-mode-only turns (#83561)",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "docs/plugins/codex-harness.md",
+          "extensions/codex/src/app-server/run-attempt.test.ts",
+          "extensions/codex/src/app-server/side-question.test.ts",
+          "extensions/codex/src/app-server/thread-lifecycle.test.ts",
+          "extensions/codex/src/app-server/thread-lifecycle.ts"
+        ],
+        "fileCount": 6
+      },
+      {
+        "sha": "0c125be7179bf0caddd973b4b68d28dcf0904572",
+        "title": "fix(android): use realtime relay for talk mode",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "ea3749872ac29e3234163c02bbd26452f1d68019",
+        "title": "fix(android): make realtime talk mode opt-in",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeGatewayConfig.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
+          "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeConfigParsingTest.kt",
+          "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt",
+          "docs/nodes/talk.md",
+          "docs/platforms/android.md"
+        ],
+        "fileCount": 8
+      },
+      {
+        "sha": "5c014184421bdfc7fb157c38b7bf5f45f338aa59",
+        "title": "fix(android): connect operator session without gateway auth",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
+          "apps/android/app/src/test/java/ai/openclaw/app/GatewayBootstrapAuthTest.kt"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "3a2502de92b1700672088101657ab8e9e200aab3",
+        "title": "fix(android): surface voice recognition failures",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceTabScreen.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "ade3a6a3ad1a59e063d746245ef80e575c50562b",
+        "title": "fix(android): gate realtime talk responses",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
+          "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt",
+          "src/gateway/talk-realtime-relay.test.ts",
+          "src/gateway/talk-realtime-relay.ts"
+        ],
+        "fileCount": 4
+      },
+      {
+        "sha": "172eadbb6fa1b9dc20b54b94f1dcb8d286c9391b",
+        "title": "fix(gateway): align transcription relay audio contract",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "src/gateway/server-methods/talk.test.ts",
+          "src/gateway/talk-transcription-relay.test.ts",
+          "src/gateway/talk-transcription-relay.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "22d98b4d527024beecc89695e9692c418301f4f9",
+        "title": "fix(android): stream turn mic through gateway transcription",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/MicCaptureManager.kt"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "c86b89a5fe43637fe54db0b67ef696bc70dff5a3",
+        "title": "test(android): cover turn mic transcription lifecycle",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "apps/android/app/src/test/java/ai/openclaw/app/voice/MicCaptureManagerTest.kt",
+          "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "55f4b66a525139adbf17b83251d8893de160d192",
+        "title": "fix(android): stream realtime mic continuously",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
+          "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "6940a01e74b4c5f356c59a25698fa8ef2aadb301",
+        "title": "feat(android): show realtime talk transcripts",
+        "category": "runtime-lifecycle",
+        "action": "smoke-required",
+        "files": [
+          "apps/android/app/src/main/java/ai/openclaw/app/MainViewModel.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceTabScreen.kt",
+          "apps/android/app/src/main/java/ai/openclaw/app/voice/TalkModeManager.kt",
+          "apps/android/app/src/test/java/ai/openclaw/app/voice/TalkModeManagerTest.kt"
+        ],
+        "fileCount": 5
+      },
+      {
+        "sha": "ff47c516086ab3b2b04089fd4a81c920ba2481a7",
+        "title": "fix: route Telegram topic media completions",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "src/agents/pi-embedded-runner/delivery-evidence.ts",
+          "src/agents/subagent-announce-delivery.test.ts",
+          "src/agents/subagent-announce-delivery.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "53d14d0561f6c81b6fdd5b809316e152ea57d848",
+        "title": "fix: route Telegram topic media completions (#83556) (thanks @fuller-stack-dev)",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "57c952f67985e567e2b70a8eef78718d7d77fe25",
+        "title": "fix: add resilient media processing fallbacks (#83568)",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "extensions/browser/src/browser/screenshot.test.ts",
+          "extensions/browser/src/browser/screenshot.ts",
+          "extensions/browser/src/media/image-ops.ts",
+          "extensions/browser/src/media/media-services.ts",
+          "extensions/browser/src/sdk-setup-tools.ts",
+          "extensions/imessage/src/monitor/media-staging.ts",
+          "extensions/speech-core/src/audio-transcode.test.ts",
+          "extensions/speech-core/src/audio-transcode.ts",
+          "extensions/speech-core/src/tts.test.ts",
+          "extensions/speech-core/src/tts.ts",
+          "package.json",
+          "pnpm-lock.yaml",
+          "src/agents/openclaw-tools.camera.test.ts",
+          "src/agents/tool-images.test.ts",
+          "src/agents/tool-images.ts"
+        ],
+        "fileCount": 37
+      },
+      {
+        "sha": "81f20d84642f81bb08f7535d93b3862ae75ebd24",
+        "title": "feat(admin-http-rpc): allow web QR login methods (#83259)",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "docs/plugins/admin-http-rpc.md",
+          "extensions/admin-http-rpc/src/handler.test.ts",
+          "extensions/admin-http-rpc/src/methods.ts",
+          "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md",
+          "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md",
+          "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md"
+        ],
+        "fileCount": 7
+      },
+      {
+        "sha": "fd8877b5fde3ccdabde766e11ca7940213a69790",
+        "title": "fix(code-mode): honor agent scoped code mode",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "docs/.generated/config-baseline.sha256",
+          "extensions/browser/src/media/image-ops.ts",
+          "src/agents/code-mode.test.ts",
+          "src/agents/code-mode.ts",
+          "src/agents/pi-embedded-runner/openai-stream-wrappers.test.ts",
+          "src/agents/pi-embedded-runner/openai-stream-wrappers.ts",
+          "src/agents/pi-embedded-runner/run/attempt.spawn-workspace.context-engine.test.ts",
+          "src/agents/pi-embedded-runner/run/attempt.spawn-workspace.test-support.ts",
+          "src/agents/pi-embedded-runner/run/attempt.ts",
+          "src/config/schema.help.ts",
+          "src/config/schema.labels.ts",
+          "src/config/types.tools.ts",
+          "src/config/zod-schema.agent-defaults.test.ts",
+          "src/config/zod-schema.agent-runtime.ts",
+          "src/media/image-ops.tempdir.test.ts"
+        ],
+        "fileCount": 16
+      },
+      {
+        "sha": "9fa8b868917ff4f67ae0381f0ebf2330f59b8b50",
+        "title": "fix: harden image metadata fallback (#83579)",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "src/media/image-ops.security.test.ts",
+          "src/media/image-ops.tempdir.test.ts",
+          "src/media/image-ops.ts"
+        ],
+        "fileCount": 4
+      },
+      {
+        "sha": "e3d802a10b15e2e4bfd9994ff32714bc3c0e9b49",
+        "title": "fix(telegram): harden spool timeout recovery",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "extensions/telegram/src/bot-message-dispatch.test.ts",
+          "extensions/telegram/src/sequential-key.ts",
+          "extensions/telegram/src/telegram-ingress-spool.test.ts",
+          "extensions/telegram/src/telegram-ingress-spool.ts",
+          "extensions/telegram/src/telegram-reply-fence.test.ts",
+          "extensions/telegram/src/telegram-reply-fence.ts"
+        ],
+        "fileCount": 7
+      },
+      {
+        "sha": "3bf518e51829223195ac21f7199a039092615a14",
+        "title": "fix(telegram): keep trajectory exports on turn lane",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "extensions/telegram/src/sequential-key.test.ts",
+          "extensions/telegram/src/sequential-key.ts",
+          "extensions/telegram/src/telegram-reply-fence.test.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "1ba9f5ded3258d41464b0ca3bdbdb79412b6acef",
+        "title": "fix(telegram): isolate noninterrupting reply fences",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "extensions/telegram/src/bot-message-dispatch.test.ts",
+          "extensions/telegram/src/bot-message-dispatch.ts",
+          "extensions/telegram/src/telegram-reply-fence.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "25aa72edbd9f80c0a9fd675e2e8072c23dfd54d2",
+        "title": "fix(telegram): stop noninterrupting reply fences",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "extensions/telegram/src/bot-message-dispatch.test.ts",
+          "extensions/telegram/src/telegram-reply-fence.test.ts",
+          "extensions/telegram/src/telegram-reply-fence.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "83b525bc1fc0e2849f9376deb3aca1a68b2ce9cb",
+        "title": "fix(telegram): keep diagnostics on turn lane",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "extensions/telegram/src/sequential-key.test.ts",
+          "extensions/telegram/src/sequential-key.ts",
+          "extensions/telegram/src/telegram-reply-fence.test.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "a2d67959d7e81903409845b48f0fb9243701b0de",
+        "title": "fix(telegram): avoid reply fence spread allocation",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "extensions/telegram/src/telegram-reply-fence.ts"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "1f01ab3a308ebecb17f8fda7c17bbe01b4f56328",
+        "title": "chore(release): bump Android version to 2026.5.18",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "apps/android/app/build.gradle.kts"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "6e8029407919405b125d93dc1cae1e4e74e0ba86",
+        "title": "Fix Discord realtime voice playback stability",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "extensions/discord/src/voice/manager.e2e.test.ts",
+          "extensions/discord/src/voice/realtime.ts",
+          "extensions/openai/realtime-voice-provider.test.ts",
+          "extensions/openai/realtime-voice-provider.ts"
+        ],
+        "fileCount": 4
+      },
+      {
+        "sha": "edd97365f2f07aed6dbc79cf3a62998502c8fac5",
+        "title": "docs: add Discord realtime voice changelog (#80505)",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "d1fa0f96287aa38b214c62e35d10f018a24fd805",
+        "title": "fix(macos): keep settings sidebar visible",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "CHANGELOG.md",
+          "apps/macos/Sources/OpenClaw/SettingsRootView.swift"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "ffae5fa9a7d500f3ce9e1656a26d0ca4cee41c69",
+        "title": "build(release): prepare 2026.5.18 beta 1",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "apps/ios/CHANGELOG.md",
+          "apps/ios/Config/Version.xcconfig",
+          "apps/ios/fastlane/metadata/en-US/release_notes.txt",
+          "apps/ios/version.json",
+          "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+          "docs/.generated/plugin-sdk-api-baseline.sha256",
+          "extensions/acpx/package.json",
+          "extensions/admin-http-rpc/package.json",
+          "extensions/alibaba/package.json",
+          "extensions/amazon-bedrock-mantle/package.json",
+          "extensions/amazon-bedrock/package.json",
+          "extensions/anthropic-vertex/package.json",
+          "extensions/anthropic/package.json",
+          "extensions/arcee/package.json",
+          "extensions/azure-speech/package.json",
+          "extensions/bonjour/package.json"
+        ],
+        "fileCount": 130
+      },
+      {
+        "sha": "fa804dea9a424e630b8567d6b87650d8ef2bea4a",
+        "title": "test(release): expect beta plugin install specs",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "src/commands/doctor/shared/missing-configured-plugin-install.test.ts"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "c3323a31585c9bdc600d00b2d48482629415aa39",
+        "title": "test(release): align channel privacy fixtures",
+        "category": "plugin-loader",
+        "action": "smoke-required",
+        "files": [
+          "extensions/discord/src/monitor/message-handler.process.test.ts",
+          "extensions/slack/src/monitor.tool-result.test.ts",
+          "src/plugins/uninstall.test.ts"
+        ],
+        "fileCount": 3
+      },
+      {
+        "sha": "e750f481f9ee4d1178e9f13ee39f7c17615c74fe",
+        "title": "perf(outbound): avoid target normalizer on exact source matches",
+        "category": "no-direct-impact",
+        "action": "no-direct-impact",
+        "files": [
+          "src/infra/outbound/source-delivery-plan.ts"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "d207951840df017664ac952db27c5d4df92ca0c0",
+        "title": "fix(qa): attribute mock tool errors to matching calls",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "extensions/qa-lab/src/providers/mock-openai/server.test.ts",
+          "extensions/qa-lab/src/providers/mock-openai/server.ts"
+        ],
+        "fileCount": 2
+      },
+      {
+        "sha": "a1cc3727c85beb680a37e2fcf2045f16a1f0de2c",
+        "title": "docs(release): refresh config baseline hash",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "docs/.generated/config-baseline.sha256"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "4eebca1d74b24906e87e33765c8295f96dc3e8c5",
+        "title": "docs(release): restore stable config baseline hash",
+        "category": "config-sdk",
+        "action": "smoke-required",
+        "files": [
+          "docs/.generated/config-baseline.sha256"
+        ],
+        "fileCount": 1
+      },
+      {
+        "sha": "50a2481652b6a62d573ece3cead60400dc77020d",
+        "title": "chore(release): prepare 2026.5.18 stable",
+        "category": "memory-provider",
+        "action": "smoke-required",
+        "files": [
+          "CHANGELOG.md",
+          "extensions/acpx/package.json",
+          "extensions/admin-http-rpc/package.json",
+          "extensions/alibaba/package.json",
+          "extensions/amazon-bedrock-mantle/package.json",
+          "extensions/amazon-bedrock/package.json",
+          "extensions/anthropic-vertex/package.json",
+          "extensions/anthropic/package.json",
+          "extensions/arcee/package.json",
+          "extensions/azure-speech/package.json",
+          "extensions/bonjour/package.json",
+          "extensions/brave/package.json",
+          "extensions/browser/package.json",
+          "extensions/byteplus/package.json",
+          "extensions/canvas/package.json",
+          "extensions/cerebras/package.json"
+        ],
+        "fileCount": 124
+      }
+    ]
+  },
+  "integrationBacklog": [
+    {
+      "feature": "registerMemoryEmbeddingProvider / contracts.memoryEmbeddingProviders",
+      "status": "ready",
+      "value": "high",
+      "risk": "low",
+      "evidence": "PLUR1BUS provider ids visible in runtime inspect; OpenClaw enforces contract ownership without requiring kind:\"memory\"."
+    },
+    {
+      "feature": "session_end shutdown/restart",
+      "status": "feature-flag candidate",
+      "value": "high",
+      "risk": "medium",
+      "evidence": "Useful for final capture flush; needs duplicate-capture guard."
+    },
+    {
+      "feature": "onSessionTranscriptUpdate",
+      "status": "feature-flag candidate",
+      "value": "high",
+      "risk": "medium",
+      "evidence": "Exported via memory host SDK; useful for incremental capture but should remain optional."
+    },
+    {
+      "feature": "runtime.state.openKeyedStore",
+      "status": "blocked-private-surface-for-external-plugin",
+      "value": "medium",
+      "risk": "high",
+      "evidence": "OpenClaw registry throws for non-bundled plugins in this release."
+    },
+    {
+      "feature": "scheduleSessionTurn / cron-backed session actions",
+      "status": "feature-flag candidate",
+      "value": "medium",
+      "risk": "medium",
+      "evidence": "SDK surface exists; useful for Dreaming/maintenance, not needed for compatibility."
+    },
+    {
+      "feature": "openclaw cron run --wait",
+      "status": "ready-for-test-harness",
+      "value": "medium",
+      "risk": "low",
+      "evidence": "Can make future Dreaming tests deterministic."
+    },
+    {
+      "feature": "plugins validate",
+      "status": "not-applicable",
+      "value": "low",
+      "risk": "low",
+      "evidence": "Current CLI documents it for simple tool plugin metadata; PLUR1BUS is a native extension."
+    },
+    {
+      "feature": "doctor --lint / diagnostics",
+      "status": "ready",
+      "value": "medium",
+      "risk": "low",
+      "evidence": "Doctor and security audit surfaces are useful; current deep audit warnings were gateway-auth baseline, not PLUR1BUS."
+    }
+  ],
+  "goNoGo": {
+    "stableCompatibility": "pass",
+    "plur1busBreaking": false,
+    "releaseEligible": true,
+    "notes": [
+      "No OpenClaw 2026.5.18 breaking change found for PLUR1BUS 3.2.2-beta.1.",
+      "Provider-backed memory tool calls were blocked by absent key/local model smoke, not by OpenClaw.",
+      "Safe to prepare final PLUR1BUS 3.2.2 release after version bump and repeat static/pack gates."
+    ],
+    "finalReleaseValidation": "pass"
+  },
+  "finalReleaseValidation": {
+    "version": "3.2.2",
+    "managedNpmPackInstall": "pass",
+    "runtimeInspect": {
+      "status": "loaded",
+      "toolNames": [
+        "memory_recall",
+        "memory_store",
+        "memory_forget",
+        "knowledge_update"
+      ],
+      "hookCount": 4,
+      "commands": [
+        "plur1bus"
+      ],
+      "memoryEmbeddingProviderIds": [
+        "plur1bus-openai",
+        "plur1bus-openai-compatible",
+        "plur1bus-e5-small"
+      ],
+      "contracts": {
+        "memoryEmbeddingProviders": [
+          "plur1bus-openai",
+          "plur1bus-openai-compatible",
+          "plur1bus-e5-small"
+        ],
+        "tools": [
+          "knowledge_update",
+          "memory_forget",
+          "memory_recall",
+          "memory_store"
+        ]
+      }
+    },
+    "pluginsDoctor": "[plugins] memory-lancedb-namespaced: registered (baseDbPath: /var/tmp/openclaw-stable-20260518-plur1bus-v322-5CpvGk/home-final-tarball/.openclaw/memory/lancedb-namespaced)\n[plugins] memory-lancedb-namespaced: enabling autoCapture\nNo plugin issues detected.",
+    "tarball": "cyb3rb1ade-plur1bus-memory-3.2.2.tgz"
+  }
+}
