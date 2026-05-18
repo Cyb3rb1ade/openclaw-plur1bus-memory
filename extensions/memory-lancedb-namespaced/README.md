@@ -3,15 +3,15 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `3.2.2-beta.1` (`3.2.2-beta1` Vorabversion) — OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
+**Aktuelle Version:** `3.2.2` — OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` und `2026.5.18` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
-gegen OpenClaw `2026.5.12` validiert; ältere OpenClaw-Versionen bleiben
+gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
 beim v2.1.x-Zweig.
 
-**Beta16-Kompatibilität:** Ab `3.2.2-beta.1` deklariert PLUR1BUS die vier
+**Beta16/2026.5.18-Kompatibilität:** Ab `3.2.2` deklariert PLUR1BUS die vier
 stabilen Toolnamen zusätzlich in den OpenClaw-Tool-Factory-Options. Damit zeigt
-`plugins inspect --json --runtime` unter OpenClaw `2026.5.16-beta.1` die Tools
+`plugins inspect --json --runtime` unter OpenClaw `2026.5.16-beta.1` und `2026.5.18` die Tools
 `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`
 namentlich an.
 

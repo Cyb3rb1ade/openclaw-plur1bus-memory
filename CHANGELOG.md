@@ -1,13 +1,14 @@
-## [3.2.2-beta.1] - 2026-05-16
+## [3.2.2] - 2026-05-18
 
 ### implemented
 - Added explicit OpenClaw Beta16 tool-factory metadata for the stable PLUR1BUS tools: `memory_recall`, `memory_store`, `memory_forget`, and `knowledge_update`.
-- Verified a fresh isolated OpenClaw `2026.5.16-beta.1` tarball install where `plugins inspect --json --runtime` now reports all four PLUR1BUS tool names.
+- Verified fresh isolated OpenClaw `2026.5.16-beta.1` and `2026.5.18` tarball installs where `plugins inspect --json --runtime` reports all four PLUR1BUS tool names.
 - Kept PLUR1BUS as an augment plugin: no manifest `kind:"memory"`, no `registerMemoryCapability`, and `memory-core` remains the OpenClaw memory slot owner.
 
 ### compatibility
 - OpenClaw Beta16 rejects `plugins.entries.<id>.kind` in user config; PLUR1BUS does not require that key.
 - Manifest `kind` remains unset intentionally because Beta16 treats manifest `kind` as an exclusive slot concept.
+- OpenClaw `2026.5.18` compatibility was validated with managed `npm-pack:` installation; no PLUR1BUS-breaking change was found.
 
 ## [3.2.1] - 2026-05-15
 
