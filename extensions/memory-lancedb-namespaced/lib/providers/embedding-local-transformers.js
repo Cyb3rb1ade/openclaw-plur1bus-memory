@@ -1,16 +1,5 @@
 import { DEFAULT_LOCAL_E5_DIMENSIONS, DEFAULT_LOCAL_E5_MODEL } from "./dimensions.js";
-
-function resolveEnvVars(value) {
-  if (!value) return value;
-  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    if (envVar === "OPENCLAW_HOME" && !process.env.OPENCLAW_HOME) {
-      return `${process.env.HOME || "."}/.openclaw`;
-    }
-    const v = process.env[envVar];
-    if (!v) throw new Error(`Environment variable ${envVar} is not set`);
-    return v.replace(/[\r\n\t\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").trim();
-  });
-}
+import { resolveEnvVars } from "./env.js";
 
 function vectorFromOutput(output) {
   if (output?.data && typeof output.data.length === "number") return Array.from(output.data);
@@ -29,7 +18,7 @@ export class LocalTransformersEmbeddingProvider {
     this.dim = Number(cfg.dimensions || DEFAULT_LOCAL_E5_DIMENSIONS);
     this.queryPrefix = cfg.queryPrefix ?? "query: ";
     this.passagePrefix = cfg.passagePrefix ?? "passage: ";
-    this.cacheDir = cfg.cacheDir ? resolveEnvVars(cfg.cacheDir) : undefined;
+    this.cacheDir = cfg.cacheDir ? resolveEnvVars(cfg.cacheDir, { groups: ["localPath"], label: "local model cacheDir" }) : undefined;
     this._pipeline = null;
   }
 
@@ -81,4 +70,3 @@ export class LocalTransformersEmbeddingProvider {
     return this.embedPassage(text);
   }
 }
-

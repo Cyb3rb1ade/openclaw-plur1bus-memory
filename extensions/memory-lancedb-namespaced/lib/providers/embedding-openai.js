@@ -1,4 +1,5 @@
 import { defaultDimensionForOpenAiModel, isOpenAiEmbeddingModel } from "./dimensions.js";
+import { resolveEnvVars, resolveOptionalEnvVars } from "./env.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,23 +17,6 @@ async function getOpenAI() {
     }
     const m = await import(LEGACY_OPENAI_PATH);
     return m.default;
-  }
-}
-
-function resolveEnvVars(value) {
-  if (!value) return value;
-  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const v = process.env[envVar];
-    if (!v) throw new Error(`Environment variable ${envVar} is not set`);
-    return v.replace(/[\r\n\t\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").trim();
-  });
-}
-
-function resolveOptionalEnvVars(value) {
-  try {
-    return resolveEnvVars(value);
-  } catch (_) {
-    return undefined;
   }
 }
 

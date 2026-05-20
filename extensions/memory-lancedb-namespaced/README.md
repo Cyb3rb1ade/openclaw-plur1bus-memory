@@ -3,13 +3,13 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `3.2.2` — OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` und `2026.5.18` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
+**Aktuelle Version:** `3.2.3` — OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` und `2026.5.18` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
 beim v2.1.x-Zweig.
 
-**Beta16/2026.5.18-Kompatibilität:** Ab `3.2.2` deklariert PLUR1BUS die vier
+**Beta16/2026.5.18-Kompatibilität:** Ab `3.2.3` deklariert PLUR1BUS die vier
 stabilen Toolnamen zusätzlich in den OpenClaw-Tool-Factory-Options. Damit zeigt
 `plugins inspect --json --runtime` unter OpenClaw `2026.5.16-beta.1` und `2026.5.18` die Tools
 `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`
@@ -38,6 +38,7 @@ Registrierung.
 - **Merging** — semantisch ähnliche Memories (Score 0.70–0.94) werden via LLM zusammengeführt
 - **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings nutzen OpenAI/OpenAI-kompatible Provider oder experimentell lokal `intfloat/multilingual-e5-small`; optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
 - **OpenClaw-native Provider-Bridge** — `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` exponieren `plur1bus-openai`, `plur1bus-openai-compatible` und experimental `plur1bus-e5-small`, ohne `kind:"memory"` zu setzen oder die Memory-Capability-API zu nutzen; `memory-core` bleibt Slot-Owner
+- **Secret-Hardening** — die OpenClaw-native Embedding-Provider-Bridge löst `${ENV_VAR}` nur fuer explizite OpenAI/OpenAI-compatible/PLUR1BUS Provider-Variablen und Provider-Header-Praefixe auf; beliebige Env-Reads werden abgelehnt
 - **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei wählbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
 - **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
 - **Schema-Migration** — bestehende DBs erhalten neue Spalten automatisch beim ersten Zugriff

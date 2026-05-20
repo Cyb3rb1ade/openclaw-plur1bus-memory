@@ -85,6 +85,29 @@ test("remote register and create do not require keys; runtime error is clear", a
   );
 });
 
+test("remote secret env expansion is limited to provider allowlist", async () => {
+  const previous = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "allowed-key";
+  try {
+    const [openai] = createOpenClawMemoryEmbeddingProviderAdapters({
+      embedding: { apiKey: "${OPENAI_API_KEY}" },
+    });
+    const result = await openai.create(createOptions());
+    assert.ok(result.provider);
+  } finally {
+    if (previous === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previous;
+  }
+
+  const [blocked] = createOpenClawMemoryEmbeddingProviderAdapters({
+    embedding: { apiKey: "${HOME}" },
+  });
+  await assert.rejects(
+    blocked.create(createOptions()),
+    /Environment variable HOME is not allowed/
+  );
+});
+
 test("remote embedBatch returns exactly one vector per input", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];

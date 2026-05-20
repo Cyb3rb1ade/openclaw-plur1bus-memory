@@ -1,16 +1,5 @@
 import { DEFAULT_LOCAL_RERANKER_MODEL } from "./dimensions.js";
-
-function resolveEnvVars(value) {
-  if (!value) return value;
-  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    if (envVar === "OPENCLAW_HOME" && !process.env.OPENCLAW_HOME) {
-      return `${process.env.HOME || "."}/.openclaw`;
-    }
-    const v = process.env[envVar];
-    if (!v) throw new Error(`Environment variable ${envVar} is not set`);
-    return v.replace(/[\r\n\t\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").trim();
-  });
-}
+import { resolveEnvVars } from "./env.js";
 
 function scoreFromOutput(output) {
   const row = Array.isArray(output) ? output[0] : output;
@@ -25,7 +14,7 @@ export class LocalTransformersRerankerProvider {
   constructor(cfg = {}) {
     this.id = "local-transformers";
     this.model = cfg.model || DEFAULT_LOCAL_RERANKER_MODEL;
-    this.cacheDir = cfg.cacheDir ? resolveEnvVars(cfg.cacheDir) : undefined;
+    this.cacheDir = cfg.cacheDir ? resolveEnvVars(cfg.cacheDir, { groups: ["localPath"], label: "local model cacheDir" }) : undefined;
     this._pipeline = null;
   }
 
@@ -65,4 +54,3 @@ export class LocalTransformersRerankerProvider {
     return scored.sort((a, b) => b.relevance_score - a.relevance_score).slice(0, topN);
   }
 }
-

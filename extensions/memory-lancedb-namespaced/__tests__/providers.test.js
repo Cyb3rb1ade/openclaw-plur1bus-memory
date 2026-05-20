@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "../lib/providers/config-normalize.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { DEFAULT_LOCAL_E5_MODEL, FRESH_OPENAI_DEFAULT_MODEL, LEGACY_DEFAULT_MODEL } from "../lib/providers/dimensions.js";
+import { resolveEnvVars } from "../lib/providers/env.js";
 
 test("embedding config normalizer separates fresh OpenAI default from legacy missing model default", () => {
   const fresh = normalizeEmbeddingConfig({ provider: "openai", apiKey: "${OPENAI_API_KEY}" }, { mode: "fresh" });
@@ -46,3 +47,17 @@ test("local embedding provider is lazy and exposes dimensions before model impor
   assert.equal(provider.dimensions(), 384);
 });
 
+test("provider env resolver rejects unrelated env variables", () => {
+  const previous = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "allowed-key";
+  try {
+    assert.equal(resolveEnvVars("${OPENAI_API_KEY}", { groups: ["openai"] }), "allowed-key");
+  } finally {
+    if (previous === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previous;
+  }
+  assert.throws(
+    () => resolveEnvVars("${HOME}", { groups: ["openai"], label: "test" }),
+    /Environment variable HOME is not allowed/
+  );
+});
