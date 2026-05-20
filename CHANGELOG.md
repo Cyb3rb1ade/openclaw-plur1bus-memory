@@ -1,3 +1,9 @@
+## [3.2.3] - 2026-05-20
+
+### security
+- Hardened the OpenClaw-native memory embedding provider bridge so `${ENV_VAR}` expansion is limited to explicit OpenAI/OpenAI-compatible/PLUR1BUS provider variables and provider header prefixes.
+- Preserved existing literal API key configuration and `${OPENAI_API_KEY}` / `${OPENAI_COMPATIBLE_API_KEY}` deployment patterns while rejecting unrelated environment variables such as `${HOME}`.
+
 ## [3.2.2] - 2026-05-18
 
 ### implemented

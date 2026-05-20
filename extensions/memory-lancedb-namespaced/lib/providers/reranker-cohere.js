@@ -1,13 +1,5 @@
 import { DEFAULT_COHERE_RERANK_MODEL } from "./dimensions.js";
-
-function resolveEnvVars(value) {
-  if (!value) return value;
-  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const v = process.env[envVar];
-    if (!v) throw new Error(`Environment variable ${envVar} is not set`);
-    return v.replace(/[\r\n\t\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").trim();
-  });
-}
+import { resolveEnvVars } from "./env.js";
 
 export class CohereRerankerProvider {
   constructor(cfg = {}) {
@@ -18,7 +10,7 @@ export class CohereRerankerProvider {
 
   async rerank(query, documents, topN) {
     if (!documents || documents.length === 0) return [];
-    const apiKey = resolveEnvVars(this.apiKeyRef);
+    const apiKey = resolveEnvVars(this.apiKeyRef, { groups: ["cohere"], label: "Cohere reranker" });
     const response = await fetch("https://api.cohere.com/v2/rerank", {
       method: "POST",
       headers: {
@@ -41,4 +33,3 @@ export class CohereRerankerProvider {
     return (await response.json()).results;
   }
 }
-

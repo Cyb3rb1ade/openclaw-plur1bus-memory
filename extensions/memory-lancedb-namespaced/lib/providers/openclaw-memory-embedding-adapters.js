@@ -7,6 +7,7 @@ import {
   embeddingDimensionsForModel,
   isOpenAiEmbeddingModel,
 } from "./dimensions.js";
+import { resolveEnvVars } from "./env.js";
 
 export const OPENCLAW_MEMORY_EMBEDDING_PROVIDER_IDS = [
   "plur1bus-openai",
@@ -23,21 +24,12 @@ function sanitizeHeaderValue(value) {
   return String(value).replace(/[\r\n\t\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").trim();
 }
 
-function resolveEnvVars(value) {
-  if (!value) return value;
-  return String(value).replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const v = process.env[envVar];
-    if (!v) throw new Error(`Environment variable ${envVar} is not set`);
-    return sanitizeHeaderValue(v);
-  });
-}
-
 function maybeString(value) {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
 }
 
 function resolveSecretInputString(value, label) {
-  if (typeof value === "string") return resolveEnvVars(value);
+  if (typeof value === "string") return resolveEnvVars(value, { groups: ["openai"], label });
   if (value && typeof value === "object") {
     throw new Error(
       `memory-lancedb-namespaced: ${label} is an unresolved SecretInput reference. ` +
@@ -51,7 +43,7 @@ function resolveHeaders(headers = {}) {
   const out = {};
   for (const [key, value] of Object.entries(headers || {})) {
     const resolved = resolveSecretInputString(value, `remote.headers.${key}`);
-    if (resolved) out[key] = resolved;
+    if (resolved) out[key] = sanitizeHeaderValue(resolved);
   }
   return out;
 }
