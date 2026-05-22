@@ -10,6 +10,7 @@
  *   pending   [agent]            — High-importance Memories nicht in KNOWLEDGE.md
  *   eval      [agent] [mode]     — mode = "raw" (default, nur LanceDB) oder "pipeline" (volle Live-Pipeline mit Canonical/Boost/Dedup/Rerank)
  *   provider-check               — validiert Embedding-Endpoint, Modell, Dim, DB-Dim-Konsistenz
+ *   obsidian                     — validiert PLUR1BUS <-> Obsidian Bridge/Vaults
  *   all                          — alle Checks (kompakt)
  *
  * Beispiele:
@@ -24,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
 import { parseSourceMemoryIds, stripFrontmatter } from "../extensions/memory-lancedb-namespaced/lib/frontmatter.js";
+import { doctorObsidianBridge } from "../extensions/memory-lancedb-namespaced/lib/obsidian-bridge.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "../extensions/memory-lancedb-namespaced/lib/providers/config-normalize.js";
 import { LocalTransformersEmbeddingProvider } from "../extensions/memory-lancedb-namespaced/lib/providers/embedding-local-transformers.js";
 import { LocalTransformersRerankerProvider } from "../extensions/memory-lancedb-namespaced/lib/providers/reranker-local-transformers.js";
@@ -674,23 +676,50 @@ async function cmdAll() {
   await cmdStale([]);
 }
 
+async function cmdObsidian(args) {
+  const cfg = loadConfig();
+  const workspace = args[0] && !args[0].startsWith("--") ? args[0] : null;
+  const asJson = args.includes("--json");
+  const report = await doctorObsidianBridge(cfg.plugin, { workspace });
+  if (asJson) {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log("\n=== Obsidian Bridge Doctor ===\n");
+    console.log(`enabled: ${report.enabled}`);
+    console.log(`dryRun:  ${report.dryRun}`);
+    console.log(`status:  ${report.ok ? "ok" : "needs attention"}`);
+    for (const item of report.reports) {
+      console.log(`\n  ${item.workspace.workspaceId} (${item.workspace.path})`);
+      if (item.issues.length === 0) {
+        console.log("    issues: none");
+        continue;
+      }
+      for (const issue of item.issues) {
+        console.log(`    ${issue.severity}: ${issue.code}${issue.path ? ` ${issue.path}` : ""} - ${issue.message}`);
+      }
+    }
+  }
+  if (!report.ok) process.exitCode = 1;
+}
+
 // ============================================================================
 // Dispatcher
 // ============================================================================
 
 const [, , cmd, ...args] = process.argv;
 
-const commands = { stats: cmdStats, dupes: cmdDupes, stale: cmdStale, orphans: cmdOrphans, pending: cmdPending, eval: cmdEval, "provider-check": cmdProviderCheck, all: cmdAll };
+const commands = { stats: cmdStats, dupes: cmdDupes, stale: cmdStale, orphans: cmdOrphans, pending: cmdPending, eval: cmdEval, "provider-check": cmdProviderCheck, obsidian: cmdObsidian, all: cmdAll };
 
 if (!cmd || !commands[cmd]) {
   console.log("Usage: memory-doctor.mjs <command> [args]\n");
-  console.log("Commands: stats, dupes, stale, orphans, pending, eval, provider-check, all\n");
+  console.log("Commands: stats, dupes, stale, orphans, pending, eval, provider-check, obsidian, all\n");
   console.log("Examples:");
   console.log("  node memory-doctor.mjs stats");
   console.log("  node memory-doctor.mjs dupes bernhardine 0.90  # default 0.85 (Jaccard)");
   console.log("  node memory-doctor.mjs stale 90");
   console.log("  node memory-doctor.mjs eval main          # default 'raw' (Vektorsuche pur)");
   console.log("  node memory-doctor.mjs eval main pipeline # volle Live-Pipeline (Canonical+Boost+Rerank+Dedup)");
+  console.log("  node memory-doctor.mjs obsidian main      # PLUR1BUS <-> Obsidian Bridge");
   process.exit(cmd ? 1 : 0);
 }
 

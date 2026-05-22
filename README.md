@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v3.2.3-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v3.2.3)
+[![Release](https://img.shields.io/badge/release-v3.3.0-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v3.3.0)
 
 ---
 
@@ -14,7 +14,7 @@ PLUR1BUS v3 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `3.2.3`<br>
+**Aktuelle Version:** `3.3.0`<br>
 **Branch:** `main`<br>
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1` und `2026.5.18`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
@@ -158,6 +158,61 @@ ob sie dir oder einem anderen Agenten gehoert. Fuer Besitz und Sichtbarkeit
 gelten `agentId`, `storedBy`, `scope` und der Memory-Namespace.
 ```
 
+## Obsidian Bridge
+
+Ab `3.3.0` kann PLUR1BUS pro Workspace eine Obsidian-kompatible Markdown-
+Oberflaeche verwalten. Obsidian ist dabei nicht die Runtime-Datenbank:
+`memory-core` bleibt Slot-Owner, PLUR1BUS/LanceDB bleibt Recall, Merge, TTL,
+Provenance und Auto-Capture. Die Vaults sind nur sichtbare, editierbare
+Markdown-Projektionen.
+
+Default bleibt sicher aus:
+
+```json
+{
+  "obsidianBridge": {
+    "enabled": false,
+    "dryRun": true,
+    "watch": false,
+    "tombstoneOnDelete": true
+  }
+}
+```
+
+Ziel-Workspaces auf diesem Host:
+
+- Bernd: `/root/.openclaw/workspace`, technischer Namespace `main`
+- Bernhardine: `/root/.openclaw/workspace-bernhardine`
+- Heisenberg: `/root/.openclaw/workspace-heisenberg`
+
+Die Bridge liest nur relevante Markdown-Dateien via `scan`/`watch`, nicht den
+ganzen Vault pro Turn. Auto-Recall kommt weiter aus PLUR1BUS. Relevante
+Obsidian-Eintraege werden nur dann runtime-wirksam, wenn sie Memory-Karten,
+`memory/KNOWLEDGE.md` oder validierte Decisions sind. Freie Notizen bleiben
+suchbare Dateien, aber keine automatische Recall-Wahrheit.
+
+CLI:
+
+```bash
+node scripts/workspace-vault-bridge.mjs init --dry-run
+node scripts/workspace-vault-bridge.mjs init --live
+node scripts/workspace-vault-bridge.mjs scan
+node scripts/workspace-vault-bridge.mjs sync --dry-run
+node scripts/workspace-vault-bridge.mjs doctor
+node scripts/memory-doctor.mjs obsidian
+```
+
+`sync --live` schreibt nicht roh nach LanceDB. Im Plugin-Runtime-Pfad nutzt die
+Bridge den selben Store/Merge/Pending-Pfad wie `memory_store`. Ausserhalb der
+Runtime legt sie `store-queue.jsonl` unter
+`.adaptive-learning/obsidian-bridge/` an. Delete erzeugt Tombstones unter
+`memory/archive/expired`, kein Hard Delete.
+
+Bernds alte `.obsidian` wird beim Live-Init als `.obsidian.legacy-<timestamp>`
+gesichert und danach durch eine frische Minimal-Konfig ersetzt. Rollback:
+`obsidianBridge.enabled=false`, Watcher stoppen, bei Bedarf `.obsidian`
+entfernen und das Legacy-Verzeichnis zurueckbenennen.
+
 ## Konfiguration
 
 Provider-Keys liegen zentral in `openclaw.json`, nicht pro Workspace. OpenAI
@@ -210,7 +265,7 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `3.2.3`:
+Provider-Status in `3.3.0`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
@@ -386,7 +441,7 @@ runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `3.2.3`<br>
+**Current version:** `3.3.0`<br>
 **Branch:** `main`<br>
 **Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, and `2026.5.18`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
@@ -397,7 +452,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `3.2.3`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `3.3.0`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental

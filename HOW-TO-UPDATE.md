@@ -2,8 +2,8 @@
 
 Safe update workflow for PLUR1BUS on OpenClaw.
 
-Current validated target: OpenClaw `2026.5.12` with
-`@cyb3rb1ade/plur1bus-memory@3.2.0`.
+Current validated target: OpenClaw `2026.5.19` with
+`@cyb3rb1ade/plur1bus-memory@3.3.0`.
 
 ## Update Rules
 
@@ -13,6 +13,9 @@ Current validated target: OpenClaw `2026.5.12` with
 - PLUR1BUS must stay an augment plugin: no `kind: "memory"` and no `registerMemoryCapability`.
 - `memory-core` remains the memory slot owner.
 - The first-class plugin evidence is an OpenClaw managed `npm-pack:` install, not a plain archive install.
+- Obsidian bridge stays default-off and dry-run by default. It must never write
+  LanceDB directly; runtime sync uses `memory_store`/`knowledge_update` paths or
+  queues a request under `.adaptive-learning/obsidian-bridge/`.
 
 ## 1. Prepare Isolated Test Base
 
@@ -48,7 +51,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
   bash -lc '
     curl -fsSL --proto "=https" --tlsv1.2 https://openclaw.ai/install-cli.sh \
-      | bash -s -- --prefix "$BASE/prefix" --version 2026.5.12 --no-onboard --json
+      | bash -s -- --prefix "$BASE/prefix" --version 2026.5.19 --no-onboard --json
   '
 ```
 
@@ -69,7 +72,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   "$BASE/prefix/bin/openclaw" --version
 ```
 
-Expected version includes `2026.5.12`.
+Expected version includes `2026.5.19`.
 
 ## 3. Run PLUR1BUS Static Checks
 
@@ -86,7 +89,7 @@ caches.
 
 ## 4. Lane A: Linked Plugin
 
-Profile: `plur1bus-3-2-0-stable-link`
+Profile: `plur1bus-3-3-0-obsidian-link`
 
 Every command must use the full non-root environment:
 
@@ -101,7 +104,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   TMPDIR="$BASE/tmp" \
   NPM_CONFIG_PREFIX="$BASE/npm-global" \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
-  "$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link \
+  "$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link \
     plugins install --link "$BASE/src/openclaw-memory-system/extensions/memory-lancedb-namespaced"
 ```
 
@@ -137,11 +140,11 @@ Set the isolated profile config:
 Then run, again with the same wrapper:
 
 ```bash
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link plugins inspect memory-lancedb-namespaced --json
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link plugins inspect memory-lancedb-namespaced --json --runtime
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link plugins doctor
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link plugins inspect memory-core --json --runtime
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-link capability embedding providers --json
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link plugins inspect memory-lancedb-namespaced --json
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link plugins inspect memory-lancedb-namespaced --json --runtime
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link plugins doctor
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link plugins inspect memory-core --json --runtime
+"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link capability embedding providers --json
 ```
 
 The short commands above are only readable examples. Execute them through
@@ -149,7 +152,7 @@ The short commands above are only readable examples. Execute them through
 
 ## 5. Lane B: Managed npm-pack Install
 
-Profile: `plur1bus-3-2-0-stable-tarball`
+Profile: `plur1bus-3-3-0-obsidian-tarball`
 
 Create the package as `kimi`:
 
@@ -177,8 +180,8 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   TMPDIR="$BASE/tmp" \
   NPM_CONFIG_PREFIX="$BASE/npm-global" \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
-  "$BASE/prefix/bin/openclaw" --profile plur1bus-3-2-0-stable-tarball \
-    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-3.2.0.tgz"
+  "$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-tarball \
+    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-3.3.0.tgz"
 ```
 
 If `npm-pack:<path>` syntax changes, check:
@@ -208,6 +211,13 @@ PLUR1BUS:
   - `plur1bus-openai`
   - `plur1bus-openai-compatible`
   - `plur1bus-e5-small`
+- Obsidian bridge config exists with `enabled:false`, `dryRun:true`,
+  `watch:false`, `tombstoneOnDelete:true`.
+- `node scripts/workspace-vault-bridge.mjs init --dry-run` shows only the three
+  target workspaces: Bernd/main, Bernhardine and Heisenberg.
+- `node scripts/memory-doctor.mjs obsidian` reports no active legacy `.obsidian`
+  after live vault init. Bernd's old `.obsidian` must exist only as
+  `.obsidian.legacy-<timestamp>`.
 
 `memory-core`:
 
@@ -227,12 +237,27 @@ Known blocked smokes:
 - Remote functional memory smokes require a real or deterministic
   OpenAI-compatible test provider.
 
+Obsidian bridge smoke:
+
+```bash
+node --check extensions/memory-lancedb-namespaced/lib/obsidian-bridge.js
+node --check scripts/workspace-vault-bridge.mjs
+node scripts/workspace-vault-bridge.mjs init --dry-run
+node scripts/workspace-vault-bridge.mjs scan
+node scripts/workspace-vault-bridge.mjs sync --dry-run
+node scripts/memory-doctor.mjs obsidian
+```
+
+Do not enable live gateway watch until the dry-run output is clean. Rollback is
+`obsidianBridge.enabled=false`, stop the watcher, and restore Bernd's
+`.obsidian.legacy-<timestamp>` if needed.
+
 ## 7. Upstream Review Gate
 
 For a new OpenClaw target, compare from the last validated tag:
 
 ```bash
-/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.12-beta.8 2026.5.12 --no-block
+/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.18 2026.5.19 --no-block
 ```
 
 ClawSweeper is a gate input, not a substitute for local review. Classify every
