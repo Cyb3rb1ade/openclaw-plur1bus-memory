@@ -76,3 +76,17 @@ test("manifest schema permits local providers and disabled reranker without apiK
   assert.ok(reranker.properties.provider.enum.includes("disabled"));
   assert.ok(reranker.properties.provider.enum.includes("local-transformers"));
 });
+
+test("manifest declares disabled-by-default Obsidian bridge config", () => {
+  const manifest = JSON.parse(readFileSync(resolve(pluginDir, "openclaw.plugin.json"), "utf8"));
+  const bridge = manifest.configSchema.properties.obsidianBridge;
+  assert.equal(manifest.version, "3.3.0");
+  assert.equal(bridge.type, "object");
+  assert.equal(bridge.additionalProperties, false);
+  assert.equal(bridge.properties.enabled.default, false);
+  assert.equal(bridge.properties.dryRun.default, true);
+  assert.ok(bridge.properties.workspaces);
+  assert.ok(bridge.properties.includeGlobs);
+  assert.ok(bridge.properties.ignoreGlobs);
+  assert.ok(bridge.properties.tombstoneOnDelete);
+});

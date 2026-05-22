@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `3.2.3` — OpenClaw-native Memory-Augment-Integration. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` und `2026.5.18` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation und Corpus-/Prompt-Supplements.
+**Aktuelle Version:** `3.3.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS <-> Obsidian Bridge. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` und `2026.5.18` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation, Corpus-/Prompt-Supplements und eine dry-run-default Vault-Sync-Oberflaeche.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -38,6 +38,7 @@ Registrierung.
 - **Merging** — semantisch ähnliche Memories (Score 0.70–0.94) werden via LLM zusammengeführt
 - **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings nutzen OpenAI/OpenAI-kompatible Provider oder experimentell lokal `intfloat/multilingual-e5-small`; optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
 - **OpenClaw-native Provider-Bridge** — `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` exponieren `plur1bus-openai`, `plur1bus-openai-compatible` und experimental `plur1bus-e5-small`, ohne `kind:"memory"` zu setzen oder die Memory-Capability-API zu nutzen; `memory-core` bleibt Slot-Owner
+- **Obsidian Bridge** — optionaler, default-ausgeschalteter Markdown/Vault-Layer pro Workspace; `sync` nutzt Runtime-Callbacks oder Queue-Dateien, nie rohe LanceDB-Writes
 - **Secret-Hardening** — die OpenClaw-native Embedding-Provider-Bridge löst `${ENV_VAR}` nur fuer explizite OpenAI/OpenAI-compatible/PLUR1BUS Provider-Variablen und Provider-Header-Praefixe auf; beliebige Env-Reads werden abgelehnt
 - **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei wählbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
 - **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
@@ -121,6 +122,94 @@ Wird beim `before_prompt_build`-Hook ausgelöst. Injiziert bis zu 5 relevante Me
 Ohne Re-Ranker: direkt Top-5 per Vektor-Score.
 
 Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
+
+---
+
+## PLUR1BUS <-> Obsidian Bridge
+
+Die Bridge macht Obsidian pro Workspace zur sichtbaren, editierbaren Markdown-
+Oberflaeche. PLUR1BUS bleibt die Runtime-Schicht fuer Recall, Merge, TTL,
+Provenance, Auto-Capture und Knowledge-Promotion. `memory-core` bleibt Slot-
+Owner; dieses Plugin setzt weiterhin kein `kind:"memory"`.
+
+Default:
+
+```json
+{
+  "obsidianBridge": {
+    "enabled": false,
+    "dryRun": true,
+    "watch": false,
+    "tombstoneOnDelete": true
+  }
+}
+```
+
+Host-Default-Workspaces:
+
+| Workspace | Pfad | Namespace |
+|-----------|------|-----------|
+| Bernd | `/root/.openclaw/workspace` | `main` |
+| Bernhardine | `/root/.openclaw/workspace-bernhardine` | `bernhardine` |
+| Heisenberg | `/root/.openclaw/workspace-heisenberg` | `heisenberg` |
+
+Vault-Struktur:
+
+- `memory/cards` fuer Memory-Karten
+- `memory/daily`, `memory/dream-diary`, `memory/archive/expired`
+- `decisions`, `people`, `projects`
+
+Memory-Karten brauchen Frontmatter:
+
+```yaml
+---
+plur1bus_type: memory_card
+workspace_id: main
+agent_id: main
+memory_id:
+category: fact
+importance: 0.8
+scope: workspace
+source_kind: obsidian
+sync_status: draft
+content_hash: <sha256-body-hash>
+---
+```
+
+Erlaubte Obsidian-Kartenkategorien sind bewusst nur
+`preference`, `fact`, `decision`, `entity`, `other`. Freie Notizen sind
+Dateien, aber nicht automatisch Recall-relevant. Auto-Recall kommt pro Turn
+weiter aus PLUR1BUS; die Bridge liest nur bei `scan`, `sync` oder `watch` die
+relevanten Markdown-Dateien.
+
+CLI:
+
+```bash
+node scripts/workspace-vault-bridge.mjs init --dry-run
+node scripts/workspace-vault-bridge.mjs init --live
+node scripts/workspace-vault-bridge.mjs scan
+node scripts/workspace-vault-bridge.mjs sync --dry-run
+node scripts/workspace-vault-bridge.mjs doctor
+node scripts/memory-doctor.mjs obsidian
+```
+
+`sync --live` schreibt ausserhalb der OpenClaw-Runtime in
+`.adaptive-learning/obsidian-bridge/store-queue.jsonl`. In der Runtime nutzt
+die Bridge denselben Store/Merge/Pending-Pfad wie `memory_store`. Deletes
+werden als Tombstone oder `memory/archive/expired` abgebildet, nicht als Hard
+Delete.
+
+`memory/KNOWLEDGE.md` bleibt kuratierte Workspace-Wahrheit. Aenderungen daran
+laufen weiter ueber Lock, Backup, Validation und atomaren Rename im
+`knowledge_update`/Maintainer-Pfad. Bridge-Konflikte landen unter
+`.adaptive-learning/obsidian-bridge/conflicts/`.
+
+Bernd-Regel: Eine bereits vorhandene `.obsidian` in
+`/root/.openclaw/workspace` wird bei `init --live` nach
+`.obsidian.legacy-<timestamp>` gesichert und nicht uebernommen.
+
+Rollback: `obsidianBridge.enabled=false`, Watcher stoppen und bei Bedarf die
+frische `.obsidian` durch das Legacy-Verzeichnis ersetzen.
 
 ---
 

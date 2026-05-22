@@ -38,6 +38,7 @@ import { distanceToScore } from "./lib/score.js";
 import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary } from "./lib/text-utils.js";
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory } from "./lib/categorize.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
+import { createObsidianBridgeService } from "./lib/obsidian-bridge.js";
 import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
@@ -894,6 +895,8 @@ const plugin = {
   register(api) {
     const cfg = api.pluginConfig || {};
     registerOpenClawMemoryEmbeddingProviders(api, cfg);
+    const obsidianBridgeCfg = cfg.obsidianBridge || {};
+    const obsidianBridgeEnabled = obsidianBridgeCfg.enabled === true;
 
     const embeddingCfg = cfg.embedding || {};
     const normalizedEmbeddingCfg = normalizeEmbeddingConfig(embeddingCfg, { mode: "existing" });
@@ -1085,6 +1088,102 @@ const plugin = {
     }
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
+
+    async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
+      const storeAgentId = storeCtx.agentId || "default";
+      const storeDb = pool.getDb(storeAgentId);
+      try {
+        const vector = await embeddings.embed(params.text);
+        const category = params.category || categorizeMemory(params.text);
+        const origin = MEMORY_ORIGINS.includes(params.origin) ? params.origin : "dm";
+        const importance = params.importance ?? 0.5;
+        const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
+        const scope = MEMORY_SCOPES.includes(params.scope) ? params.scope : "agent-private";
+        const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
+        const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
+
+        // 1. Duplicate check
+        const existing = await storeDb.findSimilar(vector, params.text, duplicateThreshold);
+        if (existing.length > 0) {
+          if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: existing[0].entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${existing[0].score.toFixed(3)}`, relatedId: existing[0].entry.id });
+          return { content: [{ type: "text", text: `Similar memory already exists: "${existing[0].entry.text}"` }], details: { action: "duplicate", id: existing[0].entry.id } };
+        }
+
+        // 2. Merge check (+ conflict detection for decision category)
+        if (mergingEnabled && mergingLlmCfg) {
+          const mergeCandidate = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+          if (mergeCandidate) {
+            let mergeResult = null;
+            try {
+              mergeResult = await Promise.race([
+                callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
+              ]);
+            } catch (mergeErr) {
+              api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+            }
+            if (category === "decision" && storeCtx.workspaceDir && mergeCandidate.entry.storedBy && mergeCandidate.entry.storedBy !== storeAgentId) {
+              const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
+              appendConflictLog(storeCtx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: storeAgentId, newText: params.text.slice(0, 200), existingMemoryId: mergeCandidate.entry.id, existingAgentId: mergeCandidate.entry.storedBy, existingText: mergeCandidate.entry.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
+            }
+            const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
+            if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
+              await storeDb.delete(mergeCandidate.entry.id);
+              appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
+              const mergedVector = await embeddings.embed(mergeResult.mergedText);
+              const mergedEntry = { id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+              await storeDb.store(mergedEntry);
+              if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
+              if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
+                trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
+              }
+              return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
+            }
+          }
+        } else if (category === "decision" && storeCtx.workspaceDir) {
+          try {
+            const conflictCandidate = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+            if (conflictCandidate && conflictCandidate.entry.storedBy && conflictCandidate.entry.storedBy !== storeAgentId) {
+              appendConflictLog(storeCtx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: storeAgentId, newText: params.text.slice(0, 200), existingMemoryId: conflictCandidate.entry.id, existingAgentId: conflictCandidate.entry.storedBy, existingText: conflictCandidate.entry.text.slice(0, 200), score: conflictCandidate.score, category, mergeDecision: "no_merge_llm_call" });
+            }
+          } catch (_) {}
+        }
+
+        // 3. Normal store
+        const summary = generateSummary(params.text, summaryMaxWords);
+        const entry = { id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+        await storeDb.store(entry);
+        if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
+        if (storeCtx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
+          trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: entry.id, category, importance });
+        }
+        return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id } };
+      } catch (err) {
+        return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
+      }
+    }
+
+    if (obsidianBridgeEnabled) {
+      const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
+        logger: api.logger,
+        memoryStore: async ({ workspace, payload }) => {
+          const result = await storeMemoryFromToolParams({ agentId: workspace.agentId, workspaceDir: workspace.path }, payload);
+          const text = result?.content?.[0]?.text || "";
+          if (text.startsWith("Memory store failed")) throw new Error(text);
+          return result;
+        },
+      });
+      if (obsidianBridgeCfg.watch === true) {
+        if (typeof api.on === "function") {
+          api.on("gateway_start", () => bridgeService.start(), { timeoutMs: 30_000 });
+          api.on("gateway_stop", () => bridgeService.stop(), { timeoutMs: 30_000 });
+        } else if (typeof api.registerService === "function") {
+          api.registerService(bridgeService);
+        }
+      } else {
+        api.logger.info(`plur1bus-obsidian-bridge: configured (watch=false, dryRun=${obsidianBridgeCfg.dryRun !== false})`);
+      }
+    }
 
     if (neoEnabled) {
       if (typeof api.registerMemoryPromptSupplement === "function") {
