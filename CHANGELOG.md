@@ -1,3 +1,36 @@
+## [3.5.0] - 2026-05-23
+
+### Added
+- Added the PLUR1BUS Obsidian Bridge control-room layer for Markdown ReviewBundles, Vault Doctor reports, conflicts, Project Hubs, memory explanations, stale/hygiene/task suggestions, and Morning Review output.
+- Added `/plur1bus obsidian ...` commands for doctor, review prepare/show/approve/reject/snooze/apply, morning-review, conflicts, project-hub, memory explain, weekly, and OpenClaw Cron command printing/install gating.
+- Added a structured, approval-gated ReviewBundle model with stable item IDs, item metadata, preconditions, maintenance review, adversarial review, and apply previews.
+- Added capability-equal agent handling so `main`, `bernhardine`, `heisenberg`, and arbitrary agent IDs receive the same Obsidian Bridge capability set; review profiles are perspectives, not permissions.
+- Added managed Markdown block helpers with stable markers and checksums plus atomic writes under the configured review root.
+
+### Changed
+- Updated package, manifest, lockfile, README, plugin README, and operations docs to PLUR1BUS `3.5.0`.
+- Extended `obsidianBridge` configuration with `mode`, `vaultPath`, `workspaceRoot`, `reviewRoot`, approval/apply gates, `.obsidian` write gating, equal-agent defaults, Morning Review settings, maintenance/adversarial defaults, optional integration flags, and file/item caps.
+- Kept the legacy workspace-vault bridge additive while making runtime sync approval-required by default and `.obsidian` writes explicit via `allowDotObsidianWrite:true`.
+
+### Security
+- Treats all Obsidian note content and retrieved memory as untrusted input, not instructions.
+- Blocks direct `memory/KNOWLEDGE.md` overwrite proposals, assistant-only trusted/global promotion, unsafe scope leaks, path traversal, stale hash apply, and prompt-injection-like note content from automatic apply.
+- Requires explicit approval and immediate revalidation before any memory or knowledge mutation.
+
+### Compatibility
+- PLUR1BUS remains an augment plugin; no manifest `kind:"memory"` and no `registerMemoryCapability`.
+- `memory-core` remains the OpenClaw memory slot owner.
+- Existing `memory_store`, `memory_recall`, `memory_forget`, `knowledge_update`, Auto-Capture, Auto-Recall, Turn Journal, MemoryCandidates, ReactionSignals, BehaviorCards, Embedding Queue, Curation Inbox, Dreaming, scopes, provenance, trust levels, and status machine remain compatible.
+- Existing LanceDB paths, embedding dimensions, and provider configuration are unchanged by the Obsidian Bridge.
+
+### Verification
+- Added Obsidian control-room tests for disabled/missing vault behavior, equal capabilities, review profiles, Morning Review ordering, warning/block handling, revalidation, hash mismatch, path traversal, managed block safety, prompt-injection-like notes, assistant-only promotion, scope leaks, disabled bridge behavior, and `.obsidian` write gating.
+
+### Known limitations
+- Deep maintenance/adversarial paths currently provide Markdown-first safe baselines; broader semantic duplicate checks, archive rotation, and optional Dataview/Bases generation remain future-safe extensions.
+- OpenClaw Cron install is gated and prints the exact command unless a runtime cron API is available and `--force` is supplied.
+- ClawHub/GitHub publishing still depends on local auth and clean release dry-runs.
+
 ## [3.2.3] - 2026-05-20
 
 ### security

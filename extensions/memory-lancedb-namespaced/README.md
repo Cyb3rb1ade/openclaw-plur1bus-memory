@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `3.3.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS <-> Obsidian Bridge. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` und `2026.5.18` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation, Corpus-/Prompt-Supplements und eine dry-run-default Vault-Sync-Oberflaeche.
+**Aktuelle Version:** `3.5.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Bridge als approval-gated Review-/Control-Room-Schicht. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` und `2026.5.18` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation, Corpus-/Prompt-Supplements und eine Markdown-first Vault-Oberflaeche.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -38,7 +38,7 @@ Registrierung.
 - **Merging** — semantisch ähnliche Memories (Score 0.70–0.94) werden via LLM zusammengeführt
 - **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings nutzen OpenAI/OpenAI-kompatible Provider oder experimentell lokal `intfloat/multilingual-e5-small`; optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
 - **OpenClaw-native Provider-Bridge** — `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` exponieren `plur1bus-openai`, `plur1bus-openai-compatible` und experimental `plur1bus-e5-small`, ohne `kind:"memory"` zu setzen oder die Memory-Capability-API zu nutzen; `memory-core` bleibt Slot-Owner
-- **Obsidian Bridge** — optionaler, default-ausgeschalteter Markdown/Vault-Layer pro Workspace; `sync` nutzt Runtime-Callbacks oder Queue-Dateien, nie rohe LanceDB-Writes
+- **Obsidian Bridge** — optionaler, default-ausgeschalteter Markdown/Vault-Layer fuer ReviewBundles, Doctor, Konflikte, Project Hubs, Task-Vorschlaege und Memory-Erklaerungen; Apply ist approval-gated und revalidiert Hashes/Preconditions
 - **Secret-Hardening** — die OpenClaw-native Embedding-Provider-Bridge löst `${ENV_VAR}` nur fuer explizite OpenAI/OpenAI-compatible/PLUR1BUS Provider-Variablen und Provider-Header-Praefixe auf; beliebige Env-Reads werden abgelehnt
 - **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei wählbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
 - **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
@@ -125,12 +125,14 @@ Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
 
 ---
 
-## PLUR1BUS <-> Obsidian Bridge
+## PLUR1BUS Obsidian Bridge
 
-Die Bridge macht Obsidian pro Workspace zur sichtbaren, editierbaren Markdown-
-Oberflaeche. PLUR1BUS bleibt die Runtime-Schicht fuer Recall, Merge, TTL,
-Provenance, Auto-Capture und Knowledge-Promotion. `memory-core` bleibt Slot-
-Owner; dieses Plugin setzt weiterhin kein `kind:"memory"`.
+Die Bridge macht Obsidian zur sichtbaren Review- und Control-Room-Oberflaeche.
+Sie ist optional, default-off und niemals die Quelle der Memory-Wahrheit.
+PLUR1BUS bleibt fuer Recall, Merge, TTL, Provenance, Auto-Capture,
+Knowledge-Promotion und LanceDB verantwortlich. `memory-core` bleibt Slot-
+Owner; dieses Plugin setzt weiterhin kein `kind:"memory"` und ruft keine
+Memory-Capability-Registrierung auf.
 
 Default:
 
@@ -138,78 +140,152 @@ Default:
 {
   "obsidianBridge": {
     "enabled": false,
-    "dryRun": true,
-    "watch": false,
-    "tombstoneOnDelete": true
+    "mode": "augment",
+    "vaultPath": null,
+    "workspaceRoot": null,
+    "reviewRoot": "00-system/plur1bus",
+    "requireUserApproval": true,
+    "applyApprovedOnly": true,
+    "writeManagedBlocks": true,
+    "allowWrite": true,
+    "allowDotObsidianWrite": false,
+    "capabilityPack": "full",
+    "agents": {
+      "include": ["*"],
+      "equalCapabilities": true,
+      "defaultProfiles": {
+        "main": "standard",
+        "bernhardine": "conservative",
+        "heisenberg": "adversarial"
+      }
+    },
+    "morningReview": {
+      "enabled": false,
+      "cron": "0 9 * * *",
+      "timezone": "Europe/Zurich",
+      "delivery": "announce",
+      "session": "isolated",
+      "writeReviewBundle": true,
+      "applyMode": "manual"
+    },
+    "maintenance": {
+      "daily": "light",
+      "weekly": "deep"
+    },
+    "adversarial": {
+      "daily": "light",
+      "weekly": "deep"
+    }
   }
 }
 ```
 
-Host-Default-Workspaces:
+Alle Agenten sind funktional gleich. Unterschiede wie `main=standard`,
+`bernhardine=conservative` oder `heisenberg=adversarial` sind nur Default-
+Profile, keine Rechte. Jeder konfigurierte Agent kann Doctor, ReviewBundle,
+Maintenance, Adversarial Review, Project Hubs, Konflikte, Memory-Erklaerung,
+Hygiene, Task Extraction und approved Apply ausfuehren.
 
-| Workspace | Pfad | Namespace |
-|-----------|------|-----------|
-| Bernd | `/root/.openclaw/workspace` | `main` |
-| Bernhardine | `/root/.openclaw/workspace-bernhardine` | `bernhardine` |
-| Heisenberg | `/root/.openclaw/workspace-heisenberg` | `heisenberg` |
+Die Bridge schreibt nur additive Dateien unter `reviewRoot`:
 
-Vault-Struktur:
+```text
+00-system/plur1bus/
+  README.md
+  dashboards/
+  review-bundles/
+  proposals/
+  doctor/
+  conflicts/
+  memory-explanations/
+  stale-knowledge/
+  project-hubs/
+  tasks/
+  managed-blocks.log.jsonl
+```
 
-- `memory/cards` fuer Memory-Karten
-- `memory/daily`, `memory/dream-diary`, `memory/archive/expired`
-- `decisions`, `people`, `projects`
+Wichtige Commands:
 
-Memory-Karten brauchen Frontmatter:
+```text
+/plur1bus obsidian doctor
+/plur1bus obsidian review prepare
+/plur1bus obsidian review show <bundleId>
+/plur1bus obsidian review approve <bundleId> --items <ids|all|low-risk>
+/plur1bus obsidian review reject <bundleId> --items <ids|all>
+/plur1bus obsidian review snooze <bundleId> --items <ids> --until <date|duration>
+/plur1bus obsidian review apply <bundleId>
+/plur1bus obsidian morning-review
+/plur1bus obsidian conflicts
+/plur1bus obsidian project-hub <topic>
+/plur1bus obsidian memory explain <id>
+/plur1bus obsidian weekly
+/plur1bus obsidian cron print-morning-review
+/plur1bus obsidian cron install-morning-review --force
+```
+
+ReviewBundle-Frontmatter:
 
 ```yaml
 ---
-plur1bus_type: memory_card
-workspace_id: main
-agent_id: main
-memory_id:
-category: fact
-importance: 0.8
-scope: workspace
-source_kind: obsidian
-sync_status: draft
-content_hash: <sha256-body-hash>
+type: plur1bus-review-bundle
+version: 1
+bundleId: rb-YYYY-MM-DD-HHmm
+createdAt: ISO timestamp
+workspaceKey: main
+createdByAgent: main
+status: pending_user_review
+applyMode: approval_required
+reviewProfiles:
+  - standard
+  - maintenance
+  - adversarial
+obsidianBridgeVersion: 3.5.0
 ---
 ```
 
-Erlaubte Obsidian-Kartenkategorien sind bewusst nur
-`preference`, `fact`, `decision`, `entity`, `other`. Freie Notizen sind
-Dateien, aber nicht automatisch Recall-relevant. Auto-Recall kommt pro Turn
-weiter aus PLUR1BUS; die Bridge liest nur bei `scan`, `sync` oder `watch` die
-relevanten Markdown-Dateien.
+`prepare` erzeugt Vorschlaege. `apply` liest das Bundle neu, revalidiert
+Hashes/Preconditions, prueft Scope- und Trust-Regeln und wendet nur explizit
+genehmigte Items an. Eine Obsidian-Checkbox ist nie ausreichend. Assistant-only
+Assertions werden nicht zu trusted/global Memory; `agent_private` leakt nicht
+ohne Genehmigung zu `workspace_shared`, und `workspace_shared` nicht ohne
+explizite globale Freigabe zu `global_user`.
 
-CLI:
+Managed Blocks:
 
-```bash
-node scripts/workspace-vault-bridge.mjs init --dry-run
-node scripts/workspace-vault-bridge.mjs init --live
-node scripts/workspace-vault-bridge.mjs scan
-node scripts/workspace-vault-bridge.mjs sync --dry-run
-node scripts/workspace-vault-bridge.mjs doctor
-node scripts/memory-doctor.mjs obsidian
+```md
+<!-- plur1bus:managed:start id="morning-summary" agent="main" bundle="rb-2026-05-23-0900" hash="sha256:..." -->
+...
+<!-- plur1bus:managed:end -->
 ```
 
-`sync --live` schreibt ausserhalb der OpenClaw-Runtime in
-`.adaptive-learning/obsidian-bridge/store-queue.jsonl`. In der Runtime nutzt
-die Bridge denselben Store/Merge/Pending-Pfad wie `memory_store`. Deletes
-werden als Tombstone oder `memory/archive/expired` abgebildet, nicht als Hard
-Delete.
+Human-Text ausserhalb der Marker bleibt unangetastet. Hash-Mismatches werden
+als Konflikt/Vorschlag behandelt. Pfad-Traversal wird abgelehnt, Schreibpfade
+sind auf den Review-Root begrenzt, `.obsidian` wird nur geschrieben, wenn
+`allowDotObsidianWrite:true` gesetzt ist.
 
-`memory/KNOWLEDGE.md` bleibt kuratierte Workspace-Wahrheit. Aenderungen daran
-laufen weiter ueber Lock, Backup, Validation und atomaren Rename im
-`knowledge_update`/Maintainer-Pfad. Bridge-Konflikte landen unter
-`.adaptive-learning/obsidian-bridge/conflicts/`.
+Morning Review laeuft proposal-only: Snapshot/Lock, `maintenance_light`,
+Change Collection, Proposal Generation, `adversarial_light`, Risk
+Classification, Deduplication, ReviewBundle-Write, User Summary, dann Warten
+auf explizite Freigabe. Empfohlener OpenClaw-Cron:
 
-Bernd-Regel: Eine bereits vorhandene `.obsidian` in
-`/root/.openclaw/workspace` wird bei `init --live` nach
-`.obsidian.legacy-<timestamp>` gesichert und nicht uebernommen.
+```bash
+openclaw cron add \
+  --name "PLUR1BUS Morning Review" \
+  --cron "0 9 * * *" \
+  --tz "Europe/Zurich" \
+  --session isolated \
+  --message "Run /plur1bus obsidian morning-review. Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary." \
+  --announce
+```
 
-Rollback: `obsidianBridge.enabled=false`, Watcher stoppen und bei Bedarf die
-frische `.obsidian` durch das Legacy-Verzeichnis ersetzen.
+Pure Markdown funktioniert ohne Obsidian-Plugins. Dataview/Bases/Tasks koennen
+spaeter nur optional darauf aufsetzen; die Bridge setzt sie nicht voraus.
+
+Failure und Recovery: Wenn Obsidian fehlt, deaktiviert, geloescht oder falsch
+konfiguriert ist, laufen `memory_store`, `memory_recall`, `memory_forget` und
+`knowledge_update` weiter. Recovery ist `obsidianBridge.enabled=false`,
+OpenClaw-Cron deaktivieren/entfernen und bei Bedarf eine vorige
+ClawHub/GitHub-Version installieren. PLUR1BUS-Memory-Daten bleiben
+authoritativ und werden durch das Deaktivieren der Bridge nicht zerstoert.
 
 ---
 

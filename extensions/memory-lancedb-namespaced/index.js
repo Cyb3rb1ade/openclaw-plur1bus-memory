@@ -39,6 +39,7 @@ import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as li
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory } from "./lib/categorize.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { createObsidianBridgeService } from "./lib/obsidian-bridge.js";
+import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
 import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
@@ -1269,6 +1270,18 @@ const plugin = {
             const id = tokens[2] || "";
             const commandStore = getNeoStore({ workspaceDir: commandCtx.workspaceDir, workspaceKey: commandCtx.workspaceKey, agentId: commandCtx.agentId || "command" });
 
+            if (action === "obsidian") {
+              return handleObsidianBridgeCommand(tokens.slice(1), {
+                config: obsidianBridgeCfg,
+                commandCtx,
+                commandStore,
+                findRecord: (recordId) => findNeoRecord(commandStore, recordId),
+                memoryStore: async ({ payload }) => storeMemoryFromToolParams({
+                  agentId: commandCtx.agentId || "command",
+                  workspaceDir: commandCtx.workspaceDir,
+                }, payload),
+              });
+            }
             if (action === "status") return formatJsonCommandResult(summarizeNeoStore(commandStore));
             if (action === "doctor") {
               return formatJsonCommandResult(buildNeoDoctorReport({
@@ -1331,7 +1344,7 @@ const plugin = {
             if (action === "dreaming") {
               return formatJsonCommandResult({ status: "planned", heavyJobCarrier: "OpenClaw-managed agent cron", modes: ["light", "rem", "deep"] });
             }
-            return { text: "Usage: /plur1bus status|doctor|curation <inbox|conflicts|stale|promoted>|memory <origin|explain|promote|demote|prune|tombstone> <id>|behavior <show|candidates|explain|promote|demote|prune> [id]|embeddings status|dreaming status" };
+            return { text: "Usage: /plur1bus status|doctor|curation <inbox|conflicts|stale|promoted>|memory <origin|explain|promote|demote|prune|tombstone> <id>|behavior <show|candidates|explain|promote|demote|prune> [id]|embeddings status|dreaming status|obsidian <doctor|review|morning-review|conflicts|project-hub|memory|weekly|cron>" };
           },
         });
       }

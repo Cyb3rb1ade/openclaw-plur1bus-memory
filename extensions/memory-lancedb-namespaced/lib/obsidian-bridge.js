@@ -197,8 +197,44 @@ export function normalizeObsidianBridgeConfig(raw = {}, options = {}) {
     : DEFAULT_OBSIDIAN_WORKSPACES;
   return {
     enabled: cfg.enabled === true,
+    mode: cfg.mode || "augment",
     dryRun: cfg.dryRun !== false,
     watch: cfg.watch === true,
+    vaultPath: cfg.vaultPath || null,
+    workspaceRoot: cfg.workspaceRoot || null,
+    reviewRoot: cfg.reviewRoot || "00-system/plur1bus",
+    requireUserApproval: cfg.requireUserApproval !== false,
+    applyApprovedOnly: cfg.applyApprovedOnly !== false,
+    writeManagedBlocks: cfg.writeManagedBlocks !== false,
+    allowWrite: cfg.allowWrite !== false,
+    allowDotObsidianWrite: cfg.allowDotObsidianWrite === true,
+    capabilityPack: cfg.capabilityPack || "full",
+    agents: cfg.agents || {
+      include: ["*"],
+      equalCapabilities: true,
+      defaultProfiles: {
+        main: "standard",
+        bernhardine: "conservative",
+        heisenberg: "adversarial",
+      },
+    },
+    morningReview: {
+      enabled: cfg.morningReview?.enabled === true,
+      cron: cfg.morningReview?.cron || "0 9 * * *",
+      timezone: cfg.morningReview?.timezone || "Europe/Zurich",
+      delivery: cfg.morningReview?.delivery || "announce",
+      session: cfg.morningReview?.session || "isolated",
+      writeReviewBundle: cfg.morningReview?.writeReviewBundle !== false,
+      applyMode: cfg.morningReview?.applyMode || "manual",
+    },
+    maintenance: {
+      daily: cfg.maintenance?.daily || "light",
+      weekly: cfg.maintenance?.weekly || "deep",
+    },
+    adversarial: {
+      daily: cfg.adversarial?.daily || "light",
+      weekly: cfg.adversarial?.weekly || "deep",
+    },
     tombstoneOnDelete: cfg.tombstoneOnDelete !== false,
     includeGlobs,
     ignoreGlobs,
@@ -222,6 +258,8 @@ export function discoverObsidianWorkspaces(rawConfig = {}, options = {}) {
         includeGlobs: workspace.includeGlobs || cfg.includeGlobs,
         ignoreGlobs: workspace.ignoreGlobs || cfg.ignoreGlobs,
         tombstoneOnDelete: workspace.tombstoneOnDelete ?? cfg.tombstoneOnDelete,
+        requireUserApproval: workspace.requireUserApproval ?? cfg.requireUserApproval,
+        allowDotObsidianWrite: workspace.allowDotObsidianWrite ?? cfg.allowDotObsidianWrite,
       };
     })
     .filter((workspace) => !filter || workspace.workspaceId === filter || workspace.agentId === filter || workspace.label === filter);
@@ -495,6 +533,7 @@ function hasBridgeMarker(obsidianDir, workspace) {
 
 export function initWorkspace(workspace, options = {}) {
   const dryRun = options.dryRun !== false;
+  const allowDotObsidianWrite = options.allowDotObsidianWrite === true || workspace.allowDotObsidianWrite === true;
   const actions = [];
   const now = new Date();
   const obsidianDir = join(workspace.path, ".obsidian");
@@ -507,19 +546,27 @@ export function initWorkspace(workspace, options = {}) {
     }
   }
 
-  if (existsSync(obsidianDir) && !hasBridgeMarker(obsidianDir, workspace)) {
+  if (!allowDotObsidianWrite) {
+    actions.push({
+      action: "skip_dot_obsidian_write",
+      path: obsidianDir,
+      reason: "obsidianBridge.allowDotObsidianWrite is not true",
+    });
+  } else if (existsSync(obsidianDir) && !hasBridgeMarker(obsidianDir, workspace)) {
     const backup = join(workspace.path, `.obsidian.legacy-${timestampId(now)}`);
     actions.push({ action: dryRun ? "would_backup_legacy_obsidian" : "backup_legacy_obsidian", from: obsidianDir, to: backup });
     if (!dryRun) renameSync(obsidianDir, backup);
   }
 
-  const files = minimalObsidianFiles(workspace);
-  for (const [name, value] of Object.entries(files)) {
-    const target = join(obsidianDir, name);
-    actions.push({ action: dryRun ? "would_write_obsidian_config" : "write_obsidian_config", path: target });
-    if (!dryRun) {
-      ensureDir(obsidianDir);
-      writeFileSync(target, JSON.stringify(value, null, 2) + "\n", "utf8");
+  if (allowDotObsidianWrite) {
+    const files = minimalObsidianFiles(workspace);
+    for (const [name, value] of Object.entries(files)) {
+      const target = join(obsidianDir, name);
+      actions.push({ action: dryRun ? "would_write_obsidian_config" : "write_obsidian_config", path: target });
+      if (!dryRun) {
+        ensureDir(obsidianDir);
+        writeFileSync(target, JSON.stringify(value, null, 2) + "\n", "utf8");
+      }
     }
   }
 
@@ -538,6 +585,7 @@ export function initWorkspace(workspace, options = {}) {
 
 export async function syncWorkspace(workspace, options = {}) {
   const dryRun = options.dryRun !== false;
+  const requireUserApproval = options.requireUserApproval === true || workspace.requireUserApproval === true;
   const tombstoneOnDelete = options.tombstoneOnDelete ?? workspace.tombstoneOnDelete ?? true;
   const scan = scanWorkspace(workspace, options);
   const state = readBridgeState(workspace);
@@ -596,6 +644,30 @@ export async function syncWorkspace(workspace, options = {}) {
       actions.push({ action: "would_memory_store", path: file.relPath, payload });
       continue;
     }
+    if (requireUserApproval) {
+      actions.push({
+        action: "approval_required",
+        path: file.relPath,
+        payload,
+        reason: "Obsidian Bridge v3.5 prepares review items; memory_store is not called without explicit approval.",
+      });
+      state.files[file.relPath] = {
+        kind: file.kind,
+        contentHash: file.contentHash,
+        syncStatus: "pending_user_review",
+        memoryId: file.frontmatter.memory_id || prev?.memoryId || "",
+        updatedAt: new Date().toISOString(),
+      };
+      appendJsonl(paths.syncLog, {
+        event: "memory.approval_required",
+        timestamp: new Date().toISOString(),
+        workspace_id: workspace.workspaceId,
+        agent_id: workspace.agentId,
+        path: file.relPath,
+        content_hash: file.contentHash,
+      });
+      continue;
+    }
 
     let syncStatus = "queued";
     let memoryId = file.frontmatter.memory_id || prev?.memoryId || "";
@@ -652,6 +724,14 @@ export async function syncWorkspace(workspace, options = {}) {
   for (const [relPath, previous] of Object.entries(state.files)) {
     if (seen.has(relPath)) continue;
     if (tombstoneOnDelete && !previous.tombstonedAt) {
+      if (requireUserApproval) {
+        actions.push({
+          action: "approval_required_tombstone",
+          path: relPath,
+          reason: "Deletion/tombstone requires explicit user approval.",
+        });
+        continue;
+      }
       const tombstone = createTombstone(workspace, relPath, previous, { dryRun });
       actions.push(tombstone);
       state.tombstones.push({

@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "3.3.0",
+  "version": "3.5.0",
   "description": "PLUR1BUS neo-arch cognitive memory augment for OpenClaw",
   "type": "module",
   "main": "./index.js",

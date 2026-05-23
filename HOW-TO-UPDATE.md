@@ -3,7 +3,7 @@
 Safe update workflow for PLUR1BUS on OpenClaw.
 
 Current validated target: OpenClaw `2026.5.19` with
-`@cyb3rb1ade/plur1bus-memory@3.3.0`.
+`@cyb3rb1ade/plur1bus-memory@3.5.0`.
 
 ## Update Rules
 
@@ -13,9 +13,10 @@ Current validated target: OpenClaw `2026.5.19` with
 - PLUR1BUS must stay an augment plugin: no `kind: "memory"` and no `registerMemoryCapability`.
 - `memory-core` remains the memory slot owner.
 - The first-class plugin evidence is an OpenClaw managed `npm-pack:` install, not a plain archive install.
-- Obsidian bridge stays default-off and dry-run by default. It must never write
-  LanceDB directly; runtime sync uses `memory_store`/`knowledge_update` paths or
-  queues a request under `.adaptive-learning/obsidian-bridge/`.
+- Obsidian Bridge stays default-off, approval-gated, and augment-only. It must
+  never write LanceDB directly, never overwrite `memory/KNOWLEDGE.md` from
+  Obsidian, and never mutate memory from a ReviewBundle without explicit
+  approval plus immediate revalidation.
 
 ## 1. Prepare Isolated Test Base
 
@@ -181,7 +182,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   NPM_CONFIG_PREFIX="$BASE/npm-global" \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
   "$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-tarball \
-    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-3.3.0.tgz"
+    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-3.5.0.tgz"
 ```
 
 If `npm-pack:<path>` syntax changes, check:
@@ -211,8 +212,10 @@ PLUR1BUS:
   - `plur1bus-openai`
   - `plur1bus-openai-compatible`
   - `plur1bus-e5-small`
-- Obsidian bridge config exists with `enabled:false`, `dryRun:true`,
-  `watch:false`, `tombstoneOnDelete:true`.
+- Obsidian Bridge config exists with `enabled:false`, `mode:"augment"`,
+  `requireUserApproval:true`, `applyApprovedOnly:true`,
+  `allowDotObsidianWrite:false`, `watch:false`, and
+  `tombstoneOnDelete:true`.
 - `node scripts/workspace-vault-bridge.mjs init --dry-run` shows only the three
   target workspaces: Bernd/main, Bernhardine and Heisenberg.
 - `node scripts/memory-doctor.mjs obsidian` reports no active legacy `.obsidian`
@@ -240,17 +243,28 @@ Known blocked smokes:
 Obsidian bridge smoke:
 
 ```bash
+node --check extensions/memory-lancedb-namespaced/lib/obsidian-control-room.js
 node --check extensions/memory-lancedb-namespaced/lib/obsidian-bridge.js
 node --check scripts/workspace-vault-bridge.mjs
+node --test extensions/memory-lancedb-namespaced/__tests__/obsidian-control-room.test.js
 node scripts/workspace-vault-bridge.mjs init --dry-run
 node scripts/workspace-vault-bridge.mjs scan
 node scripts/workspace-vault-bridge.mjs sync --dry-run
 node scripts/memory-doctor.mjs obsidian
 ```
 
-Do not enable live gateway watch until the dry-run output is clean. Rollback is
-`obsidianBridge.enabled=false`, stop the watcher, and restore Bernd's
-`.obsidian.legacy-<timestamp>` if needed.
+Runtime smoke:
+
+```text
+/plur1bus obsidian doctor
+/plur1bus obsidian review prepare
+/plur1bus obsidian cron print-morning-review
+```
+
+Do not enable live gateway watch until the dry-run output is clean and the
+control-room tests pass. Rollback is `obsidianBridge.enabled=false`, stop the
+watcher, remove/disable the OpenClaw Morning Review cron job, and restore the
+previous package/tag if needed. PLUR1BUS memory data remains authoritative.
 
 ## 7. Upstream Review Gate
 

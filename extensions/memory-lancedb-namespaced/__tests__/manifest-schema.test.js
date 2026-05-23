@@ -80,10 +80,16 @@ test("manifest schema permits local providers and disabled reranker without apiK
 test("manifest declares disabled-by-default Obsidian bridge config", () => {
   const manifest = JSON.parse(readFileSync(resolve(pluginDir, "openclaw.plugin.json"), "utf8"));
   const bridge = manifest.configSchema.properties.obsidianBridge;
-  assert.equal(manifest.version, "3.3.0");
+  assert.equal(manifest.version, "3.5.0");
   assert.equal(bridge.type, "object");
   assert.equal(bridge.additionalProperties, false);
   assert.equal(bridge.properties.enabled.default, false);
+  assert.equal(bridge.properties.mode.default, "augment");
+  assert.equal(bridge.properties.requireUserApproval.default, true);
+  assert.equal(bridge.properties.applyApprovedOnly.default, true);
+  assert.equal(bridge.properties.allowDotObsidianWrite.default, false);
+  assert.equal(bridge.properties.agents.properties.equalCapabilities.default, true);
+  assert.equal(bridge.properties.morningReview.properties.timezone.default, "Europe/Zurich");
   assert.equal(bridge.properties.dryRun.default, true);
   assert.ok(bridge.properties.workspaces);
   assert.ok(bridge.properties.includeGlobs);
