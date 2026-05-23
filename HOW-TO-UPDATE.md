@@ -2,21 +2,46 @@
 
 Safe update workflow for PLUR1BUS on OpenClaw.
 
-Current validated target: OpenClaw `2026.5.19` with
-`@cyb3rb1ade/plur1bus-memory@3.5.0`.
+Current repository release target: OpenClaw `2026.5.20` with
+`@cyb3rb1ade/plur1bus-memory@4.0.0`.
+
+Live `~/.openclaw` update record, 2026-05-23:
+
+- Rollback bundle:
+  `/root/.openclaw/backups/update-openclaw-plur1bus/20260523-103836`
+- Installed OpenClaw: `2026.5.20 (e510042)`
+- Installed PLUR1BUS: `@cyb3rb1ade/plur1bus-memory@3.5.0` from archive
+  `cyb3rb1ade-plur1bus-memory-3.5.0.tgz`
+- Preserved invariant: `plugins.slots.memory = "memory-core"`; PLUR1BUS
+  stayed `kind: "extension"` and exposes `memory_recall`, `memory_store`,
+  `memory_forget`, and `knowledge_update`.
+- Verification: config validate, gateway health, plugin inspect/doctor,
+  provider-check, `node --check`, and package tests passed. Deep security
+  audit completed with pre-existing trust/channel warnings and the known
+  PLUR1BUS scanner warning for file-read plus network-send code.
+- Patch status: `apply-media-patch.sh` remains the gateway `ExecStartPre`
+  path and ran on restart; OpenClaw `2026.5.20` intentionally has no
+  version-specific PLUR1BUS compat patch.
 
 ## Update Rules
 
-- Do not update the live OpenClaw instance before an isolated compatibility pass.
+- Do not update the live OpenClaw instance before a backup and compatibility pass.
 - Do not use bare `openclaw` in compatibility lanes; use the exact isolated prefix binary.
 - Do not install OpenClaw with `npm install -g` for compatibility validation.
 - PLUR1BUS must stay an augment plugin: no `kind: "memory"` and no `registerMemoryCapability`.
 - `memory-core` remains the memory slot owner.
 - The first-class plugin evidence is an OpenClaw managed `npm-pack:` install, not a plain archive install.
+- Personal `~/.openclaw` updates must keep version-specific dist patches gated;
+  OpenClaw `2026.5.20` currently uses no dedicated PLUR1BUS compat patch.
+- Preserve local patch edits such as the `gsd/2.77.0` Kimi/Cohere
+  `User-Agent` normalization instead of reverting them to older rollback values.
 - Obsidian Bridge stays default-off, approval-gated, and augment-only. It must
   never write LanceDB directly, never overwrite `memory/KNOWLEDGE.md` from
   Obsidian, and never mutate memory from a ReviewBundle without explicit
   approval plus immediate revalidation.
+- PLUR1BUS/LanceDB remains the authoritative memory system. Obsidian records,
+  dashboards, semantic conflicts, duplicates, provenance graphs, and impact
+  analyses are proposal/control-room artifacts only.
 
 ## 1. Prepare Isolated Test Base
 
@@ -52,7 +77,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
   bash -lc '
     curl -fsSL --proto "=https" --tlsv1.2 https://openclaw.ai/install-cli.sh \
-      | bash -s -- --prefix "$BASE/prefix" --version 2026.5.19 --no-onboard --json
+      | bash -s -- --prefix "$BASE/prefix" --version 2026.5.20 --no-onboard --json
   '
 ```
 
@@ -73,7 +98,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   "$BASE/prefix/bin/openclaw" --version
 ```
 
-Expected version includes `2026.5.19`.
+Expected version includes `2026.5.20`.
 
 ## 3. Run PLUR1BUS Static Checks
 
@@ -90,7 +115,7 @@ caches.
 
 ## 4. Lane A: Linked Plugin
 
-Profile: `plur1bus-3-3-0-obsidian-link`
+Profile: `plur1bus-4-0-0-obsidian-link`
 
 Every command must use the full non-root environment:
 
@@ -105,7 +130,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   TMPDIR="$BASE/tmp" \
   NPM_CONFIG_PREFIX="$BASE/npm-global" \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
-  "$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link \
+  "$BASE/prefix/bin/openclaw" --profile plur1bus-4-0-0-obsidian-link \
     plugins install --link "$BASE/src/openclaw-memory-system/extensions/memory-lancedb-namespaced"
 ```
 
@@ -141,11 +166,11 @@ Set the isolated profile config:
 Then run, again with the same wrapper:
 
 ```bash
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link plugins inspect memory-lancedb-namespaced --json
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link plugins inspect memory-lancedb-namespaced --json --runtime
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link plugins doctor
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link plugins inspect memory-core --json --runtime
-"$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-link capability embedding providers --json
+"$BASE/prefix/bin/openclaw" --profile plur1bus-4-0-0-obsidian-link plugins inspect memory-lancedb-namespaced --json
+"$BASE/prefix/bin/openclaw" --profile plur1bus-4-0-0-obsidian-link plugins inspect memory-lancedb-namespaced --json --runtime
+"$BASE/prefix/bin/openclaw" --profile plur1bus-4-0-0-obsidian-link plugins doctor
+"$BASE/prefix/bin/openclaw" --profile plur1bus-4-0-0-obsidian-link plugins inspect memory-core --json --runtime
+"$BASE/prefix/bin/openclaw" --profile plur1bus-4-0-0-obsidian-link capability embedding providers --json
 ```
 
 The short commands above are only readable examples. Execute them through
@@ -153,7 +178,7 @@ The short commands above are only readable examples. Execute them through
 
 ## 5. Lane B: Managed npm-pack Install
 
-Profile: `plur1bus-3-3-0-obsidian-tarball`
+Profile: `plur1bus-4-0-0-obsidian-tarball`
 
 Create the package as `kimi`:
 
@@ -181,8 +206,8 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   TMPDIR="$BASE/tmp" \
   NPM_CONFIG_PREFIX="$BASE/npm-global" \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
-  "$BASE/prefix/bin/openclaw" --profile plur1bus-3-3-0-obsidian-tarball \
-    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-3.5.0.tgz"
+  "$BASE/prefix/bin/openclaw" --profile plur1bus-4-0-0-obsidian-tarball \
+    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-4.0.0.tgz"
 ```
 
 If `npm-pack:<path>` syntax changes, check:
@@ -271,7 +296,7 @@ previous package/tag if needed. PLUR1BUS memory data remains authoritative.
 For a new OpenClaw target, compare from the last validated tag:
 
 ```bash
-/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.18 2026.5.19 --no-block
+/root/openclaw-memory-system/scripts/clawsweeper-gate.sh 2026.5.19 2026.5.20 --no-block
 ```
 
 ClawSweeper is a gate input, not a substitute for local review. Classify every

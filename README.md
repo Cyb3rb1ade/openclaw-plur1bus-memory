@@ -2,19 +2,19 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v3.5.0-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v3.5.0)
+[![Release](https://img.shields.io/badge/release-v4.0.0-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.0.0)
 
 ---
 
 <a name="deutsch"></a>
 ## Deutsch
 
-PLUR1BUS v3 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
+PLUR1BUS v4 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 `main` läuft als additives Augment-Plugin: `memory-core` bleibt der
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `3.5.0`<br>
+**Aktuelle Version:** `4.0.0`<br>
 **Branch:** `main`<br>
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1` und `2026.5.18`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
@@ -25,7 +25,7 @@ OpenClaw-native Memory-Stack aus `2026.5.12-beta.6` voraus. Ältere OpenClaw
 Versionen werden fuer v3 nicht unterstützt; für diese Installationen bleibt
 PLUR1BUS v2.1.x der kompatible Zweig.
 
-## Was v3 leistet
+## Was v4 leistet
 
 - Store jedes sichtbaren User-Turns, jeder sichtbaren Assistant-Antwort und relevanter sichtbarer Tool-Ergebnisse.
 - Assistant-Antworten werden als Evidence gespeichert, aber nicht als Wahrheit trusted.
@@ -160,13 +160,14 @@ gelten `agentId`, `storedBy`, `scope` und der Memory-Namespace.
 
 ## Obsidian Bridge
 
-Ab `3.5.0` hat PLUR1BUS eine optionale Obsidian-Bridge als Review- und
-Control-Room-Schicht. Sie schreibt Markdown-Artefakte fuer Doctor-Reports,
-ReviewBundles, Konflikte, Project Hubs, Memory-Erklaerungen, Hygiene- und
-Task-Vorschlaege in einen Vault. Sie ist kein zweites Memory-System:
-`memory-core` bleibt Slot-Owner, PLUR1BUS bleibt Augment-Plugin, LanceDB- und
-Provider-Pfade bleiben unveraendert, und `memory/KNOWLEDGE.md` bleibt
-kuratierte Workspace-Wahrheit.
+Ab `4.0.0` hat PLUR1BUS eine optionale Obsidian Living Dashboard-Schicht. Sie
+schreibt Markdown-Artefakte fuer Doctor-Reports, ReviewBundles, kanonische
+Records, Dashboards, Bases, Konflikte, Project Hubs, Memory-Erklaerungen,
+Provenance, Impact-Analysen, Link-Vorschlaege, Hygiene- und Task-Vorschlaege
+in einen Vault. Sie ist kein zweites Memory-System: `memory-core` bleibt
+Slot-Owner, PLUR1BUS bleibt Augment-Plugin, LanceDB- und Provider-Pfade
+bleiben unveraendert, und `memory/KNOWLEDGE.md` bleibt kuratierte
+Workspace-Wahrheit.
 
 Default bleibt sicher aus und approval-gated:
 
@@ -182,6 +183,8 @@ Default bleibt sicher aus und approval-gated:
     "writeManagedBlocks": true,
     "allowWrite": true,
     "allowDotObsidianWrite": false,
+    "sourceOfTruth": "plur1bus-lancedb",
+    "recallAuthority": "lancedb-reranked-vector",
     "capabilityPack": "full",
     "agents": {
       "include": ["*"],
@@ -200,6 +203,20 @@ Default bleibt sicher aus und approval-gated:
       "session": "isolated",
       "writeReviewBundle": true,
       "applyMode": "manual"
+    },
+    "dashboardLayer": {
+      "enabled": true,
+      "records": true,
+      "markdownDashboards": true,
+      "bases": false,
+      "dataview": false,
+      "tasks": false,
+      "autoLinkSuggestions": true
+    },
+    "semanticGraph": {
+      "enabled": true,
+      "proposalOnly": true,
+      "mutateMemory": false
     }
   }
 }
@@ -208,7 +225,8 @@ Default bleibt sicher aus und approval-gated:
 Alle Agenten sind capability-equal. `main`, `bernhardine`, `heisenberg` und
 beliebige weitere Agent-IDs koennen dieselben Bridge-Funktionen ausfuehren.
 Review-Profile (`standard`, `conservative`, `adversarial`, `maintenance`,
-`project_manager`) sind Perspektiven und Defaults, keine Berechtigungen.
+`project_manager`, `semantic_deep`) sind Perspektiven und Defaults, keine
+Berechtigungen.
 
 Slash Commands:
 
@@ -222,9 +240,18 @@ Slash Commands:
 /plur1bus obsidian review apply <bundleId>
 /plur1bus obsidian morning-review
 /plur1bus obsidian conflicts
+/plur1bus obsidian records rebuild
+/plur1bus obsidian dashboards build
+/plur1bus obsidian bases build
+/plur1bus obsidian semantic-conflicts build
+/plur1bus obsidian duplicates scan
+/plur1bus obsidian provenance build
+/plur1bus obsidian impact analyze <memoryId|project|all>
+/plur1bus obsidian links suggest
 /plur1bus obsidian project-hub <topic>
-/plur1bus obsidian memory explain <id>
-/plur1bus obsidian weekly
+/plur1bus obsidian memory explain <id> --deep
+/plur1bus obsidian weekly build
+/plur1bus obsidian soul patch
 /plur1bus obsidian cron print-morning-review
 /plur1bus obsidian cron install-morning-review --force
 ```
@@ -232,7 +259,7 @@ Slash Commands:
 `prepare` ist nicht `apply`. Ein ReviewBundle hat Frontmatter mit
 `type: plur1bus-review-bundle`, `bundleId`, `createdByAgent`, `status:
 pending_user_review`, `applyMode: approval_required`, Review-Profilen und
-`obsidianBridgeVersion: 3.5.0`. Jedes Item hat stabile IDs, Status, Risk,
+`obsidianBridgeVersion: 4.0.0`. Jedes Item hat stabile IDs, Status, Risk,
 Target, Action, Evidence, Preconditions, Maintenance-/Adversarial-Review und
 Apply-Preview. Checkboxen in Obsidian reichen nie fuer Mutation; `apply` liest
 das Bundle neu, revalidiert Hashes/Preconditions und wendet nur explizit
@@ -244,6 +271,8 @@ Der Vault-Teil ist additiv:
 00-system/plur1bus/
   README.md
   dashboards/
+  dashboards/bases/
+  records/
   review-bundles/
   proposals/
   doctor/
@@ -251,6 +280,11 @@ Der Vault-Teil ist additiv:
   memory-explanations/
   stale-knowledge/
   project-hubs/
+  provenance/
+  impact-analysis/
+  semantic-conflicts/
+  duplicate-candidates/
+  weekly/
   tasks/
   managed-blocks.log.jsonl
 ```
@@ -289,6 +323,13 @@ oder ist die Bridge deaktiviert, laufen `memory_store`, `memory_recall`,
 `memory_forget` und `knowledge_update` weiter. Doctor meldet die Bridge-Probleme
 read-only. Recovery: `obsidianBridge.enabled=false`, Morning-Review-Cron
 entfernen/deaktivieren, ggf. vorherige ClawHub/GitHub-Version installieren.
+
+4.0.0-Regel: LanceDB/PLUR1BUS bleibt das fuehrende Memory-System. Auto-Recall
+nutzt weiterhin reranked Vector Recall aus LanceDB und injiziert bis zu 5
+relevante Memories. Obsidian zeigt, erklaert, reviewed, visualisiert, verlinkt
+und schlaegt vor; es ersetzt weder LanceDB Recall noch `memory_store`,
+`memory_recall`, `memory_search` oder `knowledge_update`. `memory_search` ist
+ein Alias fuer denselben PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 ## Konfiguration
 
@@ -342,7 +383,7 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `3.5.0`:
+Provider-Status in `4.0.0`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
@@ -513,12 +554,12 @@ pruned/tombstoned Recall-Leaks und assistant-only Promotion-Leaks.
 <a name="english"></a>
 ## English
 
-PLUR1BUS v3 is an OpenClaw-native cognitive memory layer. The `main` branch
+PLUR1BUS v4 is an OpenClaw-native cognitive memory layer. The `main` branch
 runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `3.5.0`<br>
+**Current version:** `4.0.0`<br>
 **Branch:** `main`<br>
 **Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, and `2026.5.18`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
@@ -529,7 +570,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `3.5.0`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `4.0.0`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental
@@ -543,15 +584,15 @@ provider bridge only expands `${ENV_VAR}` for explicit OpenAI/OpenAI-compatible/
 PLUR1BUS provider variables and provider-header prefixes; unrelated env reads
 such as `${HOME}` are rejected.
 
-Obsidian Bridge in `3.5.0`: optional, disabled by default, and strictly
-approval-gated. It writes Markdown ReviewBundles, doctor reports, conflict
-reports, project hubs, task suggestions, and memory explanation pages under
-`00-system/plur1bus/`. Obsidian is a review/control-room surface, not the
-memory source of truth. All configured agents receive the same bridge
-capabilities; review profiles are perspectives, not permissions. The Morning
-Review command prepares proposals only and is intended for OpenClaw Cron at
-09:00 Europe/Zurich; apply re-reads the bundle, revalidates hashes and
-preconditions, and applies only explicitly approved items.
+Obsidian Bridge in `4.0.0`: optional, disabled by default, and strictly
+approval-gated. It writes Markdown ReviewBundles, canonical records,
+dashboards, optional Bases/Dataview/Tasks output, conflict reports, semantic
+conflict proposals, duplicate candidates, provenance graphs, impact analysis,
+project hubs, task suggestions, link suggestions, SOUL.MD runtime-rule blocks,
+and memory explanation pages under `00-system/plur1bus/`. Obsidian is a
+review/control-room/dashboard surface, not the memory source of truth. LanceDB
+reranked vector recall remains the primary recall path; Obsidian does not
+replace `memory_store`, `memory_recall`, `memory_search`, or `knowledge_update`.
 
 PLUR1BUS `3.0.0-beta.2` and newer requires the OpenClaw-native memory stack
 from OpenClaw `2026.5.12-beta.6` or newer. Existing v2 LanceDB data remains

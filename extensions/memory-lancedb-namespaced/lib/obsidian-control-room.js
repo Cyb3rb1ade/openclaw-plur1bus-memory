@@ -24,7 +24,25 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "3.5.0";
+import { generateBases } from "./obsidian/bases-generator.js";
+import { generateDashboards } from "./obsidian/dashboard-generator.js";
+import { generateTaskSuggestions } from "./obsidian/tasks-generator.js";
+import { generateConflictReport as generateLivingConflictReport } from "./obsidian/conflict-report.js";
+import { buildProjectHub } from "./obsidian/project-hub-builder.js";
+import { buildWeeklySynthesis } from "./obsidian/weekly-synthesis.js";
+import { runMaintenanceDeep as runLivingMaintenanceDeep } from "./obsidian/maintenance-deep.js";
+import { runAdversarialDeep } from "./obsidian/adversarial-deep.js";
+import { buildSemanticConflictGraph } from "./obsidian/semantic-conflict-graph.js";
+import { scanSemanticDuplicates } from "./obsidian/semantic-duplicate-scan.js";
+import { buildProvenanceGraph } from "./obsidian/provenance-graph.js";
+import { analyzeImpact } from "./obsidian/impact-analysis.js";
+import { buildMemoryExplanation } from "./obsidian/memory-explain-builder.js";
+import { generateLinkSuggestions } from "./obsidian/link-suggestions.js";
+import { writeRecords } from "./obsidian/record-writer.js";
+import { buildRecordIndex } from "./obsidian/record-index.js";
+import { patchSoulMd } from "./install/soul-patcher.js";
+
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.0.0";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "00-system/plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -36,6 +54,7 @@ export const REVIEW_PROFILES = Object.freeze([
   "adversarial",
   "maintenance",
   "project_manager",
+  "semantic_deep",
 ]);
 
 export const OBSIDIAN_CAPABILITIES = Object.freeze([
@@ -56,6 +75,14 @@ export const OBSIDIAN_CAPABILITIES = Object.freeze([
   "managed_blocks",
   "dashboards",
   "weekly_synthesis",
+  "canonical_records",
+  "bases_dashboards",
+  "semantic_conflict_graph",
+  "semantic_duplicate_scan",
+  "provenance_graph",
+  "impact_analysis",
+  "link_suggestions",
+  "soul_patch",
 ]);
 
 const REVIEW_DIRECTORIES = Object.freeze([
@@ -69,6 +96,13 @@ const REVIEW_DIRECTORIES = Object.freeze([
   "stale-knowledge",
   "project-hubs",
   "tasks",
+  "records",
+  "dashboards/bases",
+  "semantic-conflicts",
+  "duplicate-candidates",
+  "provenance",
+  "impact-analysis",
+  "weekly",
 ]);
 
 const REVIEW_ITEM_TYPES = new Set([
@@ -270,6 +304,53 @@ export function normalizeObsidianControlRoomConfig(raw = {}, options = {}) {
       dataview: cfg.optionalIntegrations?.dataview === true,
       tasks: cfg.optionalIntegrations?.tasks === true,
       bases: cfg.optionalIntegrations?.bases === true,
+    },
+    sourceOfTruth: cfg.sourceOfTruth || "plur1bus-lancedb",
+    recallAuthority: cfg.recallAuthority || "lancedb-reranked-vector",
+    dashboardLayer: {
+      enabled: cfg.dashboardLayer?.enabled !== false,
+      records: cfg.dashboardLayer?.records !== false,
+      markdownDashboards: cfg.dashboardLayer?.markdownDashboards !== false,
+      bases: cfg.dashboardLayer?.bases === true,
+      dataview: cfg.dashboardLayer?.dataview === true,
+      tasks: cfg.dashboardLayer?.tasks === true,
+      autoLinkSuggestions: cfg.dashboardLayer?.autoLinkSuggestions !== false,
+    },
+    deepMaintenance: {
+      enabled: cfg.deepMaintenance?.enabled !== false,
+      archiveAfterDays: Number(cfg.deepMaintenance?.archiveAfterDays || 30),
+      staleDecisionAfterDays: Number(cfg.deepMaintenance?.staleDecisionAfterDays || 45),
+      semanticDuplicateScan: cfg.deepMaintenance?.semanticDuplicateScan !== false,
+    },
+    adversarialDeep: {
+      enabled: cfg.adversarialDeep?.enabled !== false,
+      semanticContradictionScan: cfg.adversarialDeep?.semanticContradictionScan !== false,
+      evidenceScoring: cfg.adversarialDeep?.evidenceScoring !== false,
+      llmClassifier: cfg.adversarialDeep?.llmClassifier === true,
+    },
+    semanticGraph: {
+      enabled: cfg.semanticGraph?.enabled !== false,
+      proposalOnly: cfg.semanticGraph?.proposalOnly !== false,
+      mutateMemory: false,
+    },
+    provenanceGraph: {
+      enabled: cfg.provenanceGraph?.enabled !== false,
+    },
+    impactAnalysis: {
+      enabled: cfg.impactAnalysis?.enabled !== false,
+      proposalOnly: cfg.impactAnalysis?.proposalOnly !== false,
+    },
+    weekly: {
+      enabled: cfg.weekly?.enabled !== false,
+      archive: cfg.weekly?.archive !== false,
+      trendWindowWeeks: Number(cfg.weekly?.trendWindowWeeks || 4),
+    },
+    soulPatch: {
+      enabled: cfg.soulPatch?.enabled !== false,
+      force: cfg.soulPatch?.force === true,
+      migrateLegacy: cfg.soulPatch?.migrateLegacy === true,
+      createIfMissing: cfg.soulPatch?.createIfMissing !== false,
+      backup: cfg.soulPatch?.backup !== false,
     },
     maxFileBytes: Number(cfg.maxFileBytes || options.maxFileBytes || 256 * 1024),
     maxItems: Number(cfg.maxItems || options.maxItems || 200),
@@ -1397,6 +1478,23 @@ function commandResult(value) {
   return { text: typeof value === "string" ? value : JSON.stringify(value, null, 2) };
 }
 
+function defaultLivingDashboardRecords(agentId, workspaceKey) {
+  const now = nowIso();
+  return [{
+    type: "source",
+    id: `authority-${workspaceKey}`,
+    status: "current",
+    risk: "low",
+    scope: "dashboard_only",
+    trustLevel: "system_declared",
+    origin: "plur1bus",
+    agentId,
+    summary: "PLUR1BUS/LanceDB remains authoritative memory; Obsidian is dashboard, review, visualization, and proposal output only.",
+    createdAt: now,
+    updatedAt: now,
+  }];
+}
+
 export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
   const rawConfig = context.config || {};
   const command = tokens[0] || "doctor";
@@ -1407,18 +1505,53 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
   try {
     if (command === "doctor") return commandResult(runVaultDoctor(rawConfig, { agentId, workspaceKey }));
     if (command === "morning-review") return commandResult(await runMorningReview(rawConfig, { agentId, workspaceKey }));
-    if (command === "weekly") return commandResult(await prepareReviewBundle(rawConfig, { agentId, workspaceKey, reviewProfiles: ["maintenance", "adversarial", "project_manager"] }));
-    if (command === "conflicts") return commandResult(generateConflictReport(rawConfig, { agentId, workspaceKey }));
+    if (command === "records" && sub === "rebuild") {
+      const records = context.records || defaultLivingDashboardRecords(agentId, workspaceKey);
+      return commandResult({ ok: true, written: writeRecords(rawConfig, records, { agentId, workspaceKey }) });
+    }
+    if (command === "dashboards" && sub === "build") return commandResult(generateDashboards(rawConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+    if (command === "bases" && sub === "build") return commandResult(generateBases(rawConfig, { agentId, workspaceKey }));
+    if (command === "dataview" && sub === "build") return commandResult(generateDashboards({ ...rawConfig, optionalIntegrations: { ...(rawConfig.optionalIntegrations || {}), dataview: true } }, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+    if (command === "tasks" && sub === "build") return commandResult(generateTaskSuggestions(rawConfig, context.tasks || [], { agentId, workspaceKey }));
+    if (command === "weekly") {
+      if (sub === "build") return commandResult(buildWeeklySynthesis(rawConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+      return commandResult(await prepareReviewBundle(rawConfig, { agentId, workspaceKey, reviewProfiles: ["maintenance", "adversarial", "project_manager"] }));
+    }
+    if (command === "conflicts") {
+      if (sub === "build") return commandResult(generateLivingConflictReport(rawConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+      return commandResult(generateConflictReport(rawConfig, { agentId, workspaceKey }));
+    }
     if (command === "project-hub") {
-      const topic = tokens.slice(1).join(" ").trim();
+      const topic = tokens.filter((token) => token !== "--refresh").slice(1).join(" ").trim();
       if (!topic) return commandResult("Usage: /plur1bus obsidian project-hub <topic>");
+      if (tokens.includes("--refresh")) return commandResult(buildProjectHub(rawConfig, topic, { agentId, workspaceKey, records: context.records || [] }));
       return commandResult(generateProjectHub(rawConfig, topic, { agentId, workspaceKey }));
     }
     if (command === "memory" && sub === "explain") {
       const id = tokens[2] || "";
       if (!id) return commandResult("Usage: /plur1bus obsidian memory explain <id>");
       const record = typeof context.findRecord === "function" ? context.findRecord(id) : null;
+      if (tokens.includes("--deep")) return commandResult(buildMemoryExplanation(rawConfig, id, { agentId, workspaceKey, findRecord: context.findRecord, records: context.records || [] }));
       return commandResult(writeMemoryExplanation(rawConfig, id, record, { agentId, workspaceKey }));
+    }
+    if (command === "maintenance" && sub === "deep") return commandResult(runLivingMaintenanceDeep(rawConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+    if (command === "adversarial" && sub === "deep") return commandResult(runAdversarialDeep(context.items || [], { agentId, workspaceKey }));
+    if (command === "semantic-conflicts" && sub === "build") return commandResult(buildSemanticConflictGraph(rawConfig, { agentId, workspaceKey, records: context.records || [] }));
+    if (command === "duplicates" && sub === "scan") return commandResult(scanSemanticDuplicates(rawConfig, { agentId, workspaceKey, records: context.records || [] }));
+    if (command === "provenance" && sub === "build") return commandResult(buildProvenanceGraph(rawConfig, { agentId, workspaceKey, records: context.records || [] }));
+    if (command === "impact" && sub === "analyze") return commandResult(analyzeImpact(rawConfig, tokens[2] || "all", { agentId, workspaceKey, records: context.records || [] }));
+    if (command === "links" && sub === "suggest") return commandResult(generateLinkSuggestions(rawConfig, { agentId, workspaceKey, records: buildRecordIndex(rawConfig, { records: context.records || [] }).records }));
+    if (command === "soul" && sub === "patch") {
+      const soulPath = context.soulPath || (context.workspaceDir ? join(context.workspaceDir, "SOUL.MD") : "");
+      if (!soulPath) return commandResult({ ok: false, error: "SOUL.MD path unavailable" });
+      return commandResult(patchSoulMd(soulPath, {
+        version: OBSIDIAN_CONTROL_ROOM_VERSION,
+        force: tokens.includes("--force-soul") || rawConfig.soulPatch?.force === true,
+        migrateLegacy: tokens.includes("--migrate-soul-memory-rules") || rawConfig.soulPatch?.migrateLegacy === true,
+        dryRun: tokens.includes("--dry-run"),
+        createIfMissing: rawConfig.soulPatch?.createIfMissing !== false,
+        backup: rawConfig.soulPatch?.backup !== false,
+      }));
     }
     if (command === "cron") {
       if (sub === "print-morning-review") return commandResult({ command: printMorningReviewCronCommand(rawConfig) });
@@ -1462,7 +1595,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
         }));
       }
     }
-    return commandResult("Usage: /plur1bus obsidian doctor|review <prepare|show|approve|reject|snooze|apply>|morning-review|conflicts|project-hub <topic>|memory explain <id>|weekly|cron <print-morning-review|install-morning-review>");
+    return commandResult("Usage: /plur1bus obsidian doctor|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review>");
   } catch (err) {
     return commandResult({ ok: false, error: String(err?.message || err) });
   }

@@ -56,6 +56,7 @@ test("manifest declares PLUR1BUS memory embedding providers without memory kind"
     "knowledge_update",
     "memory_forget",
     "memory_recall",
+    "memory_search",
     "memory_store",
   ]);
   assert.deepEqual(manifest.contracts.memoryEmbeddingProviders, [
@@ -80,7 +81,7 @@ test("manifest schema permits local providers and disabled reranker without apiK
 test("manifest declares disabled-by-default Obsidian bridge config", () => {
   const manifest = JSON.parse(readFileSync(resolve(pluginDir, "openclaw.plugin.json"), "utf8"));
   const bridge = manifest.configSchema.properties.obsidianBridge;
-  assert.equal(manifest.version, "3.5.0");
+  assert.equal(manifest.version, "4.0.0");
   assert.equal(bridge.type, "object");
   assert.equal(bridge.additionalProperties, false);
   assert.equal(bridge.properties.enabled.default, false);
@@ -88,6 +89,12 @@ test("manifest declares disabled-by-default Obsidian bridge config", () => {
   assert.equal(bridge.properties.requireUserApproval.default, true);
   assert.equal(bridge.properties.applyApprovedOnly.default, true);
   assert.equal(bridge.properties.allowDotObsidianWrite.default, false);
+  assert.equal(bridge.properties.sourceOfTruth.default, "plur1bus-lancedb");
+  assert.equal(bridge.properties.recallAuthority.default, "lancedb-reranked-vector");
+  assert.equal(bridge.properties.semanticGraph.properties.proposalOnly.default, true);
+  assert.equal(bridge.properties.semanticGraph.properties.mutateMemory.default, false);
+  assert.equal(bridge.properties.adversarialDeep.properties.llmClassifier.default, false);
+  assert.ok(bridge.properties.agents.properties.defaultProfiles.additionalProperties.enum.includes("semantic_deep"));
   assert.equal(bridge.properties.agents.properties.equalCapabilities.default, true);
   assert.equal(bridge.properties.morningReview.properties.timezone.default, "Europe/Zurich");
   assert.equal(bridge.properties.dryRun.default, true);

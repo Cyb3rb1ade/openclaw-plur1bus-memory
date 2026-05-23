@@ -98,7 +98,7 @@ test("plugin declares factory tool names for OpenClaw runtime inspect", () => {
     const registered = makeApi(baseConfig(tmp));
     assert.deepEqual(
       registered.tools[0]?.opts?.names,
-      ["memory_recall", "memory_store", "memory_forget", "knowledge_update"],
+      ["memory_recall", "memory_search", "memory_store", "memory_forget", "knowledge_update"],
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });

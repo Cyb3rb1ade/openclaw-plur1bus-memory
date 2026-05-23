@@ -153,7 +153,8 @@ shutil.copy2(config_file, backup)
 if target_base_url:
     provider["baseUrl"] = target_base_url
 if needs_header:
-    headers["User-Agent"] = "claude-code/1.0"
+    # Previous rollback value: claude-code/1.0
+    headers["User-Agent"] = "gsd/2.77.0"
 with open(config_file, "w", encoding="utf-8") as f:
     json.dump(cfg, f, indent=2, ensure_ascii=False)
     f.write("\n")

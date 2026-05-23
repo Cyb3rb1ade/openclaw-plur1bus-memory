@@ -1,3 +1,33 @@
+## [4.0.0] - 2026-05-23
+
+### Added
+- Added the Obsidian Living Dashboard layer: canonical generated records, Markdown dashboards, optional Obsidian Bases, optional Dataview TABLE blocks, optional Tasks-compatible suggestions, enriched Project Hubs, and standalone Weekly Synthesis artifacts.
+- Added proposal-only deep semantics: structural and semantic conflict proposals, duplicate candidates, provenance graph records, impact-analysis records, deep memory explanations, link suggestions, deep maintenance, and adversarial deep review.
+- Added `/plur1bus obsidian ...` commands for records rebuild, dashboard/base/dataview/task builds, weekly build, maintenance/adversarial deep, semantic-conflicts, duplicates, provenance, impact analysis, link suggestions, and SOUL.MD patching.
+- Added `lib/install/soul-patcher.js` for versioned managed SOUL.MD memory-runtime rules.
+
+### Changed
+- Bumped package, manifest, lockfile, README, plugin README, and update docs to PLUR1BUS `4.0.0`.
+- Modularized new Obsidian functionality under `lib/obsidian/` while keeping `obsidian-control-room.js` as the backward-compatible command facade.
+- Extended `obsidianBridge` config with explicit `sourceOfTruth: "plur1bus-lancedb"` and `recallAuthority: "lancedb-reranked-vector"` plus dashboard, semantic, provenance, impact, weekly, and SOUL patch settings.
+
+### Security
+- Preserved the authority boundary: LanceDB/PLUR1BUS remains the leading memory system; Obsidian is dashboard, review, visualization, and proposal output only.
+- Blocks Obsidian-as-authority attempts, direct LanceDB mutation attempts, direct `KNOWLEDGE.md` overwrite attempts, unsafe scope promotions, and assistant-only trusted/global promotion in adversarial deep review.
+- Semantic conflict, duplicate, provenance, impact, link, and task outputs are proposal-only and do not mutate memory.
+
+### Compatibility
+- `memory-core` remains the memory slot owner.
+- PLUR1BUS remains an augment plugin; no manifest `kind:"memory"` and no `registerMemoryCapability`.
+- Existing `memory_store`, `memory_recall`, `memory_search`, `memory_forget`, `knowledge_update`, Auto-Recall, Auto-Capture, LanceDB paths, provider IDs, scopes, provenance, trust levels, and KNOWLEDGE.md semantics remain compatible.
+
+### Verification
+- Added 4.0.0 Living Dashboard tests covering generated records, Bases, dashboards, Tasks, Project Hub managed-block preservation, Weekly Synthesis, Deep Maintenance, Adversarial Deep, semantic conflicts, duplicates, provenance, impact analysis, deep memory explain, link suggestions, SOUL.MD patching, and command routing.
+
+### Known limitations
+- Deep semantic classification is structural/local by default. Optional LLM-assisted contradiction classification remains config-gated and disabled by default.
+- Generated Obsidian artifacts are not authoritative memory and should be reviewed through PLUR1BUS approval flows before any mutation.
+
 ## [3.5.0] - 2026-05-23
 
 ### Added

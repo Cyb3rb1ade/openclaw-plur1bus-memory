@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `3.5.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Bridge als approval-gated Review-/Control-Room-Schicht. Die Kompatibilität umfasst stabile Tool-Contracts fuer `memory_recall`, `memory_store`, `memory_forget` und `knowledge_update`, OpenClaw `2026.5.16-beta.1` und `2026.5.18` Runtime-Inspect-kompatible Tool-Factory-Namen, die optionale OpenClaw-native Embedding-Provider-Bridge fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`, Hook-basiertes Auto-Capture/Auto-Recall, Turn Journal, MemoryCandidates, Origin/Trust-Metadaten, BehaviorCards, Curation, Corpus-/Prompt-Supplements und eine Markdown-first Vault-Oberflaeche.
+**Aktuelle Version:** `4.0.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht mit ReviewBundles, kanonischen Records, Dashboards, Bases, semantischen Konfliktvorschlaegen, Duplicate Candidates, Provenance Graph, Impact Analysis, Link Suggestions, SOUL.MD-Regeln und approval-gated Apply. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -127,7 +127,7 @@ Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
 
 ## PLUR1BUS Obsidian Bridge
 
-Die Bridge macht Obsidian zur sichtbaren Review- und Control-Room-Oberflaeche.
+Die Bridge macht Obsidian zur sichtbaren Review-, Dashboard- und Control-Room-Oberflaeche.
 Sie ist optional, default-off und niemals die Quelle der Memory-Wahrheit.
 PLUR1BUS bleibt fuer Recall, Merge, TTL, Provenance, Auto-Capture,
 Knowledge-Promotion und LanceDB verantwortlich. `memory-core` bleibt Slot-
@@ -149,6 +149,8 @@ Default:
     "writeManagedBlocks": true,
     "allowWrite": true,
     "allowDotObsidianWrite": false,
+    "sourceOfTruth": "plur1bus-lancedb",
+    "recallAuthority": "lancedb-reranked-vector",
     "capabilityPack": "full",
     "agents": {
       "include": ["*"],
@@ -175,6 +177,20 @@ Default:
     "adversarial": {
       "daily": "light",
       "weekly": "deep"
+    },
+    "dashboardLayer": {
+      "enabled": true,
+      "records": true,
+      "markdownDashboards": true,
+      "bases": false,
+      "dataview": false,
+      "tasks": false,
+      "autoLinkSuggestions": true
+    },
+    "semanticGraph": {
+      "enabled": true,
+      "proposalOnly": true,
+      "mutateMemory": false
     }
   }
 }
@@ -192,6 +208,8 @@ Die Bridge schreibt nur additive Dateien unter `reviewRoot`:
 00-system/plur1bus/
   README.md
   dashboards/
+  dashboards/bases/
+  records/
   review-bundles/
   proposals/
   doctor/
@@ -199,6 +217,11 @@ Die Bridge schreibt nur additive Dateien unter `reviewRoot`:
   memory-explanations/
   stale-knowledge/
   project-hubs/
+  provenance/
+  impact-analysis/
+  semantic-conflicts/
+  duplicate-candidates/
+  weekly/
   tasks/
   managed-blocks.log.jsonl
 ```
@@ -215,9 +238,18 @@ Wichtige Commands:
 /plur1bus obsidian review apply <bundleId>
 /plur1bus obsidian morning-review
 /plur1bus obsidian conflicts
+/plur1bus obsidian records rebuild
+/plur1bus obsidian dashboards build
+/plur1bus obsidian bases build
+/plur1bus obsidian semantic-conflicts build
+/plur1bus obsidian duplicates scan
+/plur1bus obsidian provenance build
+/plur1bus obsidian impact analyze <memoryId|project|all>
+/plur1bus obsidian links suggest
 /plur1bus obsidian project-hub <topic>
-/plur1bus obsidian memory explain <id>
-/plur1bus obsidian weekly
+/plur1bus obsidian memory explain <id> --deep
+/plur1bus obsidian weekly build
+/plur1bus obsidian soul patch
 /plur1bus obsidian cron print-morning-review
 /plur1bus obsidian cron install-morning-review --force
 ```
@@ -238,7 +270,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 3.5.0
+obsidianBridgeVersion: 4.0.0
 ---
 ```
 
@@ -277,8 +309,9 @@ openclaw cron add \
   --announce
 ```
 
-Pure Markdown funktioniert ohne Obsidian-Plugins. Dataview/Bases/Tasks koennen
-spaeter nur optional darauf aufsetzen; die Bridge setzt sie nicht voraus.
+Pure Markdown funktioniert ohne Obsidian-Plugins. Dataview/Bases/Tasks sind
+optional und default-aus. Semantische Konflikte, Duplikate, Provenance, Impact
+Analysis und Link Suggestions sind Vorschlaege/Dashboards, keine Memory-Wahrheit.
 
 Failure und Recovery: Wenn Obsidian fehlt, deaktiviert, geloescht oder falsch
 konfiguriert ist, laufen `memory_store`, `memory_recall`, `memory_forget` und

@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "Memory (LanceDB, per-Agent)",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory and OpenClaw-native turn journal, provenance, curation, and recall.",
-  "version": "3.5.0",
+  "version": "4.0.0",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -13,6 +13,7 @@
       "knowledge_update",
       "memory_forget",
       "memory_recall",
+      "memory_search",
       "memory_store"
     ]
   },
@@ -208,7 +209,7 @@
           },
           "threshold": {
             "type": "number",
-            "default": 0.70
+            "default": 0.7
           },
           "model": {
             "type": "string"
@@ -288,7 +289,7 @@
           },
           "canonicalMinScore": {
             "type": "number",
-            "default": 0.30
+            "default": 0.3
           },
           "canonicalMaxItems": {
             "type": "number",
@@ -306,15 +307,23 @@
           },
           "mode": {
             "type": "string",
-            "enum": ["augment"],
+            "enum": [
+              "augment"
+            ],
             "default": "augment"
           },
           "vaultPath": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "default": null
           },
           "workspaceRoot": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "default": null
           },
           "reviewRoot": {
@@ -343,7 +352,9 @@
           },
           "capabilityPack": {
             "type": "string",
-            "enum": ["full"],
+            "enum": [
+              "full"
+            ],
             "default": "full"
           },
           "agents": {
@@ -355,7 +366,9 @@
                 "items": {
                   "type": "string"
                 },
-                "default": ["*"]
+                "default": [
+                  "*"
+                ]
               },
               "equalCapabilities": {
                 "type": "boolean",
@@ -365,7 +378,14 @@
                 "type": "object",
                 "additionalProperties": {
                   "type": "string",
-                  "enum": ["standard", "conservative", "adversarial", "maintenance", "project_manager"]
+                  "enum": [
+                    "standard",
+                    "conservative",
+                    "adversarial",
+                    "maintenance",
+                    "project_manager",
+                    "semantic_deep"
+                  ]
                 },
                 "default": {
                   "main": "standard",
@@ -393,12 +413,18 @@
               },
               "delivery": {
                 "type": "string",
-                "enum": ["announce", "silent"],
+                "enum": [
+                  "announce",
+                  "silent"
+                ],
                 "default": "announce"
               },
               "session": {
                 "type": "string",
-                "enum": ["isolated", "current"],
+                "enum": [
+                  "isolated",
+                  "current"
+                ],
                 "default": "isolated"
               },
               "writeReviewBundle": {
@@ -407,7 +433,9 @@
               },
               "applyMode": {
                 "type": "string",
-                "enum": ["manual"],
+                "enum": [
+                  "manual"
+                ],
                 "default": "manual"
               }
             }
@@ -418,12 +446,16 @@
             "properties": {
               "daily": {
                 "type": "string",
-                "enum": ["light"],
+                "enum": [
+                  "light"
+                ],
                 "default": "light"
               },
               "weekly": {
                 "type": "string",
-                "enum": ["deep"],
+                "enum": [
+                  "deep"
+                ],
                 "default": "deep"
               }
             }
@@ -434,12 +466,16 @@
             "properties": {
               "daily": {
                 "type": "string",
-                "enum": ["light"],
+                "enum": [
+                  "light"
+                ],
                 "default": "light"
               },
               "weekly": {
                 "type": "string",
-                "enum": ["deep"],
+                "enum": [
+                  "deep"
+                ],
                 "default": "deep"
               }
             }
@@ -550,6 +586,184 @@
           "tombstoneOnDelete": {
             "type": "boolean",
             "default": true
+          },
+          "sourceOfTruth": {
+            "type": "string",
+            "enum": [
+              "plur1bus-lancedb"
+            ],
+            "default": "plur1bus-lancedb"
+          },
+          "recallAuthority": {
+            "type": "string",
+            "enum": [
+              "lancedb-reranked-vector"
+            ],
+            "default": "lancedb-reranked-vector"
+          },
+          "dashboardLayer": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "records": {
+                "type": "boolean",
+                "default": true
+              },
+              "markdownDashboards": {
+                "type": "boolean",
+                "default": true
+              },
+              "bases": {
+                "type": "boolean",
+                "default": false
+              },
+              "dataview": {
+                "type": "boolean",
+                "default": false
+              },
+              "tasks": {
+                "type": "boolean",
+                "default": false
+              },
+              "autoLinkSuggestions": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "deepMaintenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "archiveAfterDays": {
+                "type": "number",
+                "default": 30
+              },
+              "staleDecisionAfterDays": {
+                "type": "number",
+                "default": 45
+              },
+              "semanticDuplicateScan": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "adversarialDeep": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "semanticContradictionScan": {
+                "type": "boolean",
+                "default": true
+              },
+              "evidenceScoring": {
+                "type": "boolean",
+                "default": true
+              },
+              "llmClassifier": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "semanticGraph": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "proposalOnly": {
+                "type": "boolean",
+                "default": true
+              },
+              "mutateMemory": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "provenanceGraph": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "impactAnalysis": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "proposalOnly": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "weekly": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "archive": {
+                "type": "boolean",
+                "default": true
+              },
+              "trendWindowWeeks": {
+                "type": "number",
+                "default": 4
+              }
+            }
+          },
+          "soulPatch": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "force": {
+                "type": "boolean",
+                "default": false
+              },
+              "migrateLegacy": {
+                "type": "boolean",
+                "default": false
+              },
+              "createIfMissing": {
+                "type": "boolean",
+                "default": true
+              },
+              "backup": {
+                "type": "boolean",
+                "default": true
+              }
+            }
           }
         }
       }

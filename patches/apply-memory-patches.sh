@@ -8,6 +8,13 @@
 # 19) plur1bus-user OpenClaw compatibility hotfixes
 # 20) bundled-runtime-deps race guard: skip npm installs when all packages are
 #     already semver-satisfied, even if plugin install manifests differ
+#
+# 2026-05-23 harmonization:
+# - OpenClaw 2026.5.20 intentionally has no dedicated version-specific
+#   PLUR1BUS compat patch. The dispatcher below must skip it unless a future
+#   audited patch is added.
+# - Keep the local Kimi/Cohere User-Agent normalization at gsd/2.77.0. The
+#   older claude-code/1.0 value is documented only as rollback context.
 
 set -u
 
@@ -75,7 +82,8 @@ new = (
     '\t\t\ttry {\n'
     '\t\t\t\tconst __cr = await fetch("https://api.cohere.com/v2/rerank", {\n'
     '\t\t\t\t\tmethod: "POST",\n'
-    '\t\t\t\t\theaders: { "Authorization": `Bearer ${__cohereKey}`, "Content-Type": "application/json", "User-Agent": "claude-code/1.0" },\n'
+    # Previous rollback value in injected code: claude-code/1.0
+    '\t\t\t\t\theaders: { "Authorization": `Bearer ${__cohereKey}`, "Content-Type": "application/json", "User-Agent": "gsd/2.77.0" },\n'
     '\t\t\t\t\tbody: JSON.stringify({ model: "rerank-v3.5", query: cleaned, documents: merged.map(r => r.snippet || ""), top_n: Math.min(merged.length, maxResults * 2), return_documents: false }),\n'
     '\t\t\t\t\tsignal: AbortSignal.timeout(8000)\n'
     '\t\t\t\t});\n'

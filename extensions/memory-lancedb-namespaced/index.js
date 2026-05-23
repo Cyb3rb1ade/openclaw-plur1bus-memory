@@ -1274,7 +1274,12 @@ const plugin = {
               return handleObsidianBridgeCommand(tokens.slice(1), {
                 config: obsidianBridgeCfg,
                 commandCtx,
+                workspaceDir: commandCtx.workspaceDir,
                 commandStore,
+                records: [
+                  ...commandStore.readCandidates(500).map((record) => ({ ...record, type: "memory_candidate", id: record.id, summary: record.statement || record.summary || record.text || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
+                  ...commandStore.readBehaviorCards(200).map((record) => ({ ...record, type: "source", id: record.id, summary: record.statement || record.summary || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
+                ],
                 findRecord: (recordId) => findNeoRecord(commandStore, recordId),
                 memoryStore: async ({ payload }) => storeMemoryFromToolParams({
                   agentId: commandCtx.agentId || "command",
@@ -1553,8 +1558,7 @@ const plugin = {
       const agentId = ctx.agentId;
       const db = pool.getDb(agentId);
 
-      return [
-        {
+      const recallTool = {
           name: "memory_recall",
           label: "Memory Recall",
           description: "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
@@ -1613,7 +1617,17 @@ const plugin = {
               return { content: [{ type: "text", text: `Memory recall failed: ${String(err)}` }] };
             }
           },
-        },
+        };
+      const searchTool = {
+        ...recallTool,
+        name: "memory_search",
+        label: "Memory Search",
+        description: "Alias for memory_recall. Uses the same PLUR1BUS LanceDB vector search and reranked recall pipeline; Obsidian records are not a recall authority.",
+      };
+
+      return [
+        recallTool,
+        searchTool,
         {
           name: "memory_store",
           label: "Memory Store",
@@ -1910,7 +1924,7 @@ const plugin = {
         },
       ];
     }, {
-      names: ["memory_recall", "memory_store", "memory_forget", "knowledge_update"],
+      names: ["memory_recall", "memory_search", "memory_store", "memory_forget", "knowledge_update"],
     });
 
     // ========================================================================
