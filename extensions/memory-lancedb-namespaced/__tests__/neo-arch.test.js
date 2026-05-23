@@ -1,16 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildNeoDoctorReport,
+  buildNeoWorkspaceAliases,
   captureNeoFromAgentEnd,
   createNeoStore,
   createTurnEvent,
   escapeMemoryText,
   findLatestNeoRecord,
   formatNeoRecallContext,
+  migrateNeoWorkspaces,
   memoryCandidatesFromTurns,
   reactionSignalsFromTurns,
   routeNeoRecall,
@@ -165,6 +167,91 @@ test("workspaceKeyFromContext resolves explicit values, session mappings, basena
   try {
     mkdirSync(join(tmp, "workspaces", "only-one"), { recursive: true });
     assert.equal(workspaceKeyFromContext({}, { rootDir: tmp }), "only-one");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("workspaceKeyFromContext maps configured workspace paths to canonical keys", () => {
+  const aliases = buildNeoWorkspaceAliases({
+    obsidianBridge: {
+      workspaces: [
+        { workspace_id: "main", agent_id: "main", path: "~/.openclaw/workspace", label: "Bernd" },
+        { workspace_id: "bernhardine", agent_id: "bernhardine", path: "~/.openclaw/workspace-bernhardine", label: "Bernhardine" },
+        { workspace_id: "heisenberg", agent_id: "heisenberg", path: "~/.openclaw/workspace-heisenberg", label: "Heisenberg" },
+      ],
+    },
+  });
+
+  assert.equal(workspaceKeyFromContext({ workspaceDir: "~/.openclaw/workspace" }, { workspaceAliases: aliases }), "main");
+  assert.equal(workspaceKeyFromContext({ workspaceDir: "~/.openclaw/workspace-bernhardine" }, { workspaceAliases: aliases }), "bernhardine");
+  assert.equal(workspaceKeyFromContext({ workspaceDir: "~/.openclaw/workspace-heisenberg" }, { workspaceAliases: aliases }), "heisenberg");
+  assert.equal(workspaceKeyFromContext({ workspaceKey: "workspace" }, { workspaceAliases: aliases }), "workspace");
+  assert.equal(workspaceKeyFromContext({ workspaceDir: "/tmp/custom-workspace" }, { workspaceAliases: { paths: [], aliases: [] } }), "custom-workspace");
+});
+
+test("migrateNeoWorkspaces dry-run merges legacy JSONL without touching legacy files", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-neo-migrate-"));
+  try {
+    const root = join(tmp, "_neo");
+    const legacy = join(root, "workspaces", "workspace");
+    const canonical = join(root, "workspaces", "main");
+    mkdirSync(legacy, { recursive: true });
+    mkdirSync(canonical, { recursive: true });
+    const legacyPath = join(legacy, "behavior-cards.jsonl");
+    const canonicalPath = join(canonical, "behavior-cards.jsonl");
+    const legacyText = [
+      JSON.stringify({ id: "dupe", workspaceKey: "workspace", statement: "legacy duplicate" }),
+      JSON.stringify({ id: "legacy-only", workspaceKey: "workspace", statement: "legacy only" }),
+      "{not json",
+      "",
+    ].join("\n");
+    writeFileSync(legacyPath, legacyText, "utf8");
+    writeFileSync(canonicalPath, `${JSON.stringify({ id: "dupe", workspaceKey: "main", statement: "canonical wins" })}\n`, "utf8");
+
+    const report = migrateNeoWorkspaces(root, { dryRun: true, verbose: true });
+    assert.equal(report.ok, true);
+    assert.equal(report.recordsScanned, 2);
+    assert.equal(report.recordsCopied, 1);
+    assert.equal(report.duplicatesSkipped, 1);
+    assert.equal(report.invalidRecordsFound, 1);
+    assert.ok(report.filesWouldWrite.includes(canonicalPath));
+    assert.equal(readFileSync(legacyPath, "utf8"), legacyText);
+    assert.equal(readFileSync(canonicalPath, "utf8").includes("legacy-only"), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("migrateNeoWorkspaces apply requires a fresh backup and preserves canonical ids", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-neo-migrate-apply-"));
+  try {
+    const root = join(tmp, "_neo");
+    const legacy = join(root, "workspaces", "workspace-bernhardine");
+    const canonical = join(root, "workspaces", "bernhardine");
+    const backupDir = join(tmp, "backup");
+    mkdirSync(legacy, { recursive: true });
+    mkdirSync(canonical, { recursive: true });
+    mkdirSync(backupDir, { recursive: true });
+    const legacyPath = join(legacy, "memory-candidates.jsonl");
+    const canonicalPath = join(canonical, "memory-candidates.jsonl");
+    writeFileSync(legacyPath, `${JSON.stringify({ id: "shared", workspaceKey: "workspace-bernhardine", statement: "legacy" })}\n${JSON.stringify({ id: "new", workspaceKey: "workspace-bernhardine", statement: "new" })}\n`, "utf8");
+    writeFileSync(canonicalPath, `${JSON.stringify({ id: "shared", workspaceKey: "bernhardine", statement: "canonical" })}\n`, "utf8");
+
+    const blocked = migrateNeoWorkspaces(root, { dryRun: false });
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.error, /backup/i);
+
+    const report = migrateNeoWorkspaces(root, { dryRun: false, backupDir });
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.filesWritten, [canonicalPath]);
+    assert.equal(readFileSync(legacyPath, "utf8").includes("legacyWorkspaceKey"), false);
+    const migrated = readFileSync(canonicalPath, "utf8").trim().split(/\n/).map(line => JSON.parse(line));
+    assert.equal(migrated.length, 2);
+    assert.equal(migrated.find(record => record.id === "shared").statement, "canonical");
+    assert.equal(migrated.find(record => record.id === "new").workspaceKey, "bernhardine");
+    assert.equal(migrated.find(record => record.id === "new").legacyWorkspaceKey, "workspace-bernhardine");
+    assert.ok(existsSync(legacyPath));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

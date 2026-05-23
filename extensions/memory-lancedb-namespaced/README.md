@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.0.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht mit ReviewBundles, kanonischen Records, Dashboards, Bases, semantischen Konfliktvorschlaegen, Duplicate Candidates, Provenance Graph, Impact Analysis, Link Suggestions, SOUL.MD-Regeln und approval-gated Apply. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.0.1` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Diese Korrektur harmonisiert Workspace Cards: Bernd/main, Bernhardine/bernhardine und Heisenberg/heisenberg schreiben kanonisch, waehrend alte `_neo/workspaces/workspace*` Daten als Legacy-Aliase lesbar bleiben. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -270,7 +270,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.0.0
+obsidianBridgeVersion: 4.0.1
 ---
 ```
 

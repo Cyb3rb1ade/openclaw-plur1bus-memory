@@ -10,6 +10,7 @@ import {
   applyApprovedReviewBundle,
   buildManagedBlock,
   getObsidianCapabilityPack,
+  handleObsidianBridgeCommand,
   normalizeObsidianControlRoomConfig,
   prepareReviewBundle,
   replaceManagedBlock,
@@ -310,6 +311,46 @@ test("no .obsidian write occurs unless explicitly configured", () => {
     assert.equal(existsSync(join(vault, ".obsidian")), false);
     initWorkspace(workspace, { dryRun: false, allowDotObsidianWrite: true });
     assert.equal(existsSync(join(vault, ".obsidian/plur1bus-bridge.json")), true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian init workspaces command creates required directories idempotently", async () => {
+  const { tmp } = makeVault();
+  try {
+    const main = join(tmp, "workspace");
+    const bernhardine = join(tmp, "workspace-bernhardine");
+    const heisenberg = join(tmp, "workspace-heisenberg");
+    const cfg = {
+      enabled: true,
+      dryRun: false,
+      workspaces: [
+        { workspace_id: "main", agent_id: "main", path: main, label: "Bernd" },
+        { workspace_id: "bernhardine", agent_id: "bernhardine", path: bernhardine, label: "Bernhardine" },
+        { workspace_id: "heisenberg", agent_id: "heisenberg", path: heisenberg, label: "Heisenberg" },
+      ],
+    };
+    mkdirSync(main, { recursive: true });
+    mkdirSync(bernhardine, { recursive: true });
+    mkdirSync(heisenberg, { recursive: true });
+
+    const result = await handleObsidianBridgeCommand(["init", "workspaces", "--verbose"], { config: cfg });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.workspaces, 3);
+    for (const dir of [main, bernhardine, heisenberg]) {
+      assert.equal(existsSync(join(dir, "memory/cards")), true);
+      assert.equal(existsSync(join(dir, "memory/daily")), true);
+      assert.equal(existsSync(join(dir, "memory/archive/expired")), true);
+      assert.equal(existsSync(join(dir, "decisions")), true);
+      assert.equal(existsSync(join(dir, "people")), true);
+      assert.equal(existsSync(join(dir, "projects")), true);
+    }
+
+    const second = await handleObsidianBridgeCommand(["init", "workspaces", "--verbose"], { config: cfg });
+    const secondParsed = JSON.parse(second.text);
+    assert.equal(secondParsed.results.every((workspace) => workspace.actions.every((action) => action.action === "skip_dot_obsidian_write")), true);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

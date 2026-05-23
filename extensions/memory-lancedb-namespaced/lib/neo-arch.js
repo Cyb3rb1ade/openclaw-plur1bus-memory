@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 export const NEO_CATEGORIES = [
   "project_fact",
@@ -57,6 +58,33 @@ export const NEO_TRUST_LEVELS = [
 
 export const NEO_SCOPES = ["agent_private", "workspace_shared", "global_user"];
 export const NEO_STATUSES = ["candidate", "active", "promoted", "demoted", "conflict", "pruned", "tombstoned"];
+export const DEFAULT_NEO_WORKSPACE_MAPPINGS = Object.freeze([
+  {
+    workspaceKey: "main",
+    paths: ["~/.openclaw/workspace"],
+    aliases: ["main", "bernd", "workspace"],
+    legacyKeys: ["workspace"],
+  },
+  {
+    workspaceKey: "bernhardine",
+    paths: ["~/.openclaw/workspace-bernhardine"],
+    aliases: ["bernhardine", "workspace-bernhardine"],
+    legacyKeys: ["workspace-bernhardine"],
+  },
+  {
+    workspaceKey: "heisenberg",
+    paths: ["~/.openclaw/workspace-heisenberg"],
+    aliases: ["heisenberg", "workspace-heisenberg"],
+    legacyKeys: ["workspace-heisenberg"],
+  },
+]);
+export const NEO_JSONL_FILES = Object.freeze([
+  "turn-journal.jsonl",
+  "memory-candidates.jsonl",
+  "reaction-ledger.jsonl",
+  "behavior-cards.jsonl",
+  "embedding-queue.jsonl",
+]);
 
 export const NEO_RECALL_LANES = [
   "recent_turns",
@@ -87,6 +115,164 @@ function firstString(...values) {
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return "";
+}
+
+function expandHomePath(value) {
+  const s = String(value || "");
+  if (s === "~") return homedir();
+  if (s.startsWith("~/")) return join(homedir(), s.slice(2));
+  return s;
+}
+
+function normalizeWorkspacePath(value, options = {}) {
+  if (!value || typeof value !== "string") return "";
+  const expanded = expandHomePath(value.trim());
+  const absolute = isAbsolute(expanded) ? expanded : resolve(options.cwd || process.cwd(), expanded);
+  try {
+    return realpathSync(absolute);
+  } catch (_) {
+    return resolve(absolute);
+  }
+}
+
+function mapSet(map, key, value) {
+  if (!key || !value) return;
+  const safe = sanitizePathPart(value);
+  map.set(String(key), safe);
+  map.set(sanitizePathPart(key).toLowerCase(), safe);
+  map.set(String(key).toLowerCase(), safe);
+}
+
+function mapGet(map, key) {
+  if (!key) return "";
+  return map.get(String(key))
+    || map.get(sanitizePathPart(key).toLowerCase())
+    || map.get(String(key).toLowerCase())
+    || "";
+}
+
+function collectWorkspaceEntries(config = {}, options = {}) {
+  const entries = [];
+  const add = (entry = {}) => {
+    if (!entry || typeof entry !== "object") return;
+    const workspaceKey = firstString(entry.workspaceKey, entry.workspace_id, entry.workspaceId, entry.id, entry.name);
+    if (!workspaceKey) return;
+    entries.push({
+      workspaceKey: sanitizePathPart(workspaceKey),
+      paths: [
+        entry.path,
+        entry.workspacePath,
+        entry.workspaceDir,
+        entry.dir,
+        entry.workspace,
+        ...(Array.isArray(entry.paths) ? entry.paths : []),
+      ].filter(value => typeof value === "string" && value.trim()),
+      aliases: [
+        entry.alias,
+        entry.label,
+        entry.agent_id,
+        entry.agentId,
+        entry.agent,
+        entry.workspace_id,
+        entry.workspaceId,
+        entry.id,
+        entry.name,
+        ...(Array.isArray(entry.aliases) ? entry.aliases : []),
+      ].filter(value => typeof value === "string" && value.trim()),
+      legacyKeys: Array.isArray(entry.legacyKeys) ? entry.legacyKeys.filter(value => typeof value === "string" && value.trim()) : [],
+    });
+  };
+
+  for (const entry of DEFAULT_NEO_WORKSPACE_MAPPINGS) add(entry);
+  const obsidian = options.obsidianBridge || config.obsidianBridge || {};
+  const neo = options.neo || config.neo || {};
+  for (const entry of Array.isArray(obsidian.workspaces) ? obsidian.workspaces : []) add(entry);
+  for (const entry of Array.isArray(neo.workspaces) ? neo.workspaces : []) add(entry);
+  for (const entry of Array.isArray(options.workspaces) ? options.workspaces : []) add(entry);
+  for (const entry of Array.isArray(options.defaultWorkspaces) ? options.defaultWorkspaces : []) add(entry);
+  return entries;
+}
+
+function addWorkspaceAliases(aliasMap, rawAliases = {}) {
+  if (Array.isArray(rawAliases)) {
+    for (const entry of rawAliases) {
+      if (!entry || typeof entry !== "object") continue;
+      const target = firstString(entry.workspaceKey, entry.workspace_id, entry.workspaceId, entry.target, entry.id);
+      const aliases = [entry.alias, ...(Array.isArray(entry.aliases) ? entry.aliases : [])];
+      for (const alias of aliases) mapSet(aliasMap, alias, target);
+    }
+    return;
+  }
+  if (rawAliases && typeof rawAliases === "object") {
+    for (const [alias, target] of Object.entries(rawAliases)) {
+      if (typeof target === "string") mapSet(aliasMap, alias, target);
+    }
+  }
+}
+
+export function buildNeoWorkspaceAliases(config = {}, options = {}) {
+  const pathMap = new Map();
+  const aliasMap = new Map();
+  const migrationMappings = new Map();
+  const entries = collectWorkspaceEntries(config, options);
+  for (const entry of entries) {
+    for (const path of entry.paths) {
+      const normalized = normalizeWorkspacePath(path, options);
+      if (normalized) pathMap.set(normalized, entry.workspaceKey);
+    }
+    for (const alias of entry.aliases) mapSet(aliasMap, alias, entry.workspaceKey);
+    for (const legacyKey of entry.legacyKeys) {
+      mapSet(aliasMap, legacyKey, entry.workspaceKey);
+      migrationMappings.set(sanitizePathPart(legacyKey), entry.workspaceKey);
+    }
+  }
+
+  const neo = options.neo || config.neo || {};
+  addWorkspaceAliases(aliasMap, options.workspaceAliases);
+  addWorkspaceAliases(aliasMap, neo.workspaceAliases);
+  addWorkspaceAliases(aliasMap, config.workspaceAliases);
+
+  return {
+    paths: [...pathMap.entries()].map(([path, workspaceKey]) => ({ path, workspaceKey })),
+    aliases: [...aliasMap.entries()].map(([alias, workspaceKey]) => ({ alias, workspaceKey })),
+    migrations: [...migrationMappings.entries()]
+      .filter(([legacyKey, workspaceKey]) => legacyKey !== workspaceKey)
+      .map(([legacyKey, workspaceKey]) => ({ legacyKey, workspaceKey })),
+  };
+}
+
+function normalizeAliasResolver(options = {}) {
+  const source = options.workspaceAliases || options.workspaceResolver || options.aliasResolver || {};
+  const pathMap = new Map();
+  const aliasMap = new Map();
+
+  const addPath = (path, workspaceKey) => {
+    const normalized = normalizeWorkspacePath(path, options);
+    if (normalized && workspaceKey) pathMap.set(normalized, sanitizePathPart(workspaceKey));
+  };
+  const addAlias = (alias, workspaceKey) => mapSet(aliasMap, alias, workspaceKey);
+
+  for (const entry of Array.isArray(source.paths) ? source.paths : []) addPath(entry.path, entry.workspaceKey);
+  for (const entry of Array.isArray(source.aliases) ? source.aliases : []) addAlias(entry.alias, entry.workspaceKey);
+  if (source.pathMap instanceof Map) {
+    for (const [path, workspaceKey] of source.pathMap.entries()) addPath(path, workspaceKey);
+  }
+  if (source.aliasMap instanceof Map) {
+    for (const [alias, workspaceKey] of source.aliasMap.entries()) addAlias(alias, workspaceKey);
+  }
+  if (source && typeof source === "object" && !Array.isArray(source) && !source.paths && !source.aliases) {
+    for (const [alias, workspaceKey] of Object.entries(source)) {
+      if (typeof workspaceKey === "string") addAlias(alias, workspaceKey);
+    }
+  }
+
+  if (pathMap.size === 0 && aliasMap.size === 0) {
+    const built = buildNeoWorkspaceAliases(options.config || {}, options);
+    for (const entry of built.paths) addPath(entry.path, entry.workspaceKey);
+    for (const entry of built.aliases) addAlias(entry.alias, entry.workspaceKey);
+  }
+
+  return { pathMap, aliasMap };
 }
 
 export function neoSessionKeysFromContext(ctx = {}, event = {}) {
@@ -126,8 +312,6 @@ export function workspaceKeyFromContext(ctx = {}, options = {}) {
     ctx.workspaceKey,
     event.workspaceId,
     ctx.workspaceId,
-    event.workspace,
-    ctx.workspace,
   );
   if (explicit) return sanitizePathPart(explicit);
 
@@ -140,15 +324,25 @@ export function workspaceKeyFromContext(ctx = {}, options = {}) {
     }
   }
 
+  const resolver = normalizeAliasResolver(options);
+  const workspaceDir = firstString(event.workspaceDir, ctx.workspaceDir, options.workspaceDir);
+  const workspaceName = firstString(event.workspace, ctx.workspace);
+  for (const candidate of [workspaceDir, workspaceName]) {
+    if (!candidate) continue;
+    const pathMatch = resolver.pathMap.get(normalizeWorkspacePath(candidate, options));
+    if (pathMatch) return sanitizePathPart(pathMatch);
+  }
+  for (const candidate of [workspaceName, workspaceDir ? basename(workspaceDir) : ""]) {
+    const aliasMatch = mapGet(resolver.aliasMap, candidate);
+    if (aliasMatch) return sanitizePathPart(aliasMatch);
+  }
+
   const runtimeWorkspace = firstString(
     options.runtimeWorkspaceKey,
     options.runtime?.agent?.workspaceKey,
     options.runtime?.workspaceKey,
   );
   if (runtimeWorkspace) return sanitizePathPart(runtimeWorkspace);
-
-  const workspaceDir = firstString(event.workspaceDir, ctx.workspaceDir, options.workspaceDir);
-  if (workspaceDir) return sanitizePathPart(basename(workspaceDir));
 
   const configured = firstString(
     options.defaultWorkspaceKey,
@@ -157,10 +351,159 @@ export function workspaceKeyFromContext(ctx = {}, options = {}) {
   );
   if (configured) return sanitizePathPart(configured);
 
+  if (workspaceName) return sanitizePathPart(workspaceName);
+  if (workspaceDir) return sanitizePathPart(basename(workspaceDir));
+
   const existing = listNeoWorkspaceKeys(options.rootDir);
   if (existing.length === 1) return existing[0];
 
   return "default";
+}
+
+function readJsonlWithErrors(path) {
+  const records = [];
+  const invalid = [];
+  if (!existsSync(path)) return { records, invalid };
+  const lines = readFileSync(path, "utf8").split(/\r?\n/);
+  lines.forEach((line, index) => {
+    if (!line.trim()) return;
+    try {
+      const parsed = JSON.parse(line);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        invalid.push({ path, line: index + 1, reason: "line is not a JSON object" });
+        return;
+      }
+      records.push({ record: parsed, line: index + 1, raw: line });
+    } catch (err) {
+      invalid.push({ path, line: index + 1, reason: String(err?.message || err) });
+    }
+  });
+  return { records, invalid };
+}
+
+function writeJsonlAtomic(path, records) {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, records.map(record => JSON.stringify(record)).join("\n") + (records.length ? "\n" : ""), "utf8");
+  renameSync(tmp, path);
+}
+
+function backupFreshnessError(backupDir, options = {}) {
+  if (!backupDir) return "A fresh backup directory is required for non-dry-run migration.";
+  try {
+    const stat = statSync(backupDir);
+    if (!stat.isDirectory()) return `Backup path is not a directory: ${backupDir}`;
+    const maxAgeMs = Number(options.freshBackupMs || 24 * 60 * 60 * 1000);
+    if (maxAgeMs > 0 && Date.now() - stat.mtimeMs > maxAgeMs) {
+      return `Backup directory is older than ${Math.round(maxAgeMs / 60000)} minutes: ${backupDir}`;
+    }
+  } catch (err) {
+    return `Backup directory is not accessible: ${backupDir} (${String(err?.message || err)})`;
+  }
+  return "";
+}
+
+export function migrateNeoWorkspaces(rootDir, options = {}) {
+  const dryRun = options.dryRun !== false;
+  const verbose = options.verbose === true;
+  const backupDir = firstString(options.backupDir, options.backupPath);
+  const report = {
+    ok: true,
+    dryRun,
+    verbose,
+    rootDir,
+    backupDir: backupDir || null,
+    recordsScanned: 0,
+    recordsCopied: 0,
+    duplicatesSkipped: 0,
+    invalidRecordsFound: 0,
+    filesWouldWrite: [],
+    filesWritten: [],
+    invalidRecords: [],
+    mappings: [],
+  };
+
+  if (!rootDir) {
+    return { ...report, ok: false, error: "Neo rootDir is required." };
+  }
+  if (!dryRun && options.requireBackup !== false) {
+    const backupError = backupFreshnessError(backupDir, options);
+    if (backupError) return { ...report, ok: false, error: backupError };
+  }
+
+  const configured = Array.isArray(options.mappings) && options.mappings.length > 0
+    ? options.mappings
+    : Array.isArray(options.workspaceAliases?.migrations) && options.workspaceAliases.migrations.length > 0
+      ? options.workspaceAliases.migrations
+      : DEFAULT_NEO_WORKSPACE_MAPPINGS.flatMap((entry) => (entry.legacyKeys || [])
+        .filter((legacyKey) => sanitizePathPart(legacyKey) !== sanitizePathPart(entry.workspaceKey))
+        .map((legacyKey) => ({ legacyKey, workspaceKey: entry.workspaceKey })));
+  const mappings = configured
+    .map((entry) => ({
+      legacyKey: sanitizePathPart(entry.legacyKey || entry.from || entry.source),
+      workspaceKey: sanitizePathPart(entry.workspaceKey || entry.to || entry.target),
+    }))
+    .filter((entry) => entry.legacyKey && entry.workspaceKey && entry.legacyKey !== entry.workspaceKey);
+
+  const workspacesDir = join(rootDir, "workspaces");
+  for (const mapping of mappings) {
+    const legacyDir = join(workspacesDir, mapping.legacyKey);
+    const canonicalDir = join(workspacesDir, mapping.workspaceKey);
+    const mappingReport = { ...mapping, sourceDir: legacyDir, targetDir: canonicalDir, files: [] };
+    report.mappings.push(mappingReport);
+    if (!existsSync(legacyDir)) continue;
+
+    for (const file of NEO_JSONL_FILES) {
+      const sourcePath = join(legacyDir, file);
+      const targetPath = join(canonicalDir, file);
+      if (!existsSync(sourcePath)) continue;
+      const source = readJsonlWithErrors(sourcePath);
+      const target = readJsonlWithErrors(targetPath);
+      report.invalidRecords.push(...source.invalid, ...target.invalid);
+      report.invalidRecordsFound += source.invalid.length + target.invalid.length;
+
+      const merged = [];
+      const seen = new Set();
+      for (const { record } of target.records) {
+        const key = record.id ? `id:${String(record.id)}` : `target:${JSON.stringify(record)}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(record);
+      }
+
+      let copied = 0;
+      let skipped = 0;
+      for (const { record, line } of source.records) {
+        report.recordsScanned += 1;
+        const key = record.id ? `id:${String(record.id)}` : `source:${sourcePath}:${line}:${JSON.stringify(record)}`;
+        if (seen.has(key)) {
+          skipped += 1;
+          continue;
+        }
+        seen.add(key);
+        copied += 1;
+        merged.push({
+          ...record,
+          workspaceKey: mapping.workspaceKey,
+          legacyWorkspaceKey: record.legacyWorkspaceKey || mapping.legacyKey,
+        });
+      }
+
+      report.recordsCopied += copied;
+      report.duplicatesSkipped += skipped;
+      const fileReport = { file, sourcePath, targetPath, recordsScanned: source.records.length, copied, duplicatesSkipped: skipped, invalid: source.invalid.length + target.invalid.length };
+      mappingReport.files.push(fileReport);
+      if (copied > 0) {
+        if (dryRun) {
+          report.filesWouldWrite.push(targetPath);
+        } else {
+          writeJsonlAtomic(targetPath, merged);
+          report.filesWritten.push(targetPath);
+        }
+      }
+    }
+  }
+  return report;
 }
 
 export function normalizeNeoScope(scope, fallback = "agent_private") {

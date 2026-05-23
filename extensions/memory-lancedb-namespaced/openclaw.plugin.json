@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "Memory (LanceDB, per-Agent)",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory and OpenClaw-native turn journal, provenance, curation, and recall.",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -128,6 +128,81 @@
           },
           "corpusDefaultWorkspaceKey": {
             "type": "string"
+          },
+          "workspaceAliases": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "workspaceKey": {
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                },
+                "workspaceId": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "workspacePath": {
+                  "type": "string"
+                },
+                "workspaceDir": {
+                  "type": "string"
+                },
+                "workspace": {
+                  "type": "string"
+                },
+                "dir": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                },
+                "agentId": {
+                  "type": "string"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "alias": {
+                  "type": "string"
+                },
+                "aliases": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "legacyKeys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
           }
         }
       },

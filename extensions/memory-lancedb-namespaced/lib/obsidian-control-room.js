@@ -41,8 +41,9 @@ import { generateLinkSuggestions } from "./obsidian/link-suggestions.js";
 import { writeRecords } from "./obsidian/record-writer.js";
 import { buildRecordIndex } from "./obsidian/record-index.js";
 import { patchSoulMd } from "./install/soul-patcher.js";
+import { discoverObsidianWorkspaces, initWorkspace } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.0.0";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.0.1";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "00-system/plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -1504,6 +1505,32 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
 
   try {
     if (command === "doctor") return commandResult(runVaultDoctor(rawConfig, { agentId, workspaceKey }));
+    if (command === "init" && sub === "workspaces") {
+      const dryRun = tokens.includes("--dry-run");
+      const verbose = tokens.includes("--verbose");
+      const workspaces = discoverObsidianWorkspaces(rawConfig);
+      const results = workspaces.map((workspace) => {
+        const init = initWorkspace(workspace, { dryRun, allowDotObsidianWrite: rawConfig.allowDotObsidianWrite === true });
+        return {
+          workspaceId: workspace.workspaceId,
+          agentId: workspace.agentId,
+          label: workspace.label,
+          path: workspace.path,
+          actions: init.actions,
+        };
+      });
+      return commandResult({
+        ok: true,
+        dryRun,
+        verbose,
+        workspaces: results.length,
+        results: verbose ? results : results.map((result) => ({
+          workspaceId: result.workspaceId,
+          path: result.path,
+          actions: result.actions.length,
+        })),
+      });
+    }
     if (command === "morning-review") return commandResult(await runMorningReview(rawConfig, { agentId, workspaceKey }));
     if (command === "records" && sub === "rebuild") {
       const records = context.records || defaultLivingDashboardRecords(agentId, workspaceKey);
@@ -1595,7 +1622,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
         }));
       }
     }
-    return commandResult("Usage: /plur1bus obsidian doctor|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review>");
+    return commandResult("Usage: /plur1bus obsidian doctor|init workspaces [--dry-run] [--verbose]|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review>");
   } catch (err) {
     return commandResult({ ok: false, error: String(err?.message || err) });
   }

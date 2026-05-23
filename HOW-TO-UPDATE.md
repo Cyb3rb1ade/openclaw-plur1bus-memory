@@ -3,7 +3,7 @@
 Safe update workflow for PLUR1BUS on OpenClaw.
 
 Current repository release target: OpenClaw `2026.5.20` with
-`@cyb3rb1ade/plur1bus-memory@4.0.0`.
+`@cyb3rb1ade/plur1bus-memory@4.0.1`.
 
 Live `~/.openclaw` update record, 2026-05-23:
 
@@ -42,6 +42,78 @@ Live `~/.openclaw` update record, 2026-05-23:
 - PLUR1BUS/LanceDB remains the authoritative memory system. Obsidian records,
   dashboards, semantic conflicts, duplicates, provenance graphs, and impact
   analyses are proposal/control-room artifacts only.
+- Neo workspace-card migration is explicit only. It must not run from
+  `npm postinstall`, and non-dry-run migration requires a fresh backup
+  directory passed with `--backup-dir`.
+
+## PLUR1BUS 4.0.1 Workspace Cards Harmonization
+
+Use this corrective lane when existing Neo data lives under legacy basename keys
+such as `_neo/workspaces/workspace`, `_neo/workspaces/workspace-bernhardine`, or
+`_neo/workspaces/workspace-heisenberg`.
+
+1. Create a rollback bundle before install or migration:
+
+```bash
+TS="$(date +%Y%m%d-%H%M%S)"
+BACKUP="/root/.openclaw/backups/plur1bus-4.0.1-workspace-cards/$TS"
+mkdir -p "$BACKUP"
+cp -a /root/.openclaw/openclaw.json "$BACKUP/openclaw.json"
+cp -a /root/.openclaw/memory/lancedb-namespaced/_neo "$BACKUP/_neo"
+openclaw plugins inspect memory-lancedb-namespaced > "$BACKUP/plur1bus-inspect.txt"
+```
+
+2. Build or install the `4.0.1` package, preserving the local tarball workflow:
+
+```bash
+cd /root/openclaw-memory-system/extensions/memory-lancedb-namespaced
+npm pack --dry-run --json
+npm pack --json
+openclaw plugins install --force ./cyb3rb1ade-plur1bus-memory-4.0.1.tgz
+```
+
+3. Ensure all three Obsidian workspace mappings exist in plugin config:
+
+```json
+[
+  { "workspace_id": "main", "agent_id": "main", "path": "~/.openclaw/workspace", "label": "Bernd" },
+  { "workspace_id": "bernhardine", "agent_id": "bernhardine", "path": "~/.openclaw/workspace-bernhardine", "label": "Bernhardine" },
+  { "workspace_id": "heisenberg", "agent_id": "heisenberg", "path": "~/.openclaw/workspace-heisenberg", "label": "Heisenberg" }
+]
+```
+
+4. Initialize workspace directories idempotently:
+
+```text
+/plur1bus obsidian init workspaces --dry-run --verbose
+/plur1bus obsidian init workspaces --verbose
+```
+
+5. Run migration dry-run, review the summary, then apply with the backup path:
+
+```text
+/plur1bus neo workspaces migrate --dry-run --verbose
+/plur1bus neo workspaces migrate --verbose --backup-dir /root/.openclaw/backups/plur1bus-4.0.1-workspace-cards/<timestamp>
+```
+
+Migration copies legacy JSONL data into canonical dirs, de-dupes by record `id`,
+keeps canonical records when the same `id` exists in both places, and leaves
+legacy source files unchanged.
+
+6. Verify:
+
+```bash
+openclaw config validate
+openclaw plugins doctor
+openclaw plugins inspect memory-lancedb-namespaced
+test -f /root/.openclaw/memory/lancedb-namespaced/_neo/workspaces/main/behavior-cards.jsonl
+test -f /root/.openclaw/memory/lancedb-namespaced/_neo/workspaces/bernhardine/behavior-cards.jsonl
+test -f /root/.openclaw/memory/lancedb-namespaced/_neo/workspaces/heisenberg/behavior-cards.jsonl
+```
+
+Rollback: restore `openclaw.json`, restore the backed-up `_neo` directory, reinstall
+the previous package artifact, restart the gateway, and rerun the verification
+commands above.
 
 ## 1. Prepare Isolated Test Base
 
@@ -207,7 +279,7 @@ runuser -u kimi -- env -u OPENCLAW_ALLOW_ROOT \
   NPM_CONFIG_PREFIX="$BASE/npm-global" \
   NPM_CONFIG_CACHE="$BASE/npm-cache" \
   "$BASE/prefix/bin/openclaw" --profile plur1bus-4-0-0-obsidian-tarball \
-    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-4.0.0.tgz"
+    plugins install "npm-pack:$BASE/artifacts/cyb3rb1ade-plur1bus-memory-4.0.1.tgz"
 ```
 
 If `npm-pack:<path>` syntax changes, check:

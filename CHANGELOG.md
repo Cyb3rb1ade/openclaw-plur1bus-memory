@@ -1,3 +1,20 @@
+## [4.0.1] - 2026-05-23
+
+### Fixed
+- Harmonized Neo workspace-card identity so configured workspace paths resolve to canonical workspace IDs: `main`, `bernhardine`, and `heisenberg`.
+- Added legacy workspace aliases for existing `_neo/workspaces/workspace*` data so older BehaviorCards remain readable while new writes use canonical keys.
+
+### Added
+- Added non-destructive Neo workspace migration support with dry-run and verbose summaries. Migration copies legacy JSONL records into canonical workspace dirs, de-dupes by record `id`, keeps canonical records authoritative on conflicts, and leaves legacy files unchanged.
+- Added `/plur1bus neo workspaces migrate` and `/plur1bus obsidian init workspaces` command routes. Non-dry-run migration requires an explicit fresh backup directory and is never run from `npm postinstall`.
+- Added workspace-card update and Obsidian setup docs for the 4.0.1 local update path.
+
+### Security
+- Preserved the LanceDB/PLUR1BUS authority boundary. Obsidian Markdown cards stay proposal/input/dashboard artifacts and vault scanning still does not mutate LanceDB directly.
+
+### Verification
+- Added tests for canonical workspace path resolution, explicit-key precedence, legacy fallback, migration de-dupe behavior, canonical-record precedence, invalid JSONL reporting, legacy file preservation, and idempotent Obsidian workspace initialization.
+
 ## [4.0.0] - 2026-05-23
 
 ### Added

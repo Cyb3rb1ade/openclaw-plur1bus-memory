@@ -44,11 +44,13 @@ import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from ".
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
   buildNeoDoctorReport,
+  buildNeoWorkspaceAliases,
   captureNeoFromAgentEnd,
   createNeoStore,
   escapeMemoryText,
   findLatestNeoRecord,
   formatNeoRecallContext,
+  migrateNeoWorkspaces,
   neoSessionKeysFromContext,
   routeNeoRecall,
   sanitizeMemoryTextForPrompt,
@@ -185,6 +187,14 @@ function resolveOptionalEnvVars(value) {
   } catch (_) {
     return undefined;
   }
+}
+
+function commandOption(tokens = [], flag, fallback = "") {
+  const index = tokens.indexOf(flag);
+  if (index >= 0 && typeof tokens[index + 1] === "string" && !tokens[index + 1].startsWith("--")) {
+    return tokens[index + 1];
+  }
+  return fallback;
 }
 
 // generateSummary kommt jetzt aus lib/text-utils.js — re-export für Tests
@@ -1013,6 +1023,7 @@ const plugin = {
     const neoEnabled = neoCfg.enabled !== false; // 3.0 default: additive cognitive layer on
     const neoRoot = api.resolvePath(neoCfg.statePath || join(baseDbPath, "_neo"));
     const neoMode = neoCfg.mode || "augment";
+    const neoWorkspaceAliases = buildNeoWorkspaceAliases({ obsidianBridge: obsidianBridgeCfg, neo: neoCfg });
     if (neoEnabled && neoMode === "slot") {
       api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
@@ -1024,6 +1035,7 @@ const plugin = {
         rootDir: neoRoot,
         runtime: api.runtime,
         sessionWorkspaceKeys,
+        workspaceAliases: neoWorkspaceAliases,
       });
       for (const sessionKey of neoSessionKeysFromContext(ctx, event)) {
         sessionWorkspaceKeys.set(sessionKey, workspaceKey);
@@ -1208,6 +1220,7 @@ const plugin = {
               rootDir: neoRoot,
               runtime: api.runtime,
               sessionWorkspaceKeys,
+              workspaceAliases: neoWorkspaceAliases,
             });
             const items = [...store.readCandidates(500), ...store.readBehaviorCards(200)];
             const lanes = routeNeoRecall(items, params?.query || "", { maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
@@ -1236,6 +1249,7 @@ const plugin = {
               rootDir: neoRoot,
               runtime: api.runtime,
               sessionWorkspaceKeys,
+              workspaceAliases: neoWorkspaceAliases,
             });
             const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey });
             const id = String(params?.lookup || "").split("/").pop();
@@ -1294,6 +1308,16 @@ const plugin = {
                 config: { ...neoCfg, hooks: resolveNeoHooksConfig(api, commandCtx.config) },
               }));
             }
+            if (action === "neo" && sub === "workspaces" && tokens[2] === "migrate") {
+              const dryRun = tokens.includes("--dry-run");
+              const backupDir = commandOption(tokens, "--backup-dir", commandOption(tokens, "--backup", ""));
+              return formatJsonCommandResult(migrateNeoWorkspaces(neoRoot, {
+                dryRun,
+                verbose: tokens.includes("--verbose"),
+                backupDir,
+                workspaceAliases: neoWorkspaceAliases,
+              }));
+            }
             if (action === "curation") {
               const candidates = commandStore.readCandidates(500);
               const behavior = commandStore.readBehaviorCards(200);
@@ -1349,7 +1373,7 @@ const plugin = {
             if (action === "dreaming") {
               return formatJsonCommandResult({ status: "planned", heavyJobCarrier: "OpenClaw-managed agent cron", modes: ["light", "rem", "deep"] });
             }
-            return { text: "Usage: /plur1bus status|doctor|curation <inbox|conflicts|stale|promoted>|memory <origin|explain|promote|demote|prune|tombstone> <id>|behavior <show|candidates|explain|promote|demote|prune> [id]|embeddings status|dreaming status|obsidian <doctor|review|morning-review|conflicts|project-hub|memory|weekly|cron>" };
+            return { text: "Usage: /plur1bus status|doctor|neo workspaces migrate [--dry-run] [--verbose] [--backup-dir <path>]|curation <inbox|conflicts|stale|promoted>|memory <origin|explain|promote|demote|prune|tombstone> <id>|behavior <show|candidates|explain|promote|demote|prune> [id]|embeddings status|dreaming status|obsidian <doctor|init workspaces|review|morning-review|conflicts|project-hub|memory|weekly|cron>" };
           },
         });
       }
@@ -1396,6 +1420,7 @@ const plugin = {
                 rootDir: neoRoot,
                 runtime: api.runtime,
                 sessionWorkspaceKeys,
+                workspaceAliases: neoWorkspaceAliases,
               });
               api.logger.info(`plur1bus-neo: captured turns=${neoCapture.turns.length}, candidates=${neoCapture.candidates.length}, reactions=${neoCapture.reactions.length}, behaviorCards=${neoCapture.behaviorCards.length}`);
             }
