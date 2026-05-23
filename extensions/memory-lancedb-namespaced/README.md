@@ -156,9 +156,7 @@ Default:
       "include": ["*"],
       "equalCapabilities": true,
       "defaultProfiles": {
-        "main": "standard",
-        "bernhardine": "conservative",
-        "heisenberg": "adversarial"
+        "default": "standard"
       }
     },
     "morningReview": {
@@ -196,9 +194,8 @@ Default:
 }
 ```
 
-Alle Agenten sind funktional gleich. Unterschiede wie `main=standard`,
-`bernhardine=conservative` oder `heisenberg=adversarial` sind nur Default-
-Profile, keine Rechte. Jeder konfigurierte Agent kann Doctor, ReviewBundle,
+Alle Agenten sind funktional gleich. Agent-spezifische Review-Profile sind nur
+Defaults, keine Rechte. Jeder konfigurierte Agent kann Doctor, ReviewBundle,
 Maintenance, Adversarial Review, Project Hubs, Konflikte, Memory-Erklaerung,
 Hygiene, Task Extraction und approved Apply ausfuehren.
 

@@ -193,9 +193,7 @@ Default bleibt sicher aus und approval-gated:
       "include": ["*"],
       "equalCapabilities": true,
       "defaultProfiles": {
-        "main": "standard",
-        "bernhardine": "conservative",
-        "heisenberg": "adversarial"
+        "default": "standard"
       }
     },
     "morningReview": {
@@ -225,8 +223,8 @@ Default bleibt sicher aus und approval-gated:
 }
 ```
 
-Alle Agenten sind capability-equal. `main`, `bernhardine`, `heisenberg` und
-beliebige weitere Agent-IDs koennen dieselben Bridge-Funktionen ausfuehren.
+Alle Agenten sind capability-equal. Jeder konfigurierte Agent kann dieselben
+Bridge-Funktionen ausfuehren.
 Review-Profile (`standard`, `conservative`, `adversarial`, `maintenance`,
 `project_manager`, `semantic_deep`) sind Perspektiven und Defaults, keine
 Berechtigungen.

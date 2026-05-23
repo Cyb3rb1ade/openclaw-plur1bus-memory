@@ -8,7 +8,7 @@ Current repository release target: OpenClaw `2026.5.20` with
 Live `~/.openclaw` update record, 2026-05-23:
 
 - Rollback bundle:
-  `/root/.openclaw/backups/update-openclaw-plur1bus/20260523-103836`
+  `~/.openclaw/backups/update-openclaw-plur1bus/<timestamp>`
 - Installed OpenClaw: `2026.5.20 (e510042)`
 - Installed PLUR1BUS: `@cyb3rb1ade/plur1bus-memory@3.5.0` from archive
   `cyb3rb1ade-plur1bus-memory-3.5.0.tgz`
@@ -54,11 +54,12 @@ derived from workspace directory names instead of configured workspace IDs.
 1. Create a rollback bundle before install or migration:
 
 ```bash
+OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
 TS="$(date +%Y%m%d-%H%M%S)"
-BACKUP="/root/.openclaw/backups/plur1bus-4.0.1-workspace-cards/$TS"
+BACKUP="$OPENCLAW_HOME/backups/plur1bus-4.0.1-workspace-cards/$TS"
 mkdir -p "$BACKUP"
-cp -a /root/.openclaw/openclaw.json "$BACKUP/openclaw.json"
-cp -a /root/.openclaw/memory/lancedb-namespaced/_neo "$BACKUP/_neo"
+cp -a "$OPENCLAW_HOME/openclaw.json" "$BACKUP/openclaw.json"
+cp -a "$OPENCLAW_HOME/memory/lancedb-namespaced/_neo" "$BACKUP/_neo"
 openclaw plugins inspect memory-lancedb-namespaced > "$BACKUP/plur1bus-inspect.txt"
 ```
 
@@ -71,7 +72,21 @@ npm pack --json
 openclaw plugins install --force ./cyb3rb1ade-plur1bus-memory-4.0.1.tgz
 ```
 
-3. Ensure every local Obsidian workspace mapping exists in plugin config:
+3. Discover local workspace mappings. Discovery is dry-run by default and uses
+OpenClaw agent config plus local workspace markers:
+
+```text
+/plur1bus obsidian discover workspaces --dry-run --verbose
+```
+
+If the dry-run looks correct, merge only missing mappings into
+`obsidianBridge.workspaces`:
+
+```text
+/plur1bus obsidian discover workspaces --write --backup-dir ~/.openclaw/backups/plur1bus-4.0.1-workspace-cards/<timestamp> --verbose
+```
+
+You can also configure mappings manually:
 
 ```json
 [
@@ -91,7 +106,7 @@ openclaw plugins install --force ./cyb3rb1ade-plur1bus-memory-4.0.1.tgz
 
 ```text
 /plur1bus neo workspaces migrate --dry-run --verbose
-/plur1bus neo workspaces migrate --verbose --backup-dir /root/.openclaw/backups/plur1bus-4.0.1-workspace-cards/<timestamp>
+/plur1bus neo workspaces migrate --verbose --backup-dir ~/.openclaw/backups/plur1bus-4.0.1-workspace-cards/<timestamp>
 ```
 
 Migration copies legacy JSONL data into canonical dirs, de-dupes by record `id`,
@@ -104,9 +119,7 @@ legacy source files unchanged.
 openclaw config validate
 openclaw plugins doctor
 openclaw plugins inspect memory-lancedb-namespaced
-test -f /root/.openclaw/memory/lancedb-namespaced/_neo/workspaces/main/behavior-cards.jsonl
-test -f /root/.openclaw/memory/lancedb-namespaced/_neo/workspaces/bernhardine/behavior-cards.jsonl
-test -f /root/.openclaw/memory/lancedb-namespaced/_neo/workspaces/heisenberg/behavior-cards.jsonl
+find "${OPENCLAW_HOME:-$HOME/.openclaw}/memory/lancedb-namespaced/_neo/workspaces" -maxdepth 2 -name "behavior-cards.jsonl" -print
 ```
 
 Rollback: restore `openclaw.json`, restore the backed-up `_neo` directory, reinstall

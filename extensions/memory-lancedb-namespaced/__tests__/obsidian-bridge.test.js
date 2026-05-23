@@ -146,17 +146,17 @@ test("tombstone is created when a synced card disappears", async () => {
 test("workspace isolation reports cross-workspace frontmatter", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-test-"));
   try {
-    const main = makeWorkspace(tmp, "main");
-    const heisenberg = makeWorkspace(tmp, "heisenberg");
-    initWorkspace(main, { dryRun: false });
-    initWorkspace(heisenberg, { dryRun: false });
-    writeCard(main, "memory/cards/cross.md", "Wrong workspace.\n", { workspace_id: "heisenberg" });
+    const primary = makeWorkspace(tmp, "primary");
+    const secondary = makeWorkspace(tmp, "secondary");
+    initWorkspace(primary, { dryRun: false });
+    initWorkspace(secondary, { dryRun: false });
+    writeCard(primary, "memory/cards/cross.md", "Wrong workspace.\n", { workspace_id: "secondary" });
     const report = await doctorObsidianBridge({
       enabled: false,
       dryRun: true,
       workspaces: [
-        { workspace_id: "main", agent_id: "main", path: main.path },
-        { workspace_id: "heisenberg", agent_id: "heisenberg", path: heisenberg.path },
+        { workspace_id: "primary", agent_id: "agent-primary", path: primary.path },
+        { workspace_id: "secondary", agent_id: "agent-secondary", path: secondary.path },
       ],
     });
     assert.equal(report.ok, false);

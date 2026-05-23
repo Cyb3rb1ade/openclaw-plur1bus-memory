@@ -36,11 +36,11 @@ test("buildFrontmatter: minimal", () => {
 
 test("buildFrontmatter: mit agent + sources", () => {
   const fm = buildFrontmatter({
-    agentId: "bernhardine",
+    agentId: "agent-secondary",
     sourceMemoryIds: ["uuid-1", "uuid-2"],
     today: "2026-04-25",
   });
-  assert.ok(fm.includes("agent: bernhardine"));
+  assert.ok(fm.includes("agent: agent-secondary"));
   assert.ok(fm.includes("source_memories:"));
   assert.ok(fm.includes("- uuid-1"));
   assert.ok(fm.includes("- uuid-2"));

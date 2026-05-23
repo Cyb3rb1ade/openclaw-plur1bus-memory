@@ -56,14 +56,14 @@ test("missing vault path is reported but does not throw", () => {
 });
 
 test("all agents receive equal Obsidian Bridge capabilities", () => {
-  const agents = ["main", "bernhardine", "heisenberg", "test-agent"].map((agent) => getObsidianCapabilityPack(agent));
+  const agents = ["primary-agent", "secondary-agent", "tertiary-agent", "test-agent"].map((agent) => getObsidianCapabilityPack(agent));
   const [first] = agents;
   for (const pack of agents) {
     assert.deepEqual(pack.capabilities, first.capabilities);
     assert.deepEqual(pack.reviewProfiles, first.reviewProfiles);
     assert.equal(pack.equalCapabilities, true);
   }
-  assert.notEqual(agents[0].defaultProfile, agents[1].defaultProfile);
+  assert.equal(agents.every((agent) => agent.defaultProfile === "standard"), true);
 });
 
 test("review profiles are perspectives and not permissions", () => {
@@ -351,6 +351,124 @@ test("obsidian init workspaces command creates required directories idempotently
     const second = await handleObsidianBridgeCommand(["init", "workspaces", "--verbose"], { config: cfg });
     const secondParsed = JSON.parse(second.text);
     assert.equal(secondParsed.results.every((workspace) => workspace.actions.every((action) => action.action === "skip_dot_obsidian_write")), true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian discover workspaces dry-run finds local candidates without writing config", async () => {
+  const { tmp } = makeVault();
+  try {
+    const openclawHome = join(tmp, "openclaw-home");
+    const primary = join(openclawHome, "workspace-primary");
+    const secondary = join(openclawHome, "workspace-secondary");
+    const configPath = join(openclawHome, "openclaw.json");
+    mkdirSync(join(primary, "memory/cards"), { recursive: true });
+    mkdirSync(secondary, { recursive: true });
+    writeFileSync(join(secondary, "AGENTS.md"), "# Workspace\n", "utf8");
+    writeFileSync(configPath, JSON.stringify({ plugins: { entries: {} } }, null, 2), "utf8");
+
+    const result = await handleObsidianBridgeCommand(["discover", "workspaces", "--dry-run", "--verbose"], {
+      config: {},
+      configPath,
+      openclawHome,
+      openclawConfig: {
+        agents: {
+          defaults: { workspace: primary },
+          list: [{ id: "agent-secondary", workspace: secondary }],
+        },
+      },
+    });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.dryRun, true);
+    assert.equal(parsed.writeRequested, false);
+    assert.ok(parsed.results.some((workspace) => workspace.path === primary));
+    assert.ok(parsed.results.some((workspace) => workspace.path === secondary));
+    assert.equal(readFileSync(configPath, "utf8"), JSON.stringify({ plugins: { entries: {} } }, null, 2));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian discover workspaces write requires a backup directory", async () => {
+  const { tmp } = makeVault();
+  try {
+    const openclawHome = join(tmp, "openclaw-home");
+    const primary = join(openclawHome, "workspace-primary");
+    const configPath = join(openclawHome, "openclaw.json");
+    mkdirSync(primary, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({ plugins: { entries: {} } }, null, 2), "utf8");
+
+    const result = await handleObsidianBridgeCommand(["discover", "workspaces", "--write"], {
+      config: {},
+      configPath,
+      openclawHome,
+      openclawConfig: { agents: { defaults: { workspace: primary } } },
+    });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, false);
+    assert.match(parsed.error, /backup-dir/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian discover workspaces write merges missing entries idempotently", async () => {
+  const { tmp } = makeVault();
+  try {
+    const openclawHome = join(tmp, "openclaw-home");
+    const primary = join(openclawHome, "workspace-primary");
+    const secondary = join(openclawHome, "workspace-secondary");
+    const backupDir = join(tmp, "backup");
+    const configPath = join(openclawHome, "openclaw.json");
+    mkdirSync(primary, { recursive: true });
+    mkdirSync(secondary, { recursive: true });
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify({
+      plugins: {
+        entries: {
+          "memory-lancedb-namespaced": {
+            config: {
+              obsidianBridge: {
+                workspaces: [{ workspace_id: "workspace-primary", agent_id: "agent-primary", path: primary }],
+              },
+            },
+          },
+        },
+      },
+    }, null, 2), "utf8");
+
+    const context = {
+      config: { workspaces: [{ workspace_id: "workspace-primary", agent_id: "agent-primary", path: primary }] },
+      configPath,
+      openclawHome,
+      openclawConfig: {
+        agents: {
+          list: [
+            { id: "agent-primary", workspace: primary },
+            { id: "agent-secondary", workspace: secondary },
+          ],
+        },
+      },
+    };
+    const result = await handleObsidianBridgeCommand(["discover", "workspaces", "--write", "--backup-dir", backupDir, "--verbose"], context);
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.write.written, true);
+    assert.equal(parsed.write.added.length, 1);
+    assert.equal(parsed.write.added[0].path, secondary);
+    assert.equal(existsSync(parsed.write.backupPath), true);
+    const written = JSON.parse(readFileSync(configPath, "utf8"));
+    assert.equal(written.plugins.entries["memory-lancedb-namespaced"].config.obsidianBridge.workspaces.length, 2);
+
+    const second = await handleObsidianBridgeCommand(["discover", "workspaces", "--write", "--backup-dir", backupDir], {
+      ...context,
+      config: written.plugins.entries["memory-lancedb-namespaced"].config.obsidianBridge,
+    });
+    const secondParsed = JSON.parse(second.text);
+    assert.equal(secondParsed.ok, true);
+    assert.equal(secondParsed.write.added.length, 0);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

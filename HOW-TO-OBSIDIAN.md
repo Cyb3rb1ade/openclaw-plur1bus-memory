@@ -47,6 +47,20 @@ ReviewBundle callbacks, or `knowledge_update`.
 
 ## Commands
 
+Discover local workspace candidates from OpenClaw config and marker
+directories. This is dry-run by default:
+
+```text
+/plur1bus obsidian discover workspaces --dry-run --verbose
+```
+
+To merge missing entries into `obsidianBridge.workspaces`, pass an explicit
+write flag and a fresh backup directory. Existing entries are not overwritten:
+
+```text
+/plur1bus obsidian discover workspaces --write --backup-dir ~/.openclaw/backups/plur1bus-workspaces/<timestamp> --verbose
+```
+
 Initialize workspace folders without overwriting notes:
 
 ```text
@@ -58,7 +72,7 @@ Migrate legacy Neo workspace files into canonical dirs:
 
 ```text
 /plur1bus neo workspaces migrate --dry-run --verbose
-/plur1bus neo workspaces migrate --verbose --backup-dir /root/.openclaw/backups/plur1bus-4.0.1-workspace-cards/<timestamp>
+/plur1bus neo workspaces migrate --verbose --backup-dir ~/.openclaw/backups/plur1bus-workspaces/<timestamp>
 ```
 
 Non-dry-run migration requires a fresh backup directory. Migration never runs

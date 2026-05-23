@@ -203,7 +203,7 @@ test("New 4.0.0 obsidian commands route through the control-room facade", async 
   const { tmp, vault } = makeVault();
   try {
     const cfg = config(vault);
-    const result = await handleObsidianBridgeCommand(["records", "rebuild"], { config: cfg, agentId: "heisenberg", workspaceKey: "main" });
+    const result = await handleObsidianBridgeCommand(["records", "rebuild"], { config: cfg, agentId: "agent-secondary", workspaceKey: "main" });
     assert.match(result.text, /authority-main/);
     const dash = await handleObsidianBridgeCommand(["dashboards", "build"], { config: cfg, records: sampleRecords });
     assert.match(dash.text, /dashboards\/index\.md/);

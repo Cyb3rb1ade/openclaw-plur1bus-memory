@@ -1,7 +1,12 @@
+## [Unreleased]
+
+### Added
+- Added `/plur1bus obsidian discover workspaces` as a local-only discovery assistant. It is dry-run by default, can inspect OpenClaw agent config and workspace markers, and only writes missing `obsidianBridge.workspaces` entries when `--write --backup-dir <dir>` is provided.
+
 ## [4.0.1] - 2026-05-23
 
 ### Fixed
-- Harmonized Neo workspace-card identity so configured workspace paths resolve to canonical workspace IDs: `main`, `bernhardine`, and `heisenberg`.
+- Harmonized Neo workspace-card identity so configured workspace paths resolve to canonical workspace IDs before legacy path basenames.
 - Added legacy workspace aliases for existing `_neo/workspaces/workspace*` data so older BehaviorCards remain readable while new writes use canonical keys.
 
 ### Added
@@ -51,7 +56,7 @@
 - Added the PLUR1BUS Obsidian Bridge control-room layer for Markdown ReviewBundles, Vault Doctor reports, conflicts, Project Hubs, memory explanations, stale/hygiene/task suggestions, and Morning Review output.
 - Added `/plur1bus obsidian ...` commands for doctor, review prepare/show/approve/reject/snooze/apply, morning-review, conflicts, project-hub, memory explain, weekly, and OpenClaw Cron command printing/install gating.
 - Added a structured, approval-gated ReviewBundle model with stable item IDs, item metadata, preconditions, maintenance review, adversarial review, and apply previews.
-- Added capability-equal agent handling so `main`, `bernhardine`, `heisenberg`, and arbitrary agent IDs receive the same Obsidian Bridge capability set; review profiles are perspectives, not permissions.
+- Added capability-equal agent handling so arbitrary configured agent IDs receive the same Obsidian Bridge capability set; review profiles are perspectives, not permissions.
 - Added managed Markdown block helpers with stable markers and checksums plus atomic writes under the configured review root.
 
 ### Changed
@@ -263,13 +268,13 @@
 ### Fixed
 - Added the versioned OpenClaw `2026.5.4` compat patch and dispatcher path.
 - Made the 5.4 subagent lane import patch resilient to hashed `lanes-*.js` bundle filenames.
-- Updated the guided OpenClaw updater to default to `2026.5.4`, dry-run the matching tarball patch, preserve 5.4 plugin contracts, and load `OPENAI_API_KEY` from `/root/.openclaw/.env` for the optional memory reindex.
+- Updated the guided OpenClaw updater to default to `2026.5.4`, dry-run the matching tarball patch, preserve 5.4 plugin contracts, and load `OPENAI_API_KEY` from the local OpenClaw env file for the optional memory reindex.
 - Hardened update diagnostics for ClawSweeper tag resolution, cron CLI fallbacks, intentional disabled cron jobs, Docker visibility in sandboxed checks, and plugin runtime drift detection.
 
 ### Verified
 - Production OpenClaw upgraded to `2026.5.4`.
 - `openclaw plugins doctor`, `memory-doctor stats`, and external `memory-doctor provider-check` passed after the upgrade.
-- Live ExecStartPre patch chain under `/root/.openclaw/patches` synchronized and verified on gateway restart.
+- Live ExecStartPre patch chain under the local OpenClaw patch directory synchronized and verified on gateway restart.
 
 ## [2.1.23] - 2026-05-04
 
@@ -282,7 +287,7 @@
 ### Fixed
 - Declared all `memory-lancedb-namespaced` runtime tools in `contracts.tools`: `memory_recall`, `memory_store`, `memory_forget`, and `knowledge_update`.
 - Updated `update-openclaw.sh` validation so future OpenClaw updates preserve the complete memory tool contract instead of only `memory_recall`.
-- Verified live plur1bus Store+Recall smoke tests on `main`, `bernhardine`, and `heisenberg` after the manifest fix.
+- Verified live plur1bus Store+Recall smoke tests across multiple configured workspaces after the manifest fix.
 
 ## [2.1.21] - 2026-05-04
 

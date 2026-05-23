@@ -463,9 +463,7 @@
                   ]
                 },
                 "default": {
-                  "main": "standard",
-                  "bernhardine": "conservative",
-                  "heisenberg": "adversarial"
+                  "default": "standard"
                 }
               }
             }

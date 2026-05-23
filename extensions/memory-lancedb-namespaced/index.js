@@ -1285,8 +1285,22 @@ const plugin = {
             const commandStore = getNeoStore({ workspaceDir: commandCtx.workspaceDir, workspaceKey: commandCtx.workspaceKey, agentId: commandCtx.agentId || "command" });
 
             if (action === "obsidian") {
+              let runtimeConfig = null;
+              try {
+                if (typeof api.runtime?.config?.current === "function") {
+                  runtimeConfig = api.runtime.config.current();
+                } else if (api.runtime?.config && typeof api.runtime.config === "object") {
+                  runtimeConfig = api.runtime.config;
+                }
+              } catch (_) {}
+              const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
+              const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
               return handleObsidianBridgeCommand(tokens.slice(1), {
                 config: obsidianBridgeCfg,
+                configPath: openclawConfigPath,
+                openclawConfig: commandCtx.openclawConfig || commandCtx.config || runtimeConfig,
+                openclawHome,
+                neoRoot,
                 commandCtx,
                 workspaceDir: commandCtx.workspaceDir,
                 commandStore,

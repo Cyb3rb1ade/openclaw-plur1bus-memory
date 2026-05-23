@@ -209,9 +209,7 @@ export function normalizeObsidianBridgeConfig(raw = {}, options = {}) {
       include: ["*"],
       equalCapabilities: true,
       defaultProfiles: {
-        main: "standard",
-        bernhardine: "conservative",
-        heisenberg: "adversarial",
+        default: "standard",
       },
     },
     morningReview: {
@@ -259,6 +257,334 @@ export function discoverObsidianWorkspaces(rawConfig = {}, options = {}) {
       };
     })
     .filter((workspace) => !filter || workspace.workspaceId === filter || workspace.agentId === filter || workspace.label === filter);
+}
+
+const WORKSPACE_DISCOVERY_MARKERS = [
+  "AGENTS.md",
+  "SOUL.MD",
+  "memory/KNOWLEDGE.md",
+  "memory/cards",
+  "decisions",
+  ".obsidian/workspace.json",
+];
+
+const WORKSPACE_DISCOVERY_SKIP_DIRS = new Set([
+  ".git",
+  "agents",
+  "backups",
+  "cache",
+  "docker",
+  "extensions",
+  "logs",
+  "memory",
+  "node_modules",
+  "plugins",
+  "tmp",
+]);
+
+function safeWorkspaceIdFromPath(path) {
+  const name = safeName(basename(path || "workspace")).toLowerCase();
+  return name || "workspace";
+}
+
+function pathKey(path) {
+  return normalizeAbsPath(path);
+}
+
+function workspaceEntryPath(entry) {
+  return entry?.path || entry?.workspace || entry?.workspaceDir || entry?.workspacePath || entry?.dir || null;
+}
+
+function workspaceEntryId(entry, fallbackPath, fallbackIndex = 0) {
+  return entry?.workspace_id
+    || entry?.workspaceId
+    || entry?.id
+    || entry?.name
+    || safeWorkspaceIdFromPath(fallbackPath)
+    || `workspace-${fallbackIndex}`;
+}
+
+function workspaceEntryAgent(entry, workspaceId) {
+  return entry?.agent_id || entry?.agentId || entry?.agent || workspaceId;
+}
+
+function hasWorkspaceDiscoveryMarker(dir) {
+  return WORKSPACE_DISCOVERY_MARKERS.some((marker) => existsSync(join(dir, marker)));
+}
+
+function addWorkspaceCandidate(map, rawCandidate) {
+  if (!rawCandidate?.path) return null;
+  const normalizedPath = pathKey(rawCandidate.path);
+  const existing = map.get(normalizedPath) || {
+    workspaceId: rawCandidate.workspaceId || safeWorkspaceIdFromPath(normalizedPath),
+    agentId: rawCandidate.agentId || rawCandidate.workspaceId || safeWorkspaceIdFromPath(normalizedPath),
+    label: rawCandidate.label || rawCandidate.workspaceId || safeWorkspaceIdFromPath(normalizedPath),
+    path: normalizedPath,
+    sources: new Set(),
+    agentIds: new Set(),
+    aliases: new Set(),
+    legacyKeys: new Set(),
+    confidence: rawCandidate.confidence || "medium",
+    existing: rawCandidate.existing === true,
+  };
+  if (rawCandidate.existing === true) existing.existing = true;
+  if (rawCandidate.workspaceId && (!existing.existing || rawCandidate.existing === true)) {
+    existing.workspaceId = rawCandidate.workspaceId;
+    existing.label = rawCandidate.label || existing.label || rawCandidate.workspaceId;
+  }
+  if (rawCandidate.agentId && (!existing.existing || rawCandidate.existing === true)) existing.agentId = rawCandidate.agentId;
+  if (rawCandidate.label && (!existing.existing || rawCandidate.existing === true)) existing.label = rawCandidate.label;
+  if (rawCandidate.confidence === "high" || existing.confidence !== "high") {
+    existing.confidence = rawCandidate.confidence || existing.confidence;
+  }
+  for (const source of rawCandidate.sources || [rawCandidate.source || "unknown"]) existing.sources.add(source);
+  for (const agentId of rawCandidate.agentIds || [rawCandidate.agentId].filter(Boolean)) existing.agentIds.add(agentId);
+  for (const alias of rawCandidate.aliases || []) existing.aliases.add(alias);
+  for (const legacyKey of rawCandidate.legacyKeys || []) existing.legacyKeys.add(legacyKey);
+  const basenameAlias = safeWorkspaceIdFromPath(normalizedPath);
+  if (basenameAlias && basenameAlias !== existing.workspaceId) existing.legacyKeys.add(basenameAlias);
+  map.set(normalizedPath, existing);
+  return existing;
+}
+
+function finalizeWorkspaceCandidate(candidate) {
+  const agentIds = [...candidate.agentIds].sort();
+  const agentId = candidate.agentId || agentIds[0] || candidate.workspaceId;
+  return {
+    workspaceId: candidate.workspaceId,
+    agentId,
+    label: candidate.label || candidate.workspaceId,
+    path: candidate.path,
+    sources: [...candidate.sources].sort(),
+    agentIds,
+    aliases: [...candidate.aliases].sort(),
+    legacyKeys: [...candidate.legacyKeys].sort(),
+    confidence: candidate.confidence,
+    existing: candidate.existing === true,
+  };
+}
+
+function collectConfiguredWorkspaceCandidates(rawConfig, map) {
+  const cfg = normalizeObsidianBridgeConfig(rawConfig);
+  cfg.workspaces.forEach((entry, index) => {
+    const path = workspaceEntryPath(entry);
+    if (!path) return;
+    const workspaceId = workspaceEntryId(entry, path, index);
+    addWorkspaceCandidate(map, {
+      workspaceId,
+      agentId: workspaceEntryAgent(entry, workspaceId),
+      label: entry.label || workspaceId,
+      path,
+      source: "obsidianBridge.workspaces",
+      confidence: "high",
+      existing: true,
+      aliases: [entry.alias, ...(Array.isArray(entry.aliases) ? entry.aliases : [])].filter(Boolean),
+    });
+  });
+}
+
+function collectOpenClawAgentWorkspaceCandidates(openclawConfig, map) {
+  const agents = openclawConfig?.agents || {};
+  const defaultsWorkspace = workspaceEntryPath(agents.defaults || {});
+  if (defaultsWorkspace) {
+    addWorkspaceCandidate(map, {
+      workspaceId: safeWorkspaceIdFromPath(defaultsWorkspace),
+      agentId: agents.defaults?.id || agents.defaults?.name || "default",
+      path: defaultsWorkspace,
+      source: "agents.defaults.workspace",
+      confidence: "medium",
+    });
+  }
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  list.forEach((entry) => {
+    const path = workspaceEntryPath(entry);
+    if (!path) return;
+    const agentId = entry.id || entry.name || safeWorkspaceIdFromPath(path);
+    addWorkspaceCandidate(map, {
+      workspaceId: safeWorkspaceIdFromPath(path),
+      agentId,
+      agentIds: [agentId],
+      label: entry.label || entry.name || safeWorkspaceIdFromPath(path),
+      path,
+      source: "agents.list.workspace",
+      confidence: "medium",
+    });
+  });
+}
+
+function collectOpenClawHomeWorkspaceCandidates(openclawHome, map) {
+  if (!openclawHome) return;
+  const home = normalizeAbsPath(openclawHome);
+  if (!existsSync(home)) return;
+  let entries = [];
+  try {
+    entries = readdirSync(home, { withFileTypes: true });
+  } catch (_) {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    if (WORKSPACE_DISCOVERY_SKIP_DIRS.has(entry.name)) continue;
+    const dir = join(home, entry.name);
+    if (!hasWorkspaceDiscoveryMarker(dir)) continue;
+    addWorkspaceCandidate(map, {
+      workspaceId: safeWorkspaceIdFromPath(dir),
+      agentId: safeWorkspaceIdFromPath(dir),
+      path: dir,
+      source: "openclawHome.workspaceMarkers",
+      confidence: "medium",
+    });
+  }
+}
+
+function collectNeoLegacyWorkspaceKeys(neoRoot, candidates) {
+  const orphanLegacyKeys = [];
+  if (!neoRoot) return orphanLegacyKeys;
+  const workspacesDir = join(normalizeAbsPath(neoRoot), "workspaces");
+  if (!existsSync(workspacesDir)) return orphanLegacyKeys;
+  let entries = [];
+  try {
+    entries = readdirSync(workspacesDir, { withFileTypes: true });
+  } catch (_) {
+    return orphanLegacyKeys;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const legacyKey = entry.name;
+    if (!legacyKey.startsWith("workspace")) continue;
+    const match = candidates.find((candidate) => candidate.legacyKeys.includes(legacyKey) || basename(candidate.path) === legacyKey);
+    if (match) {
+      if (!match.legacyKeys.includes(legacyKey)) match.legacyKeys.push(legacyKey);
+      match.legacyKeys = [...new Set(match.legacyKeys)].sort();
+    } else {
+      orphanLegacyKeys.push(legacyKey);
+    }
+  }
+  return orphanLegacyKeys.sort();
+}
+
+export function discoverLocalObsidianWorkspaceCandidates(rawConfig = {}, options = {}) {
+  const candidateMap = new Map();
+  collectConfiguredWorkspaceCandidates(rawConfig, candidateMap);
+  collectOpenClawAgentWorkspaceCandidates(options.openclawConfig || {}, candidateMap);
+  collectOpenClawHomeWorkspaceCandidates(options.openclawHome || process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"), candidateMap);
+  const candidates = [...candidateMap.values()]
+    .map(finalizeWorkspaceCandidate)
+    .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.path.localeCompare(b.path));
+  const orphanLegacyKeys = collectNeoLegacyWorkspaceKeys(options.neoRoot, candidates);
+  return {
+    ok: true,
+    dryRun: options.dryRun !== false,
+    candidates,
+    existing: candidates.filter((candidate) => candidate.existing),
+    wouldAdd: candidates.filter((candidate) => !candidate.existing),
+    orphanLegacyKeys,
+  };
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value || {}));
+}
+
+function pluginConfigFromOpenClawConfig(config) {
+  const entries = config?.plugins?.entries || {};
+  return entries["memory-lancedb-namespaced"]?.config
+    || entries["@cyb3rb1ade/plur1bus-memory"]?.config
+    || null;
+}
+
+function ensurePluginBridgeConfig(config) {
+  config.plugins = config.plugins || {};
+  config.plugins.entries = config.plugins.entries || {};
+  const pluginId = config.plugins.entries["memory-lancedb-namespaced"]
+    ? "memory-lancedb-namespaced"
+    : (config.plugins.entries["@cyb3rb1ade/plur1bus-memory"] ? "@cyb3rb1ade/plur1bus-memory" : "memory-lancedb-namespaced");
+  config.plugins.entries[pluginId] = config.plugins.entries[pluginId] || {};
+  config.plugins.entries[pluginId].config = config.plugins.entries[pluginId].config || {};
+  config.plugins.entries[pluginId].config.obsidianBridge = config.plugins.entries[pluginId].config.obsidianBridge || {};
+  return config.plugins.entries[pluginId].config.obsidianBridge;
+}
+
+function candidateAsWorkspaceEntry(candidate) {
+  return {
+    workspace_id: candidate.workspaceId,
+    agent_id: candidate.agentId,
+    label: candidate.label || candidate.workspaceId,
+    path: candidate.path,
+    aliases: [...new Set([...(candidate.aliases || []), ...(candidate.legacyKeys || [])])].filter(Boolean).sort(),
+  };
+}
+
+export function mergeDiscoveredObsidianWorkspaces(openclawConfig = {}, candidates = []) {
+  const next = cloneJson(openclawConfig);
+  const bridgeCfg = ensurePluginBridgeConfig(next);
+  const workspaces = Array.isArray(bridgeCfg.workspaces) ? bridgeCfg.workspaces : [];
+  const existingIds = new Set(workspaces.map((entry) => workspaceEntryId(entry, workspaceEntryPath(entry))).filter(Boolean));
+  const existingPaths = new Set(workspaces.map(workspaceEntryPath).filter(Boolean).map(pathKey));
+  const added = [];
+  const skipped = [];
+
+  for (const candidate of candidates) {
+    if (!candidate?.path || !candidate.workspaceId) continue;
+    const normalizedPath = pathKey(candidate.path);
+    if (existingIds.has(candidate.workspaceId) || existingPaths.has(normalizedPath)) {
+      skipped.push({ workspaceId: candidate.workspaceId, path: normalizedPath, reason: "already_configured" });
+      continue;
+    }
+    const entry = candidateAsWorkspaceEntry(candidate);
+    workspaces.push(entry);
+    existingIds.add(candidate.workspaceId);
+    existingPaths.add(normalizedPath);
+    added.push(entry);
+  }
+  bridgeCfg.workspaces = workspaces;
+  return { config: next, added, skipped };
+}
+
+function assertFreshBackupDir(backupDir, options = {}) {
+  if (!backupDir) throw new Error("Refusing to write workspace discovery without --backup-dir");
+  const dir = normalizeAbsPath(backupDir);
+  if (!existsSync(dir)) throw new Error(`Backup directory does not exist: ${dir}`);
+  const stats = statSync(dir);
+  if (!stats.isDirectory()) throw new Error(`Backup path is not a directory: ${dir}`);
+  const maxAgeMs = Number(options.maxAgeMs || 24 * 60 * 60 * 1000);
+  if (Date.now() - stats.mtimeMs > maxAgeMs) throw new Error(`Backup directory is not fresh enough: ${dir}`);
+  return dir;
+}
+
+export function writeDiscoveredObsidianWorkspaces(configPath, candidates = [], options = {}) {
+  if (!configPath) throw new Error("OpenClaw config path is required");
+  const backupDir = assertFreshBackupDir(options.backupDir, { maxAgeMs: options.backupMaxAgeMs });
+  const normalizedConfigPath = normalizeAbsPath(configPath);
+  const originalText = readFileSync(normalizedConfigPath, "utf8");
+  const original = JSON.parse(originalText);
+  const pluginCfg = pluginConfigFromOpenClawConfig(original);
+  const existingBridgeCfg = pluginCfg?.obsidianBridge || {};
+  const filteredCandidates = (candidates || []).filter((candidate) => !candidate.existing);
+  const { config, added, skipped } = mergeDiscoveredObsidianWorkspaces(original, filteredCandidates);
+  const backupPath = join(backupDir, `openclaw.json.obsidian-discover-${timestampId()}.bak`);
+  writeFileSync(backupPath, originalText, "utf8");
+  if (options.dryRun === true) {
+    return {
+      ok: true,
+      dryRun: true,
+      backupPath,
+      existingWorkspaces: Array.isArray(existingBridgeCfg.workspaces) ? existingBridgeCfg.workspaces.length : 0,
+      added,
+      skipped,
+      written: false,
+    };
+  }
+  if (added.length > 0) writeJsonAtomic(normalizedConfigPath, config);
+  return {
+    ok: true,
+    dryRun: false,
+    backupPath,
+    existingWorkspaces: Array.isArray(existingBridgeCfg.workspaces) ? existingBridgeCfg.workspaces.length : 0,
+    added,
+    skipped,
+    written: added.length > 0,
+  };
 }
 
 export function parseMarkdownFrontmatter(content) {
