@@ -1,7 +1,7 @@
 # PLUR1BUS Neo-Arch v3 Memory Guide
 
-Stand: 2026-05-20<br>
-Version: `3.2.3`<br>
+Stand: 2026-05-23<br>
+Version: `3.5.0`<br>
 Branch: `main`
 
 Dieses Dokument beschreibt nur noch den v3-Normalbetrieb und den v2→v3
@@ -13,10 +13,10 @@ entfernt.
 
 PLUR1BUS v3 ist ein kognitiver Memory-Layer fuer OpenClaw:
 
-- PLUR1BUS `3.2.3` benötigt OpenClaw `2026.5.12-beta.6`
+- PLUR1BUS `3.5.0` benötigt OpenClaw `2026.5.12-beta.6`
   oder neuer. Ältere OpenClaw-Versionen haben nicht den vorausgesetzten
   OpenClaw-native Memory-Stack fuer v3.
-- PLUR1BUS `3.2.3` wurde zusätzlich gegen OpenClaw `2026.5.18` mit
+- PLUR1BUS `3.5.0` wurde zusätzlich gegen OpenClaw `2026.5.18` mit
   isolierter managed `npm-pack:`-Installation geprüft.
 - `memory-core` bleibt der exklusive OpenClaw-Memory-Slot.
 - `memory-lancedb-namespaced` läuft default als additives Augment.
@@ -150,6 +150,96 @@ Das ist keine Funktionsänderung der Tools, sondern ein OpenClaw-native
 Discovery-/Inspect-Kompatibilitätsfix. `memory-core` bleibt weiterhin
 Slot-Owner; PLUR1BUS setzt weiterhin kein `kind:"memory"`.
 
+## 1.4 Obsidian Bridge ab v3.5.0
+
+Die Obsidian Bridge ist eine optionale Review-/Control-Room-Schicht, kein
+zweites Memory-System. Sie schreibt Markdown-Artefakte in einen konfigurierten
+Vault und haelt PLUR1BUS authoritativ:
+
+- `memory-core` bleibt Slot-Owner.
+- PLUR1BUS bleibt Augment-Plugin.
+- Obsidian-Notizen sind untrusted input.
+- `memory/KNOWLEDGE.md` bleibt kuratierte Workspace-Wahrheit und wird nie
+  still aus Obsidian ueberschrieben.
+- Mutation passiert nur ueber explizit genehmigte ReviewBundle-Items plus
+  Revalidation direkt vor `apply`.
+- `.obsidian` wird nur geschrieben, wenn `allowDotObsidianWrite:true` gesetzt
+  ist.
+
+Alle Agenten haben dieselben Bridge-Capabilities. Unterschiede sind nur
+Default-Perspektiven:
+
+```json
+{
+  "agents": {
+    "include": ["*"],
+    "equalCapabilities": true,
+    "defaultProfiles": {
+      "main": "standard",
+      "bernhardine": "conservative",
+      "heisenberg": "adversarial"
+    }
+  }
+}
+```
+
+Review-Profile sind keine Berechtigungen. Jeder Agent kann `standard`,
+`conservative`, `adversarial`, `maintenance` und `project_manager` ausfuehren.
+
+Der sichere Vault-Root ist additiv:
+
+```text
+00-system/plur1bus/
+  README.md
+  dashboards/
+  review-bundles/
+  proposals/
+  doctor/
+  conflicts/
+  memory-explanations/
+  stale-knowledge/
+  project-hubs/
+  tasks/
+  managed-blocks.log.jsonl
+```
+
+Machine-managed Markdown nutzt stabile Marker mit Checksums. Human-Text
+ausserhalb dieser Marker wird nicht ueberschrieben. Bei Hash-Mismatch erzeugt
+PLUR1BUS einen Konflikt/Vorschlag statt zu schreiben.
+
+Die taegliche Morning Review laeuft proposal-only:
+
+1. Snapshot/Lock.
+2. `maintenance_light`.
+3. Change Collection.
+4. Review-Proposals.
+5. `adversarial_light`.
+6. Risk Classification.
+7. Deduplication.
+8. ReviewBundle nach Obsidian.
+9. User Summary.
+10. Warten auf explizite Freigabe.
+11. Revalidate + apply approved only.
+
+Empfohlener Scheduler ist OpenClaw Cron, nicht Host-Cron:
+
+```bash
+openclaw cron add \
+  --name "PLUR1BUS Morning Review" \
+  --cron "0 9 * * *" \
+  --tz "Europe/Zurich" \
+  --session isolated \
+  --message "Run /plur1bus obsidian morning-review. Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary." \
+  --announce
+```
+
+Failure Mode: Fehlt der Vault, ist Obsidian geloescht oder ist die Bridge
+deaktiviert, muessen `memory_store`, `memory_recall`, `memory_forget` und
+`knowledge_update` weiter funktionieren. Recovery: `obsidianBridge.enabled=false`,
+OpenClaw-Cron deaktivieren/entfernen und bei Bedarf eine vorige PLUR1BUS-
+Version installieren. Memory-Daten werden durch das Deaktivieren der Bridge
+nicht geloescht.
+
 ## 2. Architektur
 
 ```text
@@ -189,7 +279,7 @@ OpenClaw Gateway
 ```
 
 Default ist `neo.mode = "augment"`. `registerMemoryCapability` wird in
-`3.2.3` nicht genutzt; auch ein versehentlich gesetztes
+`3.x` nicht genutzt; auch ein versehentlich gesetztes
 `neo.mode="slot"` darf PLUR1BUS nicht zum OpenClaw-Memory-Slot machen.
 
 ## 3. Zentrale Konfiguration

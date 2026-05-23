@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v3.3.0-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v3.3.0)
+[![Release](https://img.shields.io/badge/release-v3.5.0-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v3.5.0)
 
 ---
 
@@ -14,7 +14,7 @@ PLUR1BUS v3 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `3.3.0`<br>
+**Aktuelle Version:** `3.5.0`<br>
 **Branch:** `main`<br>
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1` und `2026.5.18`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
@@ -160,58 +160,135 @@ gelten `agentId`, `storedBy`, `scope` und der Memory-Namespace.
 
 ## Obsidian Bridge
 
-Ab `3.3.0` kann PLUR1BUS pro Workspace eine Obsidian-kompatible Markdown-
-Oberflaeche verwalten. Obsidian ist dabei nicht die Runtime-Datenbank:
-`memory-core` bleibt Slot-Owner, PLUR1BUS/LanceDB bleibt Recall, Merge, TTL,
-Provenance und Auto-Capture. Die Vaults sind nur sichtbare, editierbare
-Markdown-Projektionen.
+Ab `3.5.0` hat PLUR1BUS eine optionale Obsidian-Bridge als Review- und
+Control-Room-Schicht. Sie schreibt Markdown-Artefakte fuer Doctor-Reports,
+ReviewBundles, Konflikte, Project Hubs, Memory-Erklaerungen, Hygiene- und
+Task-Vorschlaege in einen Vault. Sie ist kein zweites Memory-System:
+`memory-core` bleibt Slot-Owner, PLUR1BUS bleibt Augment-Plugin, LanceDB- und
+Provider-Pfade bleiben unveraendert, und `memory/KNOWLEDGE.md` bleibt
+kuratierte Workspace-Wahrheit.
 
-Default bleibt sicher aus:
+Default bleibt sicher aus und approval-gated:
 
 ```json
 {
   "obsidianBridge": {
     "enabled": false,
-    "dryRun": true,
-    "watch": false,
-    "tombstoneOnDelete": true
+    "mode": "augment",
+    "vaultPath": null,
+    "reviewRoot": "00-system/plur1bus",
+    "requireUserApproval": true,
+    "applyApprovedOnly": true,
+    "writeManagedBlocks": true,
+    "allowWrite": true,
+    "allowDotObsidianWrite": false,
+    "capabilityPack": "full",
+    "agents": {
+      "include": ["*"],
+      "equalCapabilities": true,
+      "defaultProfiles": {
+        "main": "standard",
+        "bernhardine": "conservative",
+        "heisenberg": "adversarial"
+      }
+    },
+    "morningReview": {
+      "enabled": false,
+      "cron": "0 9 * * *",
+      "timezone": "Europe/Zurich",
+      "delivery": "announce",
+      "session": "isolated",
+      "writeReviewBundle": true,
+      "applyMode": "manual"
+    }
   }
 }
 ```
 
-Ziel-Workspaces auf diesem Host:
+Alle Agenten sind capability-equal. `main`, `bernhardine`, `heisenberg` und
+beliebige weitere Agent-IDs koennen dieselben Bridge-Funktionen ausfuehren.
+Review-Profile (`standard`, `conservative`, `adversarial`, `maintenance`,
+`project_manager`) sind Perspektiven und Defaults, keine Berechtigungen.
 
-- Bernd: `/root/.openclaw/workspace`, technischer Namespace `main`
-- Bernhardine: `/root/.openclaw/workspace-bernhardine`
-- Heisenberg: `/root/.openclaw/workspace-heisenberg`
+Slash Commands:
 
-Die Bridge liest nur relevante Markdown-Dateien via `scan`/`watch`, nicht den
-ganzen Vault pro Turn. Auto-Recall kommt weiter aus PLUR1BUS. Relevante
-Obsidian-Eintraege werden nur dann runtime-wirksam, wenn sie Memory-Karten,
-`memory/KNOWLEDGE.md` oder validierte Decisions sind. Freie Notizen bleiben
-suchbare Dateien, aber keine automatische Recall-Wahrheit.
-
-CLI:
-
-```bash
-node scripts/workspace-vault-bridge.mjs init --dry-run
-node scripts/workspace-vault-bridge.mjs init --live
-node scripts/workspace-vault-bridge.mjs scan
-node scripts/workspace-vault-bridge.mjs sync --dry-run
-node scripts/workspace-vault-bridge.mjs doctor
-node scripts/memory-doctor.mjs obsidian
+```text
+/plur1bus obsidian doctor
+/plur1bus obsidian review prepare
+/plur1bus obsidian review show <bundleId>
+/plur1bus obsidian review approve <bundleId> --items <ids|all|low-risk>
+/plur1bus obsidian review reject <bundleId> --items <ids|all>
+/plur1bus obsidian review snooze <bundleId> --items <ids> --until <date|duration>
+/plur1bus obsidian review apply <bundleId>
+/plur1bus obsidian morning-review
+/plur1bus obsidian conflicts
+/plur1bus obsidian project-hub <topic>
+/plur1bus obsidian memory explain <id>
+/plur1bus obsidian weekly
+/plur1bus obsidian cron print-morning-review
+/plur1bus obsidian cron install-morning-review --force
 ```
 
-`sync --live` schreibt nicht roh nach LanceDB. Im Plugin-Runtime-Pfad nutzt die
-Bridge den selben Store/Merge/Pending-Pfad wie `memory_store`. Ausserhalb der
-Runtime legt sie `store-queue.jsonl` unter
-`.adaptive-learning/obsidian-bridge/` an. Delete erzeugt Tombstones unter
-`memory/archive/expired`, kein Hard Delete.
+`prepare` ist nicht `apply`. Ein ReviewBundle hat Frontmatter mit
+`type: plur1bus-review-bundle`, `bundleId`, `createdByAgent`, `status:
+pending_user_review`, `applyMode: approval_required`, Review-Profilen und
+`obsidianBridgeVersion: 3.5.0`. Jedes Item hat stabile IDs, Status, Risk,
+Target, Action, Evidence, Preconditions, Maintenance-/Adversarial-Review und
+Apply-Preview. Checkboxen in Obsidian reichen nie fuer Mutation; `apply` liest
+das Bundle neu, revalidiert Hashes/Preconditions und wendet nur explizit
+genehmigte, sichere Items an.
 
-Bernds alte `.obsidian` wird beim Live-Init als `.obsidian.legacy-<timestamp>`
-gesichert und danach durch eine frische Minimal-Konfig ersetzt. Rollback:
-`obsidianBridge.enabled=false`, Watcher stoppen, bei Bedarf `.obsidian`
-entfernen und das Legacy-Verzeichnis zurueckbenennen.
+Der Vault-Teil ist additiv:
+
+```text
+00-system/plur1bus/
+  README.md
+  dashboards/
+  review-bundles/
+  proposals/
+  doctor/
+  conflicts/
+  memory-explanations/
+  stale-knowledge/
+  project-hubs/
+  tasks/
+  managed-blocks.log.jsonl
+```
+
+Machine-managed Markdown steht nur in markierten Blocks:
+
+```md
+<!-- plur1bus:managed:start id="morning-summary" agent="main" bundle="rb-2026-05-23-0900" hash="sha256:..." -->
+...
+<!-- plur1bus:managed:end -->
+```
+
+PLUR1BUS ueberschreibt keinen Human-Text ausserhalb solcher Blocks. Bei
+Hash-Mismatch wird ein Konflikt/Vorschlag geschrieben statt zu mutieren.
+Schreibpfade sind allowlisted, Pfad-Traversal wird abgelehnt, `.obsidian`
+bleibt unangetastet, solange `allowDotObsidianWrite` nicht explizit `true` ist.
+
+Die Morning-Review-Pipeline laeuft proposal-only: Snapshot/Lock,
+`maintenance_light`, Change Collection, Proposal Generation,
+`adversarial_light`, Risk Classification, Deduplication, ReviewBundle-Write,
+User Summary, then explicit approval. OpenClaw Cron, nicht Host-Cron, ist der
+empfohlene Scheduler:
+
+```bash
+openclaw cron add \
+  --name "PLUR1BUS Morning Review" \
+  --cron "0 9 * * *" \
+  --tz "Europe/Zurich" \
+  --session isolated \
+  --message "Run /plur1bus obsidian morning-review. Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary." \
+  --announce
+```
+
+Failure Modes: Fehlt Obsidian, ist `vaultPath` kaputt, wird der Vault geloescht
+oder ist die Bridge deaktiviert, laufen `memory_store`, `memory_recall`,
+`memory_forget` und `knowledge_update` weiter. Doctor meldet die Bridge-Probleme
+read-only. Recovery: `obsidianBridge.enabled=false`, Morning-Review-Cron
+entfernen/deaktivieren, ggf. vorherige ClawHub/GitHub-Version installieren.
 
 ## Konfiguration
 
@@ -265,7 +342,7 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `3.3.0`:
+Provider-Status in `3.5.0`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
@@ -441,7 +518,7 @@ runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `3.3.0`<br>
+**Current version:** `3.5.0`<br>
 **Branch:** `main`<br>
 **Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, and `2026.5.18`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
@@ -452,7 +529,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `3.3.0`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `3.5.0`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental
@@ -465,6 +542,16 @@ with `registerTool(..., { names })`. Since `3.2.3`, the native embedding
 provider bridge only expands `${ENV_VAR}` for explicit OpenAI/OpenAI-compatible/
 PLUR1BUS provider variables and provider-header prefixes; unrelated env reads
 such as `${HOME}` are rejected.
+
+Obsidian Bridge in `3.5.0`: optional, disabled by default, and strictly
+approval-gated. It writes Markdown ReviewBundles, doctor reports, conflict
+reports, project hubs, task suggestions, and memory explanation pages under
+`00-system/plur1bus/`. Obsidian is a review/control-room surface, not the
+memory source of truth. All configured agents receive the same bridge
+capabilities; review profiles are perspectives, not permissions. The Morning
+Review command prepares proposals only and is intended for OpenClaw Cron at
+09:00 Europe/Zurich; apply re-reads the bundle, revalidates hashes and
+preconditions, and applies only explicitly approved items.
 
 PLUR1BUS `3.0.0-beta.2` and newer requires the OpenClaw-native memory stack
 from OpenClaw `2026.5.12-beta.6` or newer. Existing v2 LanceDB data remains

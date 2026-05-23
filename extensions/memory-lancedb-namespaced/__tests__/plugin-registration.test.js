@@ -144,6 +144,20 @@ test("plugin registers without embedding secrets for inspect and doctor flows", 
   }
 });
 
+test("plugin routes /plur1bus obsidian commands through the control-room layer", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi(baseConfig(tmp, {
+      obsidianBridge: { enabled: false },
+    }));
+    const command = registered.commands.find(item => item.name === "plur1bus");
+    const result = await command.handler({ args: "obsidian doctor", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
+    assert.match(result.text, /missing_vault_path|bridge_disabled/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("plugin registers local-transformers config without api keys or model imports", () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
   try {

@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "Memory (LanceDB, per-Agent)",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory and OpenClaw-native turn journal, provenance, curation, and recall.",
-  "version": "3.3.0",
+  "version": "3.5.0",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -304,6 +304,172 @@
             "type": "boolean",
             "default": false
           },
+          "mode": {
+            "type": "string",
+            "enum": ["augment"],
+            "default": "augment"
+          },
+          "vaultPath": {
+            "type": ["string", "null"],
+            "default": null
+          },
+          "workspaceRoot": {
+            "type": ["string", "null"],
+            "default": null
+          },
+          "reviewRoot": {
+            "type": "string",
+            "default": "00-system/plur1bus"
+          },
+          "requireUserApproval": {
+            "type": "boolean",
+            "default": true
+          },
+          "applyApprovedOnly": {
+            "type": "boolean",
+            "default": true
+          },
+          "writeManagedBlocks": {
+            "type": "boolean",
+            "default": true
+          },
+          "allowWrite": {
+            "type": "boolean",
+            "default": true
+          },
+          "allowDotObsidianWrite": {
+            "type": "boolean",
+            "default": false
+          },
+          "capabilityPack": {
+            "type": "string",
+            "enum": ["full"],
+            "default": "full"
+          },
+          "agents": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "include": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": ["*"]
+              },
+              "equalCapabilities": {
+                "type": "boolean",
+                "default": true
+              },
+              "defaultProfiles": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": ["standard", "conservative", "adversarial", "maintenance", "project_manager"]
+                },
+                "default": {
+                  "main": "standard",
+                  "bernhardine": "conservative",
+                  "heisenberg": "adversarial"
+                }
+              }
+            }
+          },
+          "morningReview": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "cron": {
+                "type": "string",
+                "default": "0 9 * * *"
+              },
+              "timezone": {
+                "type": "string",
+                "default": "Europe/Zurich"
+              },
+              "delivery": {
+                "type": "string",
+                "enum": ["announce", "silent"],
+                "default": "announce"
+              },
+              "session": {
+                "type": "string",
+                "enum": ["isolated", "current"],
+                "default": "isolated"
+              },
+              "writeReviewBundle": {
+                "type": "boolean",
+                "default": true
+              },
+              "applyMode": {
+                "type": "string",
+                "enum": ["manual"],
+                "default": "manual"
+              }
+            }
+          },
+          "maintenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "daily": {
+                "type": "string",
+                "enum": ["light"],
+                "default": "light"
+              },
+              "weekly": {
+                "type": "string",
+                "enum": ["deep"],
+                "default": "deep"
+              }
+            }
+          },
+          "adversarial": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "daily": {
+                "type": "string",
+                "enum": ["light"],
+                "default": "light"
+              },
+              "weekly": {
+                "type": "string",
+                "enum": ["deep"],
+                "default": "deep"
+              }
+            }
+          },
+          "optionalIntegrations": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "dataview": {
+                "type": "boolean",
+                "default": false
+              },
+              "tasks": {
+                "type": "boolean",
+                "default": false
+              },
+              "bases": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "maxFileBytes": {
+            "type": "number",
+            "default": 262144
+          },
+          "maxItems": {
+            "type": "number",
+            "default": 200
+          },
           "dryRun": {
             "type": "boolean",
             "default": true
@@ -356,6 +522,12 @@
                   "items": {
                     "type": "string"
                   }
+                },
+                "requireUserApproval": {
+                  "type": "boolean"
+                },
+                "allowDotObsidianWrite": {
+                  "type": "boolean"
                 },
                 "tombstoneOnDelete": {
                   "type": "boolean"
