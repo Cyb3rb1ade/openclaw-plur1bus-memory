@@ -26,11 +26,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from "node:pat
 
 export const OBSIDIAN_BRIDGE_VERSION = 1;
 
-export const DEFAULT_OBSIDIAN_WORKSPACES = [
-  { workspace_id: "main", agent_id: "main", path: "~/.openclaw/workspace", label: "Bernd" },
-  { workspace_id: "bernhardine", agent_id: "bernhardine", path: "~/.openclaw/workspace-bernhardine", label: "Bernhardine" },
-  { workspace_id: "heisenberg", agent_id: "heisenberg", path: "~/.openclaw/workspace-heisenberg", label: "Heisenberg" },
-];
+export const DEFAULT_OBSIDIAN_WORKSPACES = [];
 
 export const DEFAULT_INCLUDE_GLOBS = [
   "memory/cards/**/*.md",

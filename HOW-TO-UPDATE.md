@@ -49,8 +49,7 @@ Live `~/.openclaw` update record, 2026-05-23:
 ## PLUR1BUS 4.0.1 Workspace Cards Harmonization
 
 Use this corrective lane when existing Neo data lives under legacy basename keys
-such as `_neo/workspaces/workspace`, `_neo/workspaces/workspace-bernhardine`, or
-`_neo/workspaces/workspace-heisenberg`.
+derived from workspace directory names instead of configured workspace IDs.
 
 1. Create a rollback bundle before install or migration:
 
@@ -72,13 +71,12 @@ npm pack --json
 openclaw plugins install --force ./cyb3rb1ade-plur1bus-memory-4.0.1.tgz
 ```
 
-3. Ensure all three Obsidian workspace mappings exist in plugin config:
+3. Ensure every local Obsidian workspace mapping exists in plugin config:
 
 ```json
 [
-  { "workspace_id": "main", "agent_id": "main", "path": "~/.openclaw/workspace", "label": "Bernd" },
-  { "workspace_id": "bernhardine", "agent_id": "bernhardine", "path": "~/.openclaw/workspace-bernhardine", "label": "Bernhardine" },
-  { "workspace_id": "heisenberg", "agent_id": "heisenberg", "path": "~/.openclaw/workspace-heisenberg", "label": "Heisenberg" }
+  { "workspace_id": "primary", "agent_id": "primary-agent", "path": "~/path/to/primary-workspace", "label": "Primary" },
+  { "workspace_id": "secondary", "agent_id": "secondary-agent", "path": "~/path/to/secondary-workspace", "label": "Secondary" }
 ]
 ```
 
@@ -313,10 +311,10 @@ PLUR1BUS:
   `requireUserApproval:true`, `applyApprovedOnly:true`,
   `allowDotObsidianWrite:false`, `watch:false`, and
   `tombstoneOnDelete:true`.
-- `node scripts/workspace-vault-bridge.mjs init --dry-run` shows only the three
-  target workspaces: Bernd/main, Bernhardine and Heisenberg.
+- `node scripts/workspace-vault-bridge.mjs init --dry-run` shows only the
+  configured target workspaces.
 - `node scripts/memory-doctor.mjs obsidian` reports no active legacy `.obsidian`
-  after live vault init. Bernd's old `.obsidian` must exist only as
+  after live vault init. Any old `.obsidian` must exist only as
   `.obsidian.legacy-<timestamp>`.
 
 `memory-core`:

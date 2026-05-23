@@ -6,21 +6,22 @@ recall system.
 
 ## Workspace Mapping
 
-Canonical workspace IDs are authoritative:
+Canonical workspace IDs are authoritative and must come from local
+`obsidianBridge.workspaces` config:
 
-| Agent | Canonical workspace ID | Workspace path |
+| Agent or workspace | Canonical workspace ID | Workspace path |
 |---|---|---|
-| Bernd | `main` | `~/.openclaw/workspace` |
-| Bernhardine | `bernhardine` | `~/.openclaw/workspace-bernhardine` |
-| Heisenberg | `heisenberg` | `~/.openclaw/workspace-heisenberg` |
+| local primary workspace | configured ID | configured path |
+| local secondary workspace | configured ID | configured path |
+| local tertiary workspace | configured ID | configured path |
 
-Legacy Neo basename keys remain readable aliases:
+Legacy Neo basename keys remain readable aliases when they can be derived from
+the configured workspace path or declared through `neo.workspaceAliases` /
+`neo.workspaces[].legacyKeys`:
 
 | Legacy key | Canonical key |
 |---|---|
-| `workspace` | `main` |
-| `workspace-bernhardine` | `bernhardine` |
-| `workspace-heisenberg` | `heisenberg` |
+| path basename or configured alias | configured ID |
 
 New Neo writes should resolve configured workspace paths to canonical keys before
 falling back to path basenames.
@@ -77,13 +78,11 @@ from `npm postinstall`, never deletes legacy dirs, and never mutates LanceDB.
 
 ## Troubleshooting
 
-- If Bernd appears to have no BehaviorCards, check both canonical and legacy
-  locations. Before `4.0.1`, Bernd commonly wrote to
-  `_neo/workspaces/workspace/behavior-cards.jsonl`; after migration the canonical
-  copy should be `_neo/workspaces/main/behavior-cards.jsonl`.
-- If Bernhardine or Heisenberg are missing from Obsidian Bridge, merge their
-  workspace entries into `obsidianBridge.workspaces` without overwriting other
-  config.
+- If a workspace appears to have no BehaviorCards, check both canonical and
+  legacy locations. Before `4.0.1`, path-basename keys could be used; after
+  migration the canonical copy should be under the configured workspace ID.
+- If a workspace is missing from Obsidian Bridge, merge its entry into
+  `obsidianBridge.workspaces` without overwriting other config.
 - If migration apply is refused, create or pass a fresh backup directory.
 - If Obsidian is disabled, deleted, or misconfigured, PLUR1BUS memory tools must
   still work through LanceDB and OpenClaw.

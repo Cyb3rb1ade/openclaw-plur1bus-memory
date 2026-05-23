@@ -161,10 +161,9 @@ gelten `agentId`, `storedBy`, `scope` und der Memory-Namespace.
 ## Obsidian Bridge
 
 Ab `4.0.0` hat PLUR1BUS eine optionale Obsidian Living Dashboard-Schicht. In
-`4.0.1` harmonisiert PLUR1BUS die Workspace-Card-Identitaet: Bernd schreibt
-kanonisch nach `main`, Bernhardine nach `bernhardine` und Heisenberg nach
-`heisenberg`, waehrend alte `_neo/workspaces/workspace*` Daten als Legacy-Aliase
-lesbar bleiben. Die Bridge
+`4.0.1` harmonisiert PLUR1BUS die Workspace-Card-Identitaet: konfigurierte
+Workspace-IDs gewinnen gegen Pfad-Basename-Fallbacks, waehrend alte
+`_neo/workspaces/<basename>` Daten als Legacy-Aliase lesbar bleiben. Die Bridge
 schreibt Markdown-Artefakte fuer Doctor-Reports, ReviewBundles, kanonische
 Records, Dashboards, Bases, Konflikte, Project Hubs, Memory-Erklaerungen,
 Provenance, Impact-Analysen, Link-Vorschlaege, Hygiene- und Task-Vorschlaege

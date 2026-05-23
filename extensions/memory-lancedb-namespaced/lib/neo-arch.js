@@ -58,26 +58,7 @@ export const NEO_TRUST_LEVELS = [
 
 export const NEO_SCOPES = ["agent_private", "workspace_shared", "global_user"];
 export const NEO_STATUSES = ["candidate", "active", "promoted", "demoted", "conflict", "pruned", "tombstoned"];
-export const DEFAULT_NEO_WORKSPACE_MAPPINGS = Object.freeze([
-  {
-    workspaceKey: "main",
-    paths: ["~/.openclaw/workspace"],
-    aliases: ["main", "bernd", "workspace"],
-    legacyKeys: ["workspace"],
-  },
-  {
-    workspaceKey: "bernhardine",
-    paths: ["~/.openclaw/workspace-bernhardine"],
-    aliases: ["bernhardine", "workspace-bernhardine"],
-    legacyKeys: ["workspace-bernhardine"],
-  },
-  {
-    workspaceKey: "heisenberg",
-    paths: ["~/.openclaw/workspace-heisenberg"],
-    aliases: ["heisenberg", "workspace-heisenberg"],
-    legacyKeys: ["workspace-heisenberg"],
-  },
-]);
+export const DEFAULT_NEO_WORKSPACE_MAPPINGS = Object.freeze([]);
 export const NEO_JSONL_FILES = Object.freeze([
   "turn-journal.jsonl",
   "memory-candidates.jsonl",
@@ -157,16 +138,18 @@ function collectWorkspaceEntries(config = {}, options = {}) {
     if (!entry || typeof entry !== "object") return;
     const workspaceKey = firstString(entry.workspaceKey, entry.workspace_id, entry.workspaceId, entry.id, entry.name);
     if (!workspaceKey) return;
+    const paths = [
+      entry.path,
+      entry.workspacePath,
+      entry.workspaceDir,
+      entry.dir,
+      entry.workspace,
+      ...(Array.isArray(entry.paths) ? entry.paths : []),
+    ].filter(value => typeof value === "string" && value.trim());
+    const pathBasenames = paths.map(value => basename(expandHomePath(value))).filter(Boolean);
     entries.push({
       workspaceKey: sanitizePathPart(workspaceKey),
-      paths: [
-        entry.path,
-        entry.workspacePath,
-        entry.workspaceDir,
-        entry.dir,
-        entry.workspace,
-        ...(Array.isArray(entry.paths) ? entry.paths : []),
-      ].filter(value => typeof value === "string" && value.trim()),
+      paths,
       aliases: [
         entry.alias,
         entry.label,
@@ -178,8 +161,12 @@ function collectWorkspaceEntries(config = {}, options = {}) {
         entry.id,
         entry.name,
         ...(Array.isArray(entry.aliases) ? entry.aliases : []),
+        ...pathBasenames,
       ].filter(value => typeof value === "string" && value.trim()),
-      legacyKeys: Array.isArray(entry.legacyKeys) ? entry.legacyKeys.filter(value => typeof value === "string" && value.trim()) : [],
+      legacyKeys: [
+        ...(Array.isArray(entry.legacyKeys) ? entry.legacyKeys.filter(value => typeof value === "string" && value.trim()) : []),
+        ...pathBasenames.filter(value => sanitizePathPart(value) !== sanitizePathPart(workspaceKey)),
+      ],
     });
   };
 

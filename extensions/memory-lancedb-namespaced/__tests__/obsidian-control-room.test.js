@@ -319,27 +319,27 @@ test("no .obsidian write occurs unless explicitly configured", () => {
 test("obsidian init workspaces command creates required directories idempotently", async () => {
   const { tmp } = makeVault();
   try {
-    const main = join(tmp, "workspace");
-    const bernhardine = join(tmp, "workspace-bernhardine");
-    const heisenberg = join(tmp, "workspace-heisenberg");
+    const main = join(tmp, "workspace-primary");
+    const secondary = join(tmp, "workspace-secondary");
+    const tertiary = join(tmp, "workspace-tertiary");
     const cfg = {
       enabled: true,
       dryRun: false,
       workspaces: [
-        { workspace_id: "main", agent_id: "main", path: main, label: "Bernd" },
-        { workspace_id: "bernhardine", agent_id: "bernhardine", path: bernhardine, label: "Bernhardine" },
-        { workspace_id: "heisenberg", agent_id: "heisenberg", path: heisenberg, label: "Heisenberg" },
+        { workspace_id: "main", agent_id: "main", path: main, label: "Primary" },
+        { workspace_id: "secondary", agent_id: "secondary-agent", path: secondary, label: "Secondary" },
+        { workspace_id: "tertiary", agent_id: "tertiary-agent", path: tertiary, label: "Tertiary" },
       ],
     };
     mkdirSync(main, { recursive: true });
-    mkdirSync(bernhardine, { recursive: true });
-    mkdirSync(heisenberg, { recursive: true });
+    mkdirSync(secondary, { recursive: true });
+    mkdirSync(tertiary, { recursive: true });
 
     const result = await handleObsidianBridgeCommand(["init", "workspaces", "--verbose"], { config: cfg });
     const parsed = JSON.parse(result.text);
     assert.equal(parsed.ok, true);
     assert.equal(parsed.workspaces, 3);
-    for (const dir of [main, bernhardine, heisenberg]) {
+    for (const dir of [main, secondary, tertiary]) {
       assert.equal(existsSync(join(dir, "memory/cards")), true);
       assert.equal(existsSync(join(dir, "memory/daily")), true);
       assert.equal(existsSync(join(dir, "memory/archive/expired")), true);
