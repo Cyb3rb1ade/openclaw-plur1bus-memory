@@ -83,15 +83,43 @@ test("Obsidian card validation allows exactly the bridge category subset", () =>
   }
 });
 
-test("sync uses memoryStore callback instead of raw DB writes", async () => {
+test("raw Obsidian sync proposes candidates and does not call memoryStore", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-test-"));
   try {
     const workspace = makeWorkspace(tmp);
     initWorkspace(workspace, { dryRun: false });
-    writeCard(workspace, "memory/cards/fact.md", "The bridge stores through memory_store.\n");
+    writeCard(workspace, "memory/cards/fact.md", "The bridge proposes through PLUR1BUS review first.\n");
     const calls = [];
     const result = await syncWorkspace(workspace, {
       dryRun: false,
+      memoryStore: async ({ payload }) => {
+        calls.push(payload);
+        return { details: { action: "stored", id: "mem-1" } };
+      },
+    });
+    assert.equal(calls.length, 0);
+    assert.ok(result.actions.some((action) => action.action === "approval_required"));
+    const candidates = readFileSync(join(workspace.path, ".adaptive-learning/obsidian-bridge/candidates.jsonl"), "utf8");
+    assert.match(candidates, /obsidian\.candidate/);
+    assert.match(candidates, /untrusted_obsidian/);
+    const updated = readFileSync(join(workspace.path, "memory/cards/fact.md"), "utf8");
+    assert.match(updated, /sync_status: draft/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("approved apply path uses memoryStore callback instead of raw DB writes", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-test-"));
+  try {
+    const workspace = makeWorkspace(tmp);
+    initWorkspace(workspace, { dryRun: false });
+    writeCard(workspace, "memory/cards/fact.md", "Approved apply stores through memory_store.\n");
+    const calls = [];
+    const result = await syncWorkspace(workspace, {
+      dryRun: false,
+      applyApproved: true,
+      approvedPaths: ["memory/cards/fact.md"],
       memoryStore: async ({ payload }) => {
         calls.push(payload);
         return { details: { action: "stored", id: "mem-1" } };
@@ -108,13 +136,17 @@ test("sync uses memoryStore callback instead of raw DB writes", async () => {
   }
 });
 
-test("sync without runtime callback queues memory_store requests", async () => {
+test("approved apply path without runtime callback queues memory_store requests", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-test-"));
   try {
     const workspace = makeWorkspace(tmp);
     initWorkspace(workspace, { dryRun: false });
-    writeCard(workspace, "memory/cards/queued.md", "Queue this through runtime later.\n");
-    await syncWorkspace(workspace, { dryRun: false });
+    writeCard(workspace, "memory/cards/queued.md", "Queue this through approved runtime later.\n");
+    await syncWorkspace(workspace, {
+      dryRun: false,
+      applyApproved: true,
+      approvedPaths: ["memory/cards/queued.md"],
+    });
     const queue = readFileSync(join(workspace.path, ".adaptive-learning/obsidian-bridge/store-queue.jsonl"), "utf8");
     assert.match(queue, /memory_store\.requested/);
     const updated = readFileSync(join(workspace.path, "memory/cards/queued.md"), "utf8");
@@ -132,12 +164,43 @@ test("tombstone is created when a synced card disappears", async () => {
     writeCard(workspace, "memory/cards/delete-me.md", "Delete should tombstone.\n");
     await syncWorkspace(workspace, {
       dryRun: false,
+      applyApproved: true,
+      approvedPaths: ["memory/cards/delete-me.md"],
       memoryStore: async () => ({ details: { action: "stored", id: "mem-delete" } }),
     });
     unlinkSync(join(workspace.path, "memory/cards/delete-me.md"));
-    const result = await syncWorkspace(workspace, { dryRun: false });
+    const result = await syncWorkspace(workspace, {
+      dryRun: false,
+      applyApproved: true,
+      approvedPaths: ["memory/cards/delete-me.md"],
+    });
     assert.ok(result.actions.some((action) => action.action === "tombstone"));
     assert.ok(existsSync(join(workspace.path, "memory/archive/expired")));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("ordinary Obsidian documents become untrusted proposals, not memory", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-test-"));
+  try {
+    const workspace = makeWorkspace(tmp);
+    workspace.includeGlobs = ["**/*.md"];
+    initWorkspace(workspace, { dryRun: false });
+    writeFileSync(join(workspace.path, "projects/imported-doc.md"), "# Imported Doc\n\nA vault document may inform review.\n", "utf8");
+    const calls = [];
+    const result = await syncWorkspace(workspace, {
+      dryRun: false,
+      memoryStore: async ({ payload }) => {
+        calls.push(payload);
+      },
+    });
+    assert.equal(calls.length, 0);
+    assert.ok(result.actions.some((action) => action.action === "obsidian_candidate_queued"));
+    const candidates = readFileSync(join(workspace.path, ".adaptive-learning/obsidian-bridge/candidates.jsonl"), "utf8");
+    assert.match(candidates, /projects\/imported-doc\.md/);
+    assert.match(candidates, /review_source/);
+    assert.match(candidates, /mutateMemory":false/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [4.0.3] - 2026-05-24
+
+### Fixed
+- Hardened Obsidian Vault ingestion so raw scans create untrusted candidate/proposal entries only. Plain Vault documents, `memory_card` files, decisions, and `KNOWLEDGE.md` edits no longer reach `memory_store` or the store queue unless an explicit approved PLUR1BUS apply path selects the file.
+- Expanded default Obsidian scan coverage to normal Markdown documents while ignoring generated `plur1bus/` artifacts, so imported Vault documents become review/source input instead of silently staying invisible.
+
+### Security
+- Reinforced the authority boundary: Obsidian remains a dashboard, review, source-reference, and proposal layer; LanceDB/PLUR1BUS Auto-Recall remains authoritative and `knowledge_update` remains the curated `KNOWLEDGE.md` write path.
+
+### Verification
+- Added regression coverage proving that raw Obsidian sync does not call `memoryStore`, approved apply does call it, approved offline apply queues `memory_store.requested`, and ordinary Vault documents become untrusted proposals with `mutateMemory:false`.
+
 ## [4.0.2] - 2026-05-24
 
 ### Fixed

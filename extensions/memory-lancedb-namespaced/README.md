@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.0.2` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Diese Korrektur macht Obsidian-Control-Room-Commands multi-workspace-faehig: bei Configs mit `obsidianBridge.workspaces[]` wird der aktive Vault aus `workspaceDir`, `workspaceKey` oder `agentId` aufgeloest, auch wenn kein globales `vaultPath` gesetzt ist. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.0.3` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Diese Korrektur macht rohe Obsidian-Vault-Scans proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -224,6 +224,13 @@ plur1bus/
   managed-blocks.log.jsonl
 ```
 
+Normale Markdown-Dokumente im Vault werden als Quellen gescannt und als
+untrusted Kandidaten in `.adaptive-learning/obsidian-bridge/candidates.jsonl`
+notiert. Sie werden dadurch nicht automatisch Auto-Recall-Memory, nicht direkt
+nach LanceDB geschrieben und nicht nach `memory/KNOWLEDGE.md` uebernommen.
+Erst ein explizit genehmigter PLUR1BUS-Apply-Pfad darf daraus `memory_store`
+oder `knowledge_update` ausloesen.
+
 Wichtige Commands:
 
 ```text
@@ -268,7 +275,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.0.2
+obsidianBridgeVersion: 4.0.3
 ---
 ```
 

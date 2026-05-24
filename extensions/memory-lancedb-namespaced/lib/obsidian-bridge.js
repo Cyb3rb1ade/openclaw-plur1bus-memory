@@ -2,9 +2,10 @@
  * PLUR1BUS <-> Obsidian bridge.
  *
  * The bridge treats Obsidian as an editable Markdown surface. Runtime memory
- * ownership stays in PLUR1BUS: sync either calls the provided memory_store /
- * knowledge_update callbacks, or appends a queue item for a runtime worker.
- * This module never writes LanceDB directly.
+ * ownership stays in PLUR1BUS: raw Vault scans create untrusted proposals only.
+ * Approved apply paths may call the provided memory_store / knowledge_update
+ * callbacks, or append a queue item for a runtime worker. This module never
+ * writes LanceDB directly.
  */
 
 import { createHash } from "node:crypto";
@@ -29,6 +30,7 @@ export const OBSIDIAN_BRIDGE_VERSION = 1;
 export const DEFAULT_OBSIDIAN_WORKSPACES = [];
 
 export const DEFAULT_INCLUDE_GLOBS = [
+  "**/*.md",
   "memory/cards/**/*.md",
   "memory/KNOWLEDGE.md",
   "decisions/**/*.md",
@@ -38,6 +40,7 @@ export const DEFAULT_IGNORE_GLOBS = [
   ".git/**",
   ".obsidian/**",
   ".adaptive-learning/**",
+  "plur1bus/**",
   "node_modules/**",
   "memory/archive/expired/**",
   "workspace-main/**",
@@ -675,6 +678,7 @@ export function bridgePaths(workspace) {
     syncLog: join(dir, "sync-log.jsonl"),
     conflictLog: join(dir, "conflict-log.jsonl"),
     queue: join(dir, "store-queue.jsonl"),
+    candidates: join(dir, "candidates.jsonl"),
     conflictsDir: join(dir, "conflicts"),
   };
 }
@@ -708,7 +712,7 @@ export function validateBridgeCard(card, workspace) {
   const warnings = [];
   const fm = card.frontmatter;
   if (card.kind === "knowledge") return { errors, warnings };
-  if (card.kind === "note") return { errors, warnings: ["not auto-recall relevant"] };
+  if (card.kind === "note") return { errors, warnings };
 
   const required = card.kind === "memory_card"
     ? ["plur1bus_type", "workspace_id", "agent_id", "category", "importance", "scope", "source_kind", "sync_status", "content_hash"]
@@ -744,6 +748,89 @@ export function buildMemoryStorePayload(card, workspace) {
   };
 }
 
+export function buildObsidianCandidate(file, workspace, options = {}) {
+  const now = options.now || new Date();
+  const candidateHash = createHash("sha256")
+    .update(`${workspace.workspaceId}\n${workspace.agentId}\n${file.relPath}\n${file.contentHash}`, "utf8")
+    .digest("hex");
+  const titleMatch = file.body.match(/^\s*#\s+(.+)$/m);
+  const title = String(file.frontmatter.title || titleMatch?.[1] || basename(file.relPath, ".md")).trim();
+  const excerpt = file.body.trim().replace(/\s+/g, " ").slice(0, 500);
+  return {
+    schema: OBSIDIAN_BRIDGE_VERSION,
+    event: "obsidian.candidate",
+    id: `obs_${candidateHash.slice(0, 24)}`,
+    timestamp: now.toISOString(),
+    workspace_id: workspace.workspaceId,
+    agent_id: workspace.agentId,
+    path: file.relPath,
+    kind: file.kind,
+    title,
+    status: "pending_user_review",
+    proposalOnly: true,
+    mutateMemory: false,
+    sourceOfTruth: "plur1bus-lancedb",
+    recallAuthority: "lancedb-reranked-vector",
+    source_kind: "obsidian",
+    source_url: `obsidian://${workspace.workspaceId}/${file.relPath}`,
+    trustLevel: "untrusted_obsidian",
+    target_action: options.targetAction || "review_source",
+    reason: options.reason || "Obsidian documents are review input only until explicitly approved through PLUR1BUS.",
+    content_hash: file.contentHash,
+    frontmatter_status: file.frontmatter.sync_status || null,
+    memory_id: file.frontmatter.memory_id || null,
+    excerpt,
+  };
+}
+
+function candidateAlreadyRecorded(prev, file) {
+  return prev?.contentHash === file.contentHash
+    && ["candidate_queued", "pending_user_review", "synced", "queued"].includes(String(prev.syncStatus || ""));
+}
+
+function queueObsidianCandidate(workspace, file, options = {}) {
+  const dryRun = options.dryRun !== false;
+  const candidate = buildObsidianCandidate(file, workspace, options);
+  if (!dryRun) {
+    const paths = bridgePaths(workspace);
+    appendJsonl(paths.candidates, candidate);
+    appendJsonl(paths.syncLog, {
+      event: "obsidian.candidate_queued",
+      timestamp: candidate.timestamp,
+      workspace_id: workspace.workspaceId,
+      agent_id: workspace.agentId,
+      path: file.relPath,
+      candidate_id: candidate.id,
+      kind: file.kind,
+      content_hash: file.contentHash,
+      target_action: candidate.target_action,
+    });
+  }
+  return {
+    action: dryRun ? "would_propose_obsidian_candidate" : "obsidian_candidate_queued",
+    path: file.relPath,
+    candidateId: candidate.id,
+    candidatePath: join(STATE_REL_DIR, "candidates.jsonl"),
+    targetAction: candidate.target_action,
+    reason: candidate.reason,
+  };
+}
+
+function normalizeApprovedPaths(value) {
+  if (value === "all") return "all";
+  if (!value) return new Set();
+  if (value instanceof Set) return value;
+  if (Array.isArray(value)) return new Set(value.map(String));
+  return new Set([String(value)]);
+}
+
+function isExplicitlyApproved(file, options = {}) {
+  if (options.applyApproved !== true) return false;
+  const approvedPaths = normalizeApprovedPaths(options.approvedPaths || options.paths);
+  if (approvedPaths === "all") return true;
+  return approvedPaths.has(file.relPath);
+}
+
 export function scanWorkspace(workspace, options = {}) {
   const includeGlobs = options.includeGlobs || workspace.includeGlobs || DEFAULT_INCLUDE_GLOBS;
   const ignoreGlobs = options.ignoreGlobs || workspace.ignoreGlobs || DEFAULT_IGNORE_GLOBS;
@@ -752,6 +839,7 @@ export function scanWorkspace(workspace, options = {}) {
   const roots = globRoots(includeGlobs);
   const files = [];
   const issues = [];
+  const collected = new Set();
 
   for (const root of roots) {
     const absRoot = join(workspace.path, root);
@@ -782,6 +870,8 @@ export function scanWorkspace(workspace, options = {}) {
     if (!relPath.endsWith(".md")) return;
     if (!matchesAny(relPath, includeRegexes)) return;
     if (matchesAny(relPath, ignoreRegexes)) return;
+    if (collected.has(relPath)) return;
+    collected.add(relPath);
     try {
       const content = readFileSync(absPath, "utf8");
       const parsed = parseMarkdownFrontmatter(content);
@@ -907,7 +997,6 @@ export function initWorkspace(workspace, options = {}) {
 
 export async function syncWorkspace(workspace, options = {}) {
   const dryRun = options.dryRun !== false;
-  const requireUserApproval = options.requireUserApproval === true || workspace.requireUserApproval === true;
   const tombstoneOnDelete = options.tombstoneOnDelete ?? workspace.tombstoneOnDelete ?? true;
   const scan = scanWorkspace(workspace, options);
   const state = readBridgeState(workspace);
@@ -931,10 +1020,19 @@ export async function syncWorkspace(workspace, options = {}) {
     }
 
     if (!["memory_card", "decision"].includes(file.kind)) {
+      if (!candidateAlreadyRecorded(prev, file)) {
+        actions.push(queueObsidianCandidate(workspace, file, {
+          dryRun,
+          reason: file.kind === "knowledge"
+            ? "KNOWLEDGE.md is curated PLUR1BUS workspace truth; Obsidian edits require review and knowledge_update, never silent overwrite."
+            : "Obsidian document is review/source input only; it is not Auto-Recall memory until promoted through PLUR1BUS.",
+          targetAction: file.kind === "knowledge" ? "knowledge_update_proposal" : "review_source",
+        }));
+      }
       state.files[file.relPath] = {
         kind: file.kind,
         contentHash: file.contentHash,
-        syncStatus: file.frontmatter.sync_status || "scanned",
+        syncStatus: "candidate_queued",
         updatedAt: new Date().toISOString(),
       };
       continue;
@@ -943,11 +1041,19 @@ export async function syncWorkspace(workspace, options = {}) {
     const isValidatedDecision = file.kind === "decision"
       && (file.frontmatter.validated === true || file.frontmatter.sync_status === "validated");
     if (file.kind === "decision" && !isValidatedDecision) {
-      actions.push({ action: "scan_only_decision", path: file.relPath, reason: "decision not validated" });
+      if (!candidateAlreadyRecorded(prev, file)) {
+        actions.push(queueObsidianCandidate(workspace, file, {
+          dryRun,
+          reason: "Decision note is not validated; it can only become memory through review and approved PLUR1BUS apply.",
+          targetAction: "review_decision",
+        }));
+      } else {
+        actions.push({ action: "scan_only_decision", path: file.relPath, reason: "decision not validated" });
+      }
       state.files[file.relPath] = {
         kind: file.kind,
         contentHash: file.contentHash,
-        syncStatus: file.frontmatter.sync_status || "scanned",
+        syncStatus: "pending_user_review",
         updatedAt: new Date().toISOString(),
       };
       continue;
@@ -958,20 +1064,40 @@ export async function syncWorkspace(workspace, options = {}) {
       continue;
     }
 
-    const changed = !prev || prev.contentHash !== file.contentHash || !["synced", "queued"].includes(String(file.frontmatter.sync_status || ""));
+    const approvedForApply = isExplicitlyApproved(file, options);
+    const pendingSameContent = prev?.contentHash === file.contentHash
+      && ["candidate_queued", "pending_user_review"].includes(String(prev.syncStatus || ""));
+    const changed = approvedForApply
+      || !prev
+      || prev.contentHash !== file.contentHash
+      || (!pendingSameContent && !["synced", "queued"].includes(String(file.frontmatter.sync_status || "")));
     if (!changed) continue;
 
     const payload = buildMemoryStorePayload(file, workspace);
     if (dryRun) {
-      actions.push({ action: "would_memory_store", path: file.relPath, payload });
+      actions.push({
+        action: approvedForApply ? "would_memory_store" : "would_require_approval",
+        path: file.relPath,
+        payload,
+        reason: approvedForApply
+          ? "Explicit approved apply path would call memory_store."
+          : "Raw Obsidian scan would create a proposal only.",
+      });
       continue;
     }
-    if (requireUserApproval) {
+    if (!approvedForApply) {
+      const candidateAction = queueObsidianCandidate(workspace, file, {
+        dryRun,
+        reason: "Obsidian-originated memory cards require explicit PLUR1BUS approval before memory_store.",
+        targetAction: "memory_store_proposal",
+      });
       actions.push({
         action: "approval_required",
         path: file.relPath,
+        candidateId: candidateAction.candidateId,
+        candidatePath: candidateAction.candidatePath,
         payload,
-        reason: "Obsidian Bridge v3.5 prepares review items; memory_store is not called without explicit approval.",
+        reason: "Obsidian Bridge prepares review items; memory_store is not called from raw Vault scans.",
       });
       state.files[file.relPath] = {
         kind: file.kind,
@@ -1046,7 +1172,10 @@ export async function syncWorkspace(workspace, options = {}) {
   for (const [relPath, previous] of Object.entries(state.files)) {
     if (seen.has(relPath)) continue;
     if (tombstoneOnDelete && !previous.tombstonedAt) {
-      if (requireUserApproval) {
+      const deletionApproved = options.applyApproved === true
+        && (normalizeApprovedPaths(options.approvedPaths || options.paths) === "all"
+          || normalizeApprovedPaths(options.approvedPaths || options.paths).has(relPath));
+      if (!deletionApproved) {
         actions.push({
           action: "approval_required_tombstone",
           path: relPath,
