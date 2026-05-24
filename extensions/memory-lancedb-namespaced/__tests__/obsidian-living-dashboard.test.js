@@ -18,6 +18,7 @@ import { analyzeImpact } from "../lib/obsidian/impact-analysis.js";
 import { buildMemoryExplanation } from "../lib/obsidian/memory-explain-builder.js";
 import { generateLinkSuggestions } from "../lib/obsidian/link-suggestions.js";
 import { writeRecordNote } from "../lib/obsidian/record-writer.js";
+import { buildManagedBlock, replaceManagedBlock, sha256Hex } from "../lib/obsidian/managed-blocks.js";
 import { buildRecordIndex } from "../lib/obsidian/record-index.js";
 import { patchSoulMd } from "../lib/install/soul-patcher.js";
 import { handleObsidianBridgeCommand } from "../lib/obsidian-control-room.js";
@@ -63,6 +64,83 @@ const sampleRecords = [
     staleAfter: "2020-01-01",
   },
 ];
+
+test("managed block hashes match emitted normalized body", () => {
+  const block = buildManagedBlock({ id: "record-authority-main", body: "\n# Authority\n\nBody\n" });
+  const expected = `sha256:${sha256Hex("# Authority\n\nBody")}`;
+  assert.match(block, new RegExp(`hash="${expected}"`));
+
+  const replaced = replaceManagedBlock(block, { id: "record-authority-main", body: "# Authority\n\nBody" });
+  assert.equal(replaced.conflict, null);
+});
+
+test("record writer can update a generated record more than once", () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const cfg = config(vault);
+    const record = {
+      type: "source",
+      id: "authority-main",
+      status: "current",
+      risk: "low",
+      scope: "dashboard_only",
+      trustLevel: "system_declared",
+      origin: "plur1bus",
+      agentId: "main",
+      summary: "PLUR1BUS/LanceDB remains authoritative memory; Obsidian is dashboard, review, visualization, and proposal output only.",
+      createdAt: "2026-05-24T00:51:40.145Z",
+      updatedAt: "2026-05-24T00:51:40.145Z",
+    };
+    const first = writeRecordNote(cfg, record);
+    const second = writeRecordNote(cfg, record);
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(second.conflict, undefined);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("legacy trailing-newline managed block hashes are accepted and upgraded", () => {
+  const body = "# Authority\n\nBody";
+  const legacyHash = `sha256:${sha256Hex(`${body}\n`)}`;
+  const legacy = [
+    `<!-- plur1bus:managed:start id="record-authority-main" version="4.0.2" type="source" hash="${legacyHash}" -->`,
+    body,
+    "<!-- plur1bus:managed:end -->",
+  ].join("\n");
+
+  const replaced = replaceManagedBlock(legacy, {
+    id: "record-authority-main",
+    version: "4.2.6",
+    body,
+    attrs: { type: "source" },
+  });
+
+  assert.equal(replaced.conflict, null);
+  assert.equal(replaced.changed, true);
+  assert.match(replaced.content, new RegExp(`hash="sha256:${sha256Hex(body)}"`));
+});
+
+test("managed block hash mismatch still blocks real body edits", () => {
+  const original = "# Authority\n\nOriginal";
+  const edited = "# Authority\n\nEdited";
+  const content = [
+    `<!-- plur1bus:managed:start id="record-authority-main" version="4.2.6" type="source" hash="sha256:${sha256Hex(original)}" -->`,
+    edited,
+    "<!-- plur1bus:managed:end -->",
+  ].join("\n");
+
+  const replaced = replaceManagedBlock(content, {
+    id: "record-authority-main",
+    version: "4.2.6",
+    body: original,
+    attrs: { type: "source" },
+  });
+
+  assert.equal(replaced.conflict?.type, "managed_block_hash_mismatch");
+  assert.equal(replaced.changed, false);
+});
 
 test("4.0.0 records, Bases, dashboards, and Tasks are generated under reviewRoot only", () => {
   const { tmp, vault } = makeVault();

@@ -4,15 +4,20 @@ export function sha256Hex(value) {
   return createHash("sha256").update(String(value || ""), "utf8").digest("hex");
 }
 
-export function buildManagedBlock({ id, version = "4.2.5", body = "", attrs = {} }) {
-  const hash = `sha256:${sha256Hex(body)}`;
+export function normalizeManagedBlockBody(body = "") {
+  return String(body || "").replace(/^\n+|\n+$/g, "");
+}
+
+export function buildManagedBlock({ id, version = "4.2.6", body = "", attrs = {} }) {
+  const normalizedBody = normalizeManagedBlockBody(body);
+  const hash = `sha256:${sha256Hex(normalizedBody)}`;
   const attrText = Object.entries({ id, version, ...attrs, hash })
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
     .map(([key, value]) => `${key}="${String(value).replace(/"/g, "&quot;")}"`)
     .join(" ");
   return [
     `<!-- plur1bus:managed:start ${attrText} -->`,
-    String(body || "").replace(/^\n+|\n+$/g, ""),
+    normalizedBody,
     "<!-- plur1bus:managed:end -->",
   ].join("\n");
 }
@@ -29,8 +34,10 @@ export function replaceManagedBlock(content, block) {
     replaced = true;
     const hashMatch = attrs.match(/hash="([^"]+)"/);
     const expected = hashMatch?.[1] || "";
-    const actual = `sha256:${sha256Hex(String(body || "").replace(/^\n|\n$/g, ""))}`;
-    if (expected && expected !== actual) {
+    const normalizedBody = normalizeManagedBlockBody(body);
+    const actual = `sha256:${sha256Hex(normalizedBody)}`;
+    const legacyTrailingNewline = `sha256:${sha256Hex(`${normalizedBody}\n`)}`;
+    if (expected && expected !== actual && expected !== legacyTrailingNewline) {
       conflict = { type: "managed_block_hash_mismatch", id: block.id, expected, actual };
       return match;
     }

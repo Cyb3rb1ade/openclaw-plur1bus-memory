@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+## [4.2.6] - 2026-05-24
+
+### Fixed
+- Fixed PLUR1BUS Obsidian managed-block hashing so generated records hash the same normalized body they write.
+- Accepted legacy trailing-newline managed-block hashes as a one-time migration path while still blocking real body edits.
+
+### Changed
+- Updated generated Obsidian artifact version markers to `4.2.6`.
+
+### Verification
+- Added regression coverage for repeated generated-record writes, legacy hash upgrades, and real edit mismatch blocking.
+- Rebuilt main, Bernhardine, and Heisenberg PLUR1BUS authority records and dashboards; `maintenance deep` returned zero findings for all three workspaces.
+
 ## [4.2.5] - 2026-05-24
 
 ### Added
