@@ -212,6 +212,190 @@ test("hash mismatch blocks apply as stale", async () => {
   }
 });
 
+test("approved note import writes immutable payload plus audit metadata", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(vault, { recursive: true });
+    const source = join(vault, "projects/import.md");
+    mkdirSync(join(vault, "projects"), { recursive: true });
+    writeFileSync(source, "# Import\n\nUser prefers stable summaries.\n", "utf8");
+    const prepared = await prepareReviewBundle(config(vault), {
+      bundleId: "rb-immutable",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "projects/import.md",
+        action: "Review immutable summary",
+        reason: "Import note",
+        evidence: ["User prefers stable summaries."],
+        evidenceQuote: "User prefers stable summaries.",
+        noteContent: "# Import\n\nUser prefers stable summaries.\n",
+        sourceRefs: ["projects/import.md"],
+        preconditions: {
+          sourcePath: "projects/import.md",
+          sourceHash: sha256("# Import\n\nUser prefers stable summaries.\n"),
+        },
+      }],
+    });
+    const item = prepared.items.find((entry) => entry.type === "note_import_candidate");
+    const originalText = item.applyPreview.payload.text;
+    updateReviewBundleItems(config(vault), "rb-immutable", "approve", item.id, {
+      approvedBy: "reviewer",
+      approvedTrustLevel: "reviewed_user_evidence",
+    });
+    const calls = [];
+    const result = await applyApprovedReviewBundle(config(vault), "rb-immutable", {
+      memoryStore: async ({ payload }) => {
+        calls.push(payload);
+        return { details: { id: "mem-immutable" } };
+      },
+    });
+    assert.equal(result.applied.length, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].text, originalText);
+    assert.equal(calls[0].sourceTrustLevel, "untrusted_obsidian");
+    assert.equal(calls[0].approvedTrustLevel, "reviewed_user_evidence");
+    assert.equal(calls[0].approvalMetadata.approvalSource, "human_review");
+    assert.equal(calls[0].approvalMetadata.approvedPayloadHash, item.applyPreview.payloadHash);
+    assert.equal(calls[0].trustLevel, undefined);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("payload hash drift after approval blocks apply", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, "projects"), { recursive: true });
+    writeFileSync(join(vault, "projects/import.md"), "Stable source quote.\n", "utf8");
+    const prepared = await prepareReviewBundle(config(vault), {
+      bundleId: "rb-payload-drift",
+      proposals: [{
+        type: "note_import_candidate",
+        target: "projects/import.md",
+        evidenceQuote: "Stable source quote.",
+        noteContent: "Stable source quote.\n",
+        sourceRefs: ["projects/import.md"],
+        preconditions: {
+          sourcePath: "projects/import.md",
+          sourceHash: sha256("Stable source quote.\n"),
+        },
+      }],
+    });
+    const item = prepared.items.find((entry) => entry.type === "note_import_candidate");
+    updateReviewBundleItems(config(vault), "rb-payload-drift", "approve", item.id);
+    const jsonPath = join(vault, "00-system/plur1bus/review-bundles/rb-payload-drift.items.json");
+    const record = JSON.parse(readFileSync(jsonPath, "utf8"));
+    record.items[0].applyPreview.payload.text = "Changed after approval.";
+    writeFileSync(jsonPath, JSON.stringify(record, null, 2), "utf8");
+    const result = await applyApprovedReviewBundle(config(vault), "rb-payload-drift", {
+      memoryStore: async () => { throw new Error("must not apply"); },
+    });
+    assert.equal(result.applied.length, 0);
+    assert.ok(result.blocked.some((entry) => /payload hash drift/.test(entry.reason)));
+    assert.equal(result.items[0].status, "invalid");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("re-running apply for the same approved candidate is idempotent", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, "projects"), { recursive: true });
+    writeFileSync(join(vault, "projects/import.md"), "Idempotent source quote.\n", "utf8");
+    const prepared = await prepareReviewBundle(config(vault), {
+      bundleId: "rb-idempotent",
+      proposals: [{
+        type: "note_import_candidate",
+        target: "projects/import.md",
+        evidenceQuote: "Idempotent source quote.",
+        noteContent: "Idempotent source quote.\n",
+        sourceRefs: ["projects/import.md"],
+        preconditions: {
+          sourcePath: "projects/import.md",
+          sourceHash: sha256("Idempotent source quote.\n"),
+        },
+      }],
+    });
+    const item = prepared.items.find((entry) => entry.type === "note_import_candidate");
+    updateReviewBundleItems(config(vault), "rb-idempotent", "approve", item.id);
+    let calls = 0;
+    const memoryStore = async () => {
+      calls += 1;
+      return { details: { id: "mem-idempotent" } };
+    };
+    await applyApprovedReviewBundle(config(vault), "rb-idempotent", { memoryStore });
+    await applyApprovedReviewBundle(config(vault), "rb-idempotent", { memoryStore });
+    assert.equal(calls, 1);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("global scope is not inferred from plain Obsidian text without explicit approval", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, "projects"), { recursive: true });
+    writeFileSync(join(vault, "projects/global.md"), "Global-looking preference.\n", "utf8");
+    const prepared = await prepareReviewBundle(config(vault), {
+      bundleId: "rb-global-scope",
+      proposals: [{
+        type: "note_import_candidate",
+        target: "projects/global.md",
+        targetScope: "global_user",
+        evidenceQuote: "Global-looking preference.",
+        noteContent: "Global-looking preference.\n",
+        sourceRefs: ["projects/global.md"],
+        preconditions: {
+          sourcePath: "projects/global.md",
+          sourceHash: sha256("Global-looking preference.\n"),
+        },
+      }],
+    });
+    const item = prepared.items.find((entry) => entry.type === "note_import_candidate");
+    updateReviewBundleItems(config(vault), "rb-global-scope", "approve", item.id);
+    const result = await applyApprovedReviewBundle(config(vault), "rb-global-scope", {
+      memoryStore: async () => { throw new Error("must not apply"); },
+    });
+    assert.equal(result.applied.length, 0);
+    assert.ok(result.blocked.some((entry) => /Global\/user scope/.test(entry.reason)));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("invented evidenceQuote is rejected during apply", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, "projects"), { recursive: true });
+    writeFileSync(join(vault, "projects/source.md"), "Real source quote.\n", "utf8");
+    const prepared = await prepareReviewBundle(config(vault), {
+      bundleId: "rb-invented-quote",
+      proposals: [{
+        type: "note_import_candidate",
+        target: "projects/source.md",
+        evidenceQuote: "Invented quote.",
+        noteContent: "Real source quote.\n",
+        sourceRefs: ["projects/source.md"],
+        preconditions: {
+          sourcePath: "projects/source.md",
+          sourceHash: sha256("Real source quote.\n"),
+        },
+      }],
+    });
+    const item = prepared.items.find((entry) => entry.type === "note_import_candidate");
+    updateReviewBundleItems(config(vault), "rb-invented-quote", "approve", item.id);
+    const result = await applyApprovedReviewBundle(config(vault), "rb-invented-quote", {
+      memoryStore: async () => { throw new Error("must not apply"); },
+    });
+    assert.equal(result.applied.length, 0);
+    assert.ok(result.blocked.some((entry) => /evidenceQuote is not source-backed/.test(entry.reason)));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("path traversal in bridge paths is rejected", () => {
   const { tmp, vault } = makeVault();
   try {

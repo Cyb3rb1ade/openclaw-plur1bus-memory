@@ -670,6 +670,56 @@ export function stableContentHash(body) {
   return createHash("sha256").update(normalized, "utf8").digest("hex");
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function hashPayload(value) {
+  return `sha256:${createHash("sha256").update(stableJson(value), "utf8").digest("hex")}`;
+}
+
+function firstSourceQuote(body) {
+  const normalized = String(body || "").replace(/\r\n/g, "\n");
+  const line = normalized
+    .split("\n")
+    .map((item) => item.trim())
+    .find((item) => item && !item.startsWith("#") && !item.startsWith("---"));
+  return (line || normalized.trim()).slice(0, 200);
+}
+
+function summarizeObsidianSource(file) {
+  const body = String(file.body || "").trim();
+  const titleMatch = body.match(/^\s*#\s+(.+)$/m);
+  const title = String(file.frontmatter.title || titleMatch?.[1] || basename(file.relPath, ".md")).trim();
+  const quote = firstSourceQuote(body);
+  if (/ignore\s+(all\s+)?(previous|system|developer)|system\s+prompt|developer\s+prompt|execute\s+(this\s+)?(shell\s+)?command|rm\s+-rf|curl\b[^\n|;&]*\|\s*(sh|bash)/i.test(body)) {
+    return `Obsidian note "${title}" contains untrusted prompt-like text and needs review before any memory promotion.`;
+  }
+  return quote ? `${title}: ${quote}` : `Obsidian note "${title}" needs review before memory promotion.`;
+}
+
+export function buildObsidianSemanticPayload(file, workspace, options = {}) {
+  const sourceHash = file.contentHash;
+  const evidenceQuote = firstSourceQuote(file.body);
+  return {
+    text: String(options.text || summarizeObsidianSource(file)).trim(),
+    category: OBSIDIAN_CARD_CATEGORIES.includes(file.frontmatter.category) ? file.frontmatter.category : "fact",
+    importance: Number.isFinite(Number(file.frontmatter.importance)) ? Number(file.frontmatter.importance) : 0.6,
+    scope: OBSIDIAN_SCOPES.includes(file.frontmatter.scope) ? file.frontmatter.scope : "workspace",
+    origin: "internal",
+    sourceUrl: `obsidian://${workspace.workspaceId}/${file.relPath}`,
+    sourceRef: file.relPath,
+    evidenceQuote,
+    sourceHash,
+    content_hash: sourceHash,
+    sourceTrustLevel: "untrusted_obsidian",
+  };
+}
+
 export function bridgePaths(workspace) {
   const dir = join(workspace.path, STATE_REL_DIR);
   return {
@@ -756,6 +806,8 @@ export function buildObsidianCandidate(file, workspace, options = {}) {
   const titleMatch = file.body.match(/^\s*#\s+(.+)$/m);
   const title = String(file.frontmatter.title || titleMatch?.[1] || basename(file.relPath, ".md")).trim();
   const excerpt = file.body.trim().replace(/\s+/g, " ").slice(0, 500);
+  const semanticPayload = buildObsidianSemanticPayload(file, workspace, options);
+  const payloadHash = hashPayload(semanticPayload);
   return {
     schema: OBSIDIAN_BRIDGE_VERSION,
     event: "obsidian.candidate",
@@ -773,12 +825,20 @@ export function buildObsidianCandidate(file, workspace, options = {}) {
     recallAuthority: "lancedb-reranked-vector",
     source_kind: "obsidian",
     source_url: `obsidian://${workspace.workspaceId}/${file.relPath}`,
-    trustLevel: "untrusted_obsidian",
+    sourceTrustLevel: "untrusted_obsidian",
     target_action: options.targetAction || "review_source",
     reason: options.reason || "Obsidian documents are review input only until explicitly approved through PLUR1BUS.",
     content_hash: file.contentHash,
+    sourceHash: file.contentHash,
     frontmatter_status: file.frontmatter.sync_status || null,
     memory_id: file.frontmatter.memory_id || null,
+    applyPreview: {
+      schemaVersion: 1,
+      payload: semanticPayload,
+      payloadHash,
+      immutableFields: ["text", "category", "scope", "origin", "sourceUrl", "sourceRef", "evidenceQuote", "sourceHash", "content_hash", "sourceTrustLevel"],
+    },
+    payloadHash,
     excerpt,
   };
 }

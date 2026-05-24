@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.0.3` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Diese Korrektur macht rohe Obsidian-Vault-Scans proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.1.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Diese Korrektur macht rohe Obsidian-Vault-Scans proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -231,6 +231,14 @@ nach LanceDB geschrieben und nicht nach `memory/KNOWLEDGE.md` uebernommen.
 Erst ein explizit genehmigter PLUR1BUS-Apply-Pfad darf daraus `memory_store`
 oder `knowledge_update` ausloesen.
 
+Ab `4.1.0` ist Approval an die konkrete vorgeschlagene Summary gebunden.
+`applyPreview.payloadHash` wird aus stabil sortiertem JSON des immutable
+semantic payload berechnet. `applyPreview.payload.text`, Kategorie, Scope,
+Origin, Source-Refs, Evidence-Quote und Source-Hash bleiben nach Candidate-
+Erzeugung unveraendert. Trust-Promotion ist nur als sichtbare
+Approval-/Audit-Metadatum erlaubt; `sourceTrustLevel: "untrusted_obsidian"`
+bleibt Teil der Quell-Provenance.
+
 Wichtige Commands:
 
 ```text
@@ -275,7 +283,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.0.3
+obsidianBridgeVersion: 4.1.0
 ---
 ```
 

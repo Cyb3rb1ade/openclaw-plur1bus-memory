@@ -201,6 +201,9 @@ test("ordinary Obsidian documents become untrusted proposals, not memory", async
     assert.match(candidates, /projects\/imported-doc\.md/);
     assert.match(candidates, /review_source/);
     assert.match(candidates, /mutateMemory":false/);
+    assert.match(candidates, /"payloadHash":"sha256:/);
+    assert.match(candidates, /"sourceTrustLevel":"untrusted_obsidian"/);
+    assert.match(candidates, /"applyPreview":/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

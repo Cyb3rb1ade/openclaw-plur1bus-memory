@@ -1,5 +1,23 @@
 ## [Unreleased]
 
+## [4.1.0] - 2026-05-24
+
+### Added
+- Added immutable Obsidian import summaries: ReviewBundles now carry an agent-formulated semantic `applyPreview.payload` plus deterministic `payloadHash` before approval.
+- Added approval binding with `approvedPayloadHash`, approval audit metadata, and idempotency keys so an approved candidate cannot be silently reworded or double-applied.
+- Added source-backed evidence validation for Obsidian imports.
+
+### Changed
+- Obsidian import approval now means approval of the exact proposed MemoryCandidate summary, not only approval of the source note.
+- Trust is split between immutable `sourceTrustLevel: "untrusted_obsidian"` and allow-listed approval/apply metadata such as `approvedTrustLevel` or `appliedTrustLevel`.
+
+### Security
+- Payload hashes are computed from canonical, stably sorted JSON of the immutable semantic payload. Approval metadata, timestamps, runtime IDs, and trust-promotion metadata are excluded from the payload hash.
+- Apply rejects source hash drift, payload hash drift, invented evidence quotes, silent global/user scope promotion, and trust metadata embedded inside the semantic payload.
+
+### Verification
+- Added regression coverage for immutable payload writes, payload-hash drift, idempotent re-apply, global-scope rejection without explicit approval, and source-backed `evidenceQuote` enforcement.
+
 ## [4.0.3] - 2026-05-24
 
 ### Fixed

@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.0.3";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.1.0";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -132,6 +132,7 @@ const REVIEW_ITEM_STATUSES = new Set([
   "applied",
   "blocked",
   "stale",
+  "invalid",
 ]);
 
 const PROMPT_INJECTION_PATTERNS = [
@@ -183,6 +184,66 @@ function stableJson(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function payloadHash(payload) {
+  return `sha256:${sha256Hex(stableJson(payload || {}))}`;
+}
+
+function firstSourceQuote(body) {
+  const normalized = String(body || "").replace(/\r\n/g, "\n");
+  const line = normalized
+    .split("\n")
+    .map((item) => item.trim())
+    .find((item) => item && !item.startsWith("#") && !item.startsWith("---"));
+  return (line || normalized.trim()).slice(0, 200);
+}
+
+function summarizeSourceForMemory(body, target) {
+  const text = String(body || "").trim();
+  const title = text.match(/^\s*#\s+(.+)$/m)?.[1]?.trim() || basename(String(target || "Obsidian note"), ".md");
+  const quote = firstSourceQuote(text);
+  if (hasPromptInjectionLikeText(text)) {
+    return `Obsidian note "${title}" contains untrusted prompt-like text and needs review before any memory promotion.`;
+  }
+  return quote ? `${title}: ${quote}` : `Obsidian note "${title}" needs review before memory promotion.`;
+}
+
+function buildSemanticPayload(raw, context = {}) {
+  const sourceHash = raw.preconditions?.sourceHash || raw.sourceHash || raw.content_hash || "";
+  const sourceRef = Array.isArray(raw.sourceRefs) && raw.sourceRefs[0] ? String(raw.sourceRefs[0]) : String(raw.sourcePath || raw.target || "");
+  const noteContent = String(raw.noteContent || raw.reason || raw.action || "");
+  const evidenceQuote = raw.evidenceQuote || (Array.isArray(raw.evidence) && raw.evidence[0]) || firstSourceQuote(noteContent);
+  return {
+    text: String(raw.text || raw.summary || summarizeSourceForMemory(noteContent, raw.target)).trim(),
+    category: raw.category || (raw.type === "knowledge_update" ? "decision" : "fact"),
+    scope: raw.scope === "global_user" || raw.targetScope === "global_user" ? "user" : raw.scope || raw.targetScope || "workspace",
+    origin: raw.origin || "internal",
+    sourceUrl: raw.sourceUrl || (sourceRef ? `obsidian://${context.workspaceKey || "main"}/${sourceRef}` : ""),
+    sourceRef,
+    evidenceQuote: String(evidenceQuote || "").slice(0, 200),
+    sourceHash,
+    content_hash: sourceHash,
+    sourceTrustLevel: raw.sourceTrustLevel || raw.sourceTrust || raw.trustLevel || "untrusted_obsidian",
+  };
+}
+
+function normalizeApplyPreview(raw, context = {}) {
+  const existing = raw.applyPreview && typeof raw.applyPreview === "object" ? raw.applyPreview : {};
+  const payload = existing.payload && typeof existing.payload === "object"
+    ? existing.payload
+    : buildSemanticPayload(raw, context);
+  return {
+    ...existing,
+    schemaVersion: existing.schemaVersion || 1,
+    payload,
+    payloadHash: existing.payloadHash || payloadHash(payload),
+    immutableFields: existing.immutableFields || ["text", "category", "scope", "origin", "sourceUrl", "sourceRef", "evidenceQuote", "sourceHash", "content_hash", "sourceTrustLevel"],
+  };
+}
+
+function hasPromptInjectionLikeText(text) {
+  return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(String(text || "")));
 }
 
 function safeSlug(value, fallback = "item") {
@@ -687,6 +748,7 @@ function normalizeReviewItem(raw, context = {}) {
   const type = REVIEW_ITEM_TYPES.has(raw.type) ? raw.type : "vault_hygiene";
   const risk = ["low", "medium", "high", "critical"].includes(raw.risk) ? raw.risk : classifyRisk(raw);
   const id = raw.id || itemIdFromBundle(context.bundleId || "rb-unknown", context.index || 0);
+  const applyPreview = normalizeApplyPreview({ ...raw, type }, context);
   return {
     id,
     type,
@@ -708,11 +770,17 @@ function normalizeReviewItem(raw, context = {}) {
     },
     adversarialReview: raw.adversarialReview || { status: "pass", reason: "", recommendation: "" },
     maintenanceReview: raw.maintenanceReview || { status: "pass", reason: "" },
-    applyPreview: raw.applyPreview || { command: "", files: [], memoryIds: [] },
-    sourceTrust: raw.sourceTrust || raw.trustLevel || "untrusted",
+    applyPreview,
+    payloadHash: applyPreview.payloadHash,
+    sourceTrustLevel: applyPreview.payload.sourceTrustLevel || raw.sourceTrustLevel || "untrusted_obsidian",
+    approvedPayloadHash: raw.approvedPayloadHash || "",
+    approvalMetadata: raw.approvalMetadata || null,
+    appliedMemoryId: raw.appliedMemoryId || "",
+    idempotencyKey: raw.idempotencyKey || `${id}:${applyPreview.payloadHash}`,
+    sourceTrust: raw.sourceTrust || raw.trustLevel || applyPreview.payload.sourceTrustLevel || "untrusted",
     evidenceKind: raw.evidenceKind || raw.sourceKind || "",
     sourceScope: raw.sourceScope || raw.scope || "",
-    targetScope: raw.targetScope || "",
+    targetScope: raw.targetScope || raw.scope || "",
     explicitGlobalApproval: raw.explicitGlobalApproval === true,
     explicitAssistantEvidenceApproval: raw.explicitAssistantEvidenceApproval === true,
     noteContent: raw.noteContent ? String(raw.noteContent).slice(0, 4000) : "",
@@ -729,7 +797,7 @@ function classifyRisk(item) {
 
 function hasPromptInjectionLikeContent(item) {
   const haystack = [item.noteContent, item.reason, item.action, ...item.evidence].join("\n");
-  return PROMPT_INJECTION_PATTERNS.some((pattern) => pattern.test(haystack));
+  return hasPromptInjectionLikeText(haystack);
 }
 
 export function adversarialLightReviewItem(rawItem, context = {}) {
@@ -900,6 +968,7 @@ function collectProposalInputs(rawConfig = {}, options = {}) {
   for (const file of files) {
     if (file.rel.startsWith(reviewRootPrefix) || file.rel === paths.reviewRoot) continue;
     if (/memory\/KNOWLEDGE\.md$/.test(file.rel)) continue;
+    if (file.rel.startsWith("memory/cards/") || file.rel.startsWith("decisions/")) continue;
     const body = parseBridgeFrontmatter(file.content).body.trim();
     if (!body) continue;
     const hash = hashToken(file.content);
@@ -917,20 +986,24 @@ function collectProposalInputs(rawConfig = {}, options = {}) {
         sourceTrust: "obsidian_untrusted",
       });
     }
-    if (hasPromptInjectionLikeContent({ noteContent: body, reason: "", action: "", evidence: [] })) {
-      inputs.push({
-        type: "note_import_candidate",
-        risk: "medium",
-        target: file.rel,
-        action: "Keep note as untrusted candidate and require adversarial review.",
-        reason: "Prompt-injection-like text was detected in note content.",
-        evidence: [body.slice(0, 280)],
-        sourceRefs: [file.rel],
-        preconditions: { sourceHash: hash, sourcePath: file.rel },
-        noteContent: body.slice(0, 1000),
-        sourceTrust: "obsidian_untrusted",
-      });
-    }
+    const promptLike = hasPromptInjectionLikeContent({ noteContent: body, reason: "", action: "", evidence: [] });
+    const evidenceQuote = firstSourceQuote(body);
+    inputs.push({
+      type: "note_import_candidate",
+      risk: promptLike ? "medium" : "low",
+      target: file.rel,
+      action: "Review immutable MemoryCandidate summary before promotion.",
+      reason: promptLike
+        ? "Prompt-injection-like text was detected in note content; keep it untrusted and review the proposed summary carefully."
+        : "Obsidian note can be reviewed as a PLUR1BUS MemoryCandidate.",
+      evidence: [evidenceQuote],
+      evidenceQuote,
+      sourceRefs: [file.rel],
+      preconditions: { sourceHash: hash, sourcePath: file.rel },
+      noteContent: body.slice(0, 4000),
+      sourceTrust: "obsidian_untrusted",
+      sourceTrustLevel: "untrusted_obsidian",
+    });
   }
   return inputs.slice(0, cfg.maxItems);
 }
@@ -1212,10 +1285,34 @@ export function updateReviewBundleItems(rawConfig, bundleId, action, selector = 
   loaded.record.items = loaded.record.items.map((item) => {
     if (!selected.has(item.id)) return item;
     if (["applied", "blocked"].includes(item.status)) return item;
+    const approvedPayloadHash = item.applyPreview?.payloadHash || payloadHash(item.applyPreview?.payload || {});
+    const approvedAt = nowIso(options);
+    const approvedBy = options.approvedBy || options.agentId || "human";
+    const approvalMetadata = status === "approved"
+      ? {
+          approvedBy,
+          approvedAt,
+          approvalSource: "human_review",
+          approvedPayloadHash,
+          approvalHash: payloadHash({
+            itemId: item.id,
+            payloadHash: approvedPayloadHash,
+            sourceHash: item.preconditions?.sourceHash || "",
+            approvedBy,
+            approvedAt,
+            approvalSource: "human_review",
+          }),
+          ...(options.approvedTrustLevel ? { approvedTrustLevel: options.approvedTrustLevel } : {}),
+          ...(options.appliedTrustLevel ? { appliedTrustLevel: options.appliedTrustLevel } : {}),
+          ...(options.explicitGlobalApproval === true ? { explicitGlobalApproval: true } : {}),
+        }
+      : item.approvalMetadata || null;
     changed += 1;
     return {
       ...item,
       status,
+      approvedPayloadHash: status === "approved" ? approvedPayloadHash : item.approvedPayloadHash || "",
+      approvalMetadata,
       snoozedUntil: status === "snoozed" ? options.until || "" : item.snoozedUntil || "",
       updatedAt: nowIso(options),
     };
@@ -1236,6 +1333,50 @@ function fileHashIfConfigured(paths, item, kind) {
     : { ok: false, reason: `${kind} hash mismatch`, expected, actual };
 }
 
+function validatePayloadApproval(paths, item) {
+  const payload = item.applyPreview?.payload || {};
+  for (const forbidden of ["trustLevel", "approvedTrustLevel", "appliedTrustLevel", "approvedBy", "approvedAt", "approvalSource", "approvalHash"]) {
+    if (payload[forbidden] !== undefined) {
+      return { ok: false, status: "invalid", reason: `${forbidden} is approval/audit metadata and must not be part of immutable semantic payload` };
+    }
+  }
+  if (payload.sourceTrustLevel && payload.sourceTrustLevel !== "untrusted_obsidian") {
+    return { ok: false, status: "invalid", reason: "Obsidian sourceTrustLevel must remain untrusted_obsidian." };
+  }
+  if ((payload.scope === "user" || item.targetScope === "global_user") && item.explicitGlobalApproval !== true && item.approvalMetadata?.explicitGlobalApproval !== true) {
+    return { ok: false, status: "invalid", reason: "Global/user scope requires explicit reviewer approval." };
+  }
+  const actualPayloadHash = payloadHash(payload);
+  const proposedPayloadHash = item.applyPreview?.payloadHash || "";
+  const approvedPayloadHash = item.approvedPayloadHash || item.approvalMetadata?.approvedPayloadHash || "";
+  if (!proposedPayloadHash) return { ok: false, status: "invalid", reason: "Missing applyPreview.payloadHash." };
+  if (actualPayloadHash !== proposedPayloadHash) {
+    return { ok: false, status: "invalid", reason: "applyPreview payload hash drift", expected: proposedPayloadHash, actual: actualPayloadHash };
+  }
+  if (!approvedPayloadHash) return { ok: false, status: "invalid", reason: "Missing approvedPayloadHash." };
+  if (approvedPayloadHash !== proposedPayloadHash) {
+    return { ok: false, status: "invalid", reason: "approvedPayloadHash does not match applyPreview.payloadHash", expected: approvedPayloadHash, actual: proposedPayloadHash };
+  }
+  const sourceHash = item.preconditions?.sourceHash || payload.sourceHash || payload.content_hash || "";
+  if (payload.sourceHash && sourceHash && stripHashPrefix(payload.sourceHash) !== stripHashPrefix(sourceHash)) {
+    return { ok: false, status: "stale", reason: "payload sourceHash does not match approved source precondition" };
+  }
+  const quote = String(payload.evidenceQuote || "");
+  const sourcePath = item.preconditions?.sourcePath || payload.sourceRef || "";
+  if (quote && sourcePath) {
+    const abs = resolveUnder(paths.vaultPath, sourcePath, paths.cfg);
+    if (existsSync(abs)) {
+      const sourceText = readFileSync(abs, "utf8");
+      if (!sourceText.includes(quote)) {
+        return { ok: false, status: "invalid", reason: "evidenceQuote is not source-backed" };
+      }
+    }
+  } else if (quote && item.noteContent && !String(item.noteContent).includes(quote)) {
+    return { ok: false, status: "invalid", reason: "evidenceQuote is not source-backed" };
+  }
+  return { ok: true };
+}
+
 async function revalidateItem(paths, item, options = {}) {
   if (typeof options.revalidateItem === "function") {
     const result = await options.revalidateItem(item);
@@ -1247,6 +1388,10 @@ async function revalidateItem(paths, item, options = {}) {
   if (!source.ok) return source;
   const target = fileHashIfConfigured(paths, item, "target");
   if (!target.ok) return target;
+  if (["memory_promotion", "note_import_candidate", "knowledge_update"].includes(item.type)) {
+    const payload = validatePayloadApproval(paths, item);
+    if (!payload.ok) return payload;
+  }
   if (item.memoryCandidateStatus && item.memoryCandidateStatus !== "pending") {
     return { ok: false, reason: "MemoryCandidate is no longer pending." };
   }
@@ -1267,6 +1412,25 @@ function applySafetyBlock(item, options = {}) {
   return "";
 }
 
+function approvedMemoryStorePayload(item) {
+  const semanticPayload = item.applyPreview?.payload || {
+    text: item.action || item.reason,
+    category: "fact",
+    origin: "internal",
+    scope: item.targetScope === "global_user" ? "user" : "workspace",
+    evidenceQuote: item.evidence?.[0] || "",
+    sourceUrl: item.sourceRefs?.[0] || "",
+  };
+  return {
+    ...semanticPayload,
+    approvedPayloadHash: item.approvedPayloadHash,
+    idempotencyKey: item.idempotencyKey || `${item.id}:${item.approvedPayloadHash || item.applyPreview?.payloadHash || ""}`,
+    approvalMetadata: item.approvalMetadata || null,
+    approvedTrustLevel: item.approvalMetadata?.approvedTrustLevel || undefined,
+    appliedTrustLevel: item.approvalMetadata?.appliedTrustLevel || undefined,
+  };
+}
+
 export async function applyApprovedReviewBundle(rawConfig, bundleId, options = {}) {
   const loaded = loadBundleRecord(rawConfig, bundleId, options);
   const { paths, record } = loaded;
@@ -1275,6 +1439,11 @@ export async function applyApprovedReviewBundle(rawConfig, bundleId, options = {
 
   for (const item of record.items) {
     if (item.status !== "approved") continue;
+    if (item.appliedMemoryId) {
+      item.status = "applied";
+      applied.push({ id: item.id, type: item.type, memoryId: item.appliedMemoryId, idempotent: true });
+      continue;
+    }
     const safety = applySafetyBlock(item, options);
     if (safety) {
       item.status = "blocked";
@@ -1284,7 +1453,7 @@ export async function applyApprovedReviewBundle(rawConfig, bundleId, options = {
     }
     const validation = await revalidateItem(paths, item, options);
     if (!validation.ok) {
-      item.status = "stale";
+      item.status = validation.status || "stale";
       item.blockedReason = validation.reason || "precondition failed";
       blocked.push({ id: item.id, reason: item.blockedReason });
       continue;
@@ -1297,17 +1466,11 @@ export async function applyApprovedReviewBundle(rawConfig, bundleId, options = {
         blocked.push({ id: item.id, reason: item.blockedReason });
         continue;
       }
-      await options.memoryStore({
+      const result = await options.memoryStore({
         item,
-        payload: item.applyPreview?.payload || {
-          text: item.action || item.reason,
-          category: "fact",
-          origin: "internal",
-          scope: item.targetScope === "global_user" ? "user" : "workspace",
-          evidenceQuote: item.evidence?.[0] || "",
-          sourceUrl: item.sourceRefs?.[0] || "",
-        },
+        payload: approvedMemoryStorePayload(item),
       });
+      item.appliedMemoryId = result?.details?.id || result?.memoryId || item.appliedMemoryId || "";
     } else if (item.type === "knowledge_update") {
       if (typeof options.knowledgeUpdate !== "function") {
         item.status = "blocked";
@@ -1315,7 +1478,7 @@ export async function applyApprovedReviewBundle(rawConfig, bundleId, options = {
         blocked.push({ id: item.id, reason: item.blockedReason });
         continue;
       }
-      await options.knowledgeUpdate({ item, payload: item.applyPreview?.payload || {} });
+      await options.knowledgeUpdate({ item, payload: approvedMemoryStorePayload(item) });
     } else if (item.type === "task_suggestion") {
       const taskBody = `- [ ] ${item.reason || item.action} #plur1bus/status-pending\n`;
       writeManagedBlockFile(rawConfig, "tasks/task-suggestions.md", {
@@ -1332,7 +1495,7 @@ export async function applyApprovedReviewBundle(rawConfig, bundleId, options = {
 
   if (applied.length === 0 && blocked.length === 0) {
     record.bundle.status = "pending_user_review";
-  } else if (record.items.every((item) => ["applied", "rejected", "blocked", "snoozed", "stale"].includes(item.status))) {
+  } else if (record.items.every((item) => ["applied", "rejected", "blocked", "snoozed", "stale", "invalid"].includes(item.status))) {
     record.bundle.status = "reviewed";
   }
   saveBundleRecord(loaded);
