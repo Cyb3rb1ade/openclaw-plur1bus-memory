@@ -112,7 +112,7 @@ test("legacy trailing-newline managed block hashes are accepted and upgraded", (
 
   const replaced = replaceManagedBlock(legacy, {
     id: "record-authority-main",
-    version: "4.2.6",
+    version: "4.2.7",
     body,
     attrs: { type: "source" },
   });
@@ -126,14 +126,14 @@ test("managed block hash mismatch still blocks real body edits", () => {
   const original = "# Authority\n\nOriginal";
   const edited = "# Authority\n\nEdited";
   const content = [
-    `<!-- plur1bus:managed:start id="record-authority-main" version="4.2.6" type="source" hash="sha256:${sha256Hex(original)}" -->`,
+    `<!-- plur1bus:managed:start id="record-authority-main" version="4.2.7" type="source" hash="sha256:${sha256Hex(original)}" -->`,
     edited,
     "<!-- plur1bus:managed:end -->",
   ].join("\n");
 
   const replaced = replaceManagedBlock(content, {
     id: "record-authority-main",
-    version: "4.2.6",
+    version: "4.2.7",
     body: original,
     attrs: { type: "source" },
   });

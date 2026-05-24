@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.2.6` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.2.7` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -249,6 +249,9 @@ bleibt Teil der Quell-Provenance.
 
 Wichtige Commands:
 
+Diese Commands sind OpenClaw Slash-/Plugin-Commands. Es gibt kein benoetigtes
+standalone `plur1bus` Shell-Binary und kein `openclaw plur1bus` CLI-Namespace.
+
 ```text
 /plur1bus obsidian doctor
 /plur1bus obsidian review prepare
@@ -258,6 +261,7 @@ Wichtige Commands:
 /plur1bus obsidian review snooze <bundleId> --items <ids> --until <date|duration>
 /plur1bus obsidian review apply <bundleId>
 /plur1bus obsidian morning-review
+/plur1bus obsidian evening-review
 /plur1bus obsidian conflicts
 /plur1bus obsidian records rebuild
 /plur1bus obsidian dashboards build
@@ -293,7 +297,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.2.6
+obsidianBridgeVersion: 4.2.7
 ---
 ```
 

@@ -657,6 +657,48 @@ test("obsidian cron workspace reviews prints selectable morning and evening jobs
     assert.match(parsed.commands.join("\n"), /--cron "0 18 \* \* \*"/);
     assert.match(parsed.commands.join("\n"), /--channel "telegram"/);
     assert.match(parsed.commands.join("\n"), /--to "12345"/);
+    assert.match(parsed.commands.join("\n"), /\/plur1bus obsidian evening-review/);
+    assert.match(parsed.commands.join("\n"), /not a shell binary/);
+    assert.doesNotMatch(parsed.commands.join("\n"), /openclaw plur1bus obsidian maintenance deep/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian evening review runs bundled deep checks without shell CLI", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(vault, { recursive: true });
+    const cfg = config(vault);
+    const result = await handleObsidianBridgeCommand(["evening-review"], {
+      config: cfg,
+      agentId: "test-agent",
+      workspaceKey: "test-workspace",
+      records: [
+        {
+          id: "source-test",
+          type: "source",
+          status: "current",
+          risk: "low",
+          scope: "dashboard_only",
+          trustLevel: "system_declared",
+          agentId: "test-agent",
+        },
+      ],
+      items: [],
+    });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.mode, "proposal-only");
+    assert.equal(parsed.agentId, "test-agent");
+    assert.equal(parsed.workspaceKey, "test-workspace");
+    assert.match(parsed.artifactPath, /^evening-deep-review-\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
+    assert.equal(existsSync(join(vault, "00-system/plur1bus", parsed.artifactPath)), true);
+    assert.equal(parsed.dashboards.count, 14);
+    assert.equal(parsed.adversarial.reviewed.length, 0);
+    const artifact = readFileSync(join(vault, "00-system/plur1bus", parsed.artifactPath), "utf8");
+    assert.match(artifact, /No standalone PLUR1BUS shell CLI is required or expected/);
+    assert.doesNotMatch(artifact, /CLI fehlt|CLI not available/i);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

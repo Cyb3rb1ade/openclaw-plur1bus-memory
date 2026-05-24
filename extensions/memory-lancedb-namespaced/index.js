@@ -1387,7 +1387,7 @@ const plugin = {
             if (action === "dreaming") {
               return formatJsonCommandResult({ status: "planned", heavyJobCarrier: "OpenClaw-managed agent cron", modes: ["light", "rem", "deep"] });
             }
-            return { text: "Usage: /plur1bus status|doctor|neo workspaces migrate [--dry-run] [--verbose] [--backup-dir <path>]|curation <inbox|conflicts|stale|promoted>|memory <origin|explain|promote|demote|prune|tombstone> <id>|behavior <show|candidates|explain|promote|demote|prune> [id]|embeddings status|dreaming status|obsidian <doctor|init workspaces|review|morning-review|conflicts|project-hub|memory|weekly|cron>" };
+            return { text: "Usage: /plur1bus status|doctor|neo workspaces migrate [--dry-run] [--verbose] [--backup-dir <path>]|curation <inbox|conflicts|stale|promoted>|memory <origin|explain|promote|demote|prune|tombstone> <id>|behavior <show|candidates|explain|promote|demote|prune> [id]|embeddings status|dreaming status|obsidian <doctor|init workspaces|review|morning-review|evening-review|conflicts|project-hub|memory|weekly|cron>" };
           },
         });
       }

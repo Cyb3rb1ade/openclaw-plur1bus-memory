@@ -48,12 +48,13 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.6";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.7";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
 export const DEFAULT_EVENING_CRON = "0 18 * * *";
 export const DEFAULT_MORNING_TZ = "Europe/Berlin";
+export const OPENCLAW_COMMAND_SURFACE_NOTICE = "Use the OpenClaw plugin command surface only. /plur1bus is a registered slash/plugin command, not a shell binary; do not search PATH, do not run a plur1bus executable, and do not run openclaw plur1bus.";
 
 export const REVIEW_PROFILES = Object.freeze([
   "standard",
@@ -1282,6 +1283,129 @@ export async function runMorningReview(rawConfig = {}, options = {}) {
   };
 }
 
+function readReviewBundleItems(rawConfig = {}, options = {}) {
+  const paths = resolveObsidianBridgePaths(rawConfig, options);
+  if (!paths.ok) return [];
+  const bundleDir = resolveUnder(paths.reviewPath, "review-bundles", paths.cfg);
+  if (!existsSync(bundleDir)) return [];
+  const items = [];
+  for (const entry of readdirSync(bundleDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isFile() || !entry.name.endsWith(".items.json")) continue;
+    const record = readJson(join(bundleDir, entry.name), null);
+    if (!Array.isArray(record?.items)) continue;
+    for (const item of record.items) {
+      if (item.status && item.status !== "pending") continue;
+      items.push({
+        ...item,
+        bundleId: record.bundle?.bundleId || entry.name.replace(/\.items\.json$/, ""),
+      });
+    }
+  }
+  return items;
+}
+
+function checkStatus({ ok = true, errors = 0, warnings = 0, count = 0 } = {}) {
+  if (!ok || errors > 0) return { icon: "error", label: "error", count };
+  if (warnings > 0) return { icon: "warning", label: "warning", count };
+  return { icon: "pass", label: "pass", count };
+}
+
+function renderEveningDeepReviewMarkdown(summary) {
+  const row = (name, status, details) => `| ${name} | ${status.label} | ${details} |`;
+  return [
+    "# PLUR1BUS Evening Deep Review",
+    "",
+    `- Created: ${summary.createdAt}`,
+    `- Agent: ${summary.agentId}`,
+    `- Workspace: ${summary.workspaceKey}`,
+    "- Mode: proposal-only",
+    "",
+    "## Checks",
+    "",
+    "| Check | Status | Details |",
+    "|---|---|---|",
+    row("Maintenance Deep", summary.status.maintenance, `${summary.maintenance.count} finding(s)`),
+    row("Adversarial Deep", summary.status.adversarial, `${summary.adversarial.reviewed.length} item(s), ${summary.adversarial.blocked.length} blocked, ${summary.adversarial.warnings.length} warning(s)`),
+    row("Semantic Conflicts", summary.status.semanticConflicts, `${summary.semanticConflicts.count || 0} record(s)`),
+    row("Duplicates Scan", summary.status.duplicates, `${summary.duplicates.count || 0} candidate(s)`),
+    row("Provenance Build", summary.status.provenance, `${summary.provenance.count || 0} record(s)`),
+    row("Impact Analyze All", summary.status.impact, `${summary.impact.count || 0} item(s)`),
+    row("Dashboards Build", summary.status.dashboards, `${summary.dashboards.count || 0} dashboard(s)`),
+    "",
+    "## Blocked / Warning Items",
+    "",
+    summary.blockedOrWarningItems.length
+      ? summary.blockedOrWarningItems.map((item) => `- ${item.kind}: ${item.id || item.code || item.path || "item"} - ${item.reason || item.message || "Review required."}`).join("\n")
+      : "- None.",
+    "",
+    "## Artifacts",
+    "",
+    `- ${summary.artifactPath}`,
+    ...(Array.isArray(summary.dashboards.generated) ? summary.dashboards.generated.map((path) => `- ${path}`) : []),
+    "",
+    "This review is generated through the OpenClaw PLUR1BUS plugin command surface. No standalone PLUR1BUS shell CLI is required or expected.",
+    "",
+  ].join("\n");
+}
+
+export function runEveningDeepReview(rawConfig = {}, options = {}) {
+  const agentId = options.agentId || "main";
+  const workspaceKey = options.workspaceKey || "main";
+  const createdAt = nowIso(options);
+  const baseRecords = options.records || defaultLivingDashboardRecords(agentId, workspaceKey);
+  const recordIndex = buildRecordIndex(rawConfig, { ...options, records: baseRecords });
+  const reviewItems = Array.isArray(options.items) ? options.items : readReviewBundleItems(rawConfig, options);
+  const maintenance = runLivingMaintenanceDeep(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
+  const adversarial = runAdversarialDeep(reviewItems, { agentId, workspaceKey });
+  const semanticConflicts = buildSemanticConflictGraph(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
+  const duplicates = scanSemanticDuplicates(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
+  const provenance = buildProvenanceGraph(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
+  const impact = analyzeImpact(rawConfig, "all", { ...options, agentId, workspaceKey, records: recordIndex.records });
+  const dashboards = generateDashboards(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
+  const artifactStamp = `${createdAt.slice(0, 10)}-${createdAt.slice(11, 16).replace(":", "")}`;
+  const artifactPath = `evening-deep-review-${artifactStamp}.md`;
+  const maintenanceErrors = maintenance.findings.filter((item) => item.severity === "error").length;
+  const maintenanceWarnings = maintenance.findings.filter((item) => item.severity === "warning").length;
+  const blockedOrWarningItems = [
+    ...maintenance.findings.filter((item) => ["error", "warning"].includes(item.severity)).map((item) => ({ ...item, kind: "maintenance" })),
+    ...adversarial.blocked.map((item) => ({ ...item, kind: "adversarial_block", reason: item.adversarialDeep?.checks?.map((check) => check.reason).join("; ") || item.reason })),
+    ...adversarial.warnings.map((item) => ({ ...item, kind: "adversarial_warning", reason: item.adversarialDeep?.checks?.map((check) => check.reason).join("; ") || item.reason })),
+  ];
+  const summary = {
+    ok: maintenance.ok !== false && adversarial.ok !== false && semanticConflicts.ok !== false && duplicates.ok !== false && provenance.ok !== false && impact.ok !== false && dashboards.ok !== false,
+    createdAt,
+    agentId,
+    workspaceKey,
+    mode: "proposal-only",
+    artifactPath,
+    records: recordIndex.records.length,
+    pendingItems: reviewItems.length,
+    maintenance,
+    adversarial,
+    semanticConflicts,
+    duplicates,
+    provenance,
+    impact,
+    dashboards,
+    blockedOrWarningItems,
+    status: {
+      maintenance: checkStatus({ ok: maintenance.ok, errors: maintenanceErrors, warnings: maintenanceWarnings, count: maintenance.count }),
+      adversarial: checkStatus({ ok: adversarial.ok, errors: adversarial.blocked.length, warnings: adversarial.warnings.length, count: adversarial.reviewed.length }),
+      semanticConflicts: checkStatus({ ok: semanticConflicts.ok, count: semanticConflicts.count }),
+      duplicates: checkStatus({ ok: duplicates.ok, count: duplicates.count }),
+      provenance: checkStatus({ ok: provenance.ok, count: provenance.count }),
+      impact: checkStatus({ ok: impact.ok, count: impact.count }),
+      dashboards: checkStatus({ ok: dashboards.ok, count: dashboards.count }),
+    },
+  };
+  summary.artifact = writeManagedBlockFile(rawConfig, artifactPath, {
+    id: "evening-deep-review",
+    agent: agentId,
+    bundle: createdAt.slice(0, 10),
+  }, renderEveningDeepReviewMarkdown(summary), options);
+  return summary;
+}
+
 function loadBundleRecord(rawConfig, bundleId, options = {}) {
   const paths = resolveObsidianBridgePaths(rawConfig, options);
   if (!paths.ok) throw new Error(paths.error);
@@ -1734,7 +1858,7 @@ export function printMorningReviewCronCommand(rawConfig = {}) {
     `  --cron "${cfg.morningReview.cron}" \\`,
     `  --tz "${cfg.morningReview.timezone}" \\`,
     `  --session ${cfg.morningReview.session} \\`,
-    "  --message \"Run /plur1bus obsidian morning-review. Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary.\" \\",
+    `  --message "Run exactly this OpenClaw plugin command: /plur1bus obsidian morning-review. ${OPENCLAW_COMMAND_SURFACE_NOTICE} Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary." \\`,
     "  --announce",
   ].join("\n");
 }
@@ -1832,7 +1956,7 @@ export function buildWorkspaceReviewCronJobs(rawConfig = {}, options = {}) {
         channel,
         to,
         timeoutSeconds: 900,
-        message: `Run /plur1bus obsidian morning-review for ${label}. Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary.`,
+        message: `Run exactly this OpenClaw plugin command for ${label}: /plur1bus obsidian morning-review. ${OPENCLAW_COMMAND_SURFACE_NOTICE} Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary.`,
       };
       jobs.push({ ...spec, command: cronCommandFromSpec(spec) });
     }
@@ -1849,7 +1973,7 @@ export function buildWorkspaceReviewCronJobs(rawConfig = {}, options = {}) {
         channel,
         to,
         timeoutSeconds: 1200,
-        message: `Run PLUR1BUS Obsidian evening deep review for ${label}. Execute proposal-only checks: /plur1bus obsidian maintenance deep, /plur1bus obsidian adversarial deep, /plur1bus obsidian semantic-conflicts build, /plur1bus obsidian duplicates scan, /plur1bus obsidian provenance build, /plur1bus obsidian impact analyze all, and /plur1bus obsidian dashboards build. Do not apply changes without explicit user approval. Return a concise summary with written artifact paths and blocked/warning items.`,
+        message: `Run exactly this OpenClaw plugin command for ${label}: /plur1bus obsidian evening-review. ${OPENCLAW_COMMAND_SURFACE_NOTICE} This command performs the proposal-only evening deep review checks internally. Do not apply changes without explicit user approval. Return a concise summary with written artifact paths and blocked/warning items.`,
       };
       jobs.push({ ...spec, command: cronCommandFromSpec(spec) });
     }
@@ -1964,6 +2088,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       return commandResult({ ...summary, ok: written.ok, write: written });
     }
     if (command === "morning-review") return commandResult(await runMorningReview(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir }));
+    if (command === "evening-review" || command === "evening-deep-review") return commandResult(runEveningDeepReview(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, records: context.records, items: context.items }));
     if (command === "records" && sub === "rebuild") {
       const records = context.records || defaultLivingDashboardRecords(agentId, workspaceKey);
       return commandResult({ ok: true, written: writeRecords(commandConfig, records, { agentId, workspaceKey, workspaceDir: context.workspaceDir }) });
@@ -2099,7 +2224,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
         }));
       }
     }
-    return commandResult("Usage: /plur1bus obsidian doctor|discover workspaces [--dry-run] [--verbose] [--write --backup-dir <dir>]|init workspaces [--workspace <id>|--agent <id>] [--dry-run] [--verbose]|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review|print-workspace-reviews|install-workspace-reviews>");
+    return commandResult("Usage: /plur1bus obsidian doctor|discover workspaces [--dry-run] [--verbose] [--write --backup-dir <dir>]|init workspaces [--workspace <id>|--agent <id>] [--dry-run] [--verbose]|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|evening-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review|print-workspace-reviews|install-workspace-reviews>");
   } catch (err) {
     return commandResult({ ok: false, error: String(err?.message || err) });
   }

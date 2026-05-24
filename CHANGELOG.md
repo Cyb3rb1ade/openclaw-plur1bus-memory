@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [4.2.7] - 2026-05-24
+
+### Added
+- Added `/plur1bus obsidian evening-review`, a single plugin command that runs the proposal-only evening deep review checks internally and writes a timestamped Obsidian review artifact.
+
+### Fixed
+- Clarified generated review cron prompts so `/plur1bus` is treated as an OpenClaw slash/plugin command, not a standalone shell binary or `openclaw plur1bus` namespace.
+
+### Verification
+- Added regression coverage for bundled evening-review execution and cron prompts that avoid the shell-CLI false diagnosis.
+- Validated Bernhardine live review generation with 14 dashboards, 0 maintenance findings, 0 adversarial warnings, and no missing-CLI warning.
+
 ## [4.2.6] - 2026-05-24
 
 ### Fixed
