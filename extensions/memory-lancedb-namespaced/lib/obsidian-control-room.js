@@ -135,6 +135,25 @@ const REVIEW_ITEM_STATUSES = new Set([
   "invalid",
 ]);
 
+const DEFAULT_OBSIDIAN_SOURCE_DIR_EXCLUDES = new Set([
+  ".adaptive-learning",
+  ".agents",
+  ".claude",
+  ".clawhub",
+  ".git",
+  ".obsidian",
+  ".openclaw",
+  ".outcome",
+  ".pi",
+  ".proactive",
+  ".secrets",
+  ".state",
+  ".stfolder",
+  ".stversions",
+  "__pycache__",
+  "node_modules",
+]);
+
 const PROMPT_INJECTION_PATTERNS = [
   /ignore\s+(all\s+)?(previous|system|developer|higher-priority)\s+(instructions|messages|rules)/i,
   /\b(system|developer)\s+prompt\b/i,
@@ -618,28 +637,30 @@ function maybeCreateReviewLayout(paths, options = {}) {
 function readMarkdownFiles(root, options = {}) {
   const maxFileBytes = options.maxFileBytes || 256 * 1024;
   const maxItems = options.maxItems || 200;
-  const out = [];
-  if (!existsSync(root)) return out;
+  const excludedDirs = options.excludedDirs || DEFAULT_OBSIDIAN_SOURCE_DIR_EXCLUDES;
+  const candidates = [];
+  if (!existsSync(root)) return [];
 
   function walk(dir) {
-    if (out.length >= maxItems) return;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (out.length >= maxItems) break;
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const abs = join(dir, entry.name);
       const rel = relative(root, abs).replace(/\\/g, "/");
       if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".obsidian") continue;
+        if (excludedDirs.has(entry.name)) continue;
         walk(abs);
       } else if (entry.isFile() && entry.name.endsWith(".md")) {
         const stat = statSync(abs);
         if (stat.size > maxFileBytes) continue;
-        out.push({ abs, rel, size: stat.size, content: readFileSync(abs, "utf8") });
+        candidates.push({ abs, rel, size: stat.size, mtimeMs: stat.mtimeMs });
       }
     }
   }
 
   walk(root);
-  return out;
+  return candidates
+    .sort((a, b) => (b.mtimeMs - a.mtimeMs) || a.rel.localeCompare(b.rel))
+    .slice(0, maxItems)
+    .map((file) => ({ ...file, content: readFileSync(file.abs, "utf8") }));
 }
 
 export function buildManagedBlock({ id, agent = "main", bundle = "", body }) {
@@ -964,7 +985,11 @@ function collectProposalInputs(rawConfig = {}, options = {}) {
   if (!paths.ok || !existsSync(paths.vaultPath)) return inputs;
   const cfg = paths.cfg;
   const reviewRootPrefix = `${paths.reviewRoot.replace(/\/+$/, "")}/`;
-  const files = readMarkdownFiles(paths.vaultPath, { maxFileBytes: cfg.maxFileBytes, maxItems: Math.min(cfg.maxItems, 80) });
+  const files = readMarkdownFiles(paths.vaultPath, {
+    maxFileBytes: cfg.maxFileBytes,
+    maxItems: Math.min(cfg.maxItems, 80),
+    excludedDirs: DEFAULT_OBSIDIAN_SOURCE_DIR_EXCLUDES,
+  });
   for (const file of files) {
     if (file.rel.startsWith(reviewRootPrefix) || file.rel === paths.reviewRoot) continue;
     if (/memory\/KNOWLEDGE\.md$/.test(file.rel)) continue;

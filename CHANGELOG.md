@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [4.1.1] - 2026-05-24
+
+### Fixed
+- Fixed Obsidian ReviewBundle source scanning so newly edited user Vault notes are prioritized before applying the candidate limit.
+- Excluded technical runtime/config directories such as `.obsidian`, `.agents`, `.git`, `.adaptive-learning`, `.openclaw`, and `.stversions` from Obsidian import candidates while still allowing user-content dot directories such as `.cards`.
+
+### Verification
+- Added regression coverage proving that hidden technical directories do not consume the scan limit and that `.cards` notes remain eligible Obsidian proposal sources.
+- Verified Bernd's local Vault at `/root/.openclaw/workspace` produces an untrusted `note_import_candidate` for a newly edited Markdown note while skipping `.agents`.
+
 ## [4.1.0] - 2026-05-24
 
 ### Added

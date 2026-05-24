@@ -468,6 +468,31 @@ test("workspace_shared does not leak to global_user without explicit policy", ()
   assert.equal(item.adversarialReview.status, "block");
 });
 
+test("review prepare skips hidden technical directories so user vault notes are reached", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, ".agents/skills"), { recursive: true });
+    mkdirSync(join(vault, ".cards"), { recursive: true });
+    mkdirSync(vault, { recursive: true });
+    for (let i = 0; i < 90; i += 1) {
+      writeFileSync(join(vault, ".agents/skills", `technical-${String(i).padStart(2, "0")}.md`), `# Technical ${i}\n\nHidden technical note ${i}.\n`, "utf8");
+    }
+    writeFileSync(join(vault, ".cards", "allowed-card.md"), "# Allowed Card\n\nDot-card notes are user content.\n", "utf8");
+    writeFileSync(join(vault, "bernd-visible-note.md"), "# Bernd Visible Note\n\nBernd Obsidian bridge visible marker.\n", "utf8");
+
+    const prepared = await prepareReviewBundle(config(vault), { bundleId: "rb-hidden-skip" });
+    const visible = prepared.items.find((item) => item.target === "bernd-visible-note.md");
+    const card = prepared.items.find((item) => item.target === ".cards/allowed-card.md");
+    assert.ok(visible);
+    assert.ok(card);
+    assert.equal(visible.type, "note_import_candidate");
+    assert.equal(visible.sourceTrustLevel, "untrusted_obsidian");
+    assert.equal(prepared.items.some((item) => String(item.target).startsWith(".agents/")), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("Obsidian disable/delete does not break existing memory contracts", async () => {
   const { tmp, vault } = makeVault();
   try {
