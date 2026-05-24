@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v4.1.0-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.1.0)
+[![Release](https://img.shields.io/badge/release-v4.2.5-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.2.5)
 
 ---
 
@@ -14,7 +14,7 @@ PLUR1BUS v4 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `4.1.0`<br>
+**Aktuelle Version:** `4.2.5`<br>
 **Branch:** `main`<br>
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1` und `2026.5.18`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
@@ -166,9 +166,11 @@ Workspace-IDs gewinnen gegen Pfad-Basename-Fallbacks, waehrend alte
 `_neo/workspaces/<basename>` Daten als Legacy-Aliase lesbar bleiben. In `4.0.2`
 loesen die Obsidian-Control-Room-Commands auch bei Multi-Workspace-Configs ohne
 globales `vaultPath` den aktiven Vault aus `obsidianBridge.workspaces[]`,
-`workspaceDir`, `workspaceKey` oder `agentId` auf. In `4.1.0` werden normale
-Vault-Dokumente als untrusted Kandidaten/Review-Input erfasst, ohne dadurch
-Auto-Recall-Memory zu werden. Die Bridge
+`workspaceDir`, `workspaceKey` oder `agentId` auf. In `4.2.5` kann die Bridge
+Workspace-Installationen gezielt initialisieren und pro Workspace 09:00
+Morning-Review- sowie 18:00 Evening-Deep-Review-Crons ausgeben oder
+installieren. Normale Vault-Dokumente werden als untrusted
+Kandidaten/Review-Input erfasst, ohne dadurch Auto-Recall-Memory zu werden. Die Bridge
 schreibt Markdown-Artefakte fuer Doctor-Reports, ReviewBundles, kanonische
 Records, Dashboards, Bases, Konflikte, Project Hubs, Memory-Erklaerungen,
 Provenance, Impact-Analysen, Link-Vorschlaege, Hygiene- und Task-Vorschlaege
@@ -205,10 +207,18 @@ Default bleibt sicher aus und approval-gated:
     "morningReview": {
       "enabled": false,
       "cron": "0 9 * * *",
-      "timezone": "Europe/Zurich",
+      "timezone": "Europe/Berlin",
       "delivery": "announce",
       "session": "isolated",
       "writeReviewBundle": true,
+      "applyMode": "manual"
+    },
+    "eveningReview": {
+      "enabled": false,
+      "cron": "0 18 * * *",
+      "timezone": "Europe/Berlin",
+      "delivery": "announce",
+      "session": "isolated",
       "applyMode": "manual"
     },
     "dashboardLayer": {
@@ -261,12 +271,14 @@ Slash Commands:
 /plur1bus obsidian soul patch
 /plur1bus obsidian cron print-morning-review
 /plur1bus obsidian cron install-morning-review --force
+/plur1bus obsidian cron print-workspace-reviews [--workspace <id>|--agent <id>|--all]
+/plur1bus obsidian cron install-workspace-reviews --force [--workspace <id>|--agent <id>|--all]
 ```
 
 `prepare` ist nicht `apply`. Ein ReviewBundle hat Frontmatter mit
 `type: plur1bus-review-bundle`, `bundleId`, `createdByAgent`, `status:
 pending_user_review`, `applyMode: approval_required`, Review-Profilen und
-`obsidianBridgeVersion: 4.1.0`. Jedes Item hat stabile IDs, Status, Risk,
+`obsidianBridgeVersion: 4.2.5`. Jedes Item hat stabile IDs, Status, Risk,
 Target, Action, Evidence, Preconditions, Maintenance-/Adversarial-Review und
 Apply-Preview. Checkboxen in Obsidian reichen nie fuer Mutation; `apply` liest
 das Bundle neu, revalidiert Hashes/Preconditions und wendet nur explizit
@@ -317,7 +329,7 @@ und nicht automatisch nach `memory/KNOWLEDGE.md` uebernommen. Erst ein
 explizit genehmigter PLUR1BUS-Apply-Pfad darf daraus `memory_store` oder
 `knowledge_update` ausloesen.
 
-Ab `4.1.0` bindet die Freigabe an die konkrete vorgeschlagene Summary:
+Ab `4.2.5` bindet die Freigabe an die konkrete vorgeschlagene Summary:
 `applyPreview.payload.text` wird vor dem Approval erzeugt und danach nicht mehr
 semantisch veraendert. `applyPreview.payloadHash` wird aus kanonisch sortiertem
 JSON des immutable semantic payload berechnet; Approval-/Audit-Metadaten sind
@@ -326,20 +338,18 @@ nicht Teil dieses Hashes. Trust bleibt getrennt: `sourceTrustLevel:
 `approvedTrustLevel`/`appliedTrustLevel` nur als sichtbare Approval-/Audit-
 Metadaten gesetzt werden duerfen.
 
-Die Morning-Review-Pipeline laeuft proposal-only: Snapshot/Lock,
+Die Review-Pipelines laufen proposal-only. Morning Review macht
 `maintenance_light`, Change Collection, Proposal Generation,
-`adversarial_light`, Risk Classification, Deduplication, ReviewBundle-Write,
-User Summary, then explicit approval. OpenClaw Cron, nicht Host-Cron, ist der
-empfohlene Scheduler:
+`adversarial_light`, Risk Classification, Deduplication, ReviewBundle-Write und
+User Summary. Evening Deep Review fuehrt die tieferen Maintenance-,
+Adversarial-, Semantic-Conflict-, Duplicate-, Provenance-, Impact- und
+Dashboard-Pruefungen aus. OpenClaw Cron, nicht Host-Cron, ist der empfohlene
+Scheduler. Ab `4.2.5` koennen diese Jobs pro Workspace ausgegeben oder
+installiert werden:
 
 ```bash
-openclaw cron add \
-  --name "PLUR1BUS Morning Review" \
-  --cron "0 9 * * *" \
-  --tz "Europe/Zurich" \
-  --session isolated \
-  --message "Run /plur1bus obsidian morning-review. Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary." \
-  --announce
+/plur1bus obsidian cron print-workspace-reviews --all
+/plur1bus obsidian cron install-workspace-reviews --force --workspace main
 ```
 
 Failure Modes: Fehlt Obsidian, ist `vaultPath` kaputt, wird der Vault geloescht
@@ -407,7 +417,7 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `4.1.0`:
+Provider-Status in `4.2.5`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
@@ -583,7 +593,7 @@ runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `4.1.0`<br>
+**Current version:** `4.2.5`<br>
 **Branch:** `main`<br>
 **Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, and `2026.5.18`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
@@ -594,7 +604,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `4.1.0`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `4.2.5`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental
@@ -608,7 +618,7 @@ provider bridge only expands `${ENV_VAR}` for explicit OpenAI/OpenAI-compatible/
 PLUR1BUS provider variables and provider-header prefixes; unrelated env reads
 such as `${HOME}` are rejected.
 
-Obsidian Bridge in `4.1.0`: optional, disabled by default, and strictly
+Obsidian Bridge in `4.2.5`: optional, disabled by default, and strictly
 approval-gated. It writes Markdown ReviewBundles, canonical records,
 dashboards, optional Bases/Dataview/Tasks output, conflict reports, semantic
 conflict proposals, duplicate candidates, provenance graphs, impact analysis,
@@ -623,7 +633,7 @@ replace `memory_store`, `memory_recall`, `memory_search`, or `knowledge_update`.
 Plain Vault documents are scanned as untrusted candidates/proposals only; they
 do not become Auto-Recall memory unless an explicit approved PLUR1BUS apply path
 promotes them through `memory_store` or `knowledge_update`.
-Since `4.1.0`, that approval is bound to the exact proposed semantic payload:
+Since `4.2.5`, that approval is bound to the exact proposed semantic payload:
 `applyPreview.payloadHash` covers stable canonical JSON of the immutable payload
 only, while approval/audit metadata stays outside the hash.
 

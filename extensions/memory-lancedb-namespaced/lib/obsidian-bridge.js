@@ -218,11 +218,19 @@ export function normalizeObsidianBridgeConfig(raw = {}, options = {}) {
     morningReview: {
       enabled: cfg.morningReview?.enabled === true,
       cron: cfg.morningReview?.cron || "0 9 * * *",
-      timezone: cfg.morningReview?.timezone || "Europe/Zurich",
+      timezone: cfg.morningReview?.timezone || "Europe/Berlin",
       delivery: cfg.morningReview?.delivery || "announce",
       session: cfg.morningReview?.session || "isolated",
       writeReviewBundle: cfg.morningReview?.writeReviewBundle !== false,
       applyMode: cfg.morningReview?.applyMode || "manual",
+    },
+    eveningReview: {
+      enabled: cfg.eveningReview?.enabled === true,
+      cron: cfg.eveningReview?.cron || "0 18 * * *",
+      timezone: cfg.eveningReview?.timezone || cfg.morningReview?.timezone || "Europe/Berlin",
+      delivery: cfg.eveningReview?.delivery || cfg.morningReview?.delivery || "announce",
+      session: cfg.eveningReview?.session || cfg.morningReview?.session || "isolated",
+      applyMode: cfg.eveningReview?.applyMode || "manual",
     },
     maintenance: {
       daily: cfg.maintenance?.daily || "light",

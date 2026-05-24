@@ -81,7 +81,7 @@ test("manifest schema permits local providers and disabled reranker without apiK
 test("manifest declares disabled-by-default Obsidian bridge config", () => {
   const manifest = JSON.parse(readFileSync(resolve(pluginDir, "openclaw.plugin.json"), "utf8"));
   const bridge = manifest.configSchema.properties.obsidianBridge;
-  assert.equal(manifest.version, "4.1.1");
+  assert.equal(manifest.version, "4.2.5");
   assert.equal(bridge.type, "object");
   assert.equal(bridge.additionalProperties, false);
   assert.equal(bridge.properties.enabled.default, false);
@@ -96,7 +96,9 @@ test("manifest declares disabled-by-default Obsidian bridge config", () => {
   assert.equal(bridge.properties.adversarialDeep.properties.llmClassifier.default, false);
   assert.ok(bridge.properties.agents.properties.defaultProfiles.additionalProperties.enum.includes("semantic_deep"));
   assert.equal(bridge.properties.agents.properties.equalCapabilities.default, true);
-  assert.equal(bridge.properties.morningReview.properties.timezone.default, "Europe/Zurich");
+  assert.equal(bridge.properties.morningReview.properties.timezone.default, "Europe/Berlin");
+  assert.equal(bridge.properties.eveningReview.properties.cron.default, "0 18 * * *");
+  assert.equal(bridge.properties.eveningReview.properties.timezone.default, "Europe/Berlin");
   assert.equal(bridge.properties.dryRun.default, true);
   assert.ok(bridge.properties.workspaces);
   assert.ok(bridge.properties.includeGlobs);

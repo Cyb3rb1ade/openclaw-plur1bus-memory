@@ -602,6 +602,104 @@ test("obsidian control-room commands derive vaultPath from matching workspace co
   }
 });
 
+test("obsidian init workspaces can target one configured workspace", async () => {
+  const { tmp } = makeVault();
+  try {
+    const primary = join(tmp, "workspace-main");
+    const secondary = join(tmp, "workspace-secondary");
+    mkdirSync(primary, { recursive: true });
+    mkdirSync(secondary, { recursive: true });
+    const cfg = {
+      enabled: true,
+      workspaces: [
+        { workspace_id: "main", agent_id: "main", path: primary, label: "Main" },
+        { workspace_id: "secondary", agent_id: "secondary-agent", path: secondary, label: "Secondary" },
+      ],
+    };
+
+    const result = await handleObsidianBridgeCommand(["init", "workspaces", "--workspace", "secondary", "--verbose"], { config: cfg });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.workspaces, 1);
+    assert.equal(parsed.results[0].workspaceId, "secondary");
+    assert.equal(existsSync(join(secondary, "memory/cards")), true);
+    assert.equal(existsSync(join(primary, "memory/cards")), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian cron workspace reviews prints selectable morning and evening jobs", async () => {
+  const { tmp } = makeVault();
+  try {
+    const main = join(tmp, "workspace-main");
+    const secondary = join(tmp, "workspace-secondary");
+    mkdirSync(main, { recursive: true });
+    mkdirSync(secondary, { recursive: true });
+    const cfg = {
+      enabled: true,
+      workspaces: [
+        { workspace_id: "main", agent_id: "main", path: main, label: "Bernd" },
+        { workspace_id: "secondary", agent_id: "secondary-agent", path: secondary, label: "Secondary" },
+      ],
+      morningReview: { cron: "0 9 * * *", timezone: "Europe/Berlin" },
+      eveningReview: { cron: "0 18 * * *", timezone: "Europe/Berlin" },
+    };
+
+    const result = await handleObsidianBridgeCommand(["cron", "print-workspace-reviews", "--workspace", "secondary", "--channel", "telegram", "--to", "12345"], { config: cfg });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.workspaces, 1);
+    assert.equal(parsed.jobs.length, 2);
+    assert.deepEqual(parsed.jobs.map((job) => job.type), ["morning", "evening_deep"]);
+    assert.equal(parsed.jobs.every((job) => job.agentId === "secondary-agent"), true);
+    assert.match(parsed.commands.join("\n"), /--name "PLUR1BUS Morning Review - Secondary"/);
+    assert.match(parsed.commands.join("\n"), /--cron "0 18 \* \* \*"/);
+    assert.match(parsed.commands.join("\n"), /--channel "telegram"/);
+    assert.match(parsed.commands.join("\n"), /--to "12345"/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian cron workspace reviews installs through provided cron API only with force", async () => {
+  const { tmp } = makeVault();
+  try {
+    const main = join(tmp, "workspace-main");
+    const secondary = join(tmp, "workspace-secondary");
+    mkdirSync(main, { recursive: true });
+    mkdirSync(secondary, { recursive: true });
+    const cfg = {
+      enabled: true,
+      workspaces: [
+        { workspace_id: "main", agent_id: "main", path: main, label: "Bernd" },
+        { workspace_id: "secondary", agent_id: "secondary-agent", path: secondary, label: "Secondary" },
+      ],
+      morningReview: { timezone: "Europe/Berlin" },
+      eveningReview: { timezone: "Europe/Berlin" },
+    };
+
+    const refused = await handleObsidianBridgeCommand(["cron", "install-workspace-reviews", "--all"], { config: cfg });
+    assert.equal(JSON.parse(refused.text).installed, false);
+
+    const calls = [];
+    const result = await handleObsidianBridgeCommand(["cron", "install-workspace-reviews", "--force", "--all"], {
+      config: cfg,
+      openclawCronAdd: async (request) => {
+        calls.push(request);
+        return { ok: true, name: request.job.name };
+      },
+    });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.installed, true);
+    assert.equal(calls.length, 4);
+    assert.ok(calls.every((call) => call.command.includes("openclaw cron add")));
+    assert.deepEqual(calls.map((call) => call.job.type), ["morning", "evening_deep", "morning", "evening_deep"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("obsidian discover workspaces dry-run finds local candidates without writing config", async () => {
   const { tmp } = makeVault();
   try {

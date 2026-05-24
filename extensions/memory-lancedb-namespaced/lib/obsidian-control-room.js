@@ -48,11 +48,12 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.1.0";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.5";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
-export const DEFAULT_MORNING_TZ = "Europe/Zurich";
+export const DEFAULT_EVENING_CRON = "0 18 * * *";
+export const DEFAULT_MORNING_TZ = "Europe/Berlin";
 
 export const REVIEW_PROFILES = Object.freeze([
   "standard",
@@ -443,6 +444,14 @@ export function normalizeObsidianControlRoomConfig(raw = {}, options = {}) {
       session: cfg.morningReview?.session || "isolated",
       writeReviewBundle: cfg.morningReview?.writeReviewBundle !== false,
       applyMode: cfg.morningReview?.applyMode || "manual",
+    },
+    eveningReview: {
+      enabled: cfg.eveningReview?.enabled === true,
+      cron: cfg.eveningReview?.cron || DEFAULT_EVENING_CRON,
+      timezone: cfg.eveningReview?.timezone || cfg.morningReview?.timezone || DEFAULT_MORNING_TZ,
+      delivery: cfg.eveningReview?.delivery || cfg.morningReview?.delivery || "announce",
+      session: cfg.eveningReview?.session || cfg.morningReview?.session || "isolated",
+      applyMode: cfg.eveningReview?.applyMode || "manual",
     },
     maintenance: {
       daily: cfg.maintenance?.daily || "light",
@@ -1730,6 +1739,124 @@ export function printMorningReviewCronCommand(rawConfig = {}) {
   ].join("\n");
 }
 
+function shellArg(value) {
+  return `"${String(value || "").replace(/(["\\$`])/g, "\\$1")}"`;
+}
+
+function workspaceDisplayName(workspace) {
+  return workspace.label || workspace.workspaceId || workspace.agentId || "Workspace";
+}
+
+function workspaceSelectorFromTokens(tokens = []) {
+  const workspace = parseCommandOption(tokens, "--workspace", parseCommandOption(tokens, "--workspace-id", ""));
+  const agent = parseCommandOption(tokens, "--agent", parseCommandOption(tokens, "--agent-id", ""));
+  return {
+    workspace: workspace === "all" ? "" : workspace,
+    agent: agent === "all" ? "" : agent,
+  };
+}
+
+function workspaceMatchesCommandSelector(workspace, selector = {}) {
+  const workspaceNeedle = selector.workspace || "";
+  const agentNeedle = selector.agent || "";
+  if (!workspaceNeedle && !agentNeedle) return true;
+  const aliases = [
+    workspace.workspaceId,
+    workspace.agentId,
+    workspace.label,
+    ...(Array.isArray(workspace.aliases) ? workspace.aliases : []),
+    ...(Array.isArray(workspace.legacyKeys) ? workspace.legacyKeys : []),
+  ].filter(Boolean).map(String);
+  if (workspaceNeedle && aliases.includes(String(workspaceNeedle))) return true;
+  if (agentNeedle && aliases.includes(String(agentNeedle))) return true;
+  return false;
+}
+
+function selectCommandWorkspaces(rawConfig = {}, tokens = [], context = {}) {
+  const selector = workspaceSelectorFromTokens(tokens);
+  const configured = discoverObsidianWorkspaces(rawConfig)
+    .filter((workspace) => workspaceMatchesCommandSelector(workspace, selector));
+  if (configured.length > 0) return configured;
+  if (selector.workspace || selector.agent) return [];
+  const workspaceDir = context.workspaceDir || context.commandCtx?.workspaceDir;
+  if (!workspaceDir) return [];
+  const workspaceId = context.workspaceKey || context.commandCtx?.workspaceKey || basename(workspaceDir);
+  const agentId = context.agentId || context.commandCtx?.agentId || workspaceId;
+  return [{
+    workspaceId,
+    agentId,
+    label: workspaceId,
+    path: normalizeAbsPath(workspaceDir),
+  }];
+}
+
+function cronCommandFromSpec(spec) {
+  const parts = [
+    "openclaw cron add",
+    `--name ${shellArg(spec.name)}`,
+    `--agent ${shellArg(spec.agentId)}`,
+    `--cron ${shellArg(spec.cron)}`,
+    `--tz ${shellArg(spec.timezone)}`,
+    "--exact",
+    `--session ${spec.session}`,
+    `--timeout-seconds ${spec.timeoutSeconds}`,
+  ];
+  if (spec.channel) parts.push(`--channel ${shellArg(spec.channel)}`);
+  if (spec.to) parts.push(`--to ${shellArg(spec.to)}`);
+  if (spec.delivery === "announce") parts.push("--announce");
+  parts.push(`--message ${shellArg(spec.message)}`);
+  return parts.map((part, index) => `${index === 0 ? part : `  ${part}`}${index < parts.length - 1 ? " \\" : ""}`).join("\n");
+}
+
+export function buildWorkspaceReviewCronJobs(rawConfig = {}, options = {}) {
+  const cfg = normalizeObsidianControlRoomConfig(rawConfig);
+  const workspaces = options.workspaces || selectCommandWorkspaces(rawConfig, options.tokens || [], options.context || {});
+  const includeMorning = options.includeMorning !== false;
+  const includeEvening = options.includeEvening !== false;
+  const channel = options.channel || "";
+  const to = options.to || "";
+  const jobs = [];
+
+  for (const workspace of workspaces) {
+    const label = workspaceDisplayName(workspace);
+    if (includeMorning) {
+      const spec = {
+        type: "morning",
+        name: `PLUR1BUS Morning Review - ${label}`,
+        workspaceId: workspace.workspaceId,
+        agentId: workspace.agentId,
+        cron: cfg.morningReview.cron,
+        timezone: cfg.morningReview.timezone,
+        session: cfg.morningReview.session,
+        delivery: cfg.morningReview.delivery,
+        channel,
+        to,
+        timeoutSeconds: 900,
+        message: `Run /plur1bus obsidian morning-review for ${label}. Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary.`,
+      };
+      jobs.push({ ...spec, command: cronCommandFromSpec(spec) });
+    }
+    if (includeEvening) {
+      const spec = {
+        type: "evening_deep",
+        name: `PLUR1BUS Evening Deep Review - ${label}`,
+        workspaceId: workspace.workspaceId,
+        agentId: workspace.agentId,
+        cron: cfg.eveningReview.cron,
+        timezone: cfg.eveningReview.timezone,
+        session: cfg.eveningReview.session,
+        delivery: cfg.eveningReview.delivery,
+        channel,
+        to,
+        timeoutSeconds: 1200,
+        message: `Run PLUR1BUS Obsidian evening deep review for ${label}. Execute proposal-only checks: /plur1bus obsidian maintenance deep, /plur1bus obsidian adversarial deep, /plur1bus obsidian semantic-conflicts build, /plur1bus obsidian duplicates scan, /plur1bus obsidian provenance build, /plur1bus obsidian impact analyze all, and /plur1bus obsidian dashboards build. Do not apply changes without explicit user approval. Return a concise summary with written artifact paths and blocked/warning items.`,
+      };
+      jobs.push({ ...spec, command: cronCommandFromSpec(spec) });
+    }
+  }
+  return { ok: true, workspaces: workspaces.length, jobs };
+}
+
 function parseCommandOption(tokens, name, fallback = "") {
   const index = tokens.indexOf(name);
   if (index < 0) return fallback;
@@ -1776,7 +1903,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
     if (command === "init" && sub === "workspaces") {
       const dryRun = tokens.includes("--dry-run");
       const verbose = tokens.includes("--verbose");
-      const workspaces = discoverObsidianWorkspaces(rawConfig);
+      const workspaces = selectCommandWorkspaces(rawConfig, tokens, context);
       const results = workspaces.map((workspace) => {
         const init = initWorkspace(workspace, { dryRun, allowDotObsidianWrite: rawConfig.allowDotObsidianWrite === true });
         return {
@@ -1887,6 +2014,51 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
     }
     if (command === "cron") {
       if (sub === "print-morning-review") return commandResult({ command: printMorningReviewCronCommand(commandConfig) });
+      if (sub === "print-workspace-reviews") {
+        const plan = buildWorkspaceReviewCronJobs(rawConfig, {
+          tokens,
+          context,
+          includeMorning: !tokens.includes("--evening-only"),
+          includeEvening: !tokens.includes("--morning-only"),
+          channel: parseCommandOption(tokens, "--channel", ""),
+          to: parseCommandOption(tokens, "--to", ""),
+        });
+        return commandResult({
+          ...plan,
+          commands: plan.jobs.map((job) => job.command),
+        });
+      }
+      if (sub === "install-workspace-reviews") {
+        const plan = buildWorkspaceReviewCronJobs(rawConfig, {
+          tokens,
+          context,
+          includeMorning: !tokens.includes("--evening-only"),
+          includeEvening: !tokens.includes("--morning-only"),
+          channel: parseCommandOption(tokens, "--channel", ""),
+          to: parseCommandOption(tokens, "--to", ""),
+        });
+        if (!tokens.includes("--force")) {
+          return commandResult({
+            installed: false,
+            reason: "Refusing to install without --force. Review the OpenClaw cron commands first.",
+            ...plan,
+            commands: plan.jobs.map((job) => job.command),
+          });
+        }
+        if (typeof context.openclawCronAdd !== "function") {
+          return commandResult({
+            installed: false,
+            reason: "No OpenClaw cron API is available in this runtime; run the printed commands manually.",
+            ...plan,
+            commands: plan.jobs.map((job) => job.command),
+          });
+        }
+        const results = [];
+        for (const job of plan.jobs) {
+          results.push(await context.openclawCronAdd({ command: job.command, job }));
+        }
+        return commandResult({ installed: true, ...plan, results });
+      }
       if (sub === "install-morning-review") {
         const cronCommand = printMorningReviewCronCommand(commandConfig);
         if (!tokens.includes("--force")) {
@@ -1927,7 +2099,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
         }));
       }
     }
-    return commandResult("Usage: /plur1bus obsidian doctor|discover workspaces [--dry-run] [--verbose] [--write --backup-dir <dir>]|init workspaces [--dry-run] [--verbose]|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review>");
+    return commandResult("Usage: /plur1bus obsidian doctor|discover workspaces [--dry-run] [--verbose] [--write --backup-dir <dir>]|init workspaces [--workspace <id>|--agent <id>] [--dry-run] [--verbose]|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review|print-workspace-reviews|install-workspace-reviews>");
   } catch (err) {
     return commandResult({ ok: false, error: String(err?.message || err) });
   }

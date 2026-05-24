@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.1.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Diese Korrektur macht rohe Obsidian-Vault-Scans proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.2.5` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -40,7 +40,7 @@ Registrierung.
 - **OpenClaw-native Provider-Bridge** — `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` exponieren `plur1bus-openai`, `plur1bus-openai-compatible` und experimental `plur1bus-e5-small`, ohne `kind:"memory"` zu setzen oder die Memory-Capability-API zu nutzen; `memory-core` bleibt Slot-Owner
 - **Obsidian Bridge** — optionaler, default-ausgeschalteter Markdown/Vault-Layer fuer ReviewBundles, Doctor, Konflikte, Project Hubs, Task-Vorschlaege und Memory-Erklaerungen; Apply ist approval-gated und revalidiert Hashes/Preconditions
 - **Secret-Hardening** — die OpenClaw-native Embedding-Provider-Bridge löst `${ENV_VAR}` nur fuer explizite OpenAI/OpenAI-compatible/PLUR1BUS Provider-Variablen und Provider-Header-Praefixe auf; beliebige Env-Reads werden abgelehnt
-- **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei wählbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
+- **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei waehlbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
 - **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
 - **Schema-Migration** — bestehende DBs erhalten neue Spalten automatisch beim ersten Zugriff
 - **Konfigurierbare Thresholds** — alle Score-Grenzen per `openclaw.json` einstellbar
@@ -163,10 +163,18 @@ Default:
     "morningReview": {
       "enabled": false,
       "cron": "0 9 * * *",
-      "timezone": "Europe/Zurich",
+      "timezone": "Europe/Berlin",
       "delivery": "announce",
       "session": "isolated",
       "writeReviewBundle": true,
+      "applyMode": "manual"
+    },
+    "eveningReview": {
+      "enabled": false,
+      "cron": "0 18 * * *",
+      "timezone": "Europe/Berlin",
+      "delivery": "announce",
+      "session": "isolated",
       "applyMode": "manual"
     },
     "maintenance": {
@@ -231,7 +239,7 @@ nach LanceDB geschrieben und nicht nach `memory/KNOWLEDGE.md` uebernommen.
 Erst ein explizit genehmigter PLUR1BUS-Apply-Pfad darf daraus `memory_store`
 oder `knowledge_update` ausloesen.
 
-Ab `4.1.0` ist Approval an die konkrete vorgeschlagene Summary gebunden.
+Ab `4.2.5` ist Approval an die konkrete vorgeschlagene Summary gebunden.
 `applyPreview.payloadHash` wird aus stabil sortiertem JSON des immutable
 semantic payload berechnet. `applyPreview.payload.text`, Kategorie, Scope,
 Origin, Source-Refs, Evidence-Quote und Source-Hash bleiben nach Candidate-
@@ -265,6 +273,8 @@ Wichtige Commands:
 /plur1bus obsidian soul patch
 /plur1bus obsidian cron print-morning-review
 /plur1bus obsidian cron install-morning-review --force
+/plur1bus obsidian cron print-workspace-reviews [--workspace <id>|--agent <id>|--all]
+/plur1bus obsidian cron install-workspace-reviews --force [--workspace <id>|--agent <id>|--all]
 ```
 
 ReviewBundle-Frontmatter:
@@ -283,7 +293,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.1.0
+obsidianBridgeVersion: 4.2.5
 ---
 ```
 
@@ -310,16 +320,16 @@ sind auf den Review-Root begrenzt, `.obsidian` wird nur geschrieben, wenn
 Morning Review laeuft proposal-only: Snapshot/Lock, `maintenance_light`,
 Change Collection, Proposal Generation, `adversarial_light`, Risk
 Classification, Deduplication, ReviewBundle-Write, User Summary, dann Warten
-auf explizite Freigabe. Empfohlener OpenClaw-Cron:
+auf explizite Freigabe. Ab `4.2.5` kann PLUR1BUS pro konfiguriertem Workspace
+waehlbar zwei OpenClaw-Crons ausgeben oder installieren: Morning Review um 09:00
+und Evening Deep Review um 18:00. Beide Jobs sind proposal-only und nutzen den
+jeweiligen `agent_id` des Workspace-Eintrags.
+
+Beispiel:
 
 ```bash
-openclaw cron add \
-  --name "PLUR1BUS Morning Review" \
-  --cron "0 9 * * *" \
-  --tz "Europe/Zurich" \
-  --session isolated \
-  --message "Run /plur1bus obsidian morning-review. Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary." \
-  --announce
+/plur1bus obsidian cron print-workspace-reviews --all
+/plur1bus obsidian cron install-workspace-reviews --force --workspace main
 ```
 
 Pure Markdown funktioniert ohne Obsidian-Plugins. Dataview/Bases/Tasks sind

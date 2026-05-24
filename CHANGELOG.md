@@ -1,5 +1,22 @@
 ## [Unreleased]
 
+## [4.2.5] - 2026-05-24
+
+### Added
+- Added per-workspace Obsidian Review cron planning and installation commands for 09:00 Morning Review and 18:00 Evening Deep Review.
+- Added selectable workspace initialization for Obsidian Bridge setup via `--workspace` / `--agent`, so installs can target one workspace or all configured workspaces.
+- Added configurable `eveningReview` defaults for proposal-only deep review scheduling.
+
+### Changed
+- Switched Obsidian Review cron defaults to `Europe/Berlin` for this release line.
+- Updated generated Obsidian artifact version markers to `4.2.5`.
+
+### Security
+- Kept all scheduled Obsidian Review jobs proposal-only. Cron generation does not approve, apply, mutate LanceDB, or rewrite `KNOWLEDGE.md`.
+
+### Verification
+- Added regression coverage for targeted workspace initialization, per-workspace cron command generation, and force-gated cron installation through the OpenClaw cron API.
+
 ## [4.1.1] - 2026-05-24
 
 ### Fixed
