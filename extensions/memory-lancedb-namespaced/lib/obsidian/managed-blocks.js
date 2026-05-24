@@ -4,7 +4,7 @@ export function sha256Hex(value) {
   return createHash("sha256").update(String(value || ""), "utf8").digest("hex");
 }
 
-export function buildManagedBlock({ id, version = "4.0.0", body = "", attrs = {} }) {
+export function buildManagedBlock({ id, version = "4.0.2", body = "", attrs = {} }) {
   const hash = `sha256:${sha256Hex(body)}`;
   const attrText = Object.entries({ id, version, ...attrs, hash })
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
@@ -41,4 +41,3 @@ export function replaceManagedBlock(content, block) {
   const sep = text && !text.endsWith("\n") ? "\n\n" : text ? "\n" : "";
   return { changed: true, content: `${text}${sep}${next}\n`, conflict: null };
 }
-

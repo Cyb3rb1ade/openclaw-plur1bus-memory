@@ -1,7 +1,16 @@
 ## [Unreleased]
 
-### Added
-- Added `/plur1bus obsidian discover workspaces` as a local-only discovery assistant. It is dry-run by default, can inspect OpenClaw agent config and workspace markers, and only writes missing `obsidianBridge.workspaces` entries when `--write --backup-dir <dir>` is provided.
+## [4.0.2] - 2026-05-24
+
+### Fixed
+- Fixed Obsidian control-room commands for multi-workspace installs that configure `obsidianBridge.workspaces[]` without a global `vaultPath`. Doctor, ReviewBundle, record, dashboard, Base, weekly, provenance, semantic, impact, link, and related `/plur1bus obsidian ...` commands now resolve the active Vault from the current `workspaceDir`, `workspaceKey`, `agentId`, or a single configured workspace.
+- Kept `reviewRoot` configurable and changed the default generated-artifact root to `plur1bus/`. Users who prefer `00-system/plur1bus` can set it explicitly.
+
+### Security
+- Preserved the authority boundary: workspace-derived Obsidian paths only select a Vault root for generated dashboard/review artifacts. They do not make Obsidian authoritative memory and do not introduce direct LanceDB mutation.
+
+### Verification
+- Added regression coverage proving that multi-workspace Obsidian commands write generated records into the matched workspace Vault and do not leak generated files into sibling workspaces.
 
 ## [4.0.1] - 2026-05-23
 

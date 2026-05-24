@@ -356,6 +356,43 @@ test("obsidian init workspaces command creates required directories idempotently
   }
 });
 
+test("obsidian control-room commands derive vaultPath from matching workspace config", async () => {
+  const { tmp } = makeVault();
+  try {
+    const main = join(tmp, "workspace-main");
+    const secondary = join(tmp, "workspace-secondary");
+    mkdirSync(main, { recursive: true });
+    mkdirSync(secondary, { recursive: true });
+    const cfg = {
+      enabled: true,
+      dryRun: false,
+      reviewRoot: "plur1bus",
+      workspaces: [
+        { workspace_id: "main", agent_id: "main", path: main, label: "Main" },
+        { workspace_id: "secondary", agent_id: "secondary-agent", path: secondary, label: "Secondary" },
+      ],
+    };
+
+    const doctor = runVaultDoctor(cfg, { workspaceKey: "secondary", agentId: "secondary-agent", workspaceDir: secondary });
+    assert.equal(doctor.vaultPathStatus.configured, true);
+    assert.equal(doctor.vaultPathStatus.exists, true);
+    assert.equal(doctor.vaultPathStatus.reviewRoot, "plur1bus");
+
+    const result = await handleObsidianBridgeCommand(["records", "rebuild"], {
+      config: cfg,
+      workspaceKey: "secondary",
+      agentId: "secondary-agent",
+      workspaceDir: secondary,
+    });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, true);
+    assert.equal(existsSync(join(secondary, "plur1bus/records/sources/authority-secondary.md")), true);
+    assert.equal(existsSync(join(main, "plur1bus/records/sources/authority-secondary.md")), false);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("obsidian discover workspaces dry-run finds local candidates without writing config", async () => {
   const { tmp } = makeVault();
   try {

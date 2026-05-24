@@ -198,7 +198,7 @@ export function normalizeObsidianBridgeConfig(raw = {}, options = {}) {
     watch: cfg.watch === true,
     vaultPath: cfg.vaultPath || null,
     workspaceRoot: cfg.workspaceRoot || null,
-    reviewRoot: cfg.reviewRoot || "00-system/plur1bus",
+    reviewRoot: cfg.reviewRoot || "plur1bus",
     requireUserApproval: cfg.requireUserApproval !== false,
     applyApprovedOnly: cfg.applyApprovedOnly !== false,
     writeManagedBlocks: cfg.writeManagedBlocks !== false,

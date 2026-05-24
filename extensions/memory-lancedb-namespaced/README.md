@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.0.1` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Diese Korrektur harmonisiert Workspace Cards: konfigurierte Workspace-IDs schreiben kanonisch, waehrend alte `_neo/workspaces/<basename>` Daten als Legacy-Aliase lesbar bleiben. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.0.2` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Diese Korrektur macht Obsidian-Control-Room-Commands multi-workspace-faehig: bei Configs mit `obsidianBridge.workspaces[]` wird der aktive Vault aus `workspaceDir`, `workspaceKey` oder `agentId` aufgeloest, auch wenn kein globales `vaultPath` gesetzt ist. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -143,7 +143,8 @@ Default:
     "mode": "augment",
     "vaultPath": null,
     "workspaceRoot": null,
-    "reviewRoot": "00-system/plur1bus",
+    "workspaces": [],
+    "reviewRoot": "plur1bus",
     "requireUserApproval": true,
     "applyApprovedOnly": true,
     "writeManagedBlocks": true,
@@ -202,7 +203,7 @@ Hygiene, Task Extraction und approved Apply ausfuehren.
 Die Bridge schreibt nur additive Dateien unter `reviewRoot`:
 
 ```text
-00-system/plur1bus/
+plur1bus/
   README.md
   dashboards/
   dashboards/bases/
@@ -267,7 +268,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.0.1
+obsidianBridgeVersion: 4.0.2
 ---
 ```
 

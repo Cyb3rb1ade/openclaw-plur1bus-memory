@@ -18,6 +18,7 @@ import { analyzeImpact } from "../lib/obsidian/impact-analysis.js";
 import { buildMemoryExplanation } from "../lib/obsidian/memory-explain-builder.js";
 import { generateLinkSuggestions } from "../lib/obsidian/link-suggestions.js";
 import { writeRecordNote } from "../lib/obsidian/record-writer.js";
+import { buildRecordIndex } from "../lib/obsidian/record-index.js";
 import { patchSoulMd } from "../lib/install/soul-patcher.js";
 import { handleObsidianBridgeCommand } from "../lib/obsidian-control-room.js";
 
@@ -92,6 +93,19 @@ test("Bases are skipped when disabled while Markdown dashboards still work", () 
     assert.equal(generateBases(cfg).skipped, "bases disabled");
     assert.ok(generateDashboards(cfg).generated.includes("dashboards/index.md"));
     assert.ok(!existsSync(join(vault, "00-system/plur1bus/dashboards/bases/memory-candidates.base")));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("record index de-duplicates runtime records against generated files", () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const cfg = config(vault);
+    writeRecordNote(cfg, sampleRecords[0]);
+    const index = buildRecordIndex(cfg, { records: [sampleRecords[0]] });
+    assert.equal(index.records.filter((record) => (record.plur1bus_id || record.id) === "mc-1").length, 1);
+    assert.equal(index.byId["mc-1"].path, "records/memory-candidates/mc-1.md");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

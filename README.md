@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v4.0.1-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.0.1)
+[![Release](https://img.shields.io/badge/release-v4.0.2-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.0.2)
 
 ---
 
@@ -14,7 +14,7 @@ PLUR1BUS v4 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `4.0.1`<br>
+**Aktuelle Version:** `4.0.2`<br>
 **Branch:** `main`<br>
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1` und `2026.5.18`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
@@ -163,7 +163,10 @@ gelten `agentId`, `storedBy`, `scope` und der Memory-Namespace.
 Ab `4.0.0` hat PLUR1BUS eine optionale Obsidian Living Dashboard-Schicht. In
 `4.0.1` harmonisiert PLUR1BUS die Workspace-Card-Identitaet: konfigurierte
 Workspace-IDs gewinnen gegen Pfad-Basename-Fallbacks, waehrend alte
-`_neo/workspaces/<basename>` Daten als Legacy-Aliase lesbar bleiben. Die Bridge
+`_neo/workspaces/<basename>` Daten als Legacy-Aliase lesbar bleiben. In `4.0.2`
+loesen die Obsidian-Control-Room-Commands auch bei Multi-Workspace-Configs ohne
+globales `vaultPath` den aktiven Vault aus `obsidianBridge.workspaces[]`,
+`workspaceDir`, `workspaceKey` oder `agentId` auf. Die Bridge
 schreibt Markdown-Artefakte fuer Doctor-Reports, ReviewBundles, kanonische
 Records, Dashboards, Bases, Konflikte, Project Hubs, Memory-Erklaerungen,
 Provenance, Impact-Analysen, Link-Vorschlaege, Hygiene- und Task-Vorschlaege
@@ -180,7 +183,8 @@ Default bleibt sicher aus und approval-gated:
     "enabled": false,
     "mode": "augment",
     "vaultPath": null,
-    "reviewRoot": "00-system/plur1bus",
+    "workspaces": [],
+    "reviewRoot": "plur1bus",
     "requireUserApproval": true,
     "applyApprovedOnly": true,
     "writeManagedBlocks": true,
@@ -260,7 +264,7 @@ Slash Commands:
 `prepare` ist nicht `apply`. Ein ReviewBundle hat Frontmatter mit
 `type: plur1bus-review-bundle`, `bundleId`, `createdByAgent`, `status:
 pending_user_review`, `applyMode: approval_required`, Review-Profilen und
-`obsidianBridgeVersion: 4.0.1`. Jedes Item hat stabile IDs, Status, Risk,
+`obsidianBridgeVersion: 4.0.2`. Jedes Item hat stabile IDs, Status, Risk,
 Target, Action, Evidence, Preconditions, Maintenance-/Adversarial-Review und
 Apply-Preview. Checkboxen in Obsidian reichen nie fuer Mutation; `apply` liest
 das Bundle neu, revalidiert Hashes/Preconditions und wendet nur explizit
@@ -269,7 +273,7 @@ genehmigte, sichere Items an.
 Der Vault-Teil ist additiv:
 
 ```text
-00-system/plur1bus/
+plur1bus/
   README.md
   dashboards/
   dashboards/bases/
@@ -384,7 +388,7 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `4.0.1`:
+Provider-Status in `4.0.2`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
@@ -560,7 +564,7 @@ runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `4.0.1`<br>
+**Current version:** `4.0.2`<br>
 **Branch:** `main`<br>
 **Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, and `2026.5.18`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
@@ -571,7 +575,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `4.0.1`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `4.0.2`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental
@@ -585,12 +589,15 @@ provider bridge only expands `${ENV_VAR}` for explicit OpenAI/OpenAI-compatible/
 PLUR1BUS provider variables and provider-header prefixes; unrelated env reads
 such as `${HOME}` are rejected.
 
-Obsidian Bridge in `4.0.1`: optional, disabled by default, and strictly
+Obsidian Bridge in `4.0.2`: optional, disabled by default, and strictly
 approval-gated. It writes Markdown ReviewBundles, canonical records,
 dashboards, optional Bases/Dataview/Tasks output, conflict reports, semantic
 conflict proposals, duplicate candidates, provenance graphs, impact analysis,
 project hubs, task suggestions, link suggestions, SOUL.MD runtime-rule blocks,
-and memory explanation pages under `00-system/plur1bus/`. Obsidian is a
+and memory explanation pages under the configured `reviewRoot` (default
+`plur1bus/`). Multi-workspace installs may omit global `vaultPath`;
+commands resolve the active Vault from `obsidianBridge.workspaces[]` plus the
+runtime workspace context. Obsidian is a
 review/control-room/dashboard surface, not the memory source of truth. LanceDB
 reranked vector recall remains the primary recall path; Obsidian does not
 replace `memory_store`, `memory_recall`, `memory_search`, or `knowledge_update`.

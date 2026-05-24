@@ -48,9 +48,9 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.0.1";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.0.2";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
-export const DEFAULT_REVIEW_ROOT = "00-system/plur1bus";
+export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
 export const DEFAULT_MORNING_TZ = "Europe/Zurich";
 
@@ -263,6 +263,73 @@ function parseYamlScalar(rawValue) {
   return value;
 }
 
+function workspaceEntryPath(entry = {}) {
+  return entry.path || entry.workspace || entry.workspaceDir || entry.workspacePath || entry.dir || null;
+}
+
+function workspaceEntryId(entry = {}, fallback = "") {
+  return entry.workspace_id || entry.workspaceId || entry.id || entry.name || fallback || "";
+}
+
+function workspaceEntryAgent(entry = {}, fallback = "") {
+  return entry.agent_id || entry.agentId || entry.agent || fallback || "";
+}
+
+function normalizePathForMatch(value) {
+  if (!value) return "";
+  try {
+    return normalizeAbsPath(value);
+  } catch (_) {
+    return resolve(expandHome(String(value)));
+  }
+}
+
+function workspaceMatchesContext(entry = {}, index = 0, options = {}) {
+  const rawPath = workspaceEntryPath(entry);
+  const workspaceId = workspaceEntryId(entry, rawPath ? basename(rawPath) : `workspace-${index}`);
+  const agentId = workspaceEntryAgent(entry, workspaceId);
+  const labels = [
+    workspaceId,
+    agentId,
+    entry.label,
+    entry.alias,
+    ...(Array.isArray(entry.aliases) ? entry.aliases : []),
+  ].filter(Boolean).map(String);
+  const requested = [
+    options.workspaceKey,
+    options.workspaceId,
+    options.agentId,
+    options.commandCtx?.workspaceKey,
+    options.commandCtx?.agentId,
+  ].filter(Boolean).map(String);
+  if (requested.some((value) => labels.includes(value))) return true;
+
+  const contextPath = options.workspaceDir || options.commandCtx?.workspaceDir;
+  if (rawPath && contextPath) {
+    return normalizePathForMatch(rawPath) === normalizePathForMatch(contextPath);
+  }
+  return false;
+}
+
+function selectWorkspaceVaultPath(rawConfig = {}, cfg = normalizeObsidianControlRoomConfig(rawConfig), options = {}) {
+  if (cfg.vaultPath) return { vaultPath: cfg.vaultPath, source: "vaultPath" };
+
+  const contextPath = options.workspaceDir || options.commandCtx?.workspaceDir;
+  const workspaces = Array.isArray(cfg.workspaces) ? cfg.workspaces : [];
+  const matchingWorkspace = workspaces.find((workspace, index) => workspaceMatchesContext(workspace, index, options));
+  const matchingPath = workspaceEntryPath(matchingWorkspace);
+  if (matchingPath) return { vaultPath: matchingPath, source: "workspaces" };
+
+  if (contextPath) return { vaultPath: contextPath, source: "workspaceDir" };
+
+  if (workspaces.length === 1) {
+    const onlyPath = workspaceEntryPath(workspaces[0]);
+    if (onlyPath) return { vaultPath: onlyPath, source: "singleWorkspace" };
+  }
+
+  return null;
+}
+
 export function normalizeObsidianControlRoomConfig(raw = {}, options = {}) {
   const cfg = raw?.obsidianBridge || raw || {};
   const agents = cfg.agents || {};
@@ -279,6 +346,7 @@ export function normalizeObsidianControlRoomConfig(raw = {}, options = {}) {
     allowWrite: cfg.allowWrite !== false,
     allowDotObsidianWrite: cfg.allowDotObsidianWrite === true,
     capabilityPack: cfg.capabilityPack || "full",
+    workspaces: Array.isArray(cfg.workspaces) ? cfg.workspaces : [],
     agents: {
       include: Array.isArray(agents.include) && agents.include.length > 0 ? agents.include : ["*"],
       equalCapabilities: agents.equalCapabilities !== false,
@@ -404,13 +472,15 @@ function resolveUnder(root, relPath, options = {}) {
 
 export function resolveObsidianBridgePaths(rawConfig = {}, options = {}) {
   const cfg = normalizeObsidianControlRoomConfig(rawConfig, options);
-  if (!cfg.vaultPath) {
-    return { cfg, ok: false, error: "obsidianBridge.vaultPath is not configured" };
+  const selected = selectWorkspaceVaultPath(rawConfig, cfg, options);
+  if (!selected?.vaultPath) {
+    return { cfg, ok: false, error: "obsidianBridge.vaultPath is not configured and no matching obsidianBridge.workspaces[] entry was found" };
   }
-  const vaultPath = normalizeAbsPath(cfg.vaultPath);
+  cfg.vaultPath = selected.vaultPath;
+  const vaultPath = normalizeAbsPath(selected.vaultPath);
   const reviewRoot = assertSafeRelativePath(cfg.reviewRoot, { allowDotObsidianWrite: cfg.allowDotObsidianWrite });
   const reviewPath = resolveUnder(vaultPath, reviewRoot, { allowDotObsidianWrite: cfg.allowDotObsidianWrite });
-  return { cfg, ok: true, vaultPath, reviewRoot, reviewPath };
+  return { cfg, ok: true, vaultPath, reviewRoot, reviewPath, vaultSource: selected.source };
 }
 
 export function safeBridgePath(rawConfig = {}, relPath, options = {}) {
@@ -1505,9 +1575,16 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
   const sub = tokens[1] || "";
   const agentId = context.commandCtx?.agentId || context.agentId || "main";
   const workspaceKey = context.commandCtx?.workspaceKey || context.workspaceKey || "main";
+  const selectedVault = selectWorkspaceVaultPath(rawConfig, normalizeObsidianControlRoomConfig(rawConfig), {
+    agentId,
+    workspaceKey,
+    workspaceDir: context.workspaceDir || context.commandCtx?.workspaceDir,
+    commandCtx: context.commandCtx,
+  });
+  const commandConfig = selectedVault?.vaultPath ? { ...rawConfig, vaultPath: selectedVault.vaultPath } : rawConfig;
 
   try {
-    if (command === "doctor") return commandResult(runVaultDoctor(rawConfig, { agentId, workspaceKey }));
+    if (command === "doctor") return commandResult(runVaultDoctor(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, commandCtx: context.commandCtx }));
     if (command === "init" && sub === "workspaces") {
       const dryRun = tokens.includes("--dry-run");
       const verbose = tokens.includes("--verbose");
@@ -1571,43 +1648,43 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       });
       return commandResult({ ...summary, ok: written.ok, write: written });
     }
-    if (command === "morning-review") return commandResult(await runMorningReview(rawConfig, { agentId, workspaceKey }));
+    if (command === "morning-review") return commandResult(await runMorningReview(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir }));
     if (command === "records" && sub === "rebuild") {
       const records = context.records || defaultLivingDashboardRecords(agentId, workspaceKey);
-      return commandResult({ ok: true, written: writeRecords(rawConfig, records, { agentId, workspaceKey }) });
+      return commandResult({ ok: true, written: writeRecords(commandConfig, records, { agentId, workspaceKey, workspaceDir: context.workspaceDir }) });
     }
-    if (command === "dashboards" && sub === "build") return commandResult(generateDashboards(rawConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
-    if (command === "bases" && sub === "build") return commandResult(generateBases(rawConfig, { agentId, workspaceKey }));
-    if (command === "dataview" && sub === "build") return commandResult(generateDashboards({ ...rawConfig, optionalIntegrations: { ...(rawConfig.optionalIntegrations || {}), dataview: true } }, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
-    if (command === "tasks" && sub === "build") return commandResult(generateTaskSuggestions(rawConfig, context.tasks || [], { agentId, workspaceKey }));
+    if (command === "dashboards" && sub === "build") return commandResult(generateDashboards(commandConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+    if (command === "bases" && sub === "build") return commandResult(generateBases(commandConfig, { agentId, workspaceKey }));
+    if (command === "dataview" && sub === "build") return commandResult(generateDashboards({ ...commandConfig, optionalIntegrations: { ...(commandConfig.optionalIntegrations || {}), dataview: true } }, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+    if (command === "tasks" && sub === "build") return commandResult(generateTaskSuggestions(commandConfig, context.tasks || [], { agentId, workspaceKey }));
     if (command === "weekly") {
-      if (sub === "build") return commandResult(buildWeeklySynthesis(rawConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
-      return commandResult(await prepareReviewBundle(rawConfig, { agentId, workspaceKey, reviewProfiles: ["maintenance", "adversarial", "project_manager"] }));
+      if (sub === "build") return commandResult(buildWeeklySynthesis(commandConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+      return commandResult(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, reviewProfiles: ["maintenance", "adversarial", "project_manager"] }));
     }
     if (command === "conflicts") {
-      if (sub === "build") return commandResult(generateLivingConflictReport(rawConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
-      return commandResult(generateConflictReport(rawConfig, { agentId, workspaceKey }));
+      if (sub === "build") return commandResult(generateLivingConflictReport(commandConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+      return commandResult(generateConflictReport(commandConfig, { agentId, workspaceKey }));
     }
     if (command === "project-hub") {
       const topic = tokens.filter((token) => token !== "--refresh").slice(1).join(" ").trim();
       if (!topic) return commandResult("Usage: /plur1bus obsidian project-hub <topic>");
-      if (tokens.includes("--refresh")) return commandResult(buildProjectHub(rawConfig, topic, { agentId, workspaceKey, records: context.records || [] }));
-      return commandResult(generateProjectHub(rawConfig, topic, { agentId, workspaceKey }));
+      if (tokens.includes("--refresh")) return commandResult(buildProjectHub(commandConfig, topic, { agentId, workspaceKey, records: context.records || [] }));
+      return commandResult(generateProjectHub(commandConfig, topic, { agentId, workspaceKey }));
     }
     if (command === "memory" && sub === "explain") {
       const id = tokens[2] || "";
       if (!id) return commandResult("Usage: /plur1bus obsidian memory explain <id>");
       const record = typeof context.findRecord === "function" ? context.findRecord(id) : null;
-      if (tokens.includes("--deep")) return commandResult(buildMemoryExplanation(rawConfig, id, { agentId, workspaceKey, findRecord: context.findRecord, records: context.records || [] }));
-      return commandResult(writeMemoryExplanation(rawConfig, id, record, { agentId, workspaceKey }));
+      if (tokens.includes("--deep")) return commandResult(buildMemoryExplanation(commandConfig, id, { agentId, workspaceKey, findRecord: context.findRecord, records: context.records || [] }));
+      return commandResult(writeMemoryExplanation(commandConfig, id, record, { agentId, workspaceKey }));
     }
-    if (command === "maintenance" && sub === "deep") return commandResult(runLivingMaintenanceDeep(rawConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
+    if (command === "maintenance" && sub === "deep") return commandResult(runLivingMaintenanceDeep(commandConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
     if (command === "adversarial" && sub === "deep") return commandResult(runAdversarialDeep(context.items || [], { agentId, workspaceKey }));
-    if (command === "semantic-conflicts" && sub === "build") return commandResult(buildSemanticConflictGraph(rawConfig, { agentId, workspaceKey, records: context.records || [] }));
-    if (command === "duplicates" && sub === "scan") return commandResult(scanSemanticDuplicates(rawConfig, { agentId, workspaceKey, records: context.records || [] }));
-    if (command === "provenance" && sub === "build") return commandResult(buildProvenanceGraph(rawConfig, { agentId, workspaceKey, records: context.records || [] }));
-    if (command === "impact" && sub === "analyze") return commandResult(analyzeImpact(rawConfig, tokens[2] || "all", { agentId, workspaceKey, records: context.records || [] }));
-    if (command === "links" && sub === "suggest") return commandResult(generateLinkSuggestions(rawConfig, { agentId, workspaceKey, records: buildRecordIndex(rawConfig, { records: context.records || [] }).records }));
+    if (command === "semantic-conflicts" && sub === "build") return commandResult(buildSemanticConflictGraph(commandConfig, { agentId, workspaceKey, records: context.records || [] }));
+    if (command === "duplicates" && sub === "scan") return commandResult(scanSemanticDuplicates(commandConfig, { agentId, workspaceKey, records: context.records || [] }));
+    if (command === "provenance" && sub === "build") return commandResult(buildProvenanceGraph(commandConfig, { agentId, workspaceKey, records: context.records || [] }));
+    if (command === "impact" && sub === "analyze") return commandResult(analyzeImpact(commandConfig, tokens[2] || "all", { agentId, workspaceKey, records: context.records || [] }));
+    if (command === "links" && sub === "suggest") return commandResult(generateLinkSuggestions(commandConfig, { agentId, workspaceKey, records: buildRecordIndex(commandConfig, { records: context.records || [] }).records }));
     if (command === "soul" && sub === "patch") {
       const soulPath = context.soulPath || (context.workspaceDir ? join(context.workspaceDir, "SOUL.MD") : "");
       if (!soulPath) return commandResult({ ok: false, error: "SOUL.MD path unavailable" });
@@ -1621,9 +1698,9 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       }));
     }
     if (command === "cron") {
-      if (sub === "print-morning-review") return commandResult({ command: printMorningReviewCronCommand(rawConfig) });
+      if (sub === "print-morning-review") return commandResult({ command: printMorningReviewCronCommand(commandConfig) });
       if (sub === "install-morning-review") {
-        const cronCommand = printMorningReviewCronCommand(rawConfig);
+        const cronCommand = printMorningReviewCronCommand(commandConfig);
         if (!tokens.includes("--force")) {
           return commandResult({
             installed: false,
@@ -1643,20 +1720,20 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
     }
     if (command === "review") {
       const bundleId = tokens[2] || "";
-      if (sub === "prepare") return commandResult(await prepareReviewBundle(rawConfig, { agentId, workspaceKey }));
+      if (sub === "prepare") return commandResult(await prepareReviewBundle(commandConfig, { agentId, workspaceKey }));
       if (sub === "show") {
         if (!bundleId) return commandResult("Usage: /plur1bus obsidian review show <bundleId>");
-        return commandResult(loadBundleRecord(rawConfig, bundleId).record);
+        return commandResult(loadBundleRecord(commandConfig, bundleId).record);
       }
       if (["approve", "reject", "snooze"].includes(sub)) {
         if (!bundleId) return commandResult(`Usage: /plur1bus obsidian review ${sub} <bundleId> --items <ids|all|low-risk>`);
-        return commandResult(updateReviewBundleItems(rawConfig, bundleId, sub, parseCommandOption(tokens, "--items", "all"), {
+        return commandResult(updateReviewBundleItems(commandConfig, bundleId, sub, parseCommandOption(tokens, "--items", "all"), {
           until: parseCommandOption(tokens, "--until", ""),
         }));
       }
       if (sub === "apply") {
         if (!bundleId) return commandResult("Usage: /plur1bus obsidian review apply <bundleId>");
-        return commandResult(await applyApprovedReviewBundle(rawConfig, bundleId, {
+        return commandResult(await applyApprovedReviewBundle(commandConfig, bundleId, {
           memoryStore: context.memoryStore,
           knowledgeUpdate: context.knowledgeUpdate,
         }));

@@ -29,7 +29,12 @@ export function readRecords(rawConfig, options = {}) {
 }
 
 export function buildRecordIndex(rawConfig, options = {}) {
-  const records = [...readRecords(rawConfig, options), ...(options.records || [])];
+  const merged = new Map();
+  for (const record of [...(options.records || []), ...readRecords(rawConfig, options)]) {
+    const key = record.plur1bus_id || record.id || record.path || JSON.stringify(record);
+    merged.set(key, { ...(merged.get(key) || {}), ...record });
+  }
+  const records = [...merged.values()];
   const byType = {};
   const byId = {};
   for (const record of records) {
@@ -40,4 +45,3 @@ export function buildRecordIndex(rawConfig, options = {}) {
   }
   return { records, byType, byId };
 }
-

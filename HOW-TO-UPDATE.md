@@ -3,7 +3,7 @@
 Safe update workflow for PLUR1BUS on OpenClaw.
 
 Current repository release target: OpenClaw `2026.5.20` with
-`@cyb3rb1ade/plur1bus-memory@4.0.1`.
+`@cyb3rb1ade/plur1bus-memory@4.0.2`.
 
 Live `~/.openclaw` update record, 2026-05-23:
 

@@ -48,15 +48,15 @@ export function renderDashboard({ title, type, collection, records, config }) {
     tableRows(records),
     "",
     basesEnabled ? `Base: [[bases/${collection}.base]]` : "",
-    dataviewEnabled ? "## Dataview\n\n" + dataviewTableBlock({ collection, type }) : "",
+    dataviewEnabled ? "## Dataview\n\n" + dataviewTableBlock({ collection, type, reviewRoot: config.reviewRoot || "plur1bus" }) : "",
     "",
   ].filter((line) => line !== "").join("\n");
   return formatFrontmatter({
     plur1bus_type: "dashboard",
     dashboard: collection,
-    generatedBy: "plur1bus-4.0.0",
+    generatedBy: "plur1bus-4.0.2",
     authoritative: false,
-  }, buildManagedBlock({ id: `dashboard-${collection}`, version: "4.0.0", body }));
+  }, buildManagedBlock({ id: `dashboard-${collection}`, version: "4.0.2", body }));
 }
 
 export function generateDashboards(rawConfig, options = {}) {
@@ -71,4 +71,3 @@ export function generateDashboards(rawConfig, options = {}) {
   }
   return { ok: true, generated, count: generated.length };
 }
-
