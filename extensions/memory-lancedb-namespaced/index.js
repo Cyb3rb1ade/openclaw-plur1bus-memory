@@ -1275,38 +1275,55 @@ const plugin = {
       if (typeof api.registerCommand === "function") {
         const parsePlur1busArgs = (commandCtx) => commandCtx.args?.trim().split(/\s+/).filter(Boolean) || [];
         const executedCronCommands = new Map();
-        const plur1busHelp = () => ({
-          text: [
-            "PLUR1BUS commands:",
+        const plur1busHelp = (mode = "quick") => ({
+          text: mode === "advanced" ? [
+            "PLUR1BUS advanced commands:",
             "/plur1bus status",
             "/plur1bus doctor",
-            "/plur1bus obsidian morning-review",
-            "/plur1bus obsidian evening-review",
+            "/plur1bus obsidian doctor",
             "/plur1bus obsidian review prepare",
+            "/plur1bus obsidian review show <bundleId>",
+            "/plur1bus obsidian review approve <bundleId> --items <ids|all|low-risk>",
+            "/plur1bus obsidian review reject <bundleId> --items <ids|all>",
+            "/plur1bus obsidian review apply <bundleId>",
             "/plur1bus obsidian dashboards build",
             "/plur1bus obsidian conflicts build",
             "/plur1bus obsidian cron print-workspace-reviews",
+          ].join("\n") : [
+            "PLUR1BUS quick commands:",
             "",
-            "Telegram shortcuts:",
-            "/plur1bus_status",
-            "/plur1bus_doctor",
-            "/plur1bus_morning",
-            "/plur1bus_evening",
-            "/plur1bus_review",
-            "/plur1bus_dashboards",
-            "/plur1bus_conflicts",
-            "/plur1bus_cron",
+            "/plur1bus_morning - prepare today's review proposals",
+            "/plur1bus_evening - run the deep evening checks",
+            "/plur1bus_review show - show the latest pending ReviewBundle",
+            "/plur1bus_review approve low-risk - approve only low-risk items",
+            "/plur1bus_review reject all - reject all pending items",
+            "/plur1bus_review apply - apply approved items",
+            "",
+            "Nothing is written by show, morning, evening, or approve. Memory changes require the final apply command.",
+            "Advanced: /plur1bus help advanced",
           ].join("\n"),
         });
+        const obsidianActionNames = new Set([
+          "conflicts",
+          "cron",
+          "dashboards",
+          "evening",
+          "evening-review",
+          "morning",
+          "morning-review",
+          "review",
+        ]);
         const runPlur1busCommand = async (commandCtx, prefixTokens = []) => {
             const tokens = [...prefixTokens, ...parsePlur1busArgs(commandCtx)];
-            if (tokens.length === 0 || tokens[0] === "help") return plur1busHelp();
+            if (tokens.length === 0) return plur1busHelp();
+            if (tokens[0]?.toLowerCase() === "help") return plur1busHelp(tokens[1]?.toLowerCase() === "advanced" ? "advanced" : "quick");
             const action = tokens[0] || "status";
+            const actionKey = action.toLowerCase();
             const sub = tokens[1] || "";
             const id = tokens[2] || "";
             const commandStore = getNeoStore({ workspaceDir: commandCtx.workspaceDir, workspaceKey: commandCtx.workspaceKey, agentId: commandCtx.agentId || "command" });
 
-            if (action === "obsidian") {
+            if (actionKey === "obsidian" || obsidianActionNames.has(actionKey)) {
               let runtimeConfig = null;
               try {
                 if (typeof api.runtime?.config?.current === "function") {
@@ -1317,7 +1334,8 @@ const plugin = {
               } catch (_) {}
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
               const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
-              return handleObsidianBridgeCommand(tokens.slice(1), {
+              const obsidianTokens = actionKey === "obsidian" ? tokens.slice(1) : tokens;
+              return handleObsidianBridgeCommand(obsidianTokens, {
                 config: obsidianBridgeCfg,
                 configPath: openclawConfigPath,
                 openclawConfig: commandCtx.openclawConfig || commandCtx.config || runtimeConfig,

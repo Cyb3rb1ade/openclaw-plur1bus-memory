@@ -39,7 +39,7 @@ import { analyzeImpact } from "./obsidian/impact-analysis.js";
 import { buildMemoryExplanation } from "./obsidian/memory-explain-builder.js";
 import { generateLinkSuggestions } from "./obsidian/link-suggestions.js";
 import { writeRecords } from "./obsidian/record-writer.js";
-import { buildRecordIndex } from "./obsidian/record-index.js";
+import { buildRecordIndex, DEEP_ANALYSIS_RECORD_COLLECTIONS } from "./obsidian/record-index.js";
 import { patchSoulMd } from "./install/soul-patcher.js";
 import {
   discoverLocalObsidianWorkspaceCandidates,
@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.9";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.10";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -1132,13 +1132,15 @@ function renderReviewBundleMarkdown(bundle, items, maintenance) {
     "## User Action Checklist",
     "",
     "- [ ] Review warnings and blocked items.",
-    "- [ ] Approve selected items with `/plur1bus obsidian review approve <bundleId> --items <ids|all|low-risk>`.",
-    "- [ ] Reject or snooze unsafe items.",
-    "- [ ] Run `/plur1bus obsidian review apply <bundleId>` after approval.",
+    `- [ ] Show details with \`/plur1bus_review show ${bundle.bundleId}\`.`,
+    `- [ ] Approve low-risk items with \`/plur1bus_review approve ${bundle.bundleId} low-risk\`.`,
+    `- [ ] Reject all pending items with \`/plur1bus_review reject ${bundle.bundleId} all\`.`,
+    `- [ ] Run \`/plur1bus_review apply ${bundle.bundleId}\` after approval.`,
     "",
     "## Apply Instructions",
     "",
     "A checked box in Obsidian is not approval. The apply command re-reads this bundle, revalidates preconditions and hashes, and applies approved items only.",
+    "If you omit the bundle id in Telegram, PLUR1BUS uses the latest pending ReviewBundle.",
     "",
   ].join("\n");
 
@@ -1338,6 +1340,32 @@ function renderEveningDeepReviewMarkdown(summary) {
       ? summary.blockedOrWarningItems.map((item) => `- ${item.kind}: ${item.id || item.code || item.path || "item"} - ${item.reason || item.message || "Review required."}`).join("\n")
       : "- None.",
     "",
+    "## Pending Items",
+    "",
+    `- Pending review items: ${summary.pendingItems ?? 0}`,
+    Array.isArray(summary.pendingBundles) && summary.pendingBundles.length
+      ? `- Bundle(s): ${summary.pendingBundles.join(", ")}`
+      : "- Bundle(s): see ReviewBundle artifacts.",
+    "",
+    "## What to do next",
+    "",
+    ...(Array.isArray(summary.pendingBundles) && summary.pendingBundles.length === 1
+      ? [
+          `- Show details: /plur1bus_review show ${summary.pendingBundles[0]}`,
+          `- Approve low-risk items: /plur1bus_review approve ${summary.pendingBundles[0]} low-risk`,
+          `- Reject all pending items: /plur1bus_review reject ${summary.pendingBundles[0]} all`,
+          `- Apply approved items: /plur1bus_review apply ${summary.pendingBundles[0]}`,
+        ]
+      : [
+          "- Show details: /plur1bus_review show",
+          "- Approve low-risk items: /plur1bus_review approve low-risk",
+          "- Reject all pending items: /plur1bus_review reject all",
+          "- Apply approved items: /plur1bus_review apply",
+        ]),
+    "",
+    "Approval only marks items as approved. Nothing is written to memory until the explicit apply command runs.",
+    "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
+    "",
     "## Artifacts",
     "",
     `- ${summary.artifactPath}`,
@@ -1353,15 +1381,35 @@ export function runEveningDeepReview(rawConfig = {}, options = {}) {
   const workspaceKey = options.workspaceKey || "main";
   const createdAt = nowIso(options);
   const baseRecords = options.records || defaultLivingDashboardRecords(agentId, workspaceKey);
-  const recordIndex = buildRecordIndex(rawConfig, { ...options, records: baseRecords });
+  const analysisOptions = {
+    ...options,
+    records: baseRecords,
+    collections: options.collections || DEEP_ANALYSIS_RECORD_COLLECTIONS,
+  };
+  const recordIndex = buildRecordIndex(rawConfig, analysisOptions);
+  const derivedOptions = {
+    ...options,
+    agentId,
+    workspaceKey,
+    records: recordIndex.records,
+    readExistingRecords: false,
+  };
   const reviewItems = Array.isArray(options.items) ? options.items : readReviewBundleItems(rawConfig, options);
-  const maintenance = runLivingMaintenanceDeep(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
+  const maintenance = runLivingMaintenanceDeep(rawConfig, derivedOptions);
   const adversarial = runAdversarialDeep(reviewItems, { agentId, workspaceKey });
-  const semanticConflicts = buildSemanticConflictGraph(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
-  const duplicates = scanSemanticDuplicates(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
-  const provenance = buildProvenanceGraph(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
-  const impact = analyzeImpact(rawConfig, "all", { ...options, agentId, workspaceKey, records: recordIndex.records });
-  const dashboards = generateDashboards(rawConfig, { ...options, agentId, workspaceKey, records: recordIndex.records });
+  const semanticConflicts = buildSemanticConflictGraph(rawConfig, derivedOptions);
+  const duplicates = scanSemanticDuplicates(rawConfig, derivedOptions);
+  const provenance = buildProvenanceGraph(rawConfig, derivedOptions);
+  const impact = analyzeImpact(rawConfig, "all", derivedOptions);
+  const dashboardRecords = [
+    ...recordIndex.records,
+    ...maintenance.findings,
+    ...semanticConflicts.proposals,
+    ...duplicates.proposals,
+    ...provenance.records,
+    ...impact.impacts,
+  ];
+  const dashboards = generateDashboards(rawConfig, { ...options, agentId, workspaceKey, records: dashboardRecords, readExistingRecords: false });
   const artifactStamp = `${createdAt.slice(0, 10)}-${createdAt.slice(11, 16).replace(":", "")}`;
   const artifactPath = `evening-deep-review-${artifactStamp}.md`;
   const maintenanceErrors = maintenance.findings.filter((item) => item.severity === "error").length;
@@ -1998,6 +2046,100 @@ function compactPathList(paths = [], max = 8) {
   return [...list.slice(0, max), `... ${list.length - max} more`];
 }
 
+function normalizeCommandWord(value = "") {
+  const raw = String(value || "").trim().toLowerCase();
+  const ascii = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  const compact = ascii.replace(/[_\s]+/g, "-");
+  const aliases = new Map([
+    ["morning", "morning-review"],
+    ["morgen", "morning-review"],
+    ["morning-review", "morning-review"],
+    ["evening", "evening-review"],
+    ["abend", "evening-review"],
+    ["evening-review", "evening-review"],
+    ["evening-deep-review", "evening-deep-review"],
+    ["show", "show"],
+    ["details", "show"],
+    ["detail", "show"],
+    ["anzeigen", "show"],
+    ["zeigen", "show"],
+    ["zeige", "show"],
+    ["approve", "approve"],
+    ["approved", "approve"],
+    ["freigabe", "approve"],
+    ["freigeben", "approve"],
+    ["zustimmen", "approve"],
+    ["zustimmung", "approve"],
+    ["akzeptieren", "approve"],
+    ["reject", "reject"],
+    ["rejected", "reject"],
+    ["ablehnen", "reject"],
+    ["verwerfen", "reject"],
+    ["snooze", "snooze"],
+    ["verschieben", "snooze"],
+    ["apply", "apply"],
+    ["anwenden", "apply"],
+    ["ausfuehren", "apply"],
+    ["ausfuhren", "apply"],
+    ["ausführen", "apply"],
+    ["prepare", "prepare"],
+    ["vorbereiten", "prepare"],
+  ]);
+  return aliases.get(compact) || compact;
+}
+
+function normalizeItemSelector(value = "") {
+  const normalized = normalizeCommandWord(value);
+  if (["lowrisk", "low-risk", "niedriges-risiko", "niedrigrisiko"].includes(normalized)) return "low-risk";
+  if (["all", "alle", "alles"].includes(normalized)) return "all";
+  return String(value || "").trim();
+}
+
+function looksLikeReviewBundleId(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw || raw.startsWith("--")) return false;
+  if (["all", "alle", "alles", "low-risk", "lowrisk", "low_risk", "niedrigrisiko"].includes(raw.toLowerCase())) return false;
+  return /^rb[-_]/i.test(raw) || /\.items\.json$/i.test(raw);
+}
+
+function bundleCreatedAt(record = {}, mtimeMs = 0) {
+  const raw = record.bundle?.createdAt || record.createdAt || "";
+  const parsed = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(parsed) ? parsed : mtimeMs;
+}
+
+function latestReviewBundleId(rawConfig, options = {}) {
+  const paths = resolveObsidianBridgePaths(rawConfig, options);
+  if (!paths.ok) return "";
+  const dir = resolveUnder(paths.reviewPath, "review-bundles", paths.cfg);
+  if (!existsSync(dir)) return "";
+  const entries = [];
+  for (const file of readdirSync(dir)) {
+    if (!file.endsWith(".items.json")) continue;
+    const target = join(dir, file);
+    const record = readJson(target, null);
+    if (!record) continue;
+    const bundleId = record.bundle?.bundleId || file.replace(/\.items\.json$/, "");
+    const mtimeMs = statSync(target).mtimeMs;
+    const items = Array.isArray(record.items) ? record.items : [];
+    entries.push({
+      bundleId,
+      record,
+      sortAt: bundleCreatedAt(record, mtimeMs),
+      actionable: items.some((item) => !item.status || item.status === "pending"),
+      approved: items.some((item) => item.status === "approved"),
+    });
+  }
+  if (entries.length === 0) return "";
+  const pool = options.preferApproved && entries.some((entry) => entry.approved)
+    ? entries.filter((entry) => entry.approved)
+    : entries.some((entry) => entry.actionable)
+      ? entries.filter((entry) => entry.actionable)
+      : entries;
+  pool.sort((a, b) => b.sortAt - a.sortAt || b.bundleId.localeCompare(a.bundleId));
+  return pool[0]?.bundleId || "";
+}
+
 function formatReviewTimestamp(value) {
   if (!value) return nowIso();
   const date = new Date(value);
@@ -2061,17 +2203,54 @@ function formatFinding(finding = {}) {
 }
 
 function reviewCommands(bundleId) {
-  const bundle = bundleId || "<bundleId>";
+  const bundle = bundleId || "";
+  const suffix = bundle ? ` ${bundle}` : "";
+  const approveDefault = bundle ? ` ${bundle} low-risk` : " low-risk";
+  const rejectDefault = bundle ? ` ${bundle} all` : " all";
   return [
-    "## Review commands",
+    "## What to do next",
     "",
-    `- Details: /plur1bus obsidian review show ${bundle}`,
-    `- Approve low-risk items: /plur1bus obsidian review approve ${bundle} --items low-risk`,
-    `- Approve all pending items: /plur1bus obsidian review approve ${bundle} --items all`,
-    `- Reject all pending items: /plur1bus obsidian review reject ${bundle} --items all`,
-    `- Apply approved items: /plur1bus obsidian review apply ${bundle}`,
+    `- Show details: /plur1bus_review show${suffix}`,
+    `- Approve low-risk items: /plur1bus_review approve${approveDefault}`,
+    `- Reject all pending items: /plur1bus_review reject${rejectDefault}`,
+    `- Apply approved items: /plur1bus_review apply${suffix}`,
     "",
-    "Approval only marks items as approved; changes are applied only by the explicit apply command.",
+    "Approval only marks items as approved. Nothing is written to memory until the explicit apply command runs.",
+    "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
+  ].join("\n");
+}
+
+function reviewActionSummary(result = {}) {
+  const action = result.action || "review";
+  const next = action === "approve"
+    ? `Next: /plur1bus_review apply ${result.bundleId || ""}`.trim()
+    : action === "reject"
+      ? "Rejected items will not be applied."
+      : action === "snooze"
+        ? "Snoozed items stay out of the active review queue until their snooze expires."
+        : "";
+  return [
+    `PLUR1BUS ReviewBundle ${action} result`,
+    `Bundle: ${result.bundleId || "n/a"}`,
+    `Selector: ${result.selector || "n/a"}`,
+    `Changed: ${result.changed ?? 0}`,
+    next,
+  ].filter(Boolean).join("\n");
+}
+
+function obsidianCommandHelp() {
+  return [
+    "PLUR1BUS quick commands:",
+    "",
+    "- /plur1bus_morning - prepare today's review proposals",
+    "- /plur1bus_evening - run the deep evening checks",
+    "- /plur1bus_review show - show the latest pending ReviewBundle",
+    "- /plur1bus_review approve low-risk - approve only low-risk items",
+    "- /plur1bus_review reject all - reject all pending items",
+    "- /plur1bus_review apply - apply approved items",
+    "",
+    "Nothing is written by show, morning, evening, or approve. Memory changes require the final apply command.",
+    "Advanced: /plur1bus help advanced",
   ].join("\n");
 }
 
@@ -2173,15 +2352,16 @@ function eveningReviewSummary(summary = {}) {
   const reviewHelp = bundles.length === 1
     ? reviewCommands(bundles[0])
     : [
-        "## Review commands",
+        "## What to do next",
         "",
         "- Open the listed ReviewBundle artifact, then use:",
-        "- /plur1bus obsidian review show <bundleId>",
-        "- /plur1bus obsidian review approve <bundleId> --items low-risk",
-        "- /plur1bus obsidian review reject <bundleId> --items all",
-        "- /plur1bus obsidian review apply <bundleId>",
+        "- /plur1bus_review show",
+        "- /plur1bus_review approve low-risk",
+        "- /plur1bus_review reject all",
+        "- /plur1bus_review apply",
         "",
-        "Approval only marks items as approved; changes are applied only by the explicit apply command.",
+        "Approval only marks items as approved. Nothing is written to memory until the explicit apply command runs.",
+        "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
       ].join("\n");
   return [
     `PLUR1BUS Evening Deep Review - ${summary.workspaceKey || "main"} (${summary.agentId || "main"})`,
@@ -2214,12 +2394,20 @@ function eveningReviewSummary(summary = {}) {
 }
 
 function applySummary(result = {}) {
+  const applied = Array.isArray(result.applied) ? result.applied.length : 0;
+  const blocked = Array.isArray(result.blocked) ? result.blocked.length : 0;
+  const next = applied > 0
+    ? "Approved items were applied."
+    : blocked > 0
+      ? "Some approved items were blocked during safety revalidation; show the bundle for details."
+      : "No approved items were ready to apply.";
   return [
     "PLUR1BUS ReviewBundle apply result",
     `Bundle: ${result.bundleId || "n/a"}`,
-    `Applied: ${Array.isArray(result.applied) ? result.applied.length : 0}`,
-    `Blocked: ${Array.isArray(result.blocked) ? result.blocked.length : 0}`,
+    `Applied: ${applied}`,
+    `Blocked: ${blocked}`,
     `Items: ${Array.isArray(result.items) ? result.items.length : 0}`,
+    next,
   ].join("\n");
 }
 
@@ -2255,8 +2443,8 @@ function defaultLivingDashboardRecords(agentId, workspaceKey) {
 
 export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
   const rawConfig = context.config || {};
-  const command = tokens[0] || "doctor";
-  const sub = tokens[1] || "";
+  const command = normalizeCommandWord(tokens[0] || "doctor");
+  const sub = normalizeCommandWord(tokens[1] || "");
   const agentId = context.commandCtx?.agentId || context.agentId || "main";
   const workspaceKey = context.commandCtx?.workspaceKey || context.workspaceKey || "main";
   const selectedVault = selectWorkspaceVaultPath(rawConfig, normalizeObsidianControlRoomConfig(rawConfig), {
@@ -2268,6 +2456,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
   const commandConfig = selectedVault?.vaultPath ? { ...rawConfig, vaultPath: selectedVault.vaultPath } : rawConfig;
 
   try {
+    if (command === "help") return commandResult(obsidianCommandHelp());
     if (command === "doctor") return commandResult(runVaultDoctor(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, commandCtx: context.commandCtx }));
     if (command === "init" && sub === "workspaces") {
       const dryRun = tokens.includes("--dry-run");
@@ -2454,27 +2643,35 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       }
     }
     if (command === "review") {
-      const bundleId = tokens[2] || "";
+      const rawBundleOrSelector = tokens[2] || "";
+      const rawMaybeSelector = tokens[3] || "";
+      const optionSelector = normalizeItemSelector(parseCommandOption(tokens, "--items", ""));
+      const hasExplicitBundle = looksLikeReviewBundleId(rawBundleOrSelector);
+      const bundleId = hasExplicitBundle
+        ? rawBundleOrSelector
+        : latestReviewBundleId(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, preferApproved: sub === "apply" });
+      const positionalSelector = hasExplicitBundle ? rawMaybeSelector : rawBundleOrSelector;
+      const selector = normalizeItemSelector(optionSelector || positionalSelector || (sub === "approve" ? "low-risk" : "all"));
       if (sub === "prepare") return commandResult(reviewBundleSummary(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, proposals: context.proposals }), "PLUR1BUS ReviewBundle"));
       if (sub === "show") {
-        if (!bundleId) return commandResult("Usage: /plur1bus obsidian review show <bundleId>");
+        if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
         return commandResult(reviewBundleSummary(loadBundleRecord(commandConfig, bundleId), "PLUR1BUS ReviewBundle"));
       }
       if (["approve", "reject", "snooze"].includes(sub)) {
-        if (!bundleId) return commandResult(`Usage: /plur1bus obsidian review ${sub} <bundleId> --items <ids|all|low-risk>`);
-        return commandResult(updateReviewBundleItems(commandConfig, bundleId, sub, parseCommandOption(tokens, "--items", "all"), {
+        if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
+        return commandResult(reviewActionSummary(updateReviewBundleItems(commandConfig, bundleId, sub, selector, {
           until: parseCommandOption(tokens, "--until", ""),
-        }));
+        })));
       }
       if (sub === "apply") {
-        if (!bundleId) return commandResult("Usage: /plur1bus obsidian review apply <bundleId>");
+        if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
         return commandResult(applySummary(await applyApprovedReviewBundle(commandConfig, bundleId, {
           memoryStore: context.memoryStore,
           knowledgeUpdate: context.knowledgeUpdate,
         })));
       }
     }
-    return commandResult("Usage: /plur1bus obsidian doctor|discover workspaces [--dry-run] [--verbose] [--write --backup-dir <dir>]|init workspaces [--workspace <id>|--agent <id>] [--dry-run] [--verbose]|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|evening-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review|print-workspace-reviews|install-workspace-reviews>");
+    return commandResult(obsidianCommandHelp());
   } catch (err) {
     return commandResult({ ok: false, error: String(err?.message || err) });
   }

@@ -112,7 +112,7 @@ test("legacy trailing-newline managed block hashes are accepted and upgraded", (
 
   const replaced = replaceManagedBlock(legacy, {
     id: "record-authority-main",
-    version: "4.2.9",
+    version: "4.2.10",
     body,
     attrs: { type: "source" },
   });
@@ -126,14 +126,14 @@ test("managed block hash mismatch still blocks real body edits", () => {
   const original = "# Authority\n\nOriginal";
   const edited = "# Authority\n\nEdited";
   const content = [
-    `<!-- plur1bus:managed:start id="record-authority-main" version="4.2.9" type="source" hash="sha256:${sha256Hex(original)}" -->`,
+    `<!-- plur1bus:managed:start id="record-authority-main" version="4.2.10" type="source" hash="sha256:${sha256Hex(original)}" -->`,
     edited,
     "<!-- plur1bus:managed:end -->",
   ].join("\n");
 
   const replaced = replaceManagedBlock(content, {
     id: "record-authority-main",
-    version: "4.2.9",
+    version: "4.2.10",
     body: original,
     attrs: { type: "source" },
   });
@@ -228,8 +228,27 @@ test("Weekly, maintenance, semantic conflicts, duplicates, provenance, and impac
     assert.ok(maintenance.findings.length > 0);
     assert.ok(semantic.proposals.length > 0);
     assert.ok(dupes.proposals.length > 0);
+    assert.equal(dupes.mode, "exhaustive");
     assert.ok(prov.records.length >= records.length);
     assert.ok(impact.impacts.every((item) => item.status === "proposal_only"));
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("semantic duplicate scan is bounded for large record sets", () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const cfg = config(vault);
+    const records = Array.from({ length: 2500 }, (_, index) => ({
+      type: "source",
+      id: `source-${index}`,
+      summary: index < 2 ? "Bounded duplicate assertion" : `Unique bounded assertion ${index}`,
+    }));
+    const dupes = scanSemanticDuplicates(cfg, { records, threshold: 0.7, maxPairwiseRecords: 1000 });
+    assert.equal(dupes.mode, "bounded");
+    assert.equal(dupes.skippedExhaustive, true);
+    assert.ok(dupes.proposals.some((item) => item.id.includes("source-0-source-1")));
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

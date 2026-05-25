@@ -114,9 +114,9 @@ test("morning review command returns compact Telegram-safe summary", async () =>
     assert.match(result.text, /\| Maintenance Light \|/);
     assert.match(result.text, /41 total, 41 pending, 0 approved, 0 rejected/);
     assert.match(result.text, /40 note_import_candidate/);
-    assert.match(result.text, /\/plur1bus obsidian review approve rb-/);
-    assert.match(result.text, /\/plur1bus obsidian review reject rb-/);
-    assert.match(result.text, /\/plur1bus obsidian review apply rb-/);
+    assert.match(result.text, /\/plur1bus_review approve rb-/);
+    assert.match(result.text, /\/plur1bus_review reject rb-/);
+    assert.match(result.text, /\/plur1bus_review apply rb-/);
     assert.doesNotMatch(result.text, /noteContent/);
     assert.ok(result.text.length < 2600);
   } finally {
@@ -147,10 +147,84 @@ test("review show command returns compact summary instead of full item json", as
     });
     assert.match(result.text, /PLUR1BUS ReviewBundle/);
     assert.match(result.text, /21 total, 21 pending, 0 approved, 0 rejected/);
-    assert.match(result.text, /\/plur1bus obsidian review show rb-compact-show/);
-    assert.match(result.text, /\/plur1bus obsidian review approve rb-compact-show --items low-risk/);
+    assert.match(result.text, /\/plur1bus_review show rb-compact-show/);
+    assert.match(result.text, /\/plur1bus_review approve rb-compact-show low-risk/);
     assert.doesNotMatch(result.text, /noteContent/);
     assert.ok(result.text.length < 2600);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("review show without bundle uses latest pending bundle and accepts mixed case", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-latest-shortcut",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "memory/latest.md",
+        action: "Review latest bundle",
+        reason: "Import note",
+        evidence: ["Evidence"],
+        noteContent: "# Latest\n\nEvidence",
+      }],
+    });
+    const result = await handleObsidianBridgeCommand(["review", "Show"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(result.text, /PLUR1BUS ReviewBundle/);
+    assert.match(result.text, /rb-latest-shortcut/);
+    assert.doesNotMatch(result.text, /^Usage:/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("review approve low-risk without bundle only marks items and still requires apply", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-approve-shortcut",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "memory/approve.md",
+        action: "Review approve shortcut",
+        reason: "Import note",
+        evidence: ["Evidence"],
+        noteContent: "# Approve\n\nEvidence",
+      }],
+    });
+    const approved = await handleObsidianBridgeCommand(["review", "approve", "low-risk"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(approved.text, /PLUR1BUS ReviewBundle approve result/);
+    assert.match(approved.text, /Bundle: rb-approve-shortcut/);
+    assert.match(approved.text, /Next: \/plur1bus_review apply rb-approve-shortcut/);
+
+    const shown = await handleObsidianBridgeCommand(["review", "show", "rb-approve-shortcut"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(shown.text, /1 pending, 1 approved, 0 rejected/);
+
+    const applied = await handleObsidianBridgeCommand(["review", "apply"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(applied.text, /Bundle: rb-approve-shortcut/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -791,13 +865,45 @@ test("obsidian evening review runs bundled deep checks without shell CLI", async
     });
     assert.match(result.text, /PLUR1BUS Evening Deep Review - test-workspace \(test-agent\)/);
     assert.match(result.text, /\| Dashboards Build \| \[OK\] pass \| 14 \|/);
-    assert.match(result.text, /\/plur1bus obsidian review show <bundleId>/);
+    assert.match(result.text, /\/plur1bus_review show/);
     assert.match(result.text, /- evening-deep-review-\d{4}-\d{2}-\d{2}-\d{4}\.md/);
     const artifactPath = result.text.match(/- (evening-deep-review-\d{4}-\d{2}-\d{2}-\d{4}\.md)/)[1];
     assert.equal(existsSync(join(vault, "00-system/plur1bus", artifactPath)), true);
     const artifact = readFileSync(join(vault, "00-system/plur1bus", artifactPath), "utf8");
     assert.match(artifact, /No standalone PLUR1BUS shell CLI is required or expected/);
+    assert.match(artifact, /\/plur1bus_review approve low-risk/);
+    assert.match(artifact, /\/plur1bus_review reject all/);
     assert.doesNotMatch(artifact, /CLI fehlt|CLI not available/i);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian evening review does not re-ingest derived dashboard records", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const cfg = config(vault);
+    const generatedDir = join(vault, "00-system/plur1bus/records/provenance");
+    mkdirSync(generatedDir, { recursive: true });
+    for (let index = 0; index < 20; index += 1) {
+      writeFileSync(join(generatedDir, `old-prov-${index}.md`), [
+        "---",
+        "plur1bus_type: provenance",
+        `plur1bus_id: old-prov-${index}`,
+        "status: current",
+        "---",
+        `# Old provenance ${index}`,
+      ].join("\n"));
+    }
+    const result = await handleObsidianBridgeCommand(["evening-review"], {
+      config: cfg,
+      agentId: "test-agent",
+      workspaceKey: "test-workspace",
+      records: [{ id: "source-test", type: "source", status: "current", summary: "Primary source only" }],
+      items: [],
+    });
+    assert.match(result.text, /\| Provenance Build \| \[OK\] pass \| 1 \|/);
+    assert.match(result.text, /\| Impact Analyze All \| \[OK\] pass \| 1 \|/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

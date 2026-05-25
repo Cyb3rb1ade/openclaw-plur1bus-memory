@@ -166,8 +166,8 @@ test("plugin returns PLUR1BUS command help for bare /plur1bus", async () => {
     const registered = makeApi(baseConfig(tmp));
     const command = registered.commands.find(item => item.name === "plur1bus");
     const result = await command.handler({ args: "", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
-    assert.match(result.text, /PLUR1BUS commands:/);
-    assert.match(result.text, /\/plur1bus obsidian morning-review/);
+    assert.match(result.text, /PLUR1BUS quick commands:/);
+    assert.match(result.text, /\/plur1bus_review approve low-risk/);
     assert.match(result.text, /\/plur1bus_morning/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -183,6 +183,22 @@ test("plugin routes /plur1bus obsidian commands through the control-room layer",
     const command = registered.commands.find(item => item.name === "plur1bus");
     const result = await command.handler({ args: "obsidian doctor", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
     assert.match(result.text, /missing_vault_path|bridge_disabled/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugin routes short PLUR1BUS review commands without obsidian prefix", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi(baseConfig(tmp, {
+      obsidianBridge: { enabled: false },
+    }));
+    const command = registered.commands.find(item => item.name === "plur1bus");
+    const result = await command.handler({ args: "Review Show", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
+    assert.match(result.text, /PLUR1BUS quick commands:/);
+    assert.match(result.text, /No ReviewBundle was found yet/);
+    assert.doesNotMatch(result.text, /^Usage:/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

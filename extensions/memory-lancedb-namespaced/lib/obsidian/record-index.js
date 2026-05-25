@@ -5,7 +5,17 @@ import { parseFrontmatter } from "./frontmatter.js";
 import { RECORD_COLLECTIONS } from "./record-schema.js";
 import { resolveReviewPath } from "./safe-paths.js";
 
+export const DEEP_ANALYSIS_RECORD_COLLECTIONS = Object.freeze([
+  "sources",
+  "memory-candidates",
+  "review-items",
+  "decisions",
+  "projects",
+  "agents",
+]);
+
 export function readRecords(rawConfig, options = {}) {
+  if (options.readExistingRecords === false) return [];
   const { reviewPath } = resolveReviewPath(rawConfig, ".");
   const root = join(reviewPath, "records");
   const records = [];
