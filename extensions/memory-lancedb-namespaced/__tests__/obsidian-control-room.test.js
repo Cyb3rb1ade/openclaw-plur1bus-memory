@@ -147,8 +147,11 @@ test("review show command returns compact summary instead of full item json", as
     });
     assert.match(result.text, /PLUR1BUS ReviewBundle/);
     assert.match(result.text, /21 total, 21 pending, 0 approved, 0 rejected/);
-    assert.match(result.text, /\/plur1bus_review show rb-compact-show/);
+    assert.match(result.text, /Open the full item list in Obsidian:/);
+    assert.match(result.text, /Refresh this Telegram summary: \/plur1bus_review show rb-compact-show/);
     assert.match(result.text, /\/plur1bus_review approve rb-compact-show low-risk/);
+    assert.match(result.text, /Apply is the only step that writes to memory/);
+    assert.doesNotMatch(result.text, /Show details:/);
     assert.doesNotMatch(result.text, /noteContent/);
     assert.ok(result.text.length < 2600);
   } finally {

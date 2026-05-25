@@ -1132,7 +1132,8 @@ function renderReviewBundleMarkdown(bundle, items, maintenance) {
     "## User Action Checklist",
     "",
     "- [ ] Review warnings and blocked items.",
-    `- [ ] Show details with \`/plur1bus_review show ${bundle.bundleId}\`.`,
+    `- [ ] Open this ReviewBundle in Obsidian for full item details.`,
+    `- [ ] Refresh the Telegram summary with \`/plur1bus_review show ${bundle.bundleId}\`.`,
     `- [ ] Approve low-risk items with \`/plur1bus_review approve ${bundle.bundleId} low-risk\`.`,
     `- [ ] Reject all pending items with \`/plur1bus_review reject ${bundle.bundleId} all\`.`,
     `- [ ] Run \`/plur1bus_review apply ${bundle.bundleId}\` after approval.`,
@@ -1351,19 +1352,21 @@ function renderEveningDeepReviewMarkdown(summary) {
     "",
     ...(Array.isArray(summary.pendingBundles) && summary.pendingBundles.length === 1
       ? [
-          `- Show details: /plur1bus_review show ${summary.pendingBundles[0]}`,
-          `- Approve low-risk items: /plur1bus_review approve ${summary.pendingBundles[0]} low-risk`,
-          `- Reject all pending items: /plur1bus_review reject ${summary.pendingBundles[0]} all`,
-          `- Apply approved items: /plur1bus_review apply ${summary.pendingBundles[0]}`,
+          `- Open the listed ReviewBundle artifact in Obsidian for full item details.`,
+          `- Approve low-risk items in Telegram: /plur1bus_review approve ${summary.pendingBundles[0]} low-risk`,
+          `- Apply approved items to memory: /plur1bus_review apply ${summary.pendingBundles[0]}`,
+          `- Or reject all pending items: /plur1bus_review reject ${summary.pendingBundles[0]} all`,
+          `- Refresh the Telegram summary: /plur1bus_review show ${summary.pendingBundles[0]}`,
         ]
       : [
-          "- Show details: /plur1bus_review show",
-          "- Approve low-risk items: /plur1bus_review approve low-risk",
-          "- Reject all pending items: /plur1bus_review reject all",
-          "- Apply approved items: /plur1bus_review apply",
+          "- Open the listed ReviewBundle artifact in Obsidian for full item details.",
+          "- Approve low-risk items in Telegram: /plur1bus_review approve low-risk",
+          "- Apply approved items to memory: /plur1bus_review apply",
+          "- Or reject all pending items: /plur1bus_review reject all",
+          "- Refresh the Telegram summary: /plur1bus_review show",
         ]),
     "",
-    "Approval only marks items as approved. Nothing is written to memory until the explicit apply command runs.",
+    "Approval only marks items as approved. Apply is the only step that writes to memory.",
     "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
     "",
     "## Artifacts",
@@ -2202,20 +2205,22 @@ function formatFinding(finding = {}) {
   return `- ${severity}: ${subject}${repeat} - ${detail}`;
 }
 
-function reviewCommands(bundleId) {
+function reviewCommands(bundleId, options = {}) {
   const bundle = bundleId || "";
   const suffix = bundle ? ` ${bundle}` : "";
   const approveDefault = bundle ? ` ${bundle} low-risk` : " low-risk";
   const rejectDefault = bundle ? ` ${bundle} all` : " all";
+  const artifactPath = options.artifactPath || "";
   return [
     "## What to do next",
     "",
-    `- Show details: /plur1bus_review show${suffix}`,
-    `- Approve low-risk items: /plur1bus_review approve${approveDefault}`,
-    `- Reject all pending items: /plur1bus_review reject${rejectDefault}`,
-    `- Apply approved items: /plur1bus_review apply${suffix}`,
+    artifactPath ? `- Open the full item list in Obsidian: ${artifactPath}` : "- Open the listed ReviewBundle artifact in Obsidian for full item details.",
+    `- Approve low-risk items in Telegram: /plur1bus_review approve${approveDefault}`,
+    `- Apply approved items to memory: /plur1bus_review apply${suffix}`,
+    `- Or reject all pending items: /plur1bus_review reject${rejectDefault}`,
+    `- Refresh this Telegram summary: /plur1bus_review show${suffix}`,
     "",
-    "Approval only marks items as approved. Nothing is written to memory until the explicit apply command runs.",
+    "Approval only marks items as approved. Apply is the only step that writes to memory.",
     "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
   ].join("\n");
 }
@@ -2249,7 +2254,7 @@ function obsidianCommandHelp() {
     "- /plur1bus_review reject all - reject all pending items",
     "- /plur1bus_review apply - apply approved items",
     "",
-    "Nothing is written by show, morning, evening, or approve. Memory changes require the final apply command.",
+    "Show, morning, evening, and approve are review-only steps. Apply is the only step that writes to memory.",
     "Advanced: /plur1bus help advanced",
   ].join("\n");
 }
@@ -2326,10 +2331,11 @@ function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
     "",
     artifactPaths.length ? artifactPaths.map((path) => `- ${path}`).join("\n") : "- No artifact path available.",
     "",
-    reviewCommands(bundle.bundleId),
+    reviewCommands(bundle.bundleId, { artifactPath: written.markdownPath || inferredMarkdownPath }),
     "",
     result.note || "",
-    "Full item details are written to the ReviewBundle artifact; no changes were applied.",
+    "Telegram shows a summary only; full item details are in the ReviewBundle artifact.",
+    "No changes were applied.",
   ].filter(Boolean).join("\n");
 }
 
@@ -2354,13 +2360,13 @@ function eveningReviewSummary(summary = {}) {
     : [
         "## What to do next",
         "",
-        "- Open the listed ReviewBundle artifact, then use:",
-        "- /plur1bus_review show",
-        "- /plur1bus_review approve low-risk",
-        "- /plur1bus_review reject all",
-        "- /plur1bus_review apply",
+        "- Open the listed ReviewBundle artifact in Obsidian for full item details.",
+        "- Approve low-risk items in Telegram: /plur1bus_review approve low-risk",
+        "- Apply approved items to memory: /plur1bus_review apply",
+        "- Or reject all pending items: /plur1bus_review reject all",
+        "- Refresh the Telegram summary: /plur1bus_review show",
         "",
-        "Approval only marks items as approved. Nothing is written to memory until the explicit apply command runs.",
+        "Approval only marks items as approved. Apply is the only step that writes to memory.",
         "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
       ].join("\n");
   return [
