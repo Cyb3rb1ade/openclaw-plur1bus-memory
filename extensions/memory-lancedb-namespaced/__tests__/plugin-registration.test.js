@@ -196,7 +196,10 @@ test("plugin routes PLUR1BUS Telegram shortcuts through the same command layer",
     }));
     const command = registered.commands.find(item => item.name === "plur1bus_morning");
     const result = await command.handler({ args: "", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
-    assert.match(result.text, /missing_vault_path|bridge_disabled/);
+    assert.match(result.text, /PLUR1BUS Morning Review - main \(main\)/);
+    assert.match(result.text, /Full item details are written to the ReviewBundle artifact/);
+    assert.doesNotMatch(result.text, /noteContent/);
+    assert.ok(result.text.length < 2600);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -223,7 +226,9 @@ test("plugin pre-executes PLUR1BUS cron review prompts before model inference", 
     assert.match(result.appendContext, /PLUR1BUS cron command result:/);
     assert.match(result.appendContext, /Command: \/plur1bus obsidian morning-review/);
     assert.match(result.appendContext, /already executed this command before model inference/);
-    assert.match(result.appendContext, /missing_vault_path|bridge_disabled/);
+    assert.match(result.appendContext, /PLUR1BUS Morning Review - main \(main\)/);
+    assert.doesNotMatch(result.appendContext, /noteContent/);
+    assert.ok(result.appendContext.length < 3200);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

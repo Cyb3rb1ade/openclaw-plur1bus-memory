@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.8";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.9";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -1380,6 +1380,7 @@ export function runEveningDeepReview(rawConfig = {}, options = {}) {
     artifactPath,
     records: recordIndex.records.length,
     pendingItems: reviewItems.length,
+    pendingBundles: [...new Set(reviewItems.map((item) => item.bundleId).filter(Boolean))],
     maintenance,
     adversarial,
     semanticConflicts,
@@ -1987,8 +1988,252 @@ function parseCommandOption(tokens, name, fallback = "") {
   return tokens[index + 1] || fallback;
 }
 
-function commandResult(value) {
-  return { text: typeof value === "string" ? value : JSON.stringify(value, null, 2) };
+function countBy(items = [], predicate = () => false) {
+  return Array.isArray(items) ? items.filter(predicate).length : 0;
+}
+
+function compactPathList(paths = [], max = 8) {
+  const list = Array.isArray(paths) ? paths.filter(Boolean) : [];
+  if (list.length <= max) return list;
+  return [...list.slice(0, max), `... ${list.length - max} more`];
+}
+
+function formatReviewTimestamp(value) {
+  if (!value) return nowIso();
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
+}
+
+function statusMarker(status = {}) {
+  const label = status.label || status.severity || "pass";
+  if (label === "error" || label === "block") return "[ERROR]";
+  if (label === "warning") return "[WARN]";
+  return "[OK]";
+}
+
+function reviewStatus(errors = 0, warnings = 0) {
+  if (errors > 0) return { label: "error" };
+  if (warnings > 0) return { label: "warning" };
+  return { label: "pass" };
+}
+
+function countByValue(items = [], pick = () => "") {
+  const counts = new Map();
+  for (const item of Array.isArray(items) ? items : []) {
+    const value = pick(item) || "unknown";
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+function formatCounts(counts = [], max = 4) {
+  if (!counts.length) return "none";
+  const shown = counts.slice(0, max).map(([name, count]) => `${count} ${name}`);
+  const hidden = counts.slice(max).reduce((sum, [, count]) => sum + count, 0);
+  return hidden ? `${shown.join(", ")}, ${hidden} more` : shown.join(", ");
+}
+
+function dedupeFindings(findings = []) {
+  const grouped = new Map();
+  for (const finding of Array.isArray(findings) ? findings : []) {
+    const key = [
+      finding.severity || finding.kind || "warning",
+      finding.code || finding.type || "",
+      finding.message || finding.reason || "",
+    ].join("|");
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      grouped.set(key, { ...finding, count: 1 });
+    }
+  }
+  return [...grouped.values()];
+}
+
+function formatFinding(finding = {}) {
+  const severity = finding.severity || finding.kind || "warning";
+  const subject = finding.id || finding.code || finding.path || finding.target || "item";
+  const detail = finding.message || finding.reason || finding.action || "Review required.";
+  const repeat = finding.count > 1 ? ` (${finding.count}x)` : "";
+  return `- ${severity}: ${subject}${repeat} - ${detail}`;
+}
+
+function reviewCommands(bundleId) {
+  const bundle = bundleId || "<bundleId>";
+  return [
+    "## Review commands",
+    "",
+    `- Details: /plur1bus obsidian review show ${bundle}`,
+    `- Approve low-risk items: /plur1bus obsidian review approve ${bundle} --items low-risk`,
+    `- Approve all pending items: /plur1bus obsidian review approve ${bundle} --items all`,
+    `- Reject all pending items: /plur1bus obsidian review reject ${bundle} --items all`,
+    `- Apply approved items: /plur1bus obsidian review apply ${bundle}`,
+    "",
+    "Approval only marks items as approved; changes are applied only by the explicit apply command.",
+  ].join("\n");
+}
+
+function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
+  const bundle = result.bundle || result.record?.bundle || {};
+  const items = Array.isArray(result.items) ? result.items : Array.isArray(result.record?.items) ? result.record.items : [];
+  const maintenanceFindings = Array.isArray(result.maintenance?.findings)
+    ? result.maintenance.findings
+    : Array.isArray(result.record?.maintenance?.findings)
+      ? result.record.maintenance.findings
+      : [];
+  const pending = countBy(items, (item) => !item.status || item.status === "pending");
+  const approved = countBy(items, (item) => item.status === "approved");
+  const rejected = countBy(items, (item) => item.status === "rejected");
+  const warnings = countBy(items, (item) => item.adversarialReview?.status === "warning")
+    + countBy(maintenanceFindings, (item) => item.severity === "warning");
+  const blocks = countBy(items, (item) => item.adversarialReview?.status === "block")
+    + countBy(maintenanceFindings, (item) => item.severity === "error");
+  const written = result.written || {};
+  const inferredMarkdownPath = !written.markdownPath && result.paths?.reviewRoot && bundle.bundleId
+    ? `${result.paths.reviewRoot}/review-bundles/${bundle.bundleId}.md`
+    : null;
+  const inferredItemsPath = !written.itemsPath && result.paths?.reviewRoot && bundle.bundleId
+    ? `${result.paths.reviewRoot}/review-bundles/${bundle.bundleId}.items.json`
+    : null;
+  const artifactPaths = compactPathList([written.markdownPath || inferredMarkdownPath, written.itemsPath || inferredItemsPath].filter(Boolean));
+  const maintenanceWarnings = countBy(maintenanceFindings, (item) => item.severity === "warning");
+  const maintenanceErrors = countBy(maintenanceFindings, (item) => item.severity === "error");
+  const adversarialWarnings = countBy(items, (item) => item.adversarialReview?.status === "warning");
+  const adversarialBlocks = countBy(items, (item) => item.adversarialReview?.status === "block");
+  const adversarialPass = countBy(items, (item) => item.adversarialReview?.status === "pass");
+  const checkRows = [
+    ["Maintenance Light", reviewStatus(maintenanceErrors, maintenanceWarnings), `${maintenanceFindings.length} finding(s), ${maintenanceErrors} error(s), ${maintenanceWarnings} warning(s)`],
+    ["Adversarial Light", reviewStatus(adversarialBlocks, adversarialWarnings), `${adversarialPass}/${items.length} pass, ${adversarialBlocks} block(s), ${adversarialWarnings} warning(s)`],
+    ["ReviewBundle Build", reviewStatus(result.ok === false || result.status === "blocked" ? 1 : 0, 0), `${items.length} item(s), ${pending} pending`],
+  ];
+  const findings = dedupeFindings([
+    ...maintenanceFindings.filter((item) => ["error", "warning"].includes(item.severity)),
+    ...items.filter((item) => ["block", "warning"].includes(item.adversarialReview?.status)).map((item) => ({
+      ...item,
+      severity: item.adversarialReview.status === "block" ? "error" : "warning",
+      message: item.adversarialReview.reason || item.reason,
+    })),
+  ]);
+  const typeSummary = formatCounts(countByValue(items, (item) => item.type));
+  const riskSummary = formatCounts(countByValue(items, (item) => item.risk));
+  const title = label.includes("Morning")
+    ? `${label} - ${bundle.workspaceKey || "main"} (${bundle.createdByAgent || "main"})`
+    : label;
+  return [
+    title,
+    `${formatReviewTimestamp(bundle.createdAt)} | Proposal-only mode`,
+    "",
+    "## Result",
+    "",
+    "| Check | Status | Details |",
+    "|---|---|---|",
+    ...checkRows.map(([name, check, detail]) => `| ${name} | ${statusMarker(check)} ${check.label} | ${detail} |`),
+    "",
+    "## Blocked / Warning",
+    "",
+    findings.length ? findings.slice(0, 8).map(formatFinding).join("\n") : "- None.",
+    findings.length > 8 ? `- ... ${findings.length - 8} more in the ReviewBundle artifact.` : "",
+    "",
+    "## Pending Items",
+    "",
+    `- ${items.length} total, ${pending} pending, ${approved} approved, ${rejected} rejected`,
+    `- Types: ${typeSummary}`,
+    `- Risk: ${riskSummary}`,
+    `- Findings: ${blocks} block(s), ${warnings} warning(s)`,
+    "",
+    "## Artifacts",
+    "",
+    artifactPaths.length ? artifactPaths.map((path) => `- ${path}`).join("\n") : "- No artifact path available.",
+    "",
+    reviewCommands(bundle.bundleId),
+    "",
+    result.note || "",
+    "Full item details are written to the ReviewBundle artifact; no changes were applied.",
+  ].filter(Boolean).join("\n");
+}
+
+function eveningReviewSummary(summary = {}) {
+  const checks = summary.status || {};
+  const rows = [
+    ["Maintenance Deep", checks.maintenance],
+    ["Adversarial Deep", checks.adversarial],
+    ["Semantic Conflicts", checks.semanticConflicts],
+    ["Duplicates Scan", checks.duplicates],
+    ["Provenance Build", checks.provenance],
+    ["Impact Analyze All", checks.impact],
+    ["Dashboards Build", checks.dashboards],
+  ].map(([name, status]) => {
+    const count = status?.count ?? 0;
+    return `| ${name} | ${statusMarker(status)} ${status?.label || "unknown"} | ${count} |`;
+  });
+  const findings = dedupeFindings(Array.isArray(summary.blockedOrWarningItems) ? summary.blockedOrWarningItems : []);
+  const bundles = Array.isArray(summary.pendingBundles) ? summary.pendingBundles.filter(Boolean) : [];
+  const reviewHelp = bundles.length === 1
+    ? reviewCommands(bundles[0])
+    : [
+        "## Review commands",
+        "",
+        "- Open the listed ReviewBundle artifact, then use:",
+        "- /plur1bus obsidian review show <bundleId>",
+        "- /plur1bus obsidian review approve <bundleId> --items low-risk",
+        "- /plur1bus obsidian review reject <bundleId> --items all",
+        "- /plur1bus obsidian review apply <bundleId>",
+        "",
+        "Approval only marks items as approved; changes are applied only by the explicit apply command.",
+      ].join("\n");
+  return [
+    `PLUR1BUS Evening Deep Review - ${summary.workspaceKey || "main"} (${summary.agentId || "main"})`,
+    `${formatReviewTimestamp(summary.createdAt)} | Proposal-only mode`,
+    "",
+    "## Result",
+    "",
+    "| Check | Status | Count |",
+    "|---|---|---|",
+    ...rows,
+    "",
+    "## Blocked / Warning",
+    "",
+    findings.length ? findings.slice(0, 8).map(formatFinding).join("\n") : "- None.",
+    findings.length > 8 ? `- ... ${findings.length - 8} more in the evening artifact.` : "",
+    "",
+    "## Pending Items",
+    "",
+    `- Pending review items: ${summary.pendingItems ?? 0}`,
+    bundles.length ? `- Bundle(s): ${compactPathList(bundles, 5).join(", ")}` : "- Bundle(s): see ReviewBundle artifacts.",
+    "",
+    "## Artifacts",
+    "",
+    `- ${summary.artifactPath || summary.artifact?.path || "n/a"}`,
+    "",
+    reviewHelp,
+    "",
+    "No changes were applied.",
+  ].filter(Boolean).join("\n");
+}
+
+function applySummary(result = {}) {
+  return [
+    "PLUR1BUS ReviewBundle apply result",
+    `Bundle: ${result.bundleId || "n/a"}`,
+    `Applied: ${Array.isArray(result.applied) ? result.applied.length : 0}`,
+    `Blocked: ${Array.isArray(result.blocked) ? result.blocked.length : 0}`,
+    `Items: ${Array.isArray(result.items) ? result.items.length : 0}`,
+  ].join("\n");
+}
+
+function commandResult(value, options = {}) {
+  const maxChars = options.maxChars || 12_000;
+  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  if (text.length <= maxChars) return { text };
+  return {
+    text: [
+      text.slice(0, maxChars),
+      "",
+      `[truncated ${text.length - maxChars} chars; use the written PLUR1BUS artifact or a narrower command for full details]`,
+    ].join("\n"),
+  };
 }
 
 function defaultLivingDashboardRecords(agentId, workspaceKey) {
@@ -2087,8 +2332,13 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       });
       return commandResult({ ...summary, ok: written.ok, write: written });
     }
-    if (command === "morning-review") return commandResult(await runMorningReview(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir }));
-    if (command === "evening-review" || command === "evening-deep-review") return commandResult(runEveningDeepReview(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, records: context.records, items: context.items }));
+    if (command === "morning-review") {
+      const result = await runMorningReview(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, proposals: context.proposals });
+      return commandResult(reviewBundleSummary(result, "PLUR1BUS Morning Review"));
+    }
+    if (command === "evening-review" || command === "evening-deep-review") {
+      return commandResult(eveningReviewSummary(runEveningDeepReview(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, records: context.records, items: context.items })));
+    }
     if (command === "records" && sub === "rebuild") {
       const records = context.records || defaultLivingDashboardRecords(agentId, workspaceKey);
       return commandResult({ ok: true, written: writeRecords(commandConfig, records, { agentId, workspaceKey, workspaceDir: context.workspaceDir }) });
@@ -2099,7 +2349,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
     if (command === "tasks" && sub === "build") return commandResult(generateTaskSuggestions(commandConfig, context.tasks || [], { agentId, workspaceKey }));
     if (command === "weekly") {
       if (sub === "build") return commandResult(buildWeeklySynthesis(commandConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
-      return commandResult(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, reviewProfiles: ["maintenance", "adversarial", "project_manager"] }));
+      return commandResult(reviewBundleSummary(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, reviewProfiles: ["maintenance", "adversarial", "project_manager"] }), "PLUR1BUS Weekly Review"));
     }
     if (command === "conflicts") {
       if (sub === "build") return commandResult(generateLivingConflictReport(commandConfig, { agentId, workspaceKey, records: context.records || defaultLivingDashboardRecords(agentId, workspaceKey) }));
@@ -2205,10 +2455,10 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
     }
     if (command === "review") {
       const bundleId = tokens[2] || "";
-      if (sub === "prepare") return commandResult(await prepareReviewBundle(commandConfig, { agentId, workspaceKey }));
+      if (sub === "prepare") return commandResult(reviewBundleSummary(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, proposals: context.proposals }), "PLUR1BUS ReviewBundle"));
       if (sub === "show") {
         if (!bundleId) return commandResult("Usage: /plur1bus obsidian review show <bundleId>");
-        return commandResult(loadBundleRecord(commandConfig, bundleId).record);
+        return commandResult(reviewBundleSummary(loadBundleRecord(commandConfig, bundleId), "PLUR1BUS ReviewBundle"));
       }
       if (["approve", "reject", "snooze"].includes(sub)) {
         if (!bundleId) return commandResult(`Usage: /plur1bus obsidian review ${sub} <bundleId> --items <ids|all|low-risk>`);
@@ -2218,10 +2468,10 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       }
       if (sub === "apply") {
         if (!bundleId) return commandResult("Usage: /plur1bus obsidian review apply <bundleId>");
-        return commandResult(await applyApprovedReviewBundle(commandConfig, bundleId, {
+        return commandResult(applySummary(await applyApprovedReviewBundle(commandConfig, bundleId, {
           memoryStore: context.memoryStore,
           knowledgeUpdate: context.knowledgeUpdate,
-        }));
+        })));
       }
     }
     return commandResult("Usage: /plur1bus obsidian doctor|discover workspaces [--dry-run] [--verbose] [--write --backup-dir <dir>]|init workspaces [--workspace <id>|--agent <id>] [--dry-run] [--verbose]|records rebuild|dashboards build|bases build|dataview build|tasks build|review <prepare|show|approve|reject|snooze|apply>|morning-review|evening-review|conflicts [build]|project-hub <topic> [--refresh]|memory explain <id> [--deep]|weekly [build]|maintenance deep|adversarial deep|semantic-conflicts build|duplicates scan|provenance build|impact analyze <id|all>|links suggest|soul patch|cron <print-morning-review|install-morning-review|print-workspace-reviews|install-workspace-reviews>");

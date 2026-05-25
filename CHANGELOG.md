@@ -1,5 +1,16 @@
 ## [Unreleased]
 
+## [4.2.9] - 2026-05-25
+
+### Fixed
+- Made PLUR1BUS Obsidian review command responses Telegram-safe by returning compact summaries for morning review, evening review, review prepare, review show, weekly review, and review apply instead of serializing full ReviewBundle item payloads into chat.
+- Added review instructions to the compact reports so users can approve, reject, inspect, and apply ReviewBundle items without opening raw JSON.
+- Added a generic command-output length guard to prevent accidental multi-hundred-message Telegram floods from large PLUR1BUS JSON results.
+
+### Verification
+- Added regression coverage for compact morning-review and review-show responses.
+- Verified the full plugin test suite with `node --test`.
+
 ## [4.2.8] - 2026-05-25
 
 ### Added
