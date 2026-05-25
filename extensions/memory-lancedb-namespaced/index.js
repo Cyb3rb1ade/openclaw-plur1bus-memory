@@ -1273,12 +1273,34 @@ const plugin = {
       }
 
       if (typeof api.registerCommand === "function") {
-        api.registerCommand({
-          name: "plur1bus",
-          description: "Inspect and curate PLUR1BUS neo-arch memory state.",
-          acceptsArgs: true,
-          handler: async (commandCtx) => {
-            const tokens = commandCtx.args?.trim().split(/\s+/).filter(Boolean) || ["status"];
+        const parsePlur1busArgs = (commandCtx) => commandCtx.args?.trim().split(/\s+/).filter(Boolean) || [];
+        const executedCronCommands = new Map();
+        const plur1busHelp = () => ({
+          text: [
+            "PLUR1BUS commands:",
+            "/plur1bus status",
+            "/plur1bus doctor",
+            "/plur1bus obsidian morning-review",
+            "/plur1bus obsidian evening-review",
+            "/plur1bus obsidian review prepare",
+            "/plur1bus obsidian dashboards build",
+            "/plur1bus obsidian conflicts build",
+            "/plur1bus obsidian cron print-workspace-reviews",
+            "",
+            "Telegram shortcuts:",
+            "/plur1bus_status",
+            "/plur1bus_doctor",
+            "/plur1bus_morning",
+            "/plur1bus_evening",
+            "/plur1bus_review",
+            "/plur1bus_dashboards",
+            "/plur1bus_conflicts",
+            "/plur1bus_cron",
+          ].join("\n"),
+        });
+        const runPlur1busCommand = async (commandCtx, prefixTokens = []) => {
+            const tokens = [...prefixTokens, ...parsePlur1busArgs(commandCtx)];
+            if (tokens.length === 0 || tokens[0] === "help") return plur1busHelp();
             const action = tokens[0] || "status";
             const sub = tokens[1] || "";
             const id = tokens[2] || "";
@@ -1387,9 +1409,73 @@ const plugin = {
             if (action === "dreaming") {
               return formatJsonCommandResult({ status: "planned", heavyJobCarrier: "OpenClaw-managed agent cron", modes: ["light", "rem", "deep"] });
             }
-            return { text: "Usage: /plur1bus status|doctor|neo workspaces migrate [--dry-run] [--verbose] [--backup-dir <path>]|curation <inbox|conflicts|stale|promoted>|memory <origin|explain|promote|demote|prune|tombstone> <id>|behavior <show|candidates|explain|promote|demote|prune> [id]|embeddings status|dreaming status|obsidian <doctor|init workspaces|review|morning-review|evening-review|conflicts|project-hub|memory|weekly|cron>" };
-          },
-        });
+            return plur1busHelp();
+          };
+        const resolvePlur1busCronCommandArgs = (prompt) => {
+          const text = typeof prompt === "string" ? prompt : "";
+          if (!text.trimStart().startsWith("[cron:")) return null;
+          if (text.includes("/plur1bus obsidian morning-review") || text.includes("/plur1bus_morning")) {
+            return { command: "/plur1bus obsidian morning-review", args: "obsidian morning-review" };
+          }
+          if (text.includes("/plur1bus obsidian evening-review") || text.includes("/plur1bus_evening")) {
+            return { command: "/plur1bus obsidian evening-review", args: "obsidian evening-review" };
+          }
+          return null;
+        };
+        const formatCronCommandContext = (command, result) => {
+          const raw = typeof result?.text === "string" ? result.text : JSON.stringify(result ?? {}, null, 2);
+          const maxLength = 24_000;
+          const text = raw.length > maxLength ? `${raw.slice(0, maxLength)}\n[truncated ${raw.length - maxLength} chars]` : raw;
+          return [
+            "PLUR1BUS cron command result:",
+            `Command: ${command}`,
+            "",
+            "The PLUR1BUS plugin already executed this command before model inference. Return a concise user-facing summary of the result below. Do not send the slash command as a chat message and do not look for a shell binary.",
+            "",
+            text,
+          ].join("\n");
+        };
+        const plur1busCommands = [
+          { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
+          { name: "plur1bus_status", description: "Show PLUR1BUS memory status.", acceptsArgs: true, prefixTokens: ["status"] },
+          { name: "plur1bus_doctor", description: "Run PLUR1BUS diagnostics.", acceptsArgs: true, prefixTokens: ["doctor"] },
+          { name: "plur1bus_morning", description: "Run PLUR1BUS morning review.", acceptsArgs: true, prefixTokens: ["obsidian", "morning-review"] },
+          { name: "plur1bus_evening", description: "Run PLUR1BUS evening review.", acceptsArgs: true, prefixTokens: ["obsidian", "evening-review"] },
+          { name: "plur1bus_review", description: "Prepare or manage PLUR1BUS reviews.", acceptsArgs: true, prefixTokens: ["obsidian", "review"] },
+          { name: "plur1bus_dashboards", description: "Build PLUR1BUS dashboards.", acceptsArgs: true, prefixTokens: ["obsidian", "dashboards", "build"] },
+          { name: "plur1bus_conflicts", description: "Build PLUR1BUS conflict reports.", acceptsArgs: true, prefixTokens: ["obsidian", "conflicts", "build"] },
+          { name: "plur1bus_cron", description: "Print PLUR1BUS review cron jobs.", acceptsArgs: true, prefixTokens: ["obsidian", "cron", "print-workspace-reviews"] },
+        ];
+        for (const command of plur1busCommands) {
+          api.registerCommand({
+            name: command.name,
+            description: command.description,
+            acceptsArgs: command.acceptsArgs ?? false,
+            channels: ["telegram", "discord", "slack", "mattermost"],
+            handler: (commandCtx) => runPlur1busCommand(commandCtx, command.prefixTokens),
+          });
+        }
+        if (typeof api.on === "function") {
+          api.on("agent_turn_prepare", async (event, hookCtx = {}) => {
+            const cronCommand = resolvePlur1busCronCommandArgs(event?.prompt);
+            if (!cronCommand) return undefined;
+            const cacheKey = `${hookCtx.runId || event?.prompt || "cron"}:${cronCommand.command}`;
+            if (executedCronCommands.has(cacheKey)) {
+              return { appendContext: executedCronCommands.get(cacheKey) };
+            }
+            const result = await runPlur1busCommand({
+              args: cronCommand.args,
+              agentId: hookCtx.agentId || "main",
+              workspaceDir: hookCtx.workspaceDir,
+              workspaceKey: hookCtx.workspaceKey,
+              sessionKey: hookCtx.sessionKey,
+              config: api.runtime?.config?.current?.() || api.runtime?.config,
+            });
+            const appendContext = formatCronCommandContext(cronCommand.command, result);
+            executedCronCommands.set(cacheKey, appendContext);
+            return { appendContext };
+          }, { timeoutMs: 60_000 });
+        }
       }
 
       const startNeoService = () => {

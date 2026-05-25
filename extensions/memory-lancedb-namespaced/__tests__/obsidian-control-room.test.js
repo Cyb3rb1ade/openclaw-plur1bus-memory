@@ -657,9 +657,46 @@ test("obsidian cron workspace reviews prints selectable morning and evening jobs
     assert.match(parsed.commands.join("\n"), /--cron "0 18 \* \* \*"/);
     assert.match(parsed.commands.join("\n"), /--channel "telegram"/);
     assert.match(parsed.commands.join("\n"), /--to "12345"/);
+    assert.match(parsed.commands.join("\n"), /--message "\/plur1bus obsidian morning-review"/);
+    assert.match(parsed.commands.join("\n"), /--message "\/plur1bus obsidian evening-review"/);
     assert.match(parsed.commands.join("\n"), /\/plur1bus obsidian evening-review/);
-    assert.match(parsed.commands.join("\n"), /not a shell binary/);
+    assert.doesNotMatch(parsed.commands.join("\n"), /Run exactly this OpenClaw plugin command/);
     assert.doesNotMatch(parsed.commands.join("\n"), /openclaw plur1bus obsidian maintenance deep/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("obsidian cron workspace reviews generates jobs for Bernd Bernhardine and Heisenberg", async () => {
+  const { tmp } = makeVault();
+  try {
+    const workspaces = [
+      { workspace_id: "main", agent_id: "main", path: join(tmp, "workspace-main"), label: "Bernd" },
+      { workspace_id: "bernhardine", agent_id: "bernhardine", path: join(tmp, "workspace-bernhardine"), label: "Bernhardine" },
+      { workspace_id: "heisenberg", agent_id: "heisenberg", path: join(tmp, "workspace-heisenberg"), label: "Heisenberg" },
+    ];
+    for (const workspace of workspaces) mkdirSync(workspace.path, { recursive: true });
+    const cfg = {
+      enabled: true,
+      workspaces,
+      morningReview: { cron: "0 9 * * *", timezone: "Europe/Berlin" },
+      eveningReview: { cron: "0 18 * * *", timezone: "Europe/Berlin" },
+    };
+
+    const result = await handleObsidianBridgeCommand(["cron", "print-workspace-reviews", "--all", "--channel", "telegram", "--to", "55736530"], { config: cfg });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.workspaces, 3);
+    assert.equal(parsed.jobs.length, 6);
+    assert.deepEqual(parsed.jobs.map((job) => job.agentId), ["main", "main", "bernhardine", "bernhardine", "heisenberg", "heisenberg"]);
+    assert.deepEqual(parsed.jobs.map((job) => job.message), [
+      "/plur1bus obsidian morning-review",
+      "/plur1bus obsidian evening-review",
+      "/plur1bus obsidian morning-review",
+      "/plur1bus obsidian evening-review",
+      "/plur1bus obsidian morning-review",
+      "/plur1bus obsidian evening-review",
+    ]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.7";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.8";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -1858,7 +1858,7 @@ export function printMorningReviewCronCommand(rawConfig = {}) {
     `  --cron "${cfg.morningReview.cron}" \\`,
     `  --tz "${cfg.morningReview.timezone}" \\`,
     `  --session ${cfg.morningReview.session} \\`,
-    `  --message "Run exactly this OpenClaw plugin command: /plur1bus obsidian morning-review. ${OPENCLAW_COMMAND_SURFACE_NOTICE} Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary." \\`,
+    "  --message \"/plur1bus obsidian morning-review\" \\",
     "  --announce",
   ].join("\n");
 }
@@ -1956,7 +1956,7 @@ export function buildWorkspaceReviewCronJobs(rawConfig = {}, options = {}) {
         channel,
         to,
         timeoutSeconds: 900,
-        message: `Run exactly this OpenClaw plugin command for ${label}: /plur1bus obsidian morning-review. ${OPENCLAW_COMMAND_SURFACE_NOTICE} Prepare proposals only. Run maintenance_light before proposal generation and adversarial_light before user presentation. Do not apply changes without explicit user approval. Write the ReviewBundle to Obsidian and return a concise approval summary.`,
+        message: "/plur1bus obsidian morning-review",
       };
       jobs.push({ ...spec, command: cronCommandFromSpec(spec) });
     }
@@ -1973,7 +1973,7 @@ export function buildWorkspaceReviewCronJobs(rawConfig = {}, options = {}) {
         channel,
         to,
         timeoutSeconds: 1200,
-        message: `Run exactly this OpenClaw plugin command for ${label}: /plur1bus obsidian evening-review. ${OPENCLAW_COMMAND_SURFACE_NOTICE} This command performs the proposal-only evening deep review checks internally. Do not apply changes without explicit user approval. Return a concise summary with written artifact paths and blocked/warning items.`,
+        message: "/plur1bus obsidian evening-review",
       };
       jobs.push({ ...spec, command: cronCommandFromSpec(spec) });
     }

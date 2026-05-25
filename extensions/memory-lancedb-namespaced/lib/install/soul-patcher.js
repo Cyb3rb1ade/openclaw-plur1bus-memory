@@ -6,7 +6,7 @@ import { assertSafeRelativePath, ensureDir } from "../obsidian/safe-paths.js";
 
 export const SOUL_BLOCK_ID = "memory-runtime-rules";
 
-export function soulRuntimeRules(version = "4.2.7") {
+export function soulRuntimeRules(version = "4.2.8") {
   return [
     "# PLUR1BUS Memory Runtime Rules",
     "",
@@ -28,7 +28,7 @@ export function soulRuntimeRules(version = "4.2.7") {
   ].join("\n");
 }
 
-function renderSoulBlock(version = "4.2.7") {
+function renderSoulBlock(version = "4.2.8") {
   const body = soulRuntimeRules(version);
   const hash = `sha256:${sha256Hex(body)}`;
   return [
@@ -42,7 +42,7 @@ export function patchSoulMd(path, options = {}) {
   assertSafeRelativePath(options.relativePath || "SOUL.MD", { allowDotObsidianWrite: false });
   const target = resolve(path);
   if (!target.endsWith("SOUL.MD")) throw new Error("SOUL patch target must be SOUL.MD");
-  const version = options.version || "4.2.7";
+  const version = options.version || "4.2.8";
   const block = renderSoulBlock(version);
   const existing = existsSync(target) ? readFileSync(target, "utf8") : "";
   if (!existing && options.createIfMissing === false) return { ok: true, changed: false, reason: "missing and createIfMissing=false" };

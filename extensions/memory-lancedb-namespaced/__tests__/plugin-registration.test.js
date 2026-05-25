@@ -139,6 +139,36 @@ test("plugin registers without embedding secrets for inspect and doctor flows", 
     });
     assert.ok(registered.tools.length > 0);
     assert.ok(registered.commands.some(command => command.name === "plur1bus"));
+    assert.deepEqual(
+      registered.commands
+        .filter(command => command.name.startsWith("plur1bus"))
+        .map(command => command.name),
+      [
+        "plur1bus",
+        "plur1bus_status",
+        "plur1bus_doctor",
+        "plur1bus_morning",
+        "plur1bus_evening",
+        "plur1bus_review",
+        "plur1bus_dashboards",
+        "plur1bus_conflicts",
+        "plur1bus_cron",
+      ],
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugin returns PLUR1BUS command help for bare /plur1bus", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi(baseConfig(tmp));
+    const command = registered.commands.find(item => item.name === "plur1bus");
+    const result = await command.handler({ args: "", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
+    assert.match(result.text, /PLUR1BUS commands:/);
+    assert.match(result.text, /\/plur1bus obsidian morning-review/);
+    assert.match(result.text, /\/plur1bus_morning/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -153,6 +183,74 @@ test("plugin routes /plur1bus obsidian commands through the control-room layer",
     const command = registered.commands.find(item => item.name === "plur1bus");
     const result = await command.handler({ args: "obsidian doctor", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
     assert.match(result.text, /missing_vault_path|bridge_disabled/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugin routes PLUR1BUS Telegram shortcuts through the same command layer", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi(baseConfig(tmp, {
+      obsidianBridge: { enabled: false },
+    }));
+    const command = registered.commands.find(item => item.name === "plur1bus_morning");
+    const result = await command.handler({ args: "", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
+    assert.match(result.text, /missing_vault_path|bridge_disabled/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugin pre-executes PLUR1BUS cron review prompts before model inference", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi(baseConfig(tmp, {
+      obsidianBridge: { enabled: false },
+    }));
+    const hook = registered.hooks.find(item => item.name === "agent_turn_prepare");
+    assert.ok(hook, "agent_turn_prepare hook should be registered");
+    const result = await hook.handler({
+      prompt: "[cron:job-a PLUR1BUS Morning Review - Bernd] /plur1bus obsidian morning-review\nCurrent time: 2026-05-25",
+      messages: [],
+      queuedInjections: [],
+    }, {
+      runId: "run-a",
+      agentId: "main",
+      workspaceDir: tmp,
+      sessionKey: "agent:main:cron:job-a",
+    });
+    assert.match(result.appendContext, /PLUR1BUS cron command result:/);
+    assert.match(result.appendContext, /Command: \/plur1bus obsidian morning-review/);
+    assert.match(result.appendContext, /already executed this command before model inference/);
+    assert.match(result.appendContext, /missing_vault_path|bridge_disabled/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("plugin pre-executes PLUR1BUS cron review prompts for all configured agents", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-plugin-"));
+  try {
+    const registered = makeApi(baseConfig(tmp, {
+      obsidianBridge: { enabled: false },
+    }));
+    const hook = registered.hooks.find(item => item.name === "agent_turn_prepare");
+    const agents = ["main", "bernhardine", "heisenberg"];
+    for (const agentId of agents) {
+      const result = await hook.handler({
+        prompt: `[cron:job-${agentId} PLUR1BUS Evening Deep Review] /plur1bus obsidian evening-review`,
+        messages: [],
+        queuedInjections: [],
+      }, {
+        runId: `run-${agentId}`,
+        agentId,
+        workspaceDir: tmp,
+        sessionKey: `agent:${agentId}:cron:job-${agentId}`,
+      });
+      assert.match(result.appendContext, /Command: \/plur1bus obsidian evening-review/);
+      assert.match(result.appendContext, /already executed this command before model inference/);
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

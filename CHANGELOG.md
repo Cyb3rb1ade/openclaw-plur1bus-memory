@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [4.2.8] - 2026-05-25
+
+### Added
+- Added Telegram-native PLUR1BUS shortcut commands (`/plur1bus_morning`, `/plur1bus_evening`, `/plur1bus_status`, `/plur1bus_doctor`, `/plur1bus_review`, `/plur1bus_dashboards`, `/plur1bus_conflicts`, `/plur1bus_cron`) while keeping `/plur1bus ...` as the canonical command.
+- Added bare `/plur1bus` command help so Telegram users can discover the available PLUR1BUS command surface.
+
+### Fixed
+- Added plugin-level cron pre-execution for PLUR1BUS Obsidian review prompts, so managed OpenClaw cron turns execute the PLUR1BUS plugin command before model inference instead of sending the slash command text back to Telegram.
+- Changed generated PLUR1BUS review cron messages to exact slash-command payloads for morning and evening reviews.
+
+### Verification
+- Added regression coverage for Telegram shortcut registration, bare `/plur1bus` help, cron pre-execution, and workspace review cron generation.
+- Verified the current Bernd, Bernhardine, and Heisenberg cron job payloads use `/plur1bus obsidian morning-review` and `/plur1bus obsidian evening-review`.
+- Verified all three live Telegram bot command menus expose the PLUR1BUS shortcut commands; documented Telegram's 100-command menu limit and the `commands.nativeSkills=false` account-level fallback.
+
 ## [4.2.7] - 2026-05-24
 
 ### Added

@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v4.2.7-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.2.7)
+[![Release](https://img.shields.io/badge/release-v4.2.8-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.2.8)
 
 ---
 
@@ -14,7 +14,7 @@ PLUR1BUS v4 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `4.2.7`<br>
+**Aktuelle Version:** `4.2.8`<br>
 **Branch:** `main`<br>
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1` und `2026.5.18`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
@@ -169,7 +169,10 @@ globales `vaultPath` den aktiven Vault aus `obsidianBridge.workspaces[]`,
 `workspaceDir`, `workspaceKey` oder `agentId` auf. In `4.2.5` kann die Bridge
 Workspace-Installationen gezielt initialisieren und pro Workspace 09:00
 Morning-Review- sowie 18:00 Evening-Deep-Review-Crons ausgeben oder
-installieren. Normale Vault-Dokumente werden als untrusted
+installieren. In `4.2.8` fuehrt PLUR1BUS solche Cron-Slash-Commands vor der
+Modellantwort plugin-intern aus und registriert Telegram-kompatible
+Shortcut-Commands fuer die sichtbare Bot-Command-Liste. Normale
+Vault-Dokumente werden als untrusted
 Kandidaten/Review-Input erfasst, ohne dadurch Auto-Recall-Memory zu werden. Die Bridge
 schreibt Markdown-Artefakte fuer Doctor-Reports, ReviewBundles, kanonische
 Records, Dashboards, Bases, Konflikte, Project Hubs, Memory-Erklaerungen,
@@ -251,6 +254,15 @@ These are OpenClaw slash/plugin commands. PLUR1BUS does not require a
 standalone `plur1bus` shell binary and does not expose an `openclaw plur1bus`
 CLI namespace.
 
+For Telegram clients, PLUR1BUS also registers native-friendly shortcuts such as
+`/plur1bus_morning`, `/plur1bus_evening`, `/plur1bus_status`,
+`/plur1bus_review`, `/plur1bus_dashboards`, `/plur1bus_conflicts`, and
+`/plur1bus_cron`. Telegram only accepts 100 commands per bot command menu; if
+native skill commands fill that list before plugin commands are reached, reduce
+the native skill command surface for that Telegram account or set
+`channels.telegram.accounts.<account>.commands.nativeSkills=false`. The generic
+`/skill` dispatcher remains available.
+
 ```text
 /plur1bus obsidian doctor
 /plur1bus obsidian review prepare
@@ -283,7 +295,7 @@ CLI namespace.
 `prepare` ist nicht `apply`. Ein ReviewBundle hat Frontmatter mit
 `type: plur1bus-review-bundle`, `bundleId`, `createdByAgent`, `status:
 pending_user_review`, `applyMode: approval_required`, Review-Profilen und
-`obsidianBridgeVersion: 4.2.7`. Jedes Item hat stabile IDs, Status, Risk,
+`obsidianBridgeVersion: 4.2.8`. Jedes Item hat stabile IDs, Status, Risk,
 Target, Action, Evidence, Preconditions, Maintenance-/Adversarial-Review und
 Apply-Preview. Checkboxen in Obsidian reichen nie fuer Mutation; `apply` liest
 das Bundle neu, revalidiert Hashes/Preconditions und wendet nur explizit
@@ -422,7 +434,7 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `4.2.7`:
+Provider-Status in `4.2.8`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
@@ -598,7 +610,7 @@ runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `4.2.7`<br>
+**Current version:** `4.2.8`<br>
 **Branch:** `main`<br>
 **Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, and `2026.5.18`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
@@ -609,7 +621,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `4.2.7`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `4.2.8`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental
@@ -623,7 +635,7 @@ provider bridge only expands `${ENV_VAR}` for explicit OpenAI/OpenAI-compatible/
 PLUR1BUS provider variables and provider-header prefixes; unrelated env reads
 such as `${HOME}` are rejected.
 
-Obsidian Bridge in `4.2.7`: optional, disabled by default, and strictly
+Obsidian Bridge in `4.2.8`: optional, disabled by default, and strictly
 approval-gated. It writes Markdown ReviewBundles, canonical records,
 dashboards, optional Bases/Dataview/Tasks output, conflict reports, semantic
 conflict proposals, duplicate candidates, provenance graphs, impact analysis,
