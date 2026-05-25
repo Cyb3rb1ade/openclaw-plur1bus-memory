@@ -185,6 +185,51 @@ test("review show without bundle uses latest pending bundle and accepts mixed ca
   }
 });
 
+test("review shortcuts select the current configured workspace", async () => {
+  const { tmp } = makeVault();
+  try {
+    const main = join(tmp, "workspace-main");
+    const bernhardine = join(tmp, "workspace-bernhardine");
+    const heisenberg = join(tmp, "workspace-heisenberg");
+    const reviewRoot = "00-system/plur1bus";
+    const cfg = {
+      enabled: true,
+      reviewRoot,
+      workspaces: [
+        { workspace_id: "main", agent_id: "main", path: main, label: "Bernd" },
+        { workspace_id: "bernhardine", agent_id: "bernhardine", path: bernhardine, label: "Bernhardine" },
+        { workspace_id: "heisenberg", agent_id: "heisenberg", path: heisenberg, label: "Heisenberg" },
+      ],
+    };
+    await prepareReviewBundle(config(main, { reviewRoot }), {
+      bundleId: "rb-main-current",
+      proposals: [{ type: "note_import_candidate", risk: "low", target: "main.md", action: "Review main", reason: "Import", evidence: ["main"] }],
+    });
+    await prepareReviewBundle(config(heisenberg, { reviewRoot }), {
+      bundleId: "rb-heisenberg-current",
+      proposals: [{ type: "note_import_candidate", risk: "low", target: "heisenberg.md", action: "Review heisenberg", reason: "Import", evidence: ["heisenberg"] }],
+    });
+
+    const result = await handleObsidianBridgeCommand(["review", "Show"], {
+      config: cfg,
+      commandCtx: { workspaceKey: "heisenberg", agentId: "heisenberg", workspaceDir: heisenberg },
+      workspaceDir: heisenberg,
+    });
+    assert.match(result.text, /rb-heisenberg-current/);
+    assert.doesNotMatch(result.text, /rb-main-current/);
+
+    const empty = await handleObsidianBridgeCommand(["review", "Show"], {
+      config: cfg,
+      commandCtx: { workspaceKey: "bernhardine", agentId: "bernhardine", workspaceDir: bernhardine },
+      workspaceDir: bernhardine,
+    });
+    assert.match(empty.text, /No ReviewBundle was found yet/);
+    assert.doesNotMatch(empty.text, /rb-main-current|rb-heisenberg-current/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("review approve low-risk without bundle only marks items and still requires apply", async () => {
   const { tmp, vault } = makeVault();
   try {
