@@ -45,6 +45,7 @@ test("plugin package is self-contained for native OpenClaw install", () => {
   assert.deepEqual(pkg.files, [
     "index.js",
     "lib/",
+    "scripts/",
     "openclaw.plugin.json",
     "README.md",
   ]);
@@ -81,7 +82,7 @@ test("manifest schema permits local providers and disabled reranker without apiK
 test("manifest declares disabled-by-default Obsidian bridge config", () => {
   const manifest = JSON.parse(readFileSync(resolve(pluginDir, "openclaw.plugin.json"), "utf8"));
   const bridge = manifest.configSchema.properties.obsidianBridge;
-  assert.equal(manifest.version, "4.2.14");
+  assert.equal(manifest.version, "4.2.15");
   assert.equal(bridge.type, "object");
   assert.equal(bridge.additionalProperties, false);
   assert.equal(bridge.properties.enabled.default, false);

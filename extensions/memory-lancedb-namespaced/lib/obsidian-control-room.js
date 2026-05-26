@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.14";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.15";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -1257,7 +1257,7 @@ function renderReviewBundleMarkdown(bundle, items, maintenance) {
     "## Apply Instructions",
     "",
     "A checked box in Obsidian is not approval. The apply command re-reads this bundle, revalidates preconditions and hashes, and applies approved items only.",
-    "If you omit the bundle id in Telegram, PLUR1BUS uses the latest pending ReviewBundle.",
+    "A Telegram reply does not need to repeat the bundle id. Without an id, show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.",
     "",
   ].join("\n");
 
@@ -1483,7 +1483,7 @@ function renderEveningDeepReviewMarkdown(summary) {
         ]),
     "",
     "Approval only marks items as approved. Apply is the only step that writes to memory.",
-    "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
+    "A Telegram reply does not need to repeat the bundle id. Without an id, show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.",
     "",
     "## Artifacts",
     "",
@@ -2341,6 +2341,7 @@ function reviewCommands(bundleId, options = {}) {
   const approveDefault = bundle ? ` ${bundle} low-risk` : " low-risk";
   const rejectDefault = bundle ? ` ${bundle} all` : " all";
   const artifactPath = options.artifactPath || "";
+  const idHint = "Bundle id is optional in Telegram replies and short commands. Without an id, review/show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.";
   return [
     "## Next step",
     "",
@@ -2351,7 +2352,7 @@ function reviewCommands(bundleId, options = {}) {
     `- Refresh this summary: /plur1bus_review show${suffix}`,
     "",
     "Approve only marks items. Apply is the only step that writes to memory.",
-    "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
+    idHint,
   ].join("\n");
 }
 
@@ -2393,6 +2394,7 @@ function obsidianCommandHelp() {
     "",
     "Normal flow: review -> approve or reject -> apply.",
     "Morning, evening, review, and approve do not write memory. Apply is the only memory write step.",
+    "Bundle id is optional in Telegram replies and short commands. Without an id, review/show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.",
     "Advanced: /plur1bus help advanced",
   ].join("\n");
 }
@@ -2603,7 +2605,7 @@ function eveningReviewSummary(summary = {}) {
         "- Refresh this summary: /plur1bus_review show",
         "",
         "Approve only marks items. Apply is the only step that writes to memory.",
-        "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
+        "Bundle id is optional in Telegram replies and short commands. Without an id, review/show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.",
       ].join("\n");
   return [
     `PLUR1BUS Evening Deep Review - ${summary.workspaceKey || "main"} (${summary.agentId || "main"})`,
@@ -2912,7 +2914,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
         : latestReviewBundleId(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, preferApproved: effectiveSub === "apply" });
       const positionalSelector = hasExplicitBundle ? rawMaybeSelector : rawBundleOrSelector;
       const selector = normalizeItemSelector(optionSelector || positionalSelector || (effectiveSub === "approve" ? "low-risk" : "all"));
-      if (effectiveSub === "prepare") return commandResult(reviewBundleSummary(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, proposals: context.proposals }), "PLUR1BUS ReviewBundle"));
+      if (effectiveSub === "prepare") return commandResult(reviewBundleSummary(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, proposals: context.proposals }), "PLUR1BUS ReviewBundle"));
       if (effectiveSub === "show") {
         if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
         return commandResult(reviewBundleSummary(loadBundleRecord(commandConfig, bundleId), "PLUR1BUS ReviewBundle"));

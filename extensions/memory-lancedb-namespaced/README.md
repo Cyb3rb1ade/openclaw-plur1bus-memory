@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.2.14` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.2.15` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -214,6 +214,13 @@ Agent-/Runtime-Workspaces sind, zum Beispiel mit `.openclaw` oder
 `apply` prueft dieselbe Grenze erneut, damit Legacy-Bundles keine fremden
 Agentenpfade in den aktuellen Memory-Namespace schreiben.
 
+Bundle-IDs sind in Telegram-Replys und Kurzbefehlen optional. Wer auf einen
+Review-Bericht mit `/plur1bus_review approve low-risk`,
+`/plur1bus_review reject all` oder `/plur1bus_review apply` antwortet, muss die
+ID nicht wiederholen. PLUR1BUS waehlt nach Queue-Status: show/explain/approve/reject
+nutzen das neueste pending ReviewBundle, apply nutzt das neueste approved
+ReviewBundle.
+
 Die Bridge schreibt nur additive Dateien unter `reviewRoot`:
 
 ```text
@@ -270,12 +277,12 @@ generische `/skill` Dispatcher bleibt verfuegbar.
 ```text
 /plur1bus obsidian doctor
 /plur1bus obsidian review prepare
-/plur1bus obsidian review show <bundleId>
-/plur1bus obsidian review explain <bundleId>
-/plur1bus obsidian review approve <bundleId> --items <ids|all|low-risk>
-/plur1bus obsidian review reject <bundleId> --items <ids|all>
-/plur1bus obsidian review snooze <bundleId> --items <ids> --until <date|duration>
-/plur1bus obsidian review apply <bundleId>
+/plur1bus obsidian review show [bundleId]
+/plur1bus obsidian review explain [bundleId]
+/plur1bus obsidian review approve [bundleId] --items <ids|all|low-risk>
+/plur1bus obsidian review reject [bundleId] --items <ids|all>
+/plur1bus obsidian review snooze [bundleId] --items <ids> --until <date|duration>
+/plur1bus obsidian review apply [bundleId]
 /plur1bus obsidian morning-review
 /plur1bus obsidian evening-review
 /plur1bus obsidian conflicts
@@ -313,7 +320,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.2.14
+obsidianBridgeVersion: 4.2.15
 ---
 ```
 

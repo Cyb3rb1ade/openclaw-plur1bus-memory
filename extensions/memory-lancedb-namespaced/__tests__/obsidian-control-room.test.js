@@ -946,6 +946,17 @@ test("obsidian control-room commands derive vaultPath from matching workspace co
     assert.equal(parsed.ok, true);
     assert.equal(existsSync(join(secondary, "plur1bus/records/sources/authority-secondary.md")), true);
     assert.equal(existsSync(join(main, "plur1bus/records/sources/authority-secondary.md")), false);
+
+    writeFileSync(join(secondary, "note.md"), "# Secondary\n\nWorkspace-specific note.");
+    const review = await handleObsidianBridgeCommand(["review", "prepare"], {
+      config: cfg,
+      workspaceKey: "secondary",
+      agentId: "secondary-agent",
+      workspaceDir: secondary,
+    });
+    assert.match(review.text, /PLUR1BUS ReviewBundle/);
+    assert.equal(existsSync(join(secondary, "plur1bus/review-bundles")), true);
+    assert.equal(existsSync(join(main, "plur1bus/review-bundles")), false);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

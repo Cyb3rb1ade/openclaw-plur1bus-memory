@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [4.2.15] - 2026-05-26
+
+### Changed
+- Made PLUR1BUS help and ReviewBundle next-step text explicit that `bundleId` is optional in Telegram replies and short commands.
+- Documented the bundle-selection rule: show/explain/approve/reject use the latest pending ReviewBundle; apply uses the latest approved ReviewBundle.
+- Passed workspace context through `/plur1bus obsidian review prepare` so multi-workspace setups do not depend on a global `vaultPath`.
+
+### Verification
+- Added help-text regression coverage for optional bundle IDs and the no-ID selection rule.
+
 ## [4.2.14] - 2026-05-26
 
 ### Fixed

@@ -36,12 +36,12 @@ export function buildProjectHub(rawConfig, topic, options = {}) {
     if (existsSync(targetPath)) {
       const existing = readFileSync(targetPath, "utf8");
       const parsed = parseFrontmatter(existing);
-      const replaced = replaceManagedBlock(parsed.body, { id: blockId, body, version: "4.2.14" });
+      const replaced = replaceManagedBlock(parsed.body, { id: blockId, body, version: "4.2.15" });
       if (!replaced.conflict) {
         atomicWriteText(targetPath, formatFrontmatter({ ...parsed.frontmatter, plur1bus_type: "project_hub", project: slug, authoritative: false }, replaced.content));
       }
     } else {
-      const block = buildManagedBlock({ id: blockId, body, version: "4.2.14" });
+      const block = buildManagedBlock({ id: blockId, body, version: "4.2.15" });
       atomicWriteText(targetPath, formatFrontmatter({ plur1bus_type: "project_hub", project: slug, authoritative: false }, block));
     }
     generated.push(rel);

@@ -36,6 +36,12 @@ Morning, evening, review, and approve do not write memory. Approval only marks
 items. Apply re-reads the ReviewBundle, revalidates hashes/preconditions, and
 applies approved safe items.
 
+Bundle IDs are optional in Telegram replies and short commands. If you answer a
+review summary with `/plur1bus_review approve low-risk`, `/plur1bus_review reject
+all`, or `/plur1bus_review apply`, PLUR1BUS selects the current bundle by queue
+state: show/explain/approve/reject use the latest pending ReviewBundle, and apply uses
+the latest approved ReviewBundle.
+
 ## Agent Boundaries
 
 PLUR1BUS keeps Obsidian import candidates scoped to the current workspace and
@@ -72,12 +78,12 @@ The long command namespace remains available:
 ```text
 /plur1bus obsidian doctor
 /plur1bus obsidian review prepare
-/plur1bus obsidian review show <bundleId>
-/plur1bus obsidian review explain <bundleId>
-/plur1bus obsidian review approve <bundleId> --items <ids|all|low-risk>
-/plur1bus obsidian review reject <bundleId> --items <ids|all>
-/plur1bus obsidian review snooze <bundleId> --items <ids> --until <date|duration>
-/plur1bus obsidian review apply <bundleId>
+/plur1bus obsidian review show [bundleId]
+/plur1bus obsidian review explain [bundleId]
+/plur1bus obsidian review approve [bundleId] --items <ids|all|low-risk>
+/plur1bus obsidian review reject [bundleId] --items <ids|all>
+/plur1bus obsidian review snooze [bundleId] --items <ids> --until <date|duration>
+/plur1bus obsidian review apply [bundleId]
 /plur1bus obsidian morning-review
 /plur1bus obsidian evening-review
 /plur1bus obsidian conflicts

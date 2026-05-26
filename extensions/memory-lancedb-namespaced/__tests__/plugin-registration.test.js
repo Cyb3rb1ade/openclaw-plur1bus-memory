@@ -169,6 +169,13 @@ test("plugin returns PLUR1BUS command help for bare /plur1bus", async () => {
     assert.match(result.text, /PLUR1BUS quick commands:/);
     assert.match(result.text, /\/plur1bus_review approve low-risk/);
     assert.match(result.text, /\/plur1bus_morning/);
+    assert.match(result.text, /Bundle id is optional/);
+    assert.match(result.text, /reply with approve\/reject\/apply|short commands without an id/);
+
+    const advanced = await command.handler({ args: "help advanced", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
+    assert.match(advanced.text, /review show \[bundleId\]/);
+    assert.match(advanced.text, /review apply \[bundleId\]/);
+    assert.match(advanced.text, /apply uses the latest approved bundle/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
