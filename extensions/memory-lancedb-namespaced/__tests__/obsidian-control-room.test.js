@@ -114,6 +114,8 @@ test("morning review command returns compact Telegram-safe summary", async () =>
     assert.match(result.text, /\| Maintenance Light \|/);
     assert.match(result.text, /41 total, 41 pending, 0 approved, 0 rejected/);
     assert.match(result.text, /40 note_import_candidate/);
+    assert.match(result.text, /Obsidian notes to import: 40/);
+    assert.match(result.text, /Vault hygiene \/ generated artifacts: 1/);
     assert.match(result.text, /\/plur1bus_review approve rb-/);
     assert.match(result.text, /\/plur1bus_review reject rb-/);
     assert.match(result.text, /\/plur1bus_review apply rb-/);
@@ -147,8 +149,10 @@ test("review show command returns compact summary instead of full item json", as
     });
     assert.match(result.text, /PLUR1BUS ReviewBundle/);
     assert.match(result.text, /21 total, 21 pending, 0 approved, 0 rejected/);
-    assert.match(result.text, /Open the full item list in Obsidian:/);
-    assert.match(result.text, /Refresh this Telegram summary: \/plur1bus_review show rb-compact-show/);
+    assert.match(result.text, /Details in Obsidian:/);
+    assert.match(result.text, /Obsidian notes to import: 20/);
+    assert.match(result.text, /Vault hygiene \/ generated artifacts: 1/);
+    assert.match(result.text, /Refresh this summary: \/plur1bus_review show rb-compact-show/);
     assert.match(result.text, /\/plur1bus_review approve rb-compact-show low-risk/);
     assert.match(result.text, /Apply is the only step that writes to memory/);
     assert.doesNotMatch(result.text, /Show details:/);
@@ -183,6 +187,35 @@ test("review show without bundle uses latest pending bundle and accepts mixed ca
     assert.match(result.text, /PLUR1BUS ReviewBundle/);
     assert.match(result.text, /rb-latest-shortcut/);
     assert.doesNotMatch(result.text, /^Usage:/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("review command without subcommand shows latest pending bundle", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-default-review",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "memory/default-review.md",
+        action: "Review default bundle",
+        reason: "Import note",
+        evidence: ["Evidence"],
+        noteContent: "# Default\n\nEvidence",
+      }],
+    });
+    const result = await handleObsidianBridgeCommand(["review"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(result.text, /PLUR1BUS ReviewBundle/);
+    assert.match(result.text, /rb-default-review/);
+    assert.doesNotMatch(result.text, /^PLUR1BUS quick commands:/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -157,6 +157,7 @@ test("4.0.0 records, Bases, dashboards, and Tasks are generated under reviewRoot
     assert.ok(existsSync(join(vault, "00-system/plur1bus/dashboards/memory-candidates.md")));
     assert.ok(!existsSync(join(vault, ".obsidian")));
     assert.match(readFileSync(join(vault, "00-system/plur1bus/dashboards/memory-candidates.md"), "utf8"), /PLUR1BUS\/LanceDB remains authoritative memory/);
+    assert.match(readFileSync(join(vault, "00-system/plur1bus/dashboards/review-queue.md"), "utf8"), /ReviewBundle queues are shown with \/plur1bus_review/);
     assert.match(readFileSync(join(vault, "00-system/plur1bus/tasks/task-suggestions.md"), "utf8"), /Checkbox state is not approval/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });

@@ -38,7 +38,7 @@ export function writeRecordNote(rawConfig, record, options = {}) {
     recordFrontmatter(normalized),
     buildManagedBlock({
       id: `record-${normalized.plur1bus_id}`,
-      version: options.version || "4.2.10",
+      version: options.version || "4.2.13",
       body: options.body || renderRecordBody(normalized),
       attrs: { type: normalized.plur1bus_type },
     }),
@@ -48,7 +48,7 @@ export function writeRecordNote(rawConfig, record, options = {}) {
     const parsed = parseFrontmatter(existing);
     const replaced = replaceManagedBlock(parsed.body, {
       id: `record-${normalized.plur1bus_id}`,
-      version: options.version || "4.2.10",
+      version: options.version || "4.2.13",
       body: options.body || renderRecordBody(normalized),
       attrs: { type: normalized.plur1bus_type },
     });

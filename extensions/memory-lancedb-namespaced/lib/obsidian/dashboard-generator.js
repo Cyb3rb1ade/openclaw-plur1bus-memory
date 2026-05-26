@@ -33,10 +33,14 @@ function tableRows(records) {
 export function renderDashboard({ title, type, collection, records, config }) {
   const dataviewEnabled = config.optionalIntegrations?.dataview === true || config.dashboardLayer?.dataview === true;
   const basesEnabled = config.optionalIntegrations?.bases === true || config.dashboardLayer?.bases === true;
+  const reviewQueueNote = collection === "review-items"
+    ? "This dashboard lists generated review_item records only. ReviewBundle queues are shown with /plur1bus_review; 0 records here does not mean there are no pending ReviewBundle items."
+    : "";
   const body = [
     `# ${title}`,
     "",
     "> Obsidian dashboard output. PLUR1BUS/LanceDB remains authoritative memory.",
+    reviewQueueNote ? `> ${reviewQueueNote}` : "",
     "",
     "## Static Summary",
     "",
@@ -54,9 +58,9 @@ export function renderDashboard({ title, type, collection, records, config }) {
   return formatFrontmatter({
     plur1bus_type: "dashboard",
     dashboard: collection,
-    generatedBy: "plur1bus-4.2.10",
+    generatedBy: "plur1bus-4.2.13",
     authoritative: false,
-  }, buildManagedBlock({ id: `dashboard-${collection}`, version: "4.2.10", body }));
+  }, buildManagedBlock({ id: `dashboard-${collection}`, version: "4.2.13", body }));
 }
 
 export function generateDashboards(rawConfig, options = {}) {

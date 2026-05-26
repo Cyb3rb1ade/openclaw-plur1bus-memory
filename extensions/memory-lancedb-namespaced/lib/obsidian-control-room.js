@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.10";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.13";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -2212,15 +2212,15 @@ function reviewCommands(bundleId, options = {}) {
   const rejectDefault = bundle ? ` ${bundle} all` : " all";
   const artifactPath = options.artifactPath || "";
   return [
-    "## What to do next",
+    "## Next step",
     "",
-    artifactPath ? `- Open the full item list in Obsidian: ${artifactPath}` : "- Open the listed ReviewBundle artifact in Obsidian for full item details.",
-    `- Approve low-risk items in Telegram: /plur1bus_review approve${approveDefault}`,
-    `- Apply approved items to memory: /plur1bus_review apply${suffix}`,
-    `- Or reject all pending items: /plur1bus_review reject${rejectDefault}`,
-    `- Refresh this Telegram summary: /plur1bus_review show${suffix}`,
+    artifactPath ? `- Details in Obsidian: ${artifactPath}` : "- Details are in the listed ReviewBundle artifact in Obsidian.",
+    `- Mark low-risk items approved: /plur1bus_review approve${approveDefault}`,
+    `- Or reject pending items: /plur1bus_review reject${rejectDefault}`,
+    `- Then write approved items to memory: /plur1bus_review apply${suffix}`,
+    `- Refresh this summary: /plur1bus_review show${suffix}`,
     "",
-    "Approval only marks items as approved. Apply is the only step that writes to memory.",
+    "Approve only marks items. Apply is the only step that writes to memory.",
     "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
   ].join("\n");
 }
@@ -2249,13 +2249,26 @@ function obsidianCommandHelp() {
     "",
     "- /plur1bus_morning - prepare today's review proposals",
     "- /plur1bus_evening - run the deep evening checks",
-    "- /plur1bus_review show - show the latest pending ReviewBundle",
-    "- /plur1bus_review approve low-risk - approve only low-risk items",
-    "- /plur1bus_review reject all - reject all pending items",
-    "- /plur1bus_review apply - apply approved items",
+    "- /plur1bus_review - show the latest pending ReviewBundle",
+    "- /plur1bus_review approve low-risk - mark safe low-risk items approved",
+    "- /plur1bus_review reject all - mark all pending items rejected",
+    "- /plur1bus_review apply - write approved items to memory",
     "",
-    "Show, morning, evening, and approve are review-only steps. Apply is the only step that writes to memory.",
+    "Normal flow: review -> approve or reject -> apply.",
+    "Morning, evening, review, and approve do not write memory. Apply is the only memory write step.",
     "Advanced: /plur1bus help advanced",
+  ].join("\n");
+}
+
+function reviewItemBuckets(items = []) {
+  const pendingItems = items.filter((item) => !item.status || item.status === "pending");
+  const noteImports = countBy(pendingItems, (item) => item.type === "note_import_candidate");
+  const vaultHygiene = countBy(pendingItems, (item) => item.type === "vault_hygiene");
+  const other = Math.max(0, pendingItems.length - noteImports - vaultHygiene);
+  return [
+    "- Obsidian notes to import: " + noteImports,
+    "- Vault hygiene / generated artifacts: " + vaultHygiene,
+    "- Other review items: " + other,
   ].join("\n");
 }
 
@@ -2327,6 +2340,10 @@ function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
     `- Risk: ${riskSummary}`,
     `- Findings: ${blocks} block(s), ${warnings} warning(s)`,
     "",
+    "## Review Buckets",
+    "",
+    reviewItemBuckets(items),
+    "",
     "## Artifacts",
     "",
     artifactPaths.length ? artifactPaths.map((path) => `- ${path}`).join("\n") : "- No artifact path available.",
@@ -2358,15 +2375,15 @@ function eveningReviewSummary(summary = {}) {
   const reviewHelp = bundles.length === 1
     ? reviewCommands(bundles[0])
     : [
-        "## What to do next",
+        "## Next step",
         "",
-        "- Open the listed ReviewBundle artifact in Obsidian for full item details.",
-        "- Approve low-risk items in Telegram: /plur1bus_review approve low-risk",
-        "- Apply approved items to memory: /plur1bus_review apply",
-        "- Or reject all pending items: /plur1bus_review reject all",
-        "- Refresh the Telegram summary: /plur1bus_review show",
+        "- Details are in the listed ReviewBundle artifact in Obsidian.",
+        "- Mark low-risk items approved: /plur1bus_review approve low-risk",
+        "- Or reject pending items: /plur1bus_review reject all",
+        "- Then write approved items to memory: /plur1bus_review apply",
+        "- Refresh this summary: /plur1bus_review show",
         "",
-        "Approval only marks items as approved. Apply is the only step that writes to memory.",
+        "Approve only marks items. Apply is the only step that writes to memory.",
         "If you omit the bundle id, PLUR1BUS uses the latest pending ReviewBundle.",
       ].join("\n");
   return [
@@ -2388,6 +2405,7 @@ function eveningReviewSummary(summary = {}) {
     "",
     `- Pending review items: ${summary.pendingItems ?? 0}`,
     bundles.length ? `- Bundle(s): ${compactPathList(bundles, 5).join(", ")}` : "- Bundle(s): see ReviewBundle artifacts.",
+    "- Use /plur1bus_review to see Obsidian-import items separately from vault-hygiene items.",
     "",
     "## Artifacts",
     "",
@@ -2649,27 +2667,28 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       }
     }
     if (command === "review") {
+      const effectiveSub = sub || "show";
       const rawBundleOrSelector = tokens[2] || "";
       const rawMaybeSelector = tokens[3] || "";
       const optionSelector = normalizeItemSelector(parseCommandOption(tokens, "--items", ""));
       const hasExplicitBundle = looksLikeReviewBundleId(rawBundleOrSelector);
       const bundleId = hasExplicitBundle
         ? rawBundleOrSelector
-        : latestReviewBundleId(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, preferApproved: sub === "apply" });
+        : latestReviewBundleId(commandConfig, { agentId, workspaceKey, workspaceDir: context.workspaceDir, preferApproved: effectiveSub === "apply" });
       const positionalSelector = hasExplicitBundle ? rawMaybeSelector : rawBundleOrSelector;
-      const selector = normalizeItemSelector(optionSelector || positionalSelector || (sub === "approve" ? "low-risk" : "all"));
-      if (sub === "prepare") return commandResult(reviewBundleSummary(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, proposals: context.proposals }), "PLUR1BUS ReviewBundle"));
-      if (sub === "show") {
+      const selector = normalizeItemSelector(optionSelector || positionalSelector || (effectiveSub === "approve" ? "low-risk" : "all"));
+      if (effectiveSub === "prepare") return commandResult(reviewBundleSummary(await prepareReviewBundle(commandConfig, { agentId, workspaceKey, proposals: context.proposals }), "PLUR1BUS ReviewBundle"));
+      if (effectiveSub === "show") {
         if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
         return commandResult(reviewBundleSummary(loadBundleRecord(commandConfig, bundleId), "PLUR1BUS ReviewBundle"));
       }
-      if (["approve", "reject", "snooze"].includes(sub)) {
+      if (["approve", "reject", "snooze"].includes(effectiveSub)) {
         if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
-        return commandResult(reviewActionSummary(updateReviewBundleItems(commandConfig, bundleId, sub, selector, {
+        return commandResult(reviewActionSummary(updateReviewBundleItems(commandConfig, bundleId, effectiveSub, selector, {
           until: parseCommandOption(tokens, "--until", ""),
         })));
       }
-      if (sub === "apply") {
+      if (effectiveSub === "apply") {
         if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
         return commandResult(applySummary(await applyApprovedReviewBundle(commandConfig, bundleId, {
           memoryStore: context.memoryStore,

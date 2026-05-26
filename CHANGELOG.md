@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+## [4.2.13] - 2026-05-26
+
+### Changed
+- Simplified the PLUR1BUS Obsidian review flow so bare `/plur1bus_review` opens the latest pending ReviewBundle and compact summaries show the normal `review -> approve/reject -> apply` path.
+- Split compact ReviewBundle summaries into Obsidian import, vault hygiene, and other review buckets.
+- Clarified the generated Review Queue dashboard so static dashboard record counts are not confused with pending ReviewBundle items.
+- Updated `HOW-TO-OBSIDIAN.md` for the current 4.2.x plugin command surface, multi-workspace setup, and approval/apply safety boundary.
+
+### Verification
+- Added regression coverage for bare `/plur1bus_review` and Review Queue dashboard guidance.
+- Verified Obsidian control-room, dashboard, and plugin-registration tests with `node --test`.
+
 ## [4.2.9] - 2026-05-25
 
 ### Fixed
