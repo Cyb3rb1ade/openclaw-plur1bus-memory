@@ -15,6 +15,7 @@ Use the short commands in Telegram or any OpenClaw command channel:
 /plur1bus_morning
 /plur1bus_evening
 /plur1bus_review
+/plur1bus_review explain
 /plur1bus_review approve low-risk
 /plur1bus_review apply
 ```
@@ -24,6 +25,8 @@ Meaning:
 - `/plur1bus_morning` prepares daily review proposals.
 - `/plur1bus_evening` runs the deeper evening checks and writes an artifact.
 - `/plur1bus_review` shows the latest pending ReviewBundle.
+- `/plur1bus_review explain` explains what was applied, what became a memory
+  DB write, and what stayed review-only hygiene.
 - `/plur1bus_review approve low-risk` marks low-risk pending items as approved.
 - `/plur1bus_review reject all` marks pending items as rejected.
 - `/plur1bus_review apply` is the only step that writes approved items to
@@ -32,6 +35,15 @@ Meaning:
 Morning, evening, review, and approve do not write memory. Approval only marks
 items. Apply re-reads the ReviewBundle, revalidates hashes/preconditions, and
 applies approved safe items.
+
+## Agent Boundaries
+
+PLUR1BUS keeps Obsidian import candidates scoped to the current workspace and
+agent. Root-level folders that are themselves OpenClaw agent/runtime workspaces
+are ignored during ReviewBundle generation, for example folders containing
+`.openclaw` or `.adaptive-learning`. Apply repeats the same boundary check, so
+older ReviewBundles cannot write a foreign agent path into the current memory
+namespace.
 
 ## What PLUR1BUS Shows
 
@@ -61,6 +73,7 @@ The long command namespace remains available:
 /plur1bus obsidian doctor
 /plur1bus obsidian review prepare
 /plur1bus obsidian review show <bundleId>
+/plur1bus obsidian review explain <bundleId>
 /plur1bus obsidian review approve <bundleId> --items <ids|all|low-risk>
 /plur1bus obsidian review reject <bundleId> --items <ids|all>
 /plur1bus obsidian review snooze <bundleId> --items <ids> --until <date|duration>

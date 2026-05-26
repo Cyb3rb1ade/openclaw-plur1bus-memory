@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.2.13` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.2.14` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -208,6 +208,12 @@ Defaults, keine Rechte. Jeder konfigurierte Agent kann Doctor, ReviewBundle,
 Maintenance, Adversarial Review, Project Hubs, Konflikte, Memory-Erklaerung,
 Hygiene, Task Extraction und approved Apply ausfuehren.
 
+Obsidian-Imports bleiben agentengebunden. Root-Ordner, die selbst OpenClaw-
+Agent-/Runtime-Workspaces sind, zum Beispiel mit `.openclaw` oder
+`.adaptive-learning`, werden bei der ReviewBundle-Erzeugung uebersprungen.
+`apply` prueft dieselbe Grenze erneut, damit Legacy-Bundles keine fremden
+Agentenpfade in den aktuellen Memory-Namespace schreiben.
+
 Die Bridge schreibt nur additive Dateien unter `reviewRoot`:
 
 ```text
@@ -265,6 +271,7 @@ generische `/skill` Dispatcher bleibt verfuegbar.
 /plur1bus obsidian doctor
 /plur1bus obsidian review prepare
 /plur1bus obsidian review show <bundleId>
+/plur1bus obsidian review explain <bundleId>
 /plur1bus obsidian review approve <bundleId> --items <ids|all|low-risk>
 /plur1bus obsidian review reject <bundleId> --items <ids|all>
 /plur1bus obsidian review snooze <bundleId> --items <ids> --until <date|duration>
@@ -306,7 +313,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.2.8
+obsidianBridgeVersion: 4.2.14
 ---
 ```
 

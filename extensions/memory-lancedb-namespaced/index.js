@@ -1295,6 +1295,7 @@ const plugin = {
             "/plur1bus_morning - prepare today's review proposals",
             "/plur1bus_evening - run the deep evening checks",
             "/plur1bus_review - show the latest pending ReviewBundle",
+            "/plur1bus_review explain - explain what apply wrote",
             "/plur1bus_review approve low-risk - mark safe low-risk items approved",
             "/plur1bus_review reject all - mark all pending items rejected",
             "/plur1bus_review apply - write approved items to memory",

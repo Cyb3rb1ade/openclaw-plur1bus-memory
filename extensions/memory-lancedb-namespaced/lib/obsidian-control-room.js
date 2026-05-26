@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.13";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.14";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -154,6 +154,11 @@ const DEFAULT_OBSIDIAN_SOURCE_DIR_EXCLUDES = new Set([
   ".stversions",
   "__pycache__",
   "node_modules",
+]);
+
+const AGENT_RUNTIME_MARKER_DIRS = Object.freeze([
+  ".openclaw",
+  ".adaptive-learning",
 ]);
 
 const PROMPT_INJECTION_PATTERNS = [
@@ -276,6 +281,115 @@ function safeSlug(value, fallback = "item") {
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 100) || fallback;
+}
+
+function normalizeOwnerToken(value) {
+  return safeSlug(String(value || "").toLowerCase().replace(/_/g, "-"), "").toLowerCase();
+}
+
+function ownerTokensForWorkspaceEntry(entry = {}, fallback = "") {
+  return [
+    workspaceEntryId(entry, fallback),
+    workspaceEntryAgent(entry, fallback),
+    entry.label,
+    entry.alias,
+    ...(Array.isArray(entry.aliases) ? entry.aliases : []),
+  ].map(normalizeOwnerToken).filter(Boolean);
+}
+
+function contextOwnerTokens(cfg, options = {}) {
+  const direct = [
+    options.workspaceKey,
+    options.workspaceId,
+    options.agentId,
+    options.commandCtx?.workspaceKey,
+    options.commandCtx?.agentId,
+  ].map(normalizeOwnerToken).filter(Boolean);
+  const matching = (Array.isArray(cfg?.workspaces) ? cfg.workspaces : [])
+    .filter((workspace, index) => workspaceMatchesContext(workspace, index, options))
+    .flatMap((workspace, index) => ownerTokensForWorkspaceEntry(workspace, `workspace-${index}`));
+  return new Set([...direct, ...matching]);
+}
+
+function configuredForeignOwnerTokens(cfg, options = {}) {
+  const current = contextOwnerTokens(cfg, options);
+  const foreign = new Set();
+  for (const [index, workspace] of (Array.isArray(cfg?.workspaces) ? cfg.workspaces : []).entries()) {
+    const tokens = ownerTokensForWorkspaceEntry(workspace, `workspace-${index}`);
+    if (tokens.length && tokens.every((token) => !current.has(token))) {
+      for (const token of tokens) foreign.add(token);
+    }
+  }
+  return foreign;
+}
+
+function sourceRelPathFromReviewItem(item = {}) {
+  const candidates = [
+    item.preconditions?.sourcePath,
+    item.sourcePath,
+    item.target,
+    ...(Array.isArray(item.sourceRefs) ? item.sourceRefs : []),
+  ];
+  for (const candidate of candidates) {
+    const raw = String(candidate || "").replace(/\\/g, "/").trim();
+    if (!raw) continue;
+    const obsidian = raw.match(/^obsidian:\/\/[^/]+\/(.+)$/i);
+    return obsidian ? obsidian[1] : raw;
+  }
+  const sourceUrl = String(item.applyPreview?.payload?.sourceUrl || "").trim();
+  const obsidian = sourceUrl.match(/^obsidian:\/\/[^/]+\/(.+)$/i);
+  return obsidian ? obsidian[1] : "";
+}
+
+function firstPathSegment(relPath) {
+  const safe = String(relPath || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  return safe[0] || "";
+}
+
+function rootHasAgentRuntimeMarker(vaultPath, relPath) {
+  const rootSegment = firstPathSegment(relPath);
+  if (!rootSegment || rootSegment.startsWith(".")) return false;
+  let rootPath;
+  try {
+    rootPath = resolveUnder(vaultPath, rootSegment, { allowDotObsidianWrite: true });
+  } catch (_) {
+    return true;
+  }
+  try {
+    if (!existsSync(rootPath) || !statSync(rootPath).isDirectory()) return false;
+    return AGENT_RUNTIME_MARKER_DIRS.some((marker) => existsSync(join(rootPath, marker)));
+  } catch (_) {
+    return false;
+  }
+}
+
+function validateAgentScopedSourcePath(paths, relPath, options = {}) {
+  const raw = String(relPath || "").replace(/\\/g, "/").trim();
+  if (!raw) return { ok: true };
+  let safeRel;
+  try {
+    safeRel = assertSafeRelativePath(raw, { allowDotObsidianWrite: paths?.cfg?.allowDotObsidianWrite === true });
+  } catch (err) {
+    return { ok: false, reason: String(err?.message || err) };
+  }
+  const rootSegment = firstPathSegment(safeRel);
+  const rootToken = normalizeOwnerToken(rootSegment);
+  const foreignTokens = configuredForeignOwnerTokens(paths?.cfg || {}, options);
+  for (const token of foreignTokens) {
+    if (rootToken === token || rootToken.startsWith(`${token}-`)) {
+      return {
+        ok: false,
+        reason: `Foreign agent/workspace path '${rootSegment}' cannot be imported into ${options.workspaceKey || options.agentId || "this agent"}.`,
+      };
+    }
+  }
+  if (rootHasAgentRuntimeMarker(paths?.vaultPath || "", safeRel)) {
+    return {
+      ok: false,
+      reason: `Agent runtime workspace path '${rootSegment}' cannot be imported as Obsidian memory.`,
+    };
+  }
+  return { ok: true };
 }
 
 function scalarYaml(value) {
@@ -1004,6 +1118,8 @@ function collectProposalInputs(rawConfig = {}, options = {}) {
     if (file.rel.startsWith(reviewRootPrefix) || file.rel === paths.reviewRoot) continue;
     if (/memory\/KNOWLEDGE\.md$/.test(file.rel)) continue;
     if (file.rel.startsWith("memory/cards/") || file.rel.startsWith("decisions/")) continue;
+    const boundary = validateAgentScopedSourcePath(paths, file.rel, options);
+    if (!boundary.ok) continue;
     const body = parseBridgeFrontmatter(file.content).body.trim();
     if (!body) continue;
     const hash = hashToken(file.content);
@@ -1610,6 +1726,11 @@ async function revalidateItem(paths, item, options = {}) {
 
 function applySafetyBlock(item, options = {}) {
   if (item.adversarialReview?.status === "block") return "Adversarial review blocks this item.";
+  if (options.paths && ["memory_promotion", "note_import_candidate", "knowledge_update", "task_suggestion"].includes(item.type)) {
+    const sourceRel = sourceRelPathFromReviewItem(item);
+    const boundary = validateAgentScopedSourcePath(options.paths, sourceRel, options);
+    if (!boundary.ok) return boundary.reason;
+  }
   if (item.evidenceKind === "assistant" && (/trusted|global_user/i.test(`${item.sourceTrust} ${item.targetScope}`)) && !item.explicitAssistantEvidenceApproval) {
     return "Assistant-only assertion cannot be promoted to trusted/global memory.";
   }
@@ -1654,7 +1775,7 @@ export async function applyApprovedReviewBundle(rawConfig, bundleId, options = {
       applied.push({ id: item.id, type: item.type, memoryId: item.appliedMemoryId, idempotent: true });
       continue;
     }
-    const safety = applySafetyBlock(item, options);
+    const safety = applySafetyBlock(item, { ...options, paths, rawConfig });
     if (safety) {
       item.status = "blocked";
       item.blockedReason = safety;
@@ -2085,6 +2206,15 @@ function normalizeCommandWord(value = "") {
     ["ausfuehren", "apply"],
     ["ausfuhren", "apply"],
     ["ausführen", "apply"],
+    ["explain", "explain"],
+    ["explanation", "explain"],
+    ["summary", "explain"],
+    ["summarize", "explain"],
+    ["erklaeren", "explain"],
+    ["erklären", "explain"],
+    ["aufdroeseln", "explain"],
+    ["aufdröseln", "explain"],
+    ["was", "explain"],
     ["prepare", "prepare"],
     ["vorbereiten", "prepare"],
   ]);
@@ -2243,6 +2373,12 @@ function reviewActionSummary(result = {}) {
   ].filter(Boolean).join("\n");
 }
 
+function shortenText(value = "", max = 110) {
+  const compact = String(value || "").replace(/\s+/g, " ").trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, Math.max(0, max - 3)).trimEnd()}...`;
+}
+
 function obsidianCommandHelp() {
   return [
     "PLUR1BUS quick commands:",
@@ -2250,6 +2386,7 @@ function obsidianCommandHelp() {
     "- /plur1bus_morning - prepare today's review proposals",
     "- /plur1bus_evening - run the deep evening checks",
     "- /plur1bus_review - show the latest pending ReviewBundle",
+    "- /plur1bus_review explain - explain what was applied and what wrote memory",
     "- /plur1bus_review approve low-risk - mark safe low-risk items approved",
     "- /plur1bus_review reject all - mark all pending items rejected",
     "- /plur1bus_review apply - write approved items to memory",
@@ -2269,6 +2406,88 @@ function reviewItemBuckets(items = []) {
     "- Obsidian notes to import: " + noteImports,
     "- Vault hygiene / generated artifacts: " + vaultHygiene,
     "- Other review items: " + other,
+  ].join("\n");
+}
+
+function reviewEffectSummary(items = []) {
+  const list = Array.isArray(items) ? items : [];
+  const applied = list.filter((item) => item.status === "applied");
+  const memoryWrites = applied.filter((item) => ["memory_promotion", "note_import_candidate"].includes(item.type) && item.appliedMemoryId);
+  const knowledgeWrites = applied.filter((item) => item.type === "knowledge_update");
+  const taskWrites = applied.filter((item) => item.type === "task_suggestion");
+  const reviewOnly = applied.filter((item) => !memoryWrites.includes(item) && !knowledgeWrites.includes(item) && !taskWrites.includes(item));
+  const pending = list.filter((item) => !item.status || item.status === "pending");
+  const blocked = list.filter((item) => item.status === "blocked" || item.status === "stale" || item.status === "invalid");
+  const sourceAgents = formatCounts(countByValue(applied, (item) => item.proposedByAgent || item.reviewProfile || "unknown"), 3);
+  return {
+    applied,
+    memoryWrites,
+    knowledgeWrites,
+    taskWrites,
+    reviewOnly,
+    pending,
+    blocked,
+    sourceAgents,
+  };
+}
+
+function formatAppliedExamples(items = [], max = 8) {
+  const examples = items.slice(0, max).map((item) => {
+    const payload = item.applyPreview?.payload || {};
+    const summary = payload.text || payload.summary || item.reason || item.action || "";
+    const memory = item.appliedMemoryId ? ` -> ${item.appliedMemoryId}` : "";
+    return `- ${item.type}: ${item.target || item.id}${memory}${summary ? ` - ${shortenText(summary)}` : ""}`;
+  });
+  if (items.length > max) examples.push(`- ... ${items.length - max} more`);
+  return examples.length ? examples.join("\n") : "- None.";
+}
+
+function formatPendingExamples(items = [], max = 6) {
+  const examples = items.slice(0, max).map((item) => `- ${item.type}: ${item.target || item.id} - ${shortenText(item.blockedReason || item.reason || item.action || "Review pending.")}`);
+  if (items.length > max) examples.push(`- ... ${items.length - max} more`);
+  return examples.length ? examples.join("\n") : "- None.";
+}
+
+function reviewExplainSummary(result = {}, label = "PLUR1BUS ReviewBundle explanation") {
+  const bundle = result.bundle || result.record?.bundle || {};
+  const items = Array.isArray(result.items) ? result.items : Array.isArray(result.record?.items) ? result.record.items : [];
+  const effects = reviewEffectSummary(items);
+  const approved = countBy(items, (item) => item.status === "approved");
+  const rejected = countBy(items, (item) => item.status === "rejected");
+  const snoozed = countBy(items, (item) => item.status === "snoozed");
+  return [
+    label,
+    `Bundle: ${bundle.bundleId || "n/a"}`,
+    `${formatReviewTimestamp(bundle.createdAt)} | Workspace: ${bundle.workspaceKey || "main"} | Agent: ${bundle.createdByAgent || "main"}`,
+    "",
+    "## What changed",
+    "",
+    `- Total items: ${items.length}`,
+    `- Marked applied: ${effects.applied.length}`,
+    `- Memory DB writes: ${effects.memoryWrites.length}`,
+    `- Knowledge updates: ${effects.knowledgeWrites.length}`,
+    `- Task/proposal files: ${effects.taskWrites.length}`,
+    `- Review-only hygiene items: ${effects.reviewOnly.length}`,
+    `- Still pending: ${effects.pending.length}`,
+    `- Blocked/stale/invalid: ${effects.blocked.length}`,
+    `- Approved but not applied: ${approved}`,
+    `- Rejected: ${rejected}`,
+    `- Snoozed: ${snoozed}`,
+    `- Proposed by: ${effects.sourceAgents}`,
+    "",
+    "## Written to memory DB",
+    "",
+    formatAppliedExamples(effects.memoryWrites),
+    "",
+    "## Applied but not memory DB writes",
+    "",
+    formatAppliedExamples([...effects.knowledgeWrites, ...effects.taskWrites, ...effects.reviewOnly]),
+    "",
+    "## Still open",
+    "",
+    formatPendingExamples([...effects.pending, ...effects.blocked]),
+    "",
+    "Apply means PLUR1BUS processed an approved item. Only Memory DB writes become LanceDB memories. Vault hygiene and task items can be marked applied without creating a memory entry.",
   ].join("\n");
 }
 
@@ -2420,6 +2639,7 @@ function eveningReviewSummary(summary = {}) {
 function applySummary(result = {}) {
   const applied = Array.isArray(result.applied) ? result.applied.length : 0;
   const blocked = Array.isArray(result.blocked) ? result.blocked.length : 0;
+  const effects = reviewEffectSummary(result.items || []);
   const next = applied > 0
     ? "Approved items were applied."
     : blocked > 0
@@ -2431,6 +2651,21 @@ function applySummary(result = {}) {
     `Applied: ${applied}`,
     `Blocked: ${blocked}`,
     `Items: ${Array.isArray(result.items) ? result.items.length : 0}`,
+    "",
+    "## What was actually written",
+    "",
+    `- Memory DB writes: ${effects.memoryWrites.length}`,
+    `- Knowledge updates: ${effects.knowledgeWrites.length}`,
+    `- Task/proposal files: ${effects.taskWrites.length}`,
+    `- Review-only hygiene items: ${effects.reviewOnly.length}`,
+    `- Still pending: ${effects.pending.length}`,
+    "",
+    "## Memory DB examples",
+    "",
+    formatAppliedExamples(effects.memoryWrites, 5),
+    "",
+    `Details: /plur1bus_review explain ${result.bundleId || ""}`.trim(),
+    "",
     next,
   ].join("\n");
 }
@@ -2682,6 +2917,10 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
         if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
         return commandResult(reviewBundleSummary(loadBundleRecord(commandConfig, bundleId), "PLUR1BUS ReviewBundle"));
       }
+      if (effectiveSub === "explain") {
+        if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
+        return commandResult(reviewExplainSummary(loadBundleRecord(commandConfig, bundleId), "PLUR1BUS ReviewBundle explanation"));
+      }
       if (["approve", "reject", "snooze"].includes(effectiveSub)) {
         if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
         return commandResult(reviewActionSummary(updateReviewBundleItems(commandConfig, bundleId, effectiveSub, selector, {
@@ -2691,6 +2930,9 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       if (effectiveSub === "apply") {
         if (!bundleId) return commandResult(`${obsidianCommandHelp()}\n\nNo ReviewBundle was found yet. Run /plur1bus_morning first.`);
         return commandResult(applySummary(await applyApprovedReviewBundle(commandConfig, bundleId, {
+          agentId,
+          workspaceKey,
+          workspaceDir: context.workspaceDir,
           memoryStore: context.memoryStore,
           knowledgeUpdate: context.knowledgeUpdate,
         })));

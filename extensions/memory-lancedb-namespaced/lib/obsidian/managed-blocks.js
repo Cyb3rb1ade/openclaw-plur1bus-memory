@@ -8,7 +8,7 @@ export function normalizeManagedBlockBody(body = "") {
   return String(body || "").replace(/^\n+|\n+$/g, "");
 }
 
-export function buildManagedBlock({ id, version = "4.2.13", body = "", attrs = {} }) {
+export function buildManagedBlock({ id, version = "4.2.14", body = "", attrs = {} }) {
   const normalizedBody = normalizeManagedBlockBody(body);
   const hash = `sha256:${sha256Hex(normalizedBody)}`;
   const attrText = Object.entries({ id, version, ...attrs, hash })

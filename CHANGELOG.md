@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [4.2.14] - 2026-05-26
+
+### Fixed
+- Enforced PLUR1BUS Obsidian agent boundaries during ReviewBundle generation and apply. Markdown under root-level agent runtime directories such as folders containing `.openclaw` or `.adaptive-learning` is no longer imported into another agent's review flow.
+- Added an apply-time guard so legacy ReviewBundles cannot write approved items from foreign agent/runtime paths into the current agent memory.
+- Added `/plur1bus_review explain` output that separates real memory DB writes from task/proposal files and review-only hygiene items.
+
+### Added
+- Added `scripts/rollback-obsidian-applies.mjs` to audit and roll back recently applied Obsidian ReviewBundle memory writes by exact `appliedMemoryId`.
+
+### Verification
+- Added regression coverage for foreign agent Obsidian path filtering, legacy apply blocking, and ReviewBundle apply/explain summaries.
+- Rolled back 39 Obsidian-applied memory rows from the live `command` LanceDB namespace for the last 56 hours and verified zero remaining hits across all LanceDB namespaces.
+
 ## [4.2.13] - 2026-05-26
 
 ### Changed

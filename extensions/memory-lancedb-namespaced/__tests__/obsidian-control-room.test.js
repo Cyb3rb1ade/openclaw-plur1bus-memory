@@ -311,6 +311,135 @@ test("review approve low-risk without bundle only marks items and still requires
   }
 });
 
+test("review apply and explain separate memory writes from review-only hygiene", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-apply-explain",
+      proposals: [
+        {
+          type: "note_import_candidate",
+          risk: "low",
+          target: "memory/imported.md",
+          action: "Review imported note",
+          reason: "Import note",
+          evidence: ["Evidence"],
+          noteContent: "# Imported\n\nEvidence",
+        },
+        {
+          type: "task_suggestion",
+          risk: "low",
+          target: "tasks/review.md",
+          action: "Review task",
+          reason: "Follow up on review",
+          evidence: ["Task evidence"],
+        },
+      ],
+    });
+    await updateReviewBundleItems(config(vault), "rb-apply-explain", "approve", "all", {
+      approvedBy: "human",
+      now: new Date("2026-05-26T17:14:08.000Z"),
+    });
+    const applied = await handleObsidianBridgeCommand(["review", "apply", "rb-apply-explain"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+      memoryStore: async ({ payload }) => ({ details: { id: `mem-${payload.idempotencyKey.slice(0, 8)}` } }),
+    });
+    assert.match(applied.text, /PLUR1BUS ReviewBundle apply result/);
+    assert.match(applied.text, /Memory DB writes: 1/);
+    assert.match(applied.text, /Task\/proposal files: 1/);
+    assert.match(applied.text, /Review-only hygiene items: 1/);
+    assert.match(applied.text, /Details: \/plur1bus_review explain rb-apply-explain/);
+
+    const explained = await handleObsidianBridgeCommand(["review", "explain", "rb-apply-explain"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(explained.text, /PLUR1BUS ReviewBundle explanation/);
+    assert.match(explained.text, /Memory DB writes: 1/);
+    assert.match(explained.text, /Applied but not memory DB writes/);
+    assert.match(explained.text, /Apply means PLUR1BUS processed an approved item/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("review bundle ignores foreign agent runtime directories", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, "memory"), { recursive: true });
+    writeFileSync(join(vault, "memory/allowed.md"), "# Allowed\n\nBernd-owned note.");
+    mkdirSync(join(vault, "heisenberg-developer-verifier/.openclaw"), { recursive: true });
+    mkdirSync(join(vault, "heisenberg-developer-verifier/memory/dreaming"), { recursive: true });
+    writeFileSync(join(vault, "heisenberg-developer-verifier/memory/dreaming/leak.md"), "# Leak\n\nHeisenberg private note.");
+    mkdirSync(join(vault, "bernhardine-developer-verifier/.adaptive-learning"), { recursive: true });
+    mkdirSync(join(vault, "bernhardine-developer-verifier/memory/dreaming"), { recursive: true });
+    writeFileSync(join(vault, "bernhardine-developer-verifier/memory/dreaming/leak.md"), "# Leak\n\nBernhardine private note.");
+
+    const cfg = config(vault, {
+      workspaces: [
+        { workspace_id: "main", agent_id: "main", path: vault, label: "Bernd" },
+        { workspace_id: "bernhardine", agent_id: "bernhardine", path: join(tmp, "workspace-bernhardine"), label: "Bernhardine" },
+        { workspace_id: "heisenberg", agent_id: "heisenberg", path: join(tmp, "workspace-heisenberg"), label: "Heisenberg" },
+      ],
+    });
+    const result = await prepareReviewBundle(cfg, {
+      bundleId: "rb-agent-boundary",
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    const importedTargets = result.items
+      .filter((item) => item.type === "note_import_candidate")
+      .map((item) => item.target);
+    assert.deepEqual(importedTargets, ["memory/allowed.md"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("review apply blocks legacy approved items from foreign agent paths", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, "heisenberg-developer-verifier/.openclaw"), { recursive: true });
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-legacy-agent-leak",
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "heisenberg-developer-verifier/memory/dreaming/leak.md",
+        action: "Review imported note",
+        reason: "Import note",
+        evidence: ["Heisenberg private note."],
+        sourceRefs: ["heisenberg-developer-verifier/memory/dreaming/leak.md"],
+        preconditions: { sourcePath: "heisenberg-developer-verifier/memory/dreaming/leak.md" },
+        noteContent: "Heisenberg private note.",
+      }],
+    });
+    await updateReviewBundleItems(config(vault), "rb-legacy-agent-leak", "approve", "low-risk", {
+      approvedBy: "human",
+    });
+    const result = await applyApprovedReviewBundle(config(vault), "rb-legacy-agent-leak", {
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+      memoryStore: async () => { throw new Error("must not store foreign agent memory"); },
+    });
+    assert.equal(result.blocked.length, 1);
+    assert.match(result.blocked[0].reason, /Agent runtime workspace path/);
+    assert.equal(result.items.find((item) => item.type === "note_import_candidate").status, "blocked");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("maintenance light runs before proposal generation", async () => {
   const { tmp, vault } = makeVault();
   try {
