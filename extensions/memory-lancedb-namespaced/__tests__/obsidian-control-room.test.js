@@ -1796,3 +1796,74 @@ test("eveningReviewSummary: Kein technischer Jargon", () => {
   assert.doesNotMatch(out, /\[OK\]/);
   assert.match(out, /Abend-Review/);
 });
+
+// ─── UX Round 2: A — Happy-Path kürzen ───────────────────────────────────────
+
+test("reviewBundleSummary: kein Sicherheitstext im Happy-Path", () => {
+  const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
+  assert.doesNotMatch(out, /Sicherheitsprüfung/);
+});
+
+test("reviewBundleSummary: Sicherheitsprüfung erscheint bei Block", () => {
+  const item = makeUserItem({ adversarialReview: { status: "block", reason: "Injekt" } });
+  const out = reviewBundleSummary(makeBundle({ items: [item] }));
+  assert.match(out, /❌ Sicherheitsprüfung/);
+});
+
+test("reviewBundleSummary: Sicherheitsprüfung erscheint bei Warnung", () => {
+  const item = makeUserItem({ adversarialReview: { status: "warning", reason: "Verdächtig" } });
+  const out = reviewBundleSummary(makeBundle({ items: [item] }));
+  assert.match(out, /⚠️ Sicherheitsprüfung/);
+});
+
+// ─── UX Round 2: B — Notiz-Vorschau ──────────────────────────────────────────
+
+test("reviewBundleSummary: zeigt Dateiname + Snippet für note_import_candidate", () => {
+  const items = [{
+    id: "rbi-b1", type: "note_import_candidate", status: "pending", risk: "low",
+    target: "memory/my-note.md",
+    applyPreview: { payload: { text: "Inhalt der Notiz hier" } },
+    adversarialReview: { status: "pass" },
+  }];
+  const out = reviewBundleSummary(makeBundle({ items }));
+  assert.match(out, /my-note\.md/);
+  assert.match(out, /Inhalt der Notiz hier/);
+});
+
+test("reviewBundleSummary: max 3 Vorschau-Items, Rest als Sammelzeile", () => {
+  const items = Array.from({ length: 5 }, (_, i) => ({
+    id: `rbi-b${i}`, type: "note_import_candidate", status: "pending", risk: "low",
+    target: `memory/note-${i}.md`,
+    applyPreview: { payload: { text: `Text ${i}` } },
+    adversarialReview: { status: "pass" },
+  }));
+  const out = reviewBundleSummary(makeBundle({ items }));
+  assert.match(out, /… 2 Notizen/);
+});
+
+test("reviewBundleSummary: Header 'neue Notizen' wenn nur note_import_candidate", () => {
+  const items = [
+    makeUserItem({ id: "rbi-b10", target: "memory/a.md", applyPreview: { payload: { text: "Inhalt A" } } }),
+    makeUserItem({ id: "rbi-b11", target: "memory/b.md", applyPreview: { payload: { text: "Inhalt B" } } }),
+  ];
+  const out = reviewBundleSummary(makeBundle({ items }));
+  assert.match(out, /neue Notizen:/);
+});
+
+test("reviewBundleSummary: Header 'Vorschläge' bei gemischten Typen", () => {
+  const items = [
+    makeUserItem({ id: "rbi-b20", target: "memory/a.md" }),
+    makeUserItem({ id: "rbi-b21", type: "task_suggestion" }),
+  ];
+  const out = reviewBundleSummary(makeBundle({ items }));
+  assert.match(out, /Vorschläge:/);
+});
+
+test("reviewBundleSummary: Header 'Aufgaben' wenn nur tasks", () => {
+  const items = [
+    makeUserItem({ id: "rbi-b30", type: "task_suggestion" }),
+    makeUserItem({ id: "rbi-b31", type: "task_suggestion" }),
+  ];
+  const out = reviewBundleSummary(makeBundle({ items }));
+  assert.match(out, /Aufgaben:/);
+});
