@@ -2934,15 +2934,12 @@ export function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle"
 
   // ── Status-Zeilen ────────────────────────────────────────────────────────
   let adversarialLine = null;
-  if (totalUserItems > 0) {
-    if (adversarialBlocks > 0) {
-      adversarialLine = `❌ Sicherheitsprüfung: ${adversarialBlocks} blockiert`;
-    } else if (adversarialWarnings > 0) {
-      adversarialLine = `⚠️ Sicherheitsprüfung: ${adversarialWarnings} Warnung${adversarialWarnings === 1 ? "" : "en"}`;
-    } else {
-      adversarialLine = `✅ Sicherheitsprüfung: alle ${totalUserItems} geprüft`;
-    }
+  if (adversarialBlocks > 0) {
+    adversarialLine = `❌ Sicherheitsprüfung: ${adversarialBlocks} blockiert`;
+  } else if (adversarialWarnings > 0) {
+    adversarialLine = `⚠️ Sicherheitsprüfung: ${adversarialWarnings} Warnung${adversarialWarnings === 1 ? "" : "en"}`;
   }
+  // Kein else-Branch — alles OK bleibt still
 
   let maintenanceLine = null;
   const allMaintenanceErrors = maintenanceErrors + systemErrors;
