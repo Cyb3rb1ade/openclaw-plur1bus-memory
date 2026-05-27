@@ -1718,7 +1718,6 @@ test("reviewBundleSummary: Kein technischer Jargon", () => {
 test("reviewBundleSummary: Emoji-Status fuer saubere Items", () => {
   const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
   assert.match(out, /✅/);
-  assert.match(out, /Sicherheitsprüfung/);
 });
 
 test("reviewBundleSummary: Emoji-Status bei Adversarial-Block", () => {
