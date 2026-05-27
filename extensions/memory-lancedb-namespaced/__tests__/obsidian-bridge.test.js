@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  DEFAULT_IGNORE_GLOBS,
+  DEFAULT_INCLUDE_GLOBS,
   buildMemoryStorePayload,
   doctorObsidianBridge,
   formatMarkdownFrontmatter,
@@ -253,6 +255,33 @@ test("validated decisions become memory_store payloads", () => {
     const scan = scanWorkspace(workspace);
     const decision = scan.files.find((file) => file.relPath === "decisions/slot-owner.md");
     assert.equal(buildMemoryStorePayload(decision, workspace).category, "decision");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// P1: PLUR1BUS-generated output files must not be re-scanned as external edits
+test("DEFAULT_IGNORE_GLOBS excludes evening-deep-review output files from vault scan", () => {
+  const tmp = mkdtempSync(join(tmpdir(), "plur1bus-obsidian-test-"));
+  try {
+    const path = join(tmp, "main");
+    const workspace = {
+      workspaceId: "main",
+      agentId: "main",
+      label: "main",
+      path,
+      includeGlobs: DEFAULT_INCLUDE_GLOBS,
+      ignoreGlobs: DEFAULT_IGNORE_GLOBS,
+      tombstoneOnDelete: true,
+    };
+    initWorkspace(workspace, { dryRun: false });
+    writeFileSync(join(path, "evening-deep-review-2026-05-26-2105.md"), "# PLUR1BUS Evening Deep Review\nPLUR1BUS-generated artifact.\n", "utf8");
+    const scan = scanWorkspace(workspace);
+    assert.equal(
+      scan.files.find((f) => f.relPath.includes("evening-deep-review")),
+      undefined,
+      "evening-deep-review-*.md files must be excluded by DEFAULT_IGNORE_GLOBS"
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

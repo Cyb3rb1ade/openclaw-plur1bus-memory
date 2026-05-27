@@ -48,6 +48,9 @@ export const DEFAULT_IGNORE_GLOBS = [
   "_neo/**",
   "defaults/**",
   "list/**",
+  // PLUR1BUS-generated review output files — must not be scanned as vault notes
+  "evening-deep-review-*.md",
+  "morning-review-*.md",
 ];
 
 export const VAULT_DIRECTORIES = [

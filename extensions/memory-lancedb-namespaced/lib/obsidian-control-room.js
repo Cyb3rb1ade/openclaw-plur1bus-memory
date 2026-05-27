@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.15";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.16";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -123,6 +123,11 @@ const REVIEW_ITEM_TYPES = new Set([
   "project_hub_update",
   "task_suggestion",
   "stale_review",
+  "note_import_candidate",
+]);
+
+const MEMORY_REVIEW_ITEM_TYPES = new Set([
+  "memory_promotion",
   "note_import_candidate",
 ]);
 
@@ -630,6 +635,7 @@ export function normalizeObsidianControlRoomConfig(raw = {}, options = {}) {
     },
     maxFileBytes: Number(cfg.maxFileBytes || options.maxFileBytes || 256 * 1024),
     maxItems: Number(cfg.maxItems || options.maxItems || 200),
+    bundleCooldownMs: Number(cfg.bundleCooldownMs || 0),
   };
 }
 
@@ -789,10 +795,13 @@ function readMarkdownFiles(root, options = {}) {
 
 export function buildManagedBlock({ id, agent = "main", bundle = "", body }) {
   const cleanId = safeSlug(id, "managed-block");
-  const hash = hashToken(body);
+  // Hash is computed from the stored form (trailing whitespace stripped) so that
+  // findManagedBlocks can verify the hash without a mismatch on every regeneration.
+  const storedBody = String(body || "").replace(/\s+$/g, "");
+  const hash = hashToken(storedBody);
   return [
     `<!-- plur1bus:managed:start id="${cleanId}" agent="${safeSlug(agent, "main")}" bundle="${safeSlug(bundle, "bundle")}" hash="${hash}" -->`,
-    String(body || "").replace(/\s+$/g, ""),
+    storedBody,
     "<!-- plur1bus:managed:end -->",
   ].join("\n");
 }
@@ -1167,11 +1176,11 @@ function maintenanceFindingsToItems(maintenance, context) {
       risk: finding.severity === "error" ? "medium" : "low",
       target: finding.path || finding.code,
       action: "Review bridge hygiene finding.",
-      reason: finding.message,
+      reason: describeFinding(finding),
       evidence: [finding.code],
       maintenanceReview: {
         status: finding.severity === "error" ? "warning" : "pass",
-        reason: finding.message,
+        reason: describeFinding(finding),
       },
     }, { ...context, index: context.index + index }));
 }
@@ -1189,6 +1198,7 @@ function dedupeItems(items) {
 }
 
 function renderReviewBundleMarkdown(bundle, items, maintenance) {
+  const mode = reviewBundleMode(items);
   const warningItems = items.filter((item) => item.adversarialReview.status === "warning");
   const blockedItems = items.filter((item) => item.adversarialReview.status === "block");
   const conflicts = items.filter((item) => item.type === "conflict_resolution" || item.status === "blocked" || item.adversarialReview.status === "block");
@@ -1203,6 +1213,8 @@ function renderReviewBundleMarkdown(bundle, items, maintenance) {
     "## Summary",
     "",
     `- Bundle: ${bundle.bundleId}`,
+    `- Review mode: ${mode.label}`,
+    `- Scope: ${mode.description}`,
     `- Status: ${bundle.status}`,
     `- Apply mode: ${bundle.applyMode}`,
     `- Items: ${items.length}`,
@@ -1212,7 +1224,7 @@ function renderReviewBundleMarkdown(bundle, items, maintenance) {
     "## Maintenance Findings",
     "",
     maintenance.findings.length
-      ? maintenance.findings.map((finding) => `- ${finding.severity}: ${finding.code} - ${finding.message}`).join("\n")
+      ? maintenance.findings.map(formatFinding).join("\n")
       : "- No light maintenance findings.",
     "",
     "## Adversarial Findings",
@@ -1247,16 +1259,13 @@ function renderReviewBundleMarkdown(bundle, items, maintenance) {
     "",
     "## User Action Checklist",
     "",
-    "- [ ] Review warnings and blocked items.",
-    `- [ ] Open this ReviewBundle in Obsidian for full item details.`,
-    `- [ ] Refresh the Telegram summary with \`/plur1bus_review show ${bundle.bundleId}\`.`,
-    `- [ ] Approve low-risk items with \`/plur1bus_review approve ${bundle.bundleId} low-risk\`.`,
-    `- [ ] Reject all pending items with \`/plur1bus_review reject ${bundle.bundleId} all\`.`,
-    `- [ ] Run \`/plur1bus_review apply ${bundle.bundleId}\` after approval.`,
+    ...reviewChecklist(bundle.bundleId, mode),
     "",
     "## Apply Instructions",
     "",
-    "A checked box in Obsidian is not approval. The apply command re-reads this bundle, revalidates preconditions and hashes, and applies approved items only.",
+    mode.kind === "maintenance"
+      ? "This bundle contains vault maintenance findings only. No memory approval is needed, and apply is not required for memory import."
+      : "A checked box in Obsidian is not approval. The apply command re-reads this bundle, revalidates preconditions and hashes, and applies approved items only.",
     "A Telegram reply does not need to repeat the bundle id. Without an id, show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.",
     "",
   ].join("\n");
@@ -1276,6 +1285,7 @@ function renderReviewBundleMarkdown(bundle, items, maintenance) {
 }
 
 function renderReviewItem(item) {
+  // U3: full item JSON lives in .items.json only — the .md stays human-readable
   return [
     `### ${item.id} - ${item.type}`,
     "",
@@ -1287,21 +1297,26 @@ function renderReviewItem(item) {
     `- Proposed by: ${item.proposedByAgent}`,
     `- Review profile: ${item.reviewProfile}`,
     `- Adversarial: ${item.adversarialReview.status} - ${item.adversarialReview.reason || "No issue"}`,
-    "",
-    "```json",
-    JSON.stringify(item, null, 2),
-    "```",
   ].join("\n");
 }
 
-function writeReviewBundle(paths, bundle, items, maintenance) {
+function writeReviewBundle(paths, bundle, items, hygieneItems, maintenance) {
+  // hygieneItems is optional for backward compat — callers that pass (paths, bundle, items, maintenance)
+  // (4 args) will have hygieneItems=maintenance and maintenance=undefined; detect and fix that.
+  if (!Array.isArray(hygieneItems) && hygieneItems && typeof hygieneItems === "object" && !Array.isArray(maintenance)) {
+    maintenance = hygieneItems;
+    hygieneItems = [];
+  }
+  const safeHygieneItems = Array.isArray(hygieneItems) ? hygieneItems : [];
   maybeCreateReviewLayout(paths, { createLayout: true });
   const rel = `review-bundles/${bundle.bundleId}.md`;
   const jsonRel = `review-bundles/${bundle.bundleId}.items.json`;
   const target = resolveUnder(paths.reviewPath, rel, paths.cfg);
   const jsonTarget = resolveUnder(paths.reviewPath, jsonRel, paths.cfg);
-  atomicWriteText(target, renderReviewBundleMarkdown(bundle, items, maintenance));
-  atomicWriteJson(jsonTarget, { bundle, items, maintenance });
+  // Markdown shows all items (merged) so existing Obsidian rendering continues to work.
+  atomicWriteText(target, renderReviewBundleMarkdown(bundle, [...items, ...safeHygieneItems], maintenance));
+  // JSON stores items and hygieneItems separately so the loader can distinguish them.
+  atomicWriteJson(jsonTarget, { bundle, items, hygieneItems: safeHygieneItems, maintenance });
   return {
     markdownPath: `${paths.reviewRoot}/${rel}`,
     itemsPath: `${paths.reviewRoot}/${jsonRel}`,
@@ -1310,6 +1325,37 @@ function writeReviewBundle(paths, bundle, items, maintenance) {
 
 export async function prepareReviewBundle(rawConfig = {}, options = {}) {
   const paths = resolveObsidianBridgePaths(rawConfig, options);
+
+  // Bundle cooldown is opt-in. Manual slash commands must never look like an
+  // empty review just because a previous bundle was created moments earlier.
+  const bundleCooldownMs = Number.isFinite(options.bundleCooldownMs)
+    ? options.bundleCooldownMs
+    : Number.isFinite(paths.cfg?.bundleCooldownMs)
+      ? paths.cfg.bundleCooldownMs
+      : 0;
+  const isAutoBundleId = !options.bundleId;
+  if (bundleCooldownMs > 0 && paths.ok && isAutoBundleId) {
+    const cooldownPath = join(paths.reviewPath, "bundle-cooldown.json");
+    const cooldownState = readJson(cooldownPath, {});
+    const lastBundleAt = cooldownState.lastBundleAt ? new Date(cooldownState.lastBundleAt) : null;
+    const now = options.now || new Date();
+    if (lastBundleAt && Number.isFinite(lastBundleAt.getTime()) && (now - lastBundleAt) < bundleCooldownMs) {
+      return {
+        status: "skipped_cooldown",
+        ok: true,
+        applied: false,
+        bundle: null,
+        items: [],
+        hygieneItems: [],
+        maintenance: null,
+        written: null,
+        pipeline: ["cooldown_skipped"],
+        cooldownRemainingMs: bundleCooldownMs - (now - lastBundleAt),
+        latestBundleId: latestReviewBundleId(rawConfig, options),
+      };
+    }
+  }
+
   const pipeline = [];
   const createdAt = nowIso(options);
   const bundleId = options.bundleId || bundleIdFromDate(options.now || new Date());
@@ -1332,13 +1378,18 @@ export async function prepareReviewBundle(rawConfig = {}, options = {}) {
     agentId,
     reviewProfile: input.reviewProfile || reviewProfiles[0],
   }));
-  items.push(...maintenanceFindingsToItems(maintenance, {
+
+  // D2: vault_hygiene findings are separated from user-facing items.
+  // They are system artefacts — the user cannot meaningfully approve or reject them.
+  // They live in hygieneItems and are displayed in a dedicated section, not in the
+  // candidate-changes queue that requires human approval.
+  let hygieneItems = maintenanceFindingsToItems(maintenance, {
     bundleId,
     index: items.length,
     generatedAt: createdAt,
     agentId,
     reviewProfile: "maintenance",
-  }));
+  });
   pipeline.push("generate_review_proposals");
 
   items = items.map((item, index) => adversarialLightReviewItem(item, {
@@ -1348,9 +1399,17 @@ export async function prepareReviewBundle(rawConfig = {}, options = {}) {
     agentId,
     reviewProfile: item.reviewProfile,
   }));
+  hygieneItems = hygieneItems.map((item, index) => adversarialLightReviewItem(item, {
+    bundleId,
+    index: items.length + index,
+    generatedAt: createdAt,
+    agentId,
+    reviewProfile: item.reviewProfile,
+  }));
   pipeline.push("adversarial_light");
 
   items = dedupeItems(items).map((item, index) => ({ ...item, id: item.id || itemIdFromBundle(bundleId, index) }));
+  hygieneItems = dedupeItems(hygieneItems).map((item, index) => ({ ...item, id: item.id || itemIdFromBundle(bundleId, items.length + index) }));
   pipeline.push("risk_classification");
   pipeline.push("deduplication");
 
@@ -1370,10 +1429,18 @@ export async function prepareReviewBundle(rawConfig = {}, options = {}) {
 
   let written = null;
   if (paths.ok && paths.cfg.allowWrite !== false && paths.cfg.morningReview.writeReviewBundle !== false) {
-    written = writeReviewBundle(paths, bundle, items, maintenance);
+    written = writeReviewBundle(paths, bundle, items, hygieneItems, maintenance);
     pipeline.push("write_review_bundle");
+    // P3: Record bundle creation time for cooldown tracking (auto bundles only).
+    if (bundleCooldownMs > 0 && isAutoBundleId) {
+      const cooldownPath = join(paths.reviewPath, "bundle-cooldown.json");
+      try {
+        atomicWriteText(cooldownPath, JSON.stringify({ lastBundleAt: (options.now || new Date()).toISOString() }, null, 2) + "\n");
+      } catch (_) {}
+    }
   }
   pipeline.push("notify_user");
+
   pipeline.push("await_explicit_approval");
 
   return {
@@ -1383,6 +1450,7 @@ export async function prepareReviewBundle(rawConfig = {}, options = {}) {
     applied: false,
     bundle,
     items,
+    hygieneItems,
     maintenance,
     written,
     pipeline,
@@ -1470,14 +1538,14 @@ function renderEveningDeepReviewMarkdown(summary) {
       ? [
           `- Open the listed ReviewBundle artifact in Obsidian for full item details.`,
           `- Approve low-risk items in Telegram: /plur1bus_review approve ${summary.pendingBundles[0]} low-risk`,
-          `- Apply approved items to memory: /plur1bus_review apply ${summary.pendingBundles[0]}`,
+          `- Apply approved memory items: /plur1bus_review apply ${summary.pendingBundles[0]}`,
           `- Or reject all pending items: /plur1bus_review reject ${summary.pendingBundles[0]} all`,
           `- Refresh the Telegram summary: /plur1bus_review show ${summary.pendingBundles[0]}`,
         ]
       : [
           "- Open the listed ReviewBundle artifact in Obsidian for full item details.",
           "- Approve low-risk items in Telegram: /plur1bus_review approve low-risk",
-          "- Apply approved items to memory: /plur1bus_review apply",
+          "- Apply approved memory items: /plur1bus_review apply",
           "- Or reject all pending items: /plur1bus_review reject all",
           "- Refresh the Telegram summary: /plur1bus_review show",
         ]),
@@ -1587,7 +1655,7 @@ function loadBundleRecord(rawConfig, bundleId, options = {}) {
 function saveBundleRecord(loaded) {
   const { paths, record, safeBundle } = loaded;
   const maintenance = record.maintenance || { findings: [] };
-  writeReviewBundle(paths, record.bundle, record.items, maintenance);
+  writeReviewBundle(paths, record.bundle, record.items, record.hygieneItems || [], maintenance);
   return record;
 }
 
@@ -1599,9 +1667,53 @@ function selectItems(items, selector) {
   return new Set(ids);
 }
 
+function itemIsClosed(item = {}) {
+  return ["applied", "rejected", "blocked", "snoozed", "stale", "invalid"].includes(item.status);
+}
+
+function updateReviewItemStatus(item, status, options = {}) {
+  if (["applied", "blocked"].includes(item.status)) return { item, changed: 0 };
+  const approvedPayloadHash = item.applyPreview?.payloadHash || payloadHash(item.applyPreview?.payload || {});
+  const approvedAt = nowIso(options);
+  const approvedBy = options.approvedBy || options.agentId || "human";
+  const approvalMetadata = status === "approved"
+    ? {
+        approvedBy,
+        approvedAt,
+        approvalSource: "human_review",
+        approvedPayloadHash,
+        approvalHash: payloadHash({
+          itemId: item.id,
+          payloadHash: approvedPayloadHash,
+          sourceHash: item.preconditions?.sourceHash || "",
+          approvedBy,
+          approvedAt,
+          approvalSource: "human_review",
+        }),
+        ...(options.approvedTrustLevel ? { approvedTrustLevel: options.approvedTrustLevel } : {}),
+        ...(options.appliedTrustLevel ? { appliedTrustLevel: options.appliedTrustLevel } : {}),
+        ...(options.explicitGlobalApproval === true ? { explicitGlobalApproval: true } : {}),
+      }
+    : item.approvalMetadata || null;
+  return {
+    changed: 1,
+    item: {
+      ...item,
+      status,
+      approvedPayloadHash: status === "approved" ? approvedPayloadHash : item.approvedPayloadHash || "",
+      approvalMetadata,
+      snoozedUntil: status === "snoozed" ? options.until || "" : item.snoozedUntil || "",
+      updatedAt: nowIso(options),
+    },
+  };
+}
+
 export function updateReviewBundleItems(rawConfig, bundleId, action, selector = "all", options = {}) {
   const loaded = loadBundleRecord(rawConfig, bundleId, options);
   const selected = selectItems(loaded.record.items, selector);
+  const selectedHygiene = action === "approve"
+    ? new Set()
+    : selectItems(loaded.record.hygieneItems || [], selector);
   const status = action === "approve" ? "approved"
     : action === "reject" ? "rejected"
       : action === "snooze" ? "snoozed"
@@ -1610,41 +1722,22 @@ export function updateReviewBundleItems(rawConfig, bundleId, action, selector = 
   let changed = 0;
   loaded.record.items = loaded.record.items.map((item) => {
     if (!selected.has(item.id)) return item;
-    if (["applied", "blocked"].includes(item.status)) return item;
-    const approvedPayloadHash = item.applyPreview?.payloadHash || payloadHash(item.applyPreview?.payload || {});
-    const approvedAt = nowIso(options);
-    const approvedBy = options.approvedBy || options.agentId || "human";
-    const approvalMetadata = status === "approved"
-      ? {
-          approvedBy,
-          approvedAt,
-          approvalSource: "human_review",
-          approvedPayloadHash,
-          approvalHash: payloadHash({
-            itemId: item.id,
-            payloadHash: approvedPayloadHash,
-            sourceHash: item.preconditions?.sourceHash || "",
-            approvedBy,
-            approvedAt,
-            approvalSource: "human_review",
-          }),
-          ...(options.approvedTrustLevel ? { approvedTrustLevel: options.approvedTrustLevel } : {}),
-          ...(options.appliedTrustLevel ? { appliedTrustLevel: options.appliedTrustLevel } : {}),
-          ...(options.explicitGlobalApproval === true ? { explicitGlobalApproval: true } : {}),
-        }
-      : item.approvalMetadata || null;
-    changed += 1;
-    return {
-      ...item,
-      status,
-      approvedPayloadHash: status === "approved" ? approvedPayloadHash : item.approvedPayloadHash || "",
-      approvalMetadata,
-      snoozedUntil: status === "snoozed" ? options.until || "" : item.snoozedUntil || "",
-      updatedAt: nowIso(options),
-    };
+    const updated = updateReviewItemStatus(item, status, options);
+    changed += updated.changed;
+    return updated.item;
   });
+  loaded.record.hygieneItems = (loaded.record.hygieneItems || []).map((item) => {
+    if (!selectedHygiene.has(item.id)) return item;
+    const updated = updateReviewItemStatus(item, status, options);
+    changed += updated.changed;
+    return updated.item;
+  });
+  const allItems = [...loaded.record.items, ...(loaded.record.hygieneItems || [])];
+  if (allItems.length > 0 && allItems.every(itemIsClosed)) {
+    loaded.record.bundle.status = "reviewed";
+  }
   saveBundleRecord(loaded);
-  return { bundleId, action, selector, changed, items: loaded.record.items };
+  return { bundleId, action, selector, changed, items: loaded.record.items, hygieneItems: loaded.record.hygieneItems || [] };
 }
 
 function fileHashIfConfigured(paths, item, kind) {
@@ -1824,13 +1917,90 @@ export async function applyApprovedReviewBundle(rawConfig, bundleId, options = {
     applied.push({ id: item.id, type: item.type });
   }
 
-  if (applied.length === 0 && blocked.length === 0) {
-    record.bundle.status = "pending_user_review";
-  } else if (record.items.every((item) => ["applied", "rejected", "blocked", "snoozed", "stale", "invalid"].includes(item.status))) {
+  // Auto-apply vault hygiene items — they are system artefacts and do not require user review.
+  // D2: hygieneItems are separate from user-facing items; apply marks them processed automatically.
+  // NOTE: hygiene items are NOT added to `applied` (the user-item counter) — they are tracked
+  // via result.hygieneItems and counted in reviewEffectSummary as review-only hygiene.
+  for (const hygieneItem of (record.hygieneItems || [])) {
+    if (["applied", "rejected"].includes(hygieneItem.status)) continue;
+    hygieneItem.status = "applied";
+    hygieneItem.appliedAt = nowIso(options);
+  }
+
+  const allItems = [...record.items, ...(record.hygieneItems || [])];
+  if (allItems.length > 0 && allItems.every(itemIsClosed)) {
     record.bundle.status = "reviewed";
+  } else if (applied.length === 0 && blocked.length === 0) {
+    record.bundle.status = "pending_user_review";
   }
   saveBundleRecord(loaded);
-  return { bundleId, applied, blocked, items: record.items };
+  return { bundleId, applied, blocked, items: record.items, hygieneItems: record.hygieneItems || [] };
+}
+
+// D1/B: automatically reject bundles that have been pending longer than staleBundleMaxAgeDays.
+// This drains the review backlog without any user action — stale items are rejected and archived.
+export function expireStaleBundles(rawConfig = {}, options = {}) {
+  const paths = resolveObsidianBridgePaths(rawConfig, options);
+  if (!paths.ok || !existsSync(paths.reviewPath)) return { expired: 0, expiredIds: [] };
+  const maxAgeDays = Number.isFinite(options.staleBundleMaxAgeDays) ? options.staleBundleMaxAgeDays : 7;
+  const maxAgeMs = maxAgeDays * 86_400_000;
+  const now = options.now ? new Date(options.now) : new Date();
+  const bundlesDir = join(paths.reviewPath, "review-bundles");
+  if (!existsSync(bundlesDir)) return { expired: 0, expiredIds: [] };
+  let files;
+  try { files = readdirSync(bundlesDir); } catch (_) { return { expired: 0, expiredIds: [] }; }
+  files = files.filter((f) => f.endsWith(".items.json"));
+  const expiredIds = [];
+  for (const file of files) {
+    const jsonPath = join(bundlesDir, file);
+    const record = readJson(jsonPath, null);
+    if (!record?.bundle) continue;
+    if (record.bundle.status !== "pending_user_review") continue;
+    const createdAt = record.bundle.createdAt ? new Date(record.bundle.createdAt) : null;
+    if (!createdAt || !Number.isFinite(createdAt.getTime())) continue;
+    if ((now - createdAt) < maxAgeMs) continue;
+    // Mark all pending items as rejected and the bundle as expired
+    record.items = (record.items || []).map((item) =>
+      (!item.status || item.status === "pending") ? { ...item, status: "rejected", rejectedReason: "auto_expired", updatedAt: now.toISOString() } : item
+    );
+    record.hygieneItems = (record.hygieneItems || []).map((item) =>
+      (!item.status || item.status === "pending") ? { ...item, status: "rejected", rejectedReason: "auto_expired", updatedAt: now.toISOString() } : item
+    );
+    record.bundle.status = "expired";
+    record.bundle.expiredAt = now.toISOString();
+    atomicWriteJson(jsonPath, record);
+    expiredIds.push(record.bundle.bundleId);
+  }
+  return { expired: expiredIds.length, expiredIds };
+}
+
+// U7: produce a ready-to-use Obsidian memory card template with all required fields.
+// The bridge scanner recognises sync_status: draft as a user-created candidate and fills
+// content_hash on the first scan, so the template intentionally leaves it blank.
+export function generateMemoryCardTemplate(options = {}) {
+  const workspaceId = options.workspaceId || "main";
+  const agentId = options.agentId || "main";
+  const body = options.body || "<!-- Describe the memory here. Delete this comment. -->";
+  const frontmatter = [
+    "---",
+    "plur1bus_type: memory_card",
+    `workspace_id: ${workspaceId}`,
+    `agent_id: ${agentId}`,
+    "memory_id: ",
+    "category: fact",
+    "importance: 0.7",
+    "scope: workspace",
+    "source_kind: obsidian",
+    "sync_status: draft",
+    "content_hash: ",
+    "validated: false",
+    `updated_at: ${options.updatedAt || new Date().toISOString()}`,
+    "---",
+    "",
+    body,
+    "",
+  ].join("\n");
+  return frontmatter;
 }
 
 export function runVaultDoctor(rawConfig = {}, options = {}) {
@@ -2255,11 +2425,12 @@ function latestReviewBundleId(rawConfig, options = {}) {
     const bundleId = record.bundle?.bundleId || file.replace(/\.items\.json$/, "");
     const mtimeMs = statSync(target).mtimeMs;
     const items = Array.isArray(record.items) ? record.items : [];
+    const hygieneItems = Array.isArray(record.hygieneItems) ? record.hygieneItems : [];
     entries.push({
       bundleId,
       record,
       sortAt: bundleCreatedAt(record, mtimeMs),
-      actionable: items.some((item) => !item.status || item.status === "pending"),
+      actionable: [...items, ...hygieneItems].some((item) => !item.status || item.status === "pending"),
       approved: items.some((item) => item.status === "approved"),
     });
   }
@@ -2278,6 +2449,15 @@ function formatReviewTimestamp(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
+}
+
+function formatDurationMs(ms = 0) {
+  const seconds = Math.max(0, Math.ceil(Number(ms || 0) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const restSeconds = seconds % 60;
+  if (minutes <= 0) return `${restSeconds}s`;
+  if (restSeconds === 0) return `${minutes}m`;
+  return `${minutes}m ${restSeconds}s`;
 }
 
 function statusMarker(status = {}) {
@@ -2327,12 +2507,82 @@ function dedupeFindings(findings = []) {
   return [...grouped.values()];
 }
 
+function describeFinding(finding = {}) {
+  const code = finding.code || finding.type || finding.evidence?.[0] || "";
+  if (code === "managed_block_hash_mismatch") {
+    return "Ein PLUR1BUS-generierter Block wurde nachtraeglich veraendert oder stammt aus alter Generator-Version.";
+  }
+  if (code === "generated_link_review") {
+    return "Generierter Dashboard-Link sollte geprueft werden; meist kosmetisch.";
+  }
+  return finding.message || finding.reason || finding.action || "Review required.";
+}
+
 function formatFinding(finding = {}) {
   const severity = finding.severity || finding.kind || "warning";
-  const subject = finding.id || finding.code || finding.path || finding.target || "item";
-  const detail = finding.message || finding.reason || finding.action || "Review required.";
+  const code = finding.code || finding.type || finding.evidence?.[0] || "";
+  const subject = describeFinding(finding);
+  const location = finding.path || finding.target || finding.id || "";
+  const codeHint = code ? ` (${code}${location ? `, ${location}` : ""})` : location ? ` (${location})` : "";
+  const detail = finding.message && finding.message !== subject ? finding.message : "";
   const repeat = finding.count > 1 ? ` (${finding.count}x)` : "";
-  return `- ${severity}: ${subject}${repeat} - ${detail}`;
+  return `- ${severity}: ${subject}${repeat}${codeHint}${detail ? ` - ${detail}` : ""}`;
+}
+
+function reviewBundleMode(items = [], hygieneItems = []) {
+  const list = Array.isArray(items) ? items : [];
+  const hygiene = Array.isArray(hygieneItems) ? hygieneItems : [];
+  const hasMemoryReview = list.some((item) => MEMORY_REVIEW_ITEM_TYPES.has(item.type));
+  // hasMaintenance: vault_hygiene either in items (legacy path) or in hygieneItems (new path)
+  const hasMaintenance = hygiene.length > 0 || list.some((item) => item.type === "vault_hygiene");
+  // maintenanceOnly: no user-facing items at all, only hygiene work to do
+  const maintenanceOnly = (list.length === 0 && hygiene.length > 0)
+    || (list.length > 0 && list.every((item) => item.type === "vault_hygiene"));
+  if (maintenanceOnly) {
+    return {
+      kind: "maintenance",
+      label: "Maintenance only",
+      description: "Vault maintenance only - no memory import",
+    };
+  }
+  if (hasMemoryReview && hasMaintenance) {
+    return {
+      kind: "mixed",
+      label: "Mixed review",
+      description: "Memory candidates plus vault maintenance findings",
+    };
+  }
+  if (hasMemoryReview) {
+    return {
+      kind: "memory",
+      label: "Memory review",
+      description: "Memory import or promotion candidates",
+    };
+  }
+  return {
+    kind: "review",
+    label: "Review",
+    description: "Non-memory review items",
+  };
+}
+
+function reviewChecklist(bundleId, mode = reviewBundleMode([])) {
+  if (mode.kind === "maintenance") {
+    return [
+      "- [ ] Review vault maintenance findings.",
+      `- [ ] Inspect details with \`/plur1bus_review show ${bundleId}\`.`,
+      `- [ ] Explain findings with \`/plur1bus_review explain ${bundleId}\`.`,
+      "- [ ] Reject/close if expected with `/plur1bus_review reject all`.",
+    ];
+  }
+  return [
+    "- [ ] Review warnings and blocked items.",
+    "- [ ] Open this ReviewBundle in Obsidian for full item details.",
+    `- [ ] Refresh the Telegram summary with \`/plur1bus_review show ${bundleId}\`.`,
+    `- [ ] Approve low-risk items with \`/plur1bus_review approve ${bundleId} low-risk\`.`,
+    `- [ ] Reject all pending items with \`/plur1bus_review reject ${bundleId} all\`.`,
+    `- [ ] Run \`/plur1bus_review apply ${bundleId}\` after approval.`,
+  ];
 }
 
 function reviewCommands(bundleId, options = {}) {
@@ -2341,14 +2591,28 @@ function reviewCommands(bundleId, options = {}) {
   const approveDefault = bundle ? ` ${bundle} low-risk` : " low-risk";
   const rejectDefault = bundle ? ` ${bundle} all` : " all";
   const artifactPath = options.artifactPath || "";
+  const mode = options.mode || reviewBundleMode([]);
   const idHint = "Bundle id is optional in Telegram replies and short commands. Without an id, review/show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.";
+  if (mode.kind === "maintenance") {
+    return [
+      "## Next step",
+      "",
+      "- No memory approval is needed.",
+      `- Inspect details: /plur1bus_review show${suffix}`,
+      `- Explain findings: /plur1bus_review explain${suffix}`,
+      "- Reject/close if expected: /plur1bus_review reject all",
+      "",
+      "This is vault maintenance only - no memory import.",
+      idHint,
+    ].join("\n");
+  }
   return [
     "## Next step",
     "",
     artifactPath ? `- Details in Obsidian: ${artifactPath}` : "- Details are in the listed ReviewBundle artifact in Obsidian.",
     `- Mark low-risk items approved: /plur1bus_review approve${approveDefault}`,
     `- Or reject pending items: /plur1bus_review reject${rejectDefault}`,
-    `- Then write approved items to memory: /plur1bus_review apply${suffix}`,
+    `- Then write approved memory items: /plur1bus_review apply${suffix}`,
     `- Refresh this summary: /plur1bus_review show${suffix}`,
     "",
     "Approve only marks items. Apply is the only step that writes to memory.",
@@ -2358,8 +2622,11 @@ function reviewCommands(bundleId, options = {}) {
 
 function reviewActionSummary(result = {}) {
   const action = result.action || "review";
+  const mode = reviewBundleMode(result.items || [], result.hygieneItems || []);
   const next = action === "approve"
-    ? `Next: /plur1bus_review apply ${result.bundleId || ""}`.trim()
+    ? mode.kind === "maintenance"
+      ? "No memory approval is needed; reject/close if expected with /plur1bus_review reject all."
+      : `Next: /plur1bus_review apply ${result.bundleId || ""}`.trim()
     : action === "reject"
       ? "Rejected items will not be applied."
       : action === "snooze"
@@ -2390,35 +2657,49 @@ function obsidianCommandHelp() {
     "- /plur1bus_review explain - explain what was applied and what wrote memory",
     "- /plur1bus_review approve low-risk - mark safe low-risk items approved",
     "- /plur1bus_review reject all - mark all pending items rejected",
-    "- /plur1bus_review apply - write approved items to memory",
+    "- /plur1bus_review apply - write approved memory candidates to memory",
     "",
-    "Normal flow: review -> approve or reject -> apply.",
-    "Morning, evening, review, and approve do not write memory. Apply is the only memory write step.",
+    "Normal memory flow: review -> approve or reject -> apply.",
+    "Maintenance-only bundles say 'Vault maintenance only - no memory import' and can be inspected, explained, or rejected/closed without approval.",
+    "Morning, evening, review, and approve do not write memory. Apply is the only memory write step, and only memory-candidate items can become Memory DB writes.",
     "Bundle id is optional in Telegram replies and short commands. Without an id, review/show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.",
     "Advanced: /plur1bus help advanced",
   ].join("\n");
 }
 
-function reviewItemBuckets(items = []) {
+function reviewItemBuckets(items = [], hygieneItems = []) {
   const pendingItems = items.filter((item) => !item.status || item.status === "pending");
+  const hygiene = Array.isArray(hygieneItems) ? hygieneItems : [];
   const noteImports = countBy(pendingItems, (item) => item.type === "note_import_candidate");
-  const vaultHygiene = countBy(pendingItems, (item) => item.type === "vault_hygiene");
-  const other = Math.max(0, pendingItems.length - noteImports - vaultHygiene);
+  const memoryPromotions = countBy(pendingItems, (item) => item.type === "memory_promotion");
+  // Count vault_hygiene from both legacy items array and the new hygieneItems array
+  const vaultHygiene = countBy(pendingItems, (item) => item.type === "vault_hygiene")
+    + countBy(hygiene, (item) => !item.status || item.status === "pending");
+  const other = Math.max(0, pendingItems.length - noteImports - memoryPromotions
+    - countBy(pendingItems, (item) => item.type === "vault_hygiene"));
   return [
     "- Obsidian notes to import: " + noteImports,
+    "- Existing memories to promote: " + memoryPromotions,
     "- Vault hygiene / generated artifacts: " + vaultHygiene,
     "- Other review items: " + other,
   ].join("\n");
 }
 
-function reviewEffectSummary(items = []) {
+function reviewEffectSummary(items = [], hygieneItems = []) {
   const list = Array.isArray(items) ? items : [];
+  const hygiene = Array.isArray(hygieneItems) ? hygieneItems : [];
   const applied = list.filter((item) => item.status === "applied");
+  const appliedHygiene = hygiene.filter((item) => item.status === "applied");
   const memoryWrites = applied.filter((item) => ["memory_promotion", "note_import_candidate"].includes(item.type) && item.appliedMemoryId);
   const knowledgeWrites = applied.filter((item) => item.type === "knowledge_update");
   const taskWrites = applied.filter((item) => item.type === "task_suggestion");
-  const reviewOnly = applied.filter((item) => !memoryWrites.includes(item) && !knowledgeWrites.includes(item) && !taskWrites.includes(item));
+  // reviewOnly: applied items that produced no DB/file writes, plus applied hygiene items (always review-only)
+  const reviewOnly = [
+    ...applied.filter((item) => !memoryWrites.includes(item) && !knowledgeWrites.includes(item) && !taskWrites.includes(item)),
+    ...appliedHygiene,
+  ];
   const pending = list.filter((item) => !item.status || item.status === "pending");
+  const pendingHygiene = hygiene.filter((item) => !item.status || item.status === "pending");
   const blocked = list.filter((item) => item.status === "blocked" || item.status === "stale" || item.status === "invalid");
   const sourceAgents = formatCounts(countByValue(applied, (item) => item.proposedByAgent || item.reviewProfile || "unknown"), 3);
   return {
@@ -2428,6 +2709,7 @@ function reviewEffectSummary(items = []) {
     taskWrites,
     reviewOnly,
     pending,
+    pendingHygiene,
     blocked,
     sourceAgents,
   };
@@ -2436,16 +2718,36 @@ function reviewEffectSummary(items = []) {
 function formatAppliedExamples(items = [], max = 8) {
   const examples = items.slice(0, max).map((item) => {
     const payload = item.applyPreview?.payload || {};
-    const summary = payload.text || payload.summary || item.reason || item.action || "";
+    const summary = payload.text || payload.summary || reviewItemSummary(item);
     const memory = item.appliedMemoryId ? ` -> ${item.appliedMemoryId}` : "";
-    return `- ${item.type}: ${item.target || item.id}${memory}${summary ? ` - ${shortenText(summary)}` : ""}`;
+    return `- ${reviewItemTypeLabel(item)}: ${item.target || item.id}${memory}${summary ? ` - ${shortenText(summary)}` : ""}`;
   });
   if (items.length > max) examples.push(`- ... ${items.length - max} more`);
   return examples.length ? examples.join("\n") : "- None.";
 }
 
+function reviewItemSummary(item = {}) {
+  if (item.type === "vault_hygiene") {
+    return describeFinding({
+      code: item.evidence?.[0],
+      type: item.evidence?.[0],
+      message: item.reason || item.action,
+    });
+  }
+  return item.blockedReason || item.reason || item.action || "Review pending.";
+}
+
+function reviewItemTypeLabel(item = {}) {
+  if (item.type === "vault_hygiene") return "Vault hygiene";
+  if (item.type === "note_import_candidate") return "Memory import candidate";
+  if (item.type === "memory_promotion") return "Memory promotion";
+  if (item.type === "task_suggestion") return "Task suggestion";
+  if (item.type === "knowledge_update") return "Knowledge update";
+  return item.type || "Review item";
+}
+
 function formatPendingExamples(items = [], max = 6) {
-  const examples = items.slice(0, max).map((item) => `- ${item.type}: ${item.target || item.id} - ${shortenText(item.blockedReason || item.reason || item.action || "Review pending.")}`);
+  const examples = items.slice(0, max).map((item) => `- ${reviewItemTypeLabel(item)}: ${item.target || item.id} - ${shortenText(reviewItemSummary(item))}`);
   if (items.length > max) examples.push(`- ... ${items.length - max} more`);
   return examples.length ? examples.join("\n") : "- None.";
 }
@@ -2453,14 +2755,24 @@ function formatPendingExamples(items = [], max = 6) {
 function reviewExplainSummary(result = {}, label = "PLUR1BUS ReviewBundle explanation") {
   const bundle = result.bundle || result.record?.bundle || {};
   const items = Array.isArray(result.items) ? result.items : Array.isArray(result.record?.items) ? result.record.items : [];
-  const effects = reviewEffectSummary(items);
+  const hygieneItems = Array.isArray(result.hygieneItems) ? result.hygieneItems : Array.isArray(result.record?.hygieneItems) ? result.record.hygieneItems : [];
+  const legacyHygieneItems = items.filter((item) => item.type === "vault_hygiene");
+  const userItems = items.filter((item) => item.type !== "vault_hygiene");
+  const allHygieneItems = [...hygieneItems, ...legacyHygieneItems];
+  const allReviewItems = [...userItems, ...allHygieneItems];
+  const mode = reviewBundleMode(items, hygieneItems);
+  // Pass hygieneItems so applied hygiene counts appear in reviewOnly and pending hygiene in still-open
+  const effects = reviewEffectSummary(items, hygieneItems);
   const approved = countBy(items, (item) => item.status === "approved");
   const rejected = countBy(items, (item) => item.status === "rejected");
   const snoozed = countBy(items, (item) => item.status === "snoozed");
+  // Pending hygiene items appear in "Still open" with human-readable descriptions
+  const pendingHygiene = hygieneItems.filter((item) => !item.status || item.status === "pending");
   return [
     label,
     `Bundle: ${bundle.bundleId || "n/a"}`,
     `${formatReviewTimestamp(bundle.createdAt)} | Workspace: ${bundle.workspaceKey || "main"} | Agent: ${bundle.createdByAgent || "main"}`,
+    `Review mode: ${mode.label} | ${mode.description}`,
     "",
     "## What changed",
     "",
@@ -2479,6 +2791,7 @@ function reviewExplainSummary(result = {}, label = "PLUR1BUS ReviewBundle explan
     "",
     "## Written to memory DB",
     "",
+    ...(mode.kind === "maintenance" ? ["No memory DB writes were possible or needed."] : []),
     formatAppliedExamples(effects.memoryWrites),
     "",
     "## Applied but not memory DB writes",
@@ -2487,26 +2800,54 @@ function reviewExplainSummary(result = {}, label = "PLUR1BUS ReviewBundle explan
     "",
     "## Still open",
     "",
-    formatPendingExamples([...effects.pending, ...effects.blocked]),
+    formatPendingExamples([...effects.pending, ...effects.blocked, ...pendingHygiene]),
     "",
     "Apply means PLUR1BUS processed an approved item. Only Memory DB writes become LanceDB memories. Vault hygiene and task items can be marked applied without creating a memory entry.",
   ].join("\n");
 }
 
 function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
+  if (result.status === "skipped_cooldown") {
+    return [
+      "PLUR1BUS Morning Review skipped - cooldown active",
+      `${formatReviewTimestamp(result.createdAt || new Date().toISOString())} | No new ReviewBundle was created`,
+      "",
+      "## Reason",
+      "",
+      `- Another automatic ReviewBundle was created recently.`,
+      `- Remaining cooldown: ${formatDurationMs(result.cooldownRemainingMs)}`,
+      result.latestBundleId ? `- Existing pending bundle: ${result.latestBundleId}` : "- Existing pending bundle: none found",
+      "",
+      "## Next step",
+      "",
+      result.latestBundleId
+        ? `- Show existing bundle: /plur1bus_review show ${result.latestBundleId}`
+        : "- Run /plur1bus_morning again after the cooldown.",
+      "",
+      "No changes were applied.",
+    ].join("\n");
+  }
   const bundle = result.bundle || result.record?.bundle || {};
   const items = Array.isArray(result.items) ? result.items : Array.isArray(result.record?.items) ? result.record.items : [];
+  const hygieneItems = Array.isArray(result.hygieneItems) ? result.hygieneItems : Array.isArray(result.record?.hygieneItems) ? result.record.hygieneItems : [];
+  const legacyHygieneItems = items.filter((item) => item.type === "vault_hygiene");
+  const userItems = items.filter((item) => item.type !== "vault_hygiene");
+  const allHygieneItems = [...hygieneItems, ...legacyHygieneItems];
+  const allReviewItems = [...userItems, ...allHygieneItems];
+  const mode = reviewBundleMode(items, hygieneItems);
   const maintenanceFindings = Array.isArray(result.maintenance?.findings)
     ? result.maintenance.findings
     : Array.isArray(result.record?.maintenance?.findings)
       ? result.record.maintenance.findings
       : [];
-  const pending = countBy(items, (item) => !item.status || item.status === "pending");
-  const approved = countBy(items, (item) => item.status === "approved");
-  const rejected = countBy(items, (item) => item.status === "rejected");
-  const warnings = countBy(items, (item) => item.adversarialReview?.status === "warning")
+  const pending = countBy(userItems, (item) => !item.status || item.status === "pending");
+  const approved = countBy(userItems, (item) => item.status === "approved");
+  const rejected = countBy(userItems, (item) => item.status === "rejected");
+  const pendingHygiene = countBy(allHygieneItems, (item) => !item.status || item.status === "pending");
+  const closedHygiene = countBy(allHygieneItems, (item) => item.status && item.status !== "pending");
+  const warnings = countBy(userItems, (item) => item.adversarialReview?.status === "warning")
     + countBy(maintenanceFindings, (item) => item.severity === "warning");
-  const blocks = countBy(items, (item) => item.adversarialReview?.status === "block")
+  const blocks = countBy(userItems, (item) => item.adversarialReview?.status === "block")
     + countBy(maintenanceFindings, (item) => item.severity === "error");
   const written = result.written || {};
   const inferredMarkdownPath = !written.markdownPath && result.paths?.reviewRoot && bundle.bundleId
@@ -2518,30 +2859,36 @@ function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
   const artifactPaths = compactPathList([written.markdownPath || inferredMarkdownPath, written.itemsPath || inferredItemsPath].filter(Boolean));
   const maintenanceWarnings = countBy(maintenanceFindings, (item) => item.severity === "warning");
   const maintenanceErrors = countBy(maintenanceFindings, (item) => item.severity === "error");
-  const adversarialWarnings = countBy(items, (item) => item.adversarialReview?.status === "warning");
-  const adversarialBlocks = countBy(items, (item) => item.adversarialReview?.status === "block");
-  const adversarialPass = countBy(items, (item) => item.adversarialReview?.status === "pass");
+  const adversarialWarnings = countBy(userItems, (item) => item.adversarialReview?.status === "warning");
+  const adversarialBlocks = countBy(userItems, (item) => item.adversarialReview?.status === "block");
+  const adversarialPass = countBy(userItems, (item) => item.adversarialReview?.status === "pass");
   const checkRows = [
     ["Maintenance Light", reviewStatus(maintenanceErrors, maintenanceWarnings), `${maintenanceFindings.length} finding(s), ${maintenanceErrors} error(s), ${maintenanceWarnings} warning(s)`],
-    ["Adversarial Light", reviewStatus(adversarialBlocks, adversarialWarnings), `${adversarialPass}/${items.length} pass, ${adversarialBlocks} block(s), ${adversarialWarnings} warning(s)`],
-    ["ReviewBundle Build", reviewStatus(result.ok === false || result.status === "blocked" ? 1 : 0, 0), `${items.length} item(s), ${pending} pending`],
+    ["Adversarial Light", reviewStatus(adversarialBlocks, adversarialWarnings), `${adversarialPass}/${userItems.length} pass, ${adversarialBlocks} block(s), ${adversarialWarnings} warning(s)`],
+    ["ReviewBundle Build", reviewStatus(result.ok === false || result.status === "blocked" ? 1 : 0, 0), mode.kind === "maintenance"
+      ? `${allHygieneItems.length} vault hygiene finding(s), ${pendingHygiene} open`
+      : `${userItems.length} item(s), ${pending} pending`],
   ];
   const findings = dedupeFindings([
     ...maintenanceFindings.filter((item) => ["error", "warning"].includes(item.severity)),
-    ...items.filter((item) => ["block", "warning"].includes(item.adversarialReview?.status)).map((item) => ({
+    ...userItems.filter((item) => ["block", "warning"].includes(item.adversarialReview?.status)).map((item) => ({
       ...item,
       severity: item.adversarialReview.status === "block" ? "error" : "warning",
       message: item.adversarialReview.reason || item.reason,
     })),
   ]);
-  const typeSummary = formatCounts(countByValue(items, (item) => item.type));
-  const riskSummary = formatCounts(countByValue(items, (item) => item.risk));
-  const title = label.includes("Morning")
+  const typeSummary = formatCounts(countByValue(allReviewItems, (item) => item.type));
+  const riskSummary = formatCounts(countByValue(allReviewItems, (item) => item.risk));
+  const baseTitle = label.includes("Morning")
     ? `${label} - ${bundle.workspaceKey || "main"} (${bundle.createdByAgent || "main"})`
     : label;
+  const title = mode.kind === "maintenance"
+    ? `${baseTitle} - Vault maintenance only - no memory import`
+    : baseTitle;
   return [
     title,
     `${formatReviewTimestamp(bundle.createdAt)} | Proposal-only mode`,
+    `Review mode: ${mode.label} | ${mode.description}`,
     "",
     "## Result",
     "",
@@ -2556,20 +2903,21 @@ function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
     "",
     "## Pending Items",
     "",
-    `- ${items.length} total, ${pending} pending, ${approved} approved, ${rejected} rejected`,
+    `- Memory/user items: ${userItems.length} total, ${pending} pending, ${approved} approved, ${rejected} rejected`,
+    `- Vault hygiene findings: ${allHygieneItems.length} total, ${pendingHygiene} open, ${closedHygiene} closed`,
     `- Types: ${typeSummary}`,
     `- Risk: ${riskSummary}`,
     `- Findings: ${blocks} block(s), ${warnings} warning(s)`,
     "",
     "## Review Buckets",
     "",
-    reviewItemBuckets(items),
+    reviewItemBuckets(items, hygieneItems),
     "",
     "## Artifacts",
     "",
     artifactPaths.length ? artifactPaths.map((path) => `- ${path}`).join("\n") : "- No artifact path available.",
     "",
-    reviewCommands(bundle.bundleId, { artifactPath: written.markdownPath || inferredMarkdownPath }),
+    reviewCommands(bundle.bundleId, { artifactPath: written.markdownPath || inferredMarkdownPath, mode }),
     "",
     result.note || "",
     "Telegram shows a summary only; full item details are in the ReviewBundle artifact.",
@@ -2601,7 +2949,7 @@ function eveningReviewSummary(summary = {}) {
         "- Details are in the listed ReviewBundle artifact in Obsidian.",
         "- Mark low-risk items approved: /plur1bus_review approve low-risk",
         "- Or reject pending items: /plur1bus_review reject all",
-        "- Then write approved items to memory: /plur1bus_review apply",
+        "- Then write approved memory items: /plur1bus_review apply",
         "- Refresh this summary: /plur1bus_review show",
         "",
         "Approve only marks items. Apply is the only step that writes to memory.",
@@ -2641,7 +2989,8 @@ function eveningReviewSummary(summary = {}) {
 function applySummary(result = {}) {
   const applied = Array.isArray(result.applied) ? result.applied.length : 0;
   const blocked = Array.isArray(result.blocked) ? result.blocked.length : 0;
-  const effects = reviewEffectSummary(result.items || []);
+  const effects = reviewEffectSummary(result.items || [], result.hygieneItems || []);
+  const mode = reviewBundleMode(result.items || [], result.hygieneItems || []);
   const next = applied > 0
     ? "Approved items were applied."
     : blocked > 0
@@ -2657,10 +3006,12 @@ function applySummary(result = {}) {
     "## What was actually written",
     "",
     `- Memory DB writes: ${effects.memoryWrites.length}`,
+    ...(mode.kind === "maintenance" ? ["- No memory DB writes were possible or needed."] : []),
     `- Knowledge updates: ${effects.knowledgeWrites.length}`,
     `- Task/proposal files: ${effects.taskWrites.length}`,
     `- Review-only hygiene items: ${effects.reviewOnly.length}`,
     `- Still pending: ${effects.pending.length}`,
+    ...(mode.kind === "maintenance" ? ["- Apply marked approved maintenance items as processed; it did not repair generated files."] : []),
     "",
     "## Memory DB examples",
     "",

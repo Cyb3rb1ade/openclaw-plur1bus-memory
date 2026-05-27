@@ -9,6 +9,9 @@ import {
   adversarialLightReviewItem,
   applyApprovedReviewBundle,
   buildManagedBlock,
+  expireStaleBundles,
+  findManagedBlocks,
+  generateMemoryCardTemplate,
   getObsidianCapabilityPack,
   handleObsidianBridgeCommand,
   normalizeObsidianControlRoomConfig,
@@ -112,7 +115,7 @@ test("morning review command returns compact Telegram-safe summary", async () =>
     });
     assert.match(result.text, /PLUR1BUS Morning Review - main \(main\)/);
     assert.match(result.text, /\| Maintenance Light \|/);
-    assert.match(result.text, /41 total, 41 pending, 0 approved, 0 rejected/);
+    assert.match(result.text, /40 total, 40 pending, 0 approved, 0 rejected/);
     assert.match(result.text, /40 note_import_candidate/);
     assert.match(result.text, /Obsidian notes to import: 40/);
     assert.match(result.text, /Vault hygiene \/ generated artifacts: 1/);
@@ -148,7 +151,7 @@ test("review show command returns compact summary instead of full item json", as
       workspaceDir: vault,
     });
     assert.match(result.text, /PLUR1BUS ReviewBundle/);
-    assert.match(result.text, /21 total, 21 pending, 0 approved, 0 rejected/);
+    assert.match(result.text, /20 total, 20 pending, 0 approved, 0 rejected/);
     assert.match(result.text, /Details in Obsidian:/);
     assert.match(result.text, /Obsidian notes to import: 20/);
     assert.match(result.text, /Vault hygiene \/ generated artifacts: 1/);
@@ -158,6 +161,126 @@ test("review show command returns compact summary instead of full item json", as
     assert.doesNotMatch(result.text, /Show details:/);
     assert.doesNotMatch(result.text, /noteContent/);
     assert.ok(result.text.length < 2600);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("morning review with only vault hygiene says no memory import", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const reviewRoot = join(vault, "00-system/plur1bus");
+    mkdirSync(join(reviewRoot, "dashboards"), { recursive: true });
+    writeFileSync(join(reviewRoot, "dashboards/generated.md"), "# PLUR1BUS\n\n[[Generated Missing Target]]\n");
+
+    const result = await handleObsidianBridgeCommand(["morning-review"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+      proposals: [],
+    });
+
+    assert.match(result.text, /Vault maintenance only - no memory import/);
+    assert.match(result.text, /Review mode: Maintenance only/);
+    assert.match(result.text, /No memory approval is needed/);
+    assert.match(result.text, /Vault hygiene findings: 1 total, 1 open, 0 closed/);
+    assert.match(result.text, /Inspect details: \/plur1bus_review show rb-/);
+    assert.match(result.text, /Explain findings: \/plur1bus_review explain rb-/);
+    assert.match(result.text, /Reject\/close if expected: \/plur1bus_review reject all/);
+    assert.doesNotMatch(result.text, /Then write approved.*memory/);
+    assert.doesNotMatch(result.text, /approve rb-.*low-risk/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("maintenance-only reject all closes hygiene findings and latest show still works", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const reviewRoot = join(vault, "00-system/plur1bus");
+    mkdirSync(join(reviewRoot, "dashboards"), { recursive: true });
+    writeFileSync(join(reviewRoot, "dashboards/generated.md"), "# PLUR1BUS\n\n[[Generated Missing Target]]\n");
+
+    await handleObsidianBridgeCommand(["morning-review"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+      proposals: [],
+    });
+
+    const reject = await handleObsidianBridgeCommand(["review", "reject", "all"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(reject.text, /Changed: 1/);
+
+    const shown = await handleObsidianBridgeCommand(["review", "show"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(shown.text, /Vault maintenance only - no memory import/);
+    assert.match(shown.text, /Vault hygiene findings: 1 total, 0 open, 1 closed/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("review show separates memory and mixed bundle modes", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, "00-system/plur1bus"), { recursive: true });
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-memory-only",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "memory/import.md",
+        action: "Review immutable summary",
+        reason: "Import note",
+        evidence: ["Evidence"],
+        noteContent: "# Import\n\nEvidence",
+      }],
+    });
+    const memory = await handleObsidianBridgeCommand(["review", "show", "rb-memory-only"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(memory.text, /Review mode: Memory review/);
+    assert.match(memory.text, /Then write approved memory items: \/plur1bus_review apply rb-memory-only/);
+    assert.doesNotMatch(memory.text, /Vault maintenance only - no memory import/);
+
+    mkdirSync(join(vault, "00-system/plur1bus/dashboards"), { recursive: true });
+    writeFileSync(join(vault, "00-system/plur1bus/dashboards/mixed-link.md"), "# PLUR1BUS\n\n[[Generated Mixed Target]]\n");
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-mixed-review",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "memory/mixed.md",
+        action: "Review immutable summary",
+        reason: "Import note",
+        evidence: ["Evidence"],
+        noteContent: "# Mixed\n\nEvidence",
+      }],
+    });
+    const mixed = await handleObsidianBridgeCommand(["review", "show", "rb-mixed-review"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(mixed.text, /Review mode: Mixed review/);
+    assert.match(mixed.text, /Obsidian notes to import: 1/);
+    assert.match(mixed.text, /Vault hygiene \/ generated artifacts: 1/);
+    assert.match(mixed.text, /Then write approved memory items: \/plur1bus_review apply rb-mixed-review/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -297,7 +420,7 @@ test("review approve low-risk without bundle only marks items and still requires
       workspaceKey: "main",
       workspaceDir: vault,
     });
-    assert.match(shown.text, /1 pending, 1 approved, 0 rejected/);
+    assert.match(shown.text, /0 pending, 1 approved, 0 rejected/);
 
     const applied = await handleObsidianBridgeCommand(["review", "apply"], {
       config: config(vault),
@@ -363,6 +486,79 @@ test("review apply and explain separate memory writes from review-only hygiene",
     assert.match(explained.text, /Memory DB writes: 1/);
     assert.match(explained.text, /Applied but not memory DB writes/);
     assert.match(explained.text, /Apply means PLUR1BUS processed an approved item/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("hygiene-only apply says no memory DB writes were needed", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(join(vault, "00-system/plur1bus/dashboards"), { recursive: true });
+    writeFileSync(join(vault, "00-system/plur1bus/dashboards/hygiene-link.md"), "# PLUR1BUS\n\n[[Generated Hygiene Target]]\n");
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-hygiene-apply",
+      proposals: [],
+    });
+    await updateReviewBundleItems(config(vault), "rb-hygiene-apply", "approve", "all", {
+      approvedBy: "human",
+      now: new Date("2026-05-26T17:14:08.000Z"),
+    });
+
+    const applied = await handleObsidianBridgeCommand(["review", "apply", "rb-hygiene-apply"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+
+    assert.match(applied.text, /Memory DB writes: 0/);
+    assert.match(applied.text, /No memory DB writes were possible or needed/);
+    assert.match(applied.text, /Apply marked approved maintenance items as processed; it did not repair generated files/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("review explain uses human-readable maintenance finding descriptions", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const reviewRoot = join(vault, "00-system/plur1bus");
+    mkdirSync(join(reviewRoot, "dashboards"), { recursive: true });
+    const block = buildManagedBlock({
+      id: "dashboard",
+      agent: "main",
+      bundle: "test",
+      body: "Generated body",
+    });
+    writeFileSync(join(reviewRoot, "dashboards/hash.md"), block.replace("Generated body", "Edited body"));
+    writeFileSync(join(reviewRoot, "dashboards/link.md"), "# PLUR1BUS\n\n[[Generated Link Target]]\n");
+
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-hygiene-explain",
+      proposals: [],
+    });
+
+    const shown = await handleObsidianBridgeCommand(["review", "show", "rb-hygiene-explain"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(shown.text, /Ein PLUR1BUS-generierter Block wurde nachtraeglich veraendert oder stammt aus alter Generator-Version/);
+    assert.match(shown.text, /Generierter Dashboard-Link sollte geprueft werden; meist kosmetisch/);
+    assert.doesNotMatch(shown.text, /warning: generated_link_review/);
+    assert.doesNotMatch(shown.text, /error: managed_block_hash_mismatch/);
+
+    const explained = await handleObsidianBridgeCommand(["review", "explain", "rb-hygiene-explain"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(explained.text, /No memory DB writes were possible or needed/);
+    assert.match(explained.text, /Vault hygiene: dashboards\/hash.md - Ein PLUR1BUS-generierter Block/);
+    assert.match(explained.text, /Vault hygiene: dashboards\/link.md - Generierter Dashboard-Link/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1284,4 +1480,193 @@ test("obsidian discover workspaces write merges missing entries idempotently", a
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+// D2: vault_hygiene maintenance findings must not appear in user-facing bundle items
+test("vault_hygiene findings are separated from user-facing bundle items into hygieneItems", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const reviewRoot = join(vault, "00-system/plur1bus");
+    mkdirSync(join(reviewRoot, "dashboards"), { recursive: true });
+    // broken link triggers a generated_link_review maintenance warning → vault_hygiene item
+    writeFileSync(join(reviewRoot, "dashboards/generated.md"), "[[BrokenMissingTarget]]\n");
+
+    const result = await prepareReviewBundle(config(vault), {
+      bundleId: "rb-hygiene-separation",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "memory/note.md",
+        action: "Review immutable summary",
+        reason: "Import note",
+      }],
+    });
+
+    assert.ok(
+      result.items.every((item) => item.type !== "vault_hygiene"),
+      "vault_hygiene items must not be in user-facing items array"
+    );
+    assert.ok(Array.isArray(result.hygieneItems), "result.hygieneItems must be an array");
+    assert.ok(
+      result.hygieneItems.every((item) => item.type === "vault_hygiene"),
+      "hygieneItems must only contain vault_hygiene items"
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// P3: bundle cooldown prevents rapid-fire bundle creation for auto-generated (cron) bundles
+test("bundle cooldown is opt-in and returns an explicit skipped summary", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const first = await prepareReviewBundle(config(vault), {
+      now: new Date("2026-05-26T07:03:00.000Z"),
+      proposals: [{ type: "note_import_candidate", risk: "low", target: "memory/a.md", action: "Review", reason: "a" }],
+    });
+    assert.equal(first.status, "prepared", "first auto bundle must be prepared normally");
+
+    const second = await prepareReviewBundle(config(vault), {
+      now: new Date("2026-05-26T07:05:00.000Z"),
+      proposals: [{ type: "note_import_candidate", risk: "low", target: "memory/b.md", action: "Review", reason: "b" }],
+    });
+    assert.equal(second.status, "prepared",
+      "manual/default bundle creation must not be hidden behind a cooldown");
+
+    const third = await prepareReviewBundle(config(vault), {
+      now: new Date("2026-05-26T07:06:00.000Z"),
+      bundleCooldownMs: 200_000_000,
+      proposals: [{ type: "note_import_candidate", risk: "low", target: "memory/c.md", action: "Review", reason: "c" }],
+    });
+    assert.equal(third.status, "prepared",
+      "first explicitly cooled bundle must create cooldown state");
+
+    const fourth = await prepareReviewBundle(config(vault), {
+      now: new Date("2026-05-26T07:07:00.000Z"),
+      bundleCooldownMs: 200_000_000,
+      proposals: [{ type: "note_import_candidate", risk: "low", target: "memory/d.md", action: "Review", reason: "d" }],
+    });
+    assert.equal(fourth.status, "skipped_cooldown",
+      "explicit cooldown must skip rapid-fire auto bundle creation");
+
+    const summary = await handleObsidianBridgeCommand(["morning-review"], {
+      config: { ...config(vault), bundleCooldownMs: 200_000_000 },
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+      proposals: [{ type: "note_import_candidate", risk: "low", target: "memory/e.md", action: "Review", reason: "e" }],
+    });
+    assert.match(summary.text, /Morning Review skipped - cooldown active/);
+    assert.match(summary.text, /Remaining cooldown:/);
+    assert.doesNotMatch(summary.text, /0 item\(s\), 0 pending/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// P1 root cause: buildManagedBlock must hash the same content it stores
+test("managed block hash is stable when body has trailing whitespace", () => {
+  const bodyWithNewline = "# Review\n\nSome content.\n";
+  const block = buildManagedBlock({ id: "evening-deep-review", agent: "main", bundle: "rb-test", body: bodyWithNewline });
+  const found = findManagedBlocks(block);
+  assert.equal(found.length, 1, "should find exactly one managed block");
+  assert.equal(found[0].hashMatches, true,
+    "buildManagedBlock hash must match the stored content even when body has trailing whitespace");
+});
+
+// U3: bundle markdown must be human-readable only — no embedded JSON code blocks
+test("review bundle markdown contains no embedded JSON code blocks", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(vault, { recursive: true });
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-no-json",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "memory/clean.md",
+        action: "Import clean note",
+        reason: "Verify no JSON in markdown",
+        evidence: ["ev-1"],
+        noteContent: "# Clean\n\nNo embedded JSON please.",
+      }],
+    });
+    const mdPath = join(vault, "00-system/plur1bus/review-bundles/rb-no-json.md");
+    const content = readFileSync(mdPath, "utf8");
+    assert.doesNotMatch(content, /```json/,
+      "ReviewBundle markdown must not contain embedded JSON code blocks (full item JSON belongs in .items.json only)");
+    assert.match(content, /note_import_candidate/,
+      "ReviewBundle markdown must still mention the item type");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// D1/B: expireStaleBundles rejects bundles older than the configured age
+test("expireStaleBundles marks old pending bundles as expired", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(vault, { recursive: true });
+    // Create a bundle with a very old timestamp so it looks stale
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-stale-old",
+      now: new Date("2026-05-01T00:00:00.000Z"),
+      proposals: [{ type: "task_suggestion", risk: "low", target: "tasks/old.md", action: "Old task", reason: "Stale test" }],
+    });
+    // Create a fresh bundle that should survive
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-stale-fresh",
+      now: new Date("2026-05-26T22:00:00.000Z"),
+      proposals: [{ type: "task_suggestion", risk: "low", target: "tasks/fresh.md", action: "Fresh task", reason: "Fresh test" }],
+    });
+
+    const result = expireStaleBundles(config(vault), {
+      now: new Date("2026-05-27T10:00:00.000Z"),
+      staleBundleMaxAgeDays: 7,
+    });
+
+    assert.equal(result.expired, 1, "exactly one bundle (the old one) must be expired");
+    assert.ok(result.expiredIds.includes("rb-stale-old"), "expired bundle ID must be listed");
+    assert.ok(!result.expiredIds.includes("rb-stale-fresh"), "fresh bundle must not be expired");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("quickapply is not a public review command", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    mkdirSync(vault, { recursive: true });
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-quickapply",
+      proposals: [
+        { type: "task_suggestion", risk: "low", target: "tasks/quick.md", action: "Quick task", reason: "Quick" },
+        { type: "task_suggestion", risk: "medium", target: "tasks/slow.md", action: "Slow task", reason: "Slow" },
+      ],
+    });
+    const result = await handleObsidianBridgeCommand(["review", "quickapply", "rb-quickapply", "low-risk"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    assert.match(result.text, /PLUR1BUS quick commands:/);
+    assert.doesNotMatch(result.text, /PLUR1BUS ReviewBundle apply result/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// U7: memory-card template has all required frontmatter fields
+test("generateMemoryCardTemplate returns a draft memory card with all required fields", () => {
+  const template = generateMemoryCardTemplate({ workspaceId: "main", agentId: "bernd" });
+  assert.match(template, /plur1bus_type: memory_card/);
+  assert.match(template, /workspace_id: main/);
+  assert.match(template, /agent_id: bernd/);
+  assert.match(template, /category: fact/);
+  assert.match(template, /sync_status: draft/);
+  assert.match(template, /importance: 0\.7/);
+  assert.match(template, /content_hash:/);
+  assert.doesNotMatch(template, /content_hash: sha256:/,
+    "content_hash must be blank in the template so the bridge fills it on first scan");
 });

@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [4.2.16] - 2026-05-27
+
+### Fixed
+- Clarified maintenance-only Obsidian ReviewBundles so vault hygiene findings no longer look like memory imports or memory approval work.
+- Made `/plur1bus_review reject all` close separated `hygieneItems`, and made latest-bundle selection include hygiene-only pending bundles.
+- Disabled hidden default bundle cooldown for manual review commands; explicit cooldown skips now return a clear skipped summary instead of an empty-looking review.
+
+### Changed
+- Kept public review flow approval-gated by not exposing one-step quick apply or config-driven low-risk auto-apply in this release.
+- Added `bundleCooldownMs` to the Obsidian Bridge config schema with default `0`.
+
+### Verification
+- Added regression coverage for maintenance-only summaries, hygiene closing, opt-in cooldown behavior, and quickapply staying non-public.
+- Verified the full plugin test suite with `node --test __tests__/*.test.js`, syntax checks, `git diff --check`, and `npm pack --dry-run`.
+
 ## [4.2.15] - 2026-05-26
 
 ### Changed

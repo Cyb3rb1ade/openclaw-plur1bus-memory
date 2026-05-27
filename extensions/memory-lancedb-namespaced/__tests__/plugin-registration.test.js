@@ -221,7 +221,7 @@ test("plugin routes PLUR1BUS Telegram shortcuts through the same command layer",
     const result = await command.handler({ args: "", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
     assert.match(result.text, /PLUR1BUS Morning Review - main \(main\)/);
     assert.match(result.text, /Telegram shows a summary only; full item details are in the ReviewBundle artifact/);
-    assert.match(result.text, /Apply is the only step that writes to memory/);
+    assert.match(result.text, /No memory approval is needed|Apply is the only step that writes to memory/);
     assert.doesNotMatch(result.text, /noteContent/);
     assert.ok(result.text.length < 2600);
   } finally {

@@ -26,20 +26,40 @@ function tableRows(records) {
   return [
     "| ID | Status | Risk | Scope | Trust | Agent | Updated |",
     "|---|---|---|---|---|---|---|",
-    ...records.slice(0, 100).map((record) => `| [[${record.path || record.plur1bus_id}|${record.plur1bus_id || record.id || "record"}]] | ${record.status || ""} | ${record.risk || ""} | ${record.scope || ""} | ${record.trustLevel || ""} | ${record.agentId || ""} | ${record.updatedAt || ""} |`),
+    // P2: fall back to "(unknown)" when record has neither path nor plur1bus_id to avoid [[undefined|...]] links
+    ...records.slice(0, 100).map((record) => `| [[${record.path || record.plur1bus_id || "(unknown)"}|${record.plur1bus_id || record.id || "record"}]] | ${record.status || ""} | ${record.risk || ""} | ${record.scope || ""} | ${record.trustLevel || ""} | ${record.agentId || ""} | ${record.updatedAt || ""} |`),
   ].join("\n");
 }
 
-export function renderDashboard({ title, type, collection, records, config }) {
+function reviewProgressSection(records) {
+  const pending = records.filter((r) => !r.status || r.status === "pending").length;
+  const applied = records.filter((r) => r.status === "applied").length;
+  const rejected = records.filter((r) => r.status === "rejected").length;
+  const total = records.length;
+  return [
+    "## Review Progress",
+    "",
+    `- Pending review items: ${pending}`,
+    `- Applied: ${applied}`,
+    `- Rejected: ${rejected}`,
+    `- Total tracked: ${total}`,
+    "",
+    "> Use /plur1bus_review show to see the active ReviewBundle queue.",
+  ].join("\n");
+}
+
+export function renderDashboard({ title, type, collection, records, config, generatedAt }) {
   const dataviewEnabled = config.optionalIntegrations?.dataview === true || config.dashboardLayer?.dataview === true;
   const basesEnabled = config.optionalIntegrations?.bases === true || config.dashboardLayer?.bases === true;
   const reviewQueueNote = collection === "review-items"
     ? "This dashboard lists generated review_item records only. ReviewBundle queues are shown with /plur1bus_review; 0 records here does not mean there are no pending ReviewBundle items."
     : "";
+  // U5: freshness timestamp so users know how current the dashboard is
+  const ts = generatedAt ? String(generatedAt).slice(0, 16).replace("T", " ") : new Date().toISOString().slice(0, 16).replace("T", " ");
   const body = [
     `# ${title}`,
     "",
-    "> Obsidian dashboard output. PLUR1BUS/LanceDB remains authoritative memory.",
+    `> 🔄 Generated: ${ts} | Obsidian dashboard output. PLUR1BUS/LanceDB remains authoritative memory.`,
     reviewQueueNote ? `> ${reviewQueueNote}` : "",
     "",
     "## Static Summary",
@@ -47,6 +67,8 @@ export function renderDashboard({ title, type, collection, records, config }) {
     `- Records: ${records.length}`,
     `- Open/pending: ${records.filter((record) => !["applied", "resolved", "closed"].includes(String(record.status || ""))).length}`,
     "",
+    // U1: review-queue dashboard gets a progress section
+    ...(collection === "review-items" ? [reviewProgressSection(records), ""] : []),
     "## Records",
     "",
     tableRows(records),
@@ -58,19 +80,20 @@ export function renderDashboard({ title, type, collection, records, config }) {
   return formatFrontmatter({
     plur1bus_type: "dashboard",
     dashboard: collection,
-    generatedBy: "plur1bus-4.2.15",
+    generatedBy: "plur1bus-4.2.16",
     authoritative: false,
-  }, buildManagedBlock({ id: `dashboard-${collection}`, version: "4.2.15", body }));
+  }, buildManagedBlock({ id: `dashboard-${collection}`, version: "4.2.16", body }));
 }
 
 export function generateDashboards(rawConfig, options = {}) {
   const index = buildRecordIndex(rawConfig, options);
+  const generatedAt = (options.now || new Date()).toISOString();
   const generated = [];
   for (const [fileName, type, title, collection] of DASHBOARD_DEFINITIONS) {
     const rel = `dashboards/${fileName}`;
     const records = index.byType[type] || [];
     const { targetPath } = resolveReviewPath(rawConfig, rel);
-    atomicWriteText(targetPath, renderDashboard({ title, type, collection, records, config: rawConfig }));
+    atomicWriteText(targetPath, renderDashboard({ title, type, collection, records, config: rawConfig, generatedAt }));
     generated.push(rel);
   }
   return { ok: true, generated, count: generated.length };

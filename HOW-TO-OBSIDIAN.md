@@ -25,16 +25,19 @@ Meaning:
 - `/plur1bus_morning` prepares daily review proposals.
 - `/plur1bus_evening` runs the deeper evening checks and writes an artifact.
 - `/plur1bus_review` shows the latest pending ReviewBundle.
-- `/plur1bus_review explain` explains what was applied, what became a memory
-  DB write, and what stayed review-only hygiene.
+- `/plur1bus_review explain` explains whether a bundle is a Memory review,
+  Maintenance only, or Mixed review; it also shows what was applied, what became
+  a memory DB write, and what stayed review-only hygiene.
 - `/plur1bus_review approve low-risk` marks low-risk pending items as approved.
 - `/plur1bus_review reject all` marks pending items as rejected.
-- `/plur1bus_review apply` is the only step that writes approved items to
-  memory.
+- `/plur1bus_review apply` is the only step that can write approved memory
+  candidates to memory.
 
 Morning, evening, review, and approve do not write memory. Approval only marks
 items. Apply re-reads the ReviewBundle, revalidates hashes/preconditions, and
-applies approved safe items.
+applies approved safe items. Maintenance-only bundles say `Vault maintenance
+only - no memory import`; they need inspection, explanation, or rejection/close,
+not memory approval.
 
 Bundle IDs are optional in Telegram replies and short commands. If you answer a
 review summary with `/plur1bus_review approve low-risk`, `/plur1bus_review reject

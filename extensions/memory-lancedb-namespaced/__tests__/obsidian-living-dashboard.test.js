@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { generateBases } from "../lib/obsidian/bases-generator.js";
-import { generateDashboards } from "../lib/obsidian/dashboard-generator.js";
+import { generateDashboards, renderDashboard } from "../lib/obsidian/dashboard-generator.js";
 import { generateTaskSuggestions } from "../lib/obsidian/tasks-generator.js";
 import { buildProjectHub } from "../lib/obsidian/project-hub-builder.js";
 import { buildWeeklySynthesis } from "../lib/obsidian/weekly-synthesis.js";
@@ -319,6 +319,53 @@ test("New 4.0.0 obsidian commands route through the control-room facade", async 
     assert.match(result.text, /authority-main/);
     const dash = await handleObsidianBridgeCommand(["dashboards", "build"], { config: cfg, records: sampleRecords });
     assert.match(dash.text, /dashboards\/index\.md/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// P2: dashboard link must not render undefined when record has no path or plur1bus_id
+test("dashboard table row falls back to (unknown) when record has no path", () => {
+  const output = renderDashboard({
+    title: "Test", type: "source", collection: "sources",
+    records: [{ id: "rec-1", status: "active" }],
+    config: {},
+  });
+  assert.doesNotMatch(output, /\[\[undefined\|/,
+    "link target must not be the string 'undefined'");
+  assert.match(output, /\[\[\(unknown\)\|/,
+    "link target must fall back to (unknown) when path and plur1bus_id are absent");
+});
+
+// U5: every generated dashboard begins with a freshness line
+test("dashboard output starts with a generated-at freshness timestamp", () => {
+  const output = renderDashboard({
+    title: "My Dashboard", type: "source", collection: "sources",
+    records: [],
+    config: {},
+    generatedAt: "2026-05-27T10:00:00.000Z",
+  });
+  assert.match(output, /🔄 Generated: 2026-05-27/,
+    "dashboard must show a generated-at timestamp for freshness");
+});
+
+// U1: review-queue dashboard includes a progress/stats section
+test("review-queue dashboard includes pending review count and progress section", () => {
+  const { tmp, vault } = makeVault();
+  try {
+    const cfg = config(vault);
+    const result = generateDashboards(cfg, {
+      records: [
+        { type: "review_item", id: "ri-1", status: "pending", agentId: "main" },
+        { type: "review_item", id: "ri-2", status: "applied", agentId: "main" },
+      ],
+    });
+    const dashPath = join(vault, "00-system/plur1bus/dashboards/review-queue.md");
+    const content = readFileSync(dashPath, "utf8");
+    assert.match(content, /## Review Progress/,
+      "review-queue.md must have a Review Progress section");
+    assert.match(content, /Pending review/i,
+      "review-queue.md must show pending item count");
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

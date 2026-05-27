@@ -3,7 +3,7 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.2.15` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.2.16` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
 gegen OpenClaw `2026.5.12` und `2026.5.18` validiert; ältere OpenClaw-Versionen bleiben
@@ -221,6 +221,12 @@ ID nicht wiederholen. PLUR1BUS waehlt nach Queue-Status: show/explain/approve/re
 nutzen das neueste pending ReviewBundle, apply nutzt das neueste approved
 ReviewBundle.
 
+ReviewBundles unterscheiden sichtbar zwischen `Memory review`,
+`Maintenance only` und `Mixed review`. Reine `vault_hygiene`-Bundles zeigen
+`Vault maintenance only - no memory import`; fuer sie ist keine Memory-Freigabe
+noetig. Nutzer sollen Details pruefen, `/plur1bus_review explain` verwenden
+oder erwartete Befunde mit `/plur1bus_review reject all` schliessen.
+
 Die Bridge schreibt nur additive Dateien unter `reviewRoot`:
 
 ```text
@@ -320,7 +326,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.2.15
+obsidianBridgeVersion: 4.2.16
 ---
 ```
 
