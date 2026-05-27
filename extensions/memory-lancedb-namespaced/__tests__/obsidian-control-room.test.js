@@ -9,6 +9,7 @@ import {
   adversarialLightReviewItem,
   applyApprovedReviewBundle,
   buildManagedBlock,
+  eveningReviewSummary,
   expireStaleBundles,
   findManagedBlocks,
   generateMemoryCardTemplate,
@@ -17,6 +18,7 @@ import {
   normalizeObsidianControlRoomConfig,
   prepareReviewBundle,
   replaceManagedBlock,
+  reviewBundleSummary,
   runMorningReview,
   runVaultDoctor,
   safeBridgePath,
@@ -1671,4 +1673,135 @@ test("generateMemoryCardTemplate returns a draft memory card with all required f
   assert.match(template, /content_hash:/);
   assert.doesNotMatch(template, /content_hash: sha256:/,
     "content_hash must be blank in the template so the bridge fills it on first scan");
+});
+
+// ─── UX-Tests: Deutsch & kein Jargon ─────────────────────────────────────────
+
+function makeBundle(overrides = {}) {
+  return {
+    bundle: {
+      createdAt: "2026-05-27T14:29:30.000Z",
+      workspaceKey: "main",
+      createdByAgent: "main",
+      bundleId: "rb-2026-05-27-1429",
+    },
+    items: [],
+    hygieneItems: [],
+    maintenance: { findings: [] },
+    ok: true,
+    ...overrides,
+  };
+}
+
+function makeUserItem(overrides = {}) {
+  return {
+    id: "rbi-001",
+    type: "note_import_candidate",
+    status: "pending",
+    risk: "low",
+    adversarialReview: { status: "pass", reason: "OK" },
+    ...overrides,
+  };
+}
+
+test("reviewBundleSummary: Deutsches Datumsformat", () => {
+  const out = reviewBundleSummary(makeBundle());
+  assert.match(out, /27\. Mai 2026/);
+  assert.match(out, /14:29/);
+});
+
+test("reviewBundleSummary: Kein technischer Jargon", () => {
+  const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
+  assert.doesNotMatch(out, /Maintenance Light/);
+  assert.doesNotMatch(out, /Adversarial Light/);
+  assert.doesNotMatch(out, /ReviewBundle Build/);
+  assert.doesNotMatch(out, /\[OK\]/);
+  assert.doesNotMatch(out, /\[ERROR\]/);
+  assert.doesNotMatch(out, /\[WARN\]/);
+  assert.doesNotMatch(out, /note_import_candidate/);
+  assert.doesNotMatch(out, /vault_hygiene/);
+  assert.doesNotMatch(out, /review-bundles\/rb-/);
+  assert.doesNotMatch(out, /Bundle id is optional/);
+});
+
+test("reviewBundleSummary: Emoji-Status fuer saubere Items", () => {
+  const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
+  assert.match(out, /✅/);
+  assert.match(out, /Sicherheitsprüfung/);
+});
+
+test("reviewBundleSummary: Emoji-Status bei Adversarial-Block", () => {
+  const item = makeUserItem({ adversarialReview: { status: "block", reason: "Gefaehrlich" } });
+  const out = reviewBundleSummary(makeBundle({ items: [item] }));
+  assert.match(out, /❌/);
+  assert.match(out, /blockiert/);
+});
+
+test("reviewBundleSummary: Anzahl Vorschlaege auf Deutsch", () => {
+  const items = [makeUserItem(), makeUserItem({ id: "rbi-002" })];
+  const out = reviewBundleSummary(makeBundle({ items }));
+  assert.match(out, /2 Vorschl/);
+  assert.match(out, /Notizen aus Obsidian/);
+});
+
+test("reviewBundleSummary: Singular korrekt", () => {
+  const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
+  assert.match(out, /1 Vorschlag/);
+  assert.doesNotMatch(out, /1 Vorschl..ge/);
+});
+
+test("reviewBundleSummary: Systemhinweise ohne Code-Bezeichner", () => {
+  const findings = [
+    { severity: "warning", code: "managed_block_hash_mismatch", message: "hash mismatch" },
+    { severity: "warning", code: "generated_link_review", message: "link" },
+  ];
+  const out = reviewBundleSummary(makeBundle({ maintenance: { findings } }));
+  assert.doesNotMatch(out, /managed_block_hash_mismatch/);
+  assert.doesNotMatch(out, /generated_link_review/);
+  assert.match(out, /Systemhinweise/);
+});
+
+test("reviewBundleSummary: Next-Step ohne Bundle-ID", () => {
+  const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
+  assert.match(out, /approve low-risk/);
+  assert.match(out, /apply/);
+  assert.doesNotMatch(out, /rb-2026-05-27-1429/);
+});
+
+test("reviewBundleSummary: Cooldown-Fall auf Deutsch", () => {
+  const out = reviewBundleSummary({
+    status: "skipped_cooldown",
+    cooldownRemainingMs: 300000,
+    latestBundleId: "rb-2026-05-27-0900",
+  });
+  assert.match(out, /Pause/);
+  assert.doesNotMatch(out, /skipped_cooldown/);
+  assert.doesNotMatch(out, /PLUR1BUS/);
+});
+
+test("reviewBundleSummary: Titel je nach Label-Typ", () => {
+  assert.match(reviewBundleSummary(makeBundle(), "PLUR1BUS Morning Review"), /Morgen-Review/);
+  assert.match(reviewBundleSummary(makeBundle(), "PLUR1BUS Weekly Review"), /Wochen-Review/);
+  assert.match(reviewBundleSummary(makeBundle(), "PLUR1BUS ReviewBundle"), /Memory Review/);
+});
+
+test("eveningReviewSummary: Kein technischer Jargon", () => {
+  const out = eveningReviewSummary({
+    workspaceKey: "main",
+    agentId: "main",
+    createdAt: "2026-05-27T18:08:00.000Z",
+    status: {
+      maintenance: { label: "pass", count: 0 },
+      adversarial: { label: "pass", count: 267 },
+      dashboards: { label: "pass", count: 14 },
+    },
+    blockedOrWarningItems: [],
+    pendingBundles: ["rb-2026-05-27-1429"],
+    pendingItems: 267,
+    artifactPath: "plur1bus/evening-deep-review-2026-05-27-1808.md",
+  });
+  assert.doesNotMatch(out, /Maintenance Deep/);
+  assert.doesNotMatch(out, /Adversarial Deep/);
+  assert.doesNotMatch(out, /\[OK\]/);
+  assert.match(out, /Abend-Review/);
 });

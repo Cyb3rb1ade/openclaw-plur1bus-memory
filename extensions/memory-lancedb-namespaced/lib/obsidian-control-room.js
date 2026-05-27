@@ -2807,7 +2807,7 @@ function reviewExplainSummary(result = {}, label = "PLUR1BUS ReviewBundle explan
   ].join("\n");
 }
 
-function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
+export function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
   if (result.status === "skipped_cooldown") {
     return [
       "PLUR1BUS Morning Review skipped - cooldown active",
@@ -2931,7 +2931,7 @@ function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
   ].filter(Boolean).join("\n");
 }
 
-function eveningReviewSummary(summary = {}) {
+export function eveningReviewSummary(summary = {}) {
   const checks = summary.status || {};
   const rows = [
     ["Maintenance Deep", checks.maintenance],
