@@ -2583,12 +2583,12 @@ function dedupeFindings(findings = []) {
 function describeFinding(finding = {}) {
   const code = finding.code || finding.type || finding.evidence?.[0] || "";
   if (code === "managed_block_hash_mismatch") {
-    return "Ein PLUR1BUS-generierter Block wurde nachtraeglich veraendert oder stammt aus alter Generator-Version.";
+    return "Interner Block wurde verändert — wird beim Anwenden korrigiert";
   }
   if (code === "generated_link_review") {
-    return "Generierter Dashboard-Link sollte geprueft werden; meist kosmetisch.";
+    return "Dashboard-Link zu prüfen (meist kein Problem)";
   }
-  return finding.message || finding.reason || finding.action || "Review required.";
+  return finding.message || finding.reason || finding.action || "Bitte prüfen.";
 }
 
 function formatFinding(finding = {}) {
