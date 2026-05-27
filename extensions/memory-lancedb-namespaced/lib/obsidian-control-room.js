@@ -3119,6 +3119,28 @@ export function eveningReviewSummary(summary = {}) {
   return out.join("\n");
 }
 
+export function quickapplySummary(applyResult = {}) {
+  const applied = Array.isArray(applyResult.applied) ? applyResult.applied.length : 0;
+  const blocked = Array.isArray(applyResult.blocked) ? applyResult.blocked.length : 0;
+  const effects = reviewEffectSummary(applyResult.items || [], applyResult.hygieneItems || []);
+
+  const lines = [];
+  if (applied > 0) {
+    lines.push(`✅ ${applied} ${applied === 1 ? "Eintrag" : "Einträge"} gespeichert`);
+  }
+  if (effects.pending.length > 0) {
+    lines.push(`⏳ ${effects.pending.length} ${effects.pending.length === 1 ? "Vorschlag wartet" : "Vorschläge warten"} noch (mittleres/hohes Risiko)`);
+    lines.push("→ show für Details");
+  }
+  if (blocked > 0) {
+    lines.push(`⚠️ ${blocked} ${blocked === 1 ? "Eintrag" : "Einträge"} blockiert — show für Details`);
+  }
+  if (applied === 0 && effects.pending.length === 0 && blocked === 0) {
+    lines.push("✅ Nichts zu tun — keine freigegebenen Einträge.");
+  }
+  return lines.join("\n");
+}
+
 function applySummary(result = {}) {
   const applied = Array.isArray(result.applied) ? result.applied.length : 0;
   const blocked = Array.isArray(result.blocked) ? result.blocked.length : 0;
@@ -3422,6 +3444,19 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
           memoryStore: context.memoryStore,
           knowledgeUpdate: context.knowledgeUpdate,
         })));
+      }
+      if (effectiveSub === "quickapply") {
+        if (!bundleId) return commandResult("✅ Keine Vorschläge offen — nichts zu tun.");
+        const quickSelector = normalizeItemSelector(positionalSelector || "low-risk");
+        updateReviewBundleItems(commandConfig, bundleId, "approve", quickSelector);
+        const applyResult = await applyApprovedReviewBundle(commandConfig, bundleId, {
+          agentId,
+          workspaceKey,
+          workspaceDir: context.workspaceDir,
+          memoryStore: context.memoryStore,
+          knowledgeUpdate: context.knowledgeUpdate,
+        });
+        return commandResult(quickapplySummary(applyResult));
       }
     }
     return commandResult(obsidianCommandHelp());

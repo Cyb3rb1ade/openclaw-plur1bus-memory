@@ -18,6 +18,7 @@ import {
   normalizeObsidianControlRoomConfig,
   prepareReviewBundle,
   replaceManagedBlock,
+  quickapplySummary,
   reviewBundleSummary,
   runMorningReview,
   runVaultDoctor,
@@ -1629,29 +1630,6 @@ test("expireStaleBundles marks old pending bundles as expired", async () => {
   }
 });
 
-test("quickapply is not a public review command", async () => {
-  const { tmp, vault } = makeVault();
-  try {
-    mkdirSync(vault, { recursive: true });
-    await prepareReviewBundle(config(vault), {
-      bundleId: "rb-quickapply",
-      proposals: [
-        { type: "task_suggestion", risk: "low", target: "tasks/quick.md", action: "Quick task", reason: "Quick" },
-        { type: "task_suggestion", risk: "medium", target: "tasks/slow.md", action: "Slow task", reason: "Slow" },
-      ],
-    });
-    const result = await handleObsidianBridgeCommand(["review", "quickapply", "rb-quickapply", "low-risk"], {
-      config: config(vault),
-      agentId: "main",
-      workspaceKey: "main",
-      workspaceDir: vault,
-    });
-    assert.match(result.text, /PLUR1BUS quick commands:/);
-    assert.doesNotMatch(result.text, /PLUR1BUS ReviewBundle apply result/);
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
-});
 
 // U7: memory-card template has all required frontmatter fields
 test("generateMemoryCardTemplate returns a draft memory card with all required fields", () => {
@@ -1868,4 +1846,56 @@ test("reviewBundleSummary: Header 'Aufgaben' wenn nur tasks", () => {
   ];
   const out = reviewBundleSummary(makeBundle({ items }));
   assert.match(out, /Aufgaben:/);
+});
+
+// ─── UX Round 2: C — quickapply ──────────────────────────────────────────────
+
+test("quickapplySummary: zeigt gespeicherte Einträge", () => {
+  const result = quickapplySummary({ applied: ["a", "b"], blocked: [], items: [], hygieneItems: [] });
+  assert.match(result, /2 Einträge gespeichert/);
+});
+
+test("quickapplySummary: Singular bei einem Eintrag", () => {
+  const result = quickapplySummary({ applied: ["a"], blocked: [], items: [], hygieneItems: [] });
+  assert.match(result, /1 Eintrag gespeichert/);
+});
+
+test("quickapplySummary: 'Nichts zu tun' wenn nichts applied", () => {
+  const result = quickapplySummary({ applied: [], blocked: [], items: [], hygieneItems: [] });
+  assert.match(result, /Nichts zu tun/);
+});
+
+test("quickapplySummary: zeigt blockierte Einträge", () => {
+  const result = quickapplySummary({ applied: ["a"], blocked: ["b"], items: [], hygieneItems: [] });
+  assert.match(result, /1 Eintrag.*blockiert/);
+});
+
+test("review quickapply wendet low-risk Items in einem Schritt an", async () => {
+  const { tmp, vault } = makeVault();
+  try {
+    await prepareReviewBundle(config(vault), {
+      bundleId: "rb-quickapply-test",
+      proposals: [{
+        type: "note_import_candidate",
+        risk: "low",
+        target: "memory/quick.md",
+        action: "Quick apply test",
+        reason: "Test note import",
+        evidence: ["Evidence"],
+        noteContent: "# Quick\n\nTest content",
+      }],
+    });
+
+    const result = await handleObsidianBridgeCommand(["review", "quickapply", "low-risk"], {
+      config: config(vault),
+      agentId: "main",
+      workspaceKey: "main",
+      workspaceDir: vault,
+    });
+    // quickapply ran (not help text) and produced quickapplySummary-style output
+    assert.doesNotMatch(result.text, /PLUR1BUS quick commands:/);
+    assert.match(result.text, /✅|⚠️|⏳/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
