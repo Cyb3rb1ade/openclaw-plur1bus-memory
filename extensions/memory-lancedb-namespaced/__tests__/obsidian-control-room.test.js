@@ -1717,7 +1717,9 @@ test("reviewBundleSummary: Kein technischer Jargon", () => {
 
 test("reviewBundleSummary: Emoji-Status fuer saubere Items", () => {
   const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
-  assert.match(out, /✅/);
+  // Happy-path is now silent: no ✅ checkmark. Verify structure instead.
+  assert.match(out, /Memory Review/);
+  assert.match(out, /approve low-risk/);
 });
 
 test("reviewBundleSummary: Emoji-Status bei Adversarial-Block", () => {
