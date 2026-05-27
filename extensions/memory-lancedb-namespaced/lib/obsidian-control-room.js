@@ -3448,7 +3448,7 @@ export async function handleObsidianBridgeCommand(tokens = [], context = {}) {
       if (effectiveSub === "quickapply") {
         if (!bundleId) return commandResult("✅ Keine Vorschläge offen — nichts zu tun.");
         const quickSelector = normalizeItemSelector(positionalSelector || "low-risk");
-        updateReviewBundleItems(commandConfig, bundleId, "approve", quickSelector);
+        updateReviewBundleItems(commandConfig, bundleId, "approve", quickSelector); // mutates disk; return not needed
         const applyResult = await applyApprovedReviewBundle(commandConfig, bundleId, {
           agentId,
           workspaceKey,
