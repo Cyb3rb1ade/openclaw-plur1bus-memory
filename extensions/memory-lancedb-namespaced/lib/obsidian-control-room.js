@@ -3026,63 +3026,56 @@ export function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle"
 
 export function eveningReviewSummary(summary = {}) {
   const checks = summary.status || {};
-  const rows = [
-    ["Maintenance Deep", checks.maintenance],
-    ["Adversarial Deep", checks.adversarial],
-    ["Semantic Conflicts", checks.semanticConflicts],
-    ["Duplicates Scan", checks.duplicates],
-    ["Provenance Build", checks.provenance],
-    ["Impact Analyze All", checks.impact],
-    ["Dashboards Build", checks.dashboards],
-  ].map(([name, status]) => {
-    const count = status?.count ?? 0;
-    return `| ${name} | ${statusMarker(status)} | ${count} |`;
-  });
-  const findings = dedupeFindings(Array.isArray(summary.blockedOrWarningItems) ? summary.blockedOrWarningItems : []);
-  const bundles = Array.isArray(summary.pendingBundles) ? summary.pendingBundles.filter(Boolean) : [];
-  const reviewHelp = bundles.length === 1
-    ? reviewCommands(bundles[0])
-    : [
-        "## Next step",
-        "",
-        "- Details are in the listed ReviewBundle artifact in Obsidian.",
-        "- Mark low-risk items approved: /plur1bus_review approve low-risk",
-        "- Or reject pending items: /plur1bus_review reject all",
-        "- Then write approved memory items: /plur1bus_review apply",
-        "- Refresh this summary: /plur1bus_review show",
-        "",
-        "Approve only marks items. Apply is the only step that writes to memory.",
-        "Bundle id is optional in Telegram replies and short commands. Without an id, review/show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.",
-      ].join("\n");
-  return [
-    `PLUR1BUS Evening Deep Review - ${summary.workspaceKey || "main"} (${summary.agentId || "main"})`,
-    `${formatReviewTimestamp(summary.createdAt)} | Proposal-only mode`,
+  const findings = dedupeFindings(
+    Array.isArray(summary.blockedOrWarningItems) ? summary.blockedOrWarningItems : []
+  );
+  const pending = summary.pendingItems ?? 0;
+
+  // Status-Zeilen auf Deutsch
+  const CHECK_NAMES = {
+    maintenance: "Systemprüfung",
+    adversarial: "Sicherheit",
+    semanticConflicts: "Konflikte",
+    duplicates: "Duplikate",
+    provenance: "Herkunft",
+    impact: "Auswirkung",
+    dashboards: "Dashboards",
+  };
+  const statusLines = Object.entries(CHECK_NAMES)
+    .filter(([key]) => checks[key] !== undefined)
+    .map(([key, name]) => {
+      const s = checks[key];
+      const icon = s?.label === "error" || s?.label === "block" ? "❌"
+        : s?.label === "warning" ? "⚠️" : "✅";
+      const count = s?.count != null ? ` (${s.count})` : "";
+      return `${icon} ${name}${count}`;
+    });
+
+  const out = [
+    `🌙 Abend-Review — ${formatGermanDate(summary.createdAt)}`,
+    "Nur Vorschau · Noch nichts gespeichert",
     "",
-    "## Result",
-    "",
-    "| Check | Status | Count |",
-    "|---|---|---|",
-    ...rows,
-    "",
-    "## Blocked / Warning",
-    "",
-    findings.length ? findings.slice(0, 8).map(formatFinding).join("\n") : "- None.",
-    findings.length > 8 ? `- ... ${findings.length - 8} more in the evening artifact.` : "",
-    "",
-    "## Pending Items",
-    "",
-    `- Pending review items: ${summary.pendingItems ?? 0}`,
-    bundles.length ? `- Bundle(s): ${compactPathList(bundles, 5).join(", ")}` : "- Bundle(s): see ReviewBundle artifacts.",
-    "- Use /plur1bus_review to see Obsidian-import items separately from vault-hygiene items.",
-    "",
-    "## Artifacts",
-    "",
-    `- ${summary.artifactPath || summary.artifact?.path || "n/a"}`,
-    "",
-    reviewHelp,
-    "",
-    "No changes were applied.",
-  ].filter(Boolean).join("\n");
+    ...statusLines,
+  ];
+
+  if (findings.length > 0) {
+    out.push("");
+    out.push("⚠️ Bitte prüfen:");
+    out.push(...findings.slice(0, 5).map(telegramFindingLine));
+    if (findings.length > 5) out.push(`• … ${findings.length - 5} weitere`);
+  }
+
+  out.push("");
+  if (pending > 0) {
+    out.push(`📋 ${pending} Vorschlag${pending === 1 ? "" : "ä"}ge warten`);
+  } else {
+    out.push("✅ Keine Vorschläge offen");
+  }
+
+  out.push("");
+  out.push("➡️ approve low-risk → apply");
+
+  return out.join("\n");
 }
 
 function applySummary(result = {}) {

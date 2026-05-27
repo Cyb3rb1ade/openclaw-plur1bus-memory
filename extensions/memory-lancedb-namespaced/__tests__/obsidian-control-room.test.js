@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1275,13 +1275,13 @@ test("obsidian evening review runs bundled deep checks without shell CLI", async
       ],
       items: [],
     });
-    assert.match(result.text, /PLUR1BUS Evening Deep Review - test-workspace \(test-agent\)/);
-    assert.match(result.text, /\| Dashboards Build \| \[OK\] \| 14 \|/);
-    assert.match(result.text, /\/plur1bus_review show/);
-    assert.match(result.text, /- evening-deep-review-\d{4}-\d{2}-\d{2}-\d{4}\.md/);
-    const artifactPath = result.text.match(/- (evening-deep-review-\d{4}-\d{2}-\d{2}-\d{4}\.md)/)[1];
-    assert.equal(existsSync(join(vault, "00-system/plur1bus", artifactPath)), true);
-    const artifact = readFileSync(join(vault, "00-system/plur1bus", artifactPath), "utf8");
+    assert.match(result.text, /Abend-Review/);
+    assert.match(result.text, /✅ Dashboards \(14\)/);
+    assert.match(result.text, /approve low-risk/);
+    const plur1busDir = join(vault, "00-system/plur1bus");
+    const artifactFiles = readdirSync(plur1busDir).filter((f) => /^evening-deep-review-\d{4}-\d{2}-\d{2}-\d{4}\.md$/.test(f));
+    assert.equal(artifactFiles.length > 0, true);
+    const artifact = readFileSync(join(plur1busDir, artifactFiles[0]), "utf8");
     assert.match(artifact, /No standalone PLUR1BUS shell CLI is required or expected/);
     assert.match(artifact, /\/plur1bus_review approve low-risk/);
     assert.match(artifact, /\/plur1bus_review reject all/);
@@ -1314,8 +1314,8 @@ test("obsidian evening review does not re-ingest derived dashboard records", asy
       records: [{ id: "source-test", type: "source", status: "current", summary: "Primary source only" }],
       items: [],
     });
-    assert.match(result.text, /\| Provenance Build \| \[OK\] \| 1 \|/);
-    assert.match(result.text, /\| Impact Analyze All \| \[OK\] \| 1 \|/);
+    assert.match(result.text, /✅ Herkunft \(1\)/);
+    assert.match(result.text, /✅ Auswirkung \(1\)/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
