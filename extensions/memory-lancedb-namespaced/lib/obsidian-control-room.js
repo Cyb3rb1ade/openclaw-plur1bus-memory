@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.16";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.17";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -2609,13 +2609,14 @@ function reviewCommands(bundleId, options = {}) {
   return [
     "## Next step",
     "",
+    "⚠️ Approve only marks items. Apply is the only step that writes to memory.",
+    "",
     artifactPath ? `- Details in Obsidian: ${artifactPath}` : "- Details are in the listed ReviewBundle artifact in Obsidian.",
     `- Mark low-risk items approved: /plur1bus_review approve${approveDefault}`,
     `- Or reject pending items: /plur1bus_review reject${rejectDefault}`,
     `- Then write approved memory items: /plur1bus_review apply${suffix}`,
     `- Refresh this summary: /plur1bus_review show${suffix}`,
     "",
-    "Approve only marks items. Apply is the only step that writes to memory.",
     idHint,
   ].join("\n");
 }
@@ -2869,15 +2870,19 @@ function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
       ? `${allHygieneItems.length} vault hygiene finding(s), ${pendingHygiene} open`
       : `${userItems.length} item(s), ${pending} pending`],
   ];
-  const findings = dedupeFindings([
-    ...maintenanceFindings.filter((item) => ["error", "warning"].includes(item.severity)),
+  const SYSTEM_FINDING_CODES = new Set(["managed_block_hash_mismatch", "generated_link_review"]);
+  const systemFindings = dedupeFindings(
+    maintenanceFindings.filter((item) => SYSTEM_FINDING_CODES.has(item.code || item.type))
+  );
+  const userFindings = dedupeFindings([
+    ...maintenanceFindings.filter((item) => !SYSTEM_FINDING_CODES.has(item.code || item.type) && ["error", "warning"].includes(item.severity)),
     ...userItems.filter((item) => ["block", "warning"].includes(item.adversarialReview?.status)).map((item) => ({
       ...item,
       severity: item.adversarialReview.status === "block" ? "error" : "warning",
       message: item.adversarialReview.reason || item.reason,
     })),
   ]);
-  const typeSummary = formatCounts(countByValue(allReviewItems, (item) => item.type));
+  const typeSummary = formatCounts(countByValue(userItems, (item) => item.type));
   const riskSummary = formatCounts(countByValue(allReviewItems, (item) => item.risk));
   const baseTitle = label.includes("Morning")
     ? `${label} - ${bundle.workspaceKey || "main"} (${bundle.createdByAgent || "main"})`
@@ -2887,27 +2892,28 @@ function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
     : baseTitle;
   return [
     title,
-    `${formatReviewTimestamp(bundle.createdAt)} | Proposal-only mode`,
+    `${formatReviewTimestamp(bundle.createdAt)} | Preview mode — nothing written until you run apply`,
     `Review mode: ${mode.label} | ${mode.description}`,
     "",
     "## Result",
     "",
     "| Check | Status | Details |",
     "|---|---|---|",
-    ...checkRows.map(([name, check, detail]) => `| ${name} | ${statusMarker(check)} ${check.label} | ${detail} |`),
+    ...checkRows.map(([name, check, detail]) => `| ${name} | ${statusMarker(check)} | ${detail} |`),
     "",
     "## Blocked / Warning",
     "",
-    findings.length ? findings.slice(0, 8).map(formatFinding).join("\n") : "- None.",
-    findings.length > 8 ? `- ... ${findings.length - 8} more in the ReviewBundle artifact.` : "",
+    userFindings.length ? userFindings.slice(0, 8).map(formatFinding).join("\n") : "- None.",
+    userFindings.length > 8 ? `- ... ${userFindings.length - 8} more in the ReviewBundle artifact.` : "",
+    systemFindings.length > 0 ? `\n## System Health (${systemFindings.length} auto-managed finding(s) — no action needed)\n\n${systemFindings.map(formatFinding).join("\n")}` : "",
     "",
     "## Pending Items",
     "",
-    `- Memory/user items: ${userItems.length} total, ${pending} pending, ${approved} approved, ${rejected} rejected`,
-    `- Vault hygiene findings: ${allHygieneItems.length} total, ${pendingHygiene} open, ${closedHygiene} closed`,
-    `- Types: ${typeSummary}`,
-    `- Risk: ${riskSummary}`,
-    `- Findings: ${blocks} block(s), ${warnings} warning(s)`,
+    userItems.length === 0 ? "- No memory review needed — only system health findings (auto-managed)." : `- Memory/user items: ${userItems.length} total, ${pending} pending, ${approved} approved, ${rejected} rejected`,
+    allHygieneItems.length > 0 ? `- System health: ${allHygieneItems.length} vault hygiene finding(s) (auto-managed, no action needed)` : "",
+    userItems.length > 0 ? `- Types: ${typeSummary}` : "",
+    userItems.length > 0 ? `- Risk: ${riskSummary}` : "",
+    (blocks + warnings) > 0 ? `- Findings: ${blocks} block(s), ${warnings} warning(s)` : "",
     "",
     "## Review Buckets",
     "",
@@ -2937,7 +2943,7 @@ function eveningReviewSummary(summary = {}) {
     ["Dashboards Build", checks.dashboards],
   ].map(([name, status]) => {
     const count = status?.count ?? 0;
-    return `| ${name} | ${statusMarker(status)} ${status?.label || "unknown"} | ${count} |`;
+    return `| ${name} | ${statusMarker(status)} | ${count} |`;
   });
   const findings = dedupeFindings(Array.isArray(summary.blockedOrWarningItems) ? summary.blockedOrWarningItems : []);
   const bundles = Array.isArray(summary.pendingBundles) ? summary.pendingBundles.filter(Boolean) : [];

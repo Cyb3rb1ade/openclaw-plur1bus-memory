@@ -45,6 +45,25 @@ all`, or `/plur1bus_review apply`, PLUR1BUS selects the current bundle by queue
 state: show/explain/approve/reject use the latest pending ReviewBundle, and apply uses
 the latest approved ReviewBundle.
 
+## Reading Review Summaries
+
+Review summaries are preview output. Nothing is written to memory until an
+explicit `/plur1bus_review apply` runs after approval.
+
+The summary intentionally separates three things:
+
+- `Blocked / Warning`: user or memory-review issues that may need a decision.
+- `System Health`: auto-managed vault hygiene such as generated block hashes or
+  generated dashboard links. These are diagnostic maintenance findings; they do
+  not need memory approval.
+- `Pending Items`: user-reviewable memory items plus a short count of any
+  system-health findings.
+
+If `Pending Items` says `No memory review needed`, there are no Obsidian notes
+waiting to become memories. You can inspect the details with
+`/plur1bus_review explain`, close expected hygiene with
+`/plur1bus_review reject all`, or leave the diagnostic artifact in Obsidian.
+
 ## Agent Boundaries
 
 PLUR1BUS keeps Obsidian import candidates scoped to the current workspace and
@@ -144,6 +163,20 @@ Print or install per-workspace Morning Review and Evening Deep Review jobs:
 OpenClaw Cron is the supported scheduler. The generated cron prompts execute
 the PLUR1BUS plugin command before model inference; they must not look for a
 standalone shell CLI.
+
+## Install And Update Safety
+
+For normal users, install or update through ClawHub:
+
+```text
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory --force
+```
+
+`--force` reinstalls the plugin package only. It must not delete the workspace
+LanceDB under `memory/lancedb-namespaced`, existing embeddings, or configured
+providers such as the Cohere reranker. The repo installer follows the same
+rule: plugin files are replaced, memory data is snapshotted/preserved, and
+workspace config is not overwritten in plugin-only mode.
 
 ## Authority Rules
 

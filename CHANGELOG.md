@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [4.2.17] - 2026-05-27
+
+### Changed
+- Adopted the live PLUR1BUS review-summary simplification: auto-managed generated-link and managed-block findings now appear under `System Health`, while `Blocked / Warning` is reserved for user/memory-review decisions.
+- Moved the approval/apply warning above the next-step commands so Telegram users see that approval only marks items and `apply` is the only memory-write step before choosing a command.
+- Simplified evening deep review status tables by showing the status marker without duplicating the marker label.
+
+### Documentation
+- Rewrote `how-to-memory.md` for the current v4 ClawHub install/update path and the workspace LanceDB preservation guarantee.
+- Updated `HOW-TO-OBSIDIAN.md`, `how-to-memory-perfect.md`, and the installer help text for System Health, optional bundle IDs, force reinstall safety, and external-user setup.
+
+### Verification
+- Updated ReviewBundle regression tests for System Health output and simplified status tables.
+
 ## [4.2.16] - 2026-05-27
 
 ### Fixed

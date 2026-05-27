@@ -1,22 +1,22 @@
-# PLUR1BUS Neo-Arch v3 Memory Guide
+# PLUR1BUS v4 Memory Guide
 
-Stand: 2026-05-23<br>
-Version: `3.5.0`<br>
+Stand: 2026-05-27<br>
+Version: `4.2.17`<br>
 Branch: `main`
 
-Dieses Dokument beschreibt nur noch den v3-Normalbetrieb und den v2→v3
-Migrationspfad. Historische v2-only Upgrade-Notizen, OpenClaw-dist-Patchketten,
-root-/host-cron-Fallbacks und deployment-fremde Betriebsdetails wurden
-entfernt.
+Dieses Dokument beschreibt den v4-Normalbetrieb von PLUR1BUS als
+OpenClaw-native Memory-Augment-Plugin. Historische v2-only Upgrade-Notizen,
+OpenClaw-dist-Patchketten, root-/host-cron-Fallbacks und deployment-fremde
+Betriebsdetails gehoeren nicht in den normalen Installationspfad.
 
 ## 1. Zielbild
 
-PLUR1BUS v3 ist ein kognitiver Memory-Layer fuer OpenClaw:
+PLUR1BUS v4 ist ein kognitiver Memory-Layer fuer OpenClaw:
 
-- PLUR1BUS `3.5.0` benötigt OpenClaw `2026.5.12-beta.6`
+- PLUR1BUS `4.2.17` benötigt OpenClaw `2026.5.12-beta.6`
   oder neuer. Ältere OpenClaw-Versionen haben nicht den vorausgesetzten
-  OpenClaw-native Memory-Stack fuer v3.
-- PLUR1BUS `3.5.0` wurde zusätzlich gegen OpenClaw `2026.5.18` mit
+  OpenClaw-native Memory-Stack fuer v4.
+- PLUR1BUS `4.2.17` wurde zusätzlich gegen OpenClaw `2026.5.18` mit
   isolierter managed `npm-pack:`-Installation geprüft.
 - `memory-core` bleibt der exklusive OpenClaw-Memory-Slot.
 - `memory-lancedb-namespaced` läuft default als additives Augment.
@@ -74,6 +74,27 @@ nur noch fuer explizite OpenAI/OpenAI-compatible/PLUR1BUS Provider-Variablen
 und Provider-Header-Praefixe auf. Beliebige Env-Reads wie `${HOME}` werden
 abgelehnt; literal API-Keys in lokaler Config bleiben technisch möglich, sind
 aber nicht empfohlen.
+
+## 1.2 Aktueller v4.2 Review- und Installationspfad
+
+Der normale Installationspfad fuer externe Nutzer ist ClawHub:
+
+```bash
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory --force
+openclaw gateway restart
+```
+
+`--force` ersetzt das Plugin-Paket, nicht die Memory-Daten. Die
+Workspace-LanceDB unter `memory/lancedb-namespaced`, bestehende Embeddings,
+Provider-Konfigurationen und der Cohere-Reranker bleiben erhalten. Der
+Repo-Installer nutzt bei `--update-plugin-only` dieselbe Grenze.
+
+Obsidian-Review-Ausgaben sind Preview-Ausgaben. `System Health` beschreibt
+auto-managed Vault-Hygiene wie Managed-Block-Hash-Mismatches oder generierte
+Dashboard-Links; das ist keine Memory-Freigabe. Nur genehmigte Memory-Kandidaten
+werden durch `/plur1bus_review apply` in LanceDB geschrieben. Bundle-IDs sind
+in Telegram-Antworten optional: show/explain/approve/reject nutzen ohne ID das
+neueste pending Bundle, apply nutzt das neueste approved Bundle.
 
 Dimensionsschutz:
 
@@ -150,7 +171,7 @@ Das ist keine Funktionsänderung der Tools, sondern ein OpenClaw-native
 Discovery-/Inspect-Kompatibilitätsfix. `memory-core` bleibt weiterhin
 Slot-Owner; PLUR1BUS setzt weiterhin kein `kind:"memory"`.
 
-## 1.4 Obsidian Bridge ab v3.5.0
+## 1.4 Obsidian Bridge ab v4.0.0
 
 Die Obsidian Bridge ist eine optionale Review-/Control-Room-Schicht, kein
 zweites Memory-System. Sie schreibt Markdown-Artefakte in einen konfigurierten

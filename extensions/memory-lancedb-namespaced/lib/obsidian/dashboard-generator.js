@@ -80,9 +80,9 @@ export function renderDashboard({ title, type, collection, records, config, gene
   return formatFrontmatter({
     plur1bus_type: "dashboard",
     dashboard: collection,
-    generatedBy: "plur1bus-4.2.16",
+    generatedBy: "plur1bus-4.2.17",
     authoritative: false,
-  }, buildManagedBlock({ id: `dashboard-${collection}`, version: "4.2.16", body }));
+  }, buildManagedBlock({ id: `dashboard-${collection}`, version: "4.2.17", body }));
 }
 
 export function generateDashboards(rawConfig, options = {}) {

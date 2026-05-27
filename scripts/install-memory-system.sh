@@ -2,22 +2,24 @@
 # install-memory-system.sh — Installiert/aktualisiert das memory-lancedb-namespaced-System
 # in eine OpenClaw-Instanz (lokal oder remote via SSH).
 #
-# Stand: 2026-05-01
+# Stand: 2026-05-27
 #
 # Verwendung:
 #   ./install-memory-system.sh                          # Auto-Erkennung lokaler Installationen
 #   ./install-memory-system.sh <ziel>                   # lokal: /home/user/.openclaw
 #   ./install-memory-system.sh user@host:/path          # remote via SSH
 #   ./install-memory-system.sh --dry-run <ziel>         # Vorschau ohne Änderungen
-#   ./install-memory-system.sh --update-plugin-only <ziel>  # Nur Plugin aktualisieren (kein Config-Overhead)
+#   ./install-memory-system.sh --update-plugin-only <ziel>  # Nur Plugin aktualisieren; Memory/Embeddings/Provider bleiben erhalten
 #   ./install-memory-system.sh --rollback <ziel>        # Letzten Snapshot wiederherstellen
 #
 # Ohne Ziel-Argument: sucht automatisch nach lokalen OpenClaw-Installationen
 # (prüft ~/.openclaw, /root/.openclaw, /home/*/.openclaw, /opt/, /srv/ etc.)
 # und zeigt ein Auswahlmenü wenn mehrere gefunden werden.
 #
-# Snapshot-Verhalten: Vor jeder Installation wird ein LanceDB-Snapshot erstellt
-# unter {ziel}/memory/.snapshots/. Max. 5 Snapshots, ältere werden gelöscht.
+# Snapshot-/Daten-Verhalten: Vor jeder Installation wird ein LanceDB-Snapshot
+# unter {ziel}/memory/.snapshots/ erstellt. Max. 5 Snapshots, ältere werden
+# gelöscht. Plugin-Updates löschen nicht {ziel}/memory/lancedb-namespaced,
+# bestehende Embeddings, Provider-Konfiguration oder Cohere-Reranker-Settings.
 #
 # Voraussetzungen (Quellinstanz):
 #   - Node.js (für jq-ähnliche JSON-Operationen via node)
@@ -33,7 +35,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"  # /root/.openclaw
 PLUGIN_SRC="$SOURCE_DIR/extensions/memory-lancedb-namespaced"
 STOCK_SRC="$SOURCE_DIR/extensions/memory-lancedb-stock"
-DOC_FILES=("how-to-memory-perfect.md" "SYSTEM-DOCUMENTATION.md" "HOW-TO-UPDATE.md")
+DOC_FILES=("README.md" "CHANGELOG.md" "how-to-memory.md" "how-to-memory-perfect.md" "HOW-TO-OBSIDIAN.md" "HOW-TO-UPDATE.md")
 GC_SCRIPT="$SOURCE_DIR/scripts/memory-gc.mjs"
 MIN_OPENCLAW_VERSION="2026.5.10-beta.5"
 
@@ -60,7 +62,7 @@ Ziele:
 
 Optionen:
   --dry-run              Vorschau ohne Änderungen
-  --update-plugin-only   Nur Plugin-Dateien und Registry aktualisieren
+  --update-plugin-only   Nur Plugin-Dateien und Registry aktualisieren; Memory-Daten, Embeddings und Provider-Config bleiben erhalten
   --rollback             Letzten Snapshot wiederherstellen
   -h, --help             Diese Hilfe anzeigen
 EOF
@@ -1484,7 +1486,10 @@ if [[ "$USE_ACTIVE_MEMORY" == "n" ]]; then
   echo
 fi
 
-echo -e "  Doku: ${TARGET_DIR}/how-to-memory-perfect.md"
+echo -e "  Daten erhalten: ${TARGET_DIR}/memory/lancedb-namespaced"
+echo -e "  Doku: ${TARGET_DIR}/how-to-memory.md"
+echo -e "        ${TARGET_DIR}/HOW-TO-OBSIDIAN.md"
+echo -e "        ${TARGET_DIR}/how-to-memory-perfect.md"
 echo
 echo -e "  Rollback (falls nötig):"
 echo -e "    $0 --rollback $TARGET"

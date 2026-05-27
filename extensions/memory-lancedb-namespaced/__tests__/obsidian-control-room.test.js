@@ -184,7 +184,8 @@ test("morning review with only vault hygiene says no memory import", async () =>
     assert.match(result.text, /Vault maintenance only - no memory import/);
     assert.match(result.text, /Review mode: Maintenance only/);
     assert.match(result.text, /No memory approval is needed/);
-    assert.match(result.text, /Vault hygiene findings: 1 total, 1 open, 0 closed/);
+    assert.match(result.text, /System Health \(1 auto-managed finding\(s\) — no action needed\)/);
+    assert.match(result.text, /System health: 1 vault hygiene finding\(s\) \(auto-managed, no action needed\)/);
     assert.match(result.text, /Inspect details: \/plur1bus_review show rb-/);
     assert.match(result.text, /Explain findings: \/plur1bus_review explain rb-/);
     assert.match(result.text, /Reject\/close if expected: \/plur1bus_review reject all/);
@@ -225,7 +226,8 @@ test("maintenance-only reject all closes hygiene findings and latest show still 
       workspaceDir: vault,
     });
     assert.match(shown.text, /Vault maintenance only - no memory import/);
-    assert.match(shown.text, /Vault hygiene findings: 1 total, 0 open, 1 closed/);
+    assert.match(shown.text, /System Health \(1 auto-managed finding\(s\) — no action needed\)/);
+    assert.match(shown.text, /ReviewBundle Build \| \[OK\] \| 1 vault hygiene finding\(s\), 0 open/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
@@ -1281,7 +1283,7 @@ test("obsidian evening review runs bundled deep checks without shell CLI", async
       items: [],
     });
     assert.match(result.text, /PLUR1BUS Evening Deep Review - test-workspace \(test-agent\)/);
-    assert.match(result.text, /\| Dashboards Build \| \[OK\] pass \| 14 \|/);
+    assert.match(result.text, /\| Dashboards Build \| \[OK\] \| 14 \|/);
     assert.match(result.text, /\/plur1bus_review show/);
     assert.match(result.text, /- evening-deep-review-\d{4}-\d{2}-\d{2}-\d{4}\.md/);
     const artifactPath = result.text.match(/- (evening-deep-review-\d{4}-\d{2}-\d{2}-\d{4}\.md)/)[1];
@@ -1319,8 +1321,8 @@ test("obsidian evening review does not re-ingest derived dashboard records", asy
       records: [{ id: "source-test", type: "source", status: "current", summary: "Primary source only" }],
       items: [],
     });
-    assert.match(result.text, /\| Provenance Build \| \[OK\] pass \| 1 \|/);
-    assert.match(result.text, /\| Impact Analyze All \| \[OK\] pass \| 1 \|/);
+    assert.match(result.text, /\| Provenance Build \| \[OK\] \| 1 \|/);
+    assert.match(result.text, /\| Impact Analyze All \| \[OK\] \| 1 \|/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
