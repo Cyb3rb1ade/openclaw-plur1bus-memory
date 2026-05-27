@@ -61,5 +61,5 @@ export function generateBases(rawConfig, options = {}) {
     atomicWriteText(targetPath, renderBaseDefinition(type, name));
     generated.push(rel);
   }
-  return { ok: true, generated, count: generated.length, version: options.version || "4.2.17" };
+  return { ok: true, generated, count: generated.length, version: options.version || "4.2.18" };
 }

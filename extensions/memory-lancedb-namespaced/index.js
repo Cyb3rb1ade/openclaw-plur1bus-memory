@@ -64,6 +64,7 @@ import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-lo
 import { registerOpenClawMemoryEmbeddingProviders } from "./lib/providers/openclaw-memory-embedding-adapters.js";
 import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
+import { createBackgroundMemoryScheduler, isBackgroundTurn } from "./lib/runtime-scheduler.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -929,6 +930,7 @@ const plugin = {
     if (fallbackEmbeddingCfg) api.logger.info(`memory-lancedb-namespaced: embedding fallback configured (${fallbackEmbeddingCfg.model} @ ${fallbackEmbeddingCfg.baseUrl || "openai"})`);
     const autoCapture = cfg.autoCapture !== false;
     const autoRecall = cfg.autoRecall !== false;
+    const runtimeScheduler = createBackgroundMemoryScheduler({ config: cfg.runtime || {}, logger: api.logger });
 
     // Configurable thresholds
     const recallMinScore     = cfg.recallMinScore     ?? 0.15;
@@ -1073,16 +1075,6 @@ const plugin = {
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? new LocalTransformersEmbeddingProvider({ ...normalizedEmbeddingCfg.local, dimensions: dimensions || vectorDim })
       : new OpenAIEmbeddingProvider({ ...normalizedEmbeddingCfg, apiKey: embeddingCfg.apiKey, fallback: embeddingCfg.fallback, dimensions: dimensions || vectorDim });
-
-    // Per-agent capture queue — serializes concurrent agent_end events to prevent DB race conditions
-    const captureQueues = new Map(); // agentId → Promise (tail of queue)
-    function enqueueCapture(agentId, fn) {
-      const prev = captureQueues.get(agentId) || Promise.resolve();
-      const next = prev.then(fn).catch(() => {}); // errors are non-blocking
-      captureQueues.set(agentId, next);
-      // Prevent unbounded queue growth — replace tail once resolved
-      next.then(() => { if (captureQueues.get(agentId) === next) captureQueues.delete(agentId); });
-    }
 
     // Reranker (optional — provider-aware since v3.1)
     const rerankerCfg = normalizeRerankerConfig(cfg.reranker || {});
@@ -1365,10 +1357,12 @@ const plugin = {
             }
             if (action === "status") return formatJsonCommandResult(summarizeNeoStore(commandStore));
             if (action === "doctor") {
-              return formatJsonCommandResult(buildNeoDoctorReport({
+              const report = buildNeoDoctorReport({
                 hooks: commandStore.readHooks(),
                 config: { ...neoCfg, hooks: resolveNeoHooksConfig(api, commandCtx.config) },
-              }));
+              });
+              report.runtimeScheduler = runtimeScheduler.status();
+              return formatJsonCommandResult(report);
             }
             if (action === "neo" && sub === "workspaces" && tokens[2] === "migrate") {
               const dryRun = tokens.includes("--dry-run");
@@ -1532,172 +1526,180 @@ const plugin = {
       api.on("agent_end", (event, ctx) => {
         api.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
 
-        if (neoEnabled) {
-          try {
-            const neoStore = getNeoStore(ctx, event);
-            neoStore.recordHook("agent_end", {
-              agentId: ctx?.agentId || "default",
-              sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
-              runner: event?.runner || event?.provider || "",
-            });
-            if (event?.messages && event.messages.length > 0) {
-              const neoCapture = captureNeoFromAgentEnd(event, ctx, neoStore, {
-                defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-                rootDir: neoRoot,
-                runtime: api.runtime,
-                sessionWorkspaceKeys,
-                workspaceAliases: neoWorkspaceAliases,
-              });
-              api.logger.info(`plur1bus-neo: captured turns=${neoCapture.turns.length}, candidates=${neoCapture.candidates.length}, reactions=${neoCapture.reactions.length}, behaviorCards=${neoCapture.behaviorCards.length}`);
-            }
-          } catch (neoErr) {
-            api.logger.warn(`plur1bus-neo: capture failed: ${String(neoErr)}`);
-          }
-        }
-
-        if (!event.success || !event.messages || event.messages.length === 0) {
-          api.logger.info(`memory-lancedb-namespaced: skipping capture - success=${event.success}, messages=${event.messages?.length || 0}`);
-          return;
-        }
-
         const agentId = ctx?.agentId || "default";
-        const db = pool.getDb(agentId);
+        const background = isBackgroundTurn(event, ctx);
 
-        enqueueCapture(agentId, async () => {
-
-        try {
-          // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
-          const maxChars = cfg.captureMaxChars || 15000;
-          const turnId = event.turnId || event.runId || "";
-          const items = [];      // {text, role, isUserUrl, sourceUrl}
-          const urlPattern = /https?:\/\/[^\s]{10,}/;
-
-          const extractUrl = (t) => {
-            const m = (t || "").match(urlPattern);
-            return m ? m[0].slice(0, 500) : "";
-          };
-
-          for (const msg of event.messages) {
-            if (!msg || typeof msg !== "object") continue;
-            const isUser = msg.role === "user";
-            const isAssistant = msg.role === "assistant";
-            if (!isUser && !isAssistant) continue;
-            const role = msg.role;
-            const content = msg.content;
-
-            if (typeof content === "string") {
-              if (content && content.length > 20) {
-                const sourceUrl = isUser ? extractUrl(content) : "";
-                items.push({ text: content, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
+        runtimeScheduler.enqueueCapture(agentId, { background }, async () => {
+          if (neoEnabled) {
+            try {
+              const neoStore = getNeoStore(ctx, event);
+              neoStore.recordHook("agent_end", {
+                agentId,
+                sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                runner: event?.runner || event?.provider || "",
+                background,
+              });
+              if (event?.messages && event.messages.length > 0) {
+                const neoCapture = captureNeoFromAgentEnd(event, ctx, neoStore, {
+                  defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+                  rootDir: neoRoot,
+                  runtime: api.runtime,
+                  sessionWorkspaceKeys,
+                  workspaceAliases: neoWorkspaceAliases,
+                });
+                api.logger.info(`plur1bus-neo: captured turns=${neoCapture.turns.length}, candidates=${neoCapture.candidates.length}, reactions=${neoCapture.reactions.length}, behaviorCards=${neoCapture.behaviorCards.length}${background ? " (background)" : ""}`);
               }
-              continue;
+            } catch (neoErr) {
+              api.logger.warn(`plur1bus-neo: capture failed: ${String(neoErr)}`);
             }
+          }
 
-            if (Array.isArray(content)) {
-              for (const block of content) {
-                if (!block || typeof block !== "object") continue;
+          if (!event.success || !event.messages || event.messages.length === 0) {
+            api.logger.info(`memory-lancedb-namespaced: skipping capture - success=${event.success}, messages=${event.messages?.length || 0}`);
+            return;
+          }
 
-                if (block.type === "text" && typeof block.text === "string" && block.text.length > 20) {
-                  const sourceUrl = isUser ? extractUrl(block.text) : "";
-                  items.push({ text: block.text, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
-                  continue;
+          const db = pool.getDb(agentId);
+
+          try {
+            // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
+            const maxChars = cfg.captureMaxChars || 15000;
+            const turnId = event.turnId || event.runId || "";
+            const items = [];      // {text, role, isUserUrl, sourceUrl}
+            const urlPattern = /https?:\/\/[^\s]{10,}/;
+
+            const extractUrl = (t) => {
+              const m = (t || "").match(urlPattern);
+              return m ? m[0].slice(0, 500) : "";
+            };
+
+            for (const msg of event.messages) {
+              if (!msg || typeof msg !== "object") continue;
+              const isUser = msg.role === "user";
+              const isAssistant = msg.role === "assistant";
+              if (!isUser && !isAssistant) continue;
+              const role = msg.role;
+              const content = msg.content;
+
+              if (typeof content === "string") {
+                if (content && content.length > 20) {
+                  const sourceUrl = isUser ? extractUrl(content) : "";
+                  items.push({ text: content, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
                 }
+                continue;
+              }
 
-                if (isUser && block.type && block.type !== "text") {
-                  const name = block.name || block.fileName || block.filename || "";
-                  const mediaType = block.mediaType || block.mimeType || block.mime_type || "";
-                  const stub = [
-                    `[User schickte ${block.type}`,
-                    name ? `: ${name}` : "",
-                    mediaType ? ` (${mediaType})` : "",
-                    "]",
-                  ].join("").trim();
-                  if (stub.length > 20) {
-                    items.push({ text: stub, role, isUserUrl: true, sourceUrl: "" }); // Attachments wie URLs priorisieren
+              if (Array.isArray(content)) {
+                for (const block of content) {
+                  if (!block || typeof block !== "object") continue;
+
+                  if (block.type === "text" && typeof block.text === "string" && block.text.length > 20) {
+                    const sourceUrl = isUser ? extractUrl(block.text) : "";
+                    items.push({ text: block.text, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
+                    continue;
+                  }
+
+                  if (isUser && block.type && block.type !== "text") {
+                    const name = block.name || block.fileName || block.filename || "";
+                    const mediaType = block.mediaType || block.mimeType || block.mime_type || "";
+                    const stub = [
+                      `[User schickte ${block.type}`,
+                      name ? `: ${name}` : "",
+                      mediaType ? ` (${mediaType})` : "",
+                      "]",
+                    ].join("").trim();
+                    if (stub.length > 20) {
+                      items.push({ text: stub, role, isUserUrl: true, sourceUrl: "" }); // Attachments wie URLs priorisieren
+                    }
                   }
                 }
               }
             }
-          }
 
-          if (items.length === 0) {
-            api.logger.info(`memory-lancedb-namespaced: no texts to capture`);
-            return;
-          }
-
-          api.logger.info(`memory-lancedb-namespaced: found ${items.length} texts to capture for agent=${agentId}`);
-          const captureOrigin = items.some((it) => textSuggestsGroupOrigin(it.text)) ? "group" : "dm";
-
-          // Priorisierung: User-Nachrichten mit URLs zuerst (max 3), dann neueste (max 5)
-          const userUrlItems = items.filter(it => it.isUserUrl);
-          const seenTexts = new Set();
-          const captureList = [];
-          for (const it of [...userUrlItems.slice(-3), ...items.slice(-5)]) {
-            if (!seenTexts.has(it.text)) { seenTexts.add(it.text); captureList.push(it); }
-            if (captureList.length >= 8) break;
-          }
-
-          let stored = 0;
-          let skipped = 0;
-          const captureTimestamp = Date.now();
-
-          for (let it of captureList) {
-            let text = it.text;
-            try {
-              // Oversized texts: LLM-summarize (or truncate as fallback)
-              if (text.length > maxChars) {
-                if (mergingLlmCfg) {
-                  api.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
-                  text = await summarizeForCapture(text, maxChars, mergingLlmCfg, api.logger);
-                } else {
-                  text = text.slice(0, maxChars);
-                }
-              }
-
-              const vector = await embeddings.embed(text);
-
-              // Duplikat-Check
-              const existing = await db.search(vector, 1, duplicateThreshold);
-              if (existing.length > 0) {
-                skipped++;
-                continue;
-              }
-
-              const category = categorizeMemory(text);
-              const summary = generateSummary(text, summaryMaxWords);
-              const evidenceQuote = it.text.slice(0, 200);
-
-              await db.store({
-                id: randomUUID(),
-                text,
-                summary,
-                origin: captureOrigin,
-                vector,
-                importance: 0.7,
-                category,
-                createdAt: captureTimestamp,
-                mergedFrom: "[]",
-                expiresAt: 0,
-                storedBy: agentId,
-                sourceTurnId: turnId || "",
-                sourceMessageRole: it.role || "",
-                sourceTimestamp: captureTimestamp,
-                sourceUrl: it.sourceUrl || "",
-                evidenceQuote,
-                scope: "agent-private",
-              });
-              stored++;
-              api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
-            } catch (err) {
-              api.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
+            if (items.length === 0) {
+              api.logger.info(`memory-lancedb-namespaced: no texts to capture`);
+              return;
             }
-          }
 
-          api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}`);
-        } catch (err) {
-          api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
-        }
-        }); // enqueueCapture
+            api.logger.info(`memory-lancedb-namespaced: found ${items.length} texts to capture for agent=${agentId}${background ? " (background)" : ""}`);
+            const contextOrigin = String(event?.origin || event?.source || ctx?.origin || ctx?.source || "").toLowerCase();
+            const contextKind = String(event?.kind || event?.type || ctx?.kind || ctx?.type || "").toLowerCase();
+            const captureOrigin = contextOrigin === "cron" || contextKind === "cron"
+              ? "cron"
+              : items.some((it) => textSuggestsGroupOrigin(it.text))
+                ? "group"
+                : "dm";
+
+            // Priorisierung: User-Nachrichten mit URLs zuerst (max 3), dann neueste (max 5)
+            const userUrlItems = items.filter(it => it.isUserUrl);
+            const seenTexts = new Set();
+            const captureList = [];
+            for (const it of [...userUrlItems.slice(-3), ...items.slice(-5)]) {
+              if (!seenTexts.has(it.text)) { seenTexts.add(it.text); captureList.push(it); }
+              if (captureList.length >= 8) break;
+            }
+
+            let stored = 0;
+            let skipped = 0;
+            const captureTimestamp = Date.now();
+
+            for (let it of captureList) {
+              let text = it.text;
+              try {
+                // Oversized texts: LLM-summarize (or truncate as fallback)
+                if (text.length > maxChars) {
+                  if (mergingLlmCfg) {
+                    api.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
+                    text = await summarizeForCapture(text, maxChars, mergingLlmCfg, api.logger);
+                  } else {
+                    text = text.slice(0, maxChars);
+                  }
+                }
+
+                const vector = await embeddings.embed(text);
+
+                // Duplikat-Check
+                const existing = await db.search(vector, 1, duplicateThreshold);
+                if (existing.length > 0) {
+                  skipped++;
+                  continue;
+                }
+
+                const category = categorizeMemory(text);
+                const summary = generateSummary(text, summaryMaxWords);
+                const evidenceQuote = it.text.slice(0, 200);
+
+                await db.store({
+                  id: randomUUID(),
+                  text,
+                  summary,
+                  origin: captureOrigin,
+                  vector,
+                  importance: 0.7,
+                  category,
+                  createdAt: captureTimestamp,
+                  mergedFrom: "[]",
+                  expiresAt: 0,
+                  storedBy: agentId,
+                  sourceTurnId: turnId || "",
+                  sourceMessageRole: it.role || "",
+                  sourceTimestamp: captureTimestamp,
+                  sourceUrl: it.sourceUrl || "",
+                  evidenceQuote,
+                  scope: "agent-private",
+                });
+                stored++;
+                api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
+              } catch (err) {
+                api.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
+              }
+            }
+
+            api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+          } catch (err) {
+            api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
+          }
+        }); // runtimeScheduler.enqueueCapture
       }, { timeoutMs: 60_000 });
     }
 
@@ -2084,6 +2086,15 @@ const plugin = {
 
     if (autoRecall) {
       api.on("before_prompt_build", async (event, ctx) => {
+        const background = isBackgroundTurn(event, ctx);
+        const agentIdForCache = ctx?.agentId || "default";
+        const sessionKeyForCache = ctx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
+        const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
+        const scheduledRecall = await runtimeScheduler.runRecall({
+          background,
+          cacheKey,
+          priority: background ? "low" : "normal",
+        }, async () => {
         let neoContext = "";
         if (neoEnabled) {
           try {
@@ -2199,7 +2210,22 @@ const plugin = {
           api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
           if (neoContext) return { prependContext: neoContext };
         }
-      });
+        });
+        if (scheduledRecall.ok) {
+          if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
+            api.logger.warn(`memory-lancedb-namespaced: using cached recall after timeout for agent=${agentIdForCache}${background ? " (background)" : ""}`);
+          }
+          return scheduledRecall.value;
+        }
+        if (scheduledRecall.timedOut) {
+          api.logger.warn(`memory-lancedb-namespaced: recall timed out without cache for agent=${agentIdForCache}${background ? " (background)" : ""}`);
+          return undefined;
+        }
+        if (scheduledRecall.error) {
+          api.logger.warn(`memory-lancedb-namespaced: recall scheduler failed for agent=${agentIdForCache}: ${String(scheduledRecall.error)}`);
+        }
+        return undefined;
+      }, { timeoutMs: runtimeScheduler.config.recallTimeoutMs + 5_000 });
     } else if (neoEnabled || schicht15Enabled || gcEnabled) {
       // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.
       api.on("before_prompt_build", async (_event, ctx) => {

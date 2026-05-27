@@ -345,6 +345,7 @@ test("before_prompt_build dedupes dynamic PLUR1BUS recall by turn key", async ()
 
     const registered = makeApi(cfg);
     const beforePrompt = registered.hooks.find(h => h.name === "before_prompt_build");
+    assert.equal(beforePrompt.opts.timeoutMs, 50_000, "OpenClaw hook timeout must leave PLUR1BUS recall scheduler in control");
     const event = { runId: "run-a", sessionId: "session-a", prompt: "agent crons allowed" };
     const ctx = { workspaceKey: "workspace-a", agentId: "agent-a" };
     const first = await beforePrompt.handler(event, ctx);

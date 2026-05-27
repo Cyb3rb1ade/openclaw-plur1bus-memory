@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v4.2.17-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.2.17)
+[![Release](https://img.shields.io/badge/release-v4.2.18-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.2.18)
 
 ---
 
@@ -14,9 +14,9 @@ PLUR1BUS v4 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `4.2.17`<br>
+**Aktuelle Version:** `4.2.18`<br>
 **Branch:** `main`<br>
-**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1` und `2026.5.18`<br>
+**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1`, `2026.5.18` und `2026.5.26`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
 `systemctl`-Recovery-Hack, kein root-/host-cron als Primärpfad.
 
@@ -169,9 +169,9 @@ globales `vaultPath` den aktiven Vault aus `obsidianBridge.workspaces[]`,
 `workspaceDir`, `workspaceKey` oder `agentId` auf. In `4.2.5` kann die Bridge
 Workspace-Installationen gezielt initialisieren und pro Workspace 09:00
 Morning-Review- sowie 18:00 Evening-Deep-Review-Crons ausgeben oder
-installieren. In `4.2.17` fuehrt PLUR1BUS solche Cron-Slash-Commands vor der
+installieren. In `4.2.18` fuehrt PLUR1BUS solche Cron-Slash-Commands vor der
 Modellantwort plugin-intern aus und registriert Telegram-kompatible
-Shortcut-Commands fuer die sichtbare Bot-Command-Liste. In `4.2.17` trennt die
+Shortcut-Commands fuer die sichtbare Bot-Command-Liste. In `4.2.18` trennt die
 Review-Ausgabe System-Health-Funde wie Managed-Block-Hashes oder generierte
 Links klar von echten Memory-Review-Warnungen und zeigt die Apply-Grenze direkt
 oberhalb der naechsten Befehle. Normale Vault-Dokumente werden als untrusted
@@ -318,7 +318,7 @@ the native skill command surface for that Telegram account or set
 `prepare` ist nicht `apply`. Ein ReviewBundle hat Frontmatter mit
 `type: plur1bus-review-bundle`, `bundleId`, `createdByAgent`, `status:
 pending_user_review`, `applyMode: approval_required`, Review-Profilen und
-`obsidianBridgeVersion: 4.2.17`. Jedes Item hat stabile IDs, Status, Risk,
+`obsidianBridgeVersion: 4.2.18`. Jedes Item hat stabile IDs, Status, Risk,
 Target, Action, Evidence, Preconditions, Maintenance-/Adversarial-Review und
 Apply-Preview. Checkboxen in Obsidian reichen nie fuer Mutation; `apply` liest
 das Bundle neu, revalidiert Hashes/Preconditions und wendet nur explizit
@@ -457,7 +457,7 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `4.2.17`:
+Provider-Status in `4.2.18`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
@@ -635,9 +635,9 @@ runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `4.2.17`<br>
+**Current version:** `4.2.18`<br>
 **Branch:** `main`<br>
-**Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, and `2026.5.18`<br>
+**Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, `2026.5.18`, and `2026.5.26`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
 recovery hack and no host cron as the primary runtime path.
 
@@ -646,7 +646,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `4.2.17`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `4.2.18`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental
@@ -660,7 +660,7 @@ provider bridge only expands `${ENV_VAR}` for explicit OpenAI/OpenAI-compatible/
 PLUR1BUS provider variables and provider-header prefixes; unrelated env reads
 such as `${HOME}` are rejected.
 
-Obsidian Bridge in `4.2.17`: optional, disabled by default, and strictly
+Obsidian Bridge in `4.2.18`: optional, disabled by default, and strictly
 approval-gated. It writes Markdown ReviewBundles, canonical records,
 dashboards, optional Bases/Dataview/Tasks output, conflict reports, semantic
 conflict proposals, duplicate candidates, provenance graphs, impact analysis,

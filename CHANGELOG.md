@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+## [4.2.18] - 2026-05-27
+
+### Changed
+- Decoupled PLUR1BUS runtime memory work from the OpenClaw hook hot path with a bounded runtime scheduler.
+- Kept cron, heartbeat and background turns on the full AutoRecall path, including embeddings, canonical recall, deduplication and Cohere reranking; background work is scheduled, not disabled.
+- Moved `agent_end` Auto-Capture into a per-agent capture queue while preserving normal memory importance, origin handling, embeddings and duplicate checks.
+- Added runtime config knobs for recall/capture timeouts, recall concurrency, capture serialization, background priority and short-lived recall cache fallback.
+
+### Diagnostics
+- Extended `/plur1bus doctor` output with runtime scheduler status for recall/capture queues, cache size, timeouts and background activity.
+
+### Verification
+- Added scheduler and plugin-registration regression tests for background recall, cache fallback, capture serialization and hook timeout control.
+- Verified syntax checks, the full PLUR1BUS test suite, `npm pack --dry-run`, live tarball installation, `plugins inspect --runtime`, `plugins doctor`, and OpenClaw gateway status/probe against OpenClaw `2026.5.26`.
+
 ## [4.2.17] - 2026-05-27
 
 ### Changed
