@@ -117,8 +117,8 @@ test("morning review command returns compact Telegram-safe summary", async () =>
     });
     assert.match(result.text, /Morgen-Review/);
     assert.match(result.text, /(?:✅|⚠️|❌)/);
-    assert.match(result.text, /40 Vorschl/);
-    assert.match(result.text, /Notizen aus Obsidian/);
+    assert.match(result.text, /40 neue Notizen/);
+    assert.match(result.text, /note-0\.md/);
     assert.match(result.text, /approve low-risk/);
     assert.match(result.text, /apply/);
     assert.doesNotMatch(result.text, /noteContent/);
@@ -150,8 +150,8 @@ test("review show command returns compact summary instead of full item json", as
       workspaceDir: vault,
     });
     assert.match(result.text, /Memory Review|Morgen-Review|Wochen-Review/);
-    assert.match(result.text, /20 Vorschl/);
-    assert.match(result.text, /Notizen aus Obsidian/);
+    assert.match(result.text, /20 neue Notizen/);
+    assert.match(result.text, /show-0\.md/);
     assert.match(result.text, /approve low-risk/);
     assert.match(result.text, /apply/);
     assert.doesNotMatch(result.text, /noteContent/);
@@ -247,7 +247,7 @@ test("review show separates memory and mixed bundle modes", async () => {
       workspaceDir: vault,
     });
     assert.match(memory.text, /Memory Review|Morgen-Review|Wochen-Review/);
-    assert.match(memory.text, /1 Vorschlag/);
+    assert.match(memory.text, /1 neue Notiz/);
     assert.match(memory.text, /approve low-risk/);
     assert.doesNotMatch(memory.text, /Kein Memory-Import/);
 
@@ -272,7 +272,8 @@ test("review show separates memory and mixed bundle modes", async () => {
       workspaceDir: vault,
     });
     assert.match(mixed.text, /Memory Review|Morgen-Review|Wochen-Review/);
-    assert.match(mixed.text, /Notiz(?:en)? aus Obsidian/);
+    assert.match(mixed.text, /neue Notiz/);
+    assert.match(mixed.text, /mixed\.md/);
     assert.match(mixed.text, /(?:✅|⚠️|❌)/);
     assert.match(mixed.text, /approve low-risk/);
   } finally {
@@ -1732,14 +1733,14 @@ test("reviewBundleSummary: Emoji-Status bei Adversarial-Block", () => {
 test("reviewBundleSummary: Anzahl Vorschlaege auf Deutsch", () => {
   const items = [makeUserItem(), makeUserItem({ id: "rbi-002" })];
   const out = reviewBundleSummary(makeBundle({ items }));
-  assert.match(out, /2 Vorschl/);
-  assert.match(out, /Notizen aus Obsidian/);
+  assert.match(out, /2 neue Notizen/);
+  assert.match(out, /rbi-001/);
 });
 
 test("reviewBundleSummary: Singular korrekt", () => {
   const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
-  assert.match(out, /1 Vorschlag/);
-  assert.doesNotMatch(out, /1 Vorschläge/);
+  assert.match(out, /1 neue Notiz/);
+  assert.doesNotMatch(out, /1 neue Notizen/);
 });
 
 test("reviewBundleSummary: Systemhinweise ohne Code-Bezeichner", () => {

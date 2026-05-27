@@ -2509,6 +2509,42 @@ function telegramBucketLines(userItems = [], hygieneItems = []) {
   return lines.join("\n");
 }
 
+function telegramPreviewLines(userItems = [], maxPreview = 3) {
+  const pending = (Array.isArray(userItems) ? userItems : [])
+    .filter((i) => !i.status || i.status === "pending");
+  const previewable = pending.filter((i) =>
+    ["note_import_candidate", "memory_promotion"].includes(i.type));
+  const tasks = pending.filter((i) => i.type === "task_suggestion");
+  const other = pending.filter((i) =>
+    !["note_import_candidate", "memory_promotion", "task_suggestion"].includes(i.type));
+
+  const lines = [];
+
+  for (const item of previewable.slice(0, maxPreview)) {
+    const name = (item.target || item.id || "unbekannt").split("/").pop();
+    const text = item.applyPreview?.payload?.text || item.reason || item.action || "";
+    const snippet = shortenText(text, 55);
+    lines.push(snippet ? `• ${name} — ${snippet}` : `• ${name}`);
+  }
+
+  const hiddenPreviewable = Math.max(0, previewable.length - maxPreview);
+  const restParts = [];
+  if (hiddenPreviewable > 0) {
+    restParts.push(`${hiddenPreviewable} ${hiddenPreviewable === 1 ? "Notiz" : "Notizen"}`);
+  }
+  if (tasks.length > 0) {
+    restParts.push(`${tasks.length} Aufgabe${tasks.length === 1 ? "" : "n"}`);
+  }
+  if (other.length > 0) {
+    restParts.push(`${other.length} weitere`);
+  }
+  if (restParts.length > 0) {
+    lines.push(`• … ${restParts.join(", ")}`);
+  }
+
+  return lines.join("\n");
+}
+
 // Risiko-Zusammenfassung auf Deutsch: "• Risiko: 12× niedrig, 3× mittel"
 function telegramRiskSummary(items = []) {
   const LABELS = { low: "niedrig", medium: "mittel", high: "hoch", critical: "kritisch" };
@@ -2955,7 +2991,7 @@ export function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle"
   }
 
   // ── Inhalt: Vorschläge ───────────────────────────────────────────────────
-  const bucketLines = telegramBucketLines(userItems, hygieneItems);
+  const previewLines = telegramPreviewLines(userItems);
   const riskLine = telegramRiskSummary([...userItems, ...allHygiene]);
 
   // ── Adversarial-Warnungen (User muss handeln) ────────────────────────────
@@ -2978,11 +3014,19 @@ export function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle"
   // Vorschläge-Sektion
   if (totalUserItems > 0) {
     out.push("");
-    const countLabel = totalUserItems === 1 ? "1 Vorschlag" : `${totalUserItems} Vorschläge`;
+    const pendingItems = userItems.filter((i) => !i.status || i.status === "pending");
+    const allPreviewable = pendingItems.length > 0 && pendingItems.every((i) =>
+      ["note_import_candidate", "memory_promotion"].includes(i.type));
+    const allTasks = pendingItems.length > 0 && pendingItems.every((i) => i.type === "task_suggestion");
+    const bucketLabel = allTasks
+      ? (totalUserItems === 1 ? "1 Aufgabe" : `${totalUserItems} Aufgaben`)
+      : allPreviewable
+        ? (totalUserItems === 1 ? "1 neue Notiz" : `${totalUserItems} neue Notizen`)
+        : (totalUserItems === 1 ? "1 Vorschlag" : `${totalUserItems} Vorschläge`);
     const pendingExtra = approved > 0 && pending < totalUserItems
       ? ` (${pending} offen, ${approved} freigegeben)` : "";
-    out.push(`📋 ${countLabel}${pendingExtra}:`);
-    if (bucketLines) out.push(bucketLines);
+    out.push(`📋 ${bucketLabel}${pendingExtra}:`);
+    if (previewLines) out.push(previewLines);
     if (riskLine) out.push(riskLine);
   } else if (mode.kind === "maintenance" && allHygiene.length > 0) {
     out.push("");
