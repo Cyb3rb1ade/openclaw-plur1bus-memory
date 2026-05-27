@@ -2460,6 +2460,79 @@ function formatDurationMs(ms = 0) {
   return `${minutes}m ${restSeconds}s`;
 }
 
+// ─── Telegram-UX: Deutsche Formatierungs-Helfer ───────────────────────────────
+
+// Deutschen Datumsstring: "27. Mai 2026, 14:29"
+function formatGermanDate(isoString) {
+  const MONTHS = ["Januar","Februar","März","April","Mai","Juni",
+                  "Juli","August","September","Oktober","November","Dezember"];
+  const date = new Date(isoString || Date.now());
+  if (Number.isNaN(date.getTime())) return String(isoString || "");
+  const day = date.getUTCDate();
+  const month = MONTHS[date.getUTCMonth()];
+  const year = date.getUTCFullYear();
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const mm = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${day}. ${month} ${year}, ${hh}:${mm}`;
+}
+
+// Mappt technische Labels auf deutsche Emoji-Titel
+function telegramBundleTitle(label = "") {
+  if (label.includes("Morning")) return "🌅 Morgen-Review";
+  if (label.includes("Evening")) return "🌙 Abend-Review";
+  if (label.includes("Weekly")) return "📅 Wochen-Review";
+  return "🧠 Memory Review";
+}
+
+// Einzelne Finding-Zeile: kein Code-Bezeichner, kein Pfad, nur Beschreibung
+function telegramFindingLine(finding = {}) {
+  const desc = describeFinding(finding);
+  const repeat = finding.count > 1 ? ` (${finding.count}×)` : "";
+  return `• ${desc}${repeat}`;
+}
+
+// Auflistung nach Typ auf Deutsch — nur pending items, nur nicht-leere Zeilen
+function telegramBucketLines(userItems = [], hygieneItems = []) {
+  const pending = (Array.isArray(userItems) ? userItems : [])
+    .filter((item) => !item.status || item.status === "pending");
+  const noteImports = pending.filter((i) => i.type === "note_import_candidate").length;
+  const promotions  = pending.filter((i) => i.type === "memory_promotion").length;
+  const tasks       = pending.filter((i) => i.type === "task_suggestion").length;
+  const updates     = pending.filter((i) => i.type === "knowledge_update").length;
+  const other       = Math.max(0, pending.length - noteImports - promotions - tasks - updates);
+  const lines = [];
+  if (noteImports > 0) lines.push(`• ${noteImports} Notiz${noteImports === 1 ? "" : "en"} aus Obsidian`);
+  if (promotions  > 0) lines.push(`• ${promotions} Erinnerung${promotions === 1 ? "" : "en"} zu aktualisieren`);
+  if (tasks       > 0) lines.push(`• ${tasks} Aufgabe${tasks === 1 ? "" : "n"} gefunden`);
+  if (updates     > 0) lines.push(`• ${updates} Wissens-Update${updates === 1 ? "" : "s"}`);
+  if (other       > 0) lines.push(`• ${other} weitere${other === 1 ? "r Vorschlag" : " Vorschläge"}`);
+  return lines.join("\n");
+}
+
+// Risiko-Zusammenfassung auf Deutsch: "• Risiko: 12× niedrig, 3× mittel"
+function telegramRiskSummary(items = []) {
+  const LABELS = { low: "niedrig", medium: "mittel", high: "hoch", critical: "kritisch" };
+  const ORDER  = ["critical", "high", "medium", "low"];
+  const counts = {};
+  for (const item of Array.isArray(items) ? items : []) {
+    const r = item.risk || "low";
+    counts[r] = (counts[r] || 0) + 1;
+  }
+  const parts = ORDER.filter((r) => counts[r] > 0).map((r) => `${counts[r]}× ${LABELS[r]}`);
+  return parts.length ? `• Risiko: ${parts.join(", ")}` : "";
+}
+
+// Einfacher Next-Step-Block ohne Bundle-IDs
+function telegramNextSteps(mode = {}, hasBlocks = false) {
+  if (mode.kind === "maintenance") {
+    return "ℹ️ Kein Memory-Handeln nötig — `show` für Details";
+  }
+  if (hasBlocks) {
+    return "⚠️ Bitte Sicherheitswarnungen prüfen\n➡️ approve → apply";
+  }
+  return "➡️ approve low-risk → apply";
+}
+
 function statusMarker(status = {}) {
   const label = status.label || status.severity || "pass";
   if (label === "error" || label === "block") return "[ERROR]";
