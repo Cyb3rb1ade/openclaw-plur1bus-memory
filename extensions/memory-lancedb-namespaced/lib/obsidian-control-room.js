@@ -2881,127 +2881,147 @@ function reviewExplainSummary(result = {}, label = "PLUR1BUS ReviewBundle explan
 }
 
 export function reviewBundleSummary(result = {}, label = "PLUR1BUS ReviewBundle") {
+  // ── Cooldown-Fall ────────────────────────────────────────────────────────
   if (result.status === "skipped_cooldown") {
-    return [
-      "PLUR1BUS Morning Review skipped - cooldown active",
-      `${formatReviewTimestamp(result.createdAt || new Date().toISOString())} | No new ReviewBundle was created`,
-      "",
-      "## Reason",
-      "",
-      `- Another automatic ReviewBundle was created recently.`,
-      `- Remaining cooldown: ${formatDurationMs(result.cooldownRemainingMs)}`,
-      result.latestBundleId ? `- Existing pending bundle: ${result.latestBundleId}` : "- Existing pending bundle: none found",
-      "",
-      "## Next step",
-      "",
-      result.latestBundleId
-        ? `- Show existing bundle: /plur1bus_review show ${result.latestBundleId}`
-        : "- Run /plur1bus_morning again after the cooldown.",
-      "",
-      "No changes were applied.",
-    ].join("\n");
+    const remaining = formatDurationMs(result.cooldownRemainingMs);
+    const lines = [
+      `${telegramBundleTitle(label)} — ${formatGermanDate(result.createdAt)}`,
+      `Kurze Pause: Nächstes Bundle in ${remaining} möglich.`,
+    ];
+    if (result.latestBundleId) lines.push("Vorhandenes Bundle: `show`");
+    return lines.join("\n");
   }
+
+  // ── Daten auflösen ───────────────────────────────────────────────────────
   const bundle = result.bundle || result.record?.bundle || {};
-  const items = Array.isArray(result.items) ? result.items : Array.isArray(result.record?.items) ? result.record.items : [];
-  const hygieneItems = Array.isArray(result.hygieneItems) ? result.hygieneItems : Array.isArray(result.record?.hygieneItems) ? result.record.hygieneItems : [];
-  const legacyHygieneItems = items.filter((item) => item.type === "vault_hygiene");
-  const userItems = items.filter((item) => item.type !== "vault_hygiene");
-  const allHygieneItems = [...hygieneItems, ...legacyHygieneItems];
-  const allReviewItems = [...userItems, ...allHygieneItems];
+  const items = Array.isArray(result.items)
+    ? result.items
+    : Array.isArray(result.record?.items) ? result.record.items : [];
+  const hygieneItems = Array.isArray(result.hygieneItems)
+    ? result.hygieneItems
+    : Array.isArray(result.record?.hygieneItems) ? result.record.hygieneItems : [];
+  const legacyHygiene = items.filter((i) => i.type === "vault_hygiene");
+  const userItems = items.filter((i) => i.type !== "vault_hygiene");
+  const allHygiene = [...hygieneItems, ...legacyHygiene];
   const mode = reviewBundleMode(items, hygieneItems);
+
   const maintenanceFindings = Array.isArray(result.maintenance?.findings)
     ? result.maintenance.findings
     : Array.isArray(result.record?.maintenance?.findings)
-      ? result.record.maintenance.findings
-      : [];
-  const pending = countBy(userItems, (item) => !item.status || item.status === "pending");
-  const approved = countBy(userItems, (item) => item.status === "approved");
-  const rejected = countBy(userItems, (item) => item.status === "rejected");
-  const pendingHygiene = countBy(allHygieneItems, (item) => !item.status || item.status === "pending");
-  const closedHygiene = countBy(allHygieneItems, (item) => item.status && item.status !== "pending");
-  const warnings = countBy(userItems, (item) => item.adversarialReview?.status === "warning")
-    + countBy(maintenanceFindings, (item) => item.severity === "warning");
-  const blocks = countBy(userItems, (item) => item.adversarialReview?.status === "block")
-    + countBy(maintenanceFindings, (item) => item.severity === "error");
-  const written = result.written || {};
-  const inferredMarkdownPath = !written.markdownPath && result.paths?.reviewRoot && bundle.bundleId
-    ? `${result.paths.reviewRoot}/review-bundles/${bundle.bundleId}.md`
-    : null;
-  const inferredItemsPath = !written.itemsPath && result.paths?.reviewRoot && bundle.bundleId
-    ? `${result.paths.reviewRoot}/review-bundles/${bundle.bundleId}.items.json`
-    : null;
-  const artifactPaths = compactPathList([written.markdownPath || inferredMarkdownPath, written.itemsPath || inferredItemsPath].filter(Boolean));
-  const maintenanceWarnings = countBy(maintenanceFindings, (item) => item.severity === "warning");
-  const maintenanceErrors = countBy(maintenanceFindings, (item) => item.severity === "error");
-  const adversarialWarnings = countBy(userItems, (item) => item.adversarialReview?.status === "warning");
-  const adversarialBlocks = countBy(userItems, (item) => item.adversarialReview?.status === "block");
-  const adversarialPass = countBy(userItems, (item) => item.adversarialReview?.status === "pass");
-  const checkRows = [
-    ["Maintenance Light", reviewStatus(maintenanceErrors, maintenanceWarnings), `${maintenanceFindings.length} finding(s), ${maintenanceErrors} error(s), ${maintenanceWarnings} warning(s)`],
-    ["Adversarial Light", reviewStatus(adversarialBlocks, adversarialWarnings), `${adversarialPass}/${userItems.length} pass, ${adversarialBlocks} block(s), ${adversarialWarnings} warning(s)`],
-    ["ReviewBundle Build", reviewStatus(result.ok === false || result.status === "blocked" ? 1 : 0, 0), mode.kind === "maintenance"
-      ? `${allHygieneItems.length} vault hygiene finding(s), ${pendingHygiene} open`
-      : `${userItems.length} item(s), ${pending} pending`],
-  ];
-  const SYSTEM_FINDING_CODES = new Set(["managed_block_hash_mismatch", "generated_link_review"]);
+      ? result.record.maintenance.findings : [];
+
+  const SYSTEM_CODES = new Set(["managed_block_hash_mismatch", "generated_link_review"]);
   const systemFindings = dedupeFindings(
-    maintenanceFindings.filter((item) => SYSTEM_FINDING_CODES.has(item.code || item.type))
+    maintenanceFindings.filter((f) => SYSTEM_CODES.has(f.code || f.type))
   );
-  const userFindings = dedupeFindings([
-    ...maintenanceFindings.filter((item) => !SYSTEM_FINDING_CODES.has(item.code || item.type) && ["error", "warning"].includes(item.severity)),
-    ...userItems.filter((item) => ["block", "warning"].includes(item.adversarialReview?.status)).map((item) => ({
-      ...item,
-      severity: item.adversarialReview.status === "block" ? "error" : "warning",
-      message: item.adversarialReview.reason || item.reason,
-    })),
-  ]);
-  const typeSummary = formatCounts(countByValue(userItems, (item) => item.type));
-  const riskSummary = formatCounts(countByValue(allReviewItems, (item) => item.risk));
-  const baseTitle = label.includes("Morning")
-    ? `${label} - ${bundle.workspaceKey || "main"} (${bundle.createdByAgent || "main"})`
-    : label;
-  const title = mode.kind === "maintenance"
-    ? `${baseTitle} - Vault maintenance only - no memory import`
-    : baseTitle;
-  return [
-    title,
-    `${formatReviewTimestamp(bundle.createdAt)} | Preview mode — nothing written until you run apply`,
-    `Review mode: ${mode.label} | ${mode.description}`,
-    "",
-    "## Result",
-    "",
-    "| Check | Status | Details |",
-    "|---|---|---|",
-    ...checkRows.map(([name, check, detail]) => `| ${name} | ${statusMarker(check)} | ${detail} |`),
-    "",
-    "## Blocked / Warning",
-    "",
-    userFindings.length ? userFindings.slice(0, 8).map(formatFinding).join("\n") : "- None.",
-    userFindings.length > 8 ? `- ... ${userFindings.length - 8} more in the ReviewBundle artifact.` : "",
-    systemFindings.length > 0 ? `\n## System Health (${systemFindings.length} auto-managed finding(s) — no action needed)\n\n${systemFindings.map(formatFinding).join("\n")}` : "",
-    "",
-    "## Pending Items",
-    "",
-    userItems.length === 0 ? "- No memory review needed — only system health findings (auto-managed)." : `- Memory/user items: ${userItems.length} total, ${pending} pending, ${approved} approved, ${rejected} rejected`,
-    allHygieneItems.length > 0 ? `- System health: ${allHygieneItems.length} vault hygiene finding(s) (auto-managed, no action needed)` : "",
-    userItems.length > 0 ? `- Types: ${typeSummary}` : "",
-    userItems.length > 0 ? `- Risk: ${riskSummary}` : "",
-    (blocks + warnings) > 0 ? `- Findings: ${blocks} block(s), ${warnings} warning(s)` : "",
-    "",
-    "## Review Buckets",
-    "",
-    reviewItemBuckets(items, hygieneItems),
-    "",
-    "## Artifacts",
-    "",
-    artifactPaths.length ? artifactPaths.map((path) => `- ${path}`).join("\n") : "- No artifact path available.",
-    "",
-    reviewCommands(bundle.bundleId, { artifactPath: written.markdownPath || inferredMarkdownPath, mode }),
-    "",
-    result.note || "",
-    "Telegram shows a summary only; full item details are in the ReviewBundle artifact.",
-    "No changes were applied.",
-  ].filter(Boolean).join("\n");
+  const nonSystemFindings = maintenanceFindings.filter((f) => !SYSTEM_CODES.has(f.code || f.type));
+
+  const maintenanceErrors = countBy(nonSystemFindings, (f) => f.severity === "error");
+  const maintenanceWarnings = countBy(nonSystemFindings, (f) => f.severity === "warning");
+  const systemErrors = countBy(systemFindings, (f) => f.severity === "error");
+  const systemWarnings = countBy(systemFindings, (f) => f.severity === "warning");
+  const adversarialBlocks = countBy(userItems, (i) => i.adversarialReview?.status === "block");
+  const adversarialWarnings = countBy(userItems, (i) => i.adversarialReview?.status === "warning");
+  const totalUserItems = userItems.length;
+  const pending = countBy(userItems, (i) => !i.status || i.status === "pending");
+  const approved = countBy(userItems, (i) => i.status === "approved");
+
+  // ── Titel & Untertitel ───────────────────────────────────────────────────
+  const title = `${telegramBundleTitle(label)} — ${formatGermanDate(bundle.createdAt)}`;
+  const subtitle = mode.kind === "maintenance"
+    ? "Nur Systemwartung · Kein Memory-Import"
+    : "Vorschau-Modus · Noch nichts gespeichert ✋";
+
+  // ── Status-Zeilen ────────────────────────────────────────────────────────
+  let adversarialLine = null;
+  if (totalUserItems > 0) {
+    if (adversarialBlocks > 0) {
+      adversarialLine = `❌ Sicherheitsprüfung: ${adversarialBlocks} blockiert`;
+    } else if (adversarialWarnings > 0) {
+      adversarialLine = `⚠️ Sicherheitsprüfung: ${adversarialWarnings} Warnung${adversarialWarnings === 1 ? "" : "en"}`;
+    } else {
+      adversarialLine = `✅ Sicherheitsprüfung: alle ${totalUserItems} geprüft`;
+    }
+  }
+
+  let maintenanceLine = null;
+  const allMaintenanceErrors = maintenanceErrors + systemErrors;
+  const allMaintenanceWarnings = maintenanceWarnings + systemWarnings;
+  if (maintenanceFindings.length > 0) {
+    if (allMaintenanceErrors > 0) {
+      maintenanceLine = `❌ System: ${allMaintenanceErrors} Fehler — automatisch verwaltet`;
+    } else if (allMaintenanceWarnings > 0) {
+      maintenanceLine = `⚠️ System: ${allMaintenanceWarnings} Hinweis${allMaintenanceWarnings === 1 ? "" : "e"} — automatisch verwaltet`;
+    } else {
+      maintenanceLine = `✅ System: keine Probleme`;
+    }
+  }
+
+  // ── Inhalt: Vorschläge ───────────────────────────────────────────────────
+  const bucketLines = telegramBucketLines(userItems, hygieneItems);
+  const riskLine = telegramRiskSummary([...userItems, ...allHygiene]);
+
+  // ── Adversarial-Warnungen (User muss handeln) ────────────────────────────
+  const adversarialProblem = dedupeFindings(
+    userItems
+      .filter((i) => ["block", "warning"].includes(i.adversarialReview?.status))
+      .map((i) => ({
+        ...i,
+        severity: i.adversarialReview.status === "block" ? "error" : "warning",
+        message: i.adversarialReview.reason || i.reason,
+      }))
+  );
+
+  // ── Ausgabe zusammenbauen ────────────────────────────────────────────────
+  const out = [title, subtitle, ""];
+
+  if (adversarialLine) out.push(adversarialLine);
+  if (maintenanceLine) out.push(maintenanceLine);
+
+  // Vorschläge-Sektion
+  if (totalUserItems > 0) {
+    out.push("");
+    const countLabel = totalUserItems === 1 ? "1 Vorschlag" : `${totalUserItems} Vorschläge`;
+    const pendingExtra = approved > 0 && pending < totalUserItems
+      ? ` (${pending} offen, ${approved} freigegeben)` : "";
+    out.push(`📋 ${countLabel}${pendingExtra}:`);
+    if (bucketLines) out.push(bucketLines);
+    if (riskLine) out.push(riskLine);
+  } else if (mode.kind === "maintenance" && allHygiene.length > 0) {
+    out.push("");
+    out.push(`🔧 ${allHygiene.length} Systemwartungs-Einträge`);
+  }
+
+  // Adversarial-Probleme (User-Handeln nötig)
+  if (adversarialProblem.length > 0) {
+    out.push("");
+    out.push("⚠️ Bitte prüfen:");
+    out.push(...adversarialProblem.slice(0, 5).map(telegramFindingLine));
+    if (adversarialProblem.length > 5) out.push(`• … ${adversarialProblem.length - 5} weitere`);
+  }
+
+  // Systemhinweise (kein Handeln nötig)
+  if (systemFindings.length > 0) {
+    out.push("");
+    out.push("Systemhinweise (kein Handeln nötig):");
+    out.push(...systemFindings.slice(0, 6).map(telegramFindingLine));
+    if (systemFindings.length > 6) out.push(`• … ${systemFindings.length - 6} weitere`);
+  }
+
+  // Non-system maintenance findings (ernst, aber auto-verwaltet)
+  if (nonSystemFindings.length > 0) {
+    out.push("");
+    out.push("Wartungshinweise:");
+    out.push(...dedupeFindings(nonSystemFindings).slice(0, 4).map(telegramFindingLine));
+  }
+
+  // Next Step
+  out.push("");
+  out.push(telegramNextSteps(mode, adversarialBlocks > 0));
+
+  if (result.note) out.push("", result.note);
+
+  return out.filter((line) => line !== null && line !== undefined).join("\n");
 }
 
 export function eveningReviewSummary(summary = {}) {
