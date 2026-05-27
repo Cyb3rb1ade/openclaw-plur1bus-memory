@@ -1747,7 +1747,7 @@ test("reviewBundleSummary: Anzahl Vorschlaege auf Deutsch", () => {
 test("reviewBundleSummary: Singular korrekt", () => {
   const out = reviewBundleSummary(makeBundle({ items: [makeUserItem()] }));
   assert.match(out, /1 Vorschlag/);
-  assert.doesNotMatch(out, /1 Vorschl..ge/);
+  assert.doesNotMatch(out, /1 Vorschläge/);
 });
 
 test("reviewBundleSummary: Systemhinweise ohne Code-Bezeichner", () => {
