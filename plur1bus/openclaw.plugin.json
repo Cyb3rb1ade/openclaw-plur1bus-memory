@@ -1,0 +1,924 @@
+{
+  "id": "memory-lancedb-namespaced",
+  "name": "Memory (LanceDB, per-Agent)",
+  "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory and OpenClaw-native turn journal, provenance, curation, and recall.",
+  "version": "4.3.0",
+  "contracts": {
+    "memoryEmbeddingProviders": [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small"
+    ],
+    "tools": [
+      "knowledge_update",
+      "memory_forget",
+      "memory_recall",
+      "memory_search",
+      "memory_store"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "openai-compatible",
+              "local-transformers"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "number"
+          },
+          "local": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "dimensions": {
+                "type": "number"
+              },
+              "queryPrefix": {
+                "type": "string"
+              },
+              "passagePrefix": {
+                "type": "string"
+              },
+              "cacheDir": {
+                "type": "string"
+              }
+            }
+          },
+          "fallback": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiKey": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "baseUrl": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "baseDbPath": {
+        "type": "string"
+      },
+      "hooks": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowConversationAccess": {
+            "type": "boolean",
+            "default": true
+          },
+          "allowPromptInjection": {
+            "type": "boolean",
+            "default": true
+          },
+          "timeoutMs": {
+            "type": "number"
+          },
+          "timeouts": {
+            "type": "object"
+          }
+        }
+      },
+      "neo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "augment",
+              "slot"
+            ],
+            "default": "augment"
+          },
+          "statePath": {
+            "type": "string"
+          },
+          "corpusDefaultWorkspaceKey": {
+            "type": "string"
+          },
+          "workspaceAliases": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "workspaceKey": {
+                  "type": "string"
+                },
+                "workspace_id": {
+                  "type": "string"
+                },
+                "workspaceId": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "workspacePath": {
+                  "type": "string"
+                },
+                "workspaceDir": {
+                  "type": "string"
+                },
+                "workspace": {
+                  "type": "string"
+                },
+                "dir": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                },
+                "agentId": {
+                  "type": "string"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "alias": {
+                  "type": "string"
+                },
+                "aliases": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "legacyKeys": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      },
+      "captureMaxChars": {
+        "type": "number"
+      },
+      "runtime": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "recallTimeoutMs": {
+            "type": "number",
+            "default": 45000
+          },
+          "captureTimeoutMs": {
+            "type": "number",
+            "default": 60000
+          },
+          "maxConcurrentRecall": {
+            "type": "number",
+            "default": 2
+          },
+          "maxConcurrentCapturePerAgent": {
+            "type": "number",
+            "default": 1
+          },
+          "backgroundPriority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal"
+            ],
+            "default": "low"
+          },
+          "recallCacheTtlMs": {
+            "type": "number",
+            "default": 120000
+          }
+        }
+      },
+      "recallMinScore": {
+        "type": "number",
+        "default": 0.15
+      },
+      "autoRecallMinScore": {
+        "type": "number",
+        "default": 0.2
+      },
+      "duplicateThreshold": {
+        "type": "number",
+        "default": 0.95
+      },
+      "forgetThreshold": {
+        "type": "number",
+        "default": 0.3
+      },
+      "summaryMaxWords": {
+        "type": "number",
+        "default": 75
+      },
+      "reranker": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "cohere",
+              "local-transformers",
+              "disabled"
+            ]
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "candidates": {
+            "type": "number"
+          },
+          "local": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "model": {
+                "type": "string"
+              },
+              "cacheDir": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "merging": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "threshold": {
+            "type": "number",
+            "default": 0.7
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "disableThinking": {
+            "type": "boolean"
+          },
+          "headers": {
+            "type": "object"
+          }
+        }
+      },
+      "schicht15": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "disableThinking": {
+            "type": "boolean"
+          },
+          "headers": {
+            "type": "object"
+          },
+          "minImportance": {
+            "type": "number",
+            "default": 0.7
+          }
+        }
+      },
+      "gc": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "recall": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "importanceBoost": {
+            "type": "number",
+            "default": 0.3
+          },
+          "dedup": {
+            "type": "boolean",
+            "default": true
+          },
+          "dedupJaccard": {
+            "type": "number",
+            "default": 0.6
+          },
+          "canonicalFirst": {
+            "type": "boolean",
+            "default": true
+          },
+          "canonicalMinScore": {
+            "type": "number",
+            "default": 0.3
+          },
+          "canonicalMaxItems": {
+            "type": "number",
+            "default": 2
+          }
+        }
+      },
+      "obsidianBridge": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "augment"
+            ],
+            "default": "augment"
+          },
+          "vaultPath": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "workspaceRoot": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "reviewRoot": {
+            "type": "string",
+            "default": "plur1bus"
+          },
+          "requireUserApproval": {
+            "type": "boolean",
+            "default": true
+          },
+          "applyApprovedOnly": {
+            "type": "boolean",
+            "default": true
+          },
+          "writeManagedBlocks": {
+            "type": "boolean",
+            "default": true
+          },
+          "allowWrite": {
+            "type": "boolean",
+            "default": true
+          },
+          "allowDotObsidianWrite": {
+            "type": "boolean",
+            "default": false
+          },
+          "capabilityPack": {
+            "type": "string",
+            "enum": [
+              "full"
+            ],
+            "default": "full"
+          },
+          "agents": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "include": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [
+                  "*"
+                ]
+              },
+              "equalCapabilities": {
+                "type": "boolean",
+                "default": true
+              },
+              "defaultProfiles": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "conservative",
+                    "adversarial",
+                    "maintenance",
+                    "project_manager",
+                    "semantic_deep"
+                  ]
+                },
+                "default": {
+                  "default": "standard"
+                }
+              }
+            }
+          },
+          "morningReview": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "cron": {
+                "type": "string",
+                "default": "0 9 * * *"
+              },
+              "timezone": {
+                "type": "string",
+                "default": "Europe/Berlin"
+              },
+              "delivery": {
+                "type": "string",
+                "enum": [
+                  "announce",
+                  "silent"
+                ],
+                "default": "announce"
+              },
+              "session": {
+                "type": "string",
+                "enum": [
+                  "isolated",
+                  "current"
+                ],
+                "default": "isolated"
+              },
+              "writeReviewBundle": {
+                "type": "boolean",
+                "default": true
+              },
+              "applyMode": {
+                "type": "string",
+                "enum": [
+                  "manual"
+                ],
+                "default": "manual"
+              }
+            }
+          },
+          "eveningReview": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "cron": {
+                "type": "string",
+                "default": "0 18 * * *"
+              },
+              "timezone": {
+                "type": "string",
+                "default": "Europe/Berlin"
+              },
+              "delivery": {
+                "type": "string",
+                "enum": [
+                  "announce",
+                  "silent"
+                ],
+                "default": "announce"
+              },
+              "session": {
+                "type": "string",
+                "enum": [
+                  "isolated",
+                  "current"
+                ],
+                "default": "isolated"
+              },
+              "applyMode": {
+                "type": "string",
+                "enum": [
+                  "manual"
+                ],
+                "default": "manual"
+              }
+            }
+          },
+          "maintenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "daily": {
+                "type": "string",
+                "enum": [
+                  "light"
+                ],
+                "default": "light"
+              },
+              "weekly": {
+                "type": "string",
+                "enum": [
+                  "deep"
+                ],
+                "default": "deep"
+              }
+            }
+          },
+          "adversarial": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "daily": {
+                "type": "string",
+                "enum": [
+                  "light"
+                ],
+                "default": "light"
+              },
+              "weekly": {
+                "type": "string",
+                "enum": [
+                  "deep"
+                ],
+                "default": "deep"
+              }
+            }
+          },
+          "optionalIntegrations": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "dataview": {
+                "type": "boolean",
+                "default": false
+              },
+              "tasks": {
+                "type": "boolean",
+                "default": false
+              },
+              "bases": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "maxFileBytes": {
+            "type": "number",
+            "default": 262144
+          },
+          "maxItems": {
+            "type": "number",
+            "default": 200
+          },
+          "bundleCooldownMs": {
+            "type": "number",
+            "default": 0
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": true
+          },
+          "watch": {
+            "type": "boolean",
+            "default": false
+          },
+          "workspaces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "workspace_id": {
+                  "type": "string"
+                },
+                "workspaceId": {
+                  "type": "string"
+                },
+                "agent_id": {
+                  "type": "string"
+                },
+                "agentId": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "workspace": {
+                  "type": "string"
+                },
+                "dir": {
+                  "type": "string"
+                },
+                "includeGlobs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ignoreGlobs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "requireUserApproval": {
+                  "type": "boolean"
+                },
+                "allowDotObsidianWrite": {
+                  "type": "boolean"
+                },
+                "tombstoneOnDelete": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "includeGlobs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ignoreGlobs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tombstoneOnDelete": {
+            "type": "boolean",
+            "default": true
+          },
+          "sourceOfTruth": {
+            "type": "string",
+            "enum": [
+              "plur1bus-lancedb"
+            ],
+            "default": "plur1bus-lancedb"
+          },
+          "recallAuthority": {
+            "type": "string",
+            "enum": [
+              "lancedb-reranked-vector"
+            ],
+            "default": "lancedb-reranked-vector"
+          },
+          "dashboardLayer": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "records": {
+                "type": "boolean",
+                "default": true
+              },
+              "markdownDashboards": {
+                "type": "boolean",
+                "default": true
+              },
+              "bases": {
+                "type": "boolean",
+                "default": false
+              },
+              "dataview": {
+                "type": "boolean",
+                "default": false
+              },
+              "tasks": {
+                "type": "boolean",
+                "default": false
+              },
+              "autoLinkSuggestions": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "deepMaintenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "archiveAfterDays": {
+                "type": "number",
+                "default": 30
+              },
+              "staleDecisionAfterDays": {
+                "type": "number",
+                "default": 45
+              },
+              "semanticDuplicateScan": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "adversarialDeep": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "semanticContradictionScan": {
+                "type": "boolean",
+                "default": true
+              },
+              "evidenceScoring": {
+                "type": "boolean",
+                "default": true
+              },
+              "llmClassifier": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "semanticGraph": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "proposalOnly": {
+                "type": "boolean",
+                "default": true
+              },
+              "mutateMemory": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "provenanceGraph": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "impactAnalysis": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "proposalOnly": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "weekly": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "archive": {
+                "type": "boolean",
+                "default": true
+              },
+              "trendWindowWeeks": {
+                "type": "number",
+                "default": 4
+              }
+            }
+          },
+          "soulPatch": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "force": {
+                "type": "boolean",
+                "default": false
+              },
+              "migrateLegacy": {
+                "type": "boolean",
+                "default": false
+              },
+              "createIfMissing": {
+                "type": "boolean",
+                "default": true
+              },
+              "backup": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
