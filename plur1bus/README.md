@@ -82,6 +82,16 @@ npm test              # node --test, 74 tests
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.
 
+## Migration from 4.x
+
+Version 5.0.0 is a rewrite. If you ran 4.x:
+
+- Old commands `/plur1bus_review`, `/plur1bus_morning`, `/plur1bus_evening` are gone. The bundle approval workflow has been replaced by autonomous learning plus the critical-push classifier.
+- Config keys removed: `autoApplyLowRisk`, `reviewProfiles`, `bundleCooldownMs`, the entire `review` block. Remove them before restart; the plugin ignores unknown keys but they will no longer have any effect.
+- Cron jobs `morning-review` and `evening-review` are gone. Replace them with the three new families: `daily-memory-consolidation-*`, `critical-memory-classifier-*`, `auto-accept-stale-criticals-*`.
+- Pending review bundles from 4.x are moved to `/plur1bus/_archive/` on first startup and are not surfaced again. Apply or discard them via the vault before deletion.
+- The vault layout changed. User-readable cards now live under `/memory/cards/YYYY/MM/<date>-<slug>.md`. Bot internal state moves to `/sys/` and is not synced. Update your Syncthing `.stignore` to allowlist `/memory`, `/decisions`, `/people`, `/projects` and deny everything else.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
