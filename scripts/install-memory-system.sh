@@ -2,7 +2,7 @@
 # install-memory-system.sh — Installiert/aktualisiert das memory-lancedb-namespaced-System
 # in eine OpenClaw-Instanz (lokal oder remote via SSH).
 #
-# Stand: 2026-05-27
+# Stand: 2026-05-28
 #
 # Verwendung:
 #   ./install-memory-system.sh                          # Auto-Erkennung lokaler Installationen
@@ -11,6 +11,7 @@
 #   ./install-memory-system.sh --dry-run <ziel>         # Vorschau ohne Änderungen
 #   ./install-memory-system.sh --update-plugin-only <ziel>  # Nur Plugin aktualisieren; Memory/Embeddings/Provider bleiben erhalten
 #   ./install-memory-system.sh --rollback <ziel>        # Letzten Snapshot wiederherstellen
+#   ./install-memory-system.sh --legacy-host-cron <ziel> # Legacy-User-Crontab-Jobs explizit einrichten
 #
 # Ohne Ziel-Argument: sucht automatisch nach lokalen OpenClaw-Installationen
 # (prüft ~/.openclaw, /root/.openclaw, /home/*/.openclaw, /opt/, /srv/ etc.)
@@ -20,6 +21,10 @@
 # unter {ziel}/memory/.snapshots/ erstellt. Max. 5 Snapshots, ältere werden
 # gelöscht. Plugin-Updates löschen nicht {ziel}/memory/lancedb-namespaced,
 # bestehende Embeddings, Provider-Konfiguration oder Cohere-Reranker-Settings.
+#
+# Runtime-Verhalten: Der v4-Normalbetrieb nutzt OpenClaw-Hooks, Plugin-Services
+# und OpenClaw-managed Crons. Dieses Script richtet keine Host-/User-Crontabs
+# als Primärpfad ein, außer --legacy-host-cron wird ausdrücklich gesetzt.
 #
 # Voraussetzungen (Quellinstanz):
 #   - Node.js (für jq-ähnliche JSON-Operationen via node)
@@ -64,6 +69,7 @@ Optionen:
   --dry-run              Vorschau ohne Änderungen
   --update-plugin-only   Nur Plugin-Dateien und Registry aktualisieren; Memory-Daten, Embeddings und Provider-Config bleiben erhalten
   --rollback             Letzten Snapshot wiederherstellen
+  --legacy-host-cron     Legacy-User-Crontab-Jobs für GC/KNOWLEDGE explizit einrichten
   -h, --help             Diese Hilfe anzeigen
 EOF
 }
@@ -252,6 +258,7 @@ refresh_plugin_registry() {
 DRY_RUN=0
 UPDATE_ONLY=0
 ROLLBACK=0
+LEGACY_HOST_CRON=0
 TARGET=""
 
 for arg in "$@"; do
@@ -260,6 +267,7 @@ for arg in "$@"; do
     --dry-run)            DRY_RUN=1 ;;
     --update-plugin-only) UPDATE_ONLY=1 ;;
     --rollback)           ROLLBACK=1 ;;
+    --legacy-host-cron)    LEGACY_HOST_CRON=1 ;;
     --*)                  error "Unbekannte Option: $arg"; usage; exit 2 ;;
     *) TARGET="$arg" ;;
   esac
@@ -380,6 +388,7 @@ fi
 [[ "$DRY_RUN" == "1" ]] && warn "DRY-RUN-Modus — keine Änderungen werden vorgenommen."
 [[ "$UPDATE_ONLY" == "1" ]] && warn "UPDATE-PLUGIN-ONLY-Modus — nur Plugin-Dateien werden aktualisiert."
 [[ "$ROLLBACK" == "1" ]] && warn "ROLLBACK-Modus — stellt letzten Snapshot wieder her."
+[[ "$LEGACY_HOST_CRON" == "1" ]] && warn "LEGACY-HOST-CRON-Modus — User-Crontab-Jobs werden explizit eingerichtet."
 echo
 
 # ─── Rollback: Schnellpfad ────────────────────────────────────────────────────
@@ -685,7 +694,7 @@ case "$RERANKER_PROVIDER_MODE" in
   local)
     RERANKER_PROVIDER="local-transformers"
     RERANKER_MODEL="$RERANKER_LOCAL_MODEL"
-    warn "Local Reranker ist in 3.1-beta.1 experimental und English-primary; Pass erst nach grünem Node/Transformers.js-Smoke."
+    warn "Local Reranker ist in v4 weiterhin experimental und English-primary; Pass erst nach grünem Node/Transformers.js-Smoke."
     ;;
   disabled)
     RERANKER_PROVIDER="disabled"
@@ -1194,9 +1203,9 @@ else
   dryrun "Würde Verzeichnisse anlegen für: ${AGENT_LIST[*]}"
 fi
 
-# ─── Schritt 6: memory-gc.mjs kopieren und Cron einrichten ────────────────────
+# ─── Schritt 6: memory-gc.mjs kopieren; Legacy-Cron nur explizit ─────────────
 
-step "Schritt 6: TTL-GC-Cron einrichten"
+step "Schritt 6: TTL-GC-Script installieren"
 
 TARGET_GC_SCRIPT="$TARGET_DIR/scripts/memory-gc.mjs"
 MAINTAIN_SRC="$SOURCE_DIR/scripts/maintain-knowledge-md.mjs"
@@ -1252,10 +1261,14 @@ else
   dryrun "Würde $TARGET_GC_SCRIPT erstellen"
 fi
 
-# Cron-Eintrag — User-Crontab (kein Root erforderlich, kein Privilege-Escalation-Risiko)
+# Cron-Eintrag — Legacy User-Crontab. Im v4-Normalbetrieb übernehmen
+# OpenClaw-managed Agent-Crons/Plugin-Services die Wartung.
 CRON_LINE="0 3 * * * /usr/bin/node $TARGET_GC_SCRIPT >> /tmp/openclaw/memory-gc.log 2>&1"
 
-if [[ "$DRY_RUN" == "1" ]]; then
+if [[ "$LEGACY_HOST_CRON" != "1" ]]; then
+  info "Legacy-User-Crontab wird nicht eingerichtet. OpenClaw-managed Crons/Plugin-Services bleiben Primärpfad."
+  info "Bei Bedarf explizit erneut mit --legacy-host-cron ausführen."
+elif [[ "$DRY_RUN" == "1" ]]; then
   dryrun "Würde zu User-Crontab hinzufügen: $CRON_LINE"
 else
   CRON_CHECK=$(run_target "(crontab -l 2>/dev/null || true) | grep -q 'memory-gc' && echo found || echo missing")
@@ -1415,7 +1428,10 @@ step "Schritt 9c: KNOWLEDGE.md Fresh-Cron"
 BACKFILL_CRON="30 4 * * * /usr/bin/node $TARGET_MAINTAIN_SCRIPT --fresh --max 10 >> $TARGET_DIR/logs/knowledge-backfill.log 2>&1"
 CRON_MARKER="maintain-knowledge-md"
 
-if [[ "$DRY_RUN" == "1" ]]; then
+if [[ "$LEGACY_HOST_CRON" != "1" ]]; then
+  info "KNOWLEDGE.md Legacy-User-Crontab wird nicht eingerichtet. Nutze OpenClaw-managed Cron/Service-Jobs oder manuelle Doctor/Backfill-Läufe."
+  info "Bei Bedarf explizit erneut mit --legacy-host-cron ausführen."
+elif [[ "$DRY_RUN" == "1" ]]; then
   dryrun "Würde Cron einrichten: $BACKFILL_CRON"
 else
   run_target "mkdir -p '$TARGET_DIR/logs'"

@@ -18,6 +18,7 @@ Use the short commands in Telegram or any OpenClaw command channel:
 /plur1bus_review explain
 /plur1bus_review approve low-risk
 /plur1bus_review apply
+/plur1bus_review quickapply
 ```
 
 Meaning:
@@ -32,12 +33,19 @@ Meaning:
 - `/plur1bus_review reject all` marks pending items as rejected.
 - `/plur1bus_review apply` is the only step that can write approved memory
   candidates to memory.
+- `/plur1bus_review quickapply` is an explicit shortcut for low-risk work:
+  approve low-risk items in the latest pending bundle, revalidate, and apply in
+  one command.
 
 Morning, evening, review, and approve do not write memory. Approval only marks
 items. Apply re-reads the ReviewBundle, revalidates hashes/preconditions, and
 applies approved safe items. Maintenance-only bundles say `Vault maintenance
 only - no memory import`; they need inspection, explanation, or rejection/close,
 not memory approval.
+
+`quickapply` is the only shortcut that can write memory. It still uses the
+normal apply safety checks, and medium/high-risk, warning, blocked, stale, or
+invalid items stay pending or blocked.
 
 Bundle IDs are optional in Telegram replies and short commands. If you answer a
 review summary with `/plur1bus_review approve low-risk`, `/plur1bus_review reject
@@ -48,7 +56,8 @@ the latest approved ReviewBundle.
 ## Reading Review Summaries
 
 Review summaries are preview output. Nothing is written to memory until an
-explicit `/plur1bus_review apply` runs after approval.
+explicit `/plur1bus_review apply` runs after approval or an explicit
+`/plur1bus_review quickapply` runs the low-risk shortcut.
 
 The summary intentionally separates three things:
 
@@ -58,6 +67,11 @@ The summary intentionally separates three things:
   not need memory approval.
 - `Pending Items`: user-reviewable memory items plus a short count of any
   system-health findings.
+- `Preview`: up to three note or memory-promotion previews with filename plus
+  snippet. Full item details stay in the ReviewBundle artifact.
+
+The happy path intentionally does not mention `Sicherheitsprüfung`. Security
+review appears only when there are actual warnings or blocks.
 
 If `Pending Items` says `No memory review needed`, there are no Obsidian notes
 waiting to become memories. You can inspect the details with
@@ -106,6 +120,7 @@ The long command namespace remains available:
 /plur1bus obsidian review reject [bundleId] --items <ids|all>
 /plur1bus obsidian review snooze [bundleId] --items <ids> --until <date|duration>
 /plur1bus obsidian review apply [bundleId]
+/plur1bus obsidian review quickapply [bundleId] [low-risk|all]
 /plur1bus obsidian morning-review
 /plur1bus obsidian evening-review
 /plur1bus obsidian conflicts
@@ -164,6 +179,10 @@ OpenClaw Cron is the supported scheduler. The generated cron prompts execute
 the PLUR1BUS plugin command before model inference; they must not look for a
 standalone shell CLI.
 
+Cron, background, and heartbeat turns keep their AutoRecall, embeddings,
+canonical recall, deduplication, and ranking path. The runtime scheduler
+deprioritizes and bounds that work; it does not disable memory quality.
+
 ## Install And Update Safety
 
 For normal users, install or update through ClawHub:
@@ -177,6 +196,10 @@ LanceDB under `memory/lancedb-namespaced`, existing embeddings, or configured
 providers such as the Cohere reranker. The repo installer follows the same
 rule: plugin files are replaced, memory data is snapshotted/preserved, and
 workspace config is not overwritten in plugin-only mode.
+
+The repo installer no longer creates host/User-Crontab maintenance jobs by
+default. Legacy GC or KNOWLEDGE crontabs require `--legacy-host-cron`; normal v4
+operations should use OpenClaw-managed cron jobs and plugin services.
 
 ## Authority Rules
 

@@ -168,9 +168,10 @@ test("plugin returns PLUR1BUS command help for bare /plur1bus", async () => {
     const result = await command.handler({ args: "", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
     assert.match(result.text, /PLUR1BUS quick commands:/);
     assert.match(result.text, /\/plur1bus_review approve low-risk/);
+    assert.match(result.text, /\/plur1bus_review quickapply/);
     assert.match(result.text, /\/plur1bus_morning/);
     assert.match(result.text, /Bundle id is optional/);
-    assert.match(result.text, /reply with approve\/reject\/apply|short commands without an id/);
+    assert.match(result.text, /reply with approve\/reject\/apply\/quickapply|short commands without an id/);
 
     const advanced = await command.handler({ args: "help advanced", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
     assert.match(advanced.text, /review show \[bundleId\]/);
@@ -219,9 +220,9 @@ test("plugin routes PLUR1BUS Telegram shortcuts through the same command layer",
     }));
     const command = registered.commands.find(item => item.name === "plur1bus_morning");
     const result = await command.handler({ args: "", workspaceDir: tmp, workspaceKey: "main", agentId: "main" });
-    assert.match(result.text, /PLUR1BUS Morning Review - main \(main\)/);
-    assert.match(result.text, /Telegram shows a summary only; full item details are in the ReviewBundle artifact/);
-    assert.match(result.text, /No memory approval is needed|Apply is the only step that writes to memory/);
+    assert.match(result.text, /Morgen-Review/);
+    assert.match(result.text, /Nur Systemwartung|Nur Vorschau/);
+    assert.match(result.text, /Kein Memory-Handeln nötig|apply/);
     assert.doesNotMatch(result.text, /noteContent/);
     assert.ok(result.text.length < 2600);
   } finally {
@@ -250,7 +251,7 @@ test("plugin pre-executes PLUR1BUS cron review prompts before model inference", 
     assert.match(result.appendContext, /PLUR1BUS cron command result:/);
     assert.match(result.appendContext, /Command: \/plur1bus obsidian morning-review/);
     assert.match(result.appendContext, /already executed this command before model inference/);
-    assert.match(result.appendContext, /PLUR1BUS Morning Review - main \(main\)/);
+    assert.match(result.appendContext, /Morgen-Review/);
     assert.doesNotMatch(result.appendContext, /noteContent/);
     assert.ok(result.appendContext.length < 3200);
   } finally {

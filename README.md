@@ -2,7 +2,7 @@
 
 *[Deutsch](#deutsch) | [English](#english)*
 
-[![Release](https://img.shields.io/badge/release-v4.2.18-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.2.18)
+[![Release](https://img.shields.io/badge/release-v4.2.19-blue)](https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/tag/v4.2.19)
 
 ---
 
@@ -14,7 +14,7 @@ PLUR1BUS v4 ist eine OpenClaw-native kognitive Memory-Schicht. Der Branch
 OpenClaw-Memory-Slot, PLUR1BUS ergänzt Recall, Capture, Curation, Behavior
 Learning, Embeddings und Dreaming über die offiziellen OpenClaw-Plugin-Flächen.
 
-**Aktuelle Version:** `4.2.18`<br>
+**Aktuelle Version:** `4.2.19`<br>
 **Branch:** `main`<br>
 **Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer; validiert gegen OpenClaw `2026.5.12`, `2026.5.16-beta.1`, `2026.5.18` und `2026.5.26`<br>
 **Normalbetrieb:** keine OpenClaw-dist-Patches, kein `ExecStartPre`, kein
@@ -169,12 +169,14 @@ globales `vaultPath` den aktiven Vault aus `obsidianBridge.workspaces[]`,
 `workspaceDir`, `workspaceKey` oder `agentId` auf. In `4.2.5` kann die Bridge
 Workspace-Installationen gezielt initialisieren und pro Workspace 09:00
 Morning-Review- sowie 18:00 Evening-Deep-Review-Crons ausgeben oder
-installieren. In `4.2.18` fuehrt PLUR1BUS solche Cron-Slash-Commands vor der
+installieren. Ab `4.2.8` fuehrt PLUR1BUS solche Cron-Slash-Commands vor der
 Modellantwort plugin-intern aus und registriert Telegram-kompatible
-Shortcut-Commands fuer die sichtbare Bot-Command-Liste. In `4.2.18` trennt die
+Shortcut-Commands fuer die sichtbare Bot-Command-Liste. Ab `4.2.17` trennt die
 Review-Ausgabe System-Health-Funde wie Managed-Block-Hashes oder generierte
 Links klar von echten Memory-Review-Warnungen und zeigt die Apply-Grenze direkt
-oberhalb der naechsten Befehle. Normale Vault-Dokumente werden als untrusted
+oberhalb der naechsten Befehle. `4.2.19` macht die Telegram-Ausgabe deutsch,
+zeigt bei Notiz-Importen Dateiname plus Snippet und ergaenzt
+`/plur1bus_review quickapply` als ausdruecklichen Low-Risk-Kurzpfad. Normale Vault-Dokumente werden als untrusted
 Kandidaten/Review-Input erfasst, ohne dadurch Auto-Recall-Memory zu werden. Die Bridge
 schreibt Markdown-Artefakte fuer Doctor-Reports, ReviewBundles, kanonische
 Records, Dashboards, Bases, Konflikte, Project Hubs, Memory-Erklaerungen,
@@ -258,10 +260,14 @@ Agentenpfade in den aktuellen Memory-Namespace schreiben.
 
 Bundle-IDs sind in Telegram-Replys und Kurzbefehlen optional. Wer auf einen
 Review-Bericht mit `/plur1bus_review approve low-risk`,
-`/plur1bus_review reject all` oder `/plur1bus_review apply` antwortet, muss die
+`/plur1bus_review reject all`, `/plur1bus_review apply` oder
+`/plur1bus_review quickapply` antwortet, muss die
 ID nicht wiederholen. PLUR1BUS waehlt nach Queue-Status: show/explain/approve/reject
 nutzen das neueste pending ReviewBundle, apply nutzt das neueste approved
-ReviewBundle.
+ReviewBundle. `quickapply` nutzt das neueste pending ReviewBundle, genehmigt
+standardmaessig nur Low-Risk-Items und ruft danach den normalen
+Apply-Revalidation-Pfad auf; mittlere/hohe Risiken und blockierte Items bleiben
+offen.
 
 ReviewBundles zeigen ihren Modus explizit: `Memory review` fuer Memory-Importe
 oder Promotions, `Maintenance only` fuer reine `vault_hygiene`-Befunde, und
@@ -294,6 +300,7 @@ the native skill command surface for that Telegram account or set
 /plur1bus obsidian review reject [bundleId] --items <ids|all>
 /plur1bus obsidian review snooze [bundleId] --items <ids> --until <date|duration>
 /plur1bus obsidian review apply [bundleId]
+/plur1bus obsidian review quickapply [bundleId] [low-risk|all]
 /plur1bus obsidian morning-review
 /plur1bus obsidian evening-review
 /plur1bus obsidian conflicts
@@ -315,10 +322,12 @@ the native skill command surface for that Telegram account or set
 /plur1bus obsidian cron install-workspace-reviews --force [--workspace <id>|--agent <id>|--all]
 ```
 
-`prepare` ist nicht `apply`. Ein ReviewBundle hat Frontmatter mit
+`prepare` ist nicht `apply`. `quickapply` ist die explizite Kurzform fuer
+`approve low-risk` plus `apply`; es schreibt nur nach derselben
+Hash-/Precondition-/Scope-Revalidation wie `apply`. Ein ReviewBundle hat Frontmatter mit
 `type: plur1bus-review-bundle`, `bundleId`, `createdByAgent`, `status:
 pending_user_review`, `applyMode: approval_required`, Review-Profilen und
-`obsidianBridgeVersion: 4.2.18`. Jedes Item hat stabile IDs, Status, Risk,
+`obsidianBridgeVersion: 4.2.19`. Jedes Item hat stabile IDs, Status, Risk,
 Target, Action, Evidence, Preconditions, Maintenance-/Adversarial-Review und
 Apply-Preview. Checkboxen in Obsidian reichen nie fuer Mutation; `apply` liest
 das Bundle neu, revalidiert Hashes/Preconditions und wendet nur explizit
@@ -392,6 +401,10 @@ installiert werden:
 /plur1bus obsidian cron install-workspace-reviews --force --workspace main
 ```
 
+Cron-, Background- und Heartbeat-Turns behalten AutoRecall, Embeddings,
+Canonical-First Recall, Deduplication und Reranking. Der Runtime-Scheduler aus
+`4.2.18` begrenzt und priorisiert diese Arbeit, schaltet sie aber nicht ab.
+
 Failure Modes: Fehlt Obsidian, ist `vaultPath` kaputt, wird der Vault geloescht
 oder ist die Bridge deaktiviert, laufen `memory_store`, `memory_recall`,
 `memory_forget` und `knowledge_update` weiter. Doctor meldet die Bridge-Probleme
@@ -457,7 +470,7 @@ Empfohlen ist `${ENV_VAR}`-Syntax. Embedding-`dimensions` müssen zur bestehende
 LanceDB passen. Ein Provider- oder Dimensionswechsel braucht einen neuen
 `baseDbPath` oder einen Fresh-DB-Rebuild.
 
-Provider-Status in `4.2.18`:
+Provider-Status in `4.2.19`:
 
 - **implemented:** `embedding.provider=openai`, `embedding.provider=openai-compatible`, `reranker.provider=cohere`, `reranker.provider=disabled`.
 - **implemented:** optionale OpenClaw-native Embedding-Provider-Bridge ueber `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` fuer `plur1bus-openai`, `plur1bus-openai-compatible` und `plur1bus-e5-small`. PLUR1BUS bleibt dabei `augment`; `memory-core` bleibt Slot-Owner.
@@ -635,7 +648,7 @@ runs as an additive augment plugin: `memory-core` remains the OpenClaw memory
 slot owner while PLUR1BUS adds capture, recall, curation, behavior learning,
 embeddings and dreaming through native plugin APIs.
 
-**Current version:** `4.2.18`<br>
+**Current version:** `4.2.19`<br>
 **Branch:** `main`<br>
 **Minimum OpenClaw:** `2026.5.12-beta.6`; validated against OpenClaw `2026.5.12`, `2026.5.16-beta.1`, `2026.5.18`, and `2026.5.26`<br>
 **Runtime rule:** no OpenClaw dist patching, no `ExecStartPre`, no `systemctl`
@@ -646,7 +659,7 @@ Provider keys are configured once in `openclaw.json` under
 turn journal, candidates, reaction ledger, behavior cards, curation state,
 embedding queue and optional `memory/KNOWLEDGE.md`.
 
-Provider status in `4.2.18`: OpenAI/OpenAI-compatible embeddings, Cohere
+Provider status in `4.2.19`: OpenAI/OpenAI-compatible embeddings, Cohere
 rerank, disabled rerank, and the optional OpenClaw-native
 `contracts.memoryEmbeddingProviders` bridge are implemented. The bridge exposes
 `plur1bus-openai`, `plur1bus-openai-compatible`, and experimental
@@ -660,7 +673,7 @@ provider bridge only expands `${ENV_VAR}` for explicit OpenAI/OpenAI-compatible/
 PLUR1BUS provider variables and provider-header prefixes; unrelated env reads
 such as `${HOME}` are rejected.
 
-Obsidian Bridge in `4.2.18`: optional, disabled by default, and strictly
+Obsidian Bridge in `4.2.19`: optional, disabled by default, and strictly
 approval-gated. It writes Markdown ReviewBundles, canonical records,
 dashboards, optional Bases/Dataview/Tasks output, conflict reports, semantic
 conflict proposals, duplicate candidates, provenance graphs, impact analysis,
@@ -674,7 +687,10 @@ reranked vector recall remains the primary recall path; Obsidian does not
 replace `memory_store`, `memory_recall`, `memory_search`, or `knowledge_update`.
 Review summaries are preview output: System Health findings are auto-managed
 vault diagnostics, while only approved memory candidates can be written by an
-explicit `/plur1bus_review apply`.
+explicit `/plur1bus_review apply`. `4.2.19` adds German Telegram-friendly
+review summaries, filename-plus-snippet previews, and the explicit
+`/plur1bus_review quickapply` low-risk shortcut; quickapply still uses the
+normal apply revalidation and leaves medium/high-risk or blocked items pending.
 Plain Vault documents are scanned as untrusted candidates/proposals only; they
 do not become Auto-Recall memory unless an explicit approved PLUR1BUS apply path
 promotes them through `memory_store` or `knowledge_update`.

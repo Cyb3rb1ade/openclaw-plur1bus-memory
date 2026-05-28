@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [4.2.19] - 2026-05-28
+
+### Added
+- Added `/plur1bus_review quickapply`, an explicit low-risk fast path that approves the latest pending ReviewBundle's low-risk items and immediately runs the normal apply revalidation in one command.
+- Added German Telegram-friendly ReviewBundle summaries with human-readable dates, localized status lines, compact next steps, and note previews that show filename plus snippet instead of abstract item counts.
+
+### Changed
+- Review summaries hide `Sicherheitsprüfung` in the happy path and show it only when there are actual warning or blocking adversarial findings.
+- Evening review summaries now use the same concise German output style and avoid internal pipeline jargon.
+- The legacy repo installer now skips User-Crontab maintenance jobs by default; GC and KNOWLEDGE scripts are still installed, but host-cron setup requires explicit `--legacy-host-cron`.
+
+### Documentation
+- Updated README, plugin README, `how-to-memory.md`, `how-to-memory-perfect.md`, `HOW-TO-OBSIDIAN.md`, and installer help for quickapply, German Telegram summaries, preview safety, and the OpenClaw-native no-host-cron default.
+
 ## [4.2.18] - 2026-05-27
 
 ### Changed

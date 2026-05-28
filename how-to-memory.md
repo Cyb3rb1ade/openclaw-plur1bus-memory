@@ -1,7 +1,7 @@
 # How-To: PLUR1BUS Memory
 
-Stand: 2026-05-27<br>
-Version: `4.2.17`<br>
+Stand: 2026-05-28<br>
+Version: `4.2.19`<br>
 Branch: `main`
 
 PLUR1BUS ist ein OpenClaw-Plugin fuer persistentes, agent-getrenntes Memory.
@@ -29,6 +29,11 @@ openclaw gateway restart
 Der Repo-Installer folgt derselben Regel. `--update-plugin-only` aktualisiert
 Plugin-Dateien und Registry-Eintraege, ohne Workspace-Konfiguration oder
 Memory-Datenbank zu ueberschreiben.
+
+Der Repo-Installer richtet im v4-Normalbetrieb keine Host-/User-Crontabs als
+Primaerpfad ein. GC- und KNOWLEDGE-Scripte koennen weiter installiert werden;
+Legacy-Crontabs werden nur mit `--legacy-host-cron` gesetzt. Fuer normale
+Wartung sind OpenClaw-managed Crons und Plugin-Services der Zielpfad.
 
 ## Konfiguration
 
@@ -97,16 +102,28 @@ Dashboards und ReviewBundles. Normale Bedienung:
 /plur1bus_review apply
 ```
 
+Schneller Low-Risk-Pfad:
+
+```text
+/plur1bus_review quickapply
+```
+
 Wichtig:
 
 - Morning/evening/review/approve sind Preview-Schritte.
 - Approval markiert Items nur als genehmigt.
 - Nur `apply` schreibt genehmigte Memory-Kandidaten in LanceDB.
+- `quickapply` ist die ausdrueckliche Kurzform fuer `approve low-risk` plus
+  `apply`. PLUR1BUS revalidiert trotzdem Hashes, Scope, Trust und
+  Preconditions; mittlere/hohe Risiken und blockierte Items bleiben offen.
 - `System Health` in Review-Ausgaben ist auto-managed Vault-Hygiene und keine
   Memory-Freigabe.
 - Bundle-IDs sind in Telegram-Antworten optional. Ohne ID nutzt show/explain/
   approve/reject das neueste pending Bundle; apply nutzt das neueste approved
   Bundle.
+- Telegram-Zusammenfassungen sind deutsch, kompakt und preview-only. Bei neuen
+  Obsidian-Notizen zeigen sie Dateiname plus kurzen Snippet; die volle
+  Entscheidung bleibt im ReviewBundle-Artefakt.
 
 Details stehen in [`HOW-TO-OBSIDIAN.md`](HOW-TO-OBSIDIAN.md).
 

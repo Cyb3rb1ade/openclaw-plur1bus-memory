@@ -3,9 +3,9 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.2.18` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben preview/proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. Review-Ausgaben trennen `System Health` fuer auto-managed Vault-Hygiene von echten Memory-Review-Warnungen. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.2.19` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben preview/proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. Review-Ausgaben trennen `System Health` fuer auto-managed Vault-Hygiene von echten Memory-Review-Warnungen. `4.2.19` bringt deutsche Telegram-Review-Summaries, Dateiname-plus-Snippet-Vorschauen und `/plur1bus_review quickapply` als ausdruecklichen Low-Risk-Kurzpfad. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
-**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v3.2 ist
+**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v4.2.19 ist
 gegen OpenClaw `2026.5.12`, `2026.5.18` und `2026.5.26` validiert; ältere OpenClaw-Versionen bleiben
 beim v2.1.x-Zweig.
 
@@ -39,6 +39,8 @@ Registrierung.
 - **Provider-neutral** — der OpenClaw-Haupt-LLM bleibt frei; Embeddings nutzen OpenAI/OpenAI-kompatible Provider oder experimentell lokal `intfloat/multilingual-e5-small`; optionale LLM-Features brauchen ein explizit gesetztes OpenAI-kompatibles Chat-Modell
 - **OpenClaw-native Provider-Bridge** — `contracts.memoryEmbeddingProviders` und `api.registerMemoryEmbeddingProvider` exponieren `plur1bus-openai`, `plur1bus-openai-compatible` und experimental `plur1bus-e5-small`, ohne `kind:"memory"` zu setzen oder die Memory-Capability-API zu nutzen; `memory-core` bleibt Slot-Owner
 - **Obsidian Bridge** — optionaler, default-ausgeschalteter Markdown/Vault-Layer fuer ReviewBundles, Doctor, Konflikte, Project Hubs, Task-Vorschlaege und Memory-Erklaerungen; Apply ist approval-gated und revalidiert Hashes/Preconditions
+- **Telegram Review UX** — deutsche, kompakte Review-Ausgaben mit Dateiname-plus-Snippet-Vorschau und ohne Sicherheitspruefungs-Text im Happy Path
+- **Quickapply** — expliziter Low-Risk-Kurzpfad fuer ReviewBundles: `approve low-risk` plus `apply` mit unveraenderter Revalidation
 - **Secret-Hardening** — die OpenClaw-native Embedding-Provider-Bridge löst `${ENV_VAR}` nur fuer explizite OpenAI/OpenAI-compatible/PLUR1BUS Provider-Variablen und Provider-Header-Praefixe auf; beliebige Env-Reads werden abgelehnt
 - **Chat-provider-neutral** — OpenClaw-Chat-Routen bleiben frei waehlbar; plur1bus konfiguriert nur seine Memory-internen Embedding- und optionalen LLM-Endpunkte
 - **Per-Agent-Isolation** — jeder Agent hat eine eigene LanceDB unter `{baseDbPath}/{agentId}/`
@@ -122,6 +124,11 @@ Wird beim `before_prompt_build`-Hook ausgelöst. Injiziert bis zu 5 relevante Me
 Ohne Re-Ranker: direkt Top-5 per Vektor-Score.
 
 Deaktivierbar via `"autoRecall": false` in der Plugin-Config.
+
+Cron-, Background- und Heartbeat-Turns behalten denselben AutoRecall-Pfad mit
+Embeddings, Canonical-First Recall, Deduplication und Reranking. Der
+Runtime-Scheduler begrenzt und priorisiert diese Arbeit, ohne Ranking-Qualitaet
+abzuschalten.
 
 ---
 
@@ -216,10 +223,14 @@ Agentenpfade in den aktuellen Memory-Namespace schreiben.
 
 Bundle-IDs sind in Telegram-Replys und Kurzbefehlen optional. Wer auf einen
 Review-Bericht mit `/plur1bus_review approve low-risk`,
-`/plur1bus_review reject all` oder `/plur1bus_review apply` antwortet, muss die
+`/plur1bus_review reject all`, `/plur1bus_review apply` oder
+`/plur1bus_review quickapply` antwortet, muss die
 ID nicht wiederholen. PLUR1BUS waehlt nach Queue-Status: show/explain/approve/reject
 nutzen das neueste pending ReviewBundle, apply nutzt das neueste approved
-ReviewBundle.
+ReviewBundle. `quickapply` nutzt das neueste pending ReviewBundle, genehmigt
+standardmaessig nur Low-Risk-Items und ruft danach denselben Apply-
+Revalidation-Pfad auf; mittlere/hohe Risiken und blockierte Items bleiben
+offen.
 
 ReviewBundles unterscheiden sichtbar zwischen `Memory review`,
 `Maintenance only` und `Mixed review`. Reine `vault_hygiene`-Bundles zeigen
@@ -289,6 +300,7 @@ generische `/skill` Dispatcher bleibt verfuegbar.
 /plur1bus obsidian review reject [bundleId] --items <ids|all>
 /plur1bus obsidian review snooze [bundleId] --items <ids> --until <date|duration>
 /plur1bus obsidian review apply [bundleId]
+/plur1bus obsidian review quickapply [bundleId] [low-risk|all]
 /plur1bus obsidian morning-review
 /plur1bus obsidian evening-review
 /plur1bus obsidian conflicts
@@ -326,20 +338,26 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.2.18
+obsidianBridgeVersion: 4.2.19
 ---
 ```
 
 `prepare` erzeugt Vorschlaege. `apply` liest das Bundle neu, revalidiert
 Hashes/Preconditions, prueft Scope- und Trust-Regeln und wendet nur explizit
-genehmigte Items an. Eine Obsidian-Checkbox ist nie ausreichend. Assistant-only
+genehmigte Items an. `quickapply` ist die ausdrueckliche Kurzform fuer
+`approve low-risk` plus `apply`; es nutzt dieselbe Revalidation und laesst
+Warnungen, Blocker sowie mittlere/hohe Risiken offen. Eine Obsidian-Checkbox ist nie ausreichend. Assistant-only
 Assertions werden nicht zu trusted/global Memory; `agent_private` leakt nicht
 ohne Genehmigung zu `workspace_shared`, und `workspace_shared` nicht ohne
 explizite globale Freigabe zu `global_user`.
 
 Telegram-Review-Summaries sind Preview-Ausgaben. `System Health` beschreibt
 auto-managed Vault-Hygiene, nicht Memory-Approval-Arbeit. Nur
-`/plur1bus_review apply` schreibt genehmigte Memory-Kandidaten nach LanceDB.
+`/plur1bus_review apply` oder der ausdrueckliche Low-Risk-Pfad
+`/plur1bus_review quickapply` schreibt genehmigte Memory-Kandidaten nach
+LanceDB. Ab `4.2.19` sind diese Summaries deutsch, zeigen Dateiname plus
+Snippet fuer Notiz-Imports und nennen `Sicherheitsprüfung` nur bei echten
+Warnungen oder Blocks.
 
 Managed Blocks:
 

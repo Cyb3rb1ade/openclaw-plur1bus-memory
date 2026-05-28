@@ -48,7 +48,7 @@ import {
   writeDiscoveredObsidianWorkspaces,
 } from "./obsidian-bridge.js";
 
-export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.18";
+export const OBSIDIAN_CONTROL_ROOM_VERSION = "4.2.19";
 export const REVIEW_BUNDLE_SCHEMA_VERSION = 1;
 export const DEFAULT_REVIEW_ROOT = "plur1bus";
 export const DEFAULT_MORNING_CRON = "0 9 * * *";
@@ -2768,8 +2768,10 @@ function obsidianCommandHelp() {
     "- /plur1bus_review approve low-risk - mark safe low-risk items approved",
     "- /plur1bus_review reject all - mark all pending items rejected",
     "- /plur1bus_review apply - write approved memory candidates to memory",
+    "- /plur1bus_review quickapply - approve low-risk items and apply them in one explicit step",
     "",
     "Normal memory flow: review -> approve or reject -> apply.",
+    "Fast low-risk flow: quickapply -> revalidate -> apply. Medium/high-risk and blocked items stay pending.",
     "Maintenance-only bundles say 'Vault maintenance only - no memory import' and can be inspected, explained, or rejected/closed without approval.",
     "Morning, evening, review, and approve do not write memory. Apply is the only memory write step, and only memory-candidate items can become Memory DB writes.",
     "Bundle id is optional in Telegram replies and short commands. Without an id, review/show/explain/approve/reject use the latest pending bundle; apply uses the latest approved bundle.",
