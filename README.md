@@ -95,7 +95,3 @@ Version 5.0.0 is a rewrite. If you ran 4.x:
 ## License
 
 MIT — see [LICENSE](./LICENSE).
-
-## Credits
-
-Designed via the [superpowers](https://github.com/obra/superpowers) brainstorming + writing-plans + test-driven-development workflow.
