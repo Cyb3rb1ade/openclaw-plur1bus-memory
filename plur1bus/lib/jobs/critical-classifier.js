@@ -53,7 +53,7 @@ export async function runClassifier(db, agent, opts = {}) {
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const counts = loadCounts(agent, statePath ? { dir: statePath } : {});
+  const counts = loadCounts(agent, statePath ? { stateDir: statePath } : {});
 
   let pushed = 0;
   let processed = 0;
@@ -85,7 +85,7 @@ export async function runClassifier(db, agent, opts = {}) {
     if (eligible && typeof telegramSend === "function") {
       try {
         await telegramSend(buildPushMessage({ ...card, type }));
-        incrementCount(agent, today, statePath ? { dir: statePath } : {});
+        incrementCount(agent, today, statePath ? { stateDir: statePath } : {});
         counts[today] = (counts[today] || 0) + 1;
         pushed += 1;
       } catch (err) {
