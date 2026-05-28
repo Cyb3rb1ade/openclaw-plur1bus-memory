@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [4.3.0] - 2026-05-28
+
+### Added
+- Promoted the ReviewBundle UX and `quickapply` work to a semver-minor feature release.
+- Includes German Telegram-friendly ReviewBundle summaries, filename-plus-snippet previews for Obsidian note candidates, and the explicit `/plur1bus_review quickapply` low-risk shortcut.
+
+### Changed
+- Keeps the `4.2.19` behavior and safety model intact: `quickapply` still runs normal apply revalidation, medium/high-risk items remain pending, and Obsidian remains proposal/review-only until explicit apply.
+- Keeps the repo installer on the OpenClaw-native runtime path by requiring `--legacy-host-cron` for legacy User-Crontab maintenance jobs.
+
 ## [4.2.19] - 2026-05-28
 
 ### Added

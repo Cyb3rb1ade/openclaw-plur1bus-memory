@@ -3,9 +3,9 @@
 Per-Agent isoliertes LanceDB-Memory-Plugin für OpenClaw.
 Jeder Agent hat seine eigene Datenbank unter `{baseDbPath}/{agentId}/`.
 
-**Aktuelle Version:** `4.2.19` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben preview/proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. Review-Ausgaben trennen `System Health` fuer auto-managed Vault-Hygiene von echten Memory-Review-Warnungen. `4.2.19` bringt deutsche Telegram-Review-Summaries, Dateiname-plus-Snippet-Vorschauen und `/plur1bus_review quickapply` als ausdruecklichen Low-Risk-Kurzpfad. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
+**Aktuelle Version:** `4.3.0` — OpenClaw-native Memory-Augment-Integration plus optionaler PLUR1BUS Obsidian Living Dashboard-Schicht. Die Bridge kann Workspaces gezielt initialisieren und pro Workspace 09:00-Morning-Review- sowie 18:00-Evening-Deep-Review-Crons ausgeben oder installieren. Rohe Obsidian-Vault-Scans bleiben preview/proposal-only: importierte Markdown-Dokumente werden untrusted Kandidaten/Review-Input, aber nicht automatisch LanceDB-Memory oder KNOWLEDGE.md. Review-Ausgaben trennen `System Health` fuer auto-managed Vault-Hygiene von echten Memory-Review-Warnungen. `4.3.0` bringt deutsche Telegram-Review-Summaries, Dateiname-plus-Snippet-Vorschauen und `/plur1bus_review quickapply` als ausdruecklichen Low-Risk-Kurzpfad. LanceDB/PLUR1BUS bleibt das fuehrende Memory-System; Obsidian ist keine zweite Memory-Datenbank. `memory_search` ist ein kompatibler Alias fuer den gleichen PLUR1BUS/LanceDB Recall-Pfad wie `memory_recall`.
 
-**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v4.2.19 ist
+**Mindestversion:** OpenClaw `2026.5.12-beta.6` oder neuer. PLUR1BUS v4.3.0 ist
 gegen OpenClaw `2026.5.12`, `2026.5.18` und `2026.5.26` validiert; ältere OpenClaw-Versionen bleiben
 beim v2.1.x-Zweig.
 
@@ -338,7 +338,7 @@ reviewProfiles:
   - standard
   - maintenance
   - adversarial
-obsidianBridgeVersion: 4.2.19
+obsidianBridgeVersion: 4.3.0
 ---
 ```
 
@@ -355,7 +355,7 @@ Telegram-Review-Summaries sind Preview-Ausgaben. `System Health` beschreibt
 auto-managed Vault-Hygiene, nicht Memory-Approval-Arbeit. Nur
 `/plur1bus_review apply` oder der ausdrueckliche Low-Risk-Pfad
 `/plur1bus_review quickapply` schreibt genehmigte Memory-Kandidaten nach
-LanceDB. Ab `4.2.19` sind diese Summaries deutsch, zeigen Dateiname plus
+LanceDB. Ab `4.3.0` sind diese Summaries deutsch, zeigen Dateiname plus
 Snippet fuer Notiz-Imports und nennen `Sicherheitsprüfung` nur bei echten
 Warnungen oder Blocks.
 

@@ -1,7 +1,7 @@
 # PLUR1BUS v4 Memory Guide
 
 Stand: 2026-05-28<br>
-Version: `4.2.19`<br>
+Version: `4.3.0`<br>
 Branch: `main`
 
 Dieses Dokument beschreibt den v4-Normalbetrieb von PLUR1BUS als
@@ -13,10 +13,10 @@ Betriebsdetails gehoeren nicht in den normalen Installationspfad.
 
 PLUR1BUS v4 ist ein kognitiver Memory-Layer fuer OpenClaw:
 
-- PLUR1BUS `4.2.19` benötigt OpenClaw `2026.5.12-beta.6`
+- PLUR1BUS `4.3.0` benötigt OpenClaw `2026.5.12-beta.6`
   oder neuer. Ältere OpenClaw-Versionen haben nicht den vorausgesetzten
   OpenClaw-native Memory-Stack fuer v4.
-- PLUR1BUS `4.2.19` wurde zusätzlich gegen OpenClaw `2026.5.18` mit
+- PLUR1BUS `4.3.0` wurde zusätzlich gegen OpenClaw `2026.5.18` mit
   isolierter managed `npm-pack:`-Installation geprüft.
 - `memory-core` bleibt der exklusive OpenClaw-Memory-Slot.
 - `memory-lancedb-namespaced` läuft default als additives Augment.
@@ -92,13 +92,13 @@ Repo-Installer nutzt bei `--update-plugin-only` dieselbe Grenze.
 Obsidian-Review-Ausgaben sind Preview-Ausgaben. `System Health` beschreibt
 auto-managed Vault-Hygiene wie Managed-Block-Hash-Mismatches oder generierte
 Dashboard-Links; das ist keine Memory-Freigabe. Nur genehmigte Memory-Kandidaten
-werden durch `/plur1bus_review apply` in LanceDB geschrieben. `4.2.19` fuegt
+werden durch `/plur1bus_review apply` in LanceDB geschrieben. `4.3.0` fuegt
 `/plur1bus_review quickapply` als ausdruecklichen Low-Risk-Kurzpfad hinzu:
 PLUR1BUS genehmigt Low-Risk-Items im neuesten pending Bundle, revalidiert
 Hashes/Preconditions/Scope/Trust und schreibt nur danach. Mittlere/hohe Risiken
 und blockierte Items bleiben offen.
 
-Telegram-Summaries sind in `4.2.19` deutsch, kompakt und preview-only. Sie
+Telegram-Summaries sind in `4.3.0` deutsch, kompakt und preview-only. Sie
 zeigen bei Obsidian-Notiz-Imports Dateiname plus Snippet, blenden
 `Sicherheitsprüfung` im sauberen Happy Path aus und zeigen Security nur bei
 echten Warnungen oder Blocks. Bundle-IDs sind in Telegram-Antworten optional:

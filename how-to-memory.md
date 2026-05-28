@@ -1,7 +1,7 @@
 # How-To: PLUR1BUS Memory
 
 Stand: 2026-05-28<br>
-Version: `4.2.19`<br>
+Version: `4.3.0`<br>
 Branch: `main`
 
 PLUR1BUS ist ein OpenClaw-Plugin fuer persistentes, agent-getrenntes Memory.
