@@ -3,15 +3,33 @@
  *
  * Phase 5 Task 5.1 — stille tägliche Konsolidierung.
  *
- * Aktueller Status: STUB. Hängt sich in einer späteren Iteration an die
- * existierende Adversarial-, Duplicate- und Conflict-Pipeline. Returnt
- * strukturierten Report, damit der Cron-Job nichts an Telegram pusht und
- * der Aufrufer trotzdem deterministisch loggen kann.
+ * Bereinigt die neo-JSONL-Stores des Workspaces (injizierten Recall-/System-/
+ * Cron-Kontext entfernen, Duplikate zusammenführen, auf Obergrenze kappen) und
+ * meldet einen strukturierten Report. Pusht NICHTS an Telegram — der Aufrufer
+ * loggt deterministisch. Verhindert das erneute Auflaufen der Recall/Capture-
+ * Rückkopplung (Performance-Analysis 2026-05-29).
  */
 
 export async function runConsolidation(db, agent, opts = {}) {
   const logger = opts.logger || { info: () => {}, warn: () => {} };
   const timestamp = new Date().toISOString();
+  const neoStore = opts.neoStore;
+
+  // Neo-JSONL-Wartung: injizierten Kontext filtern, dedupen, cappen.
+  let neoPrune = null;
+  if (neoStore && typeof neoStore.pruneAll === "function") {
+    try {
+      neoPrune = neoStore.pruneAll({ dryRun: opts.dryRun === true });
+      const totals = Object.values(neoPrune).reduce((acc, s) => ({
+        removedInjected: acc.removedInjected + (s.removedInjected || 0),
+        removedDup: acc.removedDup + (s.removedDup || 0),
+        removedCap: acc.removedCap + (s.removedCap || 0),
+      }), { removedInjected: 0, removedDup: 0, removedCap: 0 });
+      logger.info?.(`daily-consolidation[${agent}]: neo prune removedInjected=${totals.removedInjected} removedDup=${totals.removedDup} removedCap=${totals.removedCap}`);
+    } catch (err) {
+      logger.warn?.(`daily-consolidation[${agent}]: neo prune threw: ${err.message}`);
+    }
+  }
 
   if (!db || typeof db.isAvailable !== "function") {
     logger.warn?.(`daily-consolidation[${agent}]: db adapter missing`);
@@ -21,7 +39,8 @@ export async function runConsolidation(db, agent, opts = {}) {
       adversarial: 0,
       duplicates: 0,
       conflicts: 0,
-      note: "stub — db adapter missing",
+      neoPrune,
+      note: "db adapter missing — neo prune only",
     };
   }
 
@@ -39,6 +58,7 @@ export async function runConsolidation(db, agent, opts = {}) {
     duplicates: 0,
     conflicts: 0,
     dbAvailable: available,
-    note: "stub — real consolidation wires up in next iteration",
+    neoPrune,
+    note: "neo prune active; lancedb dedup/conflict wiring in next iteration",
   };
 }

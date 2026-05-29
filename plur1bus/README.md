@@ -84,7 +84,7 @@ No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter i
 
 ## Migration from 4.x
 
-Version 5.0.0 is a rewrite. If you ran 4.x:
+Version 5.0.1 is a rewrite. If you ran 4.x:
 
 - Old commands `/plur1bus_review`, `/plur1bus_morning`, `/plur1bus_evening` are gone. The bundle approval workflow has been replaced by autonomous learning plus the critical-push classifier.
 - Config keys removed: `autoApplyLowRisk`, `reviewProfiles`, `bundleCooldownMs`, the entire `review` block. Remove them before restart; the plugin ignores unknown keys but they will no longer have any effect.
@@ -95,7 +95,3 @@ Version 5.0.0 is a rewrite. If you ran 4.x:
 ## License
 
 MIT — see [LICENSE](./LICENSE).
-
-## Credits
-
-Designed via the [superpowers](https://github.com/obra/superpowers) brainstorming + writing-plans + test-driven-development workflow.
