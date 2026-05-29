@@ -278,8 +278,8 @@ export function discoverObsidianWorkspaces(rawConfig = {}, options = {}) {
 }
 
 const WORKSPACE_DISCOVERY_MARKERS = [
-  "sys/AGENTS.md",
-  "sys/SOUL.md",
+  // Kanonisch ist der Workspace-Root je Agent. sys/-Marker entfernt (2026-05-29):
+  // die sys/-Ebene wird stillgelegt, root AGENTS.md/SOUL.MD erkennt den Workspace genauso.
   "AGENTS.md",
   "SOUL.MD",
   "memory/KNOWLEDGE.md",
