@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "description": "PLUR1BUS — autonomous memory plugin for OpenClaw: LanceDB authoritative storage, Obsidian vault mirror, daily consolidation and critical-push classifier with minimal user touchpoints.",
   "type": "module",
   "main": "./index.js",
