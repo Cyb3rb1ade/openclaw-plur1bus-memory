@@ -82,9 +82,20 @@ npm test              # node --test, 74 tests
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.
 
+## Recall safety in 5.1.0
+
+Recalled memories are rendered as historical evidence, not as current user
+requests. A memory that contains an old imperative such as a download, send,
+write, delete, install, purchase, network action, or command must not trigger
+that action unless the current visible user turn asks for the same action.
+
+The recall block uses escaped metadata attributes and wraps recalled text in
+`quoted-evidence` elements, so prompt boundaries stay explicit even when old
+memory text contains tool-like markup.
+
 ## Migration from 4.x
 
-Version 5.0.1 is a rewrite. If you ran 4.x:
+Version 5.x is a rewrite. If you ran 4.x:
 
 - Old commands `/plur1bus_review`, `/plur1bus_morning`, `/plur1bus_evening` are gone. The bundle approval workflow has been replaced by autonomous learning plus the critical-push classifier.
 - Config keys removed: `autoApplyLowRisk`, `reviewProfiles`, `bundleCooldownMs`, the entire `review` block. Remove them before restart; the plugin ignores unknown keys but they will no longer have any effect.
