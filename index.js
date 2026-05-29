@@ -77,6 +77,7 @@ import {
   escapeMemoryText,
   findLatestNeoRecord,
   formatNeoRecallContext,
+  isInjectedContextText,
   migrateNeoWorkspaces,
   neoSessionKeysFromContext,
   routeNeoRecall,
@@ -1415,7 +1416,7 @@ const plugin = {
               const subKey = (sub || "").toLowerCase();
               const internalAgent = commandCtx.agentId || "default";
               if (subKey === "consolidate-daily") {
-                const result = await runDailyConsolidation(memoryDbAdapter, internalAgent, { logger: api.logger });
+                const result = await runDailyConsolidation(memoryDbAdapter, internalAgent, { logger: api.logger, neoStore: commandStore });
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
               }
@@ -1849,6 +1850,16 @@ const plugin = {
                   }
                 }
               }
+            }
+
+            // Systemisch injizierten Kontext (Recall-Blöcke, Status-Reminder,
+            // Cron) niemals re-capturen → bricht die Recall/Capture-Rückkopplung.
+            const beforeFilter = items.length;
+            for (let i = items.length - 1; i >= 0; i--) {
+              if (isInjectedContextText(items[i].text)) items.splice(i, 1);
+            }
+            if (items.length < beforeFilter) {
+              api.logger.info(`memory-lancedb-namespaced: filtered ${beforeFilter - items.length} injected-context item(s) before capture`);
             }
 
             if (items.length === 0) {
