@@ -91,7 +91,7 @@ const PROMPT_INJECTION_RE = /\b(ignore (all )?(previous|prior|above|instructions
 // Memory-Kandidaten captured werden, sonst entsteht eine Recall/Capture-
 // Rückkopplung, die Stores aufbläht und den Gateway-Prozess auslastet.
 // Quelle: Performance-Analysis 2026-05-29, §"Empfohlene dauerhafte Fixes".
-const INJECTED_CONTEXT_RE = /<\/?plur1bus-recall|<\/?relevant-memories|<\/?knowledge-update-reminder|<\/?adaptive-learning|RECALL SAFETY RULES|capturedBy"\s*:\s*"agent_end_capture|embeddingStatus"\s*:\s*"pending|plur1bus internal classify-recent|critical-memory-classifier|TTS-STATUS|\[cron:|heartbeat_ok|Reference UTC:|Current time:/i;
+const INJECTED_CONTEXT_RE = /<\/?plur1bus-recall|<\/?relevant-memories|<\/?knowledge-update-reminder|<\/?adaptive-learning|RECALL SAFETY RULES|capturedBy"\s*:\s*"agent_end_capture|embeddingStatus"\s*:\s*"pending|plur1bus internal classify-recent|critical-memory-classifier|TTS-STATUS|\[cron:|heartbeat_ok|Reference UTC:|Current time:|You are a memory search agent|memory search agent\. Another model|bounded search query|Use only the available memory tools/i;
 
 /**
  * Liefert true, wenn der Text systemisch injizierter Kontext ist (Recall-Block,
