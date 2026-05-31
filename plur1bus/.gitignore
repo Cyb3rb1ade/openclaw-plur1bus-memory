@@ -1,7 +1,0 @@
-node_modules/
-package-lock.json
-*.bak
-*.bak.*
-.DS_Store
-*.log
-.embed-promotions-state/
