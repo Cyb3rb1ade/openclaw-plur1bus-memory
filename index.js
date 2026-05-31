@@ -745,7 +745,12 @@ async function callLlm(messages, llmCfg) {
   // kimi-for-coding: omitting thinking defaults to ON → answer in reasoning_content, content empty
   if (llmCfg.disableThinking) body.thinking = { type: "disabled" };
   const response = await client.chat.completions.create(body);
-  return response.choices[0]?.message?.content?.trim() || null;
+  const msg = response.choices[0]?.message;
+  const content = msg?.content?.trim();
+  if (content) return content;
+  // Fallback: kimi-for-coding may return answer in reasoning_content when content is empty
+  const reasoning = msg?.reasoning_content;
+  return (typeof reasoning === "string" && reasoning.trim()) ? reasoning.trim() : null;
 }
 
 async function callMergeCheck(existingText, newText, llmCfg) {
