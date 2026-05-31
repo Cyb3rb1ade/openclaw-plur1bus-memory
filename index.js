@@ -249,9 +249,29 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger) {
   return text.slice(0, maxChars);
 }
 
+// Baut eine querySummarizer-Funktion für runRecallPipeline.
+// Fasst einen langen Prompt auf die semantisch wichtigsten Themen/Schlüsselwörter
+// zusammen, statt ihn hart zu kürzen — so gehen keine Suchinformationen verloren.
+function makeQuerySummarizer(llmCfg, logger) {
+  if (!llmCfg) return null;
+  return async (query) => {
+    const result = await callLlm([
+      {
+        role: "user",
+        content: `Extract the key topics, names, events, decisions, and facts from the following text that are relevant for a semantic memory search. Output ONLY a compact summary (2-4 sentences, max 800 chars) capturing the most searchable information. Do not add commentary.\n\n${query.slice(0, 60000)}`,
+      },
+    ], { ...llmCfg, maxTokens: 300 });
+    if (result && result.length > 20) return result;
+    throw new Error("empty summarizer response");
+  };
+}
+
 // ============================================================================
 // MemoryDB — pro Agent eine Instanz
 // ============================================================================
+
+const REINDEX_WRITE_THRESHOLD = 500; // Rebuild ANN index every N writes
+const REINDEX_MIN_ROWS = 256;        // Minimum rows before creating an index
 
 class MemoryDB {
   constructor(dbPath, vectorDim) {
@@ -261,6 +281,8 @@ class MemoryDB {
     this.table = null;
     this.initPromise = null;
     this.schemaFieldNames = null;
+    this._writeCounter = 0;
+    this._reindexing = false;
   }
 
   async refreshSchemaFields() {
@@ -385,6 +407,28 @@ class MemoryDB {
   async store(entry) {
     await this.init();
     await this.table.add([this.normalizeEntryForTable(entry)]);
+    this._writeCounter++;
+    if (this._writeCounter % REINDEX_WRITE_THRESHOLD === 0) {
+      this._maybeReindex().catch(() => {});
+    }
+  }
+
+  async _maybeReindex() {
+    if (this._reindexing) return;
+    this._reindexing = true;
+    try {
+      const count = await this.table.countRows();
+      if (count < REINDEX_MIN_ROWS) return;
+      const lance = await getLanceDB();
+      await this.table.createIndex("vector", {
+        config: lance.Index.hnswPq({ m: 16, efConstruction: 100, numSubVectors: 96 }),
+        replace: true,
+      });
+    } catch (_) {
+      // Non-fatal: falls back to flat scan if reindex fails
+    } finally {
+      this._reindexing = false;
+    }
   }
 
   async search(vector, limit = 5, minScore = 0.3) {
@@ -1889,10 +1933,10 @@ const plugin = {
             let skipped = 0;
             const captureTimestamp = Date.now();
 
-            for (let it of captureList) {
+            // Phase 1: Prepare texts (summarize/truncate) + embed — alle parallel
+            const prepared = await Promise.all(captureList.map(async (it) => {
               let text = it.text;
               try {
-                // Oversized texts: LLM-summarize (or truncate as fallback)
                 if (text.length > maxChars) {
                   if (mergingLlmCfg) {
                     api.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
@@ -1901,26 +1945,43 @@ const plugin = {
                     text = text.slice(0, maxChars);
                   }
                 }
-
                 const vector = await embeddings.embed(text);
+                return { it, text, vector, ok: true };
+              } catch (err) {
+                api.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${String(err)}`);
+                return { it, text, vector: null, ok: false };
+              }
+            }));
 
-                // Duplikat-Check
-                const existing = await db.search(vector, 1, duplicateThreshold);
-                if (existing.length > 0) {
-                  skipped++;
-                  continue;
+            // Phase 2: Dedup-Checks parallel (schnell mit ANN-Index)
+            const toStore = (await Promise.all(
+              prepared.filter(p => p.ok).map(async (p) => {
+                try {
+                  const existing = await db.search(p.vector, 1, duplicateThreshold);
+                  if (existing.length > 0) return null;
+                  return p;
+                } catch (err) {
+                  api.logger.warn(`memory-lancedb-namespaced: dedup-check failed: ${String(err)}`);
+                  return null;
                 }
+              })
+            )).filter(Boolean);
 
-                const category = categorizeMemory(text);
-                const summary = generateSummary(text, summaryMaxWords);
-                const evidenceQuote = it.text.slice(0, 200);
+            skipped = prepared.filter(p => p.ok).length - toStore.length;
+
+            // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
+            for (const p of toStore) {
+              try {
+                const category = categorizeMemory(p.text);
+                const summary = generateSummary(p.text, summaryMaxWords);
+                const evidenceQuote = p.it.text.slice(0, 200);
 
                 await db.store({
                   id: randomUUID(),
-                  text,
+                  text: p.text,
                   summary,
                   origin: captureOrigin,
-                  vector,
+                  vector: p.vector,
                   importance: 0.7,
                   category,
                   createdAt: captureTimestamp,
@@ -1928,9 +1989,9 @@ const plugin = {
                   expiresAt: 0,
                   storedBy: agentId,
                   sourceTurnId: turnId || "",
-                  sourceMessageRole: it.role || "",
+                  sourceMessageRole: p.it.role || "",
                   sourceTimestamp: captureTimestamp,
-                  sourceUrl: it.sourceUrl || "",
+                  sourceUrl: p.it.sourceUrl || "",
                   evidenceQuote,
                   scope: "agent-private",
                 });
@@ -1991,6 +2052,7 @@ const plugin = {
                 reranker,
                 rerankCandidates,
                 summaryMaxWords,
+                querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
                 logger: api.logger,
               });
               if (ordered.length === 0 && canonicalHits.length === 0) {
@@ -2388,6 +2450,7 @@ const plugin = {
             reranker,
             rerankCandidates,
             summaryMaxWords,
+            querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
             logger: api.logger,
           });
           if (ordered.length === 0 && canonicalHits.length === 0) {
