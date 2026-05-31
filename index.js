@@ -742,8 +742,9 @@ async function callLlm(messages, llmCfg) {
     ...(llmCfg.jsonMode ? { response_format: { type: "json_object" } } : {}),
     messages,
   };
-  // disableThinking: omit the thinking field entirely — sending budget_tokens:0
-  // causes kimi-for-coding to return empty content via OpenAI-compatible endpoint
+  // kimi-for-coding uses enable_thinking:false (OpenAI-compat param) to disable thinking;
+  // omitting the field defaults to thinking ON → answer lands in reasoning_content, content empty
+  if (llmCfg.disableThinking) body.enable_thinking = false;
   const response = await client.chat.completions.create(body);
   return response.choices[0]?.message?.content?.trim() || null;
 }
