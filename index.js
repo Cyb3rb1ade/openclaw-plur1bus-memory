@@ -1917,9 +1917,14 @@ const plugin = {
             api.logger.info(`memory-lancedb-namespaced: found ${items.length} texts to capture for agent=${agentId}${background ? " (background)" : ""}`);
             const contextOrigin = String(event?.origin || event?.source || ctx?.origin || ctx?.source || "").toLowerCase();
             const contextKind = String(event?.kind || event?.type || ctx?.kind || ctx?.type || "").toLowerCase();
+            // v2.2.0: ctx.chatType direkt prüfen (zuverlässiger als Text-Heuristik)
+            const ctxChatType = String(event?.chatType || ctx?.chatType || "").toLowerCase();
+            const isGroupSession = ctxChatType === "group" || ctxChatType === "supergroup" || ctxChatType === "channel" ||
+              String(event?.sessionKey || ctx?.sessionKey || "").includes(":group:") ||
+              String(event?.sessionKey || ctx?.sessionKey || "").includes(":channel:");
             const captureOrigin = contextOrigin === "cron" || contextKind === "cron"
               ? "cron"
-              : items.some((it) => textSuggestsGroupOrigin(it.text))
+              : isGroupSession || items.some((it) => textSuggestsGroupOrigin(it.text))
                 ? "group"
                 : "dm";
 
