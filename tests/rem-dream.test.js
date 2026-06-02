@@ -53,6 +53,30 @@ describe("rem-dream", () => {
     assert.strictEqual(result[0].id, "b");
   });
 
+  it("loadCandidateMemories nutzt where wenn verfuegbar", async () => {
+    const now = Date.now();
+    let whereClause = "";
+    const mockTable = {
+      query: () => ({
+        where: (clause) => {
+          whereClause = clause;
+          return {
+            limit: () => ({
+              toArray: async () => [
+                { id: "schema", text: "schema", sourceTimestamp: now, status: "superseded", vector: [1, 0] },
+                { id: "active", text: "active", sourceTimestamp: now, status: "active", vector: [0, 1] },
+              ],
+            }),
+          };
+        },
+      }),
+    };
+    const result = await loadCandidateMemories({ table: mockTable }, { weekStartMs: now - 7 * 86400000 });
+    assert.ok(whereClause.includes("status"));
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, "active");
+  });
+
   it("buildSparseNeighborGraph filtert unter minSimilarity", async () => {
     const memories = [
       { id: "a", vector: [1, 0, 0] },
