@@ -67,6 +67,7 @@ import { createDbAdapter } from "./lib/db-adapter.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
+import { safeUpdate } from "./lib/safe-update.js";
 import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
@@ -84,15 +85,36 @@ import {
   sanitizeMemoryTextForPrompt,
   transitionRecordStatus,
   workspaceKeyFromContext,
+  turnEventsFromMessages,
 } from "./lib/neo-arch.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
-import { EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
+import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
 import { registerOpenClawMemoryEmbeddingProviders } from "./lib/providers/openclaw-memory-embedding-adapters.js";
 import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
+import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import { createBackgroundMemoryScheduler, isBackgroundTurn } from "./lib/runtime-scheduler.js";
+import {
+  inferEmotionalValence,
+  serializeEmotionalValence,
+  deserializeEmotionalValence,
+  emotionEmoji,
+  emotionLabelDe,
+} from "./lib/emotion.js";
+import { createEmotionalStatePool } from "./lib/emotional-state.js";
+import { applyDynamicsDefaults, createRetrievalLedgerEntry } from "./lib/memory-dynamics.js";
+import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
+import { runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
+import {
+  buildEdgesForSession,
+  buildEpisodeAnchorEdges,
+  readGraph,
+  createGraphMetrics,
+  writeGraphConstellationReport,
+} from "./lib/memory-graph.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -367,6 +389,110 @@ class MemoryDB {
           if (!hasConfirmed) {
             await this.table.addColumns([{ name: 'confirmed', valueSql: 'false' }]);
           }
+          // v5.3.0 — Emotional Valence
+          const hasEmotionalValence = schema.fields.some(f => f.name === 'emotionalValence');
+          if (!hasEmotionalValence) {
+            await this.table.addColumns([{ name: 'emotionalValence', valueSql: "''" }]);
+          }
+          const hasEmotionalIntensity = schema.fields.some(f => f.name === 'emotionalIntensity');
+          if (!hasEmotionalIntensity) {
+            await this.table.addColumns([{ name: 'emotionalIntensity', valueSql: '0.0' }]);
+          }
+          const hasEmotionalDominant = schema.fields.some(f => f.name === 'emotionalDominant');
+          if (!hasEmotionalDominant) {
+            await this.table.addColumns([{ name: 'emotionalDominant', valueSql: "'neutral'" }]);
+          }
+          const hasMoodContextAtCapture = schema.fields.some(f => f.name === 'moodContextAtCapture');
+          if (!hasMoodContextAtCapture) {
+            await this.table.addColumns([{ name: 'moodContextAtCapture', valueSql: "''" }]);
+          }
+          // v5.3.0 — Light Dreaming: Replay-Tracking
+          const hasReplayCount = schema.fields.some(f => f.name === 'replayCount');
+          if (!hasReplayCount) {
+            await this.table.addColumns([{ name: 'replayCount', valueSql: '0' }]);
+          }
+          const hasLastReplayed = schema.fields.some(f => f.name === 'lastReplayed');
+          if (!hasLastReplayed) {
+            await this.table.addColumns([{ name: 'lastReplayed', valueSql: '0' }]);
+          }
+          // v5.4.0 — Memory Dynamics
+          const hasRetrievalCount = schema.fields.some(f => f.name === 'retrievalCount');
+          if (!hasRetrievalCount) {
+            await this.table.addColumns([{ name: 'retrievalCount', valueSql: '0' }]);
+          }
+          const hasLastRetrievedAt = schema.fields.some(f => f.name === 'lastRetrievedAt');
+          if (!hasLastRetrievedAt) {
+            await this.table.addColumns([{ name: 'lastRetrievedAt', valueSql: '0' }]);
+          }
+          const hasMemoryStrength = schema.fields.some(f => f.name === 'memoryStrength');
+          if (!hasMemoryStrength) {
+            await this.table.addColumns([{ name: 'memoryStrength', valueSql: '1.0' }]);
+          }
+          const hasHalfLifeDays = schema.fields.some(f => f.name === 'halfLifeDays');
+          if (!hasHalfLifeDays) {
+            await this.table.addColumns([{ name: 'halfLifeDays', valueSql: '30' }]);
+          }
+          const hasLastStrengthenedAt = schema.fields.some(f => f.name === 'lastStrengthenedAt');
+          if (!hasLastStrengthenedAt) {
+            await this.table.addColumns([{ name: 'lastStrengthenedAt', valueSql: '0' }]);
+          }
+          const hasLastDynamicsAt = schema.fields.some(f => f.name === 'lastDynamicsAt');
+          if (!hasLastDynamicsAt) {
+            await this.table.addColumns([{ name: 'lastDynamicsAt', valueSql: '0' }]);
+          }
+          const hasMemoryClass = schema.fields.some(f => f.name === 'memoryClass');
+          if (!hasMemoryClass) {
+            await this.table.addColumns([{ name: 'memoryClass', valueSql: "'standard'" }]);
+          }
+          const hasNeverForget = schema.fields.some(f => f.name === 'neverForget');
+          if (!hasNeverForget) {
+            await this.table.addColumns([{ name: 'neverForget', valueSql: '0' }]);
+          }
+          const hasCoreMemoryScore = schema.fields.some(f => f.name === 'coreMemoryScore');
+          if (!hasCoreMemoryScore) {
+            await this.table.addColumns([{ name: 'coreMemoryScore', valueSql: '0.0' }]);
+          }
+          const hasCoreMemoryReason = schema.fields.some(f => f.name === 'coreMemoryReason');
+          if (!hasCoreMemoryReason) {
+            await this.table.addColumns([{ name: 'coreMemoryReason', valueSql: "''" }]);
+          }
+          // v5.5.0 — Safe Reconsolidation: Versioning
+          const hasVersionNumber = schema.fields.some(f => f.name === 'versionNumber');
+          if (!hasVersionNumber) {
+            await this.table.addColumns([{ name: 'versionNumber', valueSql: '1' }]);
+          }
+          const hasPreviousVersion = schema.fields.some(f => f.name === 'previousVersion');
+          if (!hasPreviousVersion) {
+            await this.table.addColumns([{ name: 'previousVersion', valueSql: "''" }]);
+          }
+          const hasSupersededBy = schema.fields.some(f => f.name === 'supersededBy');
+          if (!hasSupersededBy) {
+            await this.table.addColumns([{ name: 'supersededBy', valueSql: "''" }]);
+          }
+          const hasUpdateSource = schema.fields.some(f => f.name === 'updateSource');
+          if (!hasUpdateSource) {
+            await this.table.addColumns([{ name: 'updateSource', valueSql: "''" }]);
+          }
+          const hasUpdateEvidence = schema.fields.some(f => f.name === 'updateEvidence');
+          if (!hasUpdateEvidence) {
+            await this.table.addColumns([{ name: 'updateEvidence', valueSql: "''" }]);
+          }
+          const hasReconsolidationConfidence = schema.fields.some(f => f.name === 'reconsolidationConfidence');
+          if (!hasReconsolidationConfidence) {
+            await this.table.addColumns([{ name: 'reconsolidationConfidence', valueSql: '0.0' }]);
+          }
+          const hasStatus = schema.fields.some(f => f.name === 'status');
+          if (!hasStatus) {
+            await this.table.addColumns([{ name: 'status', valueSql: "'active'" }]);
+          }
+          const hasVersionCreatedAt = schema.fields.some(f => f.name === 'versionCreatedAt');
+          if (!hasVersionCreatedAt) {
+            await this.table.addColumns([{ name: 'versionCreatedAt', valueSql: '0' }]);
+          }
+          const hasUpdatedAt = schema.fields.some(f => f.name === 'updatedAt');
+          if (!hasUpdatedAt) {
+            await this.table.addColumns([{ name: 'updatedAt', valueSql: '0' }]);
+          }
         } catch (e) {
           // Schema-Migration kann auf älteren LanceDB-Versionen scheitern
           // (kein addColumns-Support). Graceful degradation, aber loggen statt
@@ -395,6 +521,31 @@ class MemoryDB {
             sourceUrl: "",
             evidenceQuote: "",
             scope: "agent-private",
+            emotionalValence: "",
+            emotionalIntensity: 0,
+            emotionalDominant: "neutral",
+            moodContextAtCapture: "",
+            replayCount: 0,
+            lastReplayed: 0,
+            retrievalCount: 0,
+            lastRetrievedAt: 0,
+            memoryStrength: 1.0,
+            halfLifeDays: 30,
+            lastStrengthenedAt: 0,
+            lastDynamicsAt: 0,
+            memoryClass: "standard",
+            neverForget: 0,
+            coreMemoryScore: 0.0,
+            coreMemoryReason: "",
+            versionNumber: 1,
+            previousVersion: "",
+            supersededBy: "",
+            updateSource: "",
+            updateEvidence: "",
+            reconsolidationConfidence: 0.0,
+            status: "active",
+            versionCreatedAt: 0,
+            updatedAt: 0,
           },
         ]);
         await this.table.delete('id = "__schema__"');
@@ -435,7 +586,7 @@ class MemoryDB {
     await this.init();
     const count = await this.table.countRows();
     if (count === 0) return [];
-    const results = await this.table.vectorSearch(vector).limit(limit).toArray();
+    const results = await this.vectorSearchActive(vector, limit);
     const mapped = results.map((r) => ({
       entry: {
         id: r.id,
@@ -450,6 +601,31 @@ class MemoryDB {
         sourceUrl: r.sourceUrl || "",
         evidenceQuote: r.evidenceQuote || "",
         scope: r.scope || "agent-private",
+        emotionalValence: deserializeEmotionalValence(r.emotionalValence),
+        emotionalIntensity: r.emotionalIntensity ?? 0,
+        emotionalDominant: r.emotionalDominant || "neutral",
+        moodContextAtCapture: deserializeEmotionalValence(r.moodContextAtCapture),
+        replayCount: r.replayCount ?? 0,
+        lastReplayed: r.lastReplayed ?? 0,
+        retrievalCount: r.retrievalCount ?? 0,
+        lastRetrievedAt: r.lastRetrievedAt ?? 0,
+        memoryStrength: r.memoryStrength ?? 1.0,
+        halfLifeDays: r.halfLifeDays ?? 30,
+        lastStrengthenedAt: r.lastStrengthenedAt ?? 0,
+        lastDynamicsAt: r.lastDynamicsAt ?? 0,
+        memoryClass: r.memoryClass || "standard",
+        neverForget: r.neverForget ?? 0,
+        coreMemoryScore: r.coreMemoryScore ?? 0.0,
+        coreMemoryReason: r.coreMemoryReason || "",
+        versionNumber: r.versionNumber ?? 1,
+        previousVersion: r.previousVersion || "",
+        supersededBy: r.supersededBy || "",
+        updateSource: r.updateSource || "",
+        updateEvidence: r.updateEvidence || "",
+        reconsolidationConfidence: r.reconsolidationConfidence ?? 0.0,
+        status: r.status || "active",
+        versionCreatedAt: r.versionCreatedAt ?? 0,
+        updatedAt: r.updatedAt ?? 0,
       },
       score: distanceToScore(r._distance),
     }));
@@ -460,7 +636,7 @@ class MemoryDB {
     await this.init();
     const count = await this.table.countRows();
     if (count === 0) return [];
-    const results = await this.table.vectorSearch(vector).limit(10).toArray();
+    const results = await this.vectorSearchActive(vector, 10);
     return results
       .filter((r) => {
         const score = distanceToScore(r._distance);
@@ -473,7 +649,7 @@ class MemoryDB {
     await this.init();
     const count = await this.table.countRows();
     if (count === 0) return null;
-    const results = await this.table.vectorSearch(vector).limit(5).toArray();
+    const results = await this.vectorSearchActive(vector, 5);
     const candidates = results
       .map(r => ({ entry: { id: r.id, text: r.text, importance: r.importance ?? 0.5, storedBy: r.storedBy || "" }, score: distanceToScore(r._distance) }))
       .filter(r => r.score >= mergeThreshold && r.score < duplicateThreshold)
@@ -481,11 +657,45 @@ class MemoryDB {
     return candidates[0] || null;
   }
 
+  async vectorSearchActive(vector, limit) {
+    const fetchLimit = Math.max(limit, Math.min(limit * 3, 100));
+    try {
+      const builder = this.table.vectorSearch(vector);
+      if (typeof builder.where === "function") {
+        return await builder.where("status = 'active' OR status IS NULL").limit(limit).toArray();
+      }
+    } catch (_) {
+      // Older LanceDB/query-builder surfaces and old schemas fall back here.
+    }
+    const rows = await this.table.vectorSearch(vector).limit(fetchLimit).toArray();
+    return rows.filter((row) => !row.status || row.status === "active").slice(0, limit);
+  }
+
   async delete(id) {
     await this.init();
     // safeUuid wirft Error wenn id nicht exakt UUID-Format hat
     const safe = safeUuid(id);
     await this.table.delete(`id = "${safe}"`);
+  }
+
+  async getById(id) {
+    await this.init();
+    const safe = safeUuid(id);
+    const rows = await this.table.query().where(`id = "${safe}"`).limit(1).toArray();
+    return rows && rows.length > 0 ? rows[0] : null;
+  }
+
+  async update(id, patch) {
+    await this.init();
+    const safe = safeUuid(id);
+    const rows = await this.table.query().where(`id = "${safe}"`).limit(1).toArray();
+    if (!rows || rows.length === 0) {
+      throw new Error(`Memory not found: ${id}`);
+    }
+    const existing = rows[0];
+    const updated = { ...existing, ...patch };
+    await this.table.delete(`id = "${safe}"`);
+    await this.table.add([this.normalizeEntryForTable(updated)]);
   }
 
   async purgeExpired() {
@@ -1184,15 +1394,22 @@ const plugin = {
     };
 
     const pool = new AgentDbPool(baseDbPath, vectorDim);
+    const emotionalPool = createEmotionalStatePool();
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? new LocalTransformersEmbeddingProvider({ ...normalizedEmbeddingCfg.local, dimensions: dimensions || vectorDim })
       : new OpenAIEmbeddingProvider({ ...normalizedEmbeddingCfg, apiKey: embeddingCfg.apiKey, fallback: embeddingCfg.fallback, dimensions: dimensions || vectorDim });
 
     // Reranker (optional — provider-aware since v3.1)
+    // Cohere → local-transformers fallback wenn Cohere API fehlschlägt
     const rerankerCfg = normalizeRerankerConfig(cfg.reranker || {});
     let reranker = null;
     if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
-      reranker = new CohereRerankerProvider(rerankerCfg);
+      const primary = new CohereRerankerProvider(rerankerCfg);
+      const fallback = new LocalTransformersRerankerProvider({
+        model: DEFAULT_LOCAL_RERANKER_MODEL,
+        ...(rerankerCfg.local || {}),
+      });
+      reranker = new ChainedRerankerProvider(primary, fallback, api.logger);
     } else if (rerankerCfg.provider === "local-transformers" && rerankerCfg.enabled) {
       reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
     }
@@ -1201,7 +1418,8 @@ const plugin = {
 
     if (reranker) {
       const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
-      api.logger.info(`memory-lancedb-namespaced: reranker enabled (${rerankerCfg.provider}${experimental}, model: ${reranker.model})`);
+      const modelName = reranker.model || reranker.id || "unknown";
+      api.logger.info(`memory-lancedb-namespaced: reranker enabled (${rerankerCfg.provider}${experimental}, model: ${modelName})`);
     }
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
@@ -1248,7 +1466,7 @@ const plugin = {
               await storeDb.delete(mergeCandidate.entry.id);
               appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
               const mergedVector = await embeddings.embed(mergeResult.mergedText);
-              const mergedEntry = { id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+              const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now());
               await storeDb.store(mergedEntry);
               if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
               if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -1268,7 +1486,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = { id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now());
         await storeDb.store(entry);
         if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
         if (storeCtx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -1454,16 +1672,25 @@ const plugin = {
                 }, payload),
               });
             }
-            // ── Phase 5: silent cron-internal jobs ─────────────────────────
-            // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale>
-            // Wird ausschliesslich aus den 9 Phase-5-Cron-Jobs gefeuert
-            // (delivery.mode=none). DB-Methoden, die noch nicht im
-            // db-adapter existieren, no-op'en mit { note: 'db method missing' }.
+            // ── Phase 5+6: silent cron-internal jobs ──────────────────────
+            // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale|rem-dream>
+            // Wird ausschliesslich aus den OpenClaw-managed Cron-Jobs gefeuert
+            // (delivery.mode=none).
             if (actionKey === "internal") {
               const subKey = (sub || "").toLowerCase();
               const internalAgent = commandCtx.agentId || "default";
               if (subKey === "consolidate-daily") {
-                const result = await runDailyConsolidation(memoryDbAdapter, internalAgent, { logger: api.logger, neoStore: commandStore });
+                const rawDb = pool.getDb(internalAgent);
+                await rawDb.init();
+                const result = await runDailyConsolidation(rawDb, internalAgent, {
+                  logger: api.logger,
+                  neoStore: commandStore,
+                  workspaceDir: commandCtx.workspaceDir,
+                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                  llmCfg: mergingLlmCfg,
+                  callLlm,
+                  embeddings,
+                });
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
               }
@@ -1481,7 +1708,37 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale"] });
+              if (subKey === "rem-dream") {
+                if (!mergingLlmCfg) {
+                  return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "no_llm_config" });
+                }
+                const db = pool.getDb(internalAgent);
+                await db.init();
+                const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
+                const result = await runRemDream({
+                  db,
+                  llmCfg: mergingLlmCfg,
+                  callLlm,
+                  neoStore: commandStore,
+                  workspaceKey: workspaceKeyFromContext(commandCtx, {
+                    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+                    rootDir: neoRoot,
+                    runtime: api.runtime,
+                    sessionWorkspaceKeys,
+                    workspaceAliases: neoWorkspaceAliases,
+                  }),
+                  agentId: internalAgent,
+                  logger: api.logger,
+                  maxMemories: isLocalProvider ? 1000 : 5000,
+                  topK: isLocalProvider ? 10 : 20,
+                });
+                if (result.report && commandCtx.workspaceDir) {
+                  writeRemDreamToVault(result.report, result.trends, commandCtx.workspaceDir);
+                }
+                api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}]: ${JSON.stringify(result.report || result)}`);
+                return formatJsonCommandResult({ job: "rem-dream", ...(result.report || result) });
+              }
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream"] });
             }
             if (action === "status") return formatJsonCommandResult(summarizeNeoStore(commandStore));
             if (action === "doctor") {
@@ -1555,7 +1812,21 @@ const plugin = {
               return formatJsonCommandResult({ queuePath: commandStore.paths.embeddings, status: "queued", note: "Embedding drain is handled by plugin service/OpenClaw-agent-cron in neo-arch." });
             }
             if (action === "dreaming") {
-              return formatJsonCommandResult({ status: "planned", heavyJobCarrier: "OpenClaw-managed agent cron", modes: ["light", "rem", "deep"] });
+              const remDream = await import("./lib/dreaming/rem-dream.js");
+              const weekWindow = remDream.getWeekWindow();
+              const runKey = remDream.buildRunKey(commandCtx.workspaceKey || "default", commandCtx.agentId || "default", weekWindow.weekOf);
+              const runs = commandStore.readRunState();
+              const lastRun = runs.completed?.[runKey];
+              return formatJsonCommandResult({
+                status: "active",
+                heavyJobCarrier: "OpenClaw-managed agent cron",
+                modes: ["light", "rem", "deep"],
+                rem: {
+                  currentWeek: weekWindow.weekOf,
+                  lastRun: lastRun ? { weekOf: weekWindow.weekOf, completedAt: lastRun.completedAt, patternsFound: lastRun.patternsFound } : null,
+                  nextRun: lastRun ? "already completed this week" : "pending",
+                },
+              });
             }
             return plur1busHelp();
           };
@@ -1598,9 +1869,13 @@ const plugin = {
         // Diese Commands lesen die vollqualifizierte openclaw.json (mit
         // ".config." Schicht) und sind bewusst von den /plur1bus_*
         // Wartungs-Commands getrennt.
-        const runStatusCommand = () => {
+        const runStatusCommand = (commandCtx) => {
           try {
-            const data = collectStatusData();
+            const agentId = commandCtx?.agentId || "default";
+            const mood = emotionalPool.describe(agentId);
+            const data = collectStatusData({
+              emotional: mood ? { emoji: emotionEmoji(mood.dominant), label: emotionLabelDe(mood.dominant), intensity: mood.intensity } : null,
+            });
             return { text: renderStatus(data) };
           } catch (err) {
             return { text: `❌ /status fehlgeschlagen: ${err?.message || err}` };
@@ -1719,16 +1994,34 @@ const plugin = {
               return { text: `🧠 Nichts gefunden zu "${parsed.old}".` };
             }
             if (candidates.unique) {
-              try {
-                const result = await correctCard(memoryDbAdapter, agentId, candidates.card.id, parsed.new);
-                return { text: renderCorrectResult(result, candidates.card) };
-              } catch (err) {
-                const msg = String(err?.message || err);
-                if (msg.includes("updateCard ist in Phase 4b absichtlich gesperrt") || msg.includes("Embedder-Injection")) {
-                  return { text: `⚠️ Korrigieren direkt geht noch nicht (Embedder-Anbindung steht aus). Workaround: /vergiss "${candidates.card.title || candidates.card.id}" — die neue Formulierung wird beim nächsten Kontakt automatisch gemerkt.` };
-                }
-                throw err;
-              }
+              const result = await correctCard(memoryDbAdapter, agentId, candidates.card.id, parsed.new, {
+                updateMemory: async ({ id, newContent }) => {
+                  const rawDb = pool.getDb(agentId);
+                  await rawDb.init();
+                  const vector = await embeddings.embed(newContent);
+                  const neoStore = getNeoStore(commandCtx, {});
+                  await safeUpdate(
+                    rawDb,
+                    id,
+                    {
+                      text: newContent,
+                      summary: newContent.split(/\r?\n/)[0].slice(0, 200),
+                      vector,
+                    },
+                    {
+                      updateSource: "telegram:/korrigier",
+                      updateEvidence: `User corrected "${parsed.old}" to "${parsed.new}"`,
+                      confidence: 1,
+                    },
+                    {
+                      neoStore,
+                      logger: api.logger,
+                      skipDriftGate: true,
+                    },
+                  );
+                },
+              });
+              return { text: renderCorrectResult(result, candidates.card) };
             }
             const choice = renderCandidateChoice(candidates.candidates, "correct");
             return { text: choice.text, reply_markup: { inline_keyboard: choice.inline_keyboard } };
@@ -1978,14 +2271,19 @@ const plugin = {
             skipped = prepared.filter(p => p.ok).length - toStore.length;
 
             // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
+            const storedMemoryIds = [];
             for (const p of toStore) {
               try {
                 const category = categorizeMemory(p.text);
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
+                const captureEmotion = inferEmotionalValence(p.text, category);
+                const captureMoodContext = emotionalPool.snapshot(agentId);
+                const memoryId = randomUUID();
+                storedMemoryIds.push(memoryId);
 
-                await db.store({
-                  id: randomUUID(),
+                await db.store(applyDynamicsDefaults({
+                  id: memoryId,
                   text: p.text,
                   summary,
                   origin: captureOrigin,
@@ -2002,7 +2300,11 @@ const plugin = {
                   sourceUrl: p.it.sourceUrl || "",
                   evidenceQuote,
                   scope: "agent-private",
-                });
+                  emotionalValence: serializeEmotionalValence(captureEmotion),
+                  emotionalIntensity: captureEmotion.emotionalIntensity,
+                  emotionalDominant: captureEmotion.emotionalDominant,
+                  moodContextAtCapture: serializeEmotionalValence(captureMoodContext),
+                }, captureTimestamp));
                 stored++;
                 api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
               } catch (err) {
@@ -2011,6 +2313,166 @@ const plugin = {
             }
 
             api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+
+            // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten
+            const neoStore = getNeoStore(ctx, event);
+            const hooks = neoStore.readHooks();
+            const lastCount = hooks?.agent_end?.lastProcessedMessageCount || 0;
+            const currentCount = event.messages?.length || 0;
+
+            if (currentCount <= lastCount) {
+              api.logger.info(`memory-lancedb-namespaced: no new messages since last processing (${lastCount} → ${currentCount})`);
+            } else {
+              // Nur die neuen Messages normalisieren
+              const newMessages = event.messages.slice(lastCount);
+              const normalizedTurns = turnEventsFromMessages(newMessages, {
+                workspaceKey: ctx?.workspaceKey,
+                agentId,
+                sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                createdAt: new Date().toISOString(),
+              });
+
+              // Idempotenz: Session-Digest für Dreams/Episoden (nur neue Turns)
+              const sessionDigest = normalizedTurns.map(t => `${t.role}:${t.content}`).join("\n");
+              const { createHash } = await import("node:crypto");
+              const digestHash = createHash("sha256").update(sessionDigest).digest("hex").slice(0, 16);
+
+              // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)
+              if (!background && mergingLlmCfg && neoEnabled) {
+                const processedDreams = hooks?.agent_end?.processedDreams || [];
+                if (processedDreams.includes(digestHash)) {
+                  api.logger.info(`memory-lancedb-namespaced: light dream already processed for this session (digest=${digestHash})`);
+                } else if (normalizedTurns.length < 3) {
+                  api.logger.info(`memory-lancedb-namespaced: skipping light dream - too few turns (${normalizedTurns.length})`);
+                } else if (normalizedTurns.length > 50) {
+                  api.logger.info(`memory-lancedb-namespaced: skipping light dream - too many turns (${normalizedTurns.length})`);
+                } else {
+                  // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+                  lightDream({
+                    turns: normalizedTurns,
+                    neoStore,
+                    db,
+                    embeddings,
+                    llmCfg: mergingLlmCfg,
+                    callLlm,
+                    logger: api.logger,
+                  }).then((dreamResult) => {
+                    if (ctx?.workspaceDir) {
+                      writeLightDreamToVault(dreamResult, ctx.workspaceDir, normalizedTurns);
+                    }
+                    // Markiere als verarbeitet
+                    const mergedDreams = [...processedDreams.slice(-100), digestHash];
+                    neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
+                  }).catch((dreamErr) => {
+                    api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
+                  });
+                }
+              }
+
+              // v5.3.0 — Episoden-Extraktion: Turns zu Geschichten gruppieren (fire-and-forget)
+              if (!background && neoEnabled) {
+                const processedEpisodes = hooks?.agent_end?.processedEpisodes || [];
+                if (processedEpisodes.includes(digestHash)) {
+                  api.logger.info(`memory-lancedb-namespaced: episodes already processed for this session (digest=${digestHash})`);
+                } else {
+                  // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+                  extractEpisodesFromTurns(normalizedTurns, {
+                    workspaceKey: ctx?.workspaceKey,
+                    agentId,
+                    llmCfg: mergingLlmCfg,
+                    callLlm,
+                  }).then((episodes) => {
+                    if (episodes.length > 0) {
+                      neoStore.appendEpisodes(episodes);
+                      api.logger.info(`memory-lancedb-namespaced: ${episodes.length} episode(s) extracted for agent=${agentId}`);
+                      if (ctx?.workspaceDir) {
+                        for (const ep of episodes) {
+                          writeEpisodeToVault(ep, ctx.workspaceDir);
+                        }
+                      }
+                    }
+                    // Markiere als verarbeitet
+                    const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
+                    neoStore.recordHook("agent_end", { processedEpisodes: mergedEpisodes });
+                  }).catch((epErr) => {
+                    api.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
+                  });
+                }
+              }
+
+              // High-Watermark aktualisieren
+              neoStore.recordHook("agent_end", { lastProcessedMessageCount: currentCount });
+            }
+
+            // v5.4.0 — Memory-Graph: Assoziative Verknüpfung
+            if (!background && neoEnabled && storedMemoryIds.length > 0) {
+              try {
+                const neoStore = getNeoStore(ctx, event);
+                const graphMetrics = createGraphMetrics();
+
+                // Baue newMemories aus stored captures
+                const newMemories = toStore.map((p, idx) => ({
+                  id: storedMemoryIds[idx],
+                  createdAt: new Date(captureTimestamp).toISOString(),
+                  sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                  vector: p.vector,
+                  topics: [],
+                  entities: [],
+                  emotionalDominant: inferEmotionalValence(p.text).emotionalDominant,
+                  emotionalIntensity: inferEmotionalValence(p.text).emotionalIntensity,
+                }));
+
+                // Lade existierende Edges für Deduplizierung
+                const existingEdges = neoStore.readGraphEdges(10_000);
+                const { adjacency: existingAdj } = readGraph(existingEdges);
+
+                // Baue neue Edges
+                const allEdges = await buildEdgesForSession(
+                  newMemories.filter(m => m.vector),
+                  [],
+                  db.table
+                );
+
+                // Episode-Anchor-Edges
+                const episodeEdges = buildEpisodeAnchorEdges(
+                  neoStore.readEpisodes(100),
+                  storedMemoryIds
+                );
+
+                const combinedEdges = [...allEdges, ...episodeEdges];
+
+                // Dedupliziere gegen existierende Edges
+                const newUniqueEdges = combinedEdges.filter(edge => {
+                  const existing = existingAdj.get(edge.source)?.find(e =>
+                    e.target === edge.target && e.type === edge.type
+                  );
+                  return !existing;
+                });
+
+                if (newUniqueEdges.length > 0) {
+                  neoStore.appendGraphEdges(newUniqueEdges);
+                  for (const edge of newUniqueEdges) {
+                    graphMetrics.record(edge.type);
+                  }
+                  api.logger.info(`memory-graph: ${newUniqueEdges.length} edges added for agent=${agentId}`);
+                }
+
+                // Vault-Ausgabe: Memory Constellation Report
+                if (ctx?.workspaceDir && Math.random() < 0.1) {
+                  try {
+                    const allEdges = neoStore.readGraphEdges(5_000);
+                    const reportPath = writeGraphConstellationReport(allEdges, ctx.workspaceDir);
+                    if (reportPath) {
+                      api.logger.info(`memory-graph: constellation report written to ${reportPath}`);
+                    }
+                  } catch (vaultErr) {
+                    api.logger.warn?.(`memory-graph: vault report failed: ${String(vaultErr)}`);
+                  }
+                }
+              } catch (graphErr) {
+                api.logger.warn?.(`memory-lancedb-namespaced: graph build failed: ${String(graphErr)}`);
+              }
+            }
           } catch (err) {
             api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
           }
@@ -2043,6 +2505,12 @@ const plugin = {
             try {
               const limit = params.limit || 5;
               await db.init();
+              // v5.4.0 — Graph-Edges für assoziativen Spread laden
+              let graphEdges = [];
+              try {
+                const neoStore = getNeoStore(ctx, {});
+                graphEdges = neoStore.readGraphEdges(5_000);
+              } catch (_) {}
               // v1.9.0 — komplette Pipeline aus shared module
               const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
                 query: params.query,
@@ -2062,6 +2530,21 @@ const plugin = {
                 summaryMaxWords,
                 querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
                 logger: api.logger,
+                emotionalState: emotionalPool.get(agentId),
+                graphEdges,
+                associativeEnabled: true,
+                graphConfig: {},
+                workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
+                agentId,
+                retrievalLogger: (ledgerInfo) => {
+                  try {
+                    const neoStore = getNeoStore(ctx, {});
+                    neoStore.appendRetrievalLedger([createRetrievalLedgerEntry({
+                      ...ledgerInfo,
+                      timestamp: Date.now(),
+                    })]);
+                  } catch (_) {}
+                },
               });
               if (ordered.length === 0 && canonicalHits.length === 0) {
                 return { content: [{ type: "text", text: "No relevant memories found." }] };
@@ -2156,7 +2639,17 @@ const plugin = {
                     await db.delete(mergeCandidate.entry.id);
                     appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
                     const mergedVector = await embeddings.embed(mergeResult.mergedText);
-                    const mergedEntry = { id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+                    const mergedEmotion = inferEmotionalValence(mergeResult.mergedText, category);
+                    const mergedMoodContext = emotionalPool.snapshot(agentId);
+                    const mergedEntry = applyDynamicsDefaults({
+                      id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
+                      importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
+                      expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                      emotionalValence: serializeEmotionalValence(mergedEmotion),
+                      emotionalIntensity: mergedEmotion.emotionalIntensity,
+                      emotionalDominant: mergedEmotion.emotionalDominant,
+                      moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
+                    }, Date.now());
                     await db.store(mergedEntry);
                     if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
                     if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -2177,7 +2670,17 @@ const plugin = {
 
               // 3. Normal store
               const summary = generateSummary(params.text, summaryMaxWords);
-              const entry = { id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+              const emotion = inferEmotionalValence(params.text, category);
+              const moodContext = emotionalPool.snapshot(agentId);
+              const entry = applyDynamicsDefaults({
+                id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
+                createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId,
+                sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                emotionalValence: serializeEmotionalValence(emotion),
+                emotionalIntensity: emotion.emotionalIntensity,
+                emotionalDominant: emotion.emotionalDominant,
+                moodContextAtCapture: serializeEmotionalValence(moodContext),
+              }, Date.now());
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
               if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -2441,6 +2944,14 @@ const plugin = {
         }
         try {
           await db.init();
+          // v5.3.0 — Stimmung aus aktueller Konversation ableiten
+          emotionalPool.get(agentId).updateFromMessages(event.messages || []);
+          // v5.4.0 — Graph-Edges für assoziativen Spread laden
+          let graphEdges = [];
+          try {
+            const neoStore = getNeoStore(ctx, event);
+            graphEdges = neoStore.readGraphEdges(5_000);
+          } catch (_) {}
           // v1.9.0 — komplette Pipeline aus shared module
           const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
             query: event.prompt,
@@ -2460,6 +2971,21 @@ const plugin = {
             summaryMaxWords,
             querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
             logger: api.logger,
+            emotionalState: emotionalPool.get(agentId),
+            graphEdges,
+            associativeEnabled: true,
+            graphConfig: {},
+            workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
+            agentId,
+            retrievalLogger: (ledgerInfo) => {
+              try {
+                const neoStore = getNeoStore(ctx, event);
+                neoStore.appendRetrievalLedger([createRetrievalLedgerEntry({
+                  ...ledgerInfo,
+                  timestamp: Date.now(),
+                })]);
+              } catch (_) {}
+            },
           });
           if (ordered.length === 0 && canonicalHits.length === 0) {
             return neoContext ? { prependContext: neoContext } : undefined;
