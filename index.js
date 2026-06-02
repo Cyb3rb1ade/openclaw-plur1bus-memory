@@ -84,15 +84,35 @@ import {
   sanitizeMemoryTextForPrompt,
   transitionRecordStatus,
   workspaceKeyFromContext,
+  turnEventsFromMessages,
 } from "./lib/neo-arch.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
-import { EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
+import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
 import { registerOpenClawMemoryEmbeddingProviders } from "./lib/providers/openclaw-memory-embedding-adapters.js";
 import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
+import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import { createBackgroundMemoryScheduler, isBackgroundTurn } from "./lib/runtime-scheduler.js";
+import {
+  inferEmotionalValence,
+  serializeEmotionalValence,
+  deserializeEmotionalValence,
+  emotionEmoji,
+  emotionLabelDe,
+} from "./lib/emotion.js";
+import { createEmotionalStatePool } from "./lib/emotional-state.js";
+import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
+import { runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
+import {
+  buildEdgesForSession,
+  buildEpisodeAnchorEdges,
+  readGraph,
+  createGraphMetrics,
+  writeGraphConstellationReport,
+} from "./lib/memory-graph.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -367,6 +387,32 @@ class MemoryDB {
           if (!hasConfirmed) {
             await this.table.addColumns([{ name: 'confirmed', valueSql: 'false' }]);
           }
+          // v5.3.0 — Emotional Valence
+          const hasEmotionalValence = schema.fields.some(f => f.name === 'emotionalValence');
+          if (!hasEmotionalValence) {
+            await this.table.addColumns([{ name: 'emotionalValence', valueSql: "''" }]);
+          }
+          const hasEmotionalIntensity = schema.fields.some(f => f.name === 'emotionalIntensity');
+          if (!hasEmotionalIntensity) {
+            await this.table.addColumns([{ name: 'emotionalIntensity', valueSql: '0.0' }]);
+          }
+          const hasEmotionalDominant = schema.fields.some(f => f.name === 'emotionalDominant');
+          if (!hasEmotionalDominant) {
+            await this.table.addColumns([{ name: 'emotionalDominant', valueSql: "'neutral'" }]);
+          }
+          const hasMoodContextAtCapture = schema.fields.some(f => f.name === 'moodContextAtCapture');
+          if (!hasMoodContextAtCapture) {
+            await this.table.addColumns([{ name: 'moodContextAtCapture', valueSql: "''" }]);
+          }
+          // v5.3.0 — Light Dreaming: Replay-Tracking
+          const hasReplayCount = schema.fields.some(f => f.name === 'replayCount');
+          if (!hasReplayCount) {
+            await this.table.addColumns([{ name: 'replayCount', valueSql: '0' }]);
+          }
+          const hasLastReplayed = schema.fields.some(f => f.name === 'lastReplayed');
+          if (!hasLastReplayed) {
+            await this.table.addColumns([{ name: 'lastReplayed', valueSql: '0' }]);
+          }
         } catch (e) {
           // Schema-Migration kann auf älteren LanceDB-Versionen scheitern
           // (kein addColumns-Support). Graceful degradation, aber loggen statt
@@ -395,6 +441,12 @@ class MemoryDB {
             sourceUrl: "",
             evidenceQuote: "",
             scope: "agent-private",
+            emotionalValence: "",
+            emotionalIntensity: 0,
+            emotionalDominant: "neutral",
+            moodContextAtCapture: "",
+            replayCount: 0,
+            lastReplayed: 0,
           },
         ]);
         await this.table.delete('id = "__schema__"');
@@ -450,6 +502,12 @@ class MemoryDB {
         sourceUrl: r.sourceUrl || "",
         evidenceQuote: r.evidenceQuote || "",
         scope: r.scope || "agent-private",
+        emotionalValence: deserializeEmotionalValence(r.emotionalValence),
+        emotionalIntensity: r.emotionalIntensity ?? 0,
+        emotionalDominant: r.emotionalDominant || "neutral",
+        moodContextAtCapture: deserializeEmotionalValence(r.moodContextAtCapture),
+        replayCount: r.replayCount ?? 0,
+        lastReplayed: r.lastReplayed ?? 0,
       },
       score: distanceToScore(r._distance),
     }));
@@ -1184,15 +1242,22 @@ const plugin = {
     };
 
     const pool = new AgentDbPool(baseDbPath, vectorDim);
+    const emotionalPool = createEmotionalStatePool();
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? new LocalTransformersEmbeddingProvider({ ...normalizedEmbeddingCfg.local, dimensions: dimensions || vectorDim })
       : new OpenAIEmbeddingProvider({ ...normalizedEmbeddingCfg, apiKey: embeddingCfg.apiKey, fallback: embeddingCfg.fallback, dimensions: dimensions || vectorDim });
 
     // Reranker (optional — provider-aware since v3.1)
+    // Cohere → local-transformers fallback wenn Cohere API fehlschlägt
     const rerankerCfg = normalizeRerankerConfig(cfg.reranker || {});
     let reranker = null;
     if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
-      reranker = new CohereRerankerProvider(rerankerCfg);
+      const primary = new CohereRerankerProvider(rerankerCfg);
+      const fallback = new LocalTransformersRerankerProvider({
+        model: DEFAULT_LOCAL_RERANKER_MODEL,
+        ...(rerankerCfg.local || {}),
+      });
+      reranker = new ChainedRerankerProvider(primary, fallback, api.logger);
     } else if (rerankerCfg.provider === "local-transformers" && rerankerCfg.enabled) {
       reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
     }
@@ -1201,7 +1266,8 @@ const plugin = {
 
     if (reranker) {
       const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
-      api.logger.info(`memory-lancedb-namespaced: reranker enabled (${rerankerCfg.provider}${experimental}, model: ${reranker.model})`);
+      const modelName = reranker.model || reranker.id || "unknown";
+      api.logger.info(`memory-lancedb-namespaced: reranker enabled (${rerankerCfg.provider}${experimental}, model: ${modelName})`);
     }
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
@@ -1454,16 +1520,22 @@ const plugin = {
                 }, payload),
               });
             }
-            // ── Phase 5: silent cron-internal jobs ─────────────────────────
-            // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale>
-            // Wird ausschliesslich aus den 9 Phase-5-Cron-Jobs gefeuert
-            // (delivery.mode=none). DB-Methoden, die noch nicht im
-            // db-adapter existieren, no-op'en mit { note: 'db method missing' }.
+            // ── Phase 5+6: silent cron-internal jobs ──────────────────────
+            // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale|rem-dream>
+            // Wird ausschliesslich aus den OpenClaw-managed Cron-Jobs gefeuert
+            // (delivery.mode=none).
             if (actionKey === "internal") {
               const subKey = (sub || "").toLowerCase();
               const internalAgent = commandCtx.agentId || "default";
               if (subKey === "consolidate-daily") {
-                const result = await runDailyConsolidation(memoryDbAdapter, internalAgent, { logger: api.logger, neoStore: commandStore });
+                const result = await runDailyConsolidation(memoryDbAdapter, internalAgent, {
+                  logger: api.logger,
+                  neoStore: commandStore,
+                  workspaceDir: commandCtx.workspaceDir,
+                  llmCfg: mergingLlmCfg,
+                  callLlm,
+                  embeddings,
+                });
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
               }
@@ -1481,7 +1553,37 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal auto-accept-stale[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale"] });
+              if (subKey === "rem-dream") {
+                if (!mergingLlmCfg) {
+                  return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "no_llm_config" });
+                }
+                const db = pool.getDb(internalAgent);
+                await db.init();
+                const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
+                const result = await runRemDream({
+                  db,
+                  llmCfg: mergingLlmCfg,
+                  callLlm,
+                  neoStore: commandStore,
+                  workspaceKey: workspaceKeyFromContext(commandCtx, {
+                    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+                    rootDir: neoRoot,
+                    runtime: api.runtime,
+                    sessionWorkspaceKeys,
+                    workspaceAliases: neoWorkspaceAliases,
+                  }),
+                  agentId: internalAgent,
+                  logger: api.logger,
+                  maxMemories: isLocalProvider ? 1000 : 5000,
+                  topK: isLocalProvider ? 10 : 20,
+                });
+                if (result.report && commandCtx.workspaceDir) {
+                  writeRemDreamToVault(result.report, result.trends, commandCtx.workspaceDir);
+                }
+                api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}]: ${JSON.stringify(result.report || result)}`);
+                return formatJsonCommandResult({ job: "rem-dream", ...(result.report || result) });
+              }
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream"] });
             }
             if (action === "status") return formatJsonCommandResult(summarizeNeoStore(commandStore));
             if (action === "doctor") {
@@ -1555,7 +1657,21 @@ const plugin = {
               return formatJsonCommandResult({ queuePath: commandStore.paths.embeddings, status: "queued", note: "Embedding drain is handled by plugin service/OpenClaw-agent-cron in neo-arch." });
             }
             if (action === "dreaming") {
-              return formatJsonCommandResult({ status: "planned", heavyJobCarrier: "OpenClaw-managed agent cron", modes: ["light", "rem", "deep"] });
+              const remDream = await import("./lib/dreaming/rem-dream.js");
+              const weekWindow = remDream.getWeekWindow();
+              const runKey = remDream.buildRunKey(commandCtx.workspaceKey || "default", commandCtx.agentId || "default", weekWindow.weekOf);
+              const runs = commandStore.readRunState();
+              const lastRun = runs.completed?.[runKey];
+              return formatJsonCommandResult({
+                status: "active",
+                heavyJobCarrier: "OpenClaw-managed agent cron",
+                modes: ["light", "rem", "deep"],
+                rem: {
+                  currentWeek: weekWindow.weekOf,
+                  lastRun: lastRun ? { weekOf: weekWindow.weekOf, completedAt: lastRun.completedAt, patternsFound: lastRun.patternsFound } : null,
+                  nextRun: lastRun ? "already completed this week" : "pending",
+                },
+              });
             }
             return plur1busHelp();
           };
@@ -1598,9 +1714,13 @@ const plugin = {
         // Diese Commands lesen die vollqualifizierte openclaw.json (mit
         // ".config." Schicht) und sind bewusst von den /plur1bus_*
         // Wartungs-Commands getrennt.
-        const runStatusCommand = () => {
+        const runStatusCommand = (commandCtx) => {
           try {
-            const data = collectStatusData();
+            const agentId = commandCtx?.agentId || "default";
+            const mood = emotionalPool.describe(agentId);
+            const data = collectStatusData({
+              emotional: mood ? { emoji: emotionEmoji(mood.dominant), label: emotionLabelDe(mood.dominant), intensity: mood.intensity } : null,
+            });
             return { text: renderStatus(data) };
           } catch (err) {
             return { text: `❌ /status fehlgeschlagen: ${err?.message || err}` };
@@ -1978,14 +2098,19 @@ const plugin = {
             skipped = prepared.filter(p => p.ok).length - toStore.length;
 
             // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
+            const storedMemoryIds = [];
             for (const p of toStore) {
               try {
                 const category = categorizeMemory(p.text);
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
+                const captureEmotion = inferEmotionalValence(p.text, category);
+                const captureMoodContext = emotionalPool.snapshot(agentId);
+                const memoryId = randomUUID();
+                storedMemoryIds.push(memoryId);
 
                 await db.store({
-                  id: randomUUID(),
+                  id: memoryId,
                   text: p.text,
                   summary,
                   origin: captureOrigin,
@@ -2002,6 +2127,10 @@ const plugin = {
                   sourceUrl: p.it.sourceUrl || "",
                   evidenceQuote,
                   scope: "agent-private",
+                  emotionalValence: serializeEmotionalValence(captureEmotion),
+                  emotionalIntensity: captureEmotion.emotionalIntensity,
+                  emotionalDominant: captureEmotion.emotionalDominant,
+                  moodContextAtCapture: serializeEmotionalValence(captureMoodContext),
                 });
                 stored++;
                 api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
@@ -2011,6 +2140,166 @@ const plugin = {
             }
 
             api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+
+            // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten
+            const neoStore = getNeoStore(ctx, event);
+            const hooks = neoStore.readHooks();
+            const lastCount = hooks?.agent_end?.lastProcessedMessageCount || 0;
+            const currentCount = event.messages?.length || 0;
+
+            if (currentCount <= lastCount) {
+              api.logger.info(`memory-lancedb-namespaced: no new messages since last processing (${lastCount} → ${currentCount})`);
+            } else {
+              // Nur die neuen Messages normalisieren
+              const newMessages = event.messages.slice(lastCount);
+              const normalizedTurns = turnEventsFromMessages(newMessages, {
+                workspaceKey: ctx?.workspaceKey,
+                agentId,
+                sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                createdAt: new Date().toISOString(),
+              });
+
+              // Idempotenz: Session-Digest für Dreams/Episoden (nur neue Turns)
+              const sessionDigest = normalizedTurns.map(t => `${t.role}:${t.content}`).join("\n");
+              const { createHash } = await import("node:crypto");
+              const digestHash = createHash("sha256").update(sessionDigest).digest("hex").slice(0, 16);
+
+              // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)
+              if (!background && mergingLlmCfg && neoEnabled) {
+                const processedDreams = hooks?.agent_end?.processedDreams || [];
+                if (processedDreams.includes(digestHash)) {
+                  api.logger.info(`memory-lancedb-namespaced: light dream already processed for this session (digest=${digestHash})`);
+                } else if (normalizedTurns.length < 3) {
+                  api.logger.info(`memory-lancedb-namespaced: skipping light dream - too few turns (${normalizedTurns.length})`);
+                } else if (normalizedTurns.length > 50) {
+                  api.logger.info(`memory-lancedb-namespaced: skipping light dream - too many turns (${normalizedTurns.length})`);
+                } else {
+                  // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+                  lightDream({
+                    turns: normalizedTurns,
+                    neoStore,
+                    db,
+                    embeddings,
+                    llmCfg: mergingLlmCfg,
+                    callLlm,
+                    logger: api.logger,
+                  }).then((dreamResult) => {
+                    if (ctx?.workspaceDir) {
+                      writeLightDreamToVault(dreamResult, ctx.workspaceDir, normalizedTurns);
+                    }
+                    // Markiere als verarbeitet
+                    const mergedDreams = [...processedDreams.slice(-100), digestHash];
+                    neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
+                  }).catch((dreamErr) => {
+                    api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
+                  });
+                }
+              }
+
+              // v5.3.0 — Episoden-Extraktion: Turns zu Geschichten gruppieren (fire-and-forget)
+              if (!background && neoEnabled) {
+                const processedEpisodes = hooks?.agent_end?.processedEpisodes || [];
+                if (processedEpisodes.includes(digestHash)) {
+                  api.logger.info(`memory-lancedb-namespaced: episodes already processed for this session (digest=${digestHash})`);
+                } else {
+                  // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+                  extractEpisodesFromTurns(normalizedTurns, {
+                    workspaceKey: ctx?.workspaceKey,
+                    agentId,
+                    llmCfg: mergingLlmCfg,
+                    callLlm,
+                  }).then((episodes) => {
+                    if (episodes.length > 0) {
+                      neoStore.appendEpisodes(episodes);
+                      api.logger.info(`memory-lancedb-namespaced: ${episodes.length} episode(s) extracted for agent=${agentId}`);
+                      if (ctx?.workspaceDir) {
+                        for (const ep of episodes) {
+                          writeEpisodeToVault(ep, ctx.workspaceDir);
+                        }
+                      }
+                    }
+                    // Markiere als verarbeitet
+                    const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
+                    neoStore.recordHook("agent_end", { processedEpisodes: mergedEpisodes });
+                  }).catch((epErr) => {
+                    api.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
+                  });
+                }
+              }
+
+              // High-Watermark aktualisieren
+              neoStore.recordHook("agent_end", { lastProcessedMessageCount: currentCount });
+            }
+
+            // v5.4.0 — Memory-Graph: Assoziative Verknüpfung
+            if (!background && neoEnabled && storedMemoryIds.length > 0) {
+              try {
+                const neoStore = getNeoStore(ctx, event);
+                const graphMetrics = createGraphMetrics();
+
+                // Baue newMemories aus stored captures
+                const newMemories = toStore.map((p, idx) => ({
+                  id: storedMemoryIds[idx],
+                  createdAt: new Date(captureTimestamp).toISOString(),
+                  sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                  vector: p.vector,
+                  topics: [],
+                  entities: [],
+                  emotionalDominant: inferEmotionalValence(p.text).emotionalDominant,
+                  emotionalIntensity: inferEmotionalValence(p.text).emotionalIntensity,
+                }));
+
+                // Lade existierende Edges für Deduplizierung
+                const existingEdges = neoStore.readGraphEdges(10_000);
+                const { adjacency: existingAdj } = readGraph(existingEdges);
+
+                // Baue neue Edges
+                const allEdges = await buildEdgesForSession(
+                  newMemories.filter(m => m.vector),
+                  [],
+                  db.table
+                );
+
+                // Episode-Anchor-Edges
+                const episodeEdges = buildEpisodeAnchorEdges(
+                  neoStore.readEpisodes(100),
+                  storedMemoryIds
+                );
+
+                const combinedEdges = [...allEdges, ...episodeEdges];
+
+                // Dedupliziere gegen existierende Edges
+                const newUniqueEdges = combinedEdges.filter(edge => {
+                  const existing = existingAdj.get(edge.source)?.find(e =>
+                    e.target === edge.target && e.type === edge.type
+                  );
+                  return !existing;
+                });
+
+                if (newUniqueEdges.length > 0) {
+                  neoStore.appendGraphEdges(newUniqueEdges);
+                  for (const edge of newUniqueEdges) {
+                    graphMetrics.record(edge.type);
+                  }
+                  api.logger.info(`memory-graph: ${newUniqueEdges.length} edges added for agent=${agentId}`);
+                }
+
+                // Vault-Ausgabe: Memory Constellation Report
+                if (ctx?.workspaceDir && Math.random() < 0.1) {
+                  try {
+                    const allEdges = neoStore.readGraphEdges(5_000);
+                    const reportPath = writeGraphConstellationReport(allEdges, ctx.workspaceDir);
+                    if (reportPath) {
+                      api.logger.info(`memory-graph: constellation report written to ${reportPath}`);
+                    }
+                  } catch (vaultErr) {
+                    api.logger.warn?.(`memory-graph: vault report failed: ${String(vaultErr)}`);
+                  }
+                }
+              } catch (graphErr) {
+                api.logger.warn?.(`memory-lancedb-namespaced: graph build failed: ${String(graphErr)}`);
+              }
+            }
           } catch (err) {
             api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
           }
@@ -2043,6 +2332,12 @@ const plugin = {
             try {
               const limit = params.limit || 5;
               await db.init();
+              // v5.4.0 — Graph-Edges für assoziativen Spread laden
+              let graphEdges = [];
+              try {
+                const neoStore = getNeoStore(ctx, {});
+                graphEdges = neoStore.readGraphEdges(5_000);
+              } catch (_) {}
               // v1.9.0 — komplette Pipeline aus shared module
               const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
                 query: params.query,
@@ -2062,6 +2357,10 @@ const plugin = {
                 summaryMaxWords,
                 querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
                 logger: api.logger,
+                emotionalState: emotionalPool.get(agentId),
+                graphEdges,
+                associativeEnabled: true,
+                graphConfig: {},
               });
               if (ordered.length === 0 && canonicalHits.length === 0) {
                 return { content: [{ type: "text", text: "No relevant memories found." }] };
@@ -2156,7 +2455,17 @@ const plugin = {
                     await db.delete(mergeCandidate.entry.id);
                     appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
                     const mergedVector = await embeddings.embed(mergeResult.mergedText);
-                    const mergedEntry = { id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+                    const mergedEmotion = inferEmotionalValence(mergeResult.mergedText, category);
+                    const mergedMoodContext = emotionalPool.snapshot(agentId);
+                    const mergedEntry = {
+                      id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
+                      importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
+                      expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                      emotionalValence: serializeEmotionalValence(mergedEmotion),
+                      emotionalIntensity: mergedEmotion.emotionalIntensity,
+                      emotionalDominant: mergedEmotion.emotionalDominant,
+                      moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
+                    };
                     await db.store(mergedEntry);
                     if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
                     if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -2177,7 +2486,17 @@ const plugin = {
 
               // 3. Normal store
               const summary = generateSummary(params.text, summaryMaxWords);
-              const entry = { id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+              const emotion = inferEmotionalValence(params.text, category);
+              const moodContext = emotionalPool.snapshot(agentId);
+              const entry = {
+                id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
+                createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId,
+                sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                emotionalValence: serializeEmotionalValence(emotion),
+                emotionalIntensity: emotion.emotionalIntensity,
+                emotionalDominant: emotion.emotionalDominant,
+                moodContextAtCapture: serializeEmotionalValence(moodContext),
+              };
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
               if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -2441,6 +2760,14 @@ const plugin = {
         }
         try {
           await db.init();
+          // v5.3.0 — Stimmung aus aktueller Konversation ableiten
+          emotionalPool.get(agentId).updateFromMessages(event.messages || []);
+          // v5.4.0 — Graph-Edges für assoziativen Spread laden
+          let graphEdges = [];
+          try {
+            const neoStore = getNeoStore(ctx, event);
+            graphEdges = neoStore.readGraphEdges(5_000);
+          } catch (_) {}
           // v1.9.0 — komplette Pipeline aus shared module
           const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
             query: event.prompt,
@@ -2460,6 +2787,10 @@ const plugin = {
             summaryMaxWords,
             querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
             logger: api.logger,
+            emotionalState: emotionalPool.get(agentId),
+            graphEdges,
+            associativeEnabled: true,
+            graphConfig: {},
           });
           if (ordered.length === 0 && canonicalHits.length === 0) {
             return neoContext ? { prependContext: neoContext } : undefined;
