@@ -119,6 +119,24 @@ describe("memory-compaction", () => {
     assert.strictEqual(result.note, "too_few_candidates");
   });
 
+  it("schließt core memories von der Kompaktierung aus", async () => {
+    const dim = 10;
+    const v = mockVector(dim, 1);
+    const rows = [
+      { id: "core", text: "Never forget this deep moment", vector: v, createdAt: Date.now(), memoryClass: "core", neverForget: 1 },
+      { id: "ordinary", text: "Never forget this deep moment", vector: v, createdAt: Date.now() - 1000 },
+    ];
+    const table = createMockTable(rows);
+    const result = await runMemoryCompaction(createMockDb(table), {
+      similarityThreshold: 0.99,
+      dryRun: false,
+      logger: { info: () => {}, warn: () => {} },
+    });
+    assert.strictEqual(result.note, "too_few_candidates");
+    assert.strictEqual(rows.find(r => r.id === "core")?.status, undefined);
+    assert.strictEqual(rows.find(r => r.id === "ordinary")?.status, undefined);
+  });
+
   it("markiert widersprüchliche Memories als Konflikt", async () => {
     const dim = 10;
     const v = mockVector(dim, 1);

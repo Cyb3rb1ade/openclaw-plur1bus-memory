@@ -67,6 +67,7 @@ import { createDbAdapter } from "./lib/db-adapter.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
+import { safeUpdate } from "./lib/safe-update.js";
 import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
@@ -103,6 +104,7 @@ import {
   emotionLabelDe,
 } from "./lib/emotion.js";
 import { createEmotionalStatePool } from "./lib/emotional-state.js";
+import { applyDynamicsDefaults, createRetrievalLedgerEntry } from "./lib/memory-dynamics.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
 import { runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
@@ -413,6 +415,84 @@ class MemoryDB {
           if (!hasLastReplayed) {
             await this.table.addColumns([{ name: 'lastReplayed', valueSql: '0' }]);
           }
+          // v5.4.0 — Memory Dynamics
+          const hasRetrievalCount = schema.fields.some(f => f.name === 'retrievalCount');
+          if (!hasRetrievalCount) {
+            await this.table.addColumns([{ name: 'retrievalCount', valueSql: '0' }]);
+          }
+          const hasLastRetrievedAt = schema.fields.some(f => f.name === 'lastRetrievedAt');
+          if (!hasLastRetrievedAt) {
+            await this.table.addColumns([{ name: 'lastRetrievedAt', valueSql: '0' }]);
+          }
+          const hasMemoryStrength = schema.fields.some(f => f.name === 'memoryStrength');
+          if (!hasMemoryStrength) {
+            await this.table.addColumns([{ name: 'memoryStrength', valueSql: '1.0' }]);
+          }
+          const hasHalfLifeDays = schema.fields.some(f => f.name === 'halfLifeDays');
+          if (!hasHalfLifeDays) {
+            await this.table.addColumns([{ name: 'halfLifeDays', valueSql: '30' }]);
+          }
+          const hasLastStrengthenedAt = schema.fields.some(f => f.name === 'lastStrengthenedAt');
+          if (!hasLastStrengthenedAt) {
+            await this.table.addColumns([{ name: 'lastStrengthenedAt', valueSql: '0' }]);
+          }
+          const hasLastDynamicsAt = schema.fields.some(f => f.name === 'lastDynamicsAt');
+          if (!hasLastDynamicsAt) {
+            await this.table.addColumns([{ name: 'lastDynamicsAt', valueSql: '0' }]);
+          }
+          const hasMemoryClass = schema.fields.some(f => f.name === 'memoryClass');
+          if (!hasMemoryClass) {
+            await this.table.addColumns([{ name: 'memoryClass', valueSql: "'standard'" }]);
+          }
+          const hasNeverForget = schema.fields.some(f => f.name === 'neverForget');
+          if (!hasNeverForget) {
+            await this.table.addColumns([{ name: 'neverForget', valueSql: '0' }]);
+          }
+          const hasCoreMemoryScore = schema.fields.some(f => f.name === 'coreMemoryScore');
+          if (!hasCoreMemoryScore) {
+            await this.table.addColumns([{ name: 'coreMemoryScore', valueSql: '0.0' }]);
+          }
+          const hasCoreMemoryReason = schema.fields.some(f => f.name === 'coreMemoryReason');
+          if (!hasCoreMemoryReason) {
+            await this.table.addColumns([{ name: 'coreMemoryReason', valueSql: "''" }]);
+          }
+          // v5.5.0 — Safe Reconsolidation: Versioning
+          const hasVersionNumber = schema.fields.some(f => f.name === 'versionNumber');
+          if (!hasVersionNumber) {
+            await this.table.addColumns([{ name: 'versionNumber', valueSql: '1' }]);
+          }
+          const hasPreviousVersion = schema.fields.some(f => f.name === 'previousVersion');
+          if (!hasPreviousVersion) {
+            await this.table.addColumns([{ name: 'previousVersion', valueSql: "''" }]);
+          }
+          const hasSupersededBy = schema.fields.some(f => f.name === 'supersededBy');
+          if (!hasSupersededBy) {
+            await this.table.addColumns([{ name: 'supersededBy', valueSql: "''" }]);
+          }
+          const hasUpdateSource = schema.fields.some(f => f.name === 'updateSource');
+          if (!hasUpdateSource) {
+            await this.table.addColumns([{ name: 'updateSource', valueSql: "''" }]);
+          }
+          const hasUpdateEvidence = schema.fields.some(f => f.name === 'updateEvidence');
+          if (!hasUpdateEvidence) {
+            await this.table.addColumns([{ name: 'updateEvidence', valueSql: "''" }]);
+          }
+          const hasReconsolidationConfidence = schema.fields.some(f => f.name === 'reconsolidationConfidence');
+          if (!hasReconsolidationConfidence) {
+            await this.table.addColumns([{ name: 'reconsolidationConfidence', valueSql: '0.0' }]);
+          }
+          const hasStatus = schema.fields.some(f => f.name === 'status');
+          if (!hasStatus) {
+            await this.table.addColumns([{ name: 'status', valueSql: "'active'" }]);
+          }
+          const hasVersionCreatedAt = schema.fields.some(f => f.name === 'versionCreatedAt');
+          if (!hasVersionCreatedAt) {
+            await this.table.addColumns([{ name: 'versionCreatedAt', valueSql: '0' }]);
+          }
+          const hasUpdatedAt = schema.fields.some(f => f.name === 'updatedAt');
+          if (!hasUpdatedAt) {
+            await this.table.addColumns([{ name: 'updatedAt', valueSql: '0' }]);
+          }
         } catch (e) {
           // Schema-Migration kann auf älteren LanceDB-Versionen scheitern
           // (kein addColumns-Support). Graceful degradation, aber loggen statt
@@ -447,6 +527,25 @@ class MemoryDB {
             moodContextAtCapture: "",
             replayCount: 0,
             lastReplayed: 0,
+            retrievalCount: 0,
+            lastRetrievedAt: 0,
+            memoryStrength: 1.0,
+            halfLifeDays: 30,
+            lastStrengthenedAt: 0,
+            lastDynamicsAt: 0,
+            memoryClass: "standard",
+            neverForget: 0,
+            coreMemoryScore: 0.0,
+            coreMemoryReason: "",
+            versionNumber: 1,
+            previousVersion: "",
+            supersededBy: "",
+            updateSource: "",
+            updateEvidence: "",
+            reconsolidationConfidence: 0.0,
+            status: "active",
+            versionCreatedAt: 0,
+            updatedAt: 0,
           },
         ]);
         await this.table.delete('id = "__schema__"');
@@ -487,7 +586,7 @@ class MemoryDB {
     await this.init();
     const count = await this.table.countRows();
     if (count === 0) return [];
-    const results = await this.table.vectorSearch(vector).limit(limit).toArray();
+    const results = await this.vectorSearchActive(vector, limit);
     const mapped = results.map((r) => ({
       entry: {
         id: r.id,
@@ -508,6 +607,25 @@ class MemoryDB {
         moodContextAtCapture: deserializeEmotionalValence(r.moodContextAtCapture),
         replayCount: r.replayCount ?? 0,
         lastReplayed: r.lastReplayed ?? 0,
+        retrievalCount: r.retrievalCount ?? 0,
+        lastRetrievedAt: r.lastRetrievedAt ?? 0,
+        memoryStrength: r.memoryStrength ?? 1.0,
+        halfLifeDays: r.halfLifeDays ?? 30,
+        lastStrengthenedAt: r.lastStrengthenedAt ?? 0,
+        lastDynamicsAt: r.lastDynamicsAt ?? 0,
+        memoryClass: r.memoryClass || "standard",
+        neverForget: r.neverForget ?? 0,
+        coreMemoryScore: r.coreMemoryScore ?? 0.0,
+        coreMemoryReason: r.coreMemoryReason || "",
+        versionNumber: r.versionNumber ?? 1,
+        previousVersion: r.previousVersion || "",
+        supersededBy: r.supersededBy || "",
+        updateSource: r.updateSource || "",
+        updateEvidence: r.updateEvidence || "",
+        reconsolidationConfidence: r.reconsolidationConfidence ?? 0.0,
+        status: r.status || "active",
+        versionCreatedAt: r.versionCreatedAt ?? 0,
+        updatedAt: r.updatedAt ?? 0,
       },
       score: distanceToScore(r._distance),
     }));
@@ -518,7 +636,7 @@ class MemoryDB {
     await this.init();
     const count = await this.table.countRows();
     if (count === 0) return [];
-    const results = await this.table.vectorSearch(vector).limit(10).toArray();
+    const results = await this.vectorSearchActive(vector, 10);
     return results
       .filter((r) => {
         const score = distanceToScore(r._distance);
@@ -531,7 +649,7 @@ class MemoryDB {
     await this.init();
     const count = await this.table.countRows();
     if (count === 0) return null;
-    const results = await this.table.vectorSearch(vector).limit(5).toArray();
+    const results = await this.vectorSearchActive(vector, 5);
     const candidates = results
       .map(r => ({ entry: { id: r.id, text: r.text, importance: r.importance ?? 0.5, storedBy: r.storedBy || "" }, score: distanceToScore(r._distance) }))
       .filter(r => r.score >= mergeThreshold && r.score < duplicateThreshold)
@@ -539,11 +657,45 @@ class MemoryDB {
     return candidates[0] || null;
   }
 
+  async vectorSearchActive(vector, limit) {
+    const fetchLimit = Math.max(limit, Math.min(limit * 3, 100));
+    try {
+      const builder = this.table.vectorSearch(vector);
+      if (typeof builder.where === "function") {
+        return await builder.where("status = 'active' OR status IS NULL").limit(limit).toArray();
+      }
+    } catch (_) {
+      // Older LanceDB/query-builder surfaces and old schemas fall back here.
+    }
+    const rows = await this.table.vectorSearch(vector).limit(fetchLimit).toArray();
+    return rows.filter((row) => !row.status || row.status === "active").slice(0, limit);
+  }
+
   async delete(id) {
     await this.init();
     // safeUuid wirft Error wenn id nicht exakt UUID-Format hat
     const safe = safeUuid(id);
     await this.table.delete(`id = "${safe}"`);
+  }
+
+  async getById(id) {
+    await this.init();
+    const safe = safeUuid(id);
+    const rows = await this.table.query().where(`id = "${safe}"`).limit(1).toArray();
+    return rows && rows.length > 0 ? rows[0] : null;
+  }
+
+  async update(id, patch) {
+    await this.init();
+    const safe = safeUuid(id);
+    const rows = await this.table.query().where(`id = "${safe}"`).limit(1).toArray();
+    if (!rows || rows.length === 0) {
+      throw new Error(`Memory not found: ${id}`);
+    }
+    const existing = rows[0];
+    const updated = { ...existing, ...patch };
+    await this.table.delete(`id = "${safe}"`);
+    await this.table.add([this.normalizeEntryForTable(updated)]);
   }
 
   async purgeExpired() {
@@ -1314,7 +1466,7 @@ const plugin = {
               await storeDb.delete(mergeCandidate.entry.id);
               appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
               const mergedVector = await embeddings.embed(mergeResult.mergedText);
-              const mergedEntry = { id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+              const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now());
               await storeDb.store(mergedEntry);
               if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
               if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -1334,7 +1486,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = { id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope };
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now());
         await storeDb.store(entry);
         if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
         if (storeCtx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -1528,10 +1680,13 @@ const plugin = {
               const subKey = (sub || "").toLowerCase();
               const internalAgent = commandCtx.agentId || "default";
               if (subKey === "consolidate-daily") {
-                const result = await runDailyConsolidation(memoryDbAdapter, internalAgent, {
+                const rawDb = pool.getDb(internalAgent);
+                await rawDb.init();
+                const result = await runDailyConsolidation(rawDb, internalAgent, {
                   logger: api.logger,
                   neoStore: commandStore,
                   workspaceDir: commandCtx.workspaceDir,
+                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
                   llmCfg: mergingLlmCfg,
                   callLlm,
                   embeddings,
@@ -1839,16 +1994,34 @@ const plugin = {
               return { text: `🧠 Nichts gefunden zu "${parsed.old}".` };
             }
             if (candidates.unique) {
-              try {
-                const result = await correctCard(memoryDbAdapter, agentId, candidates.card.id, parsed.new);
-                return { text: renderCorrectResult(result, candidates.card) };
-              } catch (err) {
-                const msg = String(err?.message || err);
-                if (msg.includes("updateCard ist in Phase 4b absichtlich gesperrt") || msg.includes("Embedder-Injection")) {
-                  return { text: `⚠️ Korrigieren direkt geht noch nicht (Embedder-Anbindung steht aus). Workaround: /vergiss "${candidates.card.title || candidates.card.id}" — die neue Formulierung wird beim nächsten Kontakt automatisch gemerkt.` };
-                }
-                throw err;
-              }
+              const result = await correctCard(memoryDbAdapter, agentId, candidates.card.id, parsed.new, {
+                updateMemory: async ({ id, newContent }) => {
+                  const rawDb = pool.getDb(agentId);
+                  await rawDb.init();
+                  const vector = await embeddings.embed(newContent);
+                  const neoStore = getNeoStore(commandCtx, {});
+                  await safeUpdate(
+                    rawDb,
+                    id,
+                    {
+                      text: newContent,
+                      summary: newContent.split(/\r?\n/)[0].slice(0, 200),
+                      vector,
+                    },
+                    {
+                      updateSource: "telegram:/korrigier",
+                      updateEvidence: `User corrected "${parsed.old}" to "${parsed.new}"`,
+                      confidence: 1,
+                    },
+                    {
+                      neoStore,
+                      logger: api.logger,
+                      skipDriftGate: true,
+                    },
+                  );
+                },
+              });
+              return { text: renderCorrectResult(result, candidates.card) };
             }
             const choice = renderCandidateChoice(candidates.candidates, "correct");
             return { text: choice.text, reply_markup: { inline_keyboard: choice.inline_keyboard } };
@@ -2109,7 +2282,7 @@ const plugin = {
                 const memoryId = randomUUID();
                 storedMemoryIds.push(memoryId);
 
-                await db.store({
+                await db.store(applyDynamicsDefaults({
                   id: memoryId,
                   text: p.text,
                   summary,
@@ -2131,7 +2304,7 @@ const plugin = {
                   emotionalIntensity: captureEmotion.emotionalIntensity,
                   emotionalDominant: captureEmotion.emotionalDominant,
                   moodContextAtCapture: serializeEmotionalValence(captureMoodContext),
-                });
+                }, captureTimestamp));
                 stored++;
                 api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
               } catch (err) {
@@ -2361,6 +2534,17 @@ const plugin = {
                 graphEdges,
                 associativeEnabled: true,
                 graphConfig: {},
+                workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
+                agentId,
+                retrievalLogger: (ledgerInfo) => {
+                  try {
+                    const neoStore = getNeoStore(ctx, {});
+                    neoStore.appendRetrievalLedger([createRetrievalLedgerEntry({
+                      ...ledgerInfo,
+                      timestamp: Date.now(),
+                    })]);
+                  } catch (_) {}
+                },
               });
               if (ordered.length === 0 && canonicalHits.length === 0) {
                 return { content: [{ type: "text", text: "No relevant memories found." }] };
@@ -2457,7 +2641,7 @@ const plugin = {
                     const mergedVector = await embeddings.embed(mergeResult.mergedText);
                     const mergedEmotion = inferEmotionalValence(mergeResult.mergedText, category);
                     const mergedMoodContext = emotionalPool.snapshot(agentId);
-                    const mergedEntry = {
+                    const mergedEntry = applyDynamicsDefaults({
                       id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
                       importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
                       expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
@@ -2465,7 +2649,7 @@ const plugin = {
                       emotionalIntensity: mergedEmotion.emotionalIntensity,
                       emotionalDominant: mergedEmotion.emotionalDominant,
                       moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
-                    };
+                    }, Date.now());
                     await db.store(mergedEntry);
                     if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
                     if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -2488,7 +2672,7 @@ const plugin = {
               const summary = generateSummary(params.text, summaryMaxWords);
               const emotion = inferEmotionalValence(params.text, category);
               const moodContext = emotionalPool.snapshot(agentId);
-              const entry = {
+              const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
                 createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId,
                 sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
@@ -2496,7 +2680,7 @@ const plugin = {
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
-              };
+              }, Date.now());
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
               if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -2791,6 +2975,17 @@ const plugin = {
             graphEdges,
             associativeEnabled: true,
             graphConfig: {},
+            workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
+            agentId,
+            retrievalLogger: (ledgerInfo) => {
+              try {
+                const neoStore = getNeoStore(ctx, event);
+                neoStore.appendRetrievalLedger([createRetrievalLedgerEntry({
+                  ...ledgerInfo,
+                  timestamp: Date.now(),
+                })]);
+              } catch (_) {}
+            },
           });
           if (ordered.length === 0 && canonicalHits.length === 0) {
             return neoContext ? { prependContext: neoContext } : undefined;
