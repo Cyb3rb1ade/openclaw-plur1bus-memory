@@ -63,6 +63,7 @@ import {
   renderForgetResult,
   renderCorrectResult,
 } from "./lib/telegram-commands/memory-edit.js";
+import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
@@ -1943,10 +1944,14 @@ const plugin = {
           logger: api.logger,
         });
 
+        const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger);
+
         const runMemoryCommand = async (commandCtx) => {
           try {
             const input = (commandCtx.args || "").trim();
-            const parsed = parseMemoryQuery(input);
+            const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger });
+            if (normalized.error) return { text: `❌ ${normalized.error}` };
+            const parsed = parseMemoryQuery(normalized.canonicalText);
             const agentId = commandCtx.agentId || "default";
             const items = await queryMemory(memoryDbAdapter, agentId, parsed);
             return { text: formatMemoryResults(items, parsed) };
@@ -1961,10 +1966,12 @@ const plugin = {
             if (!query) {
               return { text: "Benutzung: /vergiss <Beschreibung der zu vergessenden Erinnerung>" };
             }
+            const normalized = await normalizeCommandInput({ kind: "forget-intent", text: query, summarizer, logger: api.logger });
+            if (normalized.error) return { text: `❌ ${normalized.error}` };
             const agentId = commandCtx.agentId || "default";
-            const candidates = await resolveCandidates(memoryDbAdapter, agentId, query);
+            const candidates = await resolveCandidates(memoryDbAdapter, agentId, normalized.canonicalText);
             if (candidates.none) {
-              return { text: `🧠 Nichts gefunden zu "${query}".` };
+              return { text: `🧠 Nichts gefunden zu "${normalized.canonicalText}".` };
             }
             if (candidates.unique) {
               const result = await forgetCard(memoryDbAdapter, agentId, candidates.card.id);
@@ -1988,13 +1995,19 @@ const plugin = {
             if (!parsed) {
               return { text: "❌ Kein Trenner gefunden. Erwartet: /korrigier <alt> zu <neu>" };
             }
+            const [oldNorm, newNorm] = await Promise.all([
+              normalizeCommandInput({ kind: "correction-old", text: parsed.old, summarizer, logger: api.logger }),
+              normalizeCommandInput({ kind: "correction-new", text: parsed.new, summarizer, logger: api.logger }),
+            ]);
+            if (oldNorm.error) return { text: `❌ ${oldNorm.error}` };
+            if (newNorm.error) return { text: `❌ ${newNorm.error}` };
             const agentId = commandCtx.agentId || "default";
-            const candidates = await resolveCandidates(memoryDbAdapter, agentId, parsed.old);
+            const candidates = await resolveCandidates(memoryDbAdapter, agentId, oldNorm.canonicalText);
             if (candidates.none) {
-              return { text: `🧠 Nichts gefunden zu "${parsed.old}".` };
+              return { text: `🧠 Nichts gefunden zu "${oldNorm.canonicalText}".` };
             }
             if (candidates.unique) {
-              const result = await correctCard(memoryDbAdapter, agentId, candidates.card.id, parsed.new, {
+              const result = await correctCard(memoryDbAdapter, agentId, candidates.card.id, newNorm.canonicalText, {
                 updateMemory: async ({ id, newContent }) => {
                   const rawDb = pool.getDb(agentId);
                   await rawDb.init();
@@ -2010,7 +2023,7 @@ const plugin = {
                     },
                     {
                       updateSource: "telegram:/korrigier",
-                      updateEvidence: `User corrected "${parsed.old}" to "${parsed.new}"`,
+                      updateEvidence: newNorm.evidenceSummary || `User corrected "${oldNorm.canonicalText}" to "${newNorm.canonicalText}"`,
                       confidence: 1,
                     },
                     {
