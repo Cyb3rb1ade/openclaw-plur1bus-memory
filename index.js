@@ -3139,4 +3139,5 @@ const plugin = {
   },
 };
 
+export { MemoryDB };
 export default plugin;
