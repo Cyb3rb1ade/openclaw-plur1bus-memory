@@ -89,6 +89,25 @@ describe("merging-approval-gate", () => {
     }
   });
 
+  it("defaults to autoApply=false (no DB changes)", async () => {
+    const table = makeDbTable(candidates);
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-"));
+    const result = await runMemoryCompaction(
+      { table },
+      {
+        similarityThreshold: 0.5,
+        lookbackDays: 30,
+        maxBatchSize: 50,
+        dryRun: false,
+        logger: { info: () => {}, warn: () => {} },
+        workspaceDir,
+      }
+    );
+    assert.strictEqual(table._archived.size, 0, "default should not archive");
+    assert.strictEqual(table._added.length, 0, "default should not add");
+    assert.ok(result.autoApply === false || result.proposals > 0 || result.compacted === 0, "should report proposals or no clusters");
+  });
+
   it("respects dryRun even with autoApply=true", async () => {
     const table = makeDbTable(candidates);
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-"));

@@ -91,4 +91,44 @@ describe("feature-profiles", () => {
     const result = isApplyBlocked(config);
     assert.strictEqual(result.blocked, false);
   });
+
+  it("applyFeatureProfile with confirmed sets featuresConfirmedAt and preserves existing keys", () => {
+    const existing = { plugins: { entries: { "memory-lancedb-namespaced": { enabled: true, config: { baseDbPath: "/custom", merging: { enabled: false } } } } } };
+    const merged = applyFeatureProfile(existing, recommendedProfile(), { confirmed: true });
+    const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
+    assert.ok(cfg.featuresConfirmedAt, "should set featuresConfirmedAt");
+    assert.strictEqual(cfg.baseDbPath, "/custom", "existing baseDbPath preserved");
+    assert.strictEqual(cfg.merging.enabled, false, "existing merging not overwritten");
+  });
+
+  it("safeProfile blocks obsidian apply mode", () => {
+    const p = safeProfile();
+    assert.strictEqual(p.obsidianBridge.mode, "dry-run");
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, false);
+  });
+
+  it("recommendedProfile sets obsidian status to pending_setup", () => {
+    const p = recommendedProfile();
+    assert.strictEqual(p.obsidianBridge.status, "pending_setup");
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
+  });
+
+  it("isApplyBlocked with pending_setup features when vault not confirmed", () => {
+    const config = {
+      featuresConfirmedAt: "2026-06-03",
+      obsidianBridge: { enabled: true, status: "pending_setup" },
+    };
+    const result = isApplyBlocked(config);
+    assert.strictEqual(result.blocked, true);
+    assert.strictEqual(result.reason, "pending_setup");
+    assert.ok(result.pending.some((p) => p.feature === "obsidianBridge"));
+  });
+
+  it("applyFeatureProfile does NOT overwrite existing plugin config keys", () => {
+    const existing = { plugins: { entries: { "memory-lancedb-namespaced": { enabled: true, config: { reranker: { enabled: false, timeoutMs: 9999 } } } } } };
+    const merged = applyFeatureProfile(existing, recommendedProfile(), { confirmed: true });
+    const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
+    assert.strictEqual(cfg.reranker.enabled, false, "existing reranker.enabled preserved");
+    assert.strictEqual(cfg.reranker.timeoutMs, 9999, "existing reranker.timeoutMs preserved");
+  });
 });

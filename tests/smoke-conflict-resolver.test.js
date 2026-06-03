@@ -8,7 +8,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runConflictResolver } from "../lib/jobs/conflict-resolver.js";
@@ -25,7 +25,7 @@ describe("conflict-resolver", () => {
       newAgentId: "agent-a",
       existingAgentId: "agent-b",
     };
-    writeFileSync(join(dir, ".adaptive-learning", "conflict-log.jsonl"), JSON.stringify(conflict) + "\n", "utf8");
+    mkdirSync(join(dir, ".adaptive-learning"), { recursive: true }); writeFileSync(join(dir, ".adaptive-learning", "conflict-log.jsonl"), JSON.stringify(conflict) + "\n", "utf8");
 
     const mockLlm = async () => JSON.stringify({ resolution: "keep_a", confidence: 0.85, reason: "A is more recent" });
 
@@ -64,7 +64,7 @@ describe("conflict-resolver", () => {
       newAgentId: "agent-a",
       existingAgentId: "agent-b",
     };
-    writeFileSync(join(dir, ".adaptive-learning", "conflict-log.jsonl"), JSON.stringify(conflict) + "\n", "utf8");
+    mkdirSync(join(dir, ".adaptive-learning"), { recursive: true }); writeFileSync(join(dir, ".adaptive-learning", "conflict-log.jsonl"), JSON.stringify(conflict) + "\n", "utf8");
 
     const mockLlm = async () => JSON.stringify({ resolution: "keep_a", confidence: 0.95, reason: "Very clear" });
 
@@ -96,7 +96,7 @@ describe("conflict-resolver", () => {
       newText: "X",
       existingText: "Y",
     };
-    writeFileSync(join(dir, ".adaptive-learning", "conflict-log.jsonl"), JSON.stringify(conflict) + "\n", "utf8");
+    mkdirSync(join(dir, ".adaptive-learning"), { recursive: true }); writeFileSync(join(dir, ".adaptive-learning", "conflict-log.jsonl"), JSON.stringify(conflict) + "\n", "utf8");
 
     const result = await runConflictResolver({
       workspaceDir: dir,
