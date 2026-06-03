@@ -6,6 +6,5 @@ package-lock.json
 *.log
 .embed-promotions-state/
 docs/
-tests/
 scripts/
 BREAKING_CHANGE_AUDIT.md

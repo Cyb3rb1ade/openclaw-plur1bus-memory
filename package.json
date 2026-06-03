@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "5.2.11",
+  "version": "6.0.0",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -21,13 +21,12 @@
   "files": [
     "index.js",
     "lib/",
-    "scripts/",
     "openclaw.plugin.json",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.js"
+    "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test tests/*.test.js"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
