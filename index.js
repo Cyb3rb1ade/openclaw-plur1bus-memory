@@ -1870,11 +1870,21 @@ const plugin = {
         // Diese Commands lesen die vollqualifizierte openclaw.json (mit
         // ".config." Schicht) und sind bewusst von den /plur1bus_*
         // Wartungs-Commands getrennt.
-        const runStatusCommand = (commandCtx) => {
+        const runStatusCommand = async (commandCtx) => {
           try {
             const agentId = commandCtx?.agentId || "default";
             const mood = emotionalPool.describe(agentId);
+            let cardCount = null;
+            try {
+              const db = pool.getDb(agentId);
+              if (db?.table) {
+                cardCount = await db.table.countRows();
+              }
+            } catch (_) {
+              // DB nicht verfügbar → cardCount bleibt null
+            }
             const data = collectStatusData({
+              memoryStats: { cardCount, lastUpdateMinutes: null },
               emotional: mood ? { emoji: emotionEmoji(mood.dominant), label: emotionLabelDe(mood.dominant), intensity: mood.intensity } : null,
             });
             return { text: renderStatus(data) };
