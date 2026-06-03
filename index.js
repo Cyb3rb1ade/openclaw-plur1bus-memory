@@ -48,6 +48,7 @@ import {
   toggleFeature,
   renderToggleResult,
   renderFeatureList,
+  withConfigLock,
 } from "./lib/telegram-commands/feature-toggle.js";
 import {
   parseQuery as parseMemoryQuery,
@@ -62,6 +63,7 @@ import {
   renderCandidateChoice,
   renderForgetResult,
   renderCorrectResult,
+  archiveCard,
 } from "./lib/telegram-commands/memory-edit.js";
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
@@ -697,8 +699,19 @@ class MemoryDB {
     }
     const existing = rows[0];
     const updated = { ...existing, ...patch };
+    const normalizedUpdated = this.normalizeEntryForTable(updated);
     await this.table.delete(`id = "${safe}"`);
-    await this.table.add([this.normalizeEntryForTable(updated)]);
+    try {
+      await this.table.add([normalizedUpdated]);
+    } catch (addErr) {
+      // delete+add ist nicht atomar — wenn das add fehlschlägt, würde die Row
+      // verloren gehen. Best-effort: das Original wiederherstellen, dann den
+      // Fehler weiterreichen.
+      try {
+        await this.table.add([this.normalizeEntryForTable(existing)]);
+      } catch (_) { /* Original-Restore ebenfalls fehlgeschlagen — Fehler unten */ }
+      throw addErr;
+    }
   }
 
   async purgeExpired() {
@@ -1371,6 +1384,12 @@ const plugin = {
     if (neoEnabled && neoMode === "slot") {
       api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
+    // Versteckte Kopplung sichtbar machen: Light/REM-Dreaming und
+    // Episoden-Extraktion brauchen ein Chat-Modell (merging.model). Ohne das
+    // laufen diese Features still als No-op, obwohl sie "aktiv" wirken.
+    if (neoEnabled && !mergingLlmCfg) {
+      api.logger.warn("memory-lancedb-namespaced: light/REM dreaming and episode extraction require a chat model (config.merging.model). Without it these features silently no-op. Set merging.model to enable them.");
+    }
     const sessionWorkspaceKeys = new Map();
     const rememberNeoWorkspace = (ctx = {}, event = {}) => {
       const workspaceKey = workspaceKeyFromContext(ctx, {
@@ -1618,7 +1637,6 @@ const plugin = {
 
       if (typeof api.registerCommand === "function") {
         const parsePlur1busArgs = (commandCtx) => commandCtx.args?.trim().split(/\s+/).filter(Boolean) || [];
-        const executedCronCommands = new Map();
         const plur1busHelp = (mode = "quick") => ({
           text: mode === "advanced" ? [
             "PLUR1BUS advanced commands:",
@@ -1716,10 +1734,34 @@ const plugin = {
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
               }
               if (subKey === "classify-recent") {
+                const cpCfg = cfg.criticalPush || {};
+                if (cpCfg.enabled === false) {
+                  return formatJsonCommandResult({ job: "classify-recent", skipped: true, reason: "criticalPush_disabled" });
+                }
+                // Klassifikations-Modell: criticalPush.model bevorzugt, sonst
+                // das merging-Chat-Modell. Ohne Modell führt der Job einen
+                // No-op aus (kein Vergiften der Karten als "fakt").
+                const cpModelName = (typeof cpCfg.model === "string" && cpCfg.model.trim())
+                  ? cpCfg.model.trim()
+                  : mergingModel;
+                const cpLlmCfg = cpModelName ? {
+                  model: cpModelName,
+                  baseUrl: cpCfg.baseUrl || mergingCfg.baseUrl || undefined,
+                  apiKey: cpCfg.apiKey ? resolveEnvVars(cpCfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
+                  disableThinking: cpCfg.disableThinking ?? mergingCfg.disableThinking ?? false,
+                  headers: cpCfg.headers || mergingCfg.headers || undefined,
+                } : null;
+                const criticalModel = cpLlmCfg ? {
+                  complete: async ({ prompt }) => {
+                    const text = await callLlm([{ role: "user", content: prompt }], { ...cpLlmCfg, maxTokens: 16 });
+                    return { text: text || "" };
+                  },
+                } : null;
                 const result = await runCriticalClassifier(memoryDbAdapter, internalAgent, {
                   logger: api.logger,
+                  model: criticalModel,
                   sinceMinutes: 30,
-                  maxPerDay: 3,
+                  maxPerDay: cpCfg.maxPerDay ?? 3,
                 });
                 api.logger?.info?.(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "classify-recent", ...result });
@@ -1762,6 +1804,9 @@ const plugin = {
               return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream"] });
             }
             if (actionKey === "setup") {
+              if (cfg.security?.allowChatConfigCommands === false) {
+                return { text: "🔒 Config-Änderungen per Chat sind deaktiviert (security.allowChatConfigCommands=false). Bitte openclaw.json direkt bearbeiten und das Gateway neu starten." };
+              }
               const profileName = sub?.toLowerCase() || "";
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
               const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
@@ -1780,21 +1825,26 @@ const plugin = {
               if (profileName === "recommended") profile = recommendedProfile();
               else if (profileName === "safe") profile = safeProfile();
               else return { text: `❌ Unbekanntes Profile: ${profileName}. Bekannt: recommended, safe` };
-              let cfg;
-              try {
-                cfg = JSON.parse(readFileSync(openclawConfigPath, "utf8"));
-              } catch (err) {
-                return { text: `❌ openclaw.json nicht lesbar: ${err.message}` };
-              }
-              const merged = applyFeatureProfile(cfg, profile, { confirmed: true });
-              const pending = detectPendingFeatures(merged.plugins?.entries?.["memory-lancedb-namespaced"]?.config);
-              try {
-                const tmp = `${openclawConfigPath}.tmp-${process.pid}-${Date.now()}`;
-                writeFileSync(tmp, JSON.stringify(merged, null, 2));
-                renameSync(tmp, openclawConfigPath);
-              } catch (err) {
-                return { text: `❌ Config speichern fehlgeschlagen: ${err.message}` };
-              }
+              const writeResult = withConfigLock(openclawConfigPath, () => {
+                let cfg;
+                try {
+                  cfg = JSON.parse(readFileSync(openclawConfigPath, "utf8"));
+                } catch (err) {
+                  return { error: `openclaw.json nicht lesbar: ${err.message}` };
+                }
+                const merged = applyFeatureProfile(cfg, profile, { confirmed: true });
+                const pendingInner = detectPendingFeatures(merged.plugins?.entries?.["memory-lancedb-namespaced"]?.config);
+                try {
+                  const tmp = `${openclawConfigPath}.tmp-${process.pid}-${Date.now()}`;
+                  writeFileSync(tmp, JSON.stringify(merged, null, 2));
+                  renameSync(tmp, openclawConfigPath);
+                } catch (err) {
+                  return { error: `Config speichern fehlgeschlagen: ${err.message}` };
+                }
+                return { pending: pendingInner };
+              });
+              if (writeResult.error) return { text: `❌ ${writeResult.error}` };
+              const pending = writeResult.pending || [];
               const lines = [
                 `✅ PLUR1BUS Profile "${profileName}" bestätigt.`,
                 "",
@@ -1908,24 +1958,6 @@ const plugin = {
             }
             return plur1busHelp();
           };
-        const resolvePlur1busCronCommandArgs = (prompt) => {
-          const text = typeof prompt === "string" ? prompt : "";
-          if (!text.trimStart().startsWith("[cron:")) return null;
-          return null;
-        };
-        const formatCronCommandContext = (command, result) => {
-          const raw = typeof result?.text === "string" ? result.text : JSON.stringify(result ?? {}, null, 2);
-          const maxLength = 24_000;
-          const text = raw.length > maxLength ? `${raw.slice(0, maxLength)}\n[truncated ${raw.length - maxLength} chars]` : raw;
-          return [
-            "PLUR1BUS cron command result:",
-            `Command: ${command}`,
-            "",
-            "The PLUR1BUS plugin already executed this command before model inference. Return a concise user-facing summary of the result below. Do not send the slash command as a chat message and do not look for a shell binary.",
-            "",
-            text,
-          ].join("\n");
-        };
         const plur1busCommands = [
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
           { name: "plur1bus_status", description: "Show PLUR1BUS memory status.", acceptsArgs: true, prefixTokens: ["status"] },
@@ -1976,7 +2008,16 @@ const plugin = {
           return raw.split(/\s+/)[0];
         };
 
+        // Operator-Opt-out für Config-mutierende Chat-Commands. Das Plugin-SDK
+        // liefert dem Command-Handler keine Sender-Identität, daher ist echte
+        // Per-User-Autorisierung nicht möglich. In geteilten Channels kann der
+        // Operator hiermit /einschalten, /ausschalten und /plur1bus setup für
+        // alle sperren (default: erlaubt — kein Verhaltensbruch).
+        const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
+        const blockedConfigCommandMessage = "🔒 Config-Änderungen per Chat sind deaktiviert (security.allowChatConfigCommands=false). Bitte openclaw.json direkt bearbeiten und das Gateway neu starten.";
+
         const runFeatureToggle = (commandCtx, enable) => {
+          if (chatConfigCommandsBlocked()) return { text: blockedConfigCommandMessage };
           const featureName = parseFeatureArg(commandCtx);
           if (!featureName) return { text: renderFeatureList() };
           try {
@@ -2151,27 +2192,6 @@ const plugin = {
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runKorrigierCommand,
         });
-        if (typeof api.on === "function") {
-          api.on("agent_turn_prepare", async (event, hookCtx = {}) => {
-            const cronCommand = resolvePlur1busCronCommandArgs(event?.prompt);
-            if (!cronCommand) return undefined;
-            const cacheKey = `${hookCtx.runId || event?.prompt || "cron"}:${cronCommand.command}`;
-            if (executedCronCommands.has(cacheKey)) {
-              return { appendContext: executedCronCommands.get(cacheKey) };
-            }
-            const result = await runPlur1busCommand({
-              args: cronCommand.args,
-              agentId: hookCtx.agentId || "main",
-              workspaceDir: hookCtx.workspaceDir,
-              workspaceKey: hookCtx.workspaceKey,
-              sessionKey: hookCtx.sessionKey,
-              config: api.runtime?.config?.current?.() || api.runtime?.config,
-            });
-            const appendContext = formatCronCommandContext(cronCommand.command, result);
-            executedCronCommands.set(cacheKey, appendContext);
-            return { appendContext };
-          }, { timeoutMs: 60_000 });
-        }
       }
 
       const startNeoService = () => {
@@ -2808,9 +2828,19 @@ const plugin = {
           async execute(_toolCallId, params) {
             try {
               if (params.memoryId) {
+                // Archive-First: vor dem Löschen ein JSON-Backup schreiben.
+                // Schlägt das Archiv fehl, NICHT löschen (wie bei /vergiss).
+                const card = await db.getById(params.memoryId);
+                if (!card) return { content: [{ type: "text", text: `Memory ${params.memoryId} not found.` }] };
+                let archivePath;
+                try {
+                  archivePath = archiveCard(card, agentId || "default");
+                } catch (archiveErr) {
+                  return { content: [{ type: "text", text: `Archive failed — NOT deleted: ${String(archiveErr)}` }] };
+                }
                 await db.delete(params.memoryId);
-                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: params.memoryId, via: "id", timestamp: new Date().toISOString() });
-                return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten.` }] };
+                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: params.memoryId, via: "id", archivePath, timestamp: new Date().toISOString() });
+                return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (archived).` }] };
               }
               if (params.query) {
                 const vector = typeof embeddings.embedQuery === "function"
@@ -2823,9 +2853,17 @@ const plugin = {
                   return { content: [{ type: "text", text: `Found ${results.length} candidates. Specify memoryId:\n${list}` }] };
                 }
                 const targetId = results[0].entry.id;
+                // Archive-First: vor dem Löschen ein JSON-Backup schreiben.
+                let archivePath;
+                try {
+                  const card = await db.getById(targetId);
+                  archivePath = archiveCard(card || results[0].entry, agentId || "default");
+                } catch (archiveErr) {
+                  return { content: [{ type: "text", text: `Archive failed — NOT deleted: ${String(archiveErr)}` }] };
+                }
                 await db.delete(targetId);
-                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: targetId, via: "query", query: params.query.slice(0, 200), timestamp: new Date().toISOString() });
-                return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }] };
+                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: targetId, via: "query", query: params.query.slice(0, 200), archivePath, timestamp: new Date().toISOString() });
+                return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (archived).` }] };
               }
               return { content: [{ type: "text", text: "Provide query or memoryId." }] };
             } catch (err) {
