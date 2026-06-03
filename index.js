@@ -66,6 +66,7 @@ import {
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
+import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions } from "./lib/jobs/schicht15-tracker.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
@@ -1305,6 +1306,7 @@ const plugin = {
       : mergingModel;
     const schicht15Enabled = schicht15Requested && schicht15Model !== "";
     const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
+    const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 0;
     const schicht15LlmCfg = schicht15Enabled ? {
       model: schicht15Model,
       baseUrl: schicht15Cfg.baseUrl || mergingCfg.baseUrl || undefined,
@@ -2550,6 +2552,8 @@ const plugin = {
                 canonicalMaxItems,
                 reranker,
                 rerankCandidates,
+                rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
+                rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
                 summaryMaxWords,
                 querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
                 logger: api.logger,
@@ -2834,8 +2838,24 @@ const plugin = {
                 }
               }
 
+              // Dedupe: filter already promoted memories
+              const workspaceKey = ctx.workspaceKey || ctx.workspaceDir || "default";
+              pendingTexts = pendingTexts.filter(m => !isKnowledgePromoted(ctx.workspaceDir, workspaceKey, agentId, m.id, null));
               if (pendingTexts.length === 0 && !params?.note) {
                 return { content: [{ type: "text", text: "No pending memories to integrate into KNOWLEDGE.md." }] };
+              }
+
+              // Respect maxPromotionsPerRun
+              if (schicht15MaxPromotions > 0) {
+                const promoCheck = checkMaxPromotions(ctx.workspaceDir, workspaceKey, agentId, schicht15MaxPromotions);
+                if (!promoCheck.allowed) {
+                  return { content: [{ type: "text", text: `KNOWLEDGE.md promotion limit reached (${promoCheck.current}/${promoCheck.max}). Try again later.` }] };
+                }
+                const remaining = schicht15MaxPromotions - promoCheck.current;
+                if (pendingTexts.length > remaining) {
+                  pendingTexts = pendingTexts.slice(0, remaining);
+                  api.logger.info(`memory-lancedb-namespaced: knowledge_update truncated to ${remaining} pending memories (maxPromotionsPerRun)`);
+                }
               }
 
               // Build update prompt
@@ -2906,6 +2926,11 @@ const plugin = {
               // Pending cleanup: under the KNOWLEDGE lock, briefly re-lock pending,
               // re-read current state, and subtract only successfully integrated keys.
               removeKnowledgePending(ctx.workspaceDir, pendingTexts.map(m => m.pendingKey).filter(Boolean));
+
+              // Track promoted memories for dedupe
+              for (const m of pendingTexts) {
+                recordKnowledgePromotion(ctx.workspaceDir, workspaceKey, agentId, m.id, null);
+              }
 
               const lineCount = finalContent.split("\n").length;
               return { content: [{ type: "text", text: `KNOWLEDGE.md updated (${pendingTexts.length} memories integrated, ${lineCount} lines total).` }] };
@@ -2991,6 +3016,8 @@ const plugin = {
             canonicalMaxItems,
             reranker,
             rerankCandidates,
+            rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
+            rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
             summaryMaxWords,
             querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
             logger: api.logger,
