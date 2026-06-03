@@ -293,6 +293,14 @@
           "candidates": {
             "type": "number"
           },
+          "timeoutMs": {
+            "type": "number",
+            "default": 5000
+          },
+          "fallbackOnError": {
+            "type": "boolean",
+            "default": true
+          },
           "local": {
             "type": "object",
             "additionalProperties": false,
@@ -334,6 +342,17 @@
           },
           "headers": {
             "type": "object"
+          },
+          "autoApply": {
+            "type": "boolean",
+            "default": false
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "safe-versioned"
+            ],
+            "default": "safe-versioned"
           }
         }
       },
@@ -363,6 +382,10 @@
           "minImportance": {
             "type": "number",
             "default": 0.7
+          },
+          "maxPromotionsPerRun": {
+            "type": "number",
+            "default": 0
           }
         }
       },
@@ -417,7 +440,8 @@
           "mode": {
             "type": "string",
             "enum": [
-              "augment"
+              "augment",
+              "apply"
             ],
             "default": "augment"
           },
@@ -458,6 +482,18 @@
           "allowDotObsidianWrite": {
             "type": "boolean",
             "default": false
+          },
+          "backupBeforeApply": {
+            "type": "boolean",
+            "default": true
+          },
+          "auditLog": {
+            "type": "boolean",
+            "default": true
+          },
+          "requireVaultPathConfirmation": {
+            "type": "boolean",
+            "default": true
           },
           "capabilityPack": {
             "type": "string",
@@ -544,6 +580,14 @@
                   "manual"
                 ],
                 "default": "manual"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending_setup",
+                  "active"
+                ],
+                "default": "pending_setup"
               }
             }
           },
@@ -585,6 +629,14 @@
                   "manual"
                 ],
                 "default": "manual"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending_setup",
+                  "active"
+                ],
+                "default": "pending_setup"
               }
             }
           },
