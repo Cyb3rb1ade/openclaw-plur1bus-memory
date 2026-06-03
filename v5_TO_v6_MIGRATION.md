@@ -45,6 +45,11 @@
   - `obsidianBridge.auditLog` (default: true)
   - `obsidianBridge.requireVaultPathConfirmation` (default: true)
   - `morningReview.status` / `eveningReview.status` (default: "pending_setup")
+  - `criticalPush.model` (no default — falls back to `merging.model`; without any chat model the classifier no-ops instead of mislabeling cards as `fakt`)
+  - `criticalPush.maxPerDay` (default: 3 — now read from config instead of hard-coded)
+  - `security.allowChatConfigCommands` (default: true — set `false` on shared channels to refuse chat-driven `openclaw.json` mutation)
+
+> **Schema note:** the v6 config keys `criticalPush`, `dailyConsolidation`, `security`, `setupProfile`, `featuresConfirmedAt`, `morningReview` and `eveningReview` are now declared at the config root in `openclaw.plugin.json`. Earlier 6.0.0 shipped with `additionalProperties: false` at the config root but without these keys, so strict schema validators could reject a valid v6 config (including the `featuresConfirmedAt` gate written by `/plur1bus setup`).
 
 ---
 
