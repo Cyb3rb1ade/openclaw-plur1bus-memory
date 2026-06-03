@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory and OpenClaw-native turn journal, provenance, curation, and recall.",
-  "version": "6.0.0",
+  "version": "6.0.1",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -968,6 +968,114 @@
                 "default": true
               }
             }
+          }
+        }
+      },
+      "criticalPush": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "maxPerDay": {
+            "type": "number",
+            "default": 3
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "disableThinking": {
+            "type": "boolean"
+          },
+          "headers": {
+            "type": "object"
+          }
+        }
+      },
+      "dailyConsolidation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "security": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "allowChatConfigCommands": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "setupProfile": {
+        "type": "string",
+        "enum": [
+          "recommended",
+          "safe",
+          "custom"
+        ]
+      },
+      "featuresConfirmedAt": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "morningReview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "cron": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "delivery": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "eveningReview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "cron": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "delivery": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
           }
         }
       }

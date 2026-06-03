@@ -73,7 +73,8 @@ Minimal config block in `openclaw.json`:
           },
           "criticalPush": {
             "enabled": true,
-            "maxPerDay": 3
+            "maxPerDay": 3,
+            "model": "${CRITICAL_PUSH_MODEL}"
           },
           "dailyConsolidation": {
             "enabled": true
@@ -91,6 +92,9 @@ Minimal config block in `openclaw.json`:
           "schicht15": {
             "enabled": true,
             "maxPromotionsPerRun": 0
+          },
+          "security": {
+            "allowChatConfigCommands": true
           }
         }
       }
@@ -100,6 +104,10 @@ Minimal config block in `openclaw.json`:
 ```
 
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
+
+**`criticalPush.model`** — the critical-push classifier needs an OpenAI-compatible chat model to label new cards (it falls back to `merging.model` if unset). Without any chat model configured the classifier is a deliberate no-op: it does **not** label cards, so it never poisons the backlog by marking everything `fakt`.
+
+**`security.allowChatConfigCommands`** (default `true`) — the config-mutating chat commands (`/einschalten`, `/ausschalten`, `/plur1bus setup`) write `openclaw.json`. The plugin SDK does not expose the message sender's identity to command handlers, so per-user authorization isn't possible. On a **shared channel**, set this to `false` to refuse all chat-driven config changes; edit `openclaw.json` directly instead. Writes are guarded by a file lock so concurrent toggles/setups cannot clobber each other.
 
 ### Feature profile confirmation
 
@@ -116,7 +124,7 @@ This sets `featuresConfirmedAt` in the plugin state and marks features as `activ
 
 LanceDB is the authoritative store: every memory card lives there first, indexed per agent for isolation. The Obsidian bridge mirrors cards into a Markdown vault so the user can read, link, and edit them with normal tools; LanceDB stays the source of truth and the bridge re-syncs on changes.
 
-A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier scans new cards for sensitive entity types (health markers, security topics, financial entities) and — when a per-agent daily threshold is not yet exceeded — pushes a short notification to the user's Telegram so important context is never silently buried.
+A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The plugin SDK currently exposes no outbound send API, so these messages are returned in the job result (`pushMessages`) for the cron carrier agent to deliver; once the SDK gains a reply-send hook, the same `telegramSend` path delivers them directly. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
 
 The recall pipeline runs Query → Embedding → LanceDB Top-N → Importance-Boost → optional Rerank (with timeout/fallback) → Inter-Result-Dedup → Canonical-First (KNOWLEDGE.md) → Top-5 as `<relevant-memories>` injected into the prompt.
 
