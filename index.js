@@ -67,7 +67,7 @@ import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions } from "./lib/jobs/schicht15-tracker.js";
-import { isApplyBlocked, detectPendingFeatures } from "./lib/setup/feature-profiles.js";
+import { isApplyBlocked, detectPendingFeatures, recommendedProfile, safeProfile, applyFeatureProfile } from "./lib/setup/feature-profiles.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
@@ -1637,6 +1637,7 @@ const plugin = {
             "/einschalten <feature> - Funktion einschalten (z.B. /einschalten vaultSync)",
             "/ausschalten <feature> - Funktion ausschalten",
             "",
+            "/plur1bus setup <profile> — Feature-Profile bestätigen (recommended, safe)",
             "Advanced: /plur1bus help advanced",
           ].join("\n"),
         });
@@ -1759,6 +1760,63 @@ const plugin = {
                 return formatJsonCommandResult({ job: "rem-dream", ...(result.report || result) });
               }
               return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream"] });
+            }
+            if (actionKey === "setup") {
+              const profileName = sub?.toLowerCase() || "";
+              const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
+              const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
+              if (!profileName) {
+                return { text: [
+                  "PLUR1BUS Feature Profile Setup:",
+                  "",
+                  "Verfügbare Profile:",
+                  "• recommended — Alle v6 Features aktiv (Obsidian/reviews pending_setup bis Bestätigung)",
+                  "• safe — Nur Kernfeatures, keine LLM-intensiven Jobs",
+                  "",
+                  "Benutzung: /plur1bus setup <profile>",
+                ].join("\n") };
+              }
+              let profile;
+              if (profileName === "recommended") profile = recommendedProfile();
+              else if (profileName === "safe") profile = safeProfile();
+              else return { text: `❌ Unbekanntes Profile: ${profileName}. Bekannt: recommended, safe` };
+              let cfg;
+              try {
+                cfg = JSON.parse(readFileSync(openclawConfigPath, "utf8"));
+              } catch (err) {
+                return { text: `❌ openclaw.json nicht lesbar: ${err.message}` };
+              }
+              const merged = applyFeatureProfile(cfg, profile, { confirmed: true });
+              const pending = detectPendingFeatures(merged.plugins?.entries?.["memory-lancedb-namespaced"]?.config);
+              try {
+                const tmp = `${openclawConfigPath}.tmp-${process.pid}-${Date.now()}`;
+                writeFileSync(tmp, JSON.stringify(merged, null, 2));
+                renameSync(tmp, openclawConfigPath);
+              } catch (err) {
+                return { text: `❌ Config speichern fehlgeschlagen: ${err.message}` };
+              }
+              const lines = [
+                `✅ PLUR1BUS Profile "${profileName}" bestätigt.`,
+                "",
+                "Aktivierte Features:",
+              ];
+              for (const [key, value] of Object.entries(profile)) {
+                if (key === "setupProfile" || key === "featuresConfirmedAt") continue;
+                if (typeof value === "object" && value.enabled !== undefined) {
+                  const status = value.status || (value.enabled ? "active" : "disabled");
+                  lines.push(`• ${key}: ${status}`);
+                }
+              }
+              if (pending.length > 0) {
+                lines.push("");
+                lines.push("⚠️ Pending Setup (bitte manuell bestätigen):");
+                for (const p of pending) {
+                  lines.push(`• ${p.feature}: ${p.reason}`);
+                }
+              }
+              lines.push("");
+              lines.push("Restart erforderlich: systemctl --user restart openclaw-gateway");
+              return { text: lines.join("\n") };
             }
             if (action === "status") return formatJsonCommandResult(summarizeNeoStore(commandStore));
             if (action === "doctor") {
