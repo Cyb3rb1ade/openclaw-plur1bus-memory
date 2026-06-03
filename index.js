@@ -67,6 +67,7 @@ import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions } from "./lib/jobs/schicht15-tracker.js";
+import { isApplyBlocked, detectPendingFeatures } from "./lib/setup/feature-profiles.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
@@ -1230,6 +1231,22 @@ const plugin = {
 
   register(api) {
     const cfg = api.pluginConfig || {};
+
+    // v6 Feature Profile Confirmation Gate
+    const applyBlocked = isApplyBlocked(cfg);
+    if (applyBlocked.blocked) {
+      if (applyBlocked.reason === "features_not_confirmed") {
+        api.logger.warn("memory-lancedb-namespaced: FEATURES NOT CONFIRMED. Run /plur1bus setup to confirm the Recommended Profile and activate v6 features.");
+      } else if (applyBlocked.reason === "pending_setup") {
+        const pending = detectPendingFeatures(cfg);
+        for (const p of pending) {
+          api.logger.warn(`memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Confirm before apply.`);
+        }
+      }
+      // Do NOT hard-block plugin registration — core memory still works.
+      // But warn prominently so the user knows v6 features are gated.
+    }
+
     registerOpenClawMemoryEmbeddingProviders(api, cfg);
     const obsidianBridgeCfg = cfg.obsidianBridge || {};
     const obsidianBridgeEnabled = obsidianBridgeCfg.enabled === true;
