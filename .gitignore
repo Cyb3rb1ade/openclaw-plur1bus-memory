@@ -7,3 +7,5 @@ package-lock.json
 .embed-promotions-state/
 docs/
 tests/
+scripts/
+BREAKING_CHANGE_AUDIT.md
