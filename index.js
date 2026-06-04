@@ -68,6 +68,8 @@ import {
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
+import { runSkillMiner } from "./lib/jobs/skill-miner.js";
+import { listPendingProposals, approveProposal, rejectProposal, listActiveSkills, showProposal } from "./lib/telegram-commands/skill-commands.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions } from "./lib/jobs/schicht15-tracker.js";
 import { isApplyBlocked, detectPendingFeatures, recommendedProfile, safeProfile, applyFeatureProfile } from "./lib/setup/feature-profiles.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
@@ -1349,6 +1351,26 @@ const plugin = {
     }
     if (schicht15Enabled) api.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance})`)
 
+    // Skill Miner config
+    const skillMinerCfg = cfg.skillMiner || {};
+    const skillMinerEnabled = skillMinerCfg.enabled === true;
+    const skillMinerModel = (typeof skillMinerCfg.model === "string" && skillMinerCfg.model.trim() !== "")
+      ? skillMinerCfg.model.trim()
+      : mergingModel;
+    const skillMinerLlmCfg = skillMinerEnabled && skillMinerModel
+      ? {
+          model: skillMinerModel,
+          baseUrl: skillMinerCfg.baseUrl || mergingCfg.baseUrl || undefined,
+          apiKey: skillMinerCfg.apiKey ? resolveEnvVars(skillMinerCfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
+          disableThinking: skillMinerCfg.disableThinking ?? mergingCfg.disableThinking ?? false,
+          headers: skillMinerCfg.headers || mergingCfg.headers || undefined,
+        }
+      : null;
+    if (skillMinerEnabled && !skillMinerLlmCfg) {
+      api.logger.warn("memory-lancedb-namespaced: skillMiner.enabled=true but no skillMiner.model or merging.model is configured; disabling skill miner.");
+    }
+    if (skillMinerLlmCfg) api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (model: ${skillMinerLlmCfg.model})`);
+
     // v2.1.1: hard-fail wenn Provider-Modell ohne dimensions konfiguriert ist.
     // OpenAI-Modelle: aus EMBEDDING_DIMENSIONS-Map fallback.
     // Nicht-OpenAI-Modelle (OpenRouter, custom baseUrl, etc.): MÜSSEN explizit
@@ -1801,7 +1823,27 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}]: ${JSON.stringify(result.report || result)}`);
                 return formatJsonCommandResult({ job: "rem-dream", ...(result.report || result) });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream"] });
+              if (subKey === "skill-miner") {
+                if (!skillMinerEnabled || !skillMinerLlmCfg) {
+                  return formatJsonCommandResult({ job: "skill-miner", skipped: true, reason: "not_configured" });
+                }
+                const rawDb = pool.getDb(internalAgent);
+                await rawDb.init();
+                const result = await runSkillMiner(rawDb, internalAgent, {
+                  logger: api.logger,
+                  neoStore: commandStore,
+                  workspaceDir: commandCtx.workspaceDir,
+                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                  llmCfg: skillMinerLlmCfg,
+                  callLlm,
+                  maxPerRun: skillMinerCfg.maxPerRun ?? 5,
+                  minConfidence: skillMinerCfg.minConfidence ?? 0.6,
+                  minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                });
+                api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "skill-miner", ...result });
+              }
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner"] });
             }
             if (actionKey === "setup") {
               if (cfg.security?.allowChatConfigCommands === false) {
@@ -1867,6 +1909,45 @@ const plugin = {
               lines.push("");
               lines.push("Restart erforderlich: systemctl --user restart openclaw-gateway");
               return { text: lines.join("\n") };
+            }
+            if (actionKey === "skills") {
+              const subKey = sub?.toLowerCase() || "";
+              const workspaceDir = commandCtx.workspaceDir;
+              if (!workspaceDir) {
+                return { text: "❌ Kein Workspace verfügbar." };
+              }
+              if (!subKey || subKey === "help") {
+                return { text: [
+                  "🛠️ Skill-Befehle:",
+                  "",
+                  "/plur1bus skills review — Offene Vorschläge anzeigen",
+                  "/plur1bus skills approve <id> — Skill bestätigen",
+                  "/plur1bus skills reject <id> — Skill ablehnen",
+                  "/plur1bus skills list — Aktive Skills anzeigen",
+                  "/plur1bus skills show <id> — Vorschlag-Details",
+                ].join("\n") };
+              }
+              if (subKey === "review") {
+                return { text: listPendingProposals(workspaceDir) };
+              }
+              if (subKey === "list") {
+                return { text: listActiveSkills(workspaceDir) };
+              }
+              if (subKey === "show") {
+                if (!id) return { text: "❌ Usage: /plur1bus skills show <id>" };
+                return { text: showProposal(workspaceDir, id).text };
+              }
+              if (subKey === "approve") {
+                if (!id) return { text: "❌ Usage: /plur1bus skills approve <id>" };
+                const result = approveProposal(workspaceDir, id, { agentId: commandCtx.agentId, workspaceKey: commandCtx.workspaceKey });
+                return { text: result.text };
+              }
+              if (subKey === "reject") {
+                if (!id) return { text: "❌ Usage: /plur1bus skills reject <id>" };
+                const result = rejectProposal(workspaceDir, id);
+                return { text: result.text };
+              }
+              return { text: `❌ Unbekannter skills-Befehl: ${subKey}` };
             }
             if (action === "status") return formatJsonCommandResult(summarizeNeoStore(commandStore));
             if (action === "doctor") {
