@@ -775,15 +775,15 @@ class Embeddings {
       return this._detectedDim;
     }
     // Nicht-OpenAI Provider (OpenRouter, etc.) ohne dimensions → Test-Call
-    logger?.info?.(`memory-lancedb-namespaced: keine dimensions für '${this.model}' konfiguriert — ermittle via Test-Call…`);
+    logger?.info?.(`memory-lancedb-namespaced: no dimensions configured for '${this.model}' — probing via test call…`);
     try {
       const client = await this.getClient();
       const r = await client.embeddings.create({ model: this.model, input: "dim probe", encoding_format: "float" });
       this._detectedDim = r.data[0].embedding.length;
-      logger?.info?.(`memory-lancedb-namespaced: Modell '${this.model}' liefert ${this._detectedDim}-dim Vektoren`);
+      logger?.info?.(`memory-lancedb-namespaced: model '${this.model}' yields ${this._detectedDim}-dim vectors`);
       return this._detectedDim;
     } catch (e) {
-      throw new Error(`Kann Embedding-Dimension für '${this.model}' nicht ermitteln (${e.message}). Bitte 'dimensions' explizit in openclaw.json setzen.`);
+      throw new Error(`Cannot determine embedding dimension for '${this.model}' (${e.message}). Please set 'dimensions' explicitly in openclaw.json.`);
     }
   }
 
@@ -1670,14 +1670,14 @@ const plugin = {
           ].join("\n") : [
             "PLUR1BUS quick commands:",
             "",
-            "/memory <Frage> - Erinnerungen einsehen (z.B. /memory diese Woche, /memory über Eva)",
-            "/vergiss <Freitext> - eine Erinnerung löschen",
-            "/korrigier <alt> zu <neu> - eine Erinnerung ändern",
-            "/zustand - System-Zustand (Vault-Sync, Plausibilitätsprüfung, ...)",
-            "/einschalten <feature> - Funktion einschalten (z.B. /einschalten vaultSync)",
-            "/ausschalten <feature> - Funktion ausschalten",
+            "/memory <query> - recall memories (e.g. /memory this week, /memory about Eva)",
+            "/vergiss <description> - delete a memory",
+            "/korrigier <old> zu <new> - edit a memory",
+            "/zustand - system state (vault sync, sanity checks, ...)",
+            "/einschalten <feature> - enable a feature (e.g. /einschalten vaultSync)",
+            "/ausschalten <feature> - disable a feature",
             "",
-            "/plur1bus setup <profile> — Feature-Profile bestätigen (recommended, safe)",
+            "/plur1bus setup <profile> — confirm feature profile (recommended, safe)",
             "Advanced: /plur1bus help advanced",
           ].join("\n"),
         });
@@ -1847,7 +1847,7 @@ const plugin = {
             }
             if (actionKey === "setup") {
               if (cfg.security?.allowChatConfigCommands === false) {
-                return { text: "🔒 Config-Änderungen per Chat sind deaktiviert (security.allowChatConfigCommands=false). Bitte openclaw.json direkt bearbeiten und das Gateway neu starten." };
+                return { text: "🔒 Chat config changes are disabled (security.allowChatConfigCommands=false). Please edit openclaw.json directly and restart the gateway." };
               }
               const profileName = sub?.toLowerCase() || "";
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
@@ -1856,23 +1856,23 @@ const plugin = {
                 return { text: [
                   "PLUR1BUS Feature Profile Setup:",
                   "",
-                  "Verfügbare Profile:",
-                  "• recommended — Alle v6 Features aktiv (Obsidian/reviews pending_setup bis Bestätigung)",
-                  "• safe — Nur Kernfeatures, keine LLM-intensiven Jobs",
+                  "Available Profiles:",
+                  "• recommended — All v6 features active (Obsidian/reviews pending_setup until confirmed)",
+                  "• safe — Core features only, no LLM-intensive jobs",
                   "",
-                  "Benutzung: /plur1bus setup <profile>",
+                  "Usage: /plur1bus setup <profile>",
                 ].join("\n") };
               }
               let profile;
               if (profileName === "recommended") profile = recommendedProfile();
               else if (profileName === "safe") profile = safeProfile();
-              else return { text: `❌ Unbekanntes Profile: ${profileName}. Bekannt: recommended, safe` };
+              else return { text: `❌ Unknown profile: ${profileName}. Known: recommended, safe` };
               const writeResult = withConfigLock(openclawConfigPath, () => {
                 let cfg;
                 try {
                   cfg = JSON.parse(readFileSync(openclawConfigPath, "utf8"));
                 } catch (err) {
-                  return { error: `openclaw.json nicht lesbar: ${err.message}` };
+                  return { error: `openclaw.json not readable: ${err.message}` };
                 }
                 const merged = applyFeatureProfile(cfg, profile, { confirmed: true });
                 const pendingInner = detectPendingFeatures(merged.plugins?.entries?.["memory-lancedb-namespaced"]?.config);
@@ -1881,16 +1881,16 @@ const plugin = {
                   writeFileSync(tmp, JSON.stringify(merged, null, 2));
                   renameSync(tmp, openclawConfigPath);
                 } catch (err) {
-                  return { error: `Config speichern fehlgeschlagen: ${err.message}` };
+                  return { error: `Saving config failed: ${err.message}` };
                 }
                 return { pending: pendingInner };
               });
               if (writeResult.error) return { text: `❌ ${writeResult.error}` };
               const pending = writeResult.pending || [];
               const lines = [
-                `✅ PLUR1BUS Profile "${profileName}" bestätigt.`,
+                `✅ PLUR1BUS Profile "${profileName}" confirmed.`,
                 "",
-                "Aktivierte Features:",
+                "Activated Features:",
               ];
               for (const [key, value] of Object.entries(profile)) {
                 if (key === "setupProfile" || key === "featuresConfirmedAt") continue;
@@ -1901,30 +1901,30 @@ const plugin = {
               }
               if (pending.length > 0) {
                 lines.push("");
-                lines.push("⚠️ Pending Setup (bitte manuell bestätigen):");
+                lines.push("⚠️ Pending Setup (please confirm manually):");
                 for (const p of pending) {
                   lines.push(`• ${p.feature}: ${p.reason}`);
                 }
               }
               lines.push("");
-              lines.push("Restart erforderlich: systemctl --user restart openclaw-gateway");
+              lines.push("Restart required: systemctl --user restart openclaw-gateway");
               return { text: lines.join("\n") };
             }
             if (actionKey === "skills") {
               const subKey = sub?.toLowerCase() || "";
               const workspaceDir = commandCtx.workspaceDir;
               if (!workspaceDir) {
-                return { text: "❌ Kein Workspace verfügbar." };
+                return { text: "❌ No workspace available." };
               }
               if (!subKey || subKey === "help") {
                 return { text: [
-                  "🛠️ Skill-Befehle:",
+                  "🛠️ Skill Commands:",
                   "",
-                  "/plur1bus skills review — Offene Vorschläge anzeigen",
-                  "/plur1bus skills approve <id> — Skill bestätigen",
-                  "/plur1bus skills reject <id> — Skill ablehnen",
-                  "/plur1bus skills list — Aktive Skills anzeigen",
-                  "/plur1bus skills show <id> — Vorschlag-Details",
+                  "/plur1bus skills review — show open proposals",
+                  "/plur1bus skills approve <id> — approve a skill",
+                  "/plur1bus skills reject <id> — reject a skill",
+                  "/plur1bus skills list — show active skills",
+                  "/plur1bus skills show <id> — proposal details",
                 ].join("\n") };
               }
               if (subKey === "review") {
@@ -2095,7 +2095,7 @@ const plugin = {
         // Operator hiermit /einschalten, /ausschalten und /plur1bus setup für
         // alle sperren (default: erlaubt — kein Verhaltensbruch).
         const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
-        const blockedConfigCommandMessage = "🔒 Config-Änderungen per Chat sind deaktiviert (security.allowChatConfigCommands=false). Bitte openclaw.json direkt bearbeiten und das Gateway neu starten.";
+        const blockedConfigCommandMessage = "🔒 Chat config changes are disabled (security.allowChatConfigCommands=false). Please edit openclaw.json directly and restart the gateway.";;
 
         const runFeatureToggle = (commandCtx, enable) => {
           if (chatConfigCommandsBlocked()) return { text: blockedConfigCommandMessage };
@@ -2111,7 +2111,8 @@ const plugin = {
 
         api.registerCommand({
           name: "zustand",
-          description: "PLUR1BUS — System-Zustand (Vault-Sync, Plausibilitätsprüfung, ...). '/status' ist von OpenClaw reserviert.",
+          description: "PLUR1BUS — system state (vault sync, sanity checks, ...). '/status' is reserved by OpenClaw.",
+
           acceptsArgs: false,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runStatusCommand,
@@ -2173,14 +2174,14 @@ const plugin = {
           try {
             const query = (commandCtx.args || "").trim();
             if (!query) {
-              return { text: "Benutzung: /vergiss <Beschreibung der zu vergessenden Erinnerung>" };
+              return { text: "Usage: /vergiss <description of memory to forget>" };
             }
             const normalized = await normalizeCommandInput({ kind: "forget-intent", text: query, summarizer, logger: api.logger });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const agentId = commandCtx.agentId || "default";
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, normalized.canonicalText);
             if (candidates.none) {
-              return { text: `🧠 Nichts gefunden zu "${normalized.canonicalText}".` };
+              return { text: `🧠 Nothing found for "${normalized.canonicalText}".` };
             }
             if (candidates.unique) {
               const result = await forgetCard(memoryDbAdapter, agentId, candidates.card.id);
@@ -2198,11 +2199,11 @@ const plugin = {
           try {
             const raw = (commandCtx.args || "").trim();
             if (!raw) {
-              return { text: "Benutzung: /korrigier <alt> zu <neu>  (oder: <alt> → <neu>)" };
+              return { text: "Usage: /korrigier <old> zu <new>  (or: <old> → <new>)" };
             }
             const parsed = parseCorrection(raw);
             if (!parsed) {
-              return { text: "❌ Kein Trenner gefunden. Erwartet: /korrigier <alt> zu <neu>" };
+              return { text: "❌ No separator found. Expected: /korrigier <old> zu <new>" };
             }
             const [oldNorm, newNorm] = await Promise.all([
               normalizeCommandInput({ kind: "correction-old", text: parsed.old, summarizer, logger: api.logger }),
@@ -2213,7 +2214,7 @@ const plugin = {
             const agentId = commandCtx.agentId || "default";
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, oldNorm.canonicalText);
             if (candidates.none) {
-              return { text: `🧠 Nichts gefunden zu "${oldNorm.canonicalText}".` };
+              return { text: `🧠 Nothing found for "${oldNorm.canonicalText}".` };
             }
             if (candidates.unique) {
               const result = await correctCard(memoryDbAdapter, agentId, candidates.card.id, newNorm.canonicalText, {
@@ -2254,14 +2255,14 @@ const plugin = {
 
         api.registerCommand({
           name: "memory",
-          description: "PLUR1BUS — Erinnerungen einsehen (z.B. /memory diese Woche, /memory über Eva)",
+          description: "PLUR1BUS — recall memories (e.g. /memory this week, /memory about Eva)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runMemoryCommand,
         });
         api.registerCommand({
           name: "vergiss",
-          description: "PLUR1BUS — eine Erinnerung löschen (archive-first)",
+          description: "PLUR1BUS — delete a memory (archive-first)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runVergissCommand,
@@ -3286,7 +3287,7 @@ const plugin = {
                 if (showNudge) {
                   const lines = readFileSync(conflictLogPath, "utf8").split("\n").filter(l => l.trim()).length;
                   const sizeKb = Math.round(stat.size / 1024);
-                  conflictNudge = `\n<conflict-review-reminder>\n${lines} unreviewed decision-conflicts in conflict-log.jsonl (${sizeKb} KB). Bring this up proactively: "Ich habe ${lines} unaufgelöste Konflikte im Log — willst du die durchgehen?" Do NOT rotate or delete the log without explicit user confirmation.\n</conflict-review-reminder>`;
+                  conflictNudge = `\n<conflict-review-reminder>\n${lines} unreviewed decision-conflicts in conflict-log.jsonl (${sizeKb} KB). Bring this up proactively: "I have ${lines} unresolved conflicts in the log — want to go through them?" Do NOT rotate or delete the log without explicit user confirmation.\n</conflict-review-reminder>`;
                 }
               }
             } catch (_) {}
@@ -3366,7 +3367,7 @@ const plugin = {
             if (showNudge) {
               const lines = readFileSync(conflictLogPath, "utf8").split("\n").filter(l => l.trim()).length;
               const sizeKb = Math.round(stat.size / 1024);
-              conflictNudge = `\n<conflict-review-reminder>\n${lines} unreviewed decision-conflicts in conflict-log.jsonl (${sizeKb} KB). Bring this up proactively: "Ich habe ${lines} unaufgelöste Konflikte im Log — willst du die durchgehen?" Do NOT rotate or delete the log without explicit user confirmation.\n</conflict-review-reminder>`;
+              conflictNudge = `\n<conflict-review-reminder>\n${lines} unreviewed decision-conflicts in conflict-log.jsonl (${sizeKb} KB). Bring this up proactively: "I have ${lines} unresolved conflicts in the log — want to go through them?" Do NOT rotate or delete the log without explicit user confirmation.\n</conflict-review-reminder>`;
             }
           }
         } catch (_) {}

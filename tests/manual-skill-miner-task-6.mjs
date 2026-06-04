@@ -63,7 +63,7 @@ test("listPendingProposals shows pending items", async (tmpDir) => {
 
 test("listPendingProposals shows empty message", async (tmpDir) => {
   const result = listPendingProposals(tmpDir);
-  assert.ok(result.includes("Keine offenen"));
+  assert.ok(result.includes("No open"));
 });
 
 test("approveProposal creates SKILL.md", async (tmpDir) => {
