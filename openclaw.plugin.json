@@ -389,6 +389,51 @@
           }
         }
       },
+      "skillMiner": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "cron": {
+            "type": "string",
+            "default": "0 3 * * 0"
+          },
+          "timezone": {
+            "type": "string",
+            "default": "Europe/Berlin"
+          },
+          "maxPerRun": {
+            "type": "number",
+            "default": 5
+          },
+          "minConfidence": {
+            "type": "number",
+            "default": 0.6
+          },
+          "minEvidenceScore": {
+            "type": "number",
+            "default": 3
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "disableThinking": {
+            "type": "boolean"
+          },
+          "headers": {
+            "type": "object"
+          }
+        }
+      },
       "gc": {
         "type": "object",
         "additionalProperties": false,
