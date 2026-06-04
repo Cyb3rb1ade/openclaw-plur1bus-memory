@@ -71,6 +71,7 @@ import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-cons
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
 import { listPendingProposals, approveProposal, rejectProposal, listActiveSkills, showProposal } from "./lib/telegram-commands/skill-commands.js";
 import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "./lib/jobs/skill-miner/proposal-writer.js";
+import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions } from "./lib/jobs/schicht15-tracker.js";
 import { isApplyBlocked, detectPendingFeatures, recommendedProfile, safeProfile, applyFeatureProfile } from "./lib/setup/feature-profiles.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
@@ -3326,13 +3327,15 @@ const plugin = {
               const pending = getPendingProposals(ctx.workspaceDir);
               if (pending.length > 0 && lastPresentationAgeMs(ctx.workspaceDir) > 6 * 86400000) {
                 const proposal = pending[0];
-                const more = pending.length > 1 ? ` (and ${pending.length - 1} more)` : "";
-                skillProposalNudge = `\n<skill-proposal-reminder>\nI've been reviewing our conversations and noticed a repeatable pattern: "${proposal.description || proposal.skillTitle}". I could turn this into a reusable skill so I always act on it — should I? You can say yes, no, or review all open suggestions with \`/plur1bus skills review\`.${more}\n</skill-proposal-reminder>`;
+                const nudgeText = renderSkillProposalNudge(proposal, pending.length, {
+                  workspaceDir: ctx.workspaceDir,
+                  messages: event?.messages || [],
+                });
+                skillProposalNudge = `\n<skill-proposal-reminder>\n${nudgeText}\n</skill-proposal-reminder>`;
                 recordPresentation(ctx.workspaceDir, pending.map(p => p.id));
               }
             } catch (_) {}
           }
-
           return { prependContext: [neoContext, memoriesContext + nudge + conflictNudge + skillProposalNudge].filter(Boolean).join("\n\n") };
         } catch (err) {
           api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
