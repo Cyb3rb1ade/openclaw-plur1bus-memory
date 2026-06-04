@@ -5,6 +5,9 @@ package-lock.json
 .DS_Store
 *.log
 .embed-promotions-state/
-docs/
+docs/**
+!docs/superpowers/
+!docs/superpowers/specs/
+!docs/superpowers/specs/**
 scripts/
 BREAKING_CHANGE_AUDIT.md
