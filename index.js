@@ -1668,16 +1668,17 @@ const plugin = {
             "/plur1bus obsidian dashboards build",
             "/plur1bus obsidian conflicts build",
           ].join("\n") : [
-            "PLUR1BUS quick commands:",
+            "PLUR1BUS quick commands (also work with /plur1bus prefix):",
             "",
-            "/memory <query> - recall memories (e.g. /memory this week, /memory about Eva)",
-            "/forget <description> - delete a memory",
-            "/correct <old> zu <new> - edit a memory",
-            "/state - system state (vault sync, sanity checks, ...)",
-            "/enable <feature> - enable a feature (e.g. /enable vaultSync)",
-            "/disable <feature> - disable a feature",
+            "/plur1bus memory <query> - recall memories",
+            "/plur1bus forget <description> - delete a memory",
+            "/plur1bus correct <old> zu <new> - edit a memory",
+            "/plur1bus state - system state",
+            "/plur1bus enable <feature> - enable a feature",
+            "/plur1bus disable <feature> - disable a feature",
             "",
             "/plur1bus setup <profile> — confirm feature profile (recommended, safe)",
+            "/plur1bus skills review — show open skill proposals",
             "Advanced: /plur1bus help advanced",
           ].join("\n"),
         });
@@ -2037,12 +2038,36 @@ const plugin = {
                 },
               });
             }
+            if (actionKey === "state") {
+              return runStatusCommand(commandCtx);
+            }
+            if (actionKey === "enable") {
+              return runFeatureToggle(commandCtx, true);
+            }
+            if (actionKey === "disable") {
+              return runFeatureToggle(commandCtx, false);
+            }
+            if (actionKey === "memory") {
+              return runMemoryCommand(commandCtx);
+            }
+            if (actionKey === "forget") {
+              return runVergissCommand(commandCtx);
+            }
+            if (actionKey === "correct") {
+              return runKorrigierCommand(commandCtx);
+            }
             return plur1busHelp();
           };
         const plur1busCommands = [
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
           { name: "plur1bus_status", description: "Show PLUR1BUS memory status.", acceptsArgs: true, prefixTokens: ["status"] },
           { name: "plur1bus_doctor", description: "Run PLUR1BUS diagnostics.", acceptsArgs: true, prefixTokens: ["doctor"] },
+          { name: "plur1bus_state", description: "Show PLUR1BUS system state.", acceptsArgs: false, prefixTokens: ["state"] },
+          { name: "plur1bus_enable", description: "Enable a PLUR1BUS feature.", acceptsArgs: true, prefixTokens: ["enable"] },
+          { name: "plur1bus_disable", description: "Disable a PLUR1BUS feature.", acceptsArgs: true, prefixTokens: ["disable"] },
+          { name: "plur1bus_memory", description: "Recall memories via PLUR1BUS.", acceptsArgs: true, prefixTokens: ["memory"] },
+          { name: "plur1bus_forget", description: "Forget a memory via PLUR1BUS.", acceptsArgs: true, prefixTokens: ["forget"] },
+          { name: "plur1bus_correct", description: "Correct a memory via PLUR1BUS.", acceptsArgs: true, prefixTokens: ["correct"] },
           { name: "plur1bus_dashboards", description: "Build PLUR1BUS dashboards.", acceptsArgs: true, prefixTokens: ["obsidian", "dashboards", "build"] },
           { name: "plur1bus_conflicts", description: "Build PLUR1BUS conflict reports.", acceptsArgs: true, prefixTokens: ["obsidian", "conflicts", "build"] },
         ];
