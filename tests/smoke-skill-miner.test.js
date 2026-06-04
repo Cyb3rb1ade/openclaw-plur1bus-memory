@@ -26,3 +26,44 @@ describe("skill-miner evidence-aggregator", () => {
     assert.ok(groups[0].score > 2, "validated user_confirmation should score high");
   });
 });
+
+import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
+
+describe("skill-miner llm-extractor", () => {
+  it("returns skip for low-confidence LLM response", async () => {
+    const mockLlm = async () => JSON.stringify({ confidence: 0.3, skip: true });
+    const group = {
+      memories: [{ id: "a", text: "User likes coffee" }],
+      keywords: ["coffee"],
+      score: 1,
+      topics: ["coffee"],
+    };
+    const result = await extractSkillFromEvidence(group, { callLlm: mockLlm, llmCfg: {} });
+    assert.strictEqual(result.skip, true);
+  });
+
+  it("returns skill candidate for high-confidence response", async () => {
+    const mockLlm = async () => JSON.stringify({
+      skillName: "dark-mode-preference",
+      skillTitle: "Dark Mode Preference",
+      description: "User prefers dark mode in all apps",
+      instructions: "Always offer dark mode when presenting UI options",
+      examples: ["Enable dark mode by default"],
+      confidence: 0.75,
+      category: "preference",
+    });
+    const group = {
+      memories: [
+        { id: "a", text: "User prefers dark mode" },
+        { id: "b", text: "User always enables dark mode" },
+      ],
+      keywords: ["dark", "mode", "prefers"],
+      score: 5,
+      topics: ["dark", "mode"],
+    };
+    const result = await extractSkillFromEvidence(group, { callLlm: mockLlm, llmCfg: {} });
+    assert.strictEqual(result.skip, undefined);
+    assert.strictEqual(result.skillName, "dark-mode-preference");
+    assert.strictEqual(result.confidence, 0.75);
+  });
+});
