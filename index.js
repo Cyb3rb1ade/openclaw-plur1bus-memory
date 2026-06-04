@@ -711,7 +711,7 @@ class MemoryDB {
       // Fehler weiterreichen.
       try {
         await this.table.add([this.normalizeEntryForTable(existing)]);
-      } catch (_) { /* Original-Restore ebenfalls fehlgeschlagen — Fehler unten */ }
+      } catch (_) { /* Original-Restore ebenfalls failed — Fehler unten */ }
       throw addErr;
     }
   }
@@ -1671,11 +1671,11 @@ const plugin = {
             "PLUR1BUS quick commands:",
             "",
             "/memory <query> - recall memories (e.g. /memory this week, /memory about Eva)",
-            "/vergiss <description> - delete a memory",
-            "/korrigier <old> zu <new> - edit a memory",
-            "/zustand - system state (vault sync, sanity checks, ...)",
-            "/einschalten <feature> - enable a feature (e.g. /einschalten vaultSync)",
-            "/ausschalten <feature> - disable a feature",
+            "/forget <description> - delete a memory",
+            "/correct <old> zu <new> - edit a memory",
+            "/state - system state (vault sync, sanity checks, ...)",
+            "/enable <feature> - enable a feature (e.g. /enable vaultSync)",
+            "/disable <feature> - disable a feature",
             "",
             "/plur1bus setup <profile> — confirm feature profile (recommended, safe)",
             "Advanced: /plur1bus help advanced",
@@ -2056,7 +2056,7 @@ const plugin = {
           });
         }
 
-        // ── /status, /einschalten, /ausschalten (Top-Level, user-facing) ──
+        // ── /status, /enable, /disable (Top-Level, user-facing) ──
         // Diese Commands lesen die vollqualifizierte openclaw.json (mit
         // ".config." Schicht) und sind bewusst von den /plur1bus_*
         // Wartungs-Commands getrennt.
@@ -2079,7 +2079,7 @@ const plugin = {
             });
             return { text: renderStatus(data) };
           } catch (err) {
-            return { text: `❌ /status fehlgeschlagen: ${err?.message || err}` };
+            return { text: `❌ /status failed: ${err?.message || err}` };
           }
         };
 
@@ -2092,7 +2092,7 @@ const plugin = {
         // Operator-Opt-out für Config-mutierende Chat-Commands. Das Plugin-SDK
         // liefert dem Command-Handler keine Sender-Identität, daher ist echte
         // Per-User-Autorisierung nicht möglich. In geteilten Channels kann der
-        // Operator hiermit /einschalten, /ausschalten und /plur1bus setup für
+        // Operator hiermit /enable, /disable und /plur1bus setup für
         // alle sperren (default: erlaubt — kein Verhaltensbruch).
         const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
         const blockedConfigCommandMessage = "🔒 Chat config changes are disabled (security.allowChatConfigCommands=false). Please edit openclaw.json directly and restart the gateway.";;
@@ -2105,12 +2105,12 @@ const plugin = {
             const result = toggleFeature(featureName, enable);
             return { text: renderToggleResult(result) };
           } catch (err) {
-            return { text: `❌ Toggle fehlgeschlagen: ${err?.message || err}` };
+            return { text: `❌ Toggle failed: ${err?.message || err}` };
           }
         };
 
         api.registerCommand({
-          name: "zustand",
+          name: "state",
           description: "PLUR1BUS — system state (vault sync, sanity checks, ...). '/status' is reserved by OpenClaw.",
 
           acceptsArgs: false,
@@ -2118,21 +2118,21 @@ const plugin = {
           handler: runStatusCommand,
         });
         api.registerCommand({
-          name: "einschalten",
-          description: `PLUR1BUS — Feature einschalten. Bekannt: ${listFeatures().join(", ")}`,
+          name: "enable",
+          description: `PLUR1BUS — Feature enable. Known: ${listFeatures().join(", ")}`,
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: (commandCtx) => runFeatureToggle(commandCtx, true),
         });
         api.registerCommand({
-          name: "ausschalten",
-          description: `PLUR1BUS — Feature ausschalten. Bekannt: ${listFeatures().join(", ")}`,
+          name: "disable",
+          description: `PLUR1BUS — Feature disable. Known: ${listFeatures().join(", ")}`,
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: (commandCtx) => runFeatureToggle(commandCtx, false),
         });
 
-        // ── /memory, /vergiss, /korrigier (Phase 4b) ─────────────────────
+        // ── /memory, /forget, /correct (Phase 4b) ─────────────────────
         // Lazy-initialisierter DB-Adapter: nutzt den GLEICHEN baseDbPath wie
         // die Plugin-interne MemoryDB. getEmbedding ist optional — wenn der
         // Embedder beim ersten /memory-Aufruf noch nicht ready ist, fallback
@@ -2166,7 +2166,7 @@ const plugin = {
             const items = await queryMemory(memoryDbAdapter, agentId, parsed);
             return { text: formatMemoryResults(items, parsed) };
           } catch (err) {
-            return { text: `❌ /memory fehlgeschlagen: ${err?.message || err}` };
+            return { text: `❌ /memory failed: ${err?.message || err}` };
           }
         };
 
@@ -2174,7 +2174,7 @@ const plugin = {
           try {
             const query = (commandCtx.args || "").trim();
             if (!query) {
-              return { text: "Usage: /vergiss <description of memory to forget>" };
+              return { text: "Usage: /forget <description of memory to forget>" };
             }
             const normalized = await normalizeCommandInput({ kind: "forget-intent", text: query, summarizer, logger: api.logger });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
@@ -2191,7 +2191,7 @@ const plugin = {
             const choice = renderCandidateChoice(candidates.candidates, "forget");
             return { text: choice.text, reply_markup: { inline_keyboard: choice.inline_keyboard } };
           } catch (err) {
-            return { text: `❌ /vergiss fehlgeschlagen: ${err?.message || err}` };
+            return { text: `❌ /forget failed: ${err?.message || err}` };
           }
         };
 
@@ -2199,11 +2199,11 @@ const plugin = {
           try {
             const raw = (commandCtx.args || "").trim();
             if (!raw) {
-              return { text: "Usage: /korrigier <old> zu <new>  (or: <old> → <new>)" };
+              return { text: "Usage: /correct <old> zu <new>  (or: <old> → <new>)" };
             }
             const parsed = parseCorrection(raw);
             if (!parsed) {
-              return { text: "❌ No separator found. Expected: /korrigier <old> zu <new>" };
+              return { text: "❌ No separator found. Expected: /correct <old> zu <new>" };
             }
             const [oldNorm, newNorm] = await Promise.all([
               normalizeCommandInput({ kind: "correction-old", text: parsed.old, summarizer, logger: api.logger }),
@@ -2232,7 +2232,7 @@ const plugin = {
                       vector,
                     },
                     {
-                      updateSource: "telegram:/korrigier",
+                      updateSource: "telegram:/correct",
                       updateEvidence: newNorm.evidenceSummary || `User corrected "${oldNorm.canonicalText}" to "${newNorm.canonicalText}"`,
                       confidence: 1,
                     },
@@ -2249,7 +2249,7 @@ const plugin = {
             const choice = renderCandidateChoice(candidates.candidates, "correct");
             return { text: choice.text, reply_markup: { inline_keyboard: choice.inline_keyboard } };
           } catch (err) {
-            return { text: `❌ /korrigier fehlgeschlagen: ${err?.message || err}` };
+            return { text: `❌ /correct failed: ${err?.message || err}` };
           }
         };
 
@@ -2261,15 +2261,15 @@ const plugin = {
           handler: runMemoryCommand,
         });
         api.registerCommand({
-          name: "vergiss",
+          name: "forget",
           description: "PLUR1BUS — delete a memory (archive-first)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runVergissCommand,
         });
         api.registerCommand({
-          name: "korrigier",
-          description: "PLUR1BUS — eine Erinnerung korrigieren. Syntax: /korrigier <alt> zu <neu>",
+          name: "correct",
+          description: "PLUR1BUS — edit a memory. Syntax: /correct <old> zu <new>",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runKorrigierCommand,
@@ -2911,7 +2911,7 @@ const plugin = {
             try {
               if (params.memoryId) {
                 // Archive-First: vor dem Löschen ein JSON-Backup schreiben.
-                // Schlägt das Archiv fehl, NICHT löschen (wie bei /vergiss).
+                // Schlägt das Archiv fehl, NICHT löschen (wie bei /forget).
                 const card = await db.getById(params.memoryId);
                 if (!card) return { content: [{ type: "text", text: `Memory ${params.memoryId} not found.` }] };
                 let archivePath;
