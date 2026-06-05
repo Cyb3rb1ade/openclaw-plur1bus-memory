@@ -10,7 +10,7 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 
 ### New in v6
 
-- **Semantic long-input handling** — `/memory`, `/vergiss`, `/korrigier` accept inputs of any length. No truncation, no rejection. Very long inputs (>6k chars) are semantically compressed; beyond 100k chars the user is prompted to use a file or vault source.
+- **Semantic long-input handling** — `/memory`, `/forget`, `/correct` accept inputs of any length. No truncation, no rejection. Very long inputs (>6k chars) are semantically compressed; beyond 100k chars the user is prompted to use a file or vault source.
 - **Feature activation profiles** — On first start the plugin proposes a `recommended` profile (all features active, Obsidian/reviews marked `pending_setup`). Core memory works immediately; advanced features require explicit confirmation via `featuresConfirmedAt` before they can apply changes.
 - **Proposal-only merging** — The daily memory compaction job detects duplicates and generates merge proposals, but **never auto-applies**. Proposals are written to `merge-proposals.jsonl` and await explicit user approval.
 - **Conflict resolver** — A lightweight background job scans for memory contradictions and emits a `recommendation` field (`"review_only"` or `"apply_via_safe_reconsolidation"`). It **never** modifies memory directly.
@@ -23,13 +23,28 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 
 | Command | What it does |
 | --- | --- |
-| `/zustand` | Status snapshot: memory card count, sync state, last plausibility run, any open issues with reason + fix hint. |
+| `/state` | Status snapshot: memory card count, sync state, last plausibility run, any open issues with reason + fix hint. |
 | `/memory <query>` | Search the agent's memory via the same recall pipeline used by the `memory_recall` tool. Accepts queries of any length. |
-| `/vergiss <text>` | Forget a memory card. Archive-first guarantee — the card is JSON-archived before deletion. Accepts long descriptions. |
-| `/korrigier <old> zu <new>` | Update a memory card. Same archive-first guarantee. Accepts ` zu `, `→`, or `->` as the separator. Both old and new text can be long. |
-| `/einschalten <feature>` | Turn on a whitelisted feature (`vaultSync`, `kritischPush`, `dailyConsolidation`). |
-| `/ausschalten <feature>` | Turn off the same. Writes atomically into `openclaw.json`; gateway restart required to apply. |
+| `/forget <text>` | Forget a memory card. Archive-first guarantee — the card is JSON-archived before deletion. Accepts long descriptions. |
+| `/correct <old> zu <new>` | Update a memory card. Same archive-first guarantee. Accepts ` zu `, `→`, or `->` as the separator. Both old and new text can be long. |
+| `/enable <feature>` | Turn on a whitelisted feature (`vaultSync`, `kritischPush`, `dailyConsolidation`). |
+| `/disable <feature>` | Turn off the same. Writes atomically into `openclaw.json`; gateway restart required to apply. |
 | `/plur1bus setup` | Confirm the recommended feature profile and mark all features as active (or customize which ones). Required before advanced features can apply changes. |
+
+### `/plur1bus` subcommands
+
+| Command | What it does |
+| --- | --- |
+| `/plur1bus skills review` | Show open skill proposals. |
+| `/plur1bus skills approve <id>` | Approve a skill proposal. |
+| `/plur1bus skills reject <id>` | Reject a skill proposal. |
+| `/plur1bus skills list` | Show active skills. |
+| `/plur1bus skills show <id>` | Show proposal details. |
+| `/plur1bus reminders list` | List active reminders. |
+| `/plur1bus reminders cancel <id>` | Cancel a reminder. |
+| `/plur1bus obsidian dashboards build` | Build Obsidian dashboard pages. |
+| `/plur1bus obsidian conflicts build` | Build conflict report pages. |
+| `/plur1bus doctor` | Run diagnostics and show runtime status. |
 
 ## Installation
 
@@ -107,7 +122,7 @@ All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` an
 
 **`criticalPush.model`** — the critical-push classifier needs an OpenAI-compatible chat model to label new cards (it falls back to `merging.model` if unset). Without any chat model configured the classifier is a deliberate no-op: it does **not** label cards, so it never poisons the backlog by marking everything `fakt`.
 
-**`security.allowChatConfigCommands`** (default `true`) — the config-mutating chat commands (`/einschalten`, `/ausschalten`, `/plur1bus setup`) write `openclaw.json`. The plugin SDK does not expose the message sender's identity to command handlers, so per-user authorization isn't possible. On a **shared channel**, set this to `false` to refuse all chat-driven config changes; edit `openclaw.json` directly instead. Writes are guarded by a file lock so concurrent toggles/setups cannot clobber each other.
+**`security.allowChatConfigCommands`** (default `true`) — the config-mutating chat commands (`/enable`, `/disable`, `/plur1bus setup`) write `openclaw.json`. The plugin SDK does not expose the message sender's identity to command handlers, so per-user authorization isn't possible. On a **shared channel**, set this to `false` to refuse all chat-driven config changes; edit `openclaw.json` directly instead. Writes are guarded by a file lock so concurrent toggles/setups cannot clobber each other.
 
 ### Feature profile confirmation
 
@@ -132,7 +147,7 @@ The recall pipeline runs Query → Embedding → LanceDB Top-N → Importance-Bo
 
 ```bash
 npm install
-npm test              # node --test, 57+ tests
+npm test              # node --test, 190+ tests
 ```
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.

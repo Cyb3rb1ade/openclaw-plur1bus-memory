@@ -66,7 +66,9 @@ import {
   archiveCard,
 } from "./lib/telegram-commands/memory-edit.js";
 import { normalizeCommandInput } from "./lib/semantic-input.js";
+import { validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
+import { makeBoundedCache } from "./lib/bounded-cache.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
 import { listPendingProposals, approveProposal, rejectProposal, listActiveSkills, showProposal } from "./lib/telegram-commands/skill-commands.js";
@@ -79,6 +81,8 @@ import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-clas
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
+import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
+import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
   buildNeoDoctorReport,
@@ -128,6 +132,7 @@ import {
   readGraph,
   createGraphMetrics,
   writeGraphConstellationReport,
+  extractGraphSignals,
 } from "./lib/memory-graph.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
@@ -329,6 +334,27 @@ class MemoryDB {
     this.schemaFieldNames = null;
     this._writeCounter = 0;
     this._reindexing = false;
+    this.isShuttingDown = false;
+    this.isShutdown = false;
+  }
+
+  async shutdown() {
+    if (this.isShuttingDown || this.isShutdown) return;
+    this.isShuttingDown = true;
+    try {
+      if (this.table && typeof this.table.close === "function") {
+        try { await this.table.close(); } catch (_) { /* ignore */ }
+      }
+      if (this.db && typeof this.db.close === "function") {
+        try { await this.db.close(); } catch (_) { /* ignore */ }
+      }
+    } finally {
+      this.table = null;
+      this.db = null;
+      this.initPromise = null;
+      this.isShutdown = true;
+      this.isShuttingDown = false;
+    }
   }
 
   async refreshSchemaFields() {
@@ -608,6 +634,53 @@ class MemoryDB {
     }
   }
 
+  /**
+   * Lädt die letzten N Memories für Graph-Edge-Building.
+   * @param {Object} opts
+   * @param {number} opts.limit — max Rows (default 100)
+   * @param {string} [opts.sessionId] — optional Session-ID für temporal Filter
+   * @param {boolean} [opts.includeGlobalRecent] — auch session-übergreifende laden
+   * @param {string[]} [opts.fields] — Felder, die benötigt werden
+   */
+  async getRecentForGraph({ limit = 100, sessionId = "", includeGlobalRecent = true, fields = null } = {}) {
+    await this.init();
+    if (!this.table) return [];
+    try {
+      let rows = await this.table.query()
+        .where("memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = ''")
+        .limit(limit * 2)
+        .toArray();
+
+      // Sort by createdAt DESC
+      rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+      // If includeGlobalRecent: take top N regardless of session
+      // If not: filter to same session first, fill rest with global
+      if (sessionId && !includeGlobalRecent) {
+        rows = rows.filter(r => r.sessionId === sessionId || r.sourceTurnId?.startsWith(sessionId));
+      } else if (sessionId) {
+        const sameSession = rows.filter(r => r.sessionId === sessionId || r.sourceTurnId?.startsWith(sessionId));
+        const other = rows.filter(r => r.sessionId !== sessionId && !r.sourceTurnId?.startsWith(sessionId));
+        rows = [...sameSession, ...other].slice(0, limit);
+      }
+
+      rows = rows.slice(0, limit);
+
+      if (fields && Array.isArray(fields)) {
+        return rows.map(r => {
+          const obj = { id: r.id };
+          for (const f of fields) {
+            obj[f] = r[f];
+          }
+          return obj;
+        });
+      }
+      return rows;
+    } catch (e) {
+      return [];
+    }
+  }
+
   async _maybeReindex() {
     if (this._reindexing) return;
     this._reindexing = true;
@@ -775,16 +848,34 @@ class AgentDbPool {
   constructor(basePath, vectorDim) {
     this.basePath = basePath;
     this.vectorDim = vectorDim;
-    this.dbs = new Map();
+    this.dbs = makeBoundedCache(50);
+    this.isShutdown = false;
   }
 
   getDb(agentId) {
+    if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
     const id = agentId || "default";
-    if (!this.dbs.has(id)) {
+    this.dbs.acquire(id);
+    try {
+      const cached = this.dbs.get(id);
+      if (cached) return cached;
       const dbPath = join(this.basePath, id);
-      this.dbs.set(id, new MemoryDB(dbPath, this.vectorDim));
+      const db = new MemoryDB(dbPath, this.vectorDim);
+      this.dbs.set(id, db);
+      return db;
+    } finally {
+      this.dbs.release(id);
     }
-    return this.dbs.get(id);
+  }
+
+  async shutdown() {
+    if (this.isShutdown) return;
+    this.isShutdown = true;
+    this.dbs.clear();
+  }
+
+  clear() {
+    this.dbs.clear();
   }
 }
 
@@ -1786,6 +1877,8 @@ const plugin = {
           "review",
         ]);
         const runPlur1busCommand = async (commandCtx, prefixTokens = []) => {
+            const deniedLen = checkArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
             const tokens = [...prefixTokens, ...parsePlur1busArgs(commandCtx)];
             if (tokens.length === 0) return plur1busHelp("quick", resolveCommandLocale(commandCtx));
             if (tokens[0]?.toLowerCase() === "help") return plur1busHelp(tokens[1]?.toLowerCase() === "advanced" ? "advanced" : "quick", resolveCommandLocale(commandCtx));
@@ -1937,10 +2030,26 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "skill-miner", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner"] });
+              if (subKey === "reminder-dispatch") {
+                const rawDb = pool.getDb(internalAgent);
+                await rawDb.init();
+                const remindersCfg = cfg.reminders || {};
+                const result = await runReminderDispatch(rawDb, internalAgent, {
+                  logger: api.logger,
+                  workspaceDir: commandCtx.workspaceDir,
+                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                  deliveryMode: remindersCfg.deliveryMode || "pending_only",
+                  webhookUrl: remindersCfg.webhookUrl ? resolveEnvVars(remindersCfg.webhookUrl) : null,
+                });
+                api.logger?.info?.(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "reminder-dispatch", ...result });
+              }
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch"] });
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
+              const denied = checkAuth(commandCtx, { destructive: true });
+              if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
               }
@@ -2171,10 +2280,10 @@ const plugin = {
               return runMemoryCommand(commandCtx);
             }
             if (actionKey === "forget") {
-              return runVergissCommand(commandCtx);
+              return runForgetCommand(commandCtx);
             }
             if (actionKey === "correct") {
-              return runKorrigierCommand(commandCtx);
+              return runCorrectCommand(commandCtx);
             }
             return plur1busHelp("quick", resolveCommandLocale(commandCtx));
           };
@@ -2222,6 +2331,7 @@ const plugin = {
             const data = collectStatusData({
               memoryStats: { cardCount, lastUpdateMinutes: null },
               emotional: mood ? { emoji: emotionEmoji(mood.dominant), label: t(`emotion.${mood.dominant}`, { lang, tone }), intensity: mood.intensity } : null,
+              workspaceDir: ctx?.workspaceDir,
             });
             return { text: renderStatus(data, { lang, tone }) };
           } catch (err) {
@@ -2243,8 +2353,53 @@ const plugin = {
         // alle sperren (default: erlaubt — kein Verhaltensbruch).
         const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
 
+        const confirmationStore = new Map();
+
+        const checkAuth = (commandCtx, opts = {}) => {
+          // Identität aus dem Kontext robust auflösen (verschiedene Feldnamen je
+          // Channel/OpenClaw-Version), damit Auth + Confirmation greifen.
+          const identity = resolveIdentity(commandCtx);
+          const auth = isAuthorized({ ...commandCtx, ...identity }, cfg, opts);
+          if (!auth.authorized) {
+            return { text: t(`plur1bus.${auth.reason || "unauthorized"}`, resolveCommandLocale(commandCtx)) };
+          }
+          return null;
+        };
+
+        // Text-basierter Confirm-Abschluss. Das OpenClaw-SDK liefert keine
+        // Button-/Callback-Events an Plugins (siehe OPENCLAW_SDK_COMPAT_AUDIT),
+        // daher wird die Bestätigung als Folge-Command zugestellt:
+        // `/forget confirm <token>` bzw. `/correct confirm <token>`.
+        const parseConfirmArg = (args) => {
+          const m = String(args || "").trim().match(/^confirm[:\s]+([0-9a-fA-F-]{6,})$/i);
+          return m ? m[1] : null;
+        };
+        // Sucht das Pending per Nonce(-Präfix) für das erwartete Kommando und
+        // validiert es (user/chat/expiry) via validateConfirmation (löscht es).
+        const completePending = (commandCtx, expectedCommand, token) => {
+          const { userId, chatId } = resolveIdentity(commandCtx);
+          let pending = null;
+          for (const v of confirmationStore.values()) {
+            if (v.command === expectedCommand && (v.nonce === token || v.nonce.startsWith(token))) { pending = v; break; }
+          }
+          if (!pending) return { error: "not_found_or_expired" };
+          const result = validateConfirmation(pending.callbackData, confirmationStore, { userId, chatId });
+          if (!result.valid) return { error: result.reason || "invalid" };
+          return { pending };
+        };
+
+        const checkArgsLength = (commandCtx) => {
+          const v = validateCommandArgs(commandCtx.args);
+          if (!v.ok) return { text: `❌ ${v.error}` };
+          return null;
+        };
+
         const runFeatureToggle = (commandCtx, enable) => {
+          const deniedLen = checkArgsLength(commandCtx);
+          if (deniedLen) return deniedLen;
           const { lang, tone } = resolveCommandLocale(commandCtx);
+          const denied = checkAuth(commandCtx, { destructive: true });
+          if (denied) return denied;
           if (chatConfigCommandsBlocked()) return { text: t("plur1bus.config_blocked", { lang, tone }) };
           const featureName = parseFeatureArg(commandCtx);
           if (!featureName) return { text: renderFeatureList({ lang, tone }) };
@@ -2301,10 +2456,19 @@ const plugin = {
           logger: api.logger,
         });
 
+        if (typeof api.on === "function") {
+          api.on("gateway_stop", async () => {
+            try { await memoryDbAdapter.shutdown(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: adapter shutdown failed: ${err?.message}`); }
+            try { await pool.shutdown(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: pool shutdown failed: ${err?.message}`); }
+          }, { timeoutMs: 30_000 });
+        }
+
         const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger);
 
         const runMemoryCommand = async (commandCtx) => {
           try {
+            const deniedLen = checkArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const input = (commandCtx.args || "").trim();
             const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger, lang, tone });
@@ -2319,41 +2483,95 @@ const plugin = {
           }
         };
 
-        const runVergissCommand = async (commandCtx) => {
+        const runForgetCommand = async (commandCtx) => {
           try {
+            const deniedLen = checkArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const query = (commandCtx.args || "").trim();
-            if (!query) {
-              return { text: t("plur1bus.forget_usage", { lang, tone }) };
-            }
-            const normalized = await normalizeCommandInput({ kind: "forget-intent", text: query, summarizer, logger: api.logger, lang, tone });
-            if (normalized.error) return { text: `❌ ${normalized.error}` };
+            const denied = checkAuth(commandCtx, { destructive: true });
+            if (denied) return denied;
+            const args = (commandCtx.args || "").trim();
             const agentId = commandCtx.agentId || "default";
+
+            // Completion: /forget confirm <token>
+            const token = parseConfirmArg(args);
+            if (token) {
+              const { pending, error } = completePending(commandCtx, "forget", token);
+              if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
+              const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, { lang, tone });
+              if (!result.ok) return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: result.error } }) };
+              return { text: t("plur1bus.forget_done", { lang, tone, vars: { id: pending.targetId } }) };
+            }
+
+            // Initiation
+            if (!args) return { text: t("plur1bus.forget_usage", { lang, tone }) };
+            const normalized = await normalizeCommandInput({ kind: "forget-intent", text: args, summarizer, logger: api.logger, lang, tone });
+            if (normalized.error) return { text: `❌ ${normalized.error}` };
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, normalized.canonicalText);
             if (candidates.none) {
               return { text: t("plur1bus.forget_not_found", { lang, tone, vars: { query: normalized.canonicalText } }) };
             }
-            if (candidates.unique) {
-              const result = await forgetCard(memoryDbAdapter, agentId, candidates.card.id, { lang, tone });
-              return { text: renderForgetResult(result, candidates.card, { lang, tone }) };
+            if (!candidates.unique) {
+              const choice = renderCandidateChoice(candidates.candidates, "forget", { lang, tone });
+              return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
-            // Multiple matches → selection buttons
-            const choice = renderCandidateChoice(candidates.candidates, "forget", { lang, tone });
-            return { text: choice.text, reply_markup: { inline_keyboard: choice.inline_keyboard } };
+            const card = candidates.card;
+            const { userId, chatId } = resolveIdentity(commandCtx);
+            const confirm = createConfirmation({ userId, chatId, command: "forget", targetId: card.id });
+            confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
+            return { text: t("plur1bus.forget_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
             const { lang, tone } = resolveCommandLocale(commandCtx);
             return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
 
-        const runKorrigierCommand = async (commandCtx) => {
+        const runCorrectCommand = async (commandCtx) => {
           try {
+            const deniedLen = checkArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const raw = (commandCtx.args || "").trim();
-            if (!raw) {
-              return { text: t("plur1bus.correct_usage", { lang, tone }) };
+            const denied = checkAuth(commandCtx, { destructive: true });
+            if (denied) return denied;
+            const args = (commandCtx.args || "").trim();
+            const agentId = commandCtx.agentId || "default";
+
+            // Completion: /correct confirm <token>
+            const token = parseConfirmArg(args);
+            if (token) {
+              const { pending, error } = completePending(commandCtx, "correct", token);
+              if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
+              const newText = pending.payload?.newText || "";
+              if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
+              const result = await correctCard(memoryDbAdapter, agentId, pending.targetId, newText, {
+                lang, tone,
+                updateMemory: async ({ id, newContent }) => {
+                  const rawDb = pool.getDb(agentId);
+                  await rawDb.init();
+                  const vector = await embeddings.embed(newContent);
+                  const neoStore = getNeoStore(commandCtx, {});
+                  await safeUpdate(
+                    rawDb,
+                    id,
+                    { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
+                    {
+                      updateSource: "telegram:/correct",
+                      updateEvidence: pending.payload?.oldText
+                        ? `User corrected "${pending.payload.oldText}" to "${newContent}"`
+                        : `User correction via /correct`,
+                      confidence: 1,
+                    },
+                    { neoStore, logger: api.logger, skipDriftGate: true },
+                  );
+                },
+              });
+              if (!result.ok) return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: result.error } }) };
+              return { text: t("plur1bus.correct_done", { lang, tone, vars: { id: pending.targetId } }) };
             }
-            const parsed = parseCorrection(raw);
+
+            // Initiation
+            if (!args) return { text: t("plur1bus.correct_usage", { lang, tone }) };
+            const parsed = parseCorrection(args);
             if (!parsed) {
               return { text: t("plur1bus.correct_no_separator", { lang, tone }) };
             }
@@ -2363,45 +2581,20 @@ const plugin = {
             ]);
             if (oldNorm.error) return { text: `❌ ${oldNorm.error}` };
             if (newNorm.error) return { text: `❌ ${newNorm.error}` };
-            const agentId = commandCtx.agentId || "default";
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, oldNorm.canonicalText);
             if (candidates.none) {
               return { text: t("plur1bus.correct_not_found", { lang, tone, vars: { query: oldNorm.canonicalText } }) };
             }
-            if (candidates.unique) {
-              const result = await correctCard(memoryDbAdapter, agentId, candidates.card.id, newNorm.canonicalText, {
-                lang,
-                tone,
-                updateMemory: async ({ id, newContent }) => {
-                  const rawDb = pool.getDb(agentId);
-                  await rawDb.init();
-                  const vector = await embeddings.embed(newContent);
-                  const neoStore = getNeoStore(commandCtx, {});
-                  await safeUpdate(
-                    rawDb,
-                    id,
-                    {
-                      text: newContent,
-                      summary: newContent.split(/\r?\n/)[0].slice(0, 200),
-                      vector,
-                    },
-                    {
-                      updateSource: "telegram:/correct",
-                      updateEvidence: newNorm.evidenceSummary || `User corrected "${oldNorm.canonicalText}" to "${newNorm.canonicalText}"`,
-                      confidence: 1,
-                    },
-                    {
-                      neoStore,
-                      logger: api.logger,
-                      skipDriftGate: true,
-                    },
-                  );
-                },
-              });
-              return { text: renderCorrectResult(result, candidates.card, { lang, tone }) };
+            if (!candidates.unique) {
+              const choice = renderCandidateChoice(candidates.candidates, "correct", { lang, tone });
+              return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
-            const choice = renderCandidateChoice(candidates.candidates, "correct", { lang, tone });
-            return { text: choice.text, reply_markup: { inline_keyboard: choice.inline_keyboard } };
+            const card = candidates.card;
+            const { userId, chatId } = resolveIdentity(commandCtx);
+            const confirm = createConfirmation({ userId, chatId, command: "correct", targetId: card.id });
+            confirm.payload = { newText: newNorm.canonicalText, oldText: oldNorm.canonicalText };
+            confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
+            return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
             const { lang, tone } = resolveCommandLocale(commandCtx);
             return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: err?.message || err } }) };
@@ -2420,14 +2613,14 @@ const plugin = {
           description: "PLUR1BUS — delete a memory (archive-first)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
-          handler: runVergissCommand,
+          handler: runForgetCommand,
         });
         api.registerCommand({
           name: "correct",
           description: "PLUR1BUS — edit a memory. Syntax: /correct <old> zu <new>",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
-          handler: runKorrigierCommand,
+          handler: runCorrectCommand,
         });
       }
 
@@ -2628,7 +2821,7 @@ const plugin = {
             skipped = prepared.filter(p => p.ok).length - toStore.length;
 
             // Phase 3: Writes sequentiell (LanceDB-Versioning erfordert serielle Writes)
-            const storedMemoryIds = [];
+            const storedMemoryRows = [];
             for (const p of toStore) {
               try {
                 const category = categorizeMemory(p.text);
@@ -2636,10 +2829,10 @@ const plugin = {
                 const evidenceQuote = p.it.text.slice(0, 200);
                 const captureEmotion = inferEmotionalValence(p.text, category);
                 const captureMoodContext = emotionalPool.snapshot(agentId);
+                const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
                 const memoryId = randomUUID();
-                storedMemoryIds.push(memoryId);
 
-                await db.store(applyDynamicsDefaults({
+                const row = applyDynamicsDefaults({
                   id: memoryId,
                   text: p.text,
                   summary,
@@ -2661,7 +2854,13 @@ const plugin = {
                   emotionalIntensity: captureEmotion.emotionalIntensity,
                   emotionalDominant: captureEmotion.emotionalDominant,
                   moodContextAtCapture: serializeEmotionalValence(captureMoodContext),
-                }, captureTimestamp));
+                  topics: graphSignals.topics,
+                  entities: graphSignals.entities,
+                  people: graphSignals.people,
+                  projects: graphSignals.projects,
+                }, captureTimestamp);
+                await db.store(row);
+                storedMemoryRows.push(row);
                 stored++;
                 api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
               } catch (err) {
@@ -2798,38 +2997,56 @@ const plugin = {
             }
 
             // v5.4.0 — Memory-Graph: Assoziative Verknüpfung
-            if (!background && neoEnabled && storedMemoryIds.length > 0) {
+            if (!background && neoEnabled && storedMemoryRows.length > 0) {
               try {
                 const neoStore = getNeoStore(ctx, event);
                 const graphMetrics = createGraphMetrics();
 
                 // Baue newMemories aus stored captures
-                const newMemories = toStore.map((p, idx) => ({
-                  id: storedMemoryIds[idx],
+                const newMemories = storedMemoryRows.map(row => ({
+                  id: row.id,
                   createdAt: new Date(captureTimestamp).toISOString(),
                   sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
-                  vector: p.vector,
-                  topics: [],
-                  entities: [],
-                  emotionalDominant: inferEmotionalValence(p.text).emotionalDominant,
-                  emotionalIntensity: inferEmotionalValence(p.text).emotionalIntensity,
+                  vector: row.vector,
+                  topics: row.topics || [],
+                  entities: row.entities || [],
+                  emotionalDominant: row.emotionalDominant,
+                  emotionalIntensity: row.emotionalIntensity,
                 }));
 
                 // Lade existierende Edges für Deduplizierung
                 const existingEdges = neoStore.readGraphEdges(10_000);
                 const { adjacency: existingAdj } = readGraph(existingEdges);
 
+                // Lade recent existing memories für vollständigen Edge-Aufbau
+                let recentExisting = [];
+                try {
+                  recentExisting = await db.getRecentForGraph({
+                    limit: 100,
+                    sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                    includeGlobalRecent: true,
+                    fields: ["id", "createdAt", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity"],
+                  });
+                } catch (_) { /* ignore */ }
+
                 // Baue neue Edges
                 const allEdges = await buildEdgesForSession(
                   newMemories.filter(m => m.vector),
-                  [],
-                  db.table
+                  [...recentExisting, ...newMemories],
+                  db.table,
+                  api.logger
                 );
 
-                // Episode-Anchor-Edges
+                // Episode-Anchor-Edges — nur für Episoden im aktuellen Zeitfenster
+                const allEpisodes = neoStore.readEpisodes(100);
+                const twoHoursAgo = captureTimestamp - 2 * 60 * 60 * 1000;
+                const recentEpisodes = allEpisodes.filter(ep => {
+                  const epStart = new Date(ep.startTime).getTime();
+                  return epStart >= twoHoursAgo;
+                });
                 const episodeEdges = buildEpisodeAnchorEdges(
-                  neoStore.readEpisodes(100),
-                  storedMemoryIds
+                  recentEpisodes,
+                  storedMemoryRows.map(r => r.id)
                 );
 
                 const combinedEdges = [...allEdges, ...episodeEdges];

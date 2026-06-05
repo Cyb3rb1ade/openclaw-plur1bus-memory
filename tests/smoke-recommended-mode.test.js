@@ -59,7 +59,7 @@ describe("recommended-mode-full", () => {
     assert.ok(blocked.pending.length > 0);
   });
 
-  it("daily consolidation rate limit prevents double run", () => {
+  it("daily consolidation rate limit prevents double run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-rate-"));
     const statePath = join(dir, "run-state.json");
     const agent = "test-agent";
@@ -70,7 +70,7 @@ describe("recommended-mode-full", () => {
     assert.strictEqual(first.allowed, true);
 
     // Record run
-    recordJobRun("daily-consolidation", agent, ws, statePath);
+    await recordJobRun("daily-consolidation", agent, ws, statePath);
 
     // Second run blocked
     const second = checkJobRateLimit("daily-consolidation", agent, ws, 24 * 60 * 60 * 1000, statePath);
