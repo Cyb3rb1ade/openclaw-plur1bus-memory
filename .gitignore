@@ -6,10 +6,5 @@ package-lock.json
 *.log
 .embed-promotions-state/
 docs/**
-!docs/superpowers/
-!docs/superpowers/specs/
-!docs/superpowers/specs/**
-!docs/superpowers/plans/
-!docs/superpowers/plans/**
 scripts/
 BREAKING_CHANGE_AUDIT.md
