@@ -23,7 +23,7 @@ describe("semantic-input", () => {
     const hugeText = "x".repeat(110000);
     const result = await normalizeCommandInput({ kind: "recall-query", text: hugeText });
     assert.ok(result.error, "should return error");
-    assert.ok(result.error.includes("Datei/Vault-Note/Quelle"), "should suggest external source");
+    assert.ok(result.error.includes("file/vault note/source"), "should suggest external source");
     assert.ok(!result.canonicalText);
   });
 

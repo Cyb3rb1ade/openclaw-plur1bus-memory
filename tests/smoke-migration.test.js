@@ -62,6 +62,17 @@ describe("Schema Migration Smoke", () => {
       "reconsolidationConfidence",
       "versionCreatedAt",
       "updatedAt",
+      "memoryKind",
+      "reminderStatus",
+      "remindAt",
+      "remindedAt",
+      "dispatchedAt",
+      "acknowledgedAt",
+      "cancelledAt",
+      "reminderKey",
+      "dispatchCount",
+      "lastDispatchAttemptAt",
+      "nextDispatchAttemptAt",
     ];
 
     for (const col of v6Columns) {
@@ -145,6 +156,17 @@ describe("Schema Migration Smoke", () => {
         reconsolidationConfidence: 0.0,
         versionCreatedAt: 0,
         updatedAt: 0,
+        memoryKind: "memory",
+        reminderStatus: "",
+        remindAt: 0,
+        remindedAt: 0,
+        dispatchedAt: 0,
+        acknowledgedAt: 0,
+        cancelledAt: 0,
+        reminderKey: "",
+        dispatchCount: 0,
+        lastDispatchAttemptAt: 0,
+        nextDispatchAttemptAt: 0,
       },
     ]);
 
