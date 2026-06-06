@@ -48,10 +48,10 @@ PLUR1BUS is an OpenClaw v6 plugin that provides per-agent long-term memory using
 - `safeType(value)` — allows only the documented memory type set
 
 ### Authorization
-- Destructive commands (`/forget`, `/correct`, `/enable`, `/disable`, `/plur1bus setup`) use `isAuthorized()` with `fail-closed` logic:
-  - If no whitelist is configured, destructive commands are **denied**.
-  - Destructive commands require `userId` in `allowedUserIds`; `chatId` alone is never sufficient.
-- Confirmation callbacks are bound to `userId + chatId + nonce` via `createConfirmation()` / `validateConfirmation()`.
+- Destructive commands (`/forget`, `/correct`, `/enable`, `/disable`, `/plur1bus setup`) use `isAuthorized()`:
+  - If a whitelist **is** configured (`allowedUserIds`/`allowedChatIds`), it is enforced everywhere; destructive commands require `userId` in `allowedUserIds` (`chatId` alone is never sufficient).
+  - If **no** whitelist is configured, destructive commands are allowed **only in a private 1:1 chat** (single owner; `/forget` and `/correct` are archive-first and recoverable). In groups/supergroups/channels — or when the chat type cannot be determined — they remain **denied** (fail-safe). Chat type is classified via `resolveChatKind()`.
+- Confirmation callbacks/commands are bound to `userId + chatId + nonce` via `createConfirmation()` / `validateConfirmation()`. Sender identity is resolved via `resolveIdentity()` (tolerant of channel field-name variants).
 
 ## LanceDB Schema Extensions
 

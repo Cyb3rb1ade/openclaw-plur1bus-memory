@@ -15,7 +15,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createConfirmation, validateConfirmation, resolveIdentity, isAuthorized } from "../lib/security.js";
+import { createConfirmation, validateConfirmation, resolveIdentity, isAuthorized, resolveChatKind } from "../lib/security.js";
 import { forgetCard, correctCard } from "../lib/telegram-commands/memory-edit.js";
 
 const archiveDir = mkdtempSync(join(tmpdir(), "p1b-confirm-"));
@@ -96,5 +96,26 @@ describe("forget/correct confirmation completion", () => {
     const r = isAuthorized({ chatId: "c1" }, { security: { allowedUserIds: ["u1"] } }, { destructive: true });
     assert.strictEqual(r.authorized, false);
     assert.strictEqual(r.reason, "security.no_user_identity");
+  });
+
+  it("resolveChatKind classifies private/group/unknown", () => {
+    assert.strictEqual(resolveChatKind({ chatType: "private" }), "private");
+    assert.strictEqual(resolveChatKind({ chat: { type: "supergroup" } }), "group");
+    assert.strictEqual(resolveChatKind({ is_group_chat: true }), "group");
+    assert.strictEqual(resolveChatKind({ message: { chatType: "dm" } }), "private");
+    assert.strictEqual(resolveChatKind({}), "unknown");
+  });
+
+  it("isAuthorized (no ACL): allows destructive in private DM, denies in group/unknown", () => {
+    // private 1:1 → allowed (single owner, archive-first recoverable)
+    const priv = isAuthorized({ chatType: "private" }, {}, { destructive: true });
+    assert.strictEqual(priv.authorized, true);
+    // group → denied (fail-safe)
+    const grp = isAuthorized({ chatType: "group" }, {}, { destructive: true });
+    assert.strictEqual(grp.authorized, false);
+    assert.strictEqual(grp.reason, "security.no_auth_configured");
+    // unknown chat type → denied (fail-safe)
+    const unk = isAuthorized({ chatId: "c1" }, {}, { destructive: true });
+    assert.strictEqual(unk.authorized, false);
   });
 });
