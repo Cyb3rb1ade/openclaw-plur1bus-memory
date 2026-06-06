@@ -81,12 +81,48 @@ node --test tests/*.test.js
 - Every phase must add its own regression tests.
 - Current baseline: 190 tests, all passing.
 
+## Dependency Audit
+
+Last audit run: 2026-06-05
+
+- `npm audit`: **0 vulnerabilities**
+- `npm ci --ignore-scripts`: passes
+
+### Runtime Dependencies
+
+| Package | Spec | Resolved | Pinned? |
+|---------|------|----------|---------|
+| `@lancedb/lancedb` | `^0.26.2` | `0.26.2` | No (`^`) — version fixed by `package-lock.json` |
+| `openai` | `^6.27.0` | `6.41.0` | No (`^`) — version fixed by `package-lock.json` |
+
+### Optional Dependencies
+
+| Package | Spec | Resolved | Pinned? |
+|---------|------|----------|---------|
+| `@huggingface/transformers` | `4.2.0` | `4.2.0` | Yes |
+
+All versions are effectively pinned at install time by `package-lock.json`. No critical CVEs were reported at the time of the last audit. Major upgrades require a separate plan.
+
 ## Backup / Restore
 
 Before destructive fixes or schema migrations, create a snapshot:
 
 ```bash
+# Automatic snapshot (recommended)
+./scripts/backup-snapshot.sh
+
+# Manual snapshot (fallback)
 cp -r ~/.openclaw/memory/lancedb-namespaced ~/.openclaw/memory/lancedb-namespaced.bak.$(date +%Y%m%d-%H%M%S)
+```
+
+Restore from a snapshot (dry-run by default):
+
+```bash
+# Dry-run: see what would be restored
+./scripts/restore-snapshot.sh ~/.openclaw/.snapshots/plur1bus-YYYYMMDD-HHMMSS
+
+# Actually restore
+./scripts/restore-snapshot.sh --confirm ~/.openclaw/.snapshots/plur1bus-YYYYMMDD-HHMMSS
 ```
 
 The plugin writes archives before every deletion (`/forget`, `/correct`). The archive path is reported in the command response.
