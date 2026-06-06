@@ -64,11 +64,13 @@ for rel in "${BACKUP_PATHS[@]}"; do
     SAVED_COUNT=$((SAVED_COUNT + 1))
   fi
 
-  # Calculate size from the cleaned snapshot (symlinks already removed)
+  # Calculate size from the cleaned snapshot (symlinks already removed).
+  # Portable byte count: wc -c works on BSD/macOS and GNU/Linux alike
+  # (avoids BSD-only `stat -f%z` vs GNU `stat -c%s`).
   if [[ -d "$dest" ]]; then
-    size=$(find "$dest" -type f -exec stat -f%z {} + 2>/dev/null | awk '{sum+=$1} END {print sum}')
+    size=$(find "$dest" -type f -exec cat {} + 2>/dev/null | wc -c | tr -d ' ')
   else
-    size=$(stat -f%z "$dest" 2>/dev/null)
+    size=$(wc -c < "$dest" 2>/dev/null | tr -d ' ')
   fi
   size="${size:-0}"
   TOTAL_SIZE=$((TOTAL_SIZE + size))

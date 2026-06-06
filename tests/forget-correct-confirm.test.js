@@ -15,7 +15,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createConfirmation, validateConfirmation, resolveIdentity } from "../lib/security.js";
+import { createConfirmation, validateConfirmation, resolveIdentity, isAuthorized } from "../lib/security.js";
 import { forgetCard, correctCard } from "../lib/telegram-commands/memory-edit.js";
 
 const archiveDir = mkdtempSync(join(tmpdir(), "p1b-confirm-"));
@@ -82,10 +82,19 @@ describe("forget/correct confirmation completion", () => {
     assert.deepStrictEqual(applied, { id, newContent: "new text" }, "safe-reconsolidation hook must run with the new text");
   });
 
-  it("resolveIdentity tolerates alternate field names and missing identity", () => {
+  it("resolveIdentity tolerates alternate field names, nesting, and missing identity", () => {
     assert.deepStrictEqual(resolveIdentity({ userId: "u", chatId: "c" }), { userId: "u", chatId: "c" });
     assert.deepStrictEqual(resolveIdentity({ from: { id: 42 }, chat: { id: 7 } }), { userId: "42", chatId: "7" });
     assert.deepStrictEqual(resolveIdentity({ sender_id: "s", conversationId: "cv" }), { userId: "s", chatId: "cv" });
+    // nested under message/event (some channels)
+    assert.deepStrictEqual(resolveIdentity({ message: { from: { id: 9 }, chat: { id: 3 } } }), { userId: "9", chatId: "3" });
+    assert.deepStrictEqual(resolveIdentity({ event: { userId: "e1", chatId: "e2" } }), { userId: "e1", chatId: "e2" });
     assert.deepStrictEqual(resolveIdentity({}), { userId: undefined, chatId: undefined });
+  });
+
+  it("isAuthorized reports no_user_identity when the channel passes no userId", () => {
+    const r = isAuthorized({ chatId: "c1" }, { security: { allowedUserIds: ["u1"] } }, { destructive: true });
+    assert.strictEqual(r.authorized, false);
+    assert.strictEqual(r.reason, "security.no_user_identity");
   });
 });
