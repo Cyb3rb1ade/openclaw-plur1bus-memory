@@ -4,6 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { createServer } from "node:http";
 import { redactError, safeWarn, safeDebug } from "../lib/safe-logging.js";
 import { fetchWithTimeout, fetchWithRetry } from "../lib/fetch-with-timeout.js";
 import { validateInput, validateCommandArgs, INPUT_LIMITS } from "../lib/input-limits.js";
@@ -80,8 +81,19 @@ describe("fetchWithTimeout", () => {
   });
 
   it("returns response on success", async () => {
-    const res = await fetchWithTimeout("https://httpbin.org/get", {}, 10_000);
-    assert.ok(res.ok);
+    // Hermetic: spin up a local server instead of hitting an external host.
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end('{"ok":true}');
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address();
+    try {
+      const res = await fetchWithTimeout(`http://127.0.0.1:${port}/get`, {}, 10_000);
+      assert.ok(res.ok);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });
 
