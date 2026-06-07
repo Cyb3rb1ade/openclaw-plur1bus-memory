@@ -6,6 +6,7 @@ package-lock.json
 *.log
 .embed-promotions-state/
 docs/**
+!docs/audits/
 # scripts/ stays operator-local by default, but the snapshot backup/restore
 # helpers are part of the supported workflow (and covered by tests), so track them.
 scripts/*
