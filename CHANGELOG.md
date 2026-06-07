@@ -149,6 +149,39 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ---
 
+## [6.1.0] — Engram — 2026-06-07
+
+### Added — Recall Hardening (Engram)
+
+- **P0 — Recall-Budget & Deduplizierung**
+  - `maxPromptMemories` (default `12`): hartes Limit für Memories im Prompt-Kontext
+  - `dedup` Threshold auf `0.78` erhöht: aggressivere Entfernung nahezu identischer Einträge
+  - **Akronym-Erkennung**: semantisch ähnliche Akronyme werden bei der Deduplizierung als identisch behandelt
+  - `canonicalMaxItems` (default `5`): maximale Anzahl kanonischer Repräsentanten pro Cluster
+
+- **P1 — Typbasierte Half-Life**
+  - `halfLifeDaysMap` mit typ-spezifischen Defaults:
+    - `transient`: `60` Tage
+    - `episodic`: `180` Tage
+    - `longContext` / `project`: `365` Tage
+  - Ersetzt das globale `halfLifeDays` durch kontextsensitives Vergessen
+
+- **P2 — Performance & Skalierung**
+  - **Embedding-Cache**: LRU-Cache für Embedding-Vektoren mit TTL
+    - `embeddingCacheEnabled` (default `true`)
+    - `embeddingCacheTtlMs` (default `300000` = 5 Minuten)
+    - `embeddingCacheMaxEntries` (default `1000`)
+  - **Recall-Kompression**: semantische Komprimierung langer Memory-Inhalte vor dem Prompt-Build
+  - **Adaptive Recall-Tiers**: dynamische Budget-Allokation nach Memory-Typ (transient → episodic → longContext)
+  - **Graph-Index**: beschleunigte Graph-Traversal durch invertierten Index auf Edge-Typen + Ziel-Memory
+  - **Reinforcement-Loop**: erfolgreiche Recalls (niedrige Re-Rank-Distanz) stärken `memoryStrength` leicht
+
+- **P2F — Hot-Path Metrics Debounce**
+  - Telemetrie-Flush im Recall-Hot-Path wird auf 250 ms debounced
+  - Vermeidet Synchronisations-Overhead bei schnell aufeinanderfolgenden Recall-Aufrufen
+
+---
+
 ## [5.2.10] — 2026-05-XX
 
 ### Added
