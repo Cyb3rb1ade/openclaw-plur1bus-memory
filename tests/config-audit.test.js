@@ -146,8 +146,8 @@ describe("halfLifeDaysMap-Gruppen sind vollständig", () => {
   it("Werte stimmen mit Code-Defaults überein", () => {
     assert.strictEqual(map.transient.default ?? map.transient, 60);
     assert.strictEqual(map.episodic.default ?? map.episodic, 180);
-    assert.strictEqual(map.longContext.default ?? map.longContext, 365);
-    assert.strictEqual(map.project.default ?? map.project, 365);
+    assert.strictEqual(map.longContext.default ?? map.longContext, 600);
+    assert.strictEqual(map.project.default ?? map.project, 600);
   });
 });
 
@@ -231,8 +231,8 @@ describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
     const block = m[1];
     assert.match(block, /transient:\s*60/);
     assert.match(block, /episodic:\s*180/);
-    assert.match(block, /longContext:\s*365/);
-    assert.match(block, /project:\s*365/);
+    assert.match(block, /longContext:\s*600/);
+    assert.match(block, /project:\s*600/);
   });
 
   it("lib/embedding-cache.js: maxEntries default = 500", () => {

@@ -42,14 +42,14 @@ Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jew
 {
   "transient": 60,
   "episodic": 180,
-  "longContext": 365,
-  "project": 365
+  "longContext": 600,
+  "project": 600
 }
 ```
 
 - **`transient`** (60 d): Kurzlebige Beobachtungen, Tool-Ausgaben, flüchtige Hinweise
 - **`episodic`** (180 d): Episodische Erinnerungen, Session-Zusammenfassungen
-- **`longContext`** / **`project`** (365 d): Langfristiges Wissen, Projekt-Setups, Behavior Cards
+- **`longContext`** / **`project`** (600 d): Langfristiges Wissen, Projekt-Setups, Behavior Cards
 
 > Alte, globale `halfLifeDays`-Werte bleiben erhalten, werden aber nur als Fallback verwendet, wenn kein Typ-Mapping existiert.
 
