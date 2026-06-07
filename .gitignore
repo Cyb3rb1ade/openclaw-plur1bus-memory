@@ -20,3 +20,4 @@ scripts/*
 !scripts/restore-snapshot.sh
 !scripts/migrate-missing-columns.mjs
 BREAKING_CHANGE_AUDIT.md
+!scripts/cleanup-vault-missing-tasks.mjs
