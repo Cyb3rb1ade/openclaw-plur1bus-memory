@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 
 // Shared modules (v1.9.0) — zentrale Logik für Plugin und Cron-Scripts
 import { distanceToScore } from "./lib/score.js";
+import { flushMetrics } from "./lib/metrics.js";
 import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary } from "./lib/text-utils.js";
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory } from "./lib/categorize.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
@@ -2463,6 +2464,7 @@ const plugin = {
           api.on("gateway_stop", async () => {
             try { await memoryDbAdapter.shutdown(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: adapter shutdown failed: ${err?.message}`); }
             try { await pool.shutdown(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: pool shutdown failed: ${err?.message}`); }
+            try { await flushMetrics(); } catch (err) { api.logger.warn?.(`metrics flush failed: ${err?.message}`); }
           }, { timeoutMs: 30_000 });
         }
 
