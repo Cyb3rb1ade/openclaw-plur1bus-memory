@@ -17,6 +17,7 @@ import {
   buildLinkLine,
   resolveGraphConfig,
   collectTier1Links,
+  collectTier2Links,
 } from "../lib/obsidian/graph-link-writer.js";
 
 describe("graph-link-writer: helpers", () => {
@@ -118,5 +119,54 @@ describe("graph-link-writer: tier1", () => {
     const record = { plur1bus_id: "x", memoryIds: ["dec-abc", "src-001"], sourceRefs: ["src-001"] };
     const links = collectTier1Links(record, byId, reviewRoot, 1);
     assert.strictEqual(links.length, 1);
+  });
+});
+
+describe("graph-link-writer: tier2", () => {
+  const reviewRoot = "plur1bus";
+  const decRecord = {
+    plur1bus_id: "dec-001",
+    plur1bus_type: "decision",
+    path: "records/decisions/dec-001.md",
+    title: "Auth Decision",
+    memoryIds: ["cand-001"],
+    sourceRefs: [],
+  };
+  const byType = { decision: [decRecord] };
+  const byId = { "dec-001": decRecord };
+
+  it("memory_candidate gets links to decisions that reference it", () => {
+    const record = { plur1bus_id: "cand-001", plur1bus_type: "memory_candidate" };
+    const links = collectTier2Links(record, byId, byType, reviewRoot, 5, new Set());
+    assert.strictEqual(links.length, 1);
+    assert.match(links[0], /dec-001/);
+    assert.match(links[0], /_\(Entscheidung\)_/);
+  });
+
+  it("skips already-linked records", () => {
+    const record = { plur1bus_id: "cand-001", plur1bus_type: "memory_candidate" };
+    const links = collectTier2Links(record, byId, byType, reviewRoot, 5, new Set(["dec-001"]));
+    assert.strictEqual(links.length, 0);
+  });
+
+  it("review_item gets links to siblings with same reviewBundleId", () => {
+    const sibling = {
+      plur1bus_id: "ri-002",
+      plur1bus_type: "review_item",
+      path: "records/review-items/ri-002.md",
+      title: "Sibling Review",
+      reviewBundleId: "bundle-x",
+    };
+    const self = { plur1bus_id: "ri-001", plur1bus_type: "review_item", reviewBundleId: "bundle-x" };
+    const bt = { "review_item": [self, sibling] };
+    const links = collectTier2Links(self, {}, bt, reviewRoot, 5, new Set());
+    assert.strictEqual(links.length, 1);
+    assert.match(links[0], /ri-002/);
+  });
+
+  it("unknown type returns empty", () => {
+    const record = { plur1bus_id: "src-001", plur1bus_type: "source" };
+    const links = collectTier2Links(record, byId, byType, reviewRoot, 5, new Set());
+    assert.strictEqual(links.length, 0);
   });
 });
