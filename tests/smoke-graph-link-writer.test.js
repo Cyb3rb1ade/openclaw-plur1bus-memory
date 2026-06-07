@@ -16,6 +16,7 @@ import {
   formatDisplayTitle,
   buildLinkLine,
   resolveGraphConfig,
+  collectTier1Links,
 } from "../lib/obsidian/graph-link-writer.js";
 
 describe("graph-link-writer: helpers", () => {
@@ -81,5 +82,41 @@ describe("graph-link-writer: config", () => {
     assert.deepStrictEqual(cfg.tiers, ["explicit"]);
     assert.strictEqual(cfg.includeSemantic, false);
     assert.strictEqual(cfg.blockId, "graph-links");
+  });
+});
+
+describe("graph-link-writer: tier1", () => {
+  const reviewRoot = "plur1bus";
+  const byId = {
+    "src-001": { plur1bus_id: "src-001", path: "records/sources/src-001.md", title: "Kimi Docs" },
+    "dec-abc": { plur1bus_id: "dec-abc", path: "records/decisions/dec-abc.md", title: "Auth Decision" },
+  };
+
+  it("collects memoryIds as links", () => {
+    const record = { plur1bus_id: "cand-x", memoryIds: ["dec-abc"], sourceRefs: [] };
+    const links = collectTier1Links(record, byId, reviewRoot, 5);
+    assert.strictEqual(links.length, 1);
+    assert.match(links[0], /\[\[plur1bus\/records\/decisions\/dec-abc\|Auth Decision\]\]/);
+    assert.match(links[0], /_\(memoryId\)_/);
+  });
+
+  it("collects sourceRefs as links", () => {
+    const record = { plur1bus_id: "dec-x", memoryIds: [], sourceRefs: ["src-001"] };
+    const links = collectTier1Links(record, byId, reviewRoot, 5);
+    assert.strictEqual(links.length, 1);
+    assert.match(links[0], /Kimi Docs/);
+    assert.match(links[0], /_\(Quelle\)_/);
+  });
+
+  it("skips unknown IDs", () => {
+    const record = { plur1bus_id: "x", memoryIds: ["nonexistent"], sourceRefs: [] };
+    const links = collectTier1Links(record, byId, reviewRoot, 5);
+    assert.strictEqual(links.length, 0);
+  });
+
+  it("respects maxPerNote", () => {
+    const record = { plur1bus_id: "x", memoryIds: ["dec-abc", "src-001"], sourceRefs: ["src-001"] };
+    const links = collectTier1Links(record, byId, reviewRoot, 1);
+    assert.strictEqual(links.length, 1);
   });
 });
