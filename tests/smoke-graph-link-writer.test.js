@@ -11,6 +11,9 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   formatLinkTarget,
   formatDisplayTitle,
@@ -18,6 +21,7 @@ import {
   resolveGraphConfig,
   collectTier1Links,
   collectTier2Links,
+  writeGraphLinks,
 } from "../lib/obsidian/graph-link-writer.js";
 
 describe("graph-link-writer: helpers", () => {
@@ -168,5 +172,105 @@ describe("graph-link-writer: tier2", () => {
     const record = { plur1bus_id: "src-001", plur1bus_type: "source" };
     const links = collectTier2Links(record, byId, byType, reviewRoot, 5, new Set());
     assert.strictEqual(links.length, 0);
+  });
+});
+
+describe("graph-link-writer: writeGraphLinks", () => {
+  function makeVault() {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-glw-"));
+    mkdirSync(join(dir, "plur1bus", "records", "decisions"), { recursive: true });
+    mkdirSync(join(dir, "plur1bus", "records", "sources"), { recursive: true });
+    return dir;
+  }
+
+  function writeNote(dir, relPath, content) {
+    writeFileSync(join(dir, relPath), content, "utf8");
+  }
+
+  it("injects graph-links block into a record note with sourceRefs", async () => {
+    const vault = makeVault();
+    const srcRecord = {
+      plur1bus_id: "src-001",
+      plur1bus_type: "source",
+      path: "records/sources/src-001.md",
+      title: "Kimi API Docs",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const decRecord = {
+      plur1bus_id: "dec-001",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-001.md",
+      title: "Auth Decision",
+      memoryIds: [],
+      sourceRefs: ["src-001"],
+    };
+    writeNote(vault, "plur1bus/records/sources/src-001.md", "# Kimi API Docs\n\nContent here.\n");
+    writeNote(vault, "plur1bus/records/decisions/dec-001.md", "# Auth Decision\n\nContent here.\n");
+
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const result = await writeGraphLinks(rawConfig, [srcRecord, decRecord], {});
+
+    assert.ok(result.ok);
+    assert.strictEqual(result.skipped, 0);
+    assert.strictEqual(result.conflicts.length, 0);
+
+    const decContent = readFileSync(join(vault, "plur1bus/records/decisions/dec-001.md"), "utf8");
+    assert.match(decContent, /plur1bus:managed:start id="graph-links"/);
+    assert.match(decContent, /Kimi API Docs/);
+    assert.match(decContent, /Quelle/);
+  });
+
+  it("is idempotent — second run returns unchanged=1", async () => {
+    const vault = makeVault();
+    const record = {
+      plur1bus_id: "dec-002",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-002.md",
+      title: "Standalone",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    writeNote(vault, "plur1bus/records/decisions/dec-002.md", "# Standalone\n");
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    await writeGraphLinks(rawConfig, [record], {});
+    const second = await writeGraphLinks(rawConfig, [record], {});
+    assert.strictEqual(second.updated, 0);
+    assert.strictEqual(second.unchanged, 1);
+  });
+
+  it("skips note if file does not exist on disk", async () => {
+    const vault = makeVault();
+    const record = {
+      plur1bus_id: "dec-ghost",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-ghost.md",
+      title: "Ghost",
+    };
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const result = await writeGraphLinks(rawConfig, [record], {});
+    assert.strictEqual(result.skipped, 1);
+    assert.strictEqual(result.updated, 0);
+  });
+
+  it("detects conflict when block was manually edited", async () => {
+    const vault = makeVault();
+    const record = {
+      plur1bus_id: "dec-003",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-003.md",
+      title: "Conflicted",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const tampered = `# Conflicted\n\n<!-- plur1bus:managed:start id="graph-links" version="4.2.18" hash="sha256:badhash" -->\n- manually edited\n<!-- plur1bus:managed:end -->\n`;
+    writeNote(vault, "plur1bus/records/decisions/dec-003.md", tampered);
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const result = await writeGraphLinks(rawConfig, [record], {});
+    assert.strictEqual(result.conflicts.length, 1);
+    assert.strictEqual(result.conflicts[0], "dec-003");
+    assert.strictEqual(result.updated, 0);
+    const content = readFileSync(join(vault, "plur1bus/records/decisions/dec-003.md"), "utf8");
+    assert.match(content, /manually edited/);
   });
 });
