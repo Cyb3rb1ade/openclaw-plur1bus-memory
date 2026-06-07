@@ -15,6 +15,7 @@ import {
   formatLinkTarget,
   formatDisplayTitle,
   buildLinkLine,
+  resolveGraphConfig,
 } from "../lib/obsidian/graph-link-writer.js";
 
 describe("graph-link-writer: helpers", () => {
@@ -61,5 +62,24 @@ describe("graph-link-writer: helpers", () => {
       line,
       "- [[plur1bus/records/decisions/dec-abc|Meine Decision]] _(memoryId)_"
     );
+  });
+});
+
+describe("graph-link-writer: config", () => {
+  it("resolveGraphConfig returns defaults when graphLinks absent", () => {
+    const cfg = resolveGraphConfig({});
+    assert.strictEqual(cfg.maxPerNote, 5);
+    assert.strictEqual(cfg.includeSemantic, false);
+    assert.deepStrictEqual(cfg.tiers, ["explicit", "type", "semantic"]);
+    assert.strictEqual(cfg.blockId, "graph-links");
+    assert.strictEqual(cfg.semanticThreshold, 0.78);
+  });
+
+  it("resolveGraphConfig merges user config over defaults", () => {
+    const cfg = resolveGraphConfig({ graphLinks: { maxPerNote: 3, tiers: ["explicit"] } });
+    assert.strictEqual(cfg.maxPerNote, 3);
+    assert.deepStrictEqual(cfg.tiers, ["explicit"]);
+    assert.strictEqual(cfg.includeSemantic, false);
+    assert.strictEqual(cfg.blockId, "graph-links");
   });
 });
