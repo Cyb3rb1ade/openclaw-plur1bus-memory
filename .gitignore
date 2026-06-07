@@ -7,6 +7,7 @@ package-lock.json
 .embed-promotions-state/
 docs/**
 !docs/audits/
+!docs/audits/**
 !docs/configuration.md
 !docs/recall-architecture.md
 !docs/migration-v6.md
