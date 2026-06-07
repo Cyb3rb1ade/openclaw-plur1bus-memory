@@ -385,167 +385,56 @@ class MemoryDB {
       if (tables.includes(TABLE_NAME)) {
         this.table = await this.db.openTable(TABLE_NAME);
         // Migrate: add missing columns
+        // Statt eines großen try/catch: Schema einmal lesen, dann pro Spalte
+        // einzeln migrieren. So verhindert ein Fehler bei einer Spalte nicht
+        // die Migration der übrigen.
+        let schema;
         try {
-          const schema = await this.table.schema();
-          const hasSum = schema.fields.some(f => f.name === 'summary');
-          if (!hasSum) {
-            await this.table.addColumns([{ name: 'summary', valueSql: "''" }]);
-          }
-          const hasOrigin = schema.fields.some(f => f.name === 'origin');
-          if (!hasOrigin) {
-            await this.table.addColumns([{ name: 'origin', valueSql: "'dm'" }]);
-          }
-          const hasMergedFrom = schema.fields.some(f => f.name === 'mergedFrom');
-          if (!hasMergedFrom) {
-            await this.table.addColumns([{ name: 'mergedFrom', valueSql: "'[]'" }]);
-          }
-          const hasExpiresAt = schema.fields.some(f => f.name === 'expiresAt');
-          if (!hasExpiresAt) {
-            await this.table.addColumns([{ name: 'expiresAt', valueSql: '0' }]);
-          }
-          const hasStoredBy = schema.fields.some(f => f.name === 'storedBy');
-          if (!hasStoredBy) {
-            await this.table.addColumns([{ name: 'storedBy', valueSql: "''" }]);
-          }
-          // v1.8.0 — Provenance + Scope
-          const hasSourceTurnId = schema.fields.some(f => f.name === 'sourceTurnId');
-          if (!hasSourceTurnId) {
-            await this.table.addColumns([{ name: 'sourceTurnId', valueSql: "''" }]);
-          }
-          const hasSourceMessageRole = schema.fields.some(f => f.name === 'sourceMessageRole');
-          if (!hasSourceMessageRole) {
-            await this.table.addColumns([{ name: 'sourceMessageRole', valueSql: "''" }]);
-          }
-          const hasSourceTimestamp = schema.fields.some(f => f.name === 'sourceTimestamp');
-          if (!hasSourceTimestamp) {
-            await this.table.addColumns([{ name: 'sourceTimestamp', valueSql: '0' }]);
-          }
-          const hasSourceUrl = schema.fields.some(f => f.name === 'sourceUrl');
-          if (!hasSourceUrl) {
-            await this.table.addColumns([{ name: 'sourceUrl', valueSql: "''" }]);
-          }
-          const hasEvidenceQuote = schema.fields.some(f => f.name === 'evidenceQuote');
-          if (!hasEvidenceQuote) {
-            await this.table.addColumns([{ name: 'evidenceQuote', valueSql: "''" }]);
-          }
-          const hasScope = schema.fields.some(f => f.name === 'scope');
-          if (!hasScope) {
-            await this.table.addColumns([{ name: 'scope', valueSql: "'agent-private'" }]);
-          }
-          const hasType = schema.fields.some(f => f.name === 'type');
-          if (!hasType) {
-            await this.table.addColumns([{ name: 'type', valueSql: "'memory'" }]);
-          }
-          const hasConfirmed = schema.fields.some(f => f.name === 'confirmed');
-          if (!hasConfirmed) {
-            await this.table.addColumns([{ name: 'confirmed', valueSql: 'false' }]);
-          }
-          // v5.3.0 — Emotional Valence
-          const hasEmotionalValence = schema.fields.some(f => f.name === 'emotionalValence');
-          if (!hasEmotionalValence) {
-            await this.table.addColumns([{ name: 'emotionalValence', valueSql: "''" }]);
-          }
-          const hasEmotionalIntensity = schema.fields.some(f => f.name === 'emotionalIntensity');
-          if (!hasEmotionalIntensity) {
-            await this.table.addColumns([{ name: 'emotionalIntensity', valueSql: '0.0' }]);
-          }
-          const hasEmotionalDominant = schema.fields.some(f => f.name === 'emotionalDominant');
-          if (!hasEmotionalDominant) {
-            await this.table.addColumns([{ name: 'emotionalDominant', valueSql: "'neutral'" }]);
-          }
-          const hasMoodContextAtCapture = schema.fields.some(f => f.name === 'moodContextAtCapture');
-          if (!hasMoodContextAtCapture) {
-            await this.table.addColumns([{ name: 'moodContextAtCapture', valueSql: "''" }]);
-          }
-          // v5.3.0 — Light Dreaming: Replay-Tracking
-          const hasReplayCount = schema.fields.some(f => f.name === 'replayCount');
-          if (!hasReplayCount) {
-            await this.table.addColumns([{ name: 'replayCount', valueSql: '0' }]);
-          }
-          const hasLastReplayed = schema.fields.some(f => f.name === 'lastReplayed');
-          if (!hasLastReplayed) {
-            await this.table.addColumns([{ name: 'lastReplayed', valueSql: '0' }]);
-          }
-          // v5.4.0 — Memory Dynamics
-          const hasRetrievalCount = schema.fields.some(f => f.name === 'retrievalCount');
-          if (!hasRetrievalCount) {
-            await this.table.addColumns([{ name: 'retrievalCount', valueSql: '0' }]);
-          }
-          const hasLastRetrievedAt = schema.fields.some(f => f.name === 'lastRetrievedAt');
-          if (!hasLastRetrievedAt) {
-            await this.table.addColumns([{ name: 'lastRetrievedAt', valueSql: '0' }]);
-          }
-          const hasMemoryStrength = schema.fields.some(f => f.name === 'memoryStrength');
-          if (!hasMemoryStrength) {
-            await this.table.addColumns([{ name: 'memoryStrength', valueSql: '1.0' }]);
-          }
-          const hasHalfLifeDays = schema.fields.some(f => f.name === 'halfLifeDays');
-          if (!hasHalfLifeDays) {
-            await this.table.addColumns([{ name: 'halfLifeDays', valueSql: '30' }]);
-          }
-          const hasLastStrengthenedAt = schema.fields.some(f => f.name === 'lastStrengthenedAt');
-          if (!hasLastStrengthenedAt) {
-            await this.table.addColumns([{ name: 'lastStrengthenedAt', valueSql: '0' }]);
-          }
-          const hasLastDynamicsAt = schema.fields.some(f => f.name === 'lastDynamicsAt');
-          if (!hasLastDynamicsAt) {
-            await this.table.addColumns([{ name: 'lastDynamicsAt', valueSql: '0' }]);
-          }
-          const hasMemoryClass = schema.fields.some(f => f.name === 'memoryClass');
-          if (!hasMemoryClass) {
-            await this.table.addColumns([{ name: 'memoryClass', valueSql: "'standard'" }]);
-          }
-          const hasNeverForget = schema.fields.some(f => f.name === 'neverForget');
-          if (!hasNeverForget) {
-            await this.table.addColumns([{ name: 'neverForget', valueSql: '0' }]);
-          }
-          const hasCoreMemoryScore = schema.fields.some(f => f.name === 'coreMemoryScore');
-          if (!hasCoreMemoryScore) {
-            await this.table.addColumns([{ name: 'coreMemoryScore', valueSql: '0.0' }]);
-          }
-          const hasCoreMemoryReason = schema.fields.some(f => f.name === 'coreMemoryReason');
-          if (!hasCoreMemoryReason) {
-            await this.table.addColumns([{ name: 'coreMemoryReason', valueSql: "''" }]);
-          }
-          // v5.5.0 — Safe Reconsolidation: Versioning
-          const hasVersionNumber = schema.fields.some(f => f.name === 'versionNumber');
-          if (!hasVersionNumber) {
-            await this.table.addColumns([{ name: 'versionNumber', valueSql: '1' }]);
-          }
-          const hasPreviousVersion = schema.fields.some(f => f.name === 'previousVersion');
-          if (!hasPreviousVersion) {
-            await this.table.addColumns([{ name: 'previousVersion', valueSql: "''" }]);
-          }
-          const hasSupersededBy = schema.fields.some(f => f.name === 'supersededBy');
-          if (!hasSupersededBy) {
-            await this.table.addColumns([{ name: 'supersededBy', valueSql: "''" }]);
-          }
-          const hasUpdateSource = schema.fields.some(f => f.name === 'updateSource');
-          if (!hasUpdateSource) {
-            await this.table.addColumns([{ name: 'updateSource', valueSql: "''" }]);
-          }
-          const hasUpdateEvidence = schema.fields.some(f => f.name === 'updateEvidence');
-          if (!hasUpdateEvidence) {
-            await this.table.addColumns([{ name: 'updateEvidence', valueSql: "''" }]);
-          }
-          const hasReconsolidationConfidence = schema.fields.some(f => f.name === 'reconsolidationConfidence');
-          if (!hasReconsolidationConfidence) {
-            await this.table.addColumns([{ name: 'reconsolidationConfidence', valueSql: '0.0' }]);
-          }
-          const hasStatus = schema.fields.some(f => f.name === 'status');
-          if (!hasStatus) {
-            await this.table.addColumns([{ name: 'status', valueSql: "'active'" }]);
-          }
-          const hasVersionCreatedAt = schema.fields.some(f => f.name === 'versionCreatedAt');
-          if (!hasVersionCreatedAt) {
-            await this.table.addColumns([{ name: 'versionCreatedAt', valueSql: '0' }]);
-          }
-          const hasUpdatedAt = schema.fields.some(f => f.name === 'updatedAt');
-          if (!hasUpdatedAt) {
-            await this.table.addColumns([{ name: 'updatedAt', valueSql: '0' }]);
-          }
-          // v6.x — Reminder columns
-          const reminderColumns = [
+          schema = await this.table.schema();
+        } catch (e) {
+          console.error(`[memory-lancedb-namespaced] schema read failed for ${this.dbPath}: ${e.message}`);
+        }
+
+        if (schema) {
+          const allColumns = [
+            { name: 'summary', valueSql: "''" },
+            { name: 'origin', valueSql: "'dm'" },
+            { name: 'mergedFrom', valueSql: "'[]'" },
+            { name: 'expiresAt', valueSql: '0' },
+            { name: 'storedBy', valueSql: "''" },
+            { name: 'sourceTurnId', valueSql: "''" },
+            { name: 'sourceMessageRole', valueSql: "''" },
+            { name: 'sourceTimestamp', valueSql: '0' },
+            { name: 'sourceUrl', valueSql: "''" },
+            { name: 'evidenceQuote', valueSql: "''" },
+            { name: 'scope', valueSql: "'agent-private'" },
+            { name: 'type', valueSql: "'memory'" },
+            { name: 'confirmed', valueSql: 'false' },
+            { name: 'emotionalValence', valueSql: "''" },
+            { name: 'emotionalIntensity', valueSql: '0.0' },
+            { name: 'emotionalDominant', valueSql: "'neutral'" },
+            { name: 'moodContextAtCapture', valueSql: "''" },
+            { name: 'replayCount', valueSql: '0' },
+            { name: 'lastReplayed', valueSql: '0' },
+            { name: 'retrievalCount', valueSql: '0' },
+            { name: 'lastRetrievedAt', valueSql: '0' },
+            { name: 'memoryStrength', valueSql: '1.0' },
+            { name: 'halfLifeDays', valueSql: '30' },
+            { name: 'lastStrengthenedAt', valueSql: '0' },
+            { name: 'lastDynamicsAt', valueSql: '0' },
+            { name: 'memoryClass', valueSql: "'standard'" },
+            { name: 'neverForget', valueSql: '0' },
+            { name: 'coreMemoryScore', valueSql: '0.0' },
+            { name: 'coreMemoryReason', valueSql: "''" },
+            { name: 'versionNumber', valueSql: '1' },
+            { name: 'previousVersion', valueSql: "''" },
+            { name: 'supersededBy', valueSql: "''" },
+            { name: 'updateSource', valueSql: "''" },
+            { name: 'updateEvidence', valueSql: "''" },
+            { name: 'reconsolidationConfidence', valueSql: '0.0' },
+            { name: 'status', valueSql: "'active'" },
+            { name: 'versionCreatedAt', valueSql: '0' },
+            { name: 'updatedAt', valueSql: '0' },
             { name: 'memoryKind', valueSql: "'memory'" },
             { name: 'reminderStatus', valueSql: "''" },
             { name: 'remindAt', valueSql: '0' },
@@ -558,17 +447,17 @@ class MemoryDB {
             { name: 'lastDispatchAttemptAt', valueSql: '0' },
             { name: 'nextDispatchAttemptAt', valueSql: '0' },
           ];
-          for (const col of reminderColumns) {
-            const hasCol = schema.fields.some(f => f.name === col.name);
-            if (!hasCol) {
-              await this.table.addColumns([col]);
+
+          for (const col of allColumns) {
+            try {
+              const hasCol = schema.fields.some(f => f.name === col.name);
+              if (!hasCol) {
+                await this.table.addColumns([col]);
+              }
+            } catch (e) {
+              console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${e.message}`);
             }
           }
-        } catch (e) {
-          // Schema-Migration kann auf älteren LanceDB-Versionen scheitern
-          // (kein addColumns-Support). Graceful degradation, aber loggen statt
-          // silent swallow — Schema-Drifts sind sonst unsichtbar.
-          console.warn(`[memory-lancedb-namespaced] schema migration warning for ${this.dbPath}: ${e.message}`);
         }
       } else {
         this.table = await this.db.createTable(TABLE_NAME, [

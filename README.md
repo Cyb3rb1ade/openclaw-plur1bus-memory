@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Version 6.1.1** — the Engram release — adds recall hardening, security regression fixes, and full P5 validation. Autonomous learning with explicit user control gates: semantic long-input handling, feature activation profiles, proposal-only memory merging, conflict resolution recommendations, and safety-hardened Obsidian bridge apply mode.
+**Version 6.1.2** — the Engram release — adds recall hardening, security regression fixes, and full P5 validation. Autonomous learning with explicit user control gates: semantic long-input handling, feature activation profiles, proposal-only memory merging, conflict resolution recommendations, and safety-hardened Obsidian bridge apply mode.
 
 ## What it does
 
@@ -19,7 +19,7 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 - **Obsidian bridge apply mode (safe)** — When `mode: "apply"` is confirmed, every batch creates per-file backups, a manifest (beforeHash/afterHash), and an audit-log entry. Vault path confirmation is required before the first write.
 - **Rate-limited background jobs** — Daily consolidation is capped at 1×/day/agent; REM dreaming is capped at 1×/week. Configurable via `run-state.json`.
 
-### New in v6.1.1 (Engram)
+### New in v6.1.2 (Engram)
 
 - **Recall hardening** — `maxPromptMemories` (default 12) caps memories in the prompt context; dedup threshold raised to 0.78; acronym recognition groups semantically similar abbreviations; `canonicalMaxItems` (default 5) limits canonical representatives per cluster.
 - **Typ-based memory half-life** — `halfLifeDaysMap` replaces the global default with context-sensitive decay: transient (60 days), episodic (180 days), longContext / project (600 days, tuned in P5D for >0.88 recall after 100 days).
