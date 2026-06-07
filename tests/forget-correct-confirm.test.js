@@ -1,0 +1,121 @@
+/**
+ * tests/forget-correct-confirm.test.js
+ *
+ * Integration test for the two-step forget/correct confirmation completion.
+ * The button/callback path is impossible (OpenClaw delivers no callback events),
+ * so confirmations complete via a follow-up command. This exercises the actual
+ * completion building blocks end-to-end:
+ *   createConfirmation → validateConfirmation → forgetCard/correctCard
+ * which were previously imported but never invoked (the regression).
+ */
+
+import { describe, it } from "node:test";
+import assert from "node:assert";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { createConfirmation, validateConfirmation, resolveIdentity, isAuthorized, resolveChatKind } from "../lib/security.js";
+import { forgetCard, correctCard } from "../lib/telegram-commands/memory-edit.js";
+
+const archiveDir = mkdtempSync(join(tmpdir(), "p1b-confirm-"));
+
+function mockDb(initial = []) {
+  const cards = new Map(initial.map((c) => [c.id, c]));
+  return {
+    cards,
+    async getCard(_agent, id) { return cards.get(id) || null; },
+    async deleteCard(_agent, id) { cards.delete(id); return { ok: true }; },
+    async updateCard(_agent, id, newContent) { const c = cards.get(id); if (c) c.text = newContent; return { ok: true }; },
+  };
+}
+
+describe("forget/correct confirmation completion", () => {
+  it("forget: create → validate → forgetCard deletes (archive-first) and consumes token", async () => {
+    const id = "11111111-1111-1111-1111-111111111111";
+    const db = mockDb([{ id, text: "secret note", title: "secret" }]);
+    const store = new Map();
+    const c = createConfirmation({ userId: "u1", chatId: "c1", command: "forget", targetId: id });
+    store.set(`${c.nonce}:${c.targetId}`, c);
+
+    const v = validateConfirmation(c.callbackData, store, { userId: "u1", chatId: "c1" });
+    assert.strictEqual(v.valid, true);
+    assert.strictEqual(v.targetId, id);
+
+    const res = await forgetCard(db, "default", v.targetId, { archiveDir });
+    assert.strictEqual(res.ok, true);
+    assert.ok(res.archivePath, "should write an archive before deleting");
+    assert.strictEqual(db.cards.has(id), false, "card must be deleted");
+    assert.strictEqual(store.size, 0, "confirmation token must be consumed");
+  });
+
+  it("forget: wrong user is rejected, card is kept", async () => {
+    const id = "22222222-2222-2222-2222-222222222222";
+    const db = mockDb([{ id, text: "keep me", title: "keep" }]);
+    const store = new Map();
+    const c = createConfirmation({ userId: "u1", chatId: "c1", command: "forget", targetId: id });
+    store.set(`${c.nonce}:${c.targetId}`, c);
+
+    const v = validateConfirmation(c.callbackData, store, { userId: "attacker", chatId: "c1" });
+    assert.strictEqual(v.valid, false);
+    assert.strictEqual(v.reason, "security.wrong_user");
+    assert.strictEqual(db.cards.has(id), true, "card must remain when confirmation fails");
+  });
+
+  it("correct: create → validate → correctCard applies new text via updateMemory", async () => {
+    const id = "33333333-3333-3333-3333-333333333333";
+    const db = mockDb([{ id, text: "old text", title: "note" }]);
+    const store = new Map();
+    const c = createConfirmation({ userId: "u1", chatId: "c1", command: "correct", targetId: id });
+    c.payload = { newText: "new text", oldText: "old text" };
+    store.set(`${c.nonce}:${c.targetId}`, c);
+
+    const v = validateConfirmation(c.callbackData, store, { userId: "u1", chatId: "c1" });
+    assert.strictEqual(v.valid, true);
+
+    let applied = null;
+    const res = await correctCard(db, "default", v.targetId, c.payload.newText, {
+      archiveDir,
+      updateMemory: async ({ id: mid, newContent }) => { applied = { id: mid, newContent }; },
+    });
+    assert.strictEqual(res.ok, true);
+    assert.deepStrictEqual(applied, { id, newContent: "new text" }, "safe-reconsolidation hook must run with the new text");
+  });
+
+  it("resolveIdentity tolerates alternate field names, nesting, and missing identity", () => {
+    assert.deepStrictEqual(resolveIdentity({ userId: "u", chatId: "c" }), { userId: "u", chatId: "c" });
+    assert.deepStrictEqual(resolveIdentity({ from: { id: 42 }, chat: { id: 7 } }), { userId: "42", chatId: "7" });
+    assert.deepStrictEqual(resolveIdentity({ sender_id: "s", conversationId: "cv" }), { userId: "s", chatId: "cv" });
+    // nested under message/event (some channels)
+    assert.deepStrictEqual(resolveIdentity({ message: { from: { id: 9 }, chat: { id: 3 } } }), { userId: "9", chatId: "3" });
+    assert.deepStrictEqual(resolveIdentity({ event: { userId: "e1", chatId: "e2" } }), { userId: "e1", chatId: "e2" });
+    assert.deepStrictEqual(resolveIdentity({}), { userId: undefined, chatId: undefined });
+  });
+
+  it("isAuthorized reports no_user_identity when the channel passes no userId", () => {
+    const r = isAuthorized({ chatId: "c1" }, { security: { allowedUserIds: ["u1"] } }, { destructive: true });
+    assert.strictEqual(r.authorized, false);
+    assert.strictEqual(r.reason, "security.no_user_identity");
+  });
+
+  it("resolveChatKind classifies private/group/unknown", () => {
+    assert.strictEqual(resolveChatKind({ chatType: "private" }), "private");
+    assert.strictEqual(resolveChatKind({ chat: { type: "supergroup" } }), "group");
+    assert.strictEqual(resolveChatKind({ is_group_chat: true }), "group");
+    assert.strictEqual(resolveChatKind({ message: { chatType: "dm" } }), "private");
+    assert.strictEqual(resolveChatKind({}), "unknown");
+  });
+
+  it("isAuthorized (no ACL): allows destructive in private DM, denies in group/unknown", () => {
+    // private 1:1 → allowed (single owner, archive-first recoverable)
+    const priv = isAuthorized({ chatType: "private" }, {}, { destructive: true });
+    assert.strictEqual(priv.authorized, true);
+    // group → denied (fail-safe)
+    const grp = isAuthorized({ chatType: "group" }, {}, { destructive: true });
+    assert.strictEqual(grp.authorized, false);
+    assert.strictEqual(grp.reason, "security.no_auth_configured");
+    // unknown chat type → denied (fail-safe)
+    const unk = isAuthorized({ chatId: "c1" }, {}, { destructive: true });
+    assert.strictEqual(unk.authorized, false);
+  });
+});
