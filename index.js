@@ -368,6 +368,19 @@ class MemoryDB {
     const normalized = { ...entry, id: entry.id || randomUUID() };
     if (!normalized.type) normalized.type = "memory";
     if (typeof normalized.confirmed !== "boolean") normalized.confirmed = false;
+    // Reminder-column defaults — these columns exist in migrated tables but are
+    // absent from regular memory entries; LanceDB requires all schema fields.
+    if (normalized.memoryKind == null) normalized.memoryKind = "memory";
+    if (normalized.reminderStatus == null) normalized.reminderStatus = "";
+    if (normalized.remindAt == null) normalized.remindAt = 0;
+    if (normalized.remindedAt == null) normalized.remindedAt = 0;
+    if (normalized.dispatchedAt == null) normalized.dispatchedAt = 0;
+    if (normalized.acknowledgedAt == null) normalized.acknowledgedAt = 0;
+    if (normalized.cancelledAt == null) normalized.cancelledAt = 0;
+    if (normalized.reminderKey == null) normalized.reminderKey = "";
+    if (normalized.dispatchCount == null) normalized.dispatchCount = 0;
+    if (normalized.lastDispatchAttemptAt == null) normalized.lastDispatchAttemptAt = 0;
+    if (normalized.nextDispatchAttemptAt == null) normalized.nextDispatchAttemptAt = 0;
     if (!this.schemaFieldNames) return normalized;
     const filtered = {};
     for (const [key, value] of Object.entries(normalized)) {
@@ -1747,15 +1760,16 @@ const plugin = {
         });
       }
 
+      const resolveCommandLocale = (commandCtx) => {
+        const messages = commandCtx?.messages || [];
+        const lang = resolveLocale({ ctx: commandCtx, messages, fallback: "en" });
+        const toneHint = commandCtx?.workspaceDir ? readSoulToneCached(commandCtx.workspaceDir) : null;
+        const tone = pickTone(toneHint);
+        return { lang, tone };
+      };
+
       if (typeof api.registerCommand === "function") {
         const parsePlur1busArgs = (commandCtx) => commandCtx.args?.trim().split(/\s+/).filter(Boolean) || [];
-        const resolveCommandLocale = (commandCtx) => {
-          const messages = commandCtx?.messages || [];
-          const lang = resolveLocale({ ctx: commandCtx, messages, fallback: "en" });
-          const toneHint = commandCtx?.workspaceDir ? readSoulToneCached(commandCtx.workspaceDir) : null;
-          const tone = pickTone(toneHint);
-          return { lang, tone };
-        };
         const plur1busHelp = (mode = "quick", opts = {}) => ({
           text: mode === "advanced" ? t("plur1bus.help_advanced", opts) : t("plur1bus.help_quick", opts),
         });
