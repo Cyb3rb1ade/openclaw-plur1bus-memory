@@ -117,7 +117,7 @@ import {
   emotionEmoji,
 } from "./lib/emotion.js";
 import { createEmotionalStatePool } from "./lib/emotional-state.js";
-import { applyDynamicsDefaults, createRetrievalLedgerEntry } from "./lib/memory-dynamics.js";
+import { applyDynamicsDefaults, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
 import { parseReminderIntent } from "./lib/reminder-parser.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
 import { formatReminderNudge } from "./lib/reminder-nudge.js";
@@ -600,7 +600,7 @@ class MemoryDB {
             retrievalCount: 0,
             lastRetrievedAt: 0,
             memoryStrength: 1.0,
-            halfLifeDays: 30,
+            halfLifeDays: 180,
             lastStrengthenedAt: 0,
             lastDynamicsAt: 0,
             memoryClass: "standard",
@@ -727,7 +727,7 @@ class MemoryDB {
         retrievalCount: r.retrievalCount ?? 0,
         lastRetrievedAt: r.lastRetrievedAt ?? 0,
         memoryStrength: r.memoryStrength ?? 1.0,
-        halfLifeDays: r.halfLifeDays ?? 30,
+        halfLifeDays: r.halfLifeDays ?? resolveHalfLifeDays(r.category, r.memoryClass, halfLifeOverrides),
         lastStrengthenedAt: r.lastStrengthenedAt ?? 0,
         lastDynamicsAt: r.lastDynamicsAt ?? 0,
         memoryClass: r.memoryClass || "standard",
@@ -1502,6 +1502,7 @@ const plugin = {
     const canonicalMaxItems = recallCfg.canonicalMaxItems ?? 5;
     const maxPromptMemories = recallCfg.maxPromptMemories ?? 12;
     const candidateTopK     = recallCfg.candidateTopK     ?? 40;
+    const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
 
     // GC config
     const gcCfg = cfg.gc || {};
@@ -1726,7 +1727,7 @@ const plugin = {
               await storeDb.delete(mergeCandidate.entry.id);
               appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
               const mergedVector = await embeddings.embed(mergeResult.mergedText);
-              const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now());
+              const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
               await storeDb.store(mergedEntry);
               if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
               if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -1746,7 +1747,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now());
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
         if (storeCtx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -2860,7 +2861,7 @@ const plugin = {
                   entities: graphSignals.entities,
                   people: graphSignals.people,
                   projects: graphSignals.projects,
-                }, captureTimestamp);
+                }, captureTimestamp, halfLifeOverrides);
                 await db.store(row);
                 storedMemoryRows.push(row);
                 stored++;
@@ -3263,7 +3264,7 @@ const plugin = {
                       emotionalIntensity: mergedEmotion.emotionalIntensity,
                       emotionalDominant: mergedEmotion.emotionalDominant,
                       moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
-                    }, Date.now());
+                    }, Date.now(), halfLifeOverrides);
                     await db.store(mergedEntry);
                     if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
                     if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
@@ -3294,7 +3295,7 @@ const plugin = {
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
-              }, Date.now());
+              }, Date.now(), halfLifeOverrides);
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
               if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
