@@ -151,6 +151,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [6.1.0] — Engram — 2026-06-07
 
+### Breaking Changes
+- **Keine.** v6.1.0 ist vollständig abwärtskompatibel mit v6.0.x. Keine Schema-Migration, keine manuellen Eingriffe erforderlich.
+
 ### Added — Recall Hardening (Engram)
 
 - **P0 — Recall-Budget & Deduplizierung**
@@ -179,6 +182,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **P2F — Hot-Path Metrics Debounce**
   - Telemetrie-Flush im Recall-Hot-Path wird auf 250 ms debounced
   - Vermeidet Synchronisations-Overhead bei schnell aufeinanderfolgenden Recall-Aufrufen
+
+### Fixed
+- **Akronym-Tokenisierung**: `tokenizeAcronyms` erkennt jetzt korrekt Punkt- und Bindestrich-getrennte Akronyme (z. B. „A.I.“, „REST-API“) und normalisiert sie für die Deduplizierung.
+- **`dedupJaccard` Default**: der Standardwert für `dedupJaccard` wurde von `0.0` auf `0.78` angehoben, um konsistent mit dem dokumentierten Deduplizierungsverhalten zu sein.
 
 ---
 
