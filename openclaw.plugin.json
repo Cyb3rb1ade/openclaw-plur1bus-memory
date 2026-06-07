@@ -246,6 +246,22 @@
           "recallCacheTtlMs": {
             "type": "number",
             "default": 120000
+          },
+          "embeddingCacheEnabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "embeddingCacheTtlMs": {
+            "type": "number",
+            "default": 1800000
+          },
+          "embeddingCacheMaxEntries": {
+            "type": "number",
+            "default": 500
+          },
+          "metricsDebounceMs": {
+            "type": "number",
+            "default": 5000
           }
         }
       },
@@ -267,7 +283,7 @@
       },
       "summaryMaxWords": {
         "type": "number",
-        "default": 75
+        "default": 150
       },
       "reranker": {
         "type": "object",
