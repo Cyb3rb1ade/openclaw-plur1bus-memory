@@ -216,7 +216,7 @@ describe("buildWhereClause", () => {
 
   it("sanitizes string values to prevent injection", () => {
     const clause = buildWhereClause({ category: "person' OR '1'='1" });
-    assert.ok(clause.includes("\\'"));
+    assert.ok(clause.includes("''"));
     assert.ok(!clause.includes("= 'person' OR '"));
   });
 });
