@@ -28,7 +28,7 @@ describe("graph-link-writer: helpers", () => {
 
   it("formatLinkTarget falls back to plur1bus_id when path missing", () => {
     const record = { plur1bus_id: "dec-xyz", plur1bus_type: "decision" };
-    assert.match(formatLinkTarget(record, "plur1bus"), /dec-xyz/);
+    assert.strictEqual(formatLinkTarget(record, "plur1bus"), "plur1bus/records/decision/dec-xyz");
   });
 
   it("formatDisplayTitle uses title first", () => {
