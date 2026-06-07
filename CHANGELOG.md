@@ -149,6 +149,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ---
 
+## [6.1.1] — 2026-06-07
+
+### Fixed
+- **Package-Metadata-Version meldete 6.0.1 unter v6.1.0-Tag**: `package.json`, `package-lock.json` und `openclaw.plugin.json` wurden auf `6.1.1` synchronisiert, damit `npm pack` und Installation den korrekten Versions-String liefern.
+
+### Changed
+- Keine Laufzeit-Änderungen.
+- Keine DB-Schema-Änderungen.
+
+---
+
 ## [6.1.0] — Engram — 2026-06-07
 
 > **General Availability.** Alle P5-Validierungen bestanden: P5A (8/8), P5B (6/6), P5C (5/5), P5D (8/8), P5E (9/9). 441 Tests, 0 Failures über 100 Test-Suites.
