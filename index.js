@@ -77,10 +77,11 @@ import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import { resolveLocale, readSoulToneCached, pickTone, t } from "./lib/i18n.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions } from "./lib/jobs/schicht15-tracker.js";
-import { isApplyBlocked, detectPendingFeatures, recommendedProfile, safeProfile, applyFeatureProfile } from "./lib/setup/feature-profiles.js";
+import { isApplyBlocked, detectPendingFeatures, recommendedProfile, safeProfile, applyFeatureProfile, detectObsidianVaults, describeProfileDiff } from "./lib/setup/feature-profiles.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
+import { runWikiCommand } from "./lib/wiki-command.js";
 import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
@@ -1971,14 +1972,26 @@ const plugin = {
               else if (profileName === "safe") profile = safeProfile();
               else return { text: t("plur1bus.setup_unknown", { lang, tone, vars: { profile: profileName } }) };
               const writeResult = withConfigLock(openclawConfigPath, () => {
-                let cfg;
+                let rawCfg;
                 try {
-                  cfg = JSON.parse(readFileSync(openclawConfigPath, "utf8"));
+                  rawCfg = JSON.parse(readFileSync(openclawConfigPath, "utf8"));
                 } catch (err) {
                   return { error: `openclaw.json not readable: ${err.message}` };
                 }
-                const merged = applyFeatureProfile(cfg, profile, { confirmed: true });
-                const pendingInner = detectPendingFeatures(merged.plugins?.entries?.["memory-lancedb-namespaced"]?.config);
+                const pluginKey = "memory-lancedb-namespaced";
+                const existingPluginCfg = rawCfg.plugins?.entries?.[pluginKey]?.config || null;
+
+                // Auto-detect Obsidian vaults before applying profile
+                const vaultResult = detectObsidianVaults(existingPluginCfg?.obsidianBridge || profile.obsidianBridge || {});
+                if (vaultResult.detected && profile.obsidianBridge) {
+                  profile.obsidianBridge.requireVaultPathConfirmation = false;
+                }
+
+                // Compute diff before applying (shows what changes)
+                const diff = describeProfileDiff(existingPluginCfg, profile);
+
+                const merged = applyFeatureProfile(rawCfg, profile, { confirmed: true });
+                const pendingInner = detectPendingFeatures(merged.plugins?.entries?.[pluginKey]?.config);
                 try {
                   const tmp = `${openclawConfigPath}.tmp-${process.pid}-${Date.now()}`;
                   writeFileSync(tmp, JSON.stringify(merged, null, 2));
@@ -1986,25 +1999,61 @@ const plugin = {
                 } catch (err) {
                   return { error: `Saving config failed: ${err.message}` };
                 }
-                return { pending: pendingInner, mergedCfg: merged.plugins?.entries?.["memory-lancedb-namespaced"]?.config };
+                return {
+                  pending: pendingInner,
+                  mergedCfg: merged.plugins?.entries?.[pluginKey]?.config,
+                  diff,
+                  vaultResult,
+                  existingPluginCfg,
+                };
               });
               if (writeResult.error) return { text: `❌ ${writeResult.error}` };
               const pending = writeResult.pending || [];
               const mergedCfg = writeResult.mergedCfg || {};
+              const diff = writeResult.diff || {};
+              const vaultResult = writeResult.vaultResult || { detected: false, vaultPaths: [] };
+              const existingPluginCfg = writeResult.existingPluginCfg;
               const pendingSet = new Set(pending.map(p => p.feature));
-              const lines = [
-                t("plur1bus.setup_confirm", { lang, tone, vars: { profile: profileName } }),
-                "",
-                t("plur1bus.setup_activated", { lang, tone }),
-              ];
+
+              const lines = [];
+
+              // Install type header
+              if (diff.isUpdate) {
+                const confirmedAt = existingPluginCfg?.featuresConfirmedAt
+                  ? new Date(existingPluginCfg.featuresConfirmedAt).toLocaleDateString(lang === "de" ? "de-DE" : "en-US")
+                  : "?";
+                lines.push(t("plur1bus.setup_update_mode", { lang, tone, vars: { date: confirmedAt } }));
+              } else {
+                lines.push(t("plur1bus.setup_fresh_install", { lang, tone }));
+              }
+              lines.push(t("plur1bus.setup_confirm", { lang, tone, vars: { profile: profileName } }));
+              lines.push("");
+
+              // Obsidian vault status
+              if (vaultResult.detected) {
+                lines.push(t("plur1bus.setup_obsidian_found", { lang, tone, vars: { paths: vaultResult.vaultPaths.join(", ") } }));
+              } else {
+                lines.push(t("plur1bus.setup_obsidian_missing", { lang, tone }));
+              }
+              lines.push("");
+
+              // Feature status table
+              lines.push(t("plur1bus.setup_activated", { lang, tone }));
               for (const [key, value] of Object.entries(profile)) {
                 if (key === "setupProfile" || key === "featuresConfirmedAt") continue;
-                if (typeof value === "object" && value.enabled !== undefined) {
-                  const actualEnabled = mergedCfg[key]?.enabled ?? value.enabled;
-                  const status = !actualEnabled ? "disabled" : pendingSet.has(key) ? "pending_setup" : "active";
-                  lines.push(`• ${key}: ${status}`);
+                if (typeof value !== "object" || value.enabled === undefined) continue;
+                const actualEnabled = mergedCfg[key]?.enabled ?? value.enabled;
+                if (!actualEnabled) {
+                  lines.push(`• ${key}: disabled`);
+                } else if (pendingSet.has(key)) {
+                  lines.push(`• ${key}: pending_setup`);
+                } else if (diff.alreadyActive.includes(key)) {
+                  lines.push(`• ${key}: ${t("plur1bus.setup_already_active", { lang, tone })}`);
+                } else {
+                  lines.push(`• ${key}: ${t("plur1bus.setup_newly_active", { lang, tone })}`);
                 }
               }
+
               if (pending.length > 0) {
                 lines.push("");
                 lines.push(t("plur1bus.setup_pending", { lang, tone }));
@@ -2532,6 +2581,13 @@ const plugin = {
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runCorrectCommand,
+        });
+        api.registerCommand({
+          name: "wiki",
+          description: "PLUR1BUS — Wiki durchsuchen, hinzufügen, löschen",
+          acceptsArgs: true,
+          channels: ["telegram", "discord", "slack", "mattermost"],
+          handler: (ctx) => runWikiCommand(ctx, { pool, embeddings, reranker, callLlm, cfg, api, llmCfg: mergingLlmCfg }),
         });
       }
 
