@@ -458,7 +458,7 @@
           },
           "dedupJaccard": {
             "type": "number",
-            "default": 0.6
+            "default": 0.78
           },
           "canonicalFirst": {
             "type": "boolean",
@@ -470,7 +470,15 @@
           },
           "canonicalMaxItems": {
             "type": "number",
-            "default": 2
+            "default": 5
+          },
+          "maxPromptMemories": {
+            "type": "number",
+            "default": 12
+          },
+          "candidateTopK": {
+            "type": "number",
+            "default": 40
           }
         }
       },

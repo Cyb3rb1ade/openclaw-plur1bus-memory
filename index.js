@@ -1496,10 +1496,12 @@ const plugin = {
     const recallCfg = cfg.recall || {};
     const importanceBoost  = recallCfg.importanceBoost  ?? 0.3;
     const dedupEnabled     = recallCfg.dedup            !== false; // default on
-    const dedupJaccard     = recallCfg.dedupJaccard     ?? 0.6;
+    const dedupJaccard     = recallCfg.dedupJaccard     ?? 0.78;
     const canonicalEnabled = recallCfg.canonicalFirst   !== false; // default on
     const canonicalMinScore = recallCfg.canonicalMinScore ?? 0.30;
-    const canonicalMaxItems = recallCfg.canonicalMaxItems ?? 2;
+    const canonicalMaxItems = recallCfg.canonicalMaxItems ?? 5;
+    const maxPromptMemories = recallCfg.maxPromptMemories ?? 12;
+    const candidateTopK     = recallCfg.candidateTopK     ?? 40;
 
     // GC config
     const gcCfg = cfg.gc || {};
@@ -1672,7 +1674,7 @@ const plugin = {
       reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
     }
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
-    const rerankCandidates = rerankerCfg.candidates ?? 20;
+    const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
 
     if (reranker) {
       const experimental = rerankerCfg.provider === "local-transformers" ? " experimental" : "";
@@ -3113,7 +3115,7 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
-              const limit = params.limit || 5;
+              const limit = params.limit || maxPromptMemories;
               await db.init();
               // v5.4.0 — Graph-Edges für assoziativen Spread laden
               let graphEdges = [];
@@ -3609,7 +3611,7 @@ const plugin = {
             dbTable: db.table,
             embeddings,
             workspaceDir: ctx?.workspaceDir,
-            topN: 5,
+            topN: maxPromptMemories,
             recallMinScore: autoRecallMinScore,
             importanceBoost,
             dedupEnabled,
