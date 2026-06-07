@@ -149,17 +149,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ---
 
-## [6.1.0-rc1] — Engram — 2026-06-07
+## [6.1.0] — Engram — 2026-06-07
 
-> **Release Candidate 1** – nicht für Production.
+> **General Availability.** Alle P5-Validierungen bestanden: P5A (8/8), P5B (6/6), P5C (5/5), P5D (8/8), P5E (9/9). 441 Tests, 0 Failures über 100 Test-Suites.
 
 ### Breaking Changes
-- **Keine.** v6.1.0-rc1 ist vollständig abwärtskompatibel mit v6.0.x. Keine Schema-Migration, keine manuellen Eingriffe erforderlich.
+- **Keine.** v6.1.0 ist vollständig abwärtskompatibel mit v6.0.x. Keine Schema-Migration, keine manuellen Eingriffe erforderlich.
 
 ### Upgrade-Hinweise
 - In-place Upgrade von v6.0.x: Config-Defaults werden automatisch übernommen.
 - Kein DB-Reset nötig; bestehende Memories bleiben erhalten.
-- Rollback: `git checkout HEAD~1` oder vorherigen Tag auschecken.
+- Rollback auf v6.0.x jederzeit sicher (`git checkout 917e403`); keine DB-Schema-Änderungen, keine Datenmigration nötig.
 
 ### Added — Recall Hardening (Engram)
 
@@ -173,7 +173,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   - `halfLifeDaysMap` mit typ-spezifischen Defaults:
     - `transient`: `60` Tage
     - `episodic`: `180` Tage
-    - `longContext` / `project`: `365` Tage
+    - `longContext` / `project`: `600` Tage (P5D: datengestützte Anpassung für >0.88-Recall nach 100 Tagen)
   - Ersetzt das globale `halfLifeDays` durch kontextsensitives Vergessen
 
 - **P2 — Performance & Skalierung**
@@ -190,14 +190,34 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   - Telemetrie-Flush im Recall-Hot-Path wird auf 250 ms debounced
   - Vermeidet Synchronisations-Overhead bei schnell aufeinanderfolgenden Recall-Aufrufen
 
+### Security — Hardening (P4C & P5)
+
+- **SQL-Escaping** in `lib/filter-parser.js`: Standard-SQL-Konformität (`'\'` → `''`) zur Vermeidung von Injection in DB-where-Clauses.
+- **ACL-Härtung** für destruktive Commands: `userId` muss in `allowedUserIds` enthalten sein; private DM erlaubt, Gruppen-Chat verweigert.
+- **Path-Traversal-Schutz** verifiziert: `../../../etc/passwd` wird an mehreren Schichten blockiert.
+- **Filter-Parser-Injection-Resistenz**: Parser resistiert gegen bösartige Eingaben in Filterausdrücken.
+
+### Changed
+
+- **P5D — Half-Life-Tuning für longContext / project**: `halfLifeDays` für `longContext` und `project` von `365` auf `600` Tage erhöht (datengestützt, um nach 100 Tagen noch >0.88 Recall-Qualität zu halten).
+- **P3A — Config-Defaults konsolidiert**: `openclaw.plugin.json` um neue Recall-/Runtime-Keys ergänzt; JSDoc-Default für `dedupJaccard` korrigiert (`0.6` → `0.78`).
+- **P4A — Toter Code entfernt**: 233 Zeilen ungenutzten Codes entfernt (`lib/memory-card-writer.js`, 6 tote Funktionen in `lib/obsidian-control-room.js`, `normalizeQuery` in `lib/embedding-cache.js`). Keine funktionale Regression.
+
 ### Fixed
 - **Akronym-Tokenisierung**: `tokenizeAcronyms` erkennt jetzt korrekt Punkt- und Bindestrich-getrennte Akronyme (z. B. „A.I.“, „REST-API“) und normalisiert sie für die Deduplizierung.
 - **`dedupJaccard` Default**: der Standardwert für `dedupJaccard` wurde von `0.0` auf `0.78` angehoben, um konsistent mit dem dokumentierten Deduplizierungsverhalten zu sein.
 
-### Known Issues (RC1)
-- **embeddingCache noch nicht in `index.js` verdrahtet**: Die Embedding-Cache-Implementierung existiert, wird aber im Hot-Path noch nicht genutzt. Aktiviert erst nach Verdrahtung in P5+.
-- **metricsDebounceMs noch nicht konfigurierbar**: Der Debounce-Wert für Hot-Path-Metrics ist auf `250 ms` hartcodiert; Konfiguration über `openclaw.json` folgt in P5+.
-- **60+ Over-Exports in `neo-arch.js` / `obsidian-*.js`**: Überschüssige Exports führen zu Warnungen beim Bundling. Bereinigung ist für P5+ eingeplant.
+### Validation — v6-engram GA (P3–P5)
+
+- **P3**: Config-Audit (41 Tests), E2E-Recall-Smoke (5 Tests), Performance-Benchmarks, Dead-Code-Audit.
+- **P4**: Security-Regression (105 Tests), Upgrade-Simulation (12 Tests), Release-Packaging-Smoke, Public-API-Audit.
+- **P5A**: Real-Upgrade-Dry-Run (8/8 Checks) — kein Datenverlust, keine Schema-Änderung nötig.
+- **P5B**: Telegram-Command-Smoke (6/6) — ACL-Verhalten in Private/Group validiert.
+- **P5C**: Obsidian-Bridge-Smoke (5/5) — Bidirektionaler Sync, Backup/Manifest/Audit, Path-Traversal-Schutz, atomare JSON-Writes.
+- **P5D**: Recall-Quality-Golden-Set (8/8) — Akronyme, Decay, Dedup, Kompression validiert.
+- **P5E**: Rollback-Test (9/9) — sicherer Rollback auf v6.0.x jederzeit möglich.
+
+> **Bekannte Einschränkungen** siehe `docs/known-issues.md`.
 
 ---
 

@@ -502,8 +502,8 @@
             "properties": {
               "transient": { "type": "number", "default": 60 },
               "episodic": { "type": "number", "default": 180 },
-              "longContext": { "type": "number", "default": 365 },
-              "project": { "type": "number", "default": 365 }
+              "longContext": { "type": "number", "default": 600 },
+              "project": { "type": "number", "default": 600 }
             }
           }
         }

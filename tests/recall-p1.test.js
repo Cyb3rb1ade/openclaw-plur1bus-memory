@@ -22,14 +22,14 @@ describe("P1 resolveHalfLifeDays", () => {
     assert.strictEqual(resolveHalfLifeDays("other"), 180);
   });
 
-  it("maps longContext categories (person, work) to 365 days", () => {
-    assert.strictEqual(resolveHalfLifeDays("person"), 365);
-    assert.strictEqual(resolveHalfLifeDays("work"), 365);
+  it("maps longContext categories (person, work) to 600 days", () => {
+    assert.strictEqual(resolveHalfLifeDays("person"), 600);
+    assert.strictEqual(resolveHalfLifeDays("work"), 600);
   });
 
-  it("maps project categories (project, decision) to 365 days", () => {
-    assert.strictEqual(resolveHalfLifeDays("project"), 365);
-    assert.strictEqual(resolveHalfLifeDays("decision"), 365);
+  it("maps project categories (project, decision) to 600 days", () => {
+    assert.strictEqual(resolveHalfLifeDays("project"), 600);
+    assert.strictEqual(resolveHalfLifeDays("decision"), 600);
   });
 
   it("defaults unknown categories to 180 (episodic)", () => {
@@ -42,7 +42,7 @@ describe("P1 resolveHalfLifeDays", () => {
     assert.strictEqual(resolveHalfLifeDays("fact", null, overrides), 90);
     assert.strictEqual(resolveHalfLifeDays("project", null, overrides), 730);
     // Non-overridden groups keep defaults
-    assert.strictEqual(resolveHalfLifeDays("person", null, overrides), 365);
+    assert.strictEqual(resolveHalfLifeDays("person", null, overrides), 600);
   });
 
   it("ignores category mapping for core memories", () => {
@@ -60,7 +60,7 @@ describe("P1 resolveHalfLifeDays", () => {
 describe("P1 applyDynamicsDefaults", () => {
   it("sets halfLifeDays from category for new standard memories", () => {
     const out = applyDynamicsDefaults({ category: "project" });
-    assert.strictEqual(out.halfLifeDays, 365);
+    assert.strictEqual(out.halfLifeDays, 600);
     assert.strictEqual(out.memoryClass, "standard");
   });
 
@@ -98,7 +98,7 @@ describe("P1 applyDynamicsDefaults", () => {
 });
 
 describe("P1 computeDecayedStrength respects category halfLife", () => {
-  it("fact memory decays faster (60d) than project memory (365d)", () => {
+  it("fact memory decays faster (60d) than project memory (600d)", () => {
     const now = Date.now();
     const factRow = {
       memoryStrength: 1.0,
@@ -107,13 +107,13 @@ describe("P1 computeDecayedStrength respects category halfLife", () => {
     };
     const projectRow = {
       memoryStrength: 1.0,
-      halfLifeDays: 365,
+      halfLifeDays: 600,
       createdAt: now - 86400000 * 60, // 60 days ago
     };
     const factStrength = computeDecayedStrength(factRow, now);
     const projectStrength = computeDecayedStrength(projectRow, now);
     assert.ok(factStrength < projectStrength, "fact should decay faster than project");
     assert.ok(Math.abs(factStrength - 0.5) < 0.01, "fact after 60d should be ~0.5");
-    assert.ok(projectStrength > 0.88, "project after 60d should be > 0.88 (1/2^(60/365))");
+    assert.ok(projectStrength > 0.88, "project after 60d should be > 0.88 (1/2^(60/600))");
   });
 });

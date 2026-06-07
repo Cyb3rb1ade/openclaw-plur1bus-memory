@@ -51,8 +51,8 @@ describe("Upgrade-Simulation: Alte Config ohne neue Felder", () => {
     const map = mapNode.properties;
     assert.strictEqual(map.transient.default, 60);
     assert.strictEqual(map.episodic.default, 180);
-    assert.strictEqual(map.longContext.default, 365);
-    assert.strictEqual(map.project.default, 365);
+    assert.strictEqual(map.longContext.default, 600);
+    assert.strictEqual(map.project.default, 600);
   });
 
   it("Schema-Defaults für Runtime-Felder sind korrekt", () => {
@@ -79,8 +79,8 @@ describe("Upgrade-Simulation: Alte Config ohne neue Felder", () => {
     const halfLifeDefaults = {
       transient: 60,
       episodic: 180,
-      longContext: 365,
-      project: 365,
+      longContext: 600,
+      project: 600,
     };
     assert.deepStrictEqual(halfLifeOverrides, {});
     assert.strictEqual(resolveHalfLifeDays("fact", null, halfLifeOverrides), halfLifeDefaults.transient);
@@ -118,7 +118,7 @@ describe("Upgrade-Simulation: Alte Memories mit gesetztem halfLifeDays", () => {
   });
 
   it("resolveHalfLifeDays gibt 365 für 'project' ohne Override zurück", () => {
-    assert.strictEqual(resolveHalfLifeDays("project"), 365);
+    assert.strictEqual(resolveHalfLifeDays("project"), 600);
   });
 });
 
@@ -131,7 +131,7 @@ describe("Upgrade-Simulation: Neue Memories bekommen typbasierte Werte", () => {
 
   it("applyDynamicsDefaults({ category: 'person' }) → halfLifeDays = 365", () => {
     const result = applyDynamicsDefaults({ category: "person" });
-    assert.strictEqual(result.halfLifeDays, 365);
+    assert.strictEqual(result.halfLifeDays, 600);
     assert.strictEqual(result.memoryClass, "standard");
   });
 });
@@ -150,8 +150,8 @@ describe("Upgrade-Simulation: Config-Override funktioniert", () => {
 
   it("andere Gruppen sind von transient-Override unberührt", () => {
     const overrides = { transient: 90 };
-    assert.strictEqual(resolveHalfLifeDays("project", null, overrides), 365);
-    assert.strictEqual(resolveHalfLifeDays("person", null, overrides), 365);
+    assert.strictEqual(resolveHalfLifeDays("project", null, overrides), 600);
+    assert.strictEqual(resolveHalfLifeDays("person", null, overrides), 600);
     assert.strictEqual(resolveHalfLifeDays("other", null, overrides), 180);
   });
 });

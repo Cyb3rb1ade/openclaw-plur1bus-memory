@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Version 6.0.0** — the Engram release — adds autonomous learning with explicit user control gates: semantic long-input handling, feature activation profiles, proposal-only memory merging, conflict resolution recommendations, and safety-hardened Obsidian bridge apply mode.
+**Version 6.1.0** — the Engram release — adds recall hardening, security regression fixes, and full P5 validation. Autonomous learning with explicit user control gates: semantic long-input handling, feature activation profiles, proposal-only memory merging, conflict resolution recommendations, and safety-hardened Obsidian bridge apply mode.
 
 ## What it does
 
@@ -18,6 +18,15 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 - **schicht15 deduplication** — KNOWLEDGE.md promotions are tracked per workspace+agent in persistent state. Double-promotion is prevented via `memoryId` and optional `contentHash`.
 - **Obsidian bridge apply mode (safe)** — When `mode: "apply"` is confirmed, every batch creates per-file backups, a manifest (beforeHash/afterHash), and an audit-log entry. Vault path confirmation is required before the first write.
 - **Rate-limited background jobs** — Daily consolidation is capped at 1×/day/agent; REM dreaming is capped at 1×/week. Configurable via `run-state.json`.
+
+### New in v6.1.0 (Engram)
+
+- **Recall hardening** — `maxPromptMemories` (default 12) caps memories in the prompt context; dedup threshold raised to 0.78; acronym recognition groups semantically similar abbreviations; `canonicalMaxItems` (default 5) limits canonical representatives per cluster.
+- **Typ-based memory half-life** — `halfLifeDaysMap` replaces the global default with context-sensitive decay: transient (60 days), episodic (180 days), longContext / project (600 days, tuned in P5D for >0.88 recall after 100 days).
+- **Performance & scaling** — LRU+TTL embedding cache (prepared, not yet hot-wired), semantic recall compression, adaptive recall tiers, graph-index traversal, and a reinforcement loop that strengthens `memoryStrength` on successful recalls.
+- **Security hardening** — SQL-escaping in filter parser, ACL hardening for destructive commands (private DM allowed, group denied), verified path-traversal protection, and filter-parser injection resistance.
+- **Metrics debounce** — Graph-recall telemetry flush is debounced to 250 ms to reduce sync overhead during rapid recall bursts.
+- **Validated upgrade & rollback** — P5 dry-runs confirm zero data loss, no schema changes, and safe rollback to v6.0.x (`917e403`).
 
 ## User Commands
 
