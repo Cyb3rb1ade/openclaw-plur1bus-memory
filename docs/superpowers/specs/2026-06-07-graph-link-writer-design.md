@@ -51,7 +51,7 @@ export function writeGraphLinks(rawConfig, records, options = {})
 
 - `tiers` attr in start tag records which tiers contributed (for debugging)
 - Empty state: `- _(keine Querverweise)_` — stable hash, prevents repeated re-scanning
-- Conflict (hash mismatch = user edited the block manually): skip + add to `conflicts[]`, never overwrite
+- Conflict detection: exclusively via `replaceManagedBlock()` hash-mismatch (the existing system mechanism). Block ID `"graph-links"` is always stable — no ID collisions possible. If `replaceManagedBlock()` returns `conflict ≠ null`, the note is added to `conflicts[]` and not modified.
 
 ---
 
@@ -109,14 +109,21 @@ New section inside `obsidianBridge` config (in `openclaw.json`):
       "maxPerNote": 5,
       "includeSemantic": false,
       "semanticThreshold": 0.78,
-      "blockId": "graph-links"
+      "blockId": "graph-links",
+      "tiers": ["explicit", "type", "semantic"]
     }
   }
 }
 ```
 
-Default: `enabled: true`, `maxPerNote: 5`, `includeSemantic: false`.  
-If `graphLinks` key is absent, defaults apply (feature is ON by default).
+**Defaults** (resolved inside `writeGraphLinks`, no external config required):
+- `enabled: true` — feature is ON by default; set `false` to disable
+- `maxPerNote: 5` — max links per note across all tiers
+- `includeSemantic: false` — Tier 3 disabled by default
+- `semanticThreshold: 0.78`
+- `tiers: ["explicit", "type", "semantic"]` — omit a tier name to disable it globally (e.g. `["explicit"]` skips type-rules and semantic)
+
+**Tier 3 at rebuild time:** `record.vector` is not present in disk-read records (the index reads `.md` files, not LanceDB). Therefore `embeddings.embed()` is **never called** during rebuild — zero timeout risk. Tier 3 only fires if `record.vector` is already present in `options.records` (future: when records are passed in-memory from LanceDB directly). Graceful skip otherwise; `tiersUsed` will not include `"semantic"`.
 
 ---
 
