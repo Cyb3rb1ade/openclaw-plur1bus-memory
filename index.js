@@ -1986,10 +1986,12 @@ const plugin = {
                 } catch (err) {
                   return { error: `Saving config failed: ${err.message}` };
                 }
-                return { pending: pendingInner };
+                return { pending: pendingInner, mergedCfg: merged.plugins?.entries?.["memory-lancedb-namespaced"]?.config };
               });
               if (writeResult.error) return { text: `❌ ${writeResult.error}` };
               const pending = writeResult.pending || [];
+              const mergedCfg = writeResult.mergedCfg || {};
+              const pendingSet = new Set(pending.map(p => p.feature));
               const lines = [
                 t("plur1bus.setup_confirm", { lang, tone, vars: { profile: profileName } }),
                 "",
@@ -1998,7 +2000,8 @@ const plugin = {
               for (const [key, value] of Object.entries(profile)) {
                 if (key === "setupProfile" || key === "featuresConfirmedAt") continue;
                 if (typeof value === "object" && value.enabled !== undefined) {
-                  const status = value.status || (value.enabled ? "active" : "disabled");
+                  const actualEnabled = mergedCfg[key]?.enabled ?? value.enabled;
+                  const status = !actualEnabled ? "disabled" : pendingSet.has(key) ? "pending_setup" : "active";
                   lines.push(`• ${key}: ${status}`);
                 }
               }
