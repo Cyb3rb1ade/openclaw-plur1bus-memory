@@ -162,4 +162,21 @@ describe("smoke-obsidian-bridge-sprint3", () => {
     const saved = readBundleRecord(dir, bundleId);
     assert.strictEqual(saved.items[0].status, "pending", "item should remain pending with gate off");
   });
+
+  it("autoApproveAndApplyLowRisk: vault_hygiene items are not auto-approved", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "obs-sprint3-"));
+    const bundleId = "rb-hygiene-skip";
+    const item = makeItem({ id: "rbi-hygiene-001", type: "vault_hygiene" });
+    writeBundleRecord(dir, bundleId, makeBundle(bundleId, [item]));
+
+    const result = await autoApproveAndApplyLowRisk(
+      { vaultPath: dir, autoApplyLowRisk: true },
+      bundleId,
+      {}
+    );
+
+    assert.strictEqual(result.autoApproved, 0, "vault_hygiene items must not be auto-approved");
+    const saved = readBundleRecord(dir, bundleId);
+    assert.strictEqual(saved.items[0].status, "pending", "vault_hygiene item must remain pending");
+  });
 });
