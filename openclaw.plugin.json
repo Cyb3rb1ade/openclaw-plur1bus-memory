@@ -789,6 +789,14 @@
             "type": "number",
             "default": 0
           },
+          "staleBundleMaxAgeDays": {
+            "type": "number",
+            "default": 7
+          },
+          "autoApplyLowRisk": {
+            "type": "boolean",
+            "default": false
+          },
           "dryRun": {
             "type": "boolean",
             "default": true
