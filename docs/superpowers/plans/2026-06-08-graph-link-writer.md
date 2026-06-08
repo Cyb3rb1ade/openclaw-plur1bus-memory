@@ -1,6 +1,6 @@
 # Graph Link Writer Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Inject `[[wikilinks]]` into Obsidian record notes via a Managed Block during the existing dashboard-rebuild cycle, making Obsidian's Graph View show real edges between knowledge records.
 
@@ -34,7 +34,7 @@ So: `{reviewRoot}/{record.path.replace('.md', '')}`.
 
 Display title: `record.title || record.summary?.slice(0, 60) || record.plur1bus_id || record.id || "(unbekannt)"`.
 
-- [ ] **Step 1.1: Write failing tests for link helpers**
+- [x] **Step 1.1: Write failing tests for link helpers**
 
 ```javascript
 // tests/smoke-graph-link-writer.test.js
@@ -73,14 +73,14 @@ describe("graph-link-writer: helpers", () => {
 });
 ```
 
-- [ ] **Step 1.2: Run test to see it fail**
+- [x] **Step 1.2: Run test to see it fail**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: `Error: Cannot find module '../lib/obsidian/graph-link-writer.js'`
 
-- [ ] **Step 1.3: Create the module with helpers**
+- [x] **Step 1.3: Create the module with helpers**
 
 ```javascript
 // lib/obsidian/graph-link-writer.js
@@ -113,14 +113,14 @@ export function writeGraphLinks(rawConfig, records, options = {}) {
 }
 ```
 
-- [ ] **Step 1.4: Run tests — should pass**
+- [x] **Step 1.4: Run tests — should pass**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: all 6 helper tests PASS.
 
-- [ ] **Step 1.5: Commit**
+- [x] **Step 1.5: Commit**
 
 ```bash
 git add lib/obsidian/graph-link-writer.js tests/smoke-graph-link-writer.test.js
@@ -146,7 +146,7 @@ Config comes from `rawConfig.graphLinks` with these defaults:
 
 `buildRecordIndex(rawConfig, { records })` returns `{ records, byId, byType }`. `byId` keys are `plur1bus_id || id`.
 
-- [ ] **Step 2.1: Write failing test for config defaults**
+- [x] **Step 2.1: Write failing test for config defaults**
 
 Add to `tests/smoke-graph-link-writer.test.js`:
 
@@ -171,14 +171,14 @@ describe("graph-link-writer: config", () => {
 });
 ```
 
-- [ ] **Step 2.2: Run test — should fail**
+- [x] **Step 2.2: Run test — should fail**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: `SyntaxError: The requested module does not provide an export named 'resolveGraphConfig'`
 
-- [ ] **Step 2.3: Implement `resolveGraphConfig`**
+- [x] **Step 2.3: Implement `resolveGraphConfig`**
 
 Add to `lib/obsidian/graph-link-writer.js` (before `writeGraphLinks`):
 
@@ -195,14 +195,14 @@ export function resolveGraphConfig(rawConfig) {
 }
 ```
 
-- [ ] **Step 2.4: Run tests — all pass**
+- [x] **Step 2.4: Run tests — all pass**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: all 8 tests PASS.
 
-- [ ] **Step 2.5: Commit**
+- [x] **Step 2.5: Commit**
 
 ```bash
 git add lib/obsidian/graph-link-writer.js tests/smoke-graph-link-writer.test.js
@@ -227,7 +227,7 @@ For each ID, look it up in `byId`. If found, call `buildLinkLine(target, reviewR
 Label: `"memoryId"` or `"Quelle"`.  
 Stop collecting when `links.length >= maxPerNote`.
 
-- [ ] **Step 3.1: Write failing Tier 1 test**
+- [x] **Step 3.1: Write failing Tier 1 test**
 
 Add to `tests/smoke-graph-link-writer.test.js`:
 
@@ -271,14 +271,14 @@ describe("graph-link-writer: tier1", () => {
 });
 ```
 
-- [ ] **Step 3.2: Run test — should fail**
+- [x] **Step 3.2: Run test — should fail**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: `SyntaxError: The requested module does not provide an export named 'collectTier1Links'`
 
-- [ ] **Step 3.3: Implement `collectTier1Links`**
+- [x] **Step 3.3: Implement `collectTier1Links`**
 
 Add to `lib/obsidian/graph-link-writer.js`:
 
@@ -299,14 +299,14 @@ export function collectTier1Links(record, byId, reviewRoot, maxPerNote) {
 }
 ```
 
-- [ ] **Step 3.4: Run tests — all pass**
+- [x] **Step 3.4: Run tests — all pass**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: all 12 tests PASS.
 
-- [ ] **Step 3.5: Commit**
+- [x] **Step 3.5: Commit**
 
 ```bash
 git add lib/obsidian/graph-link-writer.js tests/smoke-graph-link-writer.test.js
@@ -333,7 +333,7 @@ Tier 2 rules (fills slots remaining after Tier 1):
 
 `existing` is a `Set<string>` of already-linked `plur1bus_id` values (to avoid duplicating Tier 1 links).
 
-- [ ] **Step 4.1: Write failing Tier 2 test**
+- [x] **Step 4.1: Write failing Tier 2 test**
 
 Add to `tests/smoke-graph-link-writer.test.js`:
 
@@ -390,14 +390,14 @@ describe("graph-link-writer: tier2", () => {
 });
 ```
 
-- [ ] **Step 4.2: Run test — should fail**
+- [x] **Step 4.2: Run test — should fail**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: `SyntaxError: ... 'collectTier2Links'`
 
-- [ ] **Step 4.3: Implement `collectTier2Links`**
+- [x] **Step 4.3: Implement `collectTier2Links`**
 
 Add to `lib/obsidian/graph-link-writer.js`:
 
@@ -426,14 +426,14 @@ export function collectTier2Links(record, byId, byType, reviewRoot, maxPerNote, 
 }
 ```
 
-- [ ] **Step 4.4: Run tests — all pass**
+- [x] **Step 4.4: Run tests — all pass**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: all 16 tests PASS.
 
-- [ ] **Step 4.5: Commit**
+- [x] **Step 4.5: Commit**
 
 ```bash
 git add lib/obsidian/graph-link-writer.js tests/smoke-graph-link-writer.test.js
@@ -464,7 +464,7 @@ For each record:
    - Else → `unchanged++`
 7. Return summary stats
 
-- [ ] **Step 5.1: Write failing integration test**
+- [x] **Step 5.1: Write failing integration test**
 
 Add to `tests/smoke-graph-link-writer.test.js`:
 
@@ -578,14 +578,14 @@ describe("graph-link-writer: writeGraphLinks", () => {
 });
 ```
 
-- [ ] **Step 5.2: Run test — should fail**
+- [x] **Step 5.2: Run test — should fail**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: `AssertionError: 0 == 1` (writeGraphLinks is still a stub returning 0)
 
-- [ ] **Step 5.3: Implement full `writeGraphLinks`**
+- [x] **Step 5.3: Implement full `writeGraphLinks`**
 
 Replace the stub in `lib/obsidian/graph-link-writer.js`:
 
@@ -683,7 +683,7 @@ export function writeGraphLinks(rawConfig, records, options = {}) {
 export async function writeGraphLinks(rawConfig, records, options = {}) {
 ```
 
-- [ ] **Step 5.4: Fix the `existingIds` computation (bug in Step 5.3)**
+- [x] **Step 5.4: Fix the `existingIds` computation (bug in Step 5.3)**
 
 The `existingIds` set should contain the actual IDs from Tier 1 targets. Replace the existingIds construction:
 
@@ -693,14 +693,14 @@ for (const id of (Array.isArray(record.memoryIds) ? record.memoryIds : [])) exis
 for (const id of (Array.isArray(record.sourceRefs) ? record.sourceRefs : [])) existingIds.add(id);
 ```
 
-- [ ] **Step 5.5: Run all tests — should pass**
+- [x] **Step 5.5: Run all tests — should pass**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js
 ```
 Expected: all 20 tests PASS.
 
-- [ ] **Step 5.6: Commit**
+- [x] **Step 5.6: Commit**
 
 ```bash
 git add lib/obsidian/graph-link-writer.js tests/smoke-graph-link-writer.test.js
@@ -738,7 +738,7 @@ function rebuildDashboards() {
 
 `writeGraphLinks` is `async` (for Tier 3). `rebuildDashboards` is currently sync. Change it to `async function rebuildDashboards()` and `await writeGraphLinks(...)`. Then the callers in `start()` already use it via `setInterval` (fire-and-forget) or after `syncOnce` — wrapping in `.catch()` is fine.
 
-- [ ] **Step 6.1: Add import to `lib/obsidian-bridge.js`**
+- [x] **Step 6.1: Add import to `lib/obsidian-bridge.js`**
 
 Find the import block at the top of the file. Add after the existing obsidian imports:
 
@@ -746,7 +746,7 @@ Find the import block at the top of the file. Add after the existing obsidian im
 import { writeGraphLinks } from "./obsidian/graph-link-writer.js";
 ```
 
-- [ ] **Step 6.2: Replace `rebuildDashboards` with async version**
+- [x] **Step 6.2: Replace `rebuildDashboards` with async version**
 
 Replace the entire `rebuildDashboards` function (lines ~1634–1654):
 
@@ -787,7 +787,7 @@ async function rebuildDashboards() {
 }
 ```
 
-- [ ] **Step 6.3: Verify the callers handle async correctly**
+- [x] **Step 6.3: Verify the callers handle async correctly**
 
 Check how `rebuildDashboards` is called (lines ~1663–1676 of original):
 
@@ -815,21 +815,21 @@ dashboardTimer = setInterval(() => {
 }, dashboardRebuildIntervalMs);
 ```
 
-- [ ] **Step 6.4: Run syntax check**
+- [x] **Step 6.4: Run syntax check**
 
 ```bash
 node --check lib/obsidian-bridge.js && node --check lib/obsidian/graph-link-writer.js
 ```
 Expected: no output (clean)
 
-- [ ] **Step 6.5: Run full test suite**
+- [x] **Step 6.5: Run full test suite**
 
 ```bash
 node --test tests/smoke-graph-link-writer.test.js && node --test tests/smoke-obsidian-apply.test.js
 ```
 Expected: all tests PASS.
 
-- [ ] **Step 6.6: Commit**
+- [x] **Step 6.6: Commit**
 
 ```bash
 git add lib/obsidian-bridge.js lib/obsidian/graph-link-writer.js
@@ -843,7 +843,7 @@ git commit -m "feat(graph-links): wire writeGraphLinks into rebuildDashboards"
 **Files:**
 - Sync: `/root/.openclaw/extensions/memory-lancedb-namespaced/`
 
-- [ ] **Step 7.1: Sync modified files to installed extension**
+- [x] **Step 7.1: Sync modified files to installed extension**
 
 ```bash
 DEST=/root/.openclaw/extensions/memory-lancedb-namespaced
@@ -852,14 +852,14 @@ cp /root/lib/obsidian-bridge.js "$DEST/lib/obsidian-bridge.js"
 echo "Sync done"
 ```
 
-- [ ] **Step 7.2: Run full project test suite**
+- [x] **Step 7.2: Run full project test suite**
 
 ```bash
 node --test tests/*.test.js 2>&1 | tail -20
 ```
 Expected: no new failures (pre-existing failures, if any, are unchanged).
 
-- [ ] **Step 7.3: Create feature branch and PR**
+- [x] **Step 7.3: Create feature branch and PR**
 
 ```bash
 git checkout -b feat/v6-graph-link-writer
@@ -874,11 +874,11 @@ gh pr create --title "feat(graph-links): inject [[wikilinks]] into Obsidian reco
 - Integration: \`rebuildDashboards()\` in obsidian-bridge.js calls \`writeGraphLinks\` after \`generateDashboards\`
 
 ## Test plan
-- [ ] \`node --test tests/smoke-graph-link-writer.test.js\` — all 20 tests pass
-- [ ] Re-run produces \`unchanged=N, updated=0\` (idempotent)
-- [ ] Record with sourceRefs gets correct \`[[plur1bus/records/sources/...|Title]]\` link in vault
-- [ ] Tampered block → \`conflicts[]\` entry, file untouched
-- [ ] Open vault in Obsidian → Graph View shows edges between decision/source/candidate nodes
+- [x] \`node --test tests/smoke-graph-link-writer.test.js\` — all 20 tests pass
+- [x] Re-run produces \`unchanged=N, updated=0\` (idempotent)
+- [x] Record with sourceRefs gets correct \`[[plur1bus/records/sources/...|Title]]\` link in vault
+- [x] Tampered block → \`conflicts[]\` entry, file untouched
+- [x] Open vault in Obsidian → Graph View shows edges between decision/source/candidate nodes
 EOF
 )"
 ```
