@@ -58,7 +58,7 @@ async function searchByKind(table, vector, kind, limit, minScore) {
       const results = rows
         .map(r => ({ entry: r, score: distanceToScore(r._distance) }))
         .filter(r => r.score >= minScore);
-      if (results.length > 0 || rows.length >= 0) return results; // DB answered
+      if (Array.isArray(rows)) return results; // DB answered — return even if empty
     }
   } catch (_) {}
 
@@ -77,7 +77,13 @@ async function searchByKind(table, vector, kind, limit, minScore) {
 }
 ```
 
-**Why the `rows.length >= 0` return condition:** Once the `.where()` call succeeds without throwing, we trust the DB answered — even if 0 results. This avoids a false fallback when the wiki is simply empty (which is the normal state for new installs).
+**Why `Array.isArray(rows)` as the success condition:** `Array.isArray(rows)` is true whenever the `.where()` call succeeds and returns an array — including an empty one. This is the correct sentinel: "the DB answered". If 0 wiki entries exist, we return `[]` and do NOT fall through to the overfetch path. This prevents normal memories from leaking into the wiki search phase when the wiki is simply empty (new installs, no entries yet).
+
+```
+try WHERE-filtered vector search
+  ├─ success → Array.isArray(rows) === true → return mapped results (even if [])
+  └─ throws (unsupported .where, old LanceDB) → overfetch + post-filter
+```
 
 ---
 
@@ -115,7 +121,9 @@ Phase 1: searchByKind(db.table, vector, "wiki", 8, 0.2)
       return t("wiki.result_wiki", { query, answer })
   → else: continue to Phase 2
 
-Phase 2: searchByKind(db.table, vector, "memory", 8, 0.2)
+Phase 2 (normal memory fallback): searchByKind(db.table, vector, "memory", 8, 0.2)
+  Searches memoryKind = "memory" plus legacy empty/null records.
+  Does NOT include wiki, archive, system, or future special-purpose kinds.
   → if results.length > 0:
       LLM synthesis from memory results
       return t("wiki.result_fallback", { query, answer })
@@ -162,8 +170,8 @@ searchByKind(db.table, vector, "wiki", 5, 0.25)
   en: { default: "📖 {{query}} (Wiki)\n\n{{answer}}" },
 },
 "wiki.result_fallback": {
-  de: { default: "📖 {{query}}\n\n_(Kein kuratierter Wiki-Eintrag — Synthese aus Erinnerungen)_\n\n{{answer}}" },
-  en: { default: "📖 {{query}}\n\n_(No curated wiki entry — synthesized from memories)_\n\n{{answer}}" },
+  de: { default: "📖 {{query}}\n\n_Kein kuratierter Wiki-Eintrag gefunden. Synthese aus normalen Erinnerungen:_\n\n{{answer}}" },
+  en: { default: "📖 {{query}}\n\n_No curated wiki entry found. Synthesizing from normal memories:_\n\n{{answer}}" },
 },
 "wiki.delete_not_wiki": {
   de: { default: "Kein löschbarer Wiki-Eintrag gefunden für: {{query}}\nNormale Erinnerungen werden von /wiki delete nicht gelöscht." },
@@ -226,6 +234,12 @@ function makeDb(wikiRows = [], memoryRows = []) {
 5. **`wikiSearch falls back to memory when no wiki entries`**
    - DB wiki search returns 0 rows; memory search returns 1 row
    - Assert result text matches `wiki.result_fallback` pattern (contains "Erinnerungen" or "memories")
+
+6. **`wikiDelete does not delete normal memory even if it ranks higher`**
+   - DB returns 2 results for vector search: `[{ memoryKind: "memory", score: 0.95, id: "m1" }, { memoryKind: "wiki", score: 0.7, id: "w1" }]`
+   - After wiki-kind post-filter only `w1` survives
+   - Assert only `w1` is deleted; `m1` is never touched
+   - This guards against the silent regression where a normal memory outranks a wiki entry and gets deleted
 
 ---
 
