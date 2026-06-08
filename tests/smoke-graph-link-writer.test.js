@@ -274,3 +274,146 @@ describe("graph-link-writer: writeGraphLinks", () => {
     assert.match(content, /manually edited/);
   });
 });
+
+describe("graph-link-writer: Tier 3 (semantic link index)", () => {
+  function makeVault() {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-t3-"));
+    mkdirSync(join(dir, "plur1bus", "records", "decisions"), { recursive: true });
+    return dir;
+  }
+
+  function writeNote(dir, relPath, content) {
+    writeFileSync(join(dir, relPath), content, "utf8");
+  }
+
+  it("injects semantic links when linkIndex has entries", async () => {
+    const vault = makeVault();
+    const recA = {
+      plur1bus_id: "dec-A",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-A.md",
+      title: "Decision A",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const recB = {
+      plur1bus_id: "dec-B",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-B.md",
+      title: "Decision B",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    writeNote(vault, "plur1bus/records/decisions/dec-A.md", "# A\n");
+    writeNote(vault, "plur1bus/records/decisions/dec-B.md", "# B\n");
+
+    const linkIndex = {
+      version: "1",
+      entries: {
+        "dec-A": { similar: ["dec-B"], contentHash: "x", firstDiscoveredAt: "2026-01-01T00:00:00Z", lastCheckedAt: "2026-01-01T00:00:00Z" },
+      },
+    };
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus", graphLinks: { includeSemantic: true } };
+    const result = await writeGraphLinks(rawConfig, [recA, recB], { linkIndex });
+
+    assert.ok(result.ok);
+    const content = readFileSync(join(vault, "plur1bus/records/decisions/dec-A.md"), "utf8");
+    assert.match(content, /dec-B/);
+    assert.match(content, /ähnlich/);
+  });
+
+  it("Tier 3 skips when includeSemantic is false (default)", async () => {
+    const vault = makeVault();
+    const rec = {
+      plur1bus_id: "dec-C",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-C.md",
+      title: "Decision C",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    writeNote(vault, "plur1bus/records/decisions/dec-C.md", "# C\n");
+    const linkIndex = {
+      version: "1",
+      entries: { "dec-C": { similar: ["dec-B"], contentHash: "x", firstDiscoveredAt: "2026-01-01T00:00:00Z", lastCheckedAt: "2026-01-01T00:00:00Z" } },
+    };
+    // No graphLinks.includeSemantic — default is false
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    await writeGraphLinks(rawConfig, [rec], { linkIndex });
+    const content = readFileSync(join(vault, "plur1bus/records/decisions/dec-C.md"), "utf8");
+    assert.match(content, /keine Querverweise/);
+  });
+
+  it("Tier 3 respects maxPerNote cap", async () => {
+    const vault = makeVault();
+    mkdirSync(join(vault, "plur1bus", "records", "sources"), { recursive: true });
+    const mainRec = {
+      plur1bus_id: "main", plur1bus_type: "decision",
+      path: "records/decisions/dec-A.md", title: "Main",
+      memoryIds: [], sourceRefs: [],
+    };
+    writeNote(vault, "plur1bus/records/decisions/dec-A.md", "# Main\n");
+
+    const linkIndex = {
+      version: "1",
+      entries: {
+        "main": {
+          similar: ["s1", "s2", "s3", "s4", "s5", "s6"],
+          contentHash: "x", firstDiscoveredAt: "2026-01-01T00:00:00Z", lastCheckedAt: "2026-01-01T00:00:00Z",
+        },
+      },
+    };
+    const byIdRecords = [
+      { plur1bus_id: "s1", path: "records/sources/s1.md", title: "S1", memoryIds: [], sourceRefs: [] },
+      { plur1bus_id: "s2", path: "records/sources/s2.md", title: "S2", memoryIds: [], sourceRefs: [] },
+      { plur1bus_id: "s3", path: "records/sources/s3.md", title: "S3", memoryIds: [], sourceRefs: [] },
+    ];
+    for (const r of byIdRecords) writeNote(vault, `plur1bus/${r.path}`, `# ${r.title}\n`);
+
+    const rawConfig = {
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      graphLinks: { includeSemantic: true, maxPerNote: 2 },
+    };
+    await writeGraphLinks(rawConfig, [mainRec, ...byIdRecords], { linkIndex });
+
+    const content = readFileSync(join(vault, "plur1bus/records/decisions/dec-A.md"), "utf8");
+    const matches = content.match(/ähnlich/g) || [];
+    assert.ok(matches.length <= 2, `Expected <= 2 semantic links, got ${matches.length}`);
+  });
+
+  it("Tier 3 skips IDs already linked by Tier 1", async () => {
+    const vault = makeVault();
+    mkdirSync(join(vault, "plur1bus", "records", "sources"), { recursive: true });
+    const srcRecord = {
+      plur1bus_id: "src-dup",
+      plur1bus_type: "source",
+      path: "records/sources/src-dup.md",
+      title: "Duplicate Source",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const decRecord = {
+      plur1bus_id: "dec-dup",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-A.md",
+      title: "With Tier1",
+      memoryIds: [],
+      sourceRefs: ["src-dup"],
+    };
+    writeNote(vault, "plur1bus/records/sources/src-dup.md", "# Src\n");
+    writeNote(vault, "plur1bus/records/decisions/dec-A.md", "# Dec\n");
+
+    const linkIndex = {
+      version: "1",
+      entries: {
+        "dec-dup": { similar: ["src-dup"], contentHash: "x", firstDiscoveredAt: "2026-01-01T00:00:00Z", lastCheckedAt: "2026-01-01T00:00:00Z" },
+      },
+    };
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus", graphLinks: { includeSemantic: true } };
+    await writeGraphLinks(rawConfig, [srcRecord, decRecord], { linkIndex });
+    const content = readFileSync(join(vault, "plur1bus/records/decisions/dec-A.md"), "utf8");
+    const ähnlichCount = (content.match(/ähnlich/g) || []).length;
+    assert.strictEqual(ähnlichCount, 0, "src-dup already in Tier1, must not appear as Tier3 ähnlich");
+  });
+});
