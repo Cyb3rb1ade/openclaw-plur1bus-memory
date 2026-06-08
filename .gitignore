@@ -21,3 +21,5 @@ scripts/*
 !scripts/migrate-missing-columns.mjs
 BREAKING_CHANGE_AUDIT.md
 !scripts/cleanup-vault-missing-tasks.mjs
+!scripts/run-graph-links-once.mjs
+!scripts/run-semantic-discover-once.mjs
