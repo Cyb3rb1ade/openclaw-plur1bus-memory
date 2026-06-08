@@ -43,45 +43,45 @@ describe("link-index: computeContentHash", () => {
 describe("link-index: buildPriorityQueue", () => {
   it("puts never-processed records first", () => {
     const records = [
-      { plur1bus_id: "known", vector: [1] },
-      { plur1bus_id: "new-a", vector: [1] },
-      { plur1bus_id: "new-b", vector: [1] },
+      { id: "aaaaaaaa-0000-0000-0000-000000000001", vector: [1] },
+      { id: "aaaaaaaa-0000-0000-0000-000000000002", vector: [1] },
+      { id: "aaaaaaaa-0000-0000-0000-000000000003", vector: [1] },
     ];
     const index = {
       entries: {
-        "known": { similar: [], contentHash: "sha256:abc", firstDiscoveredAt: "2026-01-01T00:00:00.000Z", lastCheckedAt: "2026-01-02T00:00:00.000Z" },
+        "aaaaaaaa-0000-0000-0000-000000000001": { similar: [], contentHash: "sha256:abc", firstDiscoveredAt: "2026-01-01T00:00:00.000Z", lastCheckedAt: "2026-01-02T00:00:00.000Z" },
       },
     };
     const queue = buildPriorityQueue(records, index);
-    assert.strictEqual(queue[0].plur1bus_id, "new-a");
-    assert.strictEqual(queue[1].plur1bus_id, "new-b");
-    assert.strictEqual(queue[2].plur1bus_id, "known");
+    assert.strictEqual(queue[0].id, "aaaaaaaa-0000-0000-0000-000000000002");
+    assert.strictEqual(queue[1].id, "aaaaaaaa-0000-0000-0000-000000000003");
+    assert.strictEqual(queue[2].id, "aaaaaaaa-0000-0000-0000-000000000001");
   });
 
   it("sorts processed records by oldest lastCheckedAt", () => {
     const records = [
-      { plur1bus_id: "r1", vector: [1] },
-      { plur1bus_id: "r2", vector: [1] },
+      { id: "aaaaaaaa-0000-0000-0000-000000000001", vector: [1] },
+      { id: "aaaaaaaa-0000-0000-0000-000000000002", vector: [1] },
     ];
     const index = {
       entries: {
-        "r1": { lastCheckedAt: "2026-06-01T00:00:00.000Z", similar: [], contentHash: "x", firstDiscoveredAt: "2026-01-01T00:00:00.000Z" },
-        "r2": { lastCheckedAt: "2026-05-01T00:00:00.000Z", similar: [], contentHash: "y", firstDiscoveredAt: "2026-01-01T00:00:00.000Z" },
+        "aaaaaaaa-0000-0000-0000-000000000001": { lastCheckedAt: "2026-06-01T00:00:00.000Z", similar: [], contentHash: "x", firstDiscoveredAt: "2026-01-01T00:00:00.000Z" },
+        "aaaaaaaa-0000-0000-0000-000000000002": { lastCheckedAt: "2026-05-01T00:00:00.000Z", similar: [], contentHash: "y", firstDiscoveredAt: "2026-01-01T00:00:00.000Z" },
       },
     };
     const queue = buildPriorityQueue(records, index);
-    assert.strictEqual(queue[0].plur1bus_id, "r2");
-    assert.strictEqual(queue[1].plur1bus_id, "r1");
+    assert.strictEqual(queue[0].id, "aaaaaaaa-0000-0000-0000-000000000002");
+    assert.strictEqual(queue[1].id, "aaaaaaaa-0000-0000-0000-000000000001");
   });
 
-  it("skips records without plur1bus_id", () => {
+  it("skips records without id", () => {
     const records = [
       { path: "records/x.md", vector: [1] },
-      { plur1bus_id: "valid", vector: [1] },
+      { id: "aaaaaaaa-0000-0000-0000-000000000001", vector: [1] },
     ];
     const queue = buildPriorityQueue(records, { entries: {} });
     assert.strictEqual(queue.length, 1);
-    assert.strictEqual(queue[0].plur1bus_id, "valid");
+    assert.strictEqual(queue[0].id, "aaaaaaaa-0000-0000-0000-000000000001");
   });
 });
 
