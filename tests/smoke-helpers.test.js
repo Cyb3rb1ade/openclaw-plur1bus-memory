@@ -5,6 +5,7 @@ import {
   computeDecayedStrength,
   applyRetrievalReinforcement,
   applyDailyDecay,
+  applyDynamicsDefaults,
   isCoreMemory,
 } from "../lib/memory-dynamics.js";
 
@@ -47,6 +48,26 @@ describe("memory-dynamics", () => {
     const row = { memoryStrength: 0.8, halfLifeDays: 30, createdAt: Date.now() - 86400000 };
     const result = applyDailyDecay(row);
     assert.ok(result.memoryStrength < 0.8, "daily decay should reduce strength");
+  });
+
+  it("applies replay column defaults for new entries", () => {
+    const result = applyDynamicsDefaults({ category: "fact" }, 1234567890);
+    assert.strictEqual(result.replayCount, 0, "default replayCount should be 0");
+    assert.strictEqual(result.lastReplayed, 0, "default lastReplayed should be 0");
+  });
+
+  it("preserves replay columns for existing entries during decay", () => {
+    const result = applyDynamicsDefaults({
+      category: "fact",
+      replayCount: 3,
+      lastReplayed: 123,
+      lastDynamicsAt: 100,
+      memoryStrength: 0.9,
+      halfLifeDays: 30,
+    }, 200);
+
+    assert.strictEqual(result.replayCount, 3, "existing replayCount should be preserved");
+    assert.strictEqual(result.lastReplayed, 123, "existing lastReplayed should be preserved");
   });
 });
 
