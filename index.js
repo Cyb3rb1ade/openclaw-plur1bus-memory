@@ -1996,17 +1996,22 @@ const plugin = {
                 }
                 let totalProcessed = 0, totalSkipped = 0, totalUnchanged = 0, totalErrors = 0;
                 for (const ws of workspaces) {
-                  const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
-                  const wsAgentId = ws.agentId || internalAgent;
-                  const wsDb = pool.getDb(wsAgentId);
-                  const lancedbRecords = await wsDb.scanActive();
-                  await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger: api.logger });
-                  const semResult = await discoverSemanticLinks(semVaultCfg, lancedbRecords, { pool, logger: api.logger, defaultAgentId: wsAgentId });
-                  api.logger?.info?.(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
-                  totalProcessed += semResult.processed;
-                  totalSkipped += semResult.skipped;
-                  totalUnchanged += semResult.unchanged;
-                  totalErrors += semResult.errors;
+                  try {
+                    const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
+                    const wsAgentId = ws.agentId || internalAgent;
+                    const wsDb = pool.getDb(wsAgentId);
+                    const lancedbRecords = await wsDb.scanActive();
+                    await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger: api.logger });
+                    const semResult = await discoverSemanticLinks(semVaultCfg, lancedbRecords, { pool, logger: api.logger, defaultAgentId: wsAgentId });
+                    api.logger?.info?.(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
+                    totalProcessed += semResult.processed;
+                    totalSkipped += semResult.skipped;
+                    totalUnchanged += semResult.unchanged;
+                    totalErrors += semResult.errors;
+                  } catch (err) {
+                    api.logger?.warn?.(`[discover-semantic-links] workspace ${ws.path} failed: ${err.message}`);
+                    totalErrors++;
+                  }
                 }
                 return formatJsonCommandResult({ job: "discover-semantic-links", processed: totalProcessed, skipped: totalSkipped, unchanged: totalUnchanged, errors: totalErrors });
               }
