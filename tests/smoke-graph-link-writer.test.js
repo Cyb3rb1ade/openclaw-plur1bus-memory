@@ -519,7 +519,9 @@ describe("graph-link-writer: Tier 3 with memory notes (memory_id)", () => {
       "Content B.",
     ].join("\n"), "utf8");
 
-    // recB has memory_id but NO plur1bus_id — so byId won't find it, only byMemoryId
+    // recB has a distinct plur1bus_id ("legacy-id-B") so byId indexes it under that,
+    // NOT under idB. When Tier 3 looks up byId[idB] it gets undefined, and only
+    // byMemoryId[idB] resolves recB — actually exercising the byMemoryId fallback path.
     const recA = {
       memory_id: idA,
       plur1bus_type: "memory",
@@ -529,6 +531,7 @@ describe("graph-link-writer: Tier 3 with memory notes (memory_id)", () => {
       sourceRefs: [],
     };
     const recB = {
+      plur1bus_id: "legacy-id-B",
       memory_id: idB,
       plur1bus_type: "memory",
       path: `memories/${idB}.md`,
