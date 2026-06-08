@@ -156,7 +156,10 @@ describe("discoverSemanticLinks", () => {
     return mkdtempSync(join(tmpdir(), "plur1bus-sld-"));
   }
 
-  function makePool(searchResults = []) {
+  // pool.getDb() returns a MemoryDB-like object.
+  // db.search() returns [{ entry: { id }, score }] — matching real MemoryDB.search() format.
+  function makePool(searchEntries = []) {
+    const searchResults = searchEntries.map((id) => ({ entry: { id }, score: 0.9 }));
     return {
       getDb: (_agentId) => ({
         search: async (_vector, _topN, _threshold) => searchResults,
@@ -169,9 +172,9 @@ describe("discoverSemanticLinks", () => {
     reviewRoot: "plur1bus",
   });
 
-  it("throws early when pool not provided", async () => {
+  it("throws when pool not provided", async () => {
     const vault = makeVault();
-    const records = [{ plur1bus_id: "r1", vector: [0.1, 0.2] }];
+    const records = [{ id: "aaaaaaaa-0000-0000-0000-000000000001", vector: [0.1] }];
     await assert.rejects(
       () => discoverSemanticLinks(baseConfig(vault), records, {}),
       /pool/
@@ -180,7 +183,7 @@ describe("discoverSemanticLinks", () => {
 
   it("returns zero counts for empty records array", async () => {
     const vault = makeVault();
-    const result = await discoverSemanticLinks(baseConfig(vault), [], { pool: makePool() });
+    const result = await discoverSemanticLinks(baseConfig(vault), [], { pool: makePool(), defaultAgentId: "main" });
     assert.strictEqual(result.processed, 0);
     assert.strictEqual(result.skipped, 0);
     assert.strictEqual(result.errors, 0);
@@ -189,36 +192,35 @@ describe("discoverSemanticLinks", () => {
 
   it("skips records without vector", async () => {
     const vault = makeVault();
-    const records = [{ plur1bus_id: "r1" }];
-    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool: makePool() });
+    const records = [{ id: "aaaaaaaa-0000-0000-0000-000000000001" }];
+    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool: makePool(), defaultAgentId: "main" });
     assert.strictEqual(result.skipped, 1);
     assert.strictEqual(result.processed, 0);
   });
 
   it("processes a record and writes index", async () => {
     const vault = makeVault();
-    const searchResults = [
-      { plur1bus_id: "r2" },
-      { plur1bus_id: "r1" },
-    ];
+    const idA = "aaaaaaaa-0000-0000-0000-000000000001";
+    const idB = "aaaaaaaa-0000-0000-0000-000000000002";
     const records = [
-      { plur1bus_id: "r1", vector: [0.1], agentId: "main" },
-      { plur1bus_id: "r2", vector: [0.2], agentId: "main" },
+      { id: idA, vector: [0.1], text: "hello", summary: "world" },
+      { id: idB, vector: [0.2], text: "bye", summary: "later" },
     ];
-    const pool = makePool(searchResults);
-    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool });
+    const pool = makePool([idB]);
+    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
     assert.ok(result.processed >= 1);
     assert.strictEqual(result.indexUpdated, true);
     const idx = loadLinkIndex(vault);
-    assert.ok(idx.entries["r1"] || idx.entries["r2"]);
+    assert.ok(idx.entries[idA] || idx.entries[idB]);
   });
 
   it("is idempotent — second run with same contentHash returns unchanged", async () => {
     const vault = makeVault();
-    const records = [{ plur1bus_id: "r1", vector: [0.1], text: "hello", summary: "world" }];
-    const pool = makePool([{ plur1bus_id: "r2" }]);
-    await discoverSemanticLinks(baseConfig(vault), records, { pool });
-    const second = await discoverSemanticLinks(baseConfig(vault), records, { pool });
+    const idA = "aaaaaaaa-0000-0000-0000-000000000001";
+    const records = [{ id: idA, vector: [0.1], text: "hello", summary: "world" }];
+    const pool = makePool(["aaaaaaaa-0000-0000-0000-000000000002"]);
+    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
+    const second = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
     assert.strictEqual(second.unchanged, 1);
     assert.strictEqual(second.processed, 0);
     assert.strictEqual(second.indexUpdated, false);
@@ -227,23 +229,40 @@ describe("discoverSemanticLinks", () => {
   it("respects maxPerRun — processes only first N records", async () => {
     const vault = makeVault();
     const records = Array.from({ length: 10 }, (_, i) => ({
-      plur1bus_id: `r${i}`,
+      id: `aaaaaaaa-0000-0000-0000-00000000000${i}`,
       vector: [i * 0.1],
+      text: `text${i}`, summary: "",
     }));
     const result = await discoverSemanticLinks(
       { ...baseConfig(vault), graphLinks: { semanticDiscovery: { maxPerRun: 3, threshold: 0.5 } } },
       records,
-      { pool: makePool([]) }
+      { pool: makePool([]), defaultAgentId: "main" }
     );
     assert.strictEqual(result.processed + result.skipped + result.unchanged, 3);
   });
 
   it("excludes self from similar results", async () => {
     const vault = makeVault();
-    const records = [{ plur1bus_id: "self", vector: [0.1] }];
-    const pool = makePool([{ plur1bus_id: "self" }, { plur1bus_id: "other" }]);
-    await discoverSemanticLinks(baseConfig(vault), records, { pool });
+    const selfId = "aaaaaaaa-0000-0000-0000-000000000001";
+    const records = [{ id: selfId, vector: [0.1], text: "t", summary: "" }];
+    // search returns self + other
+    const pool = makePool([selfId, "aaaaaaaa-0000-0000-0000-000000000002"]);
+    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
     const idx = loadLinkIndex(vault);
-    assert.ok(!idx.entries["self"]?.similar.includes("self"));
+    assert.ok(!idx.entries[selfId]?.similar.includes(selfId));
+  });
+
+  it("aborts batch on 429 and returns batchAborted=true", async () => {
+    const vault = makeVault();
+    const records = [
+      { id: "aaaaaaaa-0000-0000-0000-000000000001", vector: [0.1], text: "t", summary: "" },
+    ];
+    const pool = {
+      getDb: () => ({
+        search: async () => { const e = new Error("429 Too Many Requests"); e.status = 429; throw e; },
+      }),
+    };
+    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
+    assert.strictEqual(result.batchAborted, true);
   });
 });
