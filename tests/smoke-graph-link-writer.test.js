@@ -419,6 +419,198 @@ describe("graph-link-writer: Tier 3 (semantic link index)", () => {
   });
 });
 
+describe("graph-link-writer: Tier 3 with memory notes (memory_id)", () => {
+  function makeVault() {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-t3m-"));
+    mkdirSync(join(dir, "plur1bus", "memories"), { recursive: true });
+    return dir;
+  }
+
+  it("memory_id lookup: record with memory_id gets semantic link from link index", async () => {
+    const vault = makeVault();
+    const idA = "aaaaaaaa-0000-0000-0000-000000000001";
+    const idB = "aaaaaaaa-0000-0000-0000-000000000002";
+
+    writeFileSync(join(vault, "plur1bus", "memories", `${idA}.md`), [
+      "---",
+      `memory_id: ${idA}`,
+      "plur1bus_type: memory",
+      "importance: 0.8",
+      "content_hash: sha256:x",
+      "---",
+      "# Memory A",
+      "Content A.",
+    ].join("\n"), "utf8");
+    writeFileSync(join(vault, "plur1bus", "memories", `${idB}.md`), [
+      "---",
+      `memory_id: ${idB}`,
+      "plur1bus_type: memory",
+      "importance: 0.7",
+      "content_hash: sha256:y",
+      "---",
+      "# Memory B",
+      "Content B.",
+    ].join("\n"), "utf8");
+
+    const recA = {
+      memory_id: idA,
+      plur1bus_type: "memory",
+      path: `memories/${idA}.md`,
+      title: "Memory A",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const recB = {
+      memory_id: idB,
+      plur1bus_type: "memory",
+      path: `memories/${idB}.md`,
+      title: "Memory B",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+
+    const linkIndex = {
+      version: "1",
+      entries: {
+        [idA]: {
+          similar: [idB],
+          contentHash: "sha256:x",
+          firstDiscoveredAt: "2026-01-01T00:00:00Z",
+          lastCheckedAt: "2026-01-01T00:00:00Z",
+        },
+      },
+    };
+
+    const rawConfig = {
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      graphLinks: { includeSemantic: true },
+    };
+    const result = await writeGraphLinks(rawConfig, [recA, recB], { linkIndex });
+    assert.ok(result.ok);
+    const content = readFileSync(join(vault, "plur1bus", "memories", `${idA}.md`), "utf8");
+    assert.match(content, new RegExp(idB));
+    assert.match(content, /ähnlich/);
+  });
+
+  it("byMemoryId fallback: target record is found via byMemoryId when similar ID is a memory_id", async () => {
+    const vault = makeVault();
+    const idA = "aaaaaaaa-0000-0000-0000-000000000001";
+    const idB = "aaaaaaaa-0000-0000-0000-000000000002";
+
+    writeFileSync(join(vault, "plur1bus", "memories", `${idA}.md`), [
+      "---",
+      `memory_id: ${idA}`,
+      "plur1bus_type: memory",
+      "importance: 0.8",
+      "content_hash: sha256:x",
+      "---",
+      "# Memory A",
+      "Content A.",
+    ].join("\n"), "utf8");
+    writeFileSync(join(vault, "plur1bus", "memories", `${idB}.md`), [
+      "---",
+      `memory_id: ${idB}`,
+      "plur1bus_type: memory",
+      "importance: 0.7",
+      "content_hash: sha256:y",
+      "---",
+      "# Memory B",
+      "Content B.",
+    ].join("\n"), "utf8");
+
+    // recB has memory_id but NO plur1bus_id — so byId won't find it, only byMemoryId
+    const recA = {
+      memory_id: idA,
+      plur1bus_type: "memory",
+      path: `memories/${idA}.md`,
+      title: "Memory A",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const recB = {
+      memory_id: idB,
+      plur1bus_type: "memory",
+      path: `memories/${idB}.md`,
+      title: "Memory B",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+
+    const linkIndex = {
+      version: "1",
+      entries: {
+        [idA]: {
+          similar: [idB],
+          contentHash: "sha256:x",
+          firstDiscoveredAt: "2026-01-01T00:00:00Z",
+          lastCheckedAt: "2026-01-01T00:00:00Z",
+        },
+      },
+    };
+
+    const rawConfig = {
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      graphLinks: { includeSemantic: true },
+    };
+    const result = await writeGraphLinks(rawConfig, [recA, recB], { linkIndex });
+    assert.ok(result.ok);
+    const content = readFileSync(join(vault, "plur1bus", "memories", `${idA}.md`), "utf8");
+    // idB should appear as target — found via byMemoryId since recB has no plur1bus_id
+    assert.match(content, /Memory B/);
+    assert.match(content, /ähnlich/);
+  });
+
+  it("plur1bus_id fallback: records with only plur1bus_id (no memory_id) still get semantic links", async () => {
+    const vault = makeVault();
+    mkdirSync(join(vault, "plur1bus", "records", "decisions"), { recursive: true });
+
+    writeFileSync(join(vault, "plur1bus", "records", "decisions", "dec-legacy-A.md"), "# Legacy A\n", "utf8");
+    writeFileSync(join(vault, "plur1bus", "records", "decisions", "dec-legacy-B.md"), "# Legacy B\n", "utf8");
+
+    const recA = {
+      plur1bus_id: "dec-legacy-A",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-legacy-A.md",
+      title: "Legacy A",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const recB = {
+      plur1bus_id: "dec-legacy-B",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-legacy-B.md",
+      title: "Legacy B",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+
+    const linkIndex = {
+      version: "1",
+      entries: {
+        "dec-legacy-A": {
+          similar: ["dec-legacy-B"],
+          contentHash: "sha256:leg",
+          firstDiscoveredAt: "2026-01-01T00:00:00Z",
+          lastCheckedAt: "2026-01-01T00:00:00Z",
+        },
+      },
+    };
+
+    const rawConfig = {
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      graphLinks: { includeSemantic: true },
+    };
+    const result = await writeGraphLinks(rawConfig, [recA, recB], { linkIndex });
+    assert.ok(result.ok);
+    const content = readFileSync(join(vault, "plur1bus", "records", "decisions", "dec-legacy-A.md"), "utf8");
+    assert.match(content, /dec-legacy-B/);
+    assert.match(content, /ähnlich/);
+  });
+});
+
 describe("readMemoryNotes", () => {
   it("reads memory notes from memories dir", () => {
     const vault = mkdtempSync(join(tmpdir(), "plur1bus-rmn-"));
