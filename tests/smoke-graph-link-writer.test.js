@@ -523,6 +523,32 @@ describe("readMemoryNotes", () => {
     assert.strictEqual(records[0].plur1bus_type, "memory");
   });
 
+  it("returns null title when body has no heading", () => {
+    const vault = mkdtempSync(join(tmpdir(), "plur1bus-ri-"));
+    const memoriesDir = join(vault, "plur1bus", "memories");
+    mkdirSync(memoriesDir, { recursive: true });
+    writeFileSync(
+      join(memoriesDir, "aaaaaaaa-0000-0000-0000-000000000001.md"),
+      [
+        "---",
+        "memory_id: aaaaaaaa-0000-0000-0000-000000000001",
+        "plur1bus_type: memory",
+        "category: fact",
+        "importance: 0.5",
+        "scope: agent-private",
+        "created_at: 2026-01-01",
+        "content_hash: sha256:abc",
+        "---",
+        "",
+        "This note has no heading, just body text.",
+      ].join("\n")
+    );
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const records = readMemoryNotes(rawConfig);
+    assert.strictEqual(records.length, 1);
+    assert.strictEqual(records[0].title, null);
+  });
+
   it("buildRecordIndex indexes by memory_id", () => {
     const vault = mkdtempSync(join(tmpdir(), "plur1bus-bri-"));
     mkdirSync(join(vault, "plur1bus"), { recursive: true });
