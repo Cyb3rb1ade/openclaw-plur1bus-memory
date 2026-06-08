@@ -25,7 +25,7 @@ describe("feature-profiles", () => {
     assert.strictEqual(p.merging.autoApply, false);
     assert.strictEqual(p.schicht15.enabled, true);
     assert.strictEqual(p.obsidianBridge.enabled, true);
-    assert.strictEqual(p.obsidianBridge.status, "pending_setup");
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
   });
 
   it("safeProfile has only core features", () => {
@@ -107,16 +107,15 @@ describe("feature-profiles", () => {
     assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, false);
   });
 
-  it("recommendedProfile sets obsidian status to pending_setup", () => {
+  it("recommendedProfile sets obsidianBridge requireVaultPathConfirmation", () => {
     const p = recommendedProfile();
-    assert.strictEqual(p.obsidianBridge.status, "pending_setup");
     assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
   });
 
   it("isApplyBlocked with pending_setup features when vault not confirmed", () => {
     const config = {
       featuresConfirmedAt: "2026-06-03",
-      obsidianBridge: { enabled: true, status: "pending_setup" },
+      obsidianBridge: { enabled: true, requireVaultPathConfirmation: true },
     };
     const result = isApplyBlocked(config);
     assert.strictEqual(result.blocked, true);
