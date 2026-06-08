@@ -40,6 +40,8 @@ import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as li
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory } from "./lib/categorize.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { createObsidianBridgeService } from "./lib/obsidian-bridge.js";
+import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
+import { loadLinkIndex } from "./lib/obsidian/link-index.js";
 import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
 import { renderStatus } from "./lib/telegram-commands/status.js";
 import { collectStatusData } from "./lib/telegram-commands/status-data.js";
@@ -1916,6 +1918,15 @@ const plugin = {
                   writeRemDreamToVault(result.report, result.trends, commandCtx.workspaceDir);
                 }
                 api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}]: ${JSON.stringify(result.report || result)}`);
+                const semanticCfg = obsidianBridgeCfg?.graphLinks?.semanticDiscovery;
+                if (semanticCfg?.enabled && commandCtx.workspaceDir) {
+                  const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
+                  const { readRecords: readRecsForSem } = await import("./lib/obsidian/record-index.js");
+                  const semRecords = readRecsForSem(semVaultCfg);
+                  discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger })
+                    .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.batchAborted ? " (aborted-429)" : ""}`))
+                    .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
+                }
                 return formatJsonCommandResult({ job: "rem-dream", ...(result.report || result) });
               }
               if (subKey === "skill-miner") {
@@ -1952,7 +1963,19 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "reminder-dispatch", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch"] });
+              if (subKey === "discover-semantic-links") {
+                const semBridgeCfg = obsidianBridgeCfg || {};
+                if (!commandCtx.workspaceDir) {
+                  return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_workspace_dir" });
+                }
+                const semVaultCfg = { ...semBridgeCfg, vaultPath: commandCtx.workspaceDir };
+                const { readRecords: readRecsInternal } = await import("./lib/obsidian/record-index.js");
+                const semRecords = readRecsInternal(semVaultCfg);
+                const semResult = await discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger });
+                api.logger?.info?.(`plur1bus internal discover-semantic-links[${internalAgent}]: ${JSON.stringify(semResult)}`);
+                return formatJsonCommandResult({ job: "discover-semantic-links", ...semResult });
+              }
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links"] });
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
