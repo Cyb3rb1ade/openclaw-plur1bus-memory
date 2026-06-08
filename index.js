@@ -743,6 +743,26 @@ class MemoryDB {
     }
   }
 
+  async scanActive() {
+    await this.init();
+    const count = await this.table.countRows();
+    if (count === 0) return [];
+    const rows = await this.table.query()
+      .where("status IS NULL OR (status != 'deleted' AND status != 'archived')")
+      .toArray();
+    return rows.map((r) => ({
+      id: r.id,
+      vector: r.vector || null,
+      text: r.text || "",
+      summary: r.summary || "",
+      category: r.category || "",
+      importance: r.importance ?? 0.5,
+      createdAt: r.createdAt || "",
+      scope: r.scope || "agent-private",
+      status: r.status || "active",
+    }));
+  }
+
   async purgeExpired() {
     await this.init();
     const now = safeTimestamp(Date.now());
