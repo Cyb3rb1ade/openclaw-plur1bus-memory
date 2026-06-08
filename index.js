@@ -41,6 +41,7 @@ import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory } fr
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
+import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
 import { loadLinkIndex } from "./lib/obsidian/link-index.js";
 import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
 import { renderStatus } from "./lib/telegram-commands/status.js";
@@ -1941,9 +1942,13 @@ const plugin = {
                 const semanticCfg = obsidianBridgeCfg?.graphLinks?.semanticDiscovery;
                 if (semanticCfg?.enabled && commandCtx.workspaceDir) {
                   const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
-                  const { readRecords: readRecsForSem } = await import("./lib/obsidian/record-index.js");
-                  const semRecords = readRecsForSem(semVaultCfg);
-                  discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger, defaultAgentId: internalAgent })
+                  const semDb = pool.getDb(internalAgent);
+                  Promise.resolve()
+                    .then(async () => {
+                      const lancedbRecords = await semDb.scanActive();
+                      await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger: api.logger });
+                      return discoverSemanticLinks(semVaultCfg, lancedbRecords, { pool, logger: api.logger, defaultAgentId: internalAgent });
+                    })
                     .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.batchAborted ? " (aborted-429)" : ""}`))
                     .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
                 }
@@ -1989,13 +1994,15 @@ const plugin = {
                 if (!workspaces.length) {
                   return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_workspaces_configured" });
                 }
-                const { readRecords: readRecsInternal } = await import("./lib/obsidian/record-index.js");
                 let totalProcessed = 0, totalSkipped = 0, totalUnchanged = 0, totalErrors = 0;
                 for (const ws of workspaces) {
                   const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
-                  const semRecords = readRecsInternal(semVaultCfg);
-                  const semResult = await discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger, defaultAgentId: ws.agentId });
-                  api.logger?.info?.(`plur1bus internal discover-semantic-links[${ws.agentId || internalAgent}]: ${JSON.stringify(semResult)}`);
+                  const wsAgentId = ws.agentId || internalAgent;
+                  const wsDb = pool.getDb(wsAgentId);
+                  const lancedbRecords = await wsDb.scanActive();
+                  await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger: api.logger });
+                  const semResult = await discoverSemanticLinks(semVaultCfg, lancedbRecords, { pool, logger: api.logger, defaultAgentId: wsAgentId });
+                  api.logger?.info?.(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
                   totalProcessed += semResult.processed;
                   totalSkipped += semResult.skipped;
                   totalUnchanged += semResult.unchanged;
