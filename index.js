@@ -752,7 +752,7 @@ class MemoryDB {
       .toArray();
     return rows.map((r) => ({
       id: r.id,
-      vector: r.vector || null,
+      vector: (Array.isArray(r.vector) && r.vector.length > 0) ? r.vector : null,
       text: r.text || "",
       summary: r.summary || "",
       category: r.category || "",
