@@ -33,7 +33,7 @@ describe("recommended-mode-full", () => {
     assert.strictEqual(p.merging.autoApply, false);
     assert.strictEqual(p.schicht15.enabled, true);
     assert.strictEqual(p.obsidianBridge.enabled, true);
-    assert.strictEqual(p.obsidianBridge.status, "pending_setup");
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
   });
 
   it("applyFeatureProfile merges only missing keys", () => {
