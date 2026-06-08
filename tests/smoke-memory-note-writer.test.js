@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeMemoryNotes } from "../lib/obsidian/memory-note-writer.js";
@@ -93,7 +93,11 @@ describe("writeMemoryNotes", () => {
 
     const result = writeMemoryNotes(baseConfig(vault), records, { maxPerRun: 3 });
     assert.strictEqual(result.written, 3);
+
+    const files = readdirSync(join(vault, "plur1bus", "memories"));
+    assert.strictEqual(files.length, 3, "exactly 3 files should exist on disk");
   });
+
 
   it("dryRun writes nothing and returns written=0", () => {
     const vault = makeVault();
@@ -104,5 +108,24 @@ describe("writeMemoryNotes", () => {
 
     const notePath = join(vault, "plur1bus", "memories", "aaaaaaaa-0000-0000-0000-000000000001.md");
     assert.ok(!existsSync(notePath), "file should not exist in dryRun mode");
+  });
+
+  it("sanitizes newlines in frontmatter fields", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-mnw-"));
+    const record = {
+      id: "aaaaaaaa-0000-0000-0000-000000000001",
+      text: "hello world",
+      summary: "line one\nstatus: injected",
+      category: "fact",
+      importance: 0.8,
+      createdAt: "2026-01-01",
+      scope: "agent-private",
+      status: "active",
+      vector: [0.1],
+    };
+    await writeMemoryNotes(baseConfig(tmpDir), [record], {});
+    const content = readFileSync(join(tmpDir, "plur1bus", "memories", `${record.id}.md`), "utf8");
+    assert.ok(!/^status: injected$/m.test(content), "injected YAML key should not appear as a standalone line");
+    assert.ok(content.includes("line one"), "summary text should still appear");
   });
 });
