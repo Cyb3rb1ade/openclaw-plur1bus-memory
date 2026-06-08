@@ -39,7 +39,7 @@ import { flushMetrics } from "./lib/metrics.js";
 import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary } from "./lib/text-utils.js";
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory } from "./lib/categorize.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
-import { createObsidianBridgeService } from "./lib/obsidian-bridge.js";
+import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { loadLinkIndex } from "./lib/obsidian/link-index.js";
 import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
@@ -1965,16 +1965,23 @@ const plugin = {
               }
               if (subKey === "discover-semantic-links") {
                 const semBridgeCfg = obsidianBridgeCfg || {};
-                const semVaultPath = commandCtx.workspaceDir || semBridgeCfg.vaultPath;
-                if (!semVaultPath) {
-                  return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_vault_path" });
+                const workspaces = discoverObsidianWorkspaces(semBridgeCfg, { commandCtx });
+                if (!workspaces.length) {
+                  return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_workspaces_configured" });
                 }
-                const semVaultCfg = { ...semBridgeCfg, vaultPath: semVaultPath };
                 const { readRecords: readRecsInternal } = await import("./lib/obsidian/record-index.js");
-                const semRecords = readRecsInternal(semVaultCfg);
-                const semResult = await discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger });
-                api.logger?.info?.(`plur1bus internal discover-semantic-links[${internalAgent}]: ${JSON.stringify(semResult)}`);
-                return formatJsonCommandResult({ job: "discover-semantic-links", ...semResult });
+                let totalProcessed = 0, totalSkipped = 0, totalUnchanged = 0, totalErrors = 0;
+                for (const ws of workspaces) {
+                  const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
+                  const semRecords = readRecsInternal(semVaultCfg);
+                  const semResult = await discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger });
+                  api.logger?.info?.(`plur1bus internal discover-semantic-links[${ws.agentId || internalAgent}]: ${JSON.stringify(semResult)}`);
+                  totalProcessed += semResult.processed;
+                  totalSkipped += semResult.skipped;
+                  totalUnchanged += semResult.unchanged;
+                  totalErrors += semResult.errors;
+                }
+                return formatJsonCommandResult({ job: "discover-semantic-links", processed: totalProcessed, skipped: totalSkipped, unchanged: totalUnchanged, errors: totalErrors });
               }
               return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links"] });
             }
