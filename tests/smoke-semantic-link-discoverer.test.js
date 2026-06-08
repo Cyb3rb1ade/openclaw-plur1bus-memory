@@ -211,7 +211,13 @@ describe("discoverSemanticLinks", () => {
     assert.ok(result.processed >= 1);
     assert.strictEqual(result.indexUpdated, true);
     const idx = loadLinkIndex(vault);
-    assert.ok(idx.entries[idA] || idx.entries[idB]);
+    // At minimum, check idA was processed and its similar list contains idB
+    assert.ok(result.processed >= 1);
+    const entryA = idx.entries[idA];
+    assert.ok(entryA, "idA should have an index entry");
+    assert.ok(Array.isArray(entryA.similar), "similar should be an array");
+    assert.ok(entryA.similar.includes(idB), "idA similar list should include idB");
+    assert.ok(!entryA.similar.includes(idA), "idA should not link to itself");
   });
 
   it("is idempotent — second run with same contentHash returns unchanged", async () => {
