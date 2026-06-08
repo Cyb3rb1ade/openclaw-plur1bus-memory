@@ -1923,7 +1923,7 @@ const plugin = {
                   const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
                   const { readRecords: readRecsForSem } = await import("./lib/obsidian/record-index.js");
                   const semRecords = readRecsForSem(semVaultCfg);
-                  discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger })
+                  discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger, defaultAgentId: internalAgent })
                     .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.batchAborted ? " (aborted-429)" : ""}`))
                     .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
                 }
@@ -1974,7 +1974,7 @@ const plugin = {
                 for (const ws of workspaces) {
                   const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
                   const semRecords = readRecsInternal(semVaultCfg);
-                  const semResult = await discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger });
+                  const semResult = await discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger, defaultAgentId: ws.agentId });
                   api.logger?.info?.(`plur1bus internal discover-semantic-links[${ws.agentId || internalAgent}]: ${JSON.stringify(semResult)}`);
                   totalProcessed += semResult.processed;
                   totalSkipped += semResult.skipped;
