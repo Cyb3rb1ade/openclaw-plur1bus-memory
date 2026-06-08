@@ -83,6 +83,28 @@ describe("link-index: buildPriorityQueue", () => {
     assert.strictEqual(queue.length, 1);
     assert.strictEqual(queue[0].id, "aaaaaaaa-0000-0000-0000-000000000001");
   });
+
+  it("returns empty array when records is empty", () => {
+    const queue = buildPriorityQueue([], { entries: {} });
+    assert.deepStrictEqual(queue, []);
+  });
+
+  it("returns all records when none are in the index", () => {
+    const records = [
+      { id: "aaaaaaaa-0000-0000-0000-000000000001", vector: [1] },
+      { id: "aaaaaaaa-0000-0000-0000-000000000002", vector: [1] },
+    ];
+    const queue = buildPriorityQueue(records, { entries: {} });
+    assert.strictEqual(queue.length, 2);
+    assert.strictEqual(queue[0].id, "aaaaaaaa-0000-0000-0000-000000000001");
+    assert.strictEqual(queue[1].id, "aaaaaaaa-0000-0000-0000-000000000002");
+  });
+
+  it("handles null existingIndex gracefully", () => {
+    const records = [{ id: "aaaaaaaa-0000-0000-0000-000000000001", vector: [1] }];
+    const queue = buildPriorityQueue(records, null);
+    assert.strictEqual(queue.length, 1);
+  });
 });
 
 describe("link-index: loadLinkIndex / saveLinkIndex", () => {
