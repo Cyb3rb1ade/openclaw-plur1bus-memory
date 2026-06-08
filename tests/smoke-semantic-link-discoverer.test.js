@@ -126,3 +126,102 @@ describe("link-index: loadLinkIndex / saveLinkIndex", () => {
     assert.ok(existsSync(join(vault, ".plur1bus", "link-index.json")));
   });
 });
+
+import { discoverSemanticLinks } from "../lib/obsidian/semantic-link-discoverer.js";
+
+describe("discoverSemanticLinks", () => {
+  function makeVault() {
+    return mkdtempSync(join(tmpdir(), "plur1bus-sld-"));
+  }
+
+  function makePool(searchResults = []) {
+    return {
+      getDb: (_agentId) => ({
+        search: async (_vector, _topN, _threshold) => searchResults,
+      }),
+    };
+  }
+
+  const baseConfig = (vault) => ({
+    vaultPath: vault,
+    reviewRoot: "plur1bus",
+  });
+
+  it("throws early when pool not provided", async () => {
+    const vault = makeVault();
+    const records = [{ plur1bus_id: "r1", vector: [0.1, 0.2] }];
+    await assert.rejects(
+      () => discoverSemanticLinks(baseConfig(vault), records, {}),
+      /pool/
+    );
+  });
+
+  it("returns zero counts for empty records array", async () => {
+    const vault = makeVault();
+    const result = await discoverSemanticLinks(baseConfig(vault), [], { pool: makePool() });
+    assert.strictEqual(result.processed, 0);
+    assert.strictEqual(result.skipped, 0);
+    assert.strictEqual(result.errors, 0);
+    assert.strictEqual(result.indexUpdated, false);
+  });
+
+  it("skips records without vector", async () => {
+    const vault = makeVault();
+    const records = [{ plur1bus_id: "r1" }];
+    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool: makePool() });
+    assert.strictEqual(result.skipped, 1);
+    assert.strictEqual(result.processed, 0);
+  });
+
+  it("processes a record and writes index", async () => {
+    const vault = makeVault();
+    const searchResults = [
+      { plur1bus_id: "r2" },
+      { plur1bus_id: "r1" },
+    ];
+    const records = [
+      { plur1bus_id: "r1", vector: [0.1], agentId: "main" },
+      { plur1bus_id: "r2", vector: [0.2], agentId: "main" },
+    ];
+    const pool = makePool(searchResults);
+    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool });
+    assert.ok(result.processed >= 1);
+    assert.strictEqual(result.indexUpdated, true);
+    const idx = loadLinkIndex(vault);
+    assert.ok(idx.entries["r1"] || idx.entries["r2"]);
+  });
+
+  it("is idempotent — second run with same contentHash returns unchanged", async () => {
+    const vault = makeVault();
+    const records = [{ plur1bus_id: "r1", vector: [0.1], text: "hello", summary: "world" }];
+    const pool = makePool([{ plur1bus_id: "r2" }]);
+    await discoverSemanticLinks(baseConfig(vault), records, { pool });
+    const second = await discoverSemanticLinks(baseConfig(vault), records, { pool });
+    assert.strictEqual(second.unchanged, 1);
+    assert.strictEqual(second.processed, 0);
+    assert.strictEqual(second.indexUpdated, false);
+  });
+
+  it("respects maxPerRun — processes only first N records", async () => {
+    const vault = makeVault();
+    const records = Array.from({ length: 10 }, (_, i) => ({
+      plur1bus_id: `r${i}`,
+      vector: [i * 0.1],
+    }));
+    const result = await discoverSemanticLinks(
+      { ...baseConfig(vault), graphLinks: { semanticDiscovery: { maxPerRun: 3, threshold: 0.5 } } },
+      records,
+      { pool: makePool([]) }
+    );
+    assert.strictEqual(result.processed + result.skipped + result.unchanged, 3);
+  });
+
+  it("excludes self from similar results", async () => {
+    const vault = makeVault();
+    const records = [{ plur1bus_id: "self", vector: [0.1] }];
+    const pool = makePool([{ plur1bus_id: "self" }, { plur1bus_id: "other" }]);
+    await discoverSemanticLinks(baseConfig(vault), records, { pool });
+    const idx = loadLinkIndex(vault);
+    assert.ok(!idx.entries["self"]?.similar.includes("self"));
+  });
+});
