@@ -101,6 +101,7 @@ export async function discoverSemanticLinks(rawConfig, records, options = {})
 - Empty vault / no records → returns `{ processed: 0, ... }` immediately
 - `maxPerRun > records.length` → processes all records (no error)
 - Vector search failure for one record → log warning, increment `errors`, continue
+- HTTP 429 from vector DB → abort batch early, save partial index, return with `batchAborted: true`
 - Missing `record.vector` → skip (mark `skipped`)
 - `pool` not provided → throw early with clear error message
 
