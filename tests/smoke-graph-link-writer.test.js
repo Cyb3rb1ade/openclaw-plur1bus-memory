@@ -14,6 +14,7 @@ import assert from "node:assert";
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readMemoryNotes, buildRecordIndex } from "../lib/obsidian/record-index.js";
 import {
   formatLinkTarget,
   formatDisplayTitle,
@@ -415,5 +416,133 @@ describe("graph-link-writer: Tier 3 (semantic link index)", () => {
     const content = readFileSync(join(vault, "plur1bus/records/decisions/dec-A.md"), "utf8");
     const ähnlichCount = (content.match(/ähnlich/g) || []).length;
     assert.strictEqual(ähnlichCount, 0, "src-dup already in Tier1, must not appear as Tier3 ähnlich");
+  });
+});
+
+describe("readMemoryNotes", () => {
+  it("reads memory notes from memories dir", () => {
+    const vault = mkdtempSync(join(tmpdir(), "plur1bus-rmn-"));
+    const memoriesDir = join(vault, "plur1bus", "memories");
+    mkdirSync(memoriesDir, { recursive: true });
+
+    const note1 = [
+      "---",
+      "memory_id: aaaaaaaa-0000-0000-0000-000000000001",
+      "plur1bus_type: memory",
+      "category: fact",
+      "importance: 0.9",
+      "scope: workspace",
+      "created_at: 2026-01-01T00:00:00.000Z",
+      "content_hash: sha256:abc123",
+      "---",
+      "",
+      "# First Memory Title",
+      "",
+      "Some memory text.",
+    ].join("\n");
+
+    const note2 = [
+      "---",
+      "memory_id: aaaaaaaa-0000-0000-0000-000000000002",
+      "plur1bus_type: memory",
+      "category: preference",
+      "importance: 0.7",
+      "scope: agent-private",
+      "created_at: 2026-02-01T00:00:00.000Z",
+      "content_hash: sha256:def456",
+      "---",
+      "",
+      "# Second Memory Title",
+      "",
+      "Other memory text.",
+    ].join("\n");
+
+    writeFileSync(join(memoriesDir, "aaaaaaaa-0000-0000-0000-000000000001.md"), note1, "utf8");
+    writeFileSync(join(memoriesDir, "aaaaaaaa-0000-0000-0000-000000000002.md"), note2, "utf8");
+
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const records = readMemoryNotes(rawConfig);
+
+    assert.strictEqual(records.length, 2);
+    const rec1 = records.find((r) => r.memory_id === "aaaaaaaa-0000-0000-0000-000000000001");
+    assert.ok(rec1, "should find record with memory_id 1");
+    assert.strictEqual(rec1.memory_id, "aaaaaaaa-0000-0000-0000-000000000001");
+    assert.strictEqual(rec1.category, "fact");
+    assert.strictEqual(rec1.importance, 0.9);
+    assert.strictEqual(rec1.title, "First Memory Title");
+  });
+
+  it("returns empty array when memories dir missing", () => {
+    const vault = mkdtempSync(join(tmpdir(), "plur1bus-rmn-"));
+    mkdirSync(join(vault, "plur1bus"), { recursive: true });
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const records = readMemoryNotes(rawConfig);
+    assert.deepStrictEqual(records, []);
+  });
+
+  it("skips non-memory files (plur1bus_type !== memory)", () => {
+    const vault = mkdtempSync(join(tmpdir(), "plur1bus-rmn-"));
+    const memoriesDir = join(vault, "plur1bus", "memories");
+    mkdirSync(memoriesDir, { recursive: true });
+
+    const memoryNote = [
+      "---",
+      "memory_id: aaaaaaaa-0000-0000-0000-000000000001",
+      "plur1bus_type: memory",
+      "category: fact",
+      "importance: 0.8",
+      "scope: workspace",
+      "created_at: 2026-01-01T00:00:00.000Z",
+      "content_hash: sha256:abc",
+      "---",
+      "",
+      "# Memory Note",
+    ].join("\n");
+
+    const recordNote = [
+      "---",
+      "plur1bus_id: rec-001",
+      "plur1bus_type: record",
+      "category: decision",
+      "importance: 0.5",
+      "scope: workspace",
+      "created_at: 2026-01-01T00:00:00.000Z",
+      "content_hash: sha256:xyz",
+      "---",
+      "",
+      "# Record Note",
+    ].join("\n");
+
+    writeFileSync(join(memoriesDir, "aaaaaaaa-0000-0000-0000-000000000001.md"), memoryNote, "utf8");
+    writeFileSync(join(memoriesDir, "rec-001.md"), recordNote, "utf8");
+
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const records = readMemoryNotes(rawConfig);
+
+    assert.strictEqual(records.length, 1);
+    assert.strictEqual(records[0].plur1bus_type, "memory");
+  });
+
+  it("buildRecordIndex indexes by memory_id", () => {
+    const vault = mkdtempSync(join(tmpdir(), "plur1bus-bri-"));
+    mkdirSync(join(vault, "plur1bus"), { recursive: true });
+
+    const uuid = "aaaaaaaa-0000-0000-0000-000000000001";
+    const records = [
+      {
+        memory_id: uuid,
+        plur1bus_type: "memory",
+        path: `memories/${uuid}.md`,
+        title: "A Memory",
+        importance: 0.9,
+      },
+    ];
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const index = buildRecordIndex(rawConfig, { records, readExistingRecords: false });
+
+    assert.ok(index.byMemoryId, "index should have byMemoryId");
+    assert.ok(index.byMemoryId[uuid], `byMemoryId should contain ${uuid}`);
+    assert.strictEqual(index.byMemoryId[uuid].memory_id, uuid);
+    assert.strictEqual(index.byMemoryId[uuid].title, "A Memory");
   });
 });
