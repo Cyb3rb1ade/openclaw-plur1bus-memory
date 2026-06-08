@@ -1965,10 +1965,11 @@ const plugin = {
               }
               if (subKey === "discover-semantic-links") {
                 const semBridgeCfg = obsidianBridgeCfg || {};
-                if (!commandCtx.workspaceDir) {
-                  return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_workspace_dir" });
+                const semVaultPath = commandCtx.workspaceDir || semBridgeCfg.vaultPath;
+                if (!semVaultPath) {
+                  return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_vault_path" });
                 }
-                const semVaultCfg = { ...semBridgeCfg, vaultPath: commandCtx.workspaceDir };
+                const semVaultCfg = { ...semBridgeCfg, vaultPath: semVaultPath };
                 const { readRecords: readRecsInternal } = await import("./lib/obsidian/record-index.js");
                 const semRecords = readRecsInternal(semVaultCfg);
                 const semResult = await discoverSemanticLinks(semVaultCfg, semRecords, { pool, logger: api.logger });
