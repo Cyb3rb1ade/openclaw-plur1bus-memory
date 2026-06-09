@@ -3624,6 +3624,17 @@ const plugin = {
     // Auto-Recall: Memories before prompt build injecten
     // ========================================================================
 
+    // resolveCommandLocale ist im neoEnabled-Block definiert, aber autoRecall
+    // kann unabhängig davon aktiviert sein. Wir brauchen eine eigene Kopie,
+    // die außerhalb beider Blöcke verfügbar ist.
+    const resolveCommandLocaleRecall = (commandCtx) => {
+      const messages = commandCtx?.messages || [];
+      const lang = resolveLocale({ ctx: commandCtx, messages, fallback: "en" });
+      const toneHint = commandCtx?.workspaceDir ? readSoulToneCached(commandCtx.workspaceDir) : null;
+      const tone = pickTone(toneHint);
+      return { lang, tone };
+    };
+
     if (autoRecall) {
       api.on("before_prompt_build", async (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
@@ -3734,7 +3745,7 @@ const plugin = {
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
-          const { lang, tone } = resolveCommandLocale({ messages: event?.messages || [] });
+          const { lang, tone } = resolveCommandLocaleRecall({ messages: event?.messages || [] });
           const { knowledgeNudge: nudge, conflictNudge } = buildMaintenanceNudges({
             workspaceDir: ctx?.workspaceDir,
             schicht15Enabled,
@@ -3841,7 +3852,7 @@ const plugin = {
 
         // Knowledge-update + conflict-review nudges (shared, localized helper;
         // conflict-log is read only once). #9 dedup + #11 i18n.
-        const { lang, tone } = resolveCommandLocale({ messages: _event?.messages || [] });
+        const { lang, tone } = resolveCommandLocaleRecall({ messages: _event?.messages || [] });
         const { knowledgeNudge: nudge, conflictNudge } = buildMaintenanceNudges({
           workspaceDir: ctx.workspaceDir,
           schicht15Enabled,
