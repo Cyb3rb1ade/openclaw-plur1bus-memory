@@ -258,6 +258,61 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ---
 
+## [6.1.4] — 2026-06-09
+
+### Added — Uncommitted Features Consolidated
+
+> **Consolidation-Release.** Alle Features aus `feature/emotion-integration` und uncommitted Changes aus `../memory-analysis` wurden in `main` gemergt. 550 Tests, 0 Failures.
+
+- **ACL / Access Control** (`lib/acl-middleware.js`)
+  - Agent- und Workspace-basierte Zugriffskontrolle für Memories
+  - Filterung in `searchByTopic`, `getCard`, und Recall-Pipeline
+  - Log-Audit für abgelehnte Zugriffe
+
+- **Feedback-Loop** (`lib/feedback-log.js`, `lib/jobs/feedback-analyzer.js`)
+  - `/mf <ID> +|-|~` Command für Memory-Feedback (👍/👎/neutral)
+  - Persistente Feedback-Speicherung pro Workspace
+  - Hintergrund-Analyse für Recall-Qualitäts-Verbesserung
+
+- **Temporal Reasoning** (`lib/temporal-parser.js`, `lib/temporal-filter.js`)
+  - Zeit-Ausdrücke im Query: "letzten Monat", "vor 3 Tagen", "Q2 2026"
+  - Anchor-Resolution: Zeit-Referenzen werden auf konkrete Date-Ranges aufgelöst
+  - Filterung vor Boost/Rerank für bessere Performance
+
+- **Proactive Nudge** (`lib/proactive-nudge.js`, `lib/jobs/proactive-check.js`)
+  - Proaktive Erinnerungs-Vorschläge basierend auf Mustern
+  - Konfigurierbare Cron-Frequenz und Thresholds
+
+- **Meta-Cognition** (`lib/meta-cognition.js`, `lib/jobs/reflection-job.js`)
+  - Selbstreflexion über Memory-Nutzungsmuster
+  - Wöchentliche Reflexions-Jobs mit Pattern-Erkennung
+
+- **Collaborative Memory** (`lib/shared-memory.js`)
+  - `/share <ID>` Command: Karten in Workspace-Pool teilen
+  - ACL-geschützter Zugriff auf geteilte Memories
+
+- **Explainability** (`lib/explainability.js`)
+  - `--explain` Flag für `/memory`: zeigt Begründung pro Treffer
+  - Transparente Recall-Entscheidungen für den Nutzer
+
+- **Query Refinement** (`lib/query-refiner.js`)
+  - Automatische Query-Erweiterung bei schlechten Ergebnissen
+  - Kombination originaler + verfeinerter Suche mit Deduplizierung
+
+- **Garbage Collection Job** (`lib/jobs/gc-job.js`)
+  - Hintergrund-GC für expired/stale Memories
+  - Konfigurierbare Retention-Policies
+
+### Changed
+
+- **Recall-Pipeline**: Query-Verfeinerung, Temporal-Filter, und ACL-Filter als neue Stufen
+- **DB-Adapter**: `rowToCard` um `scope`, `agentId`, `workspaceId` erweitert
+- **Memory-Query**: `--explain` Flag, `showIds` in Ergebnissen, `parseMemoryFeedback`
+- **Memory-Edit**: ACL-Checks für `forgetCard`/`correctCard`, `shareCard` Funktion
+- **i18n**: Übersetzungen für `/mf` Command
+
+---
+
 ## [5.2.10] — 2026-05-XX
 
 ### Added
