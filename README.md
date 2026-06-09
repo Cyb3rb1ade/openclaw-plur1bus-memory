@@ -19,6 +19,14 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 - **Obsidian bridge apply mode (safe)** — When `mode: "apply"` is confirmed, every batch creates per-file backups, a manifest (beforeHash/afterHash), and an audit-log entry. Vault path confirmation is required before the first write.
 - **Rate-limited background jobs** — Daily consolidation is capped at 1×/day/agent; REM dreaming is capped at 1×/week. Configurable via `run-state.json`.
 
+### New in v6.1.5 (Tiefere Emotionen)
+
+- **8 Plutchik-Dimensionen** — `disgust` ergänzt als vollwertige Basisemotion.
+- **20+ Emotionale Nuancen** — relief, pride, gratitude, nostalgia, loneliness, resentment, awe, contempt, guilt, shame, hope, envy, compassion, curiosity, boredom, excitement, love, disappointment, embarrassment, serenity (de/en).
+- **Emotionale Blends** — Erkennung komplexer Emotionen: bittersweet, schadenfreude, awe, melancholy, suspense, love, contempt, fiero, relief, disappointment, nostalgia. Mit semantischem Trigger und Confidence.
+- **Emotion-spezifischer Decay** — surprise (2min), fear (20min), joy/trust (30min), sadness/disgust/anger (2h), resentment (6h), shame (12h).
+- **Erweiterte Emojis** — 40+ Emojis für Nuancen und Blends.
+
 ### New in v6.1.4 (Consolidation)
 
 - **ACL / Access Control** — Agent- and workspace-scoped memory access. `searchByTopic`, `getCard`, and the recall pipeline filter results by ACL. Unauthorized access is logged for audit.
