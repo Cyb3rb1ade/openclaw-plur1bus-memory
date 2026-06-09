@@ -1,11 +1,13 @@
 # Perfektes Gedächtnis für OpenClaw-Agenten
 ## Ein vollständiges How-To für alle Deployments
 
-> **Status (2026-05-28):** Dieses Dokument beschreibt die **Architektur** der drei Memory-Schichten (Flat-File, Workspace-Indexer, LanceDB) plus Dreaming und Adaptive Learning. Diese Konzepte bleiben mit plur1bus 5.0.0 unverändert gültig.
+> **Status (2026-06-02):** Dieses Dokument beschreibt die **Architektur** der drei Memory-Schichten (Flat-File, Workspace-Indexer, LanceDB) plus Dreaming und Adaptive Learning. Diese Konzepte bleiben mit **plur1bus 6.0.0** unverändert gültig.
 >
-> **Für die tägliche Nutzung** (neue Commands `/zustand`, `/memory`, `/vergiss`, `/korrigier`, `/einschalten`, `/ausschalten`; Kritisch-Push-Mechanismus; Vault-Layout `/memory/cards/YYYY/MM/`; die 3 neuen Cron-Jobs) ist **`how-to-memory.md`** die Single Source of Truth.
+> **Neu in 6.0.0:** Feature Profiles (Recommended/Safe/Custom) mit Confirmation-Gate, Semantic Long-Input Handling (keine harten Command-Limits mehr), Pipeline-weiter Reranker-Fallback/Timeout, Merging Approval-Gate (`autoApply: false`), Obsidian Bridge Apply-Modus mit per-Batch Backup + Manifest + Audit-Log, schicht15 Dedupe (`promotedKnowledgeIds` pro Workspace/Agent), persistente Rate-Limits für Heavy Jobs.
 >
-> **Veraltet in 5.0.0** (in diesem Dokument ggf. noch erwähnt, aber nicht mehr aktiv): Review-Bundle-Workflow, `/plur1bus_review|morning|evening`, Cron-Jobs `morning-review` / `evening-review`, Config-Keys `autoApplyLowRisk` / `reviewProfiles` / `bundleCooldownMs` / `review.*`.
+> **Für die tägliche Nutzung** (Commands `/zustand`, `/memory`, `/vergiss`, `/korrigier`, `/einschalten`, `/ausschalten`; Kritisch-Push-Mechanismus; Vault-Layout `/memory/cards/YYYY/MM/`) ist **`how-to-memory.md`** die Single Source of Truth.
+>
+> **Veraltet in 5.0.0+** (in diesem Dokument ggf. noch erwähnt, aber nicht mehr aktiv): Review-Bundle-Workflow, `/plur1bus_review|morning|evening`, Cron-Jobs `morning-review` / `evening-review`, Config-Keys `autoApplyLowRisk` / `reviewProfiles` / `bundleCooldownMs` / `review.*`.
 
 > **Zielgruppe:** Alle, die OpenClaw betreiben — unabhängig von Installationspfad, Betriebssystem oder Anzahl der Agenten. Dieses Dokument beschreibt Konzepte, Architektur und Implementierung von Grund auf.
 
