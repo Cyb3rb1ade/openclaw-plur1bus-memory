@@ -122,7 +122,7 @@ import {
   emotionEmoji,
 } from "./lib/emotion.js";
 import { createEmotionalStatePool } from "./lib/emotional-state.js";
-import { applyDynamicsDefaults, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
+import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
 import { parseReminderIntent } from "./lib/reminder-parser.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
 import { formatReminderNudge } from "./lib/reminder-nudge.js";
@@ -2573,7 +2573,7 @@ const plugin = {
                   await rawDb.init();
                   const vector = await embeddings.embed(newContent);
                   const neoStore = getNeoStore(commandCtx, {});
-                  await safeUpdate(
+                  const { newId } = await safeUpdate(
                     rawDb,
                     id,
                     { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
@@ -2586,6 +2586,10 @@ const plugin = {
                     },
                     { neoStore, logger: api.logger, skipDriftGate: true },
                   );
+                  const correctedCard = await rawDb.getById(newId);
+                  if (correctedCard) {
+                    await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
+                  }
                 },
               });
               if (!result.ok) return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: result.error } }) };
