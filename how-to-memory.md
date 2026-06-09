@@ -1,8 +1,8 @@
-# How-To: Memory-System — PLUR1BUS 6.1.4 (Stand 2026-06-09)
+# How-To: Memory-System — PLUR1BUS 6.1.5 (Stand 2026-06-09)
 
 > **Single Source of Truth** für die tägliche Nutzung. Architektur-Details (Schicht 1/2/3, Dreaming, Adaptive Learning, Meta-Cognition) stehen in `how-to-memory-perfect.md`.
 
-**Plugin-Version:** `memory-lancedb-namespaced` 6.1.4. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
+**Plugin-Version:** `memory-lancedb-namespaced` 6.1.5. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
 
 ---
 
@@ -142,6 +142,39 @@ Alle Jobs laufen pro Agent (`-main`, `-bernhardine`, `-heisenberg`). State in `/
 | `gc-job-*` | 05:00 | **Still.** Entfernt expired/stale Memories nach Retention-Policy. |
 
 Staffelung (Bernhardine → Bernd → Heisenberg) verhindert Kimi-Rate-Limit-Kollisionen.
+
+---
+
+## Emotionen — Wie der Bot "fühlt"
+
+Der Bot modelliert emotionale Zustände (er fühlt nicht wirklich, sondern spiegelt und beschreibt). Drei Ebenen:
+
+### Basisemotionen (8 Plutchik)
+joy, trust, anticipation, sadness, **disgust**, anger, fear, surprise
+
+### Nuancen (20+)
+relief, pride, gratitude, nostalgia, loneliness, resentment, awe, contempt, guilt, shame, hope, envy, compassion, curiosity, boredom, excitement, love, disappointment, embarrassment, serenity
+
+### Blends (Komplexe Emotionen)
+Wenn mehrere Basisemotionen gleichzeitig stark sind, erkennt der Bot Blends:
+- **bittersweet** — joy + sadness + Abschied
+- **schadenfreude** — joy + anger + "jemand ist gescheitert"
+- **love** — trust + joy + Herz/Vertrauen
+- **contempt** — anger + disgust + Verachtung
+- **relief** — joy nach fear (Transition)
+
+Jede Nuance und jeder Blend hat Confidence, Evidence und Quelle (lexicon/transformer/llm).
+
+### Emotion-spezifischer Decay
+Emotionen klingen unterschiedlich schnell ab:
+| Emotion | Halbwertszeit |
+|---------|--------------|
+| surprise | 2 Minuten |
+| fear | 20 Minuten |
+| joy/trust | 30 Minuten |
+| sadness/disgust/anger | 2 Stunden |
+| resentment | 6 Stunden |
+| shame | 12 Stunden |
 
 ---
 
