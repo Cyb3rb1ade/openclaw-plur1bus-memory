@@ -312,66 +312,43 @@ class MemoryDB {
       if (tables.includes(TABLE_NAME)) {
         this.table = await this.db.openTable(TABLE_NAME);
         // Migrate: add missing columns
+        // Statt eines großen try/catch: Schema einmal lesen, dann pro Spalte
+        // einzeln migrieren. So verhindert ein Fehler bei einer Spalte nicht
+        // die Migration der übrigen.
+        let schema;
         try {
-          const schema = await this.table.schema();
-          const hasSum = schema.fields.some(f => f.name === 'summary');
-          if (!hasSum) {
-            await this.table.addColumns([{ name: 'summary', valueSql: "''" }]);
-          }
-          const hasOrigin = schema.fields.some(f => f.name === 'origin');
-          if (!hasOrigin) {
-            await this.table.addColumns([{ name: 'origin', valueSql: "'dm'" }]);
-          }
-          const hasMergedFrom = schema.fields.some(f => f.name === 'mergedFrom');
-          if (!hasMergedFrom) {
-            await this.table.addColumns([{ name: 'mergedFrom', valueSql: "'[]'" }]);
-          }
-          const hasExpiresAt = schema.fields.some(f => f.name === 'expiresAt');
-          if (!hasExpiresAt) {
-            await this.table.addColumns([{ name: 'expiresAt', valueSql: '0' }]);
-          }
-          const hasStoredBy = schema.fields.some(f => f.name === 'storedBy');
-          if (!hasStoredBy) {
-            await this.table.addColumns([{ name: 'storedBy', valueSql: "''" }]);
-          }
-          // v1.8.0 — Provenance + Scope
-          const hasSourceTurnId = schema.fields.some(f => f.name === 'sourceTurnId');
-          if (!hasSourceTurnId) {
-            await this.table.addColumns([{ name: 'sourceTurnId', valueSql: "''" }]);
-          }
-          const hasSourceMessageRole = schema.fields.some(f => f.name === 'sourceMessageRole');
-          if (!hasSourceMessageRole) {
-            await this.table.addColumns([{ name: 'sourceMessageRole', valueSql: "''" }]);
-          }
-          const hasSourceTimestamp = schema.fields.some(f => f.name === 'sourceTimestamp');
-          if (!hasSourceTimestamp) {
-            await this.table.addColumns([{ name: 'sourceTimestamp', valueSql: '0' }]);
-          }
-          const hasSourceUrl = schema.fields.some(f => f.name === 'sourceUrl');
-          if (!hasSourceUrl) {
-            await this.table.addColumns([{ name: 'sourceUrl', valueSql: "''" }]);
-          }
-          const hasEvidenceQuote = schema.fields.some(f => f.name === 'evidenceQuote');
-          if (!hasEvidenceQuote) {
-            await this.table.addColumns([{ name: 'evidenceQuote', valueSql: "''" }]);
-          }
-          const hasScope = schema.fields.some(f => f.name === 'scope');
-          if (!hasScope) {
-            await this.table.addColumns([{ name: 'scope', valueSql: "'agent-private'" }]);
-          }
-          const hasType = schema.fields.some(f => f.name === 'type');
-          if (!hasType) {
-            await this.table.addColumns([{ name: 'type', valueSql: "'memory'" }]);
-          }
-          const hasConfirmed = schema.fields.some(f => f.name === 'confirmed');
-          if (!hasConfirmed) {
-            await this.table.addColumns([{ name: 'confirmed', valueSql: 'false' }]);
-          }
+          schema = await this.table.schema();
         } catch (e) {
-          // Schema-Migration kann auf älteren LanceDB-Versionen scheitern
-          // (kein addColumns-Support). Graceful degradation, aber loggen statt
-          // silent swallow — Schema-Drifts sind sonst unsichtbar.
-          console.warn(`[memory-lancedb-namespaced] schema migration warning for ${this.dbPath}: ${e.message}`);
+          console.error(`[memory-lancedb-namespaced] schema read failed for ${this.dbPath}: ${e.message}`);
+        }
+
+        if (schema) {
+          const allColumns = [
+            { name: 'summary', valueSql: "''" },
+            { name: 'origin', valueSql: "'dm'" },
+            { name: 'mergedFrom', valueSql: "'[]'" },
+            { name: 'expiresAt', valueSql: '0' },
+            { name: 'storedBy', valueSql: "''" },
+            { name: 'sourceTurnId', valueSql: "''" },
+            { name: 'sourceMessageRole', valueSql: "''" },
+            { name: 'sourceTimestamp', valueSql: '0' },
+            { name: 'sourceUrl', valueSql: "''" },
+            { name: 'evidenceQuote', valueSql: "''" },
+            { name: 'scope', valueSql: "'agent-private'" },
+            { name: 'type', valueSql: "'memory'" },
+            { name: 'confirmed', valueSql: 'false' },
+          ];
+
+          for (const col of allColumns) {
+            try {
+              const hasCol = schema.fields.some(f => f.name === col.name);
+              if (!hasCol) {
+                await this.table.addColumns([col]);
+              }
+            } catch (e) {
+              console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${e.message}`);
+            }
+          }
         }
       } else {
         this.table = await this.db.createTable(TABLE_NAME, [
@@ -2613,4 +2590,5 @@ const plugin = {
   },
 };
 
+export { MemoryDB };
 export default plugin;
