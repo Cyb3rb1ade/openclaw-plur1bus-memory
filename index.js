@@ -58,7 +58,9 @@ import {
   parseQuery as parseMemoryQuery,
   formatResults as formatMemoryResults,
   queryMemory,
+  parseMemoryFeedback,
 } from "./lib/telegram-commands/memory-query.js";
+import { recordFeedback } from "./lib/feedback-log.js";
 import {
   parseCorrection,
   resolveCandidates,
@@ -2499,7 +2501,7 @@ const plugin = {
             const parsed = parseMemoryQuery(normalized.canonicalText);
             const agentId = commandCtx.agentId || "default";
             const items = await queryMemory(memoryDbAdapter, agentId, parsed);
-            return { text: formatMemoryResults(items, parsed, { lang, tone }) };
+            return { text: formatMemoryResults(items, parsed, { lang, tone, showIds: true }) };
           } catch (err) {
             const { lang, tone } = resolveCommandLocale(commandCtx);
             return { text: t("plur1bus.memory_failed", { lang, tone, vars: { error: err?.message || err } }) };
@@ -2633,12 +2635,41 @@ const plugin = {
           }
         };
 
+        const runMemoryFeedbackCommand = (commandCtx) => {
+          try {
+            const deniedLen = checkArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const args = (commandCtx.args || "").trim();
+            const parsed = parseMemoryFeedback(args);
+            if (!parsed) {
+              return { text: t("plur1bus.mf_usage", { lang, tone }) };
+            }
+            const workspaceDir = commandCtx.workspaceDir || null;
+            if (!workspaceDir) {
+              return { text: t("plur1bus.mf_no_workspace", { lang, tone }) };
+            }
+            recordFeedback(workspaceDir, "", parsed.memoryId, parsed.feedback, {});
+            return { text: t("plur1bus.mf_done", { lang, tone, vars: { id: parsed.memoryId, feedback: parsed.feedback } }) };
+          } catch (err) {
+            const { lang, tone } = resolveCommandLocale(commandCtx);
+            return { text: t("plur1bus.mf_failed", { lang, tone, vars: { error: err?.message || err } }) };
+          }
+        };
+
         api.registerCommand({
           name: "memory",
           description: "PLUR1BUS — recall memories (e.g. /memory this week, /memory about Eva)",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runMemoryCommand,
+        });
+        api.registerCommand({
+          name: "mf",
+          description: "PLUR1BUS — give feedback on a memory. Syntax: /mf <id> + (or -, ~)",
+          acceptsArgs: true,
+          channels: ["telegram", "discord", "slack", "mattermost"],
+          handler: runMemoryFeedbackCommand,
         });
         api.registerCommand({
           name: "forget",
