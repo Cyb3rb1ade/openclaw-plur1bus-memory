@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory and OpenClaw-native turn journal, provenance, curation, and recall.",
-  "version": "5.2.10",
+  "version": "5.2.100",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
