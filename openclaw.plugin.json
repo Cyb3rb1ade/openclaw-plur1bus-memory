@@ -605,7 +605,6 @@
                   "enum": [
                     "standard",
                     "conservative",
-                    "adversarial",
                     "maintenance",
                     "project_manager",
                     "semantic_deep"
