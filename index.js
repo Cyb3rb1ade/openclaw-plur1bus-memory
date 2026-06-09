@@ -2586,9 +2586,14 @@ const plugin = {
                     },
                     { neoStore, logger: api.logger, skipDriftGate: true },
                   );
-                  const correctedCard = await rawDb.getById(newId);
-                  if (correctedCard) {
-                    await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
+                  // newId === id on idempotent skip; reinforcement still valid
+                  try {
+                    const correctedCard = await rawDb.getById(newId);
+                    if (correctedCard) {
+                      await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
+                    }
+                  } catch (err) {
+                    api.logger?.warn?.(`[/correct] reinforcement failed: ${err?.message}`);
                   }
                 },
               });
