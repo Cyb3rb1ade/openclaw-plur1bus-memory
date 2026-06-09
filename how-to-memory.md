@@ -1,18 +1,20 @@
-# How-To: Memory-System — plur1bus 5.1.x (Stand 2026-05-31)
+# How-To: Memory-System — PLUR1BUS 6.1.4 (Stand 2026-06-09)
 
-> **Single Source of Truth** für die tägliche Nutzung. Architektur-Details (Schicht 1/2/3, Dreaming, Adaptive Learning) stehen in `how-to-memory-perfect.md`.
+> **Single Source of Truth** für die tägliche Nutzung. Architektur-Details (Schicht 1/2/3, Dreaming, Adaptive Learning, Meta-Cognition) stehen in `how-to-memory-perfect.md`.
 
-**Plugin-Version:** `memory-lancedb-namespaced` 5.1.x. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `/root/plur1bus/`. Live unter `/root/.openclaw/extensions/memory-lancedb-namespaced/`.
+**Plugin-Version:** `memory-lancedb-namespaced` 6.1.4. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
 
 ---
 
 ## Was ist PLUR1BUS jetzt
 
-Eine **autonome** Gedächtnis-Schicht. Der Bot lernt selbst — ohne dass Cy mehrmals täglich Review-Bundles anschauen muss. Drei Bausteine:
+Eine **autonome** Gedächtnis-Schicht mit kognitiven Erweiterungen. Der Bot lernt selbst — ohne dass der User mehrmals täglich Review-Bundles anschauen muss. Fünf Bausteine:
 
 1. **LanceDB pro Agent** — Source of Truth für jede Memory-Karte
 2. **Obsidian-Vault-Mirror** — `/memory/cards/YYYY/MM/*.md`, mobil lesbar
-3. **Background-Jobs** — Cron-getriebene Konsolidierung + Kritisch-Klassifier; nur bei wirklichen Treffern (z.B. Gesundheit, Sicherheit) gibt es einen Telegram-Push
+3. **Background-Jobs** — Cron-getriebene Konsolidierung + Kritisch-Klassifier + GC
+4. **Emotion & Meta-Cognition** — Stimmungsabhängiger Recall, wöchentliche Reflexion
+5. **ACL & Collaborative Memory** — Agent-/Workspace-Scoped Zugriff, Sharing-Pool
 
 **Was nicht mehr da ist (Breaking Changes vs. 4.x):**
 - `/plur1bus_review` / `/plur1bus_morning` / `/plur1bus_evening` weg
@@ -22,9 +24,9 @@ Eine **autonome** Gedächtnis-Schicht. Der Bot lernt selbst — ohne dass Cy meh
 
 ---
 
-## Die 6 neuen Commands
+## Die 8 Commands
 
-Alle deutschsprachig, im Telegram-DM mit dem jeweiligen Agent (Bernd, Bernhardine, Heisenberg).
+Alle deutschsprachig, im Telegram-DM mit dem jeweiligen Agent.
 
 ### `/zustand`
 System-Health auf einen Blick. **Nicht** `/status` — das ist OpenClaw-Built-in für was anderes.
@@ -65,14 +67,36 @@ Erinnerung ändern. Akzeptiert ` zu `, `→`, oder `->` als Separator. Archive-f
 /korrigier Termin Mittwoch -> Termin Donnerstag
 ```
 
+### `/mf <ID> +|-|~`
+Feedback auf ein Memory-Ergebnis geben. Persistiert pro Workspace für Recall-Qualitäts-Verbesserung.
+
+```
+/mf abc123 +
+→ ✅ Feedback gespeichert: abc123 → positive
+
+/mf abc123 -
+→ ✅ Feedback gespeichert: abc123 → negative
+```
+
+### `/teile <ID>`
+Memory-Karte in den Workspace-Shared-Pool kopieren. ACL-geschützt.
+
+```
+/teile abc123
+→ Shared "Plan Pferdekauf Q3" to workspace pool (id: xyz789).
+```
+
 ### `/einschalten <feature>` / `/ausschalten <feature>`
-Toggle für drei Features:
+Toggle für Features:
 
 | Feature | Effekt |
 | --- | --- |
 | `vaultSync` | Obsidian-Mirror an/aus |
 | `kritischPush` | Telegram-Push bei kritischen Treffern an/aus |
 | `dailyConsolidation` | Nächtliche Karten-Konsolidierung an/aus |
+| `proactiveNudge` | Proaktive Erinnerungs-Vorschläge an/aus |
+| `metaCognition` | Wöchentliche Reflexions-Jobs an/aus |
+| `queryRefinement` | Automatische Query-Verfeinerung an/aus |
 
 Schreibt atomar nach `openclaw.json`. **Gateway-Restart nötig**, damit die Änderung greift.
 
@@ -109,9 +133,13 @@ Alle Jobs laufen pro Agent (`-main`, `-bernhardine`, `-heisenberg`). State in `/
 
 | Job | Zeit | Was er macht |
 | --- | --- | --- |
-| `daily-memory-consolidation-*` | 00:30 / 00:32 / 00:38 | **Still.** Mergt Duplikate, glättet via Kimi-coding LLM, schreibt frische Markdown-Cards in `/memory/cards/YYYY/MM/`. Kein Push. |
+| `daily-memory-consolidation-*` | 00:30 / 00:32 / 00:38 | **Still.** Mergt Duplikate, glättet via LLM, schreibt frische Markdown-Cards in `/memory/cards/YYYY/MM/`. Kein Push. |
 | `critical-memory-classifier-*` | alle 30min | **Still bis Treffer.** Scannt neue Karten auf sensitive Entity-Typen. Treffer → Telegram-Push (siehe oben). |
 | `auto-accept-stale-criticals-*` | 03:15 / 03:17 / 03:19 | **Still.** Markiert nicht-beantwortete Kritisch-Pushes nach 24h als bestätigt. |
+| `feedback-analyzer-*` | 01:00 | **Still.** Analysiert gesammeltes `/mf`-Feedback für Recall-Qualitäts-Verbesserung. |
+| `proactive-check-*` | 02:00 | **Still.** Erkennt Muster und schlägt proaktive Erinnerungen vor. |
+| `reflection-job-*` | So 04:00 | **Still.** Wöchentliche Meta-Cognition: Pattern-Dichte, Recall-Erfolgsraten, Knowledge-Gaps. |
+| `gc-job-*` | 05:00 | **Still.** Entfernt expired/stale Memories nach Retention-Policy. |
 
 Staffelung (Bernhardine → Bernd → Heisenberg) verhindert Kimi-Rate-Limit-Kollisionen.
 
@@ -264,9 +292,9 @@ Cron-Jobs `morning-review` / `evening-review` wurden via `update-openclaw.sh` en
 
 ## Tests & Distribution
 
-Plugin: **74/74 Tests passing** (`cd /root/plur1bus && npm test`).
-Distribution: `/root/plur1bus/` (Source). Live deployed nach `/root/.openclaw/extensions/memory-lancedb-namespaced/` (per `install-memory-system.sh` oder manuelles rsync + Gateway-Restart).
+Plugin: **550/550 Tests passing** (`npm test`).
+Distribution: Source-Repo. Live deployed nach `~/.openclaw/extensions/memory-lancedb-namespaced/` (per `git pull` + Gateway-Restart).
 
 ---
 
-*Letzter Refresh: 2026-05-28 (PLUR1BUS 5.0.0 Rewrite). Vorgängerstand zur Bundle-Review-Architektur: siehe Git-History dieser Datei.*
+*Letzter Refresh: 2026-06-09 (PLUR1BUS 6.1.4 Consolidation). Vorgängerstände: siehe Git-History und `CHANGELOG.md`.*
