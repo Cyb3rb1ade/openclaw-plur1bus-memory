@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Version 6.1.2** — the Engram release — adds recall hardening, security regression fixes, and full P5 validation. Autonomous learning with explicit user control gates: semantic long-input handling, feature activation profiles, proposal-only memory merging, conflict resolution recommendations, and safety-hardened Obsidian bridge apply mode.
+**Version 6.1.4** — the Consolidation release — merges all features from `feature/emotion-integration` plus uncommitted enhancements from the development workspace. Adds ACL-based memory access control, user feedback loop (`/mf`), temporal reasoning in queries, proactive nudges, meta-cognition, collaborative memory sharing, explainability (`--explain`), and automatic query refinement. All atop the Engram recall-hardening foundation with full P5 validation.
 
 ## What it does
 
@@ -19,6 +19,18 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 - **Obsidian bridge apply mode (safe)** — When `mode: "apply"` is confirmed, every batch creates per-file backups, a manifest (beforeHash/afterHash), and an audit-log entry. Vault path confirmation is required before the first write.
 - **Rate-limited background jobs** — Daily consolidation is capped at 1×/day/agent; REM dreaming is capped at 1×/week. Configurable via `run-state.json`.
 
+### New in v6.1.4 (Consolidation)
+
+- **ACL / Access Control** — Agent- and workspace-scoped memory access. `searchByTopic`, `getCard`, and the recall pipeline filter results by ACL. Unauthorized access is logged for audit.
+- **Feedback loop (`/mf`)** — Users can give thumbs-up/down/neutral feedback on any memory result. Feedback is persisted per workspace and analyzed by a background job to improve recall quality.
+- **Temporal reasoning** — Queries like "last month", "3 days ago", "Q2 2026" are parsed and resolved to concrete date ranges before the expensive boost/rerank stages.
+- **Proactive nudge** — Background pattern detection suggests reminders based on recurring memory patterns. Configurable cron frequency and confidence thresholds.
+- **Meta-cognition** — Weekly reflection jobs analyze memory usage patterns and emit self-awareness reports (pattern density, recall success rates, knowledge gaps).
+- **Collaborative memory (`/share`)** — Any memory card can be copied into a workspace-shared pool. Shared memories inherit ACL protections.
+- **Explainability (`--explain`)** — `/memory <query> --explain` shows a human-readable rationale for why each result was returned (score breakdown, boost factors, temporal relevance).
+- **Query refinement** — When the first recall round yields poor results, the pipeline automatically rewrites the query and merges both result sets (deduplicated, best score wins).
+- **Garbage collection job** — Background cleanup of expired and stale memories with configurable retention policies.
+
 ### New in v6.1.2 (Engram)
 
 - **Recall hardening** — `maxPromptMemories` (default 12) caps memories in the prompt context; dedup threshold raised to 0.78; acronym recognition groups semantically similar abbreviations; `canonicalMaxItems` (default 5) limits canonical representatives per cluster.
@@ -33,9 +45,11 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 | Command | What it does |
 | --- | --- |
 | `/state` | Status snapshot: memory card count, sync state, last plausibility run, any open issues with reason + fix hint. |
-| `/memory <query>` | Search the agent's memory via the same recall pipeline used by the `memory_recall` tool. Accepts queries of any length. |
+| `/memory <query>` | Search the agent's memory via the same recall pipeline used by the `memory_recall` tool. Accepts queries of any length. Add `--explain` for result rationale. |
 | `/forget <text>` | Forget a memory card. Archive-first guarantee — the card is JSON-archived before deletion. Accepts long descriptions. |
 | `/correct <old> zu <new>` | Update a memory card. Same archive-first guarantee. Accepts ` zu `, `→`, or `->` as the separator. Both old and new text can be long. |
+| `/mf <id> +` / `-` / `~` | Give feedback on a memory result: 👍 positive, 👎 negative, ~ neutral. Persisted per workspace for recall quality improvement. |
+| `/share <id>` | Copy a memory card into the workspace-shared pool. Shared memories are ACL-protected. |
 | `/enable <feature>` | Turn on a whitelisted feature (`vaultSync`, `kritischPush`, `dailyConsolidation`). |
 | `/disable <feature>` | Turn off the same. Writes atomically into `openclaw.json`; gateway restart required to apply. |
 | `/plur1bus setup` | Confirm the recommended feature profile and mark all features as active (or customize which ones). Required before advanced features can apply changes. |
@@ -150,13 +164,13 @@ LanceDB is the authoritative store: every memory card lives there first, indexed
 
 A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The plugin SDK currently exposes no outbound send API, so these messages are returned in the job result (`pushMessages`) for the cron carrier agent to deliver; once the SDK gains a reply-send hook, the same `telegramSend` path delivers them directly. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
 
-The recall pipeline runs Query → Embedding → LanceDB Top-N → Importance-Boost → optional Rerank (with timeout/fallback) → Inter-Result-Dedup → Canonical-First (KNOWLEDGE.md) → Top-5 as `<relevant-memories>` injected into the prompt.
+The recall pipeline runs Query → Embedding → LanceDB Top-N → **Query Refinement** (optional, on poor first results) → **Temporal Filter** (when time expressions detected) → Importance-Boost → optional Rerank (with timeout/fallback) → Inter-Result-Dedup → Canonical-First (KNOWLEDGE.md) → **ACL Filter** (agent/workspace scoped) → Top-5 as `<relevant-memories>` injected into the prompt.
 
 ## Development
 
 ```bash
 npm install
-npm test              # node --test, 190+ tests
+npm test              # node --test, 550+ tests
 ```
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.
