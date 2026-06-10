@@ -26,6 +26,7 @@
     "LICENSE"
   ],
   "scripts": {
+    "lint": "find . -name '*.js' -not -path './node_modules/*' -not -path './.git/*' -not -path './coverage/*' -exec node --check {} +",
     "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test tests/*.test.js test/*.test.js",
     "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test tests/*.test.js test/*.test.js"
   },
