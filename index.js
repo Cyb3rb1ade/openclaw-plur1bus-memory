@@ -374,8 +374,45 @@ class MemoryDB {
     const normalized = { ...entry, id: entry.id || randomUUID() };
     if (!normalized.type) normalized.type = "memory";
     if (typeof normalized.confirmed !== "boolean") normalized.confirmed = false;
-    // Reminder-column defaults — these columns exist in migrated tables but are
-    // absent from regular memory entries; LanceDB requires all schema fields.
+    // All schema column defaults — LanceDB requires every field present on insert.
+    // These cover both partial entries (e.g. reminders) and base memory fields.
+    if (normalized.summary == null) normalized.summary = "";
+    if (normalized.origin == null) normalized.origin = "dm";
+    if (normalized.mergedFrom == null) normalized.mergedFrom = "[]";
+    if (normalized.expiresAt == null) normalized.expiresAt = 0;
+    if (normalized.storedBy == null) normalized.storedBy = "";
+    if (normalized.sourceTurnId == null) normalized.sourceTurnId = "";
+    if (normalized.sourceMessageRole == null) normalized.sourceMessageRole = "";
+    if (normalized.sourceTimestamp == null) normalized.sourceTimestamp = 0;
+    if (normalized.sourceUrl == null) normalized.sourceUrl = "";
+    if (normalized.evidenceQuote == null) normalized.evidenceQuote = "";
+    if (normalized.scope == null) normalized.scope = "agent-private";
+    if (normalized.emotionalValence == null) normalized.emotionalValence = "";
+    if (normalized.emotionalIntensity == null) normalized.emotionalIntensity = 0.0;
+    if (normalized.emotionalDominant == null) normalized.emotionalDominant = "neutral";
+    if (normalized.moodContextAtCapture == null) normalized.moodContextAtCapture = "";
+    if (normalized.replayCount == null) normalized.replayCount = 0;
+    if (normalized.lastReplayed == null) normalized.lastReplayed = 0;
+    if (normalized.retrievalCount == null) normalized.retrievalCount = 0;
+    if (normalized.lastRetrievedAt == null) normalized.lastRetrievedAt = 0;
+    if (normalized.memoryStrength == null) normalized.memoryStrength = 1.0;
+    if (normalized.halfLifeDays == null) normalized.halfLifeDays = 30;
+    if (normalized.lastStrengthenedAt == null) normalized.lastStrengthenedAt = 0;
+    if (normalized.lastDynamicsAt == null) normalized.lastDynamicsAt = 0;
+    if (normalized.memoryClass == null) normalized.memoryClass = "standard";
+    if (normalized.neverForget == null) normalized.neverForget = 0;
+    if (normalized.coreMemoryScore == null) normalized.coreMemoryScore = 0.0;
+    if (normalized.coreMemoryReason == null) normalized.coreMemoryReason = "";
+    if (normalized.versionNumber == null) normalized.versionNumber = 1;
+    if (normalized.previousVersion == null) normalized.previousVersion = "";
+    if (normalized.supersededBy == null) normalized.supersededBy = "";
+    if (normalized.updateSource == null) normalized.updateSource = "";
+    if (normalized.updateEvidence == null) normalized.updateEvidence = "";
+    if (normalized.reconsolidationConfidence == null) normalized.reconsolidationConfidence = 0.0;
+    if (normalized.status == null) normalized.status = "active";
+    if (normalized.versionCreatedAt == null) normalized.versionCreatedAt = 0;
+    if (normalized.updatedAt == null) normalized.updatedAt = 0;
+    if (normalized.workspaceKey == null) normalized.workspaceKey = "";
     if (normalized.memoryKind == null) normalized.memoryKind = "memory";
     if (normalized.reminderStatus == null) normalized.reminderStatus = "";
     if (normalized.remindAt == null) normalized.remindAt = 0;
