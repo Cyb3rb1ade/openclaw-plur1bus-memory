@@ -93,6 +93,8 @@ import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
 import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
 import { runProactiveCheck } from "./lib/jobs/proactive-check.js";
+import { runReflectionJob } from "./lib/jobs/reflection-job.js";
+import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
@@ -1608,6 +1610,25 @@ const plugin = {
       api.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
     }
 
+    // Meta-Cognition Config
+    const metaCognitionCfg = cfg.metaCognition || {};
+    const metaCognitionEnabled = metaCognitionCfg.enabled !== false;
+    const metaCognitionSessionThreshold = metaCognitionCfg.sessionThreshold ?? 50;
+    const metaCognitionIntervalMs = (metaCognitionCfg.intervalDays ?? 7) * 24 * 60 * 60 * 1000;
+    const metaCognitionLlmReport = metaCognitionCfg.llmReport === true;
+    let sessionCountSinceReflection = 0;
+    let lastReflectionAt = 0;
+    try {
+      const metaStatePath = join(baseDbPath, "_meta-cognition-state.json");
+      if (existsSync(metaStatePath)) {
+        const metaState = JSON.parse(readFileSync(metaStatePath, "utf8"));
+        sessionCountSinceReflection = metaState.sessionCountSinceReflection || 0;
+        lastReflectionAt = metaState.lastReflectionAt || 0;
+      }
+    } catch (_) {
+      // ignore corrupt state
+    }
+
     // v2.1.1: hard-fail wenn Provider-Modell ohne dimensions konfiguriert ist.
     // OpenAI-Modelle: aus EMBEDDING_DIMENSIONS-Map fallback.
     // Nicht-OpenAI-Modelle (OpenRouter, custom baseUrl, etc.): MÜSSEN explizit
@@ -2167,7 +2188,21 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal proactive-check[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "proactive-check", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check"] });
+              if (subKey === "meta-reflect") {
+                if (!commandCtx.workspaceDir) {
+                  return formatJsonCommandResult({ job: "meta-reflect", skipped: true, reason: "no_workspace" });
+                }
+                const neoStore = createNeoStore(neoRoot, rememberNeoWorkspace(commandCtx, {}));
+                const result = await runReflectionJob({
+                  store: neoStore,
+                  workspaceDir: commandCtx.workspaceDir,
+                  logger: api.logger,
+                  llmReport: metaCognitionLlmReport,
+                });
+                api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "meta-reflect", ...result });
+              }
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check", "meta-reflect"] });
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
@@ -3097,6 +3132,38 @@ const plugin = {
             }
 
             api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+
+            // Meta-Cognition: Session-Counter erhöhen, ggf. Reflection triggern
+            if (metaCognitionEnabled && stored > 0) {
+              sessionCountSinceReflection++;
+              const shouldReflect = shouldTriggerReflection(
+                sessionCountSinceReflection,
+                metaCognitionSessionThreshold,
+                lastReflectionAt,
+                { intervalMs: metaCognitionIntervalMs },
+              );
+              if (shouldReflect) {
+                try {
+                  const neoStore = createNeoStore(neoRoot, rememberNeoWorkspace(ctx, event));
+                  const reflectResult = await runReflectionJob({
+                    store: neoStore,
+                    workspaceDir: commandCtx?.workspaceDir || workspaceDir,
+                    logger: api.logger,
+                    llmReport: metaCognitionLlmReport,
+                  });
+                  if (reflectResult.ok) {
+                    sessionCountSinceReflection = 0;
+                    lastReflectionAt = Date.now();
+                    const metaStatePath = join(baseDbPath, "_meta-cognition-state.json");
+                    writeFileSync(metaStatePath, JSON.stringify({ sessionCountSinceReflection, lastReflectionAt }, null, 2));
+                    api.logger.info(`memory-lancedb-namespaced: meta-reflection triggered after ${metaCognitionSessionThreshold} sessions`);
+                  }
+                } catch (err) {
+                  api.logger.warn(`memory-lancedb-namespaced: meta-reflection failed: ${String(err)}`);
+                }
+              }
+            }
+
             // --- Reminder Extraction ---
             for (const it of items) {
               try {
