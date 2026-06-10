@@ -74,6 +74,7 @@ const ALL_COLUMNS = [
   { name: "dispatchCount", valueSql: "0" },
   { name: "lastDispatchAttemptAt", valueSql: "0" },
   { name: "nextDispatchAttemptAt", valueSql: "0" },
+  { name: "workspaceKey", valueSql: "''" },
 ];
 
 async function main() {
