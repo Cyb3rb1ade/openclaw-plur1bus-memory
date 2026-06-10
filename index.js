@@ -92,6 +92,7 @@ import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
 import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
+import { runProactiveCheck } from "./lib/jobs/proactive-check.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
@@ -2152,7 +2153,21 @@ const plugin = {
                 }
                 return formatJsonCommandResult({ job: "discover-semantic-links", processed: totalProcessed, skipped: totalSkipped, unchanged: totalUnchanged, errors: totalErrors });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report"] });
+              if (subKey === "proactive-check") {
+                if (!commandCtx.workspaceDir) {
+                  return formatJsonCommandResult({ job: "proactive-check", skipped: true, reason: "no_workspace" });
+                }
+                const neoStore = createNeoStore(neoRoot, rememberNeoWorkspace(commandCtx, {}));
+                const result = await runProactiveCheck(neoStore, internalAgent, {
+                  workspaceDir: commandCtx.workspaceDir,
+                  workspaceKey: commandCtx.workspaceKey || "default",
+                  embedFn: async (text) => embeddings.embed(text),
+                  logger: api.logger,
+                });
+                api.logger?.info?.(`plur1bus internal proactive-check[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "proactive-check", ...result });
+              }
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check"] });
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
