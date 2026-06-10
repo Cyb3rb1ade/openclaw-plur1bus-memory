@@ -1,8 +1,8 @@
-# How-To: Memory-System — PLUR1BUS 6.1.5 (Stand 2026-06-09)
+# How-To: Memory-System — PLUR1BUS 6.2.0 (Stand 2026-06-10)
 
 > **Single Source of Truth** für die tägliche Nutzung. Architektur-Details (Schicht 1/2/3, Dreaming, Adaptive Learning, Meta-Cognition) stehen in `how-to-memory-perfect.md`.
 
-**Plugin-Version:** `memory-lancedb-namespaced` 6.1.5. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
+**Plugin-Version:** `memory-lancedb-namespaced` 6.2.0. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
 
 ---
 
@@ -26,13 +26,13 @@ Eine **autonome** Gedächtnis-Schicht mit kognitiven Erweiterungen. Der Bot lern
 
 ## Die 8 Commands
 
-Alle deutschsprachig, im Telegram-DM mit dem jeweiligen Agent.
+Im Telegram-DM mit dem jeweiligen Agent.
 
-### `/zustand`
-System-Health auf einen Blick. **Nicht** `/status` — das ist OpenClaw-Built-in für was anderes.
+### `/state`
+System-Health auf einen Blick.
 
 ```
-/zustand
+/state
 → 1247 Karten, Sync OK, letzte Plausibilitätsprüfung 03:32, keine offenen Themen.
 ```
 
@@ -50,21 +50,21 @@ Inspektion der eigenen Erinnerungen — zeitbasiert oder topic-basiert.
 
 Nutzt dieselbe Recall-Pipeline wie das `memory_recall`-Tool — d.h. Embedding-Suche + Reranker.
 
-### `/vergiss <Freitext>`
+### `/forget <Freitext>`
 Erinnerung löschen mit **archive-first**-Garantie. Die Karte wird vor dem Löschen als JSON in `/plur1bus/_archive/` weggesichert — kein endgültiger Verlust.
 
 ```
-/vergiss den Pferdekauf-Plan
+/forget den Pferdekauf-Plan
 → 1 Karte gefunden ("Plan Pferdekauf Q3"), archiviert und gelöscht.
 ```
 
-### `/korrigier <alt> zu <neu>`
-Erinnerung ändern. Akzeptiert ` zu `, `→`, oder `->` als Separator. Archive-first wie `/vergiss`. **Mit echtem Embedder-Wiring** (Phase 6.2) — das Update generiert neue Embeddings, nicht nur Textersatz.
+### `/correct <alt> zu <neu>`
+Erinnerung ändern. Akzeptiert ` zu `, `→`, oder `->` als Separator. Archive-first wie `/forget`. **Mit echtem Embedder-Wiring** (Phase 6.2) — das Update generiert neue Embeddings, nicht nur Textersatz.
 
 ```
-/korrigier Eva mag keinen Kaffee zu Eva mag Espresso aber keinen Filterkaffee
-/korrigier Pferd → Pony
-/korrigier Termin Mittwoch -> Termin Donnerstag
+/correct Eva mag keinen Kaffee zu Eva mag Espresso aber keinen Filterkaffee
+/correct Pferd → Pony
+/correct Termin Mittwoch -> Termin Donnerstag
 ```
 
 ### `/mf <ID> +|-|~`
@@ -86,7 +86,7 @@ Memory-Karte in den Workspace-Shared-Pool kopieren. ACL-geschützt.
 → Shared "Plan Pferdekauf Q3" to workspace pool (id: xyz789).
 ```
 
-### `/einschalten <feature>` / `/ausschalten <feature>`
+### `/enable <feature>` / `/disable <feature>`
 Toggle für Features:
 
 | Feature | Effekt |
@@ -101,7 +101,7 @@ Toggle für Features:
 Schreibt atomar nach `openclaw.json`. **Gateway-Restart nötig**, damit die Änderung greift.
 
 ```
-/ausschalten kritischPush
+/disable kritischPush
 → Toggle gesetzt. Gateway-Restart aktiv ab nächstem Neustart.
 ```
 
@@ -122,8 +122,8 @@ Statt alles in eine Review-Queue zu schieben, klassifiziert ein 30min-Cron neue 
 
 **Was passiert hinter den Buttons:**
 - `✅ Stimmt` → `markConfirmed(id)` in LanceDB
-- `❌ Falsch` → `/vergiss`-Flow (Archive + Delete)
-- `✏️ Anders formulieren` → eröffnet Mini-Dialog wie `/korrigier`
+- `❌ Falsch` → `/forget`-Flow (Archive + Delete)
+- `✏️ Anders formulieren` → eröffnet Mini-Dialog wie `/correct`
 
 ---
 
@@ -184,8 +184,8 @@ Emotionen klingen unterschiedlich schnell ab:
 | --- | --- |
 | Cy erzählt im Chat etwas Neues (`"Eva fängt Montag den neuen Job an"`) | **Stilles Lernen.** Auto-Capture nach jedem Turn, Karte landet in LanceDB + Vault. Kein Push. |
 | Klassifier markiert es als kritisch (z.B. Symptom, Passwort, Diagnose) | **Push mit Buttons.** Max 3/Tag. |
-| Cy ruft explizit `/vergiss`, `/korrigier`, `/memory` | Direkte Aktion. Kein Push. |
-| Nightly Consolidation merged zwei ähnliche Karten | **Stilles Merging.** Nur `/zustand` zeigt das im Health-Snapshot. |
+| Cy ruft explizit `/forget`, `/correct`, `/memory` | Direkte Aktion. Kein Push. |
+| Nightly Consolidation merged zwei ähnliche Karten | **Stilles Merging.** Nur `/state` zeigt das im Health-Snapshot. |
 | LLM-Glättung beim Card-Write scheitert | Fallback: raw text wird gespeichert. Kein Abbruch. |
 
 ---
@@ -289,21 +289,21 @@ Symptom: `recall failed: Error: 400 Invalid 'input': maximum context length is 8
 Ursache: Der aktuelle User-Prompt überschreitet das Embedding-Limit (~32 KB / 8191 Token).
 Fix (ab 5.1.x automatisch): Lange Prompts werden via LLM zu Key-Topics zusammengefasst bevor sie an die Embedding-API gehen. Kein manueller Eingriff nötig. Voraussetzung: `merging.model` ist konfiguriert (Standard: `kimi-for-coding`).
 
-### `/korrigier` hängt am Embedder
+### `/correct` hängt am Embedder
 Symptom: Telegram zeigt langes "thinking…", dann Timeout.
 Ursache: Embedder-Call (`text-embedding-3-large`) blockiert oder Quota leer.
 Check: `journalctl --user -u openclaw-gateway --since "10 min ago" | grep embedder`
 Fix: OpenAI-Key prüfen (`.env`), ggf. Embedder-Fallback aktivieren.
 
 ### Kritisch-Push kommt nicht obwohl Karte sensitiv aussieht
-Check 1: `/zustand` — ist `kritischPush` an?
+Check 1: `/state` — ist `kritischPush` an?
 Check 2: Tages-Limit (3/Tag) bereits ausgeschöpft? → State in `/plur1bus/_state/critical-push-budget.json`
 Check 3: Classifier-Cron lief? → `cat /root/.openclaw/cron/jobs.json | jq '.jobs[] | select(.name | startswith("critical-memory-classifier"))'`
 
-### `/zustand` meldet "sync stale"
+### `/state` meldet "sync stale"
 Obsidian-Bridge schreibt nicht (mehr) ins Vault.
 Check: Vault-Pfad existiert? Schreibrechte? `vaultSync` per Toggle aktiv?
-Fix: `/einschalten vaultSync` + Gateway-Restart.
+Fix: `/enable vaultSync` + Gateway-Restart.
 
 ### Karten erscheinen doppelt im Vault
 Self-Hash-Mismatch (P1-Bug, in 5.0.0 gefixt): Bridge erkannte eigene Outputs nicht als ignorierbar.
