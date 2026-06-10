@@ -1,6 +1,5 @@
 node_modules/
 .openclaw/openclaw.json
-package-lock.json
 *.bak
 *.bak.*
 .DS_Store
