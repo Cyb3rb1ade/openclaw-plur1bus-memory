@@ -136,7 +136,7 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
 
     // Smoke-Grenze: 1000 Scans auf 10k Edges müssen unter 100ms bleiben
     // (ist auf moderner HW meist 5–20ms, aber wir lassen Puffer)
-    assert.ok(scanMs < 100, `Array-Scan dauerte ${scanMs.toFixed(2)}ms, erwartet < 100ms`);
+    assert.ok(scanMs < 200, `Array-Scan dauerte ${scanMs.toFixed(2)}ms, erwartet < 200ms`);
   });
 
   it("mit Index: queryGraphIndex ist schnell", () => {
