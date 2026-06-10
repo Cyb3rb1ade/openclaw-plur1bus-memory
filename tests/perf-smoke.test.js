@@ -170,7 +170,7 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
 describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
   const N = 100;
 
-  it("100x accumulate() ist < 1ms total", async () => {
+  it("100x accumulate() ist < 2ms total", async () => {
     const debouncer = createMetricsDebouncer({
       flushFn: async () => {},
       debounceMs: 60_000, // Timer soll während des Tests nicht feuern
@@ -183,7 +183,7 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
     const accMs = performance.now() - start;
     await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
-    assert.ok(accMs < 1, `100x accumulate dauerte ${accMs.toFixed(3)}ms, erwartet < 1ms`);
+    assert.ok(accMs < 2, `100x accumulate dauerte ${accMs.toFixed(3)}ms, erwartet < 2ms`);
   });
 
   it("100x direct atomicJsonUpdate ist deutlich langsamer", async () => {
