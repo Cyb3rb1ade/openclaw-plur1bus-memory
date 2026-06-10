@@ -1,11 +1,17 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import * as lancedb from "@lancedb/lancedb";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { MemoryDB } from "../index.js";
+
+let lancedb;
+try {
+  lancedb = await import("@lancedb/lancedb");
+} catch {
+  // LanceDB native bindings not available in this environment
+}
 
 const VECTOR_DIM = 384;
 const TABLE_NAME = "memories";
@@ -30,7 +36,7 @@ async function createTableWithSchema(dbPath) {
   await db.close();
 }
 
-describe("MemoryDB.store validation", () => {
+(lancedb ? describe : describe.skip)("MemoryDB.store validation", () => {
   it("rejects entry with empty text and empty summary", async () => {
     const dbPath = mkdtempSync(join(tmpdir(), "plur1bus-store-val-"));
     await createTableWithSchema(dbPath);
