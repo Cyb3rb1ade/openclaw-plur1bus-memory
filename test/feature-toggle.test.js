@@ -17,10 +17,11 @@ function makeTmpConfig(initial = {}) {
   return { path, dir };
 }
 
-test('FEATURE_WHITELIST hat die drei spezifizierten Features', () => {
+test('FEATURE_WHITELIST hat die vier spezifizierten Features', () => {
   assert.ok(FEATURE_WHITELIST.vaultSync);
   assert.ok(FEATURE_WHITELIST.kritischPush);
   assert.ok(FEATURE_WHITELIST.dailyConsolidation);
+  assert.ok(FEATURE_WHITELIST.emotionTier);
   assert.deepStrictEqual(
     FEATURE_WHITELIST.vaultSync.configPath,
     ['plugins', 'entries', 'memory-lancedb-namespaced', 'config', 'obsidianBridge', 'enabled'],
@@ -98,16 +99,17 @@ test('renderToggleResult Erfolg für disable', () => {
 test('renderToggleResult Fehler enthält Feature-Liste', () => {
   const out = renderToggleResult({
     ok: false, error: 'Feature "foo" unbekannt.',
-    knownFeatures: ['vaultSync', 'kritischPush', 'dailyConsolidation'],
+    knownFeatures: ['vaultSync', 'kritischPush', 'dailyConsolidation', 'emotionTier'],
   }, { lang: 'de' });
   assert.match(out, /❌/);
   assert.match(out, /Bekannt:/);
   assert.match(out, /vaultSync/);
   assert.match(out, /kritischPush/);
   assert.match(out, /dailyConsolidation/);
+  assert.match(out, /emotionTier/);
 });
 
-test('listFeatures liefert alle drei Featurenamen', () => {
+test('listFeatures liefert alle vier Featurenamen', () => {
   const list = listFeatures();
-  assert.deepStrictEqual(list.sort(), ['dailyConsolidation', 'kritischPush', 'vaultSync']);
+  assert.deepStrictEqual(list.sort(), ['dailyConsolidation', 'emotionTier', 'kritischPush', 'vaultSync']);
 });
