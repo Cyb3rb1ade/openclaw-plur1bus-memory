@@ -23,7 +23,50 @@ No breaking changes vs. 6.1.x. Upgrade from 5.x: run `node scripts/migrate-missi
 
 - **`normalizeEntryForTable` — LanceDB-Schema-Mismatch bei Reminder-Inserts**: Beim Speichern von Reminders (`saveReminder` via `reminder-store.js`) fehlten ca. 37 Schema-Felder im erstellten Record (z.B. `moodContextAtCapture`, `lastStrengthenedAt`, `updateSource`, `reconsolidationConfidence` etc.). LanceDB warf `Append with different schema: fields did not match` und rollte den Insert zurück. Ursache: Die bisherige Schnittstelle in `normalizeEntryForTable` ergänzte nur Reminder-Spalten als Defaults, nicht aber die vollständigen 57-Spalten-Defaults des 6.1.x-Schemas. Fix: Komplette Default-Abdeckung aller Schema-Spalten in `normalizeEntryForTable` ergänzt — verhindert Schema-Mismatch unabhängig davon, welche Felder der Aufrufer mitliefert.
 
-## [6.1.0] — 2026-06-09
+## [6.1.4] — 2026-06-09
+
+### Added — Uncommitted Features Consolidated
+
+> **Consolidation-Release.** Alle Features aus `feature/emotion-integration` und uncommitted Changes aus `../memory-analysis` wurden in `main` gemergt. 550 Tests, 0 Failures.
+
+- **ACL / Access Control** (`lib/acl-middleware.js`)
+  - Agent- und Workspace-basierte Zugriffskontrolle für Memories
+  - Filterung in `searchByTopic`, `getCard`, und Recall-Pipeline
+  - Log-Audit für abgelehnte Zugriffe
+
+- **Feedback-Loop** (`lib/feedback-log.js`, `lib/jobs/feedback-analyzer.js`)
+  - `/mf <ID> +|-|~` Command für Memory-Feedback (👍/👎/neutral)
+  - Persistente Feedback-Speicherung pro Workspace
+  - Hintergrund-Analyse für Recall-Qualitäts-Verbesserung
+
+- **Temporal Reasoning** (`lib/temporal-parser.js`, `lib/temporal-filter.js`)
+  - Zeit-Ausdrücke im Query: "letzten Monat", "vor 3 Tagen", "Q2 2026"
+  - Anchor-Resolution: Zeit-Referenzen werden auf konkrete Date-Ranges aufgelöst
+  - Filterung vor Boost/Rerank für bessere Performance
+
+- **Proactive Nudge** (`lib/proactive-nudge.js`, `lib/jobs/proactive-check.js`)
+  - Proaktive Erinnerungs-Vorschläge basierend auf Mustern
+  - Konfigurierbare Cron-Frequenz und Thresholds
+
+- **Meta-Cognition** (`lib/meta-cognition.js`, `lib/jobs/reflection-job.js`)
+  - Selbstreflexion über Memory-Nutzungsmuster
+  - Wöchentliche Reflexions-Jobs mit Pattern-Erkennung
+
+- **Collaborative Memory** (`lib/shared-memory.js`)
+  - `/share <ID>` Command: Karten in Workspace-Pool teilen
+  - ACL-geschützter Zugriff auf geteilte Memories
+
+- **Explainability** (`lib/explainability.js`)
+  - `--explain` Flag für `/memory`: zeigt Begründung pro Treffer
+  - Transparente Recall-Entscheidungen für den Nutzer
+
+- **Query Refinement** (`lib/query-refiner.js`)
+  - Automatische Query-Erweiterung bei schlechten Ergebnissen
+  - Kombination originaler + verfeinerter Suche mit Deduplizierung
+
+- **Garbage Collection Job** (`lib/jobs/gc-job.js`)
+  - Hintergrund-GC für expired/stale Memories
+  - Konfigurierbare Retention-Policies
 
 ### Added — Tiefere Emotionen (Phase 1)
 
@@ -47,6 +90,107 @@ No breaking changes vs. 6.1.x. Upgrade from 5.x: run `node scripts/migrate-missi
 ### Fixed
 - **Unicode-Regex für deutsche Umlaute**: `/\b\w+\b/g` → `/\p{L}+/gu` in Tier 1 und Tier 2.
 
+## [6.1.3] — 2026-06-07
+
+### Fixed
+- **`ensureDynamicsColumns` fehlte `replayCount` + `lastReplayed`**: `lib/db-adapter.js` hatte die Replay-Spalten nur in `MemoryDB.init()` (index.js), aber nicht im DB-Adapter. Telegram-Commands und andere Adapter-Consumer, die über `resolveTable` gehen, haben die Spalten daher nicht ergänzt bekommen. Jetzt konsistent mit `index.js`.
+- **Standalone-Migrationsskript als `.mjs`**: `scripts/migrate-missing-columns.mjs` ist jetzt im Repo enthalten und wird von `.gitignore` explizit getrackt.
+
+### Added
+- `tests/db-adapter-replay-columns.test.js` — prüft, dass `ensureDynamicsColumns` die Spalten `replayCount` und `lastReplayed` zuverlässig ergänzt und idempotent bleibt.
+
+## [6.1.2] — 2026-06-07
+
+### Fixed
+- **Robustere Schema-Migration**: `MemoryDB.init()` nutzte einen einzigen großen try/catch für alle `addColumns`-Aufrufe. Wenn eine Spalte fehlschlug, wurden alle nachfolgenden nicht mehr hinzugefügt. Jetzt: Schema wird einmal gelesen, dann wird jede Spalte einzeln mit eigenem try/catch migriert. Ein Fehler bei `replayCount` blockiert nicht mehr `lastReplayed` (oder umgekehrt).
+- **Standalone-Migrationsskript**: `scripts/migrate-missing-columns.js` erlaubt manuelle Nachmigration auf Servern, die das Plugin nicht automatisch migriert hat (z.B. ältere LanceDB-Versionen ohne `addColumns`-Support im Runtime-Pfad).
+
+### Added
+- `tests/migration-robustness.test.js` — prüft, dass die Migration idempotent ist und fehlende Spalten zuverlässig ergänzt.
+
+### Changed
+- Keine DB-Schema-Änderungen (nur robustere Hinzufügung bestehender Spalten).
+- Keine API-Änderungen.
+
+## [6.1.1] — 2026-06-07
+
+### Fixed
+- **Package-Metadata-Version meldete 6.0.1 unter v6.1.0-Tag**: `package.json`, `package-lock.json` und `openclaw.plugin.json` wurden auf `6.1.1` synchronisiert, damit `npm pack` und Installation den korrekten Versions-String liefern.
+
+### Changed
+- Keine Laufzeit-Änderungen.
+- Keine DB-Schema-Änderungen.
+
+## [6.1.0] — Engram — 2026-06-07
+
+> **General Availability.** Alle P5-Validierungen bestanden: P5A (8/8), P5B (6/6), P5C (5/5), P5D (8/8), P5E (9/9). 441 Tests, 0 Failures über 100 Test-Suites.
+
+### Breaking Changes
+- **Keine.** v6.1.0 ist vollständig abwärtskompatibel mit v6.0.x. Keine Schema-Migration, keine manuellen Eingriffe erforderlich.
+
+### Upgrade-Hinweise
+- In-place Upgrade von v6.0.x: Config-Defaults werden automatisch übernommen.
+- Kein DB-Reset nötig; bestehende Memories bleiben erhalten.
+- Rollback auf v6.0.x jederzeit sicher (`git checkout 917e403`); keine DB-Schema-Änderungen, keine Datenmigration nötig.
+
+### Added — Recall Hardening (Engram)
+
+- **P0 — Recall-Budget & Deduplizierung**
+  - `maxPromptMemories` (default `12`): hartes Limit für Memories im Prompt-Kontext
+  - `dedup` Threshold auf `0.78` erhöht: aggressivere Entfernung nahezu identischer Einträge
+  - **Akronym-Erkennung**: semantisch ähnliche Akronyme werden bei der Deduplizierung als identisch behandelt
+  - `canonicalMaxItems` (default `5`): maximale Anzahl kanonischer Repräsentanten pro Cluster
+
+- **P1 — Typbasierte Half-Life**
+  - `halfLifeDaysMap` mit typ-spezifischen Defaults:
+    - `transient`: `60` Tage
+    - `episodic`: `180` Tage
+    - `longContext` / `project`: `600` Tage (P5D: datengestützte Anpassung für >0.88-Recall nach 100 Tagen)
+  - Ersetzt das globale `halfLifeDays` durch kontextsensitives Vergessen
+
+- **P2 — Performance & Skalierung**
+  - **Embedding-Cache**: LRU-Cache für Embedding-Vektoren mit TTL
+    - `embeddingCacheEnabled` (default `true`)
+    - `embeddingCacheTtlMs` (default `300000` = 5 Minuten)
+    - `embeddingCacheMaxEntries` (default `1000`)
+  - **Recall-Kompression**: semantische Komprimierung langer Memory-Inhalte vor dem Prompt-Build
+  - **Adaptive Recall-Tiers**: dynamische Budget-Allokation nach Memory-Typ (transient → episodic → longContext)
+  - **Graph-Index**: beschleunigte Graph-Traversal durch invertierten Index auf Edge-Typen + Ziel-Memory
+  - **Reinforcement-Loop**: erfolgreiche Recalls (niedrige Re-Rank-Distanz) stärken `memoryStrength` leicht
+
+- **P2F — Hot-Path Metrics Debounce**
+  - Telemetrie-Flush im Recall-Hot-Path wird auf 250 ms debounced
+  - Vermeidet Synchronisations-Overhead bei schnell aufeinanderfolgenden Recall-Aufrufen
+
+### Security — Hardening (P4C & P5)
+
+- **SQL-Escaping** in `lib/filter-parser.js`: Standard-SQL-Konformität (`'\'` → `''`) zur Vermeidung von Injection in DB-where-Clauses.
+- **ACL-Härtung** für destruktive Commands: `userId` muss in `allowedUserIds` enthalten sein; private DM erlaubt, Gruppen-Chat verweigert.
+- **Path-Traversal-Schutz** verifiziert: `../../../etc/passwd` wird an mehreren Schichten blockiert.
+- **Filter-Parser-Injection-Resistenz**: Parser resistiert gegen bösartige Eingaben in Filterausdrücken.
+
+### Changed
+
+- **P5D — Half-Life-Tuning für longContext / project**: `halfLifeDays` für `longContext` und `project` von `365` auf `600` Tage erhöht (datengestützt, um nach 100 Tagen noch >0.88 Recall-Qualität zu halten).
+- **P3A — Config-Defaults konsolidiert**: `openclaw.plugin.json` um neue Recall-/Runtime-Keys ergänzt; JSDoc-Default für `dedupJaccard` korrigiert (`0.6` → `0.78`).
+- **P4A — Toter Code entfernt**: 233 Zeilen ungenutzten Codes entfernt (`lib/memory-card-writer.js`, 6 tote Funktionen in `lib/obsidian-control-room.js`, `normalizeQuery` in `lib/embedding-cache.js`). Keine funktionale Regression.
+
+### Fixed
+- **Akronym-Tokenisierung**: `tokenizeAcronyms` erkennt jetzt korrekt Punkt- und Bindestrich-getrennte Akronyme (z. B. „A.I.", „REST-API") und normalisiert sie für die Deduplizierung.
+- **`dedupJaccard` Default**: der Standardwert für `dedupJaccard` wurde von `0.0` auf `0.78` angehoben, um konsistent mit dem dokumentierten Deduplizierungsverhalten zu sein.
+
+### Validation — v6-engram GA (P3–P5)
+
+- **P3**: Config-Audit (41 Tests), E2E-Recall-Smoke (5 Tests), Performance-Benchmarks, Dead-Code-Audit.
+- **P4**: Security-Regression (105 Tests), Upgrade-Simulation (12 Tests), Release-Packaging-Smoke, Public-API-Audit.
+- **P5A**: Real-Upgrade-Dry-Run (8/8 Checks) — kein Datenverlust, keine Schema-Änderung nötig.
+- **P5B**: Telegram-Command-Smoke (6/6) — ACL-Verhalten in Private/Group validiert.
+- **P5C**: Obsidian-Bridge-Smoke (5/5) — Bidirektionaler Sync, Backup/Manifest/Audit, Path-Traversal-Schutz, atomare JSON-Writes.
+- **P5D**: Recall-Quality-Golden-Set (8/8) — Akronyme, Decay, Dedup, Kompression validiert.
+- **P5E**: Rollback-Test (9/9) — sicherer Rollback auf v6.0.x jederzeit möglich.
+
+> **Bekannte Einschränkungen** siehe `docs/known-issues.md`.
+
 ## [6.0.1] — 2026-06-03
 
 ### Fixed
@@ -58,16 +202,14 @@ No breaking changes vs. 6.1.x. Upgrade from 5.x: run `node scripts/migrate-missi
 - Toter, unerreichbarer Cron-Command-Pfad (`resolvePlur1busCronCommandArgs` gab immer `null`) inkl. `agent_turn_prepare`-No-op-Hook entfernt.
 
 ### Security
-- **`security.allowChatConfigCommands`** (default `true`): Operator-Opt-out, um in geteilten Channels alle config-mutierenden Chat-Commands (`/einschalten`, `/ausschalten`, `/plur1bus setup`) zu sperren. Per-User-Authz ist nicht möglich, da das SDK dem Command-Handler keine Sender-Identität gibt.
+- **`security.allowChatConfigCommands`** (default `true`): Operator-Opt-out, um in geteilten Channels alle config-mutierenden Chat-Commands (`/enable`, `/disable`, `/plur1bus setup`) zu sperren. Per-User-Authz ist nicht möglich, da das SDK dem Command-Handler keine Sender-Identität gibt.
 - **File-Lock auf `openclaw.json`-Writes** (`withConfigLock`): verhindert lost-updates bei konkurrierenden Toggles/Setups.
-- **Archive-First für das `memory_forget`-Tool**: schreibt vor dem Löschen ein JSON-Backup (wie `/vergiss`); schlägt das Archiv fehl, wird nicht gelöscht.
+- **Archive-First für das `memory_forget`-Tool**: schreibt vor dem Löschen ein JSON-Backup (wie `/forget`); schlägt das Archiv fehl, wird nicht gelöscht.
 - **`safeSlug` härtet Punkt-Segmente**: `".."` kollabiert nicht mehr zu einem Traversal-Segment.
 - Obsidian-Apply: `backupBeforeApply`/`auditLog` jetzt „an, außer explizit `false`" (deckt sich mit dem dokumentierten Default).
 
 ### Changed
 - `lib/semantic-input.js`: `wasCompressed` spiegelt jetzt die tatsächliche Längenreduktion wider.
-
----
 
 ## [6.0.0] — 2026-06-03
 
@@ -147,7 +289,7 @@ No breaking changes vs. 6.1.x. Upgrade from 5.x: run `node scripts/migrate-missi
 - **Emotional State Pool** (`lib/emotional-state.js`)
   - Pro-Agent Emotional State Tracking
   - Stimmungsabhängiger Recall-Boost
-  - `/zustand` zeigt aktuelle Emotion
+  - `/state` zeigt aktuelle Emotion
 
 ### Added — Reranker & Provider
 
@@ -191,170 +333,6 @@ No breaking changes vs. 6.1.x. Upgrade from 5.x: run `node scripts/migrate-missi
 
 ---
 
-## [6.1.3] — 2026-06-07
-
-### Fixed
-- **`ensureDynamicsColumns` fehlte `replayCount` + `lastReplayed`**: `lib/db-adapter.js` hatte die Replay-Spalten nur in `MemoryDB.init()` (index.js), aber nicht im DB-Adapter. Telegram-Commands und andere Adapter-Consumer, die über `resolveTable` gehen, haben die Spalten daher nicht ergänzt bekommen. Jetzt konsistent mit `index.js`.
-- **Standalone-Migrationsskript als `.mjs`**: `scripts/migrate-missing-columns.mjs` ist jetzt im Repo enthalten und wird von `.gitignore` explizit getrackt.
-
-### Added
-- `tests/db-adapter-replay-columns.test.js` — prüft, dass `ensureDynamicsColumns` die Spalten `replayCount` und `lastReplayed` zuverlässig ergänzt und idempotent bleibt.
-
----
-
-## [6.1.2] — 2026-06-07
-
-### Fixed
-- **Robustere Schema-Migration**: `MemoryDB.init()` nutzte einen einzigen großen try/catch für alle `addColumns`-Aufrufe. Wenn eine Spalte fehlschlug, wurden alle nachfolgenden nicht mehr hinzugefügt. Jetzt: Schema wird einmal gelesen, dann wird jede Spalte einzeln mit eigenem try/catch migriert. Ein Fehler bei `replayCount` blockiert nicht mehr `lastReplayed` (oder umgekehrt).
-- **Standalone-Migrationsskript**: `scripts/migrate-missing-columns.js` erlaubt manuelle Nachmigration auf Servern, die das Plugin nicht automatisch migriert hat (z.B. ältere LanceDB-Versionen ohne `addColumns`-Support im Runtime-Pfad).
-
-### Added
-- `tests/migration-robustness.test.js` — prüft, dass die Migration idempotent ist und fehlende Spalten zuverlässig ergänzt.
-
-### Changed
-- Keine DB-Schema-Änderungen (nur robustere Hinzufügung bestehender Spalten).
-- Keine API-Änderungen.
-
----
-
-## [6.1.1] — 2026-06-07
-
-### Fixed
-- **Package-Metadata-Version meldete 6.0.1 unter v6.1.0-Tag**: `package.json`, `package-lock.json` und `openclaw.plugin.json` wurden auf `6.1.1` synchronisiert, damit `npm pack` und Installation den korrekten Versions-String liefern.
-
-### Changed
-- Keine Laufzeit-Änderungen.
-- Keine DB-Schema-Änderungen.
-
----
-
-## [6.1.0] — Engram — 2026-06-07
-
-> **General Availability.** Alle P5-Validierungen bestanden: P5A (8/8), P5B (6/6), P5C (5/5), P5D (8/8), P5E (9/9). 441 Tests, 0 Failures über 100 Test-Suites.
-
-### Breaking Changes
-- **Keine.** v6.1.0 ist vollständig abwärtskompatibel mit v6.0.x. Keine Schema-Migration, keine manuellen Eingriffe erforderlich.
-
-### Upgrade-Hinweise
-- In-place Upgrade von v6.0.x: Config-Defaults werden automatisch übernommen.
-- Kein DB-Reset nötig; bestehende Memories bleiben erhalten.
-- Rollback auf v6.0.x jederzeit sicher (`git checkout 917e403`); keine DB-Schema-Änderungen, keine Datenmigration nötig.
-
-### Added — Recall Hardening (Engram)
-
-- **P0 — Recall-Budget & Deduplizierung**
-  - `maxPromptMemories` (default `12`): hartes Limit für Memories im Prompt-Kontext
-  - `dedup` Threshold auf `0.78` erhöht: aggressivere Entfernung nahezu identischer Einträge
-  - **Akronym-Erkennung**: semantisch ähnliche Akronyme werden bei der Deduplizierung als identisch behandelt
-  - `canonicalMaxItems` (default `5`): maximale Anzahl kanonischer Repräsentanten pro Cluster
-
-- **P1 — Typbasierte Half-Life**
-  - `halfLifeDaysMap` mit typ-spezifischen Defaults:
-    - `transient`: `60` Tage
-    - `episodic`: `180` Tage
-    - `longContext` / `project`: `600` Tage (P5D: datengestützte Anpassung für >0.88-Recall nach 100 Tagen)
-  - Ersetzt das globale `halfLifeDays` durch kontextsensitives Vergessen
-
-- **P2 — Performance & Skalierung**
-  - **Embedding-Cache**: LRU-Cache für Embedding-Vektoren mit TTL
-    - `embeddingCacheEnabled` (default `true`)
-    - `embeddingCacheTtlMs` (default `300000` = 5 Minuten)
-    - `embeddingCacheMaxEntries` (default `1000`)
-  - **Recall-Kompression**: semantische Komprimierung langer Memory-Inhalte vor dem Prompt-Build
-  - **Adaptive Recall-Tiers**: dynamische Budget-Allokation nach Memory-Typ (transient → episodic → longContext)
-  - **Graph-Index**: beschleunigte Graph-Traversal durch invertierten Index auf Edge-Typen + Ziel-Memory
-  - **Reinforcement-Loop**: erfolgreiche Recalls (niedrige Re-Rank-Distanz) stärken `memoryStrength` leicht
-
-- **P2F — Hot-Path Metrics Debounce**
-  - Telemetrie-Flush im Recall-Hot-Path wird auf 250 ms debounced
-  - Vermeidet Synchronisations-Overhead bei schnell aufeinanderfolgenden Recall-Aufrufen
-
-### Security — Hardening (P4C & P5)
-
-- **SQL-Escaping** in `lib/filter-parser.js`: Standard-SQL-Konformität (`'\'` → `''`) zur Vermeidung von Injection in DB-where-Clauses.
-- **ACL-Härtung** für destruktive Commands: `userId` muss in `allowedUserIds` enthalten sein; private DM erlaubt, Gruppen-Chat verweigert.
-- **Path-Traversal-Schutz** verifiziert: `../../../etc/passwd` wird an mehreren Schichten blockiert.
-- **Filter-Parser-Injection-Resistenz**: Parser resistiert gegen bösartige Eingaben in Filterausdrücken.
-
-### Changed
-
-- **P5D — Half-Life-Tuning für longContext / project**: `halfLifeDays` für `longContext` und `project` von `365` auf `600` Tage erhöht (datengestützt, um nach 100 Tagen noch >0.88 Recall-Qualität zu halten).
-- **P3A — Config-Defaults konsolidiert**: `openclaw.plugin.json` um neue Recall-/Runtime-Keys ergänzt; JSDoc-Default für `dedupJaccard` korrigiert (`0.6` → `0.78`).
-- **P4A — Toter Code entfernt**: 233 Zeilen ungenutzten Codes entfernt (`lib/memory-card-writer.js`, 6 tote Funktionen in `lib/obsidian-control-room.js`, `normalizeQuery` in `lib/embedding-cache.js`). Keine funktionale Regression.
-
-### Fixed
-- **Akronym-Tokenisierung**: `tokenizeAcronyms` erkennt jetzt korrekt Punkt- und Bindestrich-getrennte Akronyme (z. B. „A.I.“, „REST-API“) und normalisiert sie für die Deduplizierung.
-- **`dedupJaccard` Default**: der Standardwert für `dedupJaccard` wurde von `0.0` auf `0.78` angehoben, um konsistent mit dem dokumentierten Deduplizierungsverhalten zu sein.
-
-### Validation — v6-engram GA (P3–P5)
-
-- **P3**: Config-Audit (41 Tests), E2E-Recall-Smoke (5 Tests), Performance-Benchmarks, Dead-Code-Audit.
-- **P4**: Security-Regression (105 Tests), Upgrade-Simulation (12 Tests), Release-Packaging-Smoke, Public-API-Audit.
-- **P5A**: Real-Upgrade-Dry-Run (8/8 Checks) — kein Datenverlust, keine Schema-Änderung nötig.
-- **P5B**: Telegram-Command-Smoke (6/6) — ACL-Verhalten in Private/Group validiert.
-- **P5C**: Obsidian-Bridge-Smoke (5/5) — Bidirektionaler Sync, Backup/Manifest/Audit, Path-Traversal-Schutz, atomare JSON-Writes.
-- **P5D**: Recall-Quality-Golden-Set (8/8) — Akronyme, Decay, Dedup, Kompression validiert.
-- **P5E**: Rollback-Test (9/9) — sicherer Rollback auf v6.0.x jederzeit möglich.
-
-> **Bekannte Einschränkungen** siehe `docs/known-issues.md`.
-
----
-
-## [6.1.4] — 2026-06-09
-
-### Added — Uncommitted Features Consolidated
-
-> **Consolidation-Release.** Alle Features aus `feature/emotion-integration` und uncommitted Changes aus `../memory-analysis` wurden in `main` gemergt. 550 Tests, 0 Failures.
-
-- **ACL / Access Control** (`lib/acl-middleware.js`)
-  - Agent- und Workspace-basierte Zugriffskontrolle für Memories
-  - Filterung in `searchByTopic`, `getCard`, und Recall-Pipeline
-  - Log-Audit für abgelehnte Zugriffe
-
-- **Feedback-Loop** (`lib/feedback-log.js`, `lib/jobs/feedback-analyzer.js`)
-  - `/mf <ID> +|-|~` Command für Memory-Feedback (👍/👎/neutral)
-  - Persistente Feedback-Speicherung pro Workspace
-  - Hintergrund-Analyse für Recall-Qualitäts-Verbesserung
-
-- **Temporal Reasoning** (`lib/temporal-parser.js`, `lib/temporal-filter.js`)
-  - Zeit-Ausdrücke im Query: "letzten Monat", "vor 3 Tagen", "Q2 2026"
-  - Anchor-Resolution: Zeit-Referenzen werden auf konkrete Date-Ranges aufgelöst
-  - Filterung vor Boost/Rerank für bessere Performance
-
-- **Proactive Nudge** (`lib/proactive-nudge.js`, `lib/jobs/proactive-check.js`)
-  - Proaktive Erinnerungs-Vorschläge basierend auf Mustern
-  - Konfigurierbare Cron-Frequenz und Thresholds
-
-- **Meta-Cognition** (`lib/meta-cognition.js`, `lib/jobs/reflection-job.js`)
-  - Selbstreflexion über Memory-Nutzungsmuster
-  - Wöchentliche Reflexions-Jobs mit Pattern-Erkennung
-
-- **Collaborative Memory** (`lib/shared-memory.js`)
-  - `/share <ID>` Command: Karten in Workspace-Pool teilen
-  - ACL-geschützter Zugriff auf geteilte Memories
-
-- **Explainability** (`lib/explainability.js`)
-  - `--explain` Flag für `/memory`: zeigt Begründung pro Treffer
-  - Transparente Recall-Entscheidungen für den Nutzer
-
-- **Query Refinement** (`lib/query-refiner.js`)
-  - Automatische Query-Erweiterung bei schlechten Ergebnissen
-  - Kombination originaler + verfeinerter Suche mit Deduplizierung
-
-- **Garbage Collection Job** (`lib/jobs/gc-job.js`)
-  - Hintergrund-GC für expired/stale Memories
-  - Konfigurierbare Retention-Policies
-
-### Changed
-
-- **Recall-Pipeline**: Query-Verfeinerung, Temporal-Filter, und ACL-Filter als neue Stufen
-- **DB-Adapter**: `rowToCard` um `scope`, `agentId`, `workspaceId` erweitert
-- **Memory-Query**: `--explain` Flag, `showIds` in Ergebnissen, `parseMemoryFeedback`
-- **Memory-Edit**: ACL-Checks für `forgetCard`/`correctCard`, `shareCard` Funktion
-- **i18n**: Übersetzungen für `/mf` Command
-
----
-
 ## [5.2.10] — 2026-05-XX
 
 ### Added
@@ -363,8 +341,6 @@ No breaking changes vs. 6.1.x. Upgrade from 5.x: run `node scripts/migrate-missi
 ### Fixed
 - `callLlm`: fallback to `reasoning_content` when `content` is empty
 - `callLlm`: use `thinking: { type: "disabled" }` to suppress kimi-for-coding thinking
-
----
 
 ## [5.1.0] — 2026-04-XX
 
@@ -375,8 +351,6 @@ No breaking changes vs. 6.1.x. Upgrade from 5.x: run `node scripts/migrate-missi
 - Recall/capture feedback loop
 - Bounded stores
 - LanceDB AND-filter bug
-
----
 
 ## [4.2.0] — 2026-03-XX
 
