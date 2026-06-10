@@ -90,6 +90,9 @@ import { runWikiCommand } from "./lib/wiki-command.js";
 import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
+import { runGcJob } from "./lib/jobs/gc-job.js";
+import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
+import { explainResults, renderExplanation } from "./lib/explainability.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
 import {
   buildNeoDoctorReport,
@@ -2076,6 +2079,29 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "reminder-dispatch", ...result });
               }
+              if (subKey === "gc-run") {
+                const gcPolicy = cfg.gc || {};
+                if (gcPolicy.enabled === false) {
+                  return formatJsonCommandResult({ job: "gc-run", skipped: true, reason: "gc_disabled" });
+                }
+                const result = await runGcJob({
+                  baseDbPath,
+                  dbPool: pool,
+                  policy: gcPolicy,
+                  workspaceDir: commandCtx.workspaceDir,
+                  logger: api.logger,
+                });
+                api.logger?.info?.(`plur1bus internal gc-run[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "gc-run", ...result });
+              }
+              if (subKey === "feedback-report") {
+                if (!commandCtx.workspaceDir) {
+                  return formatJsonCommandResult({ job: "feedback-report", skipped: true, reason: "no_workspace" });
+                }
+                const result = await runFeedbackAnalyzer(commandCtx.workspaceDir);
+                api.logger?.info?.(`plur1bus internal feedback-report[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "feedback-report", ...result });
+              }
               if (subKey === "discover-semantic-links") {
                 const semBridgeCfg = obsidianBridgeCfg || {};
                 const workspaces = discoverObsidianWorkspaces(semBridgeCfg, { commandCtx });
@@ -2103,7 +2129,7 @@ const plugin = {
                 }
                 return formatJsonCommandResult({ job: "discover-semantic-links", processed: totalProcessed, skipped: totalSkipped, unchanged: totalUnchanged, errors: totalErrors });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links"] });
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report"] });
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
@@ -2587,6 +2613,12 @@ const plugin = {
             const parsed = parseMemoryQuery(normalized.canonicalText);
             const agentId = commandCtx.agentId || "default";
             const items = await queryMemory(memoryDbAdapter, agentId, parsed);
+            if (parsed.explain) {
+              const explanations = explainResults(items.map((r) => ({ entry: r, score: r.score ?? 0 })), parsed.topic);
+              items.forEach((item, i) => {
+                item.explanation = renderExplanation(explanations[i], lang);
+              });
+            }
             return { text: formatMemoryResults(items, parsed, { lang, tone, showIds: true }) };
           } catch (err) {
             const { lang, tone } = resolveCommandLocale(commandCtx);
