@@ -170,7 +170,7 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
 describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
   const N = 100;
 
-  it("100x accumulate() ist < 1ms total", () => {
+  it("100x accumulate() ist < 1ms total", async () => {
     const debouncer = createMetricsDebouncer({
       flushFn: async () => {},
       debounceMs: 60_000, // Timer soll während des Tests nicht feuern
@@ -181,6 +181,7 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
       debouncer.accumulate("/ws", { latencyMs: i });
     }
     const accMs = performance.now() - start;
+    await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
     assert.ok(accMs < 1, `100x accumulate dauerte ${accMs.toFixed(3)}ms, erwartet < 1ms`);
   });
@@ -188,6 +189,20 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
   it("100x direct atomicJsonUpdate ist deutlich langsamer", async () => {
     const dir = mkdtempSync(join(tmpdir(), "perf-atomic-"));
     const path = join(dir, "state.json");
+
+    // Referenz: 100x reines In-Memory-accumulate im selben Environment messen,
+    // statt eine absolute Untergrenze anzunehmen (schlägt auf tmpfs/schnellen
+    // Disks sonst fehl).
+    const debouncer = createMetricsDebouncer({
+      flushFn: async () => {},
+      debounceMs: 60_000,
+    });
+    const accStart = performance.now();
+    for (let i = 0; i < N; i++) {
+      debouncer.accumulate("/ws", { latencyMs: i });
+    }
+    const accMs = performance.now() - accStart;
+    await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
     const start = performance.now();
     for (let i = 0; i < N; i++) {
@@ -197,7 +212,10 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
 
     // Smoke-Grenze: 100 atomare Disk-Writes müssen unter 5s bleiben (meist 100–400ms)
     assert.ok(atomicMs < 5000, `100x atomicJsonUpdate dauerte ${atomicMs.toFixed(2)}ms, erwartet < 5000ms`);
-    // Sollte deutlich langsamer als reines In-Memory sein (> 10ms)
-    assert.ok(atomicMs > 10, `100x atomicJsonUpdate war zu schnell (${atomicMs.toFixed(2)}ms), erwartet > 10ms`);
+    // Sollte langsamer als reines In-Memory sein (relativer Vergleich statt absoluter Floor)
+    assert.ok(
+      atomicMs > accMs,
+      `100x atomicJsonUpdate (${atomicMs.toFixed(2)}ms) war nicht langsamer als 100x accumulate (${accMs.toFixed(3)}ms)`
+    );
   });
 });
