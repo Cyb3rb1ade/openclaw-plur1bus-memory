@@ -11,15 +11,21 @@ import assert from "node:assert";
 import { mkdtempSync, writeFileSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as lancedb from "@lancedb/lancedb";
 
 import { MemoryDB } from "../index.js";
 import { resolveHalfLifeDays } from "../lib/memory-dynamics.js";
 
+let lancedb;
+try {
+  lancedb = await import("@lancedb/lancedb");
+} catch {
+  // LanceDB native bindings not available in this environment
+}
+
 const VECTOR_DIM = 384;
 const TABLE_NAME = "memories";
 
-describe("Rollback v6-engram-rc1 → v5.x", () => {
+(lancedb ? describe : describe.skip)("Rollback v6-engram-rc1 → v5.x", () => {
   describe("Schema compatibility: v6 config backward-readable by v5 code", () => {
     it("ignores unknown root fields (criticalPush, setupProfile, featuresConfirmedAt, security, morningReview, eveningReview)", () => {
       const v6Config = {
