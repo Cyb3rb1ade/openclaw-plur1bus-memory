@@ -1,61 +1,63 @@
-# What's new in PLUR1BUS Memory 6.6.0 — Engram
+# PLUR1BUS Memory 6.6.0 — Engram: Meta-Cognition
 
 **Release Date:** 2026-06-10
 
-Three new cognitive layers ship in 6.6.0, expanding how your agent feels, anticipates, and reflects on its own memory.
-
----
-
-## 🎭 Emotion Tier-Config (PR #19)
-
-Fine-grained control over the emotion inference pipeline:
-
-- **Budget-Gate per Tier** — Tier-1 (regex), Tier-2 (heuristic), and Tier-3 (LLM) can be enabled/disabled independently
-- **Configurable model per tier** — use `gpt-4o-mini` for Tier-3 or bring your own via `baseUrl`/`apiKey`
-- **Feature-Toggle** — `emotionTier` can be locked to a specific tier or set to `auto` for dynamic escalation
-- **Graceful degradation** — if Tier-3 is enabled but no API key is available, the system falls back to Tier-2 without crashing
-
-```json
-{
-  "emotion": {
-    "tier": "auto",
-    "t2": { "enabled": true },
-    "t3": {
-      "enabled": true,
-      "model": "gpt-4o-mini",
-      "apiKey": "${OPENAI_API_KEY}"
-    }
-  }
-}
-```
-
----
-
-## 🔮 Proactive Nudges with Embedding Clustering (PR #20)
-
-Your agent now surfaces contextual reminders before you ask:
-
-- **Embedding-based pattern detection** — clusters similar turns by cosine similarity over embedding centroids
-- **Cluster persistence** — clusters are stored per workspace/agent and survive restarts
-- **Cooldown mechanism** — nudges are rate-limited to avoid spam (default: 24h per workspace)
-- **Configurable thresholds** — `minClusterSize`, `similarityThreshold`, and `maxNudgesPerDay`
-
-Run manually: `/plur1bus internal proactive-check`
+The final cognitive layer of Engram: your agent now reflects on its own memory usage.
 
 ---
 
 ## 🧠 Meta-Cognition (PR #21)
 
-The agent can now reflect on its own recall quality:
+The agent can now introspect its own recall performance and identify blind spots:
 
-- **Recall-Quality Metrics** — Precision, Recall, F1 computed from user feedback (`/mf +/-/~`)
-- **Coverage-Gap Detection** — identifies topics with few memories or low `memoryStrength`
-- **Threshold-based Reflection Trigger** — auto-runs when `sessionThreshold` (default: 50) or `intervalDays` (default: 7) is reached
-- **Optional LLM Report** — generates a natural-language reflection summary when `llmReport: true`
+### Recall-Quality Metrics
 
-State is persisted in `_meta-cognition-state.json` per workspace.
+- **Precision, Recall, F1** computed from user feedback (`/mf +/-/~`)
+- Per-workspace aggregation with persistent state in `_meta-cognition-state.json`
+- Tracks both positive and negative signals over time
 
-Run manually: `/plur1bus internal meta-reflect`
+### Coverage-Gap Detection
+
+- Identifies topics with **few memories** (< 3 entries)
+- Flags topics with **low `memoryStrength`** (< 0.3 average)
+- Sorted by gap severity for prioritized attention
+
+### Threshold-Based Reflection Trigger
+
+Auto-runs when either condition is met:
+- `sessionThreshold`: N sessions since last reflection (default: 50)
+- `intervalDays`: Days since last reflection (default: 7)
+
+### Optional LLM Report
+
+When `llmReport: true`, generates a natural-language reflection summary:
+```json
+{
+  "metaCognition": {
+    "enabled": true,
+    "sessionThreshold": 50,
+    "intervalDays": 7,
+    "llmReport": true
+  }
+}
+```
+
+### Manual Trigger
+
+```bash
+/plur1bus internal meta-reflect
+```
+
+---
+
+## What's in the full Engram release (6.3–6.6)
+
+| Version | Feature | PR |
+|---------|---------|-----|
+| 6.3.0 | Explainability, GC Job, Feedback Analyzer | #15 |
+| 6.4.0 | Emotion Tier-Config (Budget-Gate per Tier) | #19 |
+| 6.5.0 | Proactive Nudges with Embedding Clustering | #20 |
+| **6.6.0** | **Meta-Cognition** | **#21** |
 
 ---
 
