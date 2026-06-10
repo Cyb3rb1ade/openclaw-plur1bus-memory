@@ -118,7 +118,7 @@ test('forgetCard scheitert wenn Card nicht existiert', async () => {
       getCard: async () => null,
       deleteCard: async () => { throw new Error('should not delete'); },
     };
-    const result = await forgetCard(fakeDb, 'agent', 'nope', { archiveDir: tmpRoot });
+    const result = await forgetCard(fakeDb, 'agent', 'nope', { archiveDir: tmpRoot, lang: 'de' });
     assert.strictEqual(result.ok, false);
     assert.match(result.error, /nicht gefunden/i);
   } finally {
@@ -271,9 +271,13 @@ function evalWhere(row, expr) {
   return false;
 }
 
+// Valide UUIDs für Fixtures — db-adapter validiert IDs inzwischen strikt (sql-safety safeUuid)
+const UUID_1 = '00000000-0000-4000-8000-000000000001';
+const UUID_2 = '00000000-0000-4000-8000-000000000002';
+
 test('db-adapter updateCard mit Embedder: ruft embed() + persistiert neuen Text/Vektor', async () => {
   const fakeTable = makeFakeTable([
-    { id: 'card-1', text: 'alt-Inhalt', summary: 'alt', vector: [0.1, 0.2], createdAt: Date.now(), origin: 'dm', category: 'fakt' },
+    { id: UUID_1, text: 'alt-Inhalt', summary: 'alt', vector: [0.1, 0.2], createdAt: Date.now(), origin: 'dm', category: 'fakt' },
   ]);
   let embedCalls = 0;
   const fakeEmbedder = {
@@ -287,14 +291,23 @@ test('db-adapter updateCard mit Embedder: ruft embed() + persistiert neuen Text/
     getTable: async () => fakeTable,
     embedder: fakeEmbedder,
   });
-  const res = await adapter.updateCard('agent', 'card-1', 'neuer-Inhalt');
+  const res = await adapter.updateCard('agent', UUID_1, 'neuer-Inhalt');
   assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.previousId, UUID_1, 'previousId zeigt auf alte Card');
   assert.strictEqual(embedCalls, 1, 'embed wurde genau 1x aufgerufen');
+  // Safe-Update-Semantik: neue Version wird angelegt, alte als superseded markiert
   const rows = fakeTable._rows();
-  assert.strictEqual(rows.length, 1, 'Row-Count bleibt 1');
-  assert.strictEqual(rows[0].id, 'card-1', 'ID identisch');
-  assert.strictEqual(rows[0].text, 'neuer-Inhalt', 'Text aktualisiert');
-  assert.deepStrictEqual(rows[0].vector, ['neuer-Inhalt'.length / 100, 0.5], 'Vektor aktualisiert');
+  assert.strictEqual(rows.length, 2, 'Row-Count ist 2 (alte + neue Version)');
+  const oldRow = rows.find((r) => r.id === UUID_1);
+  const newRow = rows.find((r) => r.id === res.id);
+  assert.ok(oldRow, 'alte Row existiert noch');
+  assert.strictEqual(oldRow.status, 'superseded', 'alte Row ist superseded');
+  assert.strictEqual(oldRow.supersededBy, res.id, 'alte Row verweist auf neue Version');
+  assert.ok(newRow, 'neue Row existiert');
+  assert.strictEqual(newRow.text, 'neuer-Inhalt', 'Text aktualisiert');
+  assert.deepStrictEqual(newRow.vector, ['neuer-Inhalt'.length / 100, 0.5], 'Vektor aktualisiert');
+  assert.strictEqual(newRow.previousVersion, UUID_1, 'neue Row verweist auf Vorgänger');
+  assert.strictEqual(newRow.status, 'active', 'neue Row ist active');
 });
 
 test('db-adapter updateCard ohne Embedder: hard-fail (rückwärts-kompatibel)', async () => {
@@ -325,10 +338,10 @@ test('db-adapter findRecentUnclassified: filtert leeres type + sinceMinutes', as
 
 test('db-adapter updateCardType: setzt type-Spalte', async () => {
   const fakeTable = makeFakeTable([
-    { id: 'r1', text: 'foo', vector: [0], createdAt: 0, origin: 'dm' },
+    { id: UUID_2, text: 'foo', vector: [0], createdAt: 0, origin: 'dm' },
   ]);
   const adapter = createDbAdapter({ getTable: async () => fakeTable });
-  const res = await adapter.updateCardType('agent', 'r1', 'person');
+  const res = await adapter.updateCardType('agent', UUID_2, 'person');
   assert.strictEqual(res.ok, true);
   assert.strictEqual(fakeTable._rows()[0].type, 'person');
 });
@@ -352,10 +365,10 @@ test('db-adapter findUnconfirmedCritical: filtert CRITICAL + unconfirmed + älte
 
 test('db-adapter markConfirmed: setzt confirmed=1', async () => {
   const fakeTable = makeFakeTable([
-    { id: 'r1', text: 'foo', vector: [0], createdAt: 0, origin: 'dm', confirmed: 0 },
+    { id: UUID_2, text: 'foo', vector: [0], createdAt: 0, origin: 'dm', confirmed: 0 },
   ]);
   const adapter = createDbAdapter({ getTable: async () => fakeTable });
-  const res = await adapter.markConfirmed('agent', 'r1');
+  const res = await adapter.markConfirmed('agent', UUID_2);
   assert.strictEqual(res.ok, true);
   assert.strictEqual(fakeTable._rows()[0].confirmed, 1);
 });

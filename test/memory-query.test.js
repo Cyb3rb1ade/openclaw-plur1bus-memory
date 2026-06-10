@@ -16,30 +16,30 @@ import {
 // ─── parseQuery: Zeit-Modus ──────────────────────────────────────────────
 
 test('parseQuery erkennt "diese Woche"', () => {
-  assert.deepStrictEqual(parseQuery('diese Woche'), { mode: 'time', range: 'this_week' });
+  assert.deepStrictEqual(parseQuery('diese Woche'), { mode: 'time', range: 'this_week', explain: false });
 });
 
 test('parseQuery erkennt "heute"', () => {
-  assert.deepStrictEqual(parseQuery('heute'), { mode: 'time', range: 'today' });
+  assert.deepStrictEqual(parseQuery('heute'), { mode: 'time', range: 'today', explain: false });
 });
 
 test('parseQuery erkennt "gestern"', () => {
-  assert.deepStrictEqual(parseQuery('gestern'), { mode: 'time', range: 'yesterday' });
+  assert.deepStrictEqual(parseQuery('gestern'), { mode: 'time', range: 'yesterday', explain: false });
 });
 
 test('parseQuery erkennt Monatsnamen', () => {
-  assert.deepStrictEqual(parseQuery('Mai'), { mode: 'time', range: 'month:Mai' });
-  assert.deepStrictEqual(parseQuery('Januar'), { mode: 'time', range: 'month:Januar' });
+  assert.deepStrictEqual(parseQuery('Mai'), { mode: 'time', range: 'month:Mai', explain: false });
+  assert.deepStrictEqual(parseQuery('Januar'), { mode: 'time', range: 'month:Januar', explain: false });
 });
 
 // ─── parseQuery: Topic-Modus ─────────────────────────────────────────────
 
 test('parseQuery erkennt "über X" Syntax', () => {
-  assert.deepStrictEqual(parseQuery('über Eva'), { mode: 'topic', topic: 'Eva' });
+  assert.deepStrictEqual(parseQuery('über Eva'), { mode: 'topic', topic: 'Eva', filters: {}, explain: false });
 });
 
 test('parseQuery erkennt "was weißt du über X"', () => {
-  assert.deepStrictEqual(parseQuery('was weißt du über Riva'), { mode: 'topic', topic: 'Riva' });
+  assert.deepStrictEqual(parseQuery('was weißt du über Riva'), { mode: 'topic', topic: 'Riva', filters: {}, explain: false });
 });
 
 test('parseQuery default = topic mit ganzem Text wenn kein Schlüsselwort', () => {
@@ -60,7 +60,7 @@ test('formatResults zeigt Titel + Quelle + Datum', () => {
     { title: 'PinchTab 0.11 läuft stabil', source: 'notiz', date: '2026-05-27' },
     { title: 'Wochenend-Trip mit Eva geplant', source: 'konversation', date: '2026-05-26' },
   ];
-  const out = formatResults(items, { mode: 'time', range: 'this_week' });
+  const out = formatResults(items, { mode: 'time', range: 'this_week' }, { lang: 'de' });
   assert.ok(out.includes('🧠'), 'enthält Memory-Emoji');
   assert.ok(out.includes('PinchTab 0.11'), 'enthält ersten Titel');
   assert.ok(out.includes('Wochenend-Trip'), 'enthält zweiten Titel');
@@ -73,17 +73,17 @@ test('formatResults zeigt "Mehr"-Hinweis bei >5 Treffern', () => {
     source: 'notiz',
     date: '2026-05-27',
   }));
-  const out = formatResults(items, { mode: 'time', range: 'this_week' });
+  const out = formatResults(items, { mode: 'time', range: 'this_week' }, { lang: 'de' });
   assert.ok(out.includes('Mehr'), 'enthält Mehr-Hinweis');
 });
 
 test('formatResults bei leerer Liste → freundliche Nachricht', () => {
-  const out = formatResults([], { mode: 'time', range: 'this_week' });
+  const out = formatResults([], { mode: 'time', range: 'this_week' }, { lang: 'de' });
   assert.ok(/keine|nichts|leer/i.test(out), 'enthält leere-Liste-Nachricht');
 });
 
 test('formatResults bei mode=help → Hilfe-Text', () => {
-  const out = formatResults([], { mode: 'help' });
+  const out = formatResults([], { mode: 'help' }, { lang: 'de' });
   assert.ok(/memory/i.test(out), 'enthält Hilfe');
   assert.ok(/über/i.test(out) || /Woche/i.test(out), 'enthält Beispiel');
 });
