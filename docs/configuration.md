@@ -96,3 +96,46 @@ Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jew
   }
 }
 ```
+
+---
+
+## Emotion Tier-Config
+
+Steuert die 3-Tier-Emotions-Inferenz beim Memory-Capture.
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `emotion.tier` | `"t1" \| "t2" \| "t3" \| "auto"` | `"auto"` | Festes Tier oder automatisches Routing |
+| `emotion.t2.enabled` | `boolean` | `true` | Tier-2 (Keyword-Fallback) aktivieren |
+| `emotion.t3.enabled` | `boolean` | `false` | Tier-3 (LLM-basiert) aktivieren — **kostet API-Calls** |
+| `emotion.t3.model` | `string` | `"gpt-4o-mini"` | Modell für Tier-3 |
+| `emotion.t3.apiKey` | `string` | — | Optionaler API-Key (fallback zu `OPENAI_API_KEY`) |
+| `emotion.t3.baseUrl` | `string` | — | Optionaler Base-URL für OpenAI-compatible Provider |
+
+### Budget-Gate
+
+Tier-3 läuft **niemals heimlich**. Es wird nur aktiviert, wenn:
+1. `emotion.t3.enabled === true`
+2. Ein gültiger API-Key verfügbar ist
+
+Der Feature-Toggle `/enable emotionTier` (bzw. `/disable emotionTier`) steuert `emotion.t3.enabled`.
+
+### Beispiel
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-lancedb-namespaced": {
+        "config": {
+          "emotion": {
+            "tier": "auto",
+            "t2": { "enabled": true },
+            "t3": { "enabled": false, "model": "gpt-4o-mini" }
+          }
+        }
+      }
+    }
+  }
+}
+```
