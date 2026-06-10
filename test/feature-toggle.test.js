@@ -70,7 +70,7 @@ test('toggleFeature erstellt fehlende Zwischenebenen an', () => {
 test('toggleFeature ablehnt unbekanntes Feature', () => {
   const { path, dir } = makeTmpConfig({});
   try {
-    const res = toggleFeature('unknownThing', true, { configPath: path });
+    const res = toggleFeature('unknownThing', true, { configPath: path, lang: 'de' });
     assert.strictEqual(res.ok, false);
     assert.match(res.error, /unbekannt/);
   } finally {
@@ -81,7 +81,7 @@ test('toggleFeature ablehnt unbekanntes Feature', () => {
 test('renderToggleResult Erfolg enthält Restart-Hinweis', () => {
   const out = renderToggleResult({
     ok: true, feature: 'vaultSync', enabled: true,
-  });
+  }, { lang: 'de' });
   assert.match(out, /✅/);
   assert.match(out, /Vault-Sync \(Obsidian-Bridge\)/);
   assert.match(out, /jetzt an/);
@@ -91,7 +91,7 @@ test('renderToggleResult Erfolg enthält Restart-Hinweis', () => {
 test('renderToggleResult Erfolg für disable', () => {
   const out = renderToggleResult({
     ok: true, feature: 'vaultSync', enabled: false,
-  });
+  }, { lang: 'de' });
   assert.match(out, /jetzt aus/);
 });
 
@@ -99,7 +99,7 @@ test('renderToggleResult Fehler enthält Feature-Liste', () => {
   const out = renderToggleResult({
     ok: false, error: 'Feature "foo" unbekannt.',
     knownFeatures: ['vaultSync', 'kritischPush', 'dailyConsolidation'],
-  });
+  }, { lang: 'de' });
   assert.match(out, /❌/);
   assert.match(out, /Bekannt:/);
   assert.match(out, /vaultSync/);
