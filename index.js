@@ -582,6 +582,11 @@ class MemoryDB {
 
   async store(entry) {
     await this.init();
+    const text = typeof entry?.text === "string" ? entry.text.trim() : "";
+    const summary = typeof entry?.summary === "string" ? entry.summary.trim() : "";
+    if (!text && !summary) {
+      throw new Error("store() rejected: entry text and summary are both empty — refusing to store a memory without content.");
+    }
     await this.table.add([this.normalizeEntryForTable(entry)]);
     this._writeCounter++;
     if (this._writeCounter % REINDEX_WRITE_THRESHOLD === 0) {
