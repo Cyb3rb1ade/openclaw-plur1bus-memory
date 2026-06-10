@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "6.1.5",
+  "version": "6.2.0",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -500,10 +500,22 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "transient": { "type": "number", "default": 60 },
-              "episodic": { "type": "number", "default": 180 },
-              "longContext": { "type": "number", "default": 600 },
-              "project": { "type": "number", "default": 600 }
+              "transient": {
+                "type": "number",
+                "default": 60
+              },
+              "episodic": {
+                "type": "number",
+                "default": 180
+              },
+              "longContext": {
+                "type": "number",
+                "default": 600
+              },
+              "project": {
+                "type": "number",
+                "default": 600
+              }
             }
           }
         }
@@ -1106,13 +1118,17 @@
           },
           "allowedUserIds": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "default": [],
             "description": "List of allowed Telegram/Discord user IDs. Destructive commands require user-bound auth."
           },
           "allowedChatIds": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "default": [],
             "description": "List of allowed chat/channel IDs. Non-destructive commands may use chat-only auth when allowedUserIds is empty."
           }
