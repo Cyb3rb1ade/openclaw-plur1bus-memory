@@ -5,6 +5,16 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.5.1] — 2026-06-10
+
+### Added — Emotion Tier-Config, Proactive Nudges, Meta-Cognition
+
+- **Emotion Tier-Config** (PR #19): Budget-Gate und Feature-Toggle pro Tier — Tier-1/2/3 einzeln aktivierbar mit konfigurierbarem Modell je Tier.
+- **Proactive Nudges mit Embedding-Clustering** (PR #20): Embedding-basierte Pattern-Erkennung, Cluster-Persistenz und Cooldown-Mechanismus für kontextbewusste Nudges.
+- **Meta-Cognition** (PR #21): Recall-Quality-Metriken, Coverage-Gap-Erkennung und Threshold-basierter Reflection-Trigger.
+
+---
+
 ## [6.2.0] — 2026-06-10
 
 ### Summary
