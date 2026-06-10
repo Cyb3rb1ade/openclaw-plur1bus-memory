@@ -5,6 +5,16 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.6.0] — 2026-06-10
+
+### Added — Correction-as-Recall
+
+- **`/correct` treated as recall event**: After `safeUpdate()` inserts the corrected version of a card, `applyRetrievalReinforcement` is now called on the new card — refreshing `lastRetrievedAt`, incrementing `retrievalCount`, and applying a small strength boost. This prevents corrected cards from continuing to decay from the same state as the old card, and ensures corrected memories surface at the top of subsequent recall results.
+- **Null guard**: If `getById(newId)` races or fails after `safeUpdate()`, the reinforcement is silently skipped via try/catch — the correction itself is never rolled back.
+- **New tests**: `tests/smoke-correct-recall.test.js` — 2 tests covering the happy path and the null-guard contract.
+
+---
+
 ## [6.5.1] — 2026-06-10
 
 ### Added — Emotion Tier-Config, Proactive Nudges, Meta-Cognition
