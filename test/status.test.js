@@ -8,7 +8,7 @@ test('status zeigt grün wenn alles OK', () => {
     sync: { active: true, devices: 3 },
     plausibility: { lastRun: '2026-05-27T20:30:00Z' },
     issues: [],
-  });
+  }, { lang: 'de' });
   assert.ok(result.includes('🟢'));
   assert.ok(result.includes('4218'));
   assert.ok(result.includes('3 Geräten'));
@@ -27,7 +27,7 @@ test('status zeigt jeden issue mit grund + einschalt-anleitung', () => {
       whatItDoes: 'spiegelt deine Erinnerungen in den Obsidian-Vault',
       whatYouLose: 'du siehst Erinnerungen nur über /memory, nicht im Vault',
     }],
-  });
+  }, { lang: 'de' });
   assert.ok(result.includes('🟡'));
   assert.ok(result.includes('Vault-Sync ist aus'));
   assert.ok(result.includes('Grund:'));
