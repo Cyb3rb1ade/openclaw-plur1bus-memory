@@ -5,6 +5,14 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.1.5] — 2026-06-10 (Post-Deploy Fixes)
+
+### Fixed
+
+- **`workspaceKey` fehlte in `scripts/migrate-missing-columns.mjs`**: `reminder-store.js` queried `workspaceKey` als LanceDB-Spalte, aber das Migrations-Script kannte das Feld nicht → `plur1bus-reminder` crashte bei jedem Session-Inject mit `LanceError(Schema): No field named "workspaceKey"`. Spalte zur `ALL_COLUMNS`-Liste ergänzt. **Migration muss manuell ausgeführt werden** (Gateway stoppen, `node scripts/migrate-missing-columns.mjs` für jeden Agent-Namespace unter `memory/lancedb-namespaced/`, Gateway starten).
+
+- **active-memory-fast-path bricht bei OpenClaw ≥2026.6 (host-Patch)**: Der `active-memory-fast-path`-Patch in `apply-media-patch.sh` war durch zwei Breaking Changes in OpenClaw 2026.6.x unbrauchbar geworden: (1) Memory-Modul umbenannt von `memory-BRQCcYLp.js` → `memory-host-search-C1rk4659.js`, Export `n` → `r`; (2) `active-memory/index.js` hat `searchQueryChars` zum Start-Log-Parameter hinzugefügt, was den Anchor zerstört hat. Der Patch war deshalb als "retired" markiert — active-memory fiel auf den 120s-LLM-Pfad zurück. Fix: Anchor auf die neue Start-Log-Zeile mit `searchQueryChars` aktualisiert, Modulpfad und Export-Name korrigiert. **Betrifft nur den Host-Patch in `apply-media-patch.sh`, nicht den Plugin-Code selbst.**
+
 ## [6.1.0] — 2026-06-09
 
 ### Added — Tiefere Emotionen (Phase 1)
