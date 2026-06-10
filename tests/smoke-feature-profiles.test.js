@@ -8,6 +8,7 @@ import {
   applyFeatureProfile,
   detectPendingFeatures,
   isApplyBlocked,
+  DEFAULT_WS_SUFFIXES,
 } from "../lib/setup/feature-profiles.js";
 
 describe("feature-profiles", () => {
@@ -129,5 +130,12 @@ describe("feature-profiles", () => {
     const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
     assert.strictEqual(cfg.reranker.enabled, false, "existing reranker.enabled preserved");
     assert.strictEqual(cfg.reranker.timeoutMs, 9999, "existing reranker.timeoutMs preserved");
+  });
+
+  it("DEFAULT_WS_SUFFIXES does not contain user-specific hardcoded names", () => {
+    for (const suffix of DEFAULT_WS_SUFFIXES) {
+      assert.ok(!suffix.includes("bernhardine"), "must not contain hardcoded user name bernhardine");
+      assert.ok(!suffix.includes("heisenberg"), "must not contain hardcoded user name heisenberg");
+    }
   });
 });

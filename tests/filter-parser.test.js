@@ -219,4 +219,12 @@ describe("buildWhereClause", () => {
     assert.ok(clause.includes("''"));
     assert.ok(!clause.includes("= 'person' OR '"));
   });
+
+  it("escapes backslashes to prevent escape-based injection", () => {
+    const clause = buildWhereClause({ category: "foo\\'bar" });
+    // Input: foo\'bar  →  SQL-safe: foo\\''bar (escaped backslash + doubled quote)
+    assert.ok(clause.includes("\\\\''"), "backslash must be escaped and quote doubled");
+    // Must NOT contain an unescaped backslash followed by a single quote
+    assert.ok(!clause.includes("foo\\'"), "unescaped backslash-quote must not appear");
+  });
 });
