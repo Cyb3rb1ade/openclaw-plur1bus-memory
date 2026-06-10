@@ -72,7 +72,7 @@ import {
   archiveCard,
 } from "./lib/telegram-commands/memory-edit.js";
 import { normalizeCommandInput } from "./lib/semantic-input.js";
-import { validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery } from "./lib/input-limits.js";
+import { validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
@@ -117,6 +117,7 @@ import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
 import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import { createBackgroundMemoryScheduler, isBackgroundTurn } from "./lib/runtime-scheduler.js";
+import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import {
   inferEmotionalValence,
   serializeEmotionalValence,
@@ -145,8 +146,11 @@ import {
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
 const __pluginDir = dirname(fileURLToPath(import.meta.url));
-const LANCEDB_PATH = join(__pluginDir, "../memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js");
-const OPENAI_PATH  = join(__pluginDir, "../memory-lancedb-stock/node_modules/openai/index.js");
+const LANCEDB_LEGACY_PATH = join(__pluginDir, "../memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js");
+const OPENAI_LEGACY_PATH  = join(__pluginDir, "../memory-lancedb-stock/node_modules/openai/index.js");
+// v6.2.1 — Zusätzliche Fallback-Pfade für npm-Installationen (P0-Fix)
+const LANCEDB_PLUGIN_PATH = join(__pluginDir, "node_modules/@lancedb/lancedb/dist/index.js");
+const OPENAI_PLUGIN_PATH  = join(__pluginDir, "node_modules/openai/index.js");
 
 const DEFAULT_BASE_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
 const DEFAULT_MODEL = LEGACY_DEFAULT_MODEL;
@@ -213,21 +217,22 @@ async function getLanceDB() {
       _lancedb = await import("@lancedb/lancedb");
       return _lancedb;
     } catch (directErr) {
-      if (!existsSync(LANCEDB_PATH)) {
-        throw new Error(
-          `memory-lancedb-namespaced: LanceDB dependency not found. ` +
-          `Install the plugin package dependencies or run: cd extensions/memory-lancedb-stock && npm install. ` +
-          `Direct import failed: ${directErr?.message || String(directErr)}`
-        );
+      // v6.2.1 — Versuche Plugin-eigenes node_modules (P0-Fix)
+      if (existsSync(LANCEDB_PLUGIN_PATH)) {
+        _lancedb = await import(LANCEDB_PLUGIN_PATH);
+        return _lancedb;
       }
-    }
-    if (!existsSync(LANCEDB_PATH)) {
+      // v6.2.1 — Versuche Legacy-Pfad (P0-Fix)
+      if (existsSync(LANCEDB_LEGACY_PATH)) {
+        _lancedb = await import(LANCEDB_LEGACY_PATH);
+        return _lancedb;
+      }
       throw new Error(
-        `memory-lancedb-namespaced: LanceDB not found at ${LANCEDB_PATH}. ` +
-        `Run: cd extensions/memory-lancedb-stock && npm install`
+        `memory-lancedb-namespaced: LanceDB dependency not found. ` +
+        `Install the plugin package dependencies: npm install @lancedb/lancedb. ` +
+        `Direct import failed: ${directErr?.message || String(directErr)}`
       );
     }
-    _lancedb = await import(LANCEDB_PATH);
   }
   return _lancedb;
 }
@@ -239,22 +244,24 @@ async function getOpenAI() {
       _OpenAI = m.default;
       return _OpenAI;
     } catch (directErr) {
-      if (!existsSync(OPENAI_PATH)) {
-        throw new Error(
-          `memory-lancedb-namespaced: openai dependency not found. ` +
-          `Install the plugin package dependencies or run: cd extensions/memory-lancedb-stock && npm install. ` +
-          `Direct import failed: ${directErr?.message || String(directErr)}`
-        );
+      // v6.2.1 — Versuche Plugin-eigenes node_modules (P0-Fix)
+      if (existsSync(OPENAI_PLUGIN_PATH)) {
+        const m = await import(OPENAI_PLUGIN_PATH);
+        _OpenAI = m.default;
+        return _OpenAI;
       }
-    }
-    if (!existsSync(OPENAI_PATH)) {
+      // v6.2.1 — Versuche Legacy-Pfad (P0-Fix)
+      if (existsSync(OPENAI_LEGACY_PATH)) {
+        const m = await import(OPENAI_LEGACY_PATH);
+        _OpenAI = m.default;
+        return _OpenAI;
+      }
       throw new Error(
-        `memory-lancedb-namespaced: openai package not found at ${OPENAI_PATH}. ` +
-        `Run: cd extensions/memory-lancedb-stock && npm install`
+        `memory-lancedb-namespaced: openai dependency not found. ` +
+        `Install the plugin package dependencies: npm install openai. ` +
+        `Direct import failed: ${directErr?.message || String(directErr)}`
       );
     }
-    const m = await import(OPENAI_PATH);
-    _OpenAI = m.default;
   }
   return _OpenAI;
 }
@@ -328,8 +335,9 @@ function makeQuerySummarizer(llmCfg, logger) {
 // MemoryDB — pro Agent eine Instanz
 // ============================================================================
 
-const REINDEX_WRITE_THRESHOLD = 500; // Rebuild ANN index every N writes
-const REINDEX_MIN_ROWS = 256;        // Minimum rows before creating an index
+const REINDEX_WRITE_THRESHOLD = 5000; // Rebuild ANN index every N writes (v6.2.1: increased from 500)
+const REINDEX_MIN_ROWS = 256;         // Minimum rows before creating an index
+const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fix)
 
 class MemoryDB {
   constructor(dbPath, vectorDim) {
@@ -341,6 +349,7 @@ class MemoryDB {
     this.schemaFieldNames = null;
     this._writeCounter = 0;
     this._reindexing = false;
+    this._lastReindexAt = 0;
     this.isShuttingDown = false;
     this.isShutdown = false;
   }
@@ -629,6 +638,8 @@ class MemoryDB {
 
   async _maybeReindex() {
     if (this._reindexing) return;
+    // v6.2.1 — Zeitbasiertes Intervall enforce (P0-Fix)
+    if (Date.now() - this._lastReindexAt < REINDEX_MIN_INTERVAL_MS) return;
     this._reindexing = true;
     try {
       const count = await this.table.countRows();
@@ -638,6 +649,9 @@ class MemoryDB {
         config: lance.Index.hnswPq({ m: 16, efConstruction: 100, numSubVectors: 96 }),
         replace: true,
       });
+      // v6.2.1 — Counter reset nach erfolgreichem Reindex (P0-Fix)
+      this._writeCounter = 0;
+      this._lastReindexAt = Date.now();
     } catch (_) {
       // Non-fatal: falls back to flat scan if reindex fails
     } finally {
@@ -814,7 +828,11 @@ class AgentDbPool {
   constructor(basePath, vectorDim) {
     this.basePath = basePath;
     this.vectorDim = vectorDim;
-    this.dbs = makeBoundedCache(50);
+    this.dbs = makeBoundedCache(50, async (_id, db) => {
+      if (db && typeof db.shutdown === "function") {
+        try { await db.shutdown(); } catch (_) { /* ignore */ }
+      }
+    });
     this.isShutdown = false;
   }
 
@@ -837,6 +855,11 @@ class AgentDbPool {
   async shutdown() {
     if (this.isShutdown) return;
     this.isShutdown = true;
+    for (const db of this.dbs.values()) {
+      if (db && typeof db.shutdown === "function") {
+        try { await db.shutdown(); } catch (_) { /* ignore */ }
+      }
+    }
     this.dbs.clear();
   }
 
@@ -846,7 +869,7 @@ class AgentDbPool {
 }
 
 class Embeddings {
-  constructor(apiKey, model, baseUrl, dimensions, fallbackCfg) {
+  constructor(apiKey, model, baseUrl, dimensions, fallbackCfg, cacheOptions = {}) {
     this.apiKey = apiKey;
     this.model = model;
     this.baseUrl = baseUrl;
@@ -856,6 +879,11 @@ class Embeddings {
     this._fallbackCfg = fallbackCfg || null;
     this._fallbackClient = null;
     this._detectedDim = null; // gesetzt nach erstem embed-Call
+    // v6.2.1 — Embedding-Cache aktivieren (P0-Fix)
+    this._cache = cacheOptions.enabled !== false ? createEmbeddingCache({
+      maxEntries: cacheOptions.maxEntries || 500,
+      ttlMs: cacheOptions.ttlMs || 1800000,
+    }) : null;
   }
 
   /**
@@ -949,12 +977,21 @@ class Embeddings {
   }
 
   async embed(text, retries = 3) {
+    // v6.2.1 — Cache-Lookup vor API-Call (P0-Fix)
+    const cacheKey = text.trim().toLowerCase();
+    if (this._cache) {
+      const cached = this._cache.get("__global__", cacheKey, this.model);
+      if (cached) return cached.vector;
+    }
+
     const client = await this.getClient();
     let lastErr;
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
         const response = await client.embeddings.create(this._buildEmbeddingRequest(this.model, text));
-        return this._validateDim(response.data[0].embedding);
+        const vector = this._validateDim(response.data[0].embedding);
+        if (this._cache) this._cache.set("__global__", cacheKey, this.model, vector);
+        return vector;
       } catch (err) {
         lastErr = err;
         if (attempt === retries) break;
@@ -969,7 +1006,9 @@ class Embeddings {
       try {
         const fallbackModel = this._fallbackCfg.model || this.model;
         const response = await fallbackClient.embeddings.create(this._buildEmbeddingRequest(fallbackModel, text));
-        return this._validateDim(response.data[0].embedding);
+        const vector = this._validateDim(response.data[0].embedding);
+        if (this._cache) this._cache.set("__global__", cacheKey, this.model, vector);
+        return vector;
       } catch (fallbackErr) {
         // Both failed — throw original error for clarity
         throw lastErr;
@@ -1654,6 +1693,11 @@ const plugin = {
     async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
       const storeAgentId = storeCtx.agentId || "default";
       const storeDb = pool.getDb(storeAgentId);
+      // v6.2.1 — Input-Validierung für Memory-Text (P0-Fix)
+      const textValidation = validateMemoryText(params.text);
+      if (!textValidation.ok) {
+        return { error: textValidation.error };
+      }
       try {
         const vector = await embeddings.embed(params.text);
         const category = params.category || categorizeMemory(params.text);
@@ -2560,7 +2604,7 @@ const plugin = {
             if (token) {
               const { pending, error } = completePending(commandCtx, "forget", token);
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
-              const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, { lang, tone });
+              const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, { lang, tone, workspaceDir: commandCtx.workspaceDir });
               if (!result.ok) return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: result.error } }) };
               return { text: t("plur1bus.forget_done", { lang, tone, vars: { id: pending.targetId } }) };
             }
@@ -2605,8 +2649,10 @@ const plugin = {
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
               const newText = pending.payload?.newText || "";
               if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
+              const validated = validateCorrectionText(newText);
+              if (!validated.ok) return { text: `❌ ${validated.error}` };
               const result = await correctCard(memoryDbAdapter, agentId, pending.targetId, newText, {
-                lang, tone,
+                lang, tone, workspaceDir: commandCtx.workspaceDir,
                 updateMemory: async ({ id, newContent }) => {
                   const rawDb = pool.getDb(agentId);
                   await rawDb.init();
