@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Version 6.1.4** — the Consolidation release — merges all features from `feature/emotion-integration` plus uncommitted enhancements from the development workspace. Adds ACL-based memory access control, user feedback loop (`/mf`), temporal reasoning in queries, proactive nudges, meta-cognition, collaborative memory sharing, explainability (`--explain`), and automatic query refinement. All atop the Engram recall-hardening foundation with full P5 validation.
+**Version 6.2.0** — the Emotion & Consolidation release — merges all features from `feature/emotion-integration` plus uncommitted enhancements from the development workspace. Adds ACL-based memory access control, user feedback loop (`/mf`), temporal reasoning in queries, proactive nudges, meta-cognition, collaborative memory sharing, explainability (`--explain`), and automatic query refinement. All atop the Engram recall-hardening foundation with full P5 validation.
 
 ## What it does
 

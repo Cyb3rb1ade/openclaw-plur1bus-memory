@@ -26,7 +26,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test tests/*.test.js"
+    "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test tests/*.test.js test/*.test.js",
+    "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test tests/*.test.js test/*.test.js"
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
@@ -34,5 +35,8 @@
   },
   "optionalDependencies": {
     "@huggingface/transformers": "4.2.0"
+  },
+  "devDependencies": {
+    "c8": "^11.0.0"
   }
 }
