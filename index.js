@@ -123,9 +123,11 @@ import { createBackgroundMemoryScheduler, isBackgroundTurn } from "./lib/runtime
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import {
   inferEmotionalValence,
+  inferEmotionalValenceAsync,
   serializeEmotionalValence,
   deserializeEmotionalValence,
   emotionEmoji,
+  setEmotionConfig,
 } from "./lib/emotion.js";
 import { createEmotionalStatePool } from "./lib/emotional-state.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
@@ -1584,6 +1586,27 @@ const plugin = {
     }
     if (skillMinerLlmCfg) api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (model: ${skillMinerLlmCfg.model})`);
 
+    // Emotion Tier Config
+    const emotionCfg = cfg.emotion || {};
+    const emotionTier = emotionCfg.tier || "auto";
+    const emotionT2Enabled = emotionCfg.t2?.enabled !== false;
+    const emotionT3Enabled = emotionCfg.t3?.enabled === true;
+    const emotionT3Model = emotionCfg.t3?.model || "gpt-4o-mini";
+    const emotionT3ApiKey = emotionCfg.t3?.apiKey ? resolveEnvVars(emotionCfg.t3.apiKey) : apiKey;
+    if (emotionT3Enabled && emotionT3ApiKey) {
+      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled (model: ${emotionT3Model})`);
+    } else if (emotionT3Enabled && !emotionT3ApiKey) {
+      api.logger.warn("memory-lancedb-namespaced: emotion tier-3.enabled=true but no API key available. Set config.emotion.t3.apiKey or OPENAI_API_KEY.");
+    }
+    setEmotionConfig({
+      tier: emotionTier,
+      t2: { enabled: emotionT2Enabled },
+      t3: { enabled: emotionT3Enabled, model: emotionT3Model, apiKey: emotionT3ApiKey, baseUrl: emotionCfg.t3?.baseUrl || undefined },
+    });
+    if (emotionTier !== "auto") {
+      api.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
+    }
+
     // v2.1.1: hard-fail wenn Provider-Modell ohne dimensions konfiguriert ist.
     // OpenAI-Modelle: aus EMBEDDING_DIMENSIONS-Map fallback.
     // Nicht-OpenAI-Modelle (OpenRouter, custom baseUrl, etc.): MÜSSEN explizit
@@ -3017,7 +3040,7 @@ const plugin = {
                 const category = categorizeMemory(p.text);
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const captureEmotion = inferEmotionalValence(p.text, category);
+                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user");
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
                 const memoryId = randomUUID();
@@ -3441,7 +3464,7 @@ const plugin = {
                     await db.delete(mergeCandidate.entry.id);
                     appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
                     const mergedVector = await embeddings.embed(mergeResult.mergedText);
-                    const mergedEmotion = inferEmotionalValence(mergeResult.mergedText, category);
+                    const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user");
                     const mergedMoodContext = emotionalPool.snapshot(agentId);
                     const mergedEntry = applyDynamicsDefaults({
                       id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
@@ -3472,7 +3495,7 @@ const plugin = {
 
               // 3. Normal store
               const summary = generateSummary(params.text, summaryMaxWords);
-              const emotion = inferEmotionalValence(params.text, category);
+              const emotion = await inferEmotionalValenceAsync(params.text, "user");
               const moodContext = emotionalPool.snapshot(agentId);
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
