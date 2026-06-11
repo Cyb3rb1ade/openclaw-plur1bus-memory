@@ -103,6 +103,9 @@ export async function findBestPattern(candidateIds, patterns, gate, sessionState
       const memberIds = pattern.memberIds ?? [];
       const triggerIds = candidateIds.filter(id => memberIds.includes(id));
 
+      // Record the surface event to increment rate limit counter
+      gate.record(sessionState, "pattern", pattern.id ?? pattern.patternKey ?? null);
+
       return { pattern, score, triggerIds };
     }
   }
