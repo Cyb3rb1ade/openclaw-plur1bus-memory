@@ -21,6 +21,12 @@
  */
 export function computePatternScore(pattern, candidateIds, weeksSince) {
   const memberIds = pattern.memberIds ?? [];
+
+  // Guard against empty sets
+  if (!memberIds || memberIds.length === 0 || !candidateIds || candidateIds.length === 0) {
+    return 0;
+  }
+
   const candidateSet = new Set(candidateIds);
 
   // Count overlapping IDs
@@ -61,14 +67,21 @@ export async function findBestPattern(candidateIds, patterns, gate, sessionState
     return null;
   }
 
+  // Filter out null/invalid patterns
+  const validPatterns = patterns.filter(p => p && p.memberIds);
+
+  if (validPatterns.length === 0) {
+    return null;
+  }
+
   // Score all patterns
-  const scored = patterns.map(pattern => {
+  const scored = validPatterns.map(pattern => {
     const patternCreatedAt = pattern.createdAt || pattern.weekOf;
     let weeksSince = 0;
     if (patternCreatedAt) {
       const createdTime = new Date(patternCreatedAt).getTime();
       const nowTime = Date.now();
-      weeksSince = (nowTime - createdTime) / (7 * 24 * 3600 * 1000);
+      weeksSince = isNaN(createdTime) ? 0 : (nowTime - createdTime) / (7 * 24 * 3600 * 1000);
     }
 
     const score = computePatternScore(pattern, candidateIds, weeksSince);
@@ -117,10 +130,11 @@ export function formatPatternBlock(pattern, triggerIds, score) {
   }
   const weeksAgo = Math.round(weeksSince);
 
-  // Sanitize: strip angle brackets and quotes
+  // Sanitize: escape ampersand (FIRST), then strip angle brackets and quotes
   const sanitize = (str) => {
     if (!str) return "";
     return String(str)
+      .replace(/&/g, "&amp;")
       .replace(/[<>]/g, "")
       .replace(/['"]/g, "");
   };
@@ -142,7 +156,7 @@ export function formatPatternBlock(pattern, triggerIds, score) {
   content += `My memory of when this started is partial — it appeared across several conversations. I'm surfacing it because today's recalled memories overlap with it.`;
 
   // Attributes
-  const triggerIdsStr = triggerIds.join(",");
+  const triggerIdsStr = Array.isArray(triggerIds) ? triggerIds.join(",") : "";
   const confidenceStr = score.toFixed(2);
 
   return `<memory-continuity source="rem-pattern" confidence="${confidenceStr}" weeks-ago="${weeksAgo}" trigger-memory-ids="${triggerIdsStr}">
