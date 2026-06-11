@@ -120,7 +120,9 @@ import {
   serializeEmotionalValence,
   deserializeEmotionalValence,
   emotionEmoji,
+  valenceCosineSimilarity,
 } from "./lib/emotion.js";
+import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
 import { createEmotionalStatePool } from "./lib/emotional-state.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, computeDecayedStrength, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
 import { parseReminderIntent } from "./lib/reminder-parser.js";
@@ -1147,6 +1149,92 @@ async function callMergeCheck(existingText, newText, llmCfg) {
   if (typeof parsed?.merge !== "boolean" || typeof parsed?.reason !== "string") return null;
   if (parsed.merge && typeof parsed.mergedText !== "string") return null;
   return parsed;
+}
+
+// ============================================================================
+// Interpretation overlays — fire-and-forget after recall
+// ============================================================================
+
+const _overlayStoreCache = new Map();
+function _getOverlayStore(workspaceDir) {
+  if (!_overlayStoreCache.has(workspaceDir)) {
+    _overlayStoreCache.set(workspaceDir, new InterpretationOverlayStore(workspaceDir));
+  }
+  return _overlayStoreCache.get(workspaceDir);
+}
+
+/**
+ * Attempt to create one interpretation overlay for the highest-priority memory
+ * that meets all trigger conditions. Capped to 1 overlay per turn to avoid
+ * LLM-call amplification in the recall path.
+ *
+ * Never throws — all errors are swallowed to protect the caller (fire-and-forget).
+ */
+async function _maybeCreateOverlays(memories, currentEmotional, sessionContext, overlayStore, llmCfg, matchedPattern, logger) {
+  for (const r of memories) {
+    try {
+      const entry = r.entry;
+      if (!entry?.id) continue;
+
+      // Gate 1: memory must have been retrieved at least 3 times
+      if ((entry.retrievalCount ?? 0) < 3) continue;
+
+      // Gate 2: emotional divergence — skip if valence is missing or similar
+      const rawValence = entry.emotionalValence;
+      if (!rawValence) continue; // no valence data → skip
+      const memValence = typeof rawValence === "string"
+        ? deserializeEmotionalValence(rawValence)
+        : rawValence;
+      if (!memValence || typeof memValence !== "object") continue;
+      const similarity = valenceCosineSimilarity(memValence, currentEmotional);
+      if (similarity === null || similarity >= 0.65) continue; // not divergent enough
+
+      // Gate 3: 7-day cooldown per memory
+      const recent = await overlayStore.loadFor([entry.id], 7);
+      if (recent.length > 0) continue;
+
+      // Build constrained LLM prompt — fabrication explicitly forbidden
+      const patternDesc = matchedPattern?.pattern?.description ?? "";
+      const memText = String(entry.text || entry.summary || "").slice(0, 600);
+      const ctx2s = String(sessionContext || "").slice(0, 300);
+      const prompt =
+        `You are annotating a meaning shift — not summarizing or embellishing.\n\n` +
+        `Original memory: ${memText} (${entry.emotionalDominant || "neutral"}, ${entry.category || "general"})\n` +
+        `Current conversation context: ${ctx2s}\n` +
+        `Relevant pattern (if known): ${patternDesc}\n\n` +
+        `Rules:\n` +
+        `- You may ONLY describe a possible shift in meaning based on the text above.\n` +
+        `- Do NOT invent facts, specific dates, names, or details not in the original memory.\n` +
+        `- Do NOT speculate beyond what the provided evidence supports.\n` +
+        `- If you see no meaningful shift: respond exactly "no shift".\n` +
+        `- If you see a shift: one sentence, ≤150 chars, use hedged language ("may", "could", "appears").\n\n` +
+        `Output: one sentence OR "no shift".`;
+
+      // disableThinking: kimi returns prose in reasoning_content when thinking is on
+      const response = await callLlm(
+        [{ role: "user", content: prompt }],
+        { ...llmCfg, maxTokens: 100, disableThinking: true },
+      );
+      if (InterpretationOverlayStore.shouldSkipLlmResponse(response)) continue;
+
+      await overlayStore.append({
+        targetMemoryId: entry.id,
+        shiftType: "meaning",
+        shiftDescription: String(response).trim().slice(0, 200),
+        triggerContext: ctx2s,
+        provenance: {
+          triggerMemoryIds: memories.slice(0, 3).map(m => m.entry?.id).filter(Boolean),
+          patternId: matchedPattern?.pattern?.id ?? null,
+          llmModel: llmCfg?.model || "unknown",
+        },
+      });
+
+      logger?.info?.(`plur1bus: interpretation overlay created for memory=${entry.id}`);
+      return; // cap: 1 overlay per turn
+    } catch (err) {
+      logger?.warn?.(`plur1bus: overlay creation skipped for memory=${r.entry?.id}: ${String(err)}`);
+    }
+  }
 }
 
 // ============================================================================
@@ -3707,7 +3795,7 @@ const plugin = {
             graphEdges = neoStore.readGraphEdges(5_000);
           } catch (_e) { dbg(_e); }
           // v1.9.0 — komplette Pipeline aus shared module
-          const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
+          const { canonical: canonicalHits, memories: ordered, matchedPattern } = await runRecallPipeline({
             query: event.prompt,
             dbTable: db.table,
             embeddings,
@@ -3760,11 +3848,36 @@ const plugin = {
               id: r.entry.id,
               category: r.entry.category,
               source: r.entry.origin || "dm",
+              graphSource: r.source ?? "vector",   // "graph" | "vector" | "both"
+              depth: r.depth ?? 0,
               display: r.entry.summary || libGenerateSummary(r.entry.text, summaryMaxWords),
               memoryStrength: computeDecayedStrength(r.entry, Date.now()),
             });
           }
           const memoriesContext = formatRelevantMemoriesContext(items, { fadedThreshold });
+
+          // Fire-and-forget interpretation overlay creation (Spec C, Task 6).
+          // Skipped for background turns to avoid LLM amplification in cron paths.
+          const overlayCfg = recallCfg.interpretationOverlays;
+          if (overlayCfg?.enabled && !background && mergingLlmCfg && ctx?.workspaceDir) {
+            const overlayStore = _getOverlayStore(ctx.workspaceDir);
+            const currentEmoState = emotionalPool.get(agentId).current;
+            const sessionCtx = (event.messages || []).slice(-2)
+              .filter(m => m.role === "user")
+              .map(m => String(m.content || "").slice(0, 150))
+              .join(" | ");
+            setImmediate(() =>
+              _maybeCreateOverlays(
+                ordered.slice(0, 5),
+                currentEmoState,
+                sessionCtx,
+                overlayStore,
+                mergingLlmCfg,
+                matchedPattern,
+                api.logger,
+              ).catch(e => api.logger.warn?.(`plur1bus: overlay fire-and-forget failed: ${String(e)}`))
+            );
+          }
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
