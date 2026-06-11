@@ -134,6 +134,7 @@ import {
 } from "./lib/emotion.js";
 import { createEmotionalStatePool } from "./lib/emotional-state.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
+import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
 import { parseReminderIntent } from "./lib/reminder-parser.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
 import { formatReminderNudge } from "./lib/reminder-nudge.js";
@@ -1522,6 +1523,8 @@ const plugin = {
     const candidateTopK     = recallCfg.candidateTopK     ?? 40;
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
 
+    const riCfg = cfg.retroactiveInterference ?? {};
+
     // GC config
     const gcCfg = cfg.gc || {};
     const gcEnabled = gcCfg.enabled !== false; // default true
@@ -1812,6 +1815,17 @@ const plugin = {
         const summary = generateSummary(params.text, summaryMaxWords);
         const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
+        if (riCfg.enabled) {
+          setImmediate(() => {
+            applyRetroactiveInterference(storeDb, entry, {
+              threshold: riCfg.threshold ?? 0.65,
+              multiplier: riCfg.multiplier ?? 0.9,
+              maxAffected: riCfg.maxAffected ?? 5,
+            }).catch((err) => {
+              api.logger?.warn?.("[retroactive-interference] failed", err?.message ?? err);
+            });
+          });
+        }
         if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
         if (storeCtx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
           trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: entry.id, category, importance });
