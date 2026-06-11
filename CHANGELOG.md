@@ -5,23 +5,51 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
-## [6.6.0] — 2026-06-10
+## [6.6.0] — 2026-06-10 — Engram
 
-### Added — Correction-as-Recall
+### Added — Meta-Cognition (PR #21)
 
-- **`/correct` treated as recall event**: After `safeUpdate()` inserts the corrected version of a card, `applyRetrievalReinforcement` is now called on the new card — refreshing `lastRetrievedAt`, incrementing `retrievalCount`, and applying a small strength boost. This prevents corrected cards from continuing to decay from the same state as the old card, and ensures corrected memories surface at the top of subsequent recall results.
-- **Null guard**: If `getById(newId)` races or fails after `safeUpdate()`, the reinforcement is silently skipped via try/catch — the correction itself is never rolled back.
-- **New tests**: `tests/smoke-correct-recall.test.js` — 2 tests covering the happy path and the null-guard contract.
+- **Recall-Quality-Metriken**: Precision, Recall, F1 aus User-Feedback (`/mf +/-/~`)
+- **Coverage-Gap-Erkennung**: Topics mit wenig Memories oder niedriger `memoryStrength` identifizieren
+- **Threshold-basierter Reflection-Trigger**: Auto-Run bei `sessionThreshold` (default: 50) oder `intervalDays` (default: 7)
+- **Optioneller LLM-Report**: Natürlichsprachige Reflexions-Zusammenfassung wenn `llmReport: true`
+- State-Persistenz in `_meta-cognition-state.json` pro Workspace
 
 ---
 
-## [6.5.1] — 2026-06-10
+## [6.5.0] — 2026-06-10 — Engram
 
-### Added — Emotion Tier-Config, Proactive Nudges, Meta-Cognition
+### Added — Proactive Nudges mit Embedding-Clustering (PR #20)
 
-- **Emotion Tier-Config** (PR #19): Budget-Gate und Feature-Toggle pro Tier — Tier-1/2/3 einzeln aktivierbar mit konfigurierbarem Modell je Tier.
-- **Proactive Nudges mit Embedding-Clustering** (PR #20): Embedding-basierte Pattern-Erkennung, Cluster-Persistenz und Cooldown-Mechanismus für kontextbewusste Nudges.
-- **Meta-Cognition** (PR #21): Recall-Quality-Metriken, Coverage-Gap-Erkennung und Threshold-basierter Reflection-Trigger.
+- **Embedding-basierte Pattern-Erkennung**: Cosine-Similarity über Embedding-Centroids für Turn-Clustering
+- **Cluster-Persistenz**: Cluster werden pro Workspace/Agent gespeichert und überleben Restarts
+- **Cooldown-Mechanismus**: Nudges werden rate-limited (default: 24h pro Workspace)
+- **Konfigurierbare Thresholds**: `minClusterSize`, `similarityThreshold`, `maxNudgesPerDay`
+
+---
+
+## [6.4.0] — 2026-06-10 — Engram
+
+### Added — Emotion Tier-Config (PR #19)
+
+- **Budget-Gate pro Tier**: Tier-1 (Regex), Tier-2 (Heuristik), Tier-3 (LLM) einzeln aktivierbar/deaktivierbar
+- **Konfigurierbares Modell pro Tier**: `gpt-4o-mini` für Tier-3 oder eigener Provider via `baseUrl`/`apiKey`
+- **Feature-Toggle**: `emotionTier` auf spezifisches Tier locken oder `auto` für dynamische Eskalation
+- **Graceful Degradation**: Fallback von Tier-3 auf Tier-2 wenn kein API-Key verfügbar
+
+---
+
+## [6.3.0] — 2026-06-10 — Engram
+
+### Added — Explainability, GC Job, Feedback Analyzer (PR #15)
+
+- **Explainability** (`--explain` Flag für `/memory`): Begründung pro Treffer mit Score-Breakdown
+- **Garbage Collection Job**: Hintergrund-GC für expired/stale Memories mit konfigurierbaren Retention-Policies
+- **Feedback Analyzer**: Analyse von User-Feedback (`/mf +/-/~`) für Recall-Quality-Verbesserung
+
+### Fixed
+
+- **Audit-Fixes v6.2.0** (Commit `c60b28a`): Validierung, Lint, CI — P2-Audit-Ergebnisse eingearbeitet
 
 ---
 
