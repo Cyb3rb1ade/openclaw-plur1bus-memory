@@ -81,7 +81,7 @@ import { listPendingProposals, approveProposal, rejectProposal, listActiveSkills
 import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "./lib/jobs/skill-miner/proposal-writer.js";
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import { resolveLocale, readSoulToneCached, pickTone, t } from "./lib/i18n.js";
-import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions } from "./lib/jobs/schicht15-tracker.js";
+import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions, computeContentHash } from "./lib/jobs/schicht15-tracker.js";
 import { isApplyBlocked, detectPendingFeatures, recommendedProfile, safeProfile, applyFeatureProfile, detectObsidianVaults, describeProfileDiff } from "./lib/setup/feature-profiles.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
@@ -3736,9 +3736,9 @@ const plugin = {
                 }
               }
 
-              // Dedupe: filter already promoted memories
+              // Dedupe: filter already promoted memories (by memoryId + contentHash)
               const workspaceKey = ctx.workspaceKey || ctx.workspaceDir || "default";
-              pendingTexts = pendingTexts.filter(m => !isKnowledgePromoted(ctx.workspaceDir, workspaceKey, agentId, m.id, null));
+              pendingTexts = pendingTexts.filter(m => !isKnowledgePromoted(ctx.workspaceDir, workspaceKey, agentId, m.id, computeContentHash(m.text)));
               if (pendingTexts.length === 0 && !params?.note) {
                 return { content: [{ type: "text", text: "No pending memories to integrate into KNOWLEDGE.md." }] };
               }
@@ -3825,9 +3825,9 @@ const plugin = {
               // re-read current state, and subtract only successfully integrated keys.
               removeKnowledgePending(ctx.workspaceDir, pendingTexts.map(m => m.pendingKey).filter(Boolean));
 
-              // Track promoted memories for dedupe
+              // Track promoted memories for dedupe (memoryId + contentHash)
               for (const m of pendingTexts) {
-                recordKnowledgePromotion(ctx.workspaceDir, workspaceKey, agentId, m.id, null);
+                recordKnowledgePromotion(ctx.workspaceDir, workspaceKey, agentId, m.id, computeContentHash(m.text));
               }
 
               const lineCount = finalContent.split("\n").length;
