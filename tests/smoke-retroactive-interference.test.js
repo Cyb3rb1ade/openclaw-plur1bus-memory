@@ -94,4 +94,22 @@ describe("smoke-retroactive-interference: applyRetroactiveInterference", () => {
     assert.strictEqual(db.searchCalls.length, 0, "db.search must not be called");
     assert.strictEqual(db.updateCalls.length, 0, "db.update must not be called");
   });
+
+  it("decays from elapsed baseline, not raw stored value", async () => {
+    // candidate raw strength 1.0, but ~90 days old (halfLife 30 days → decayed to ~0.125)
+    const staleCandidate = makeCandidate({
+      id: "stale-mem",
+      memoryStrength: 1.0,
+      halfLifeDays: 30,
+      lastDynamicsAt: Date.now() - 90 * 86_400_000,
+    });
+    const db = makeDb({ searchResults: [staleCandidate] });
+    await applyRetroactiveInterference(db, makeEntry(), { multiplier: 0.9 });
+
+    const updated = db.updateCalls[0].patch.memoryStrength;
+    // True decayed ≈ 1.0 * 0.5^3 = 0.125, after RI: ~0.112
+    // If decay-first is skipped: 1.0 * 0.9 = 0.9 → this assertion fails
+    assert.ok(updated < 0.2, `expected ~0.112 (decay-first), got ${updated}`);
+    assert.ok(updated > 0.01, "should not be floored");
+  });
 });
