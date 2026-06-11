@@ -2,65 +2,82 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Version 6.2.0** — the Emotion & Consolidation release — merges all features from `feature/emotion-integration` plus uncommitted enhancements from the development workspace. Adds ACL-based memory access control, user feedback loop (`/mf`), temporal reasoning in queries, proactive nudges, meta-cognition, collaborative memory sharing, explainability (`--explain`), and automatic query refinement. All atop the Engram recall-hardening foundation with full P5 validation.
+**Version 6.6.0** — the Meta-Cognition release — adds self-reflection over memory usage, embedding-based proactive nudges, and configurable emotion inference tiers. All atop the Engram recall-hardening foundation with full P5 validation.
 
 ## What it does
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
-### New in v6
+### New in v6.6.0 — Meta-Cognition
 
-- **Semantic long-input handling** — `/memory`, `/forget`, `/correct` accept inputs of any length. No truncation, no rejection. Very long inputs (>6k chars) are semantically compressed; beyond 100k chars the user is prompted to use a file or vault source.
-- **Feature activation profiles** — On first start the plugin proposes a `recommended` profile (all features active, Obsidian/reviews marked `pending_setup`). Core memory works immediately; advanced features require explicit confirmation via `featuresConfirmedAt` before they can apply changes.
-- **Proposal-only merging** — The daily memory compaction job detects duplicates and generates merge proposals, but **never auto-applies**. Proposals are written to `merge-proposals.jsonl` and await explicit user approval.
-- **Conflict resolver** — A lightweight background job scans for memory contradictions and emits a `recommendation` field (`"review_only"` or `"apply_via_safe_reconsolidation"`). It **never** modifies memory directly.
-- **Reranker timeout & fallback** — The recall pipeline reranker has a configurable timeout (default 5s) with automatic fallback to vector-only ranking on timeout or error.
-- **schicht15 deduplication** — KNOWLEDGE.md promotions are tracked per workspace+agent in persistent state. Double-promotion is prevented via `memoryId` and optional `contentHash`.
-- **Obsidian bridge apply mode (safe)** — When `mode: "apply"` is confirmed, every batch creates per-file backups, a manifest (beforeHash/afterHash), and an audit-log entry. Vault path confirmation is required before the first write.
-- **Rate-limited background jobs** — Daily consolidation is capped at 1×/day/agent; REM dreaming is capped at 1×/week. Configurable via `run-state.json`.
+- **Self-reflection on recall quality** — Precision, Recall, F1 computed from user feedback (`/mf +/-/~`). Coverage-gap detection finds topics with few or weak memories.
+- **Threshold-based reflection trigger** — Auto-runs when `sessionThreshold` (default: 50) or `intervalDays` (default: 7) is reached. Optional LLM-generated natural-language report.
+- **Persistent state** — Reflection state stored in `_meta-cognition-state.json` per workspace.
 
-### New in v6.1.5 (Tiefere Emotionen)
+### New in v6.5.0 — Proactive Nudges
 
-- **8 Plutchik-Dimensionen** — `disgust` ergänzt als vollwertige Basisemotion.
-- **20+ Emotionale Nuancen** — relief, pride, gratitude, nostalgia, loneliness, resentment, awe, contempt, guilt, shame, hope, envy, compassion, curiosity, boredom, excitement, love, disappointment, embarrassment, serenity (de/en).
-- **Emotionale Blends** — Erkennung komplexer Emotionen: bittersweet, schadenfreude, awe, melancholy, suspense, love, contempt, fiero, relief, disappointment, nostalgia. Mit semantischem Trigger und Confidence.
-- **Emotion-spezifischer Decay** — surprise (2min), fear (20min), joy/trust (30min), sadness/disgust/anger (2h), resentment (6h), shame (12h).
-- **Erweiterte Emojis** — 40+ Emojis für Nuancen und Blends.
+- **Embedding-based pattern detection** — Clusters similar turns by cosine similarity over embedding centroids.
+- **Cluster persistence** — Clusters survive restarts, stored per workspace/agent.
+- **Cooldown mechanism** — Rate-limited to avoid spam (default: 24h per workspace).
+- **Configurable thresholds** — `minClusterSize`, `similarityThreshold`, `maxNudgesPerDay`.
+
+### New in v6.4.0 — Emotion Tier-Config
+
+- **Budget-Gate per tier** — Tier-1 (regex), Tier-2 (heuristic), Tier-3 (LLM) independently enable/disable.
+- **Configurable model per tier** — Use `gpt-4o-mini` for Tier-3 or bring your own via `baseUrl`/`apiKey`.
+- **Feature-Toggle** — Lock `emotionTier` to a specific tier or use `auto` for dynamic escalation.
+- **Graceful degradation** — Falls back from Tier-3 to Tier-2 when no API key is available.
+
+### New in v6.3.0 — Explainability & GC
+
+- **Explainability** (`--explain` flag for `/memory`) — Human-readable rationale per result: score breakdown, boost factors, temporal relevance.
+- **Garbage Collection job** — Background cleanup of expired/stale memories with configurable retention policies.
+- **Feedback Analyzer** — Background analysis of `/mf` feedback for recall-quality improvement.
+
+### New in v6.2.0 — Correction-as-Recall
+
+- **`/correct` treated as recall event** — After `safeUpdate()` inserts the corrected card, `applyRetrievalReinforcement` refreshes `lastRetrievedAt`, increments `retrievalCount`, and boosts `memoryStrength`.
+- **Null guard** — If `getById(newId)` races or fails, reinforcement is silently skipped; the correction itself is never rolled back.
 
 ### New in v6.1.4 (Consolidation)
 
-- **ACL / Access Control** — Agent- and workspace-scoped memory access. `searchByTopic`, `getCard`, and the recall pipeline filter results by ACL. Unauthorized access is logged for audit.
-- **Feedback loop (`/mf`)** — Users can give thumbs-up/down/neutral feedback on any memory result. Feedback is persisted per workspace and analyzed by a background job to improve recall quality.
-- **Temporal reasoning** — Queries like "last month", "3 days ago", "Q2 2026" are parsed and resolved to concrete date ranges before the expensive boost/rerank stages.
-- **Proactive nudge** — Background pattern detection suggests reminders based on recurring memory patterns. Configurable cron frequency and confidence thresholds.
-- **Meta-cognition** — Weekly reflection jobs analyze memory usage patterns and emit self-awareness reports (pattern density, recall success rates, knowledge gaps).
-- **Collaborative memory (`/share`)** — Any memory card can be copied into a workspace-shared pool. Shared memories inherit ACL protections.
-- **Explainability (`--explain`)** — `/memory <query> --explain` shows a human-readable rationale for why each result was returned (score breakdown, boost factors, temporal relevance).
-- **Query refinement** — When the first recall round yields poor results, the pipeline automatically rewrites the query and merges both result sets (deduplicated, best score wins).
-- **Garbage collection job** — Background cleanup of expired and stale memories with configurable retention policies.
+- **ACL / Access Control** — Agent- and workspace-scoped memory access. `searchByTopic`, `getCard`, and recall pipeline filter by ACL. Unauthorized access is logged.
+- **Feedback loop (`/mf`)** — Thumbs-up/down/neutral feedback on any memory result. Persisted per workspace.
+- **Temporal reasoning** — Queries like "last month", "3 days ago", "Q2 2026" parsed to concrete date ranges before boost/rerank.
+- **Collaborative memory (`/share`)** — Copy any card into a workspace-shared pool with ACL protection.
+- **Query refinement** — Automatic query rewrite on poor first results, merged and deduplicated.
 
-### New in v6.1.2 (Engram)
+### New in v6.1.2 (Engram — Recall Hardening)
 
-- **Recall hardening** — `maxPromptMemories` (default 12) caps memories in the prompt context; dedup threshold raised to 0.78; acronym recognition groups semantically similar abbreviations; `canonicalMaxItems` (default 5) limits canonical representatives per cluster.
-- **Typ-based memory half-life** — `halfLifeDaysMap` replaces the global default with context-sensitive decay: transient (60 days), episodic (180 days), longContext / project (600 days, tuned in P5D for >0.88 recall after 100 days).
-- **Performance & scaling** — LRU+TTL embedding cache (prepared, not yet hot-wired), semantic recall compression, adaptive recall tiers, graph-index traversal, and a reinforcement loop that strengthens `memoryStrength` on successful recalls.
-- **Security hardening** — SQL-escaping in filter parser, ACL hardening for destructive commands (private DM allowed, group denied), verified path-traversal protection, and filter-parser injection resistance.
-- **Metrics debounce** — Graph-recall telemetry flush is debounced to 250 ms to reduce sync overhead during rapid recall bursts.
-- **Validated upgrade & rollback** — P5 dry-runs confirm zero data loss, no schema changes, and safe rollback to v6.0.x (`917e403`).
+- **Recall hardening** — `maxPromptMemories` (default 12), dedup threshold 0.78, acronym recognition, `canonicalMaxItems` (default 5).
+- **Typ-based half-life** — `halfLifeDaysMap`: transient (60d), episodic (180d), longContext/project (600d).
+- **Performance** — LRU+TTL embedding cache, semantic recall compression, adaptive recall tiers, graph-index traversal, reinforcement loop.
+- **Security** — SQL-escaping, ACL hardening for destructive commands, path-traversal protection, filter-parser injection resistance.
+
+### New in v6 (Base)
+
+- **Semantic long-input handling** — `/memory`, `/forget`, `/correct` accept any length. >6k chars are semantically compressed; >100k chars prompts for file/vault source.
+- **Feature activation profiles** — On first start proposes a `recommended` profile (all features active, Obsidian/reviews marked `pending_setup`). Core memory works immediately; advanced features require explicit confirmation.
+- **Proposal-only merging** — Daily compaction detects duplicates, generates merge proposals in `merge-proposals.jsonl`, **never auto-applies**.
+- **Conflict resolver** — Scans for contradictions, emits `recommendation` (`review_only` or `apply_via_safe_reconsolidation`), **never modifies** memory directly.
+- **Reranker timeout & fallback** — Configurable timeout (default 5s) with automatic fallback to vector-only ranking.
+- **schicht15 deduplication** — KNOWLEDGE.md promotions tracked per workspace+agent. Double-promotion prevented via `memoryId` + optional `contentHash`.
+- **Obsidian bridge apply mode (safe)** — `mode: "apply"` creates per-file backups, manifest (beforeHash/afterHash), and audit-log entry. Vault path confirmation required before first write.
+- **Rate-limited background jobs** — Daily consolidation capped at 1×/day/agent; REM dreaming at 1×/week.
 
 ## User Commands
 
 | Command | What it does |
 | --- | --- |
 | `/state` | Status snapshot: memory card count, sync state, last plausibility run, any open issues with reason + fix hint. |
-| `/memory <query>` | Search the agent's memory via the same recall pipeline used by the `memory_recall` tool. Accepts queries of any length. Add `--explain` for result rationale. |
-| `/forget <text>` | Forget a memory card. Archive-first guarantee — the card is JSON-archived before deletion. Accepts long descriptions. |
-| `/correct <old> zu <new>` | Update a memory card. Same archive-first guarantee. Accepts ` zu `, `→`, or `->` as the separator. Both old and new text can be long. |
-| `/mf <id> +` / `-` / `~` | Give feedback on a memory result: 👍 positive, 👎 negative, ~ neutral. Persisted per workspace for recall quality improvement. |
-| `/share <id>` | Copy a memory card into the workspace-shared pool. Shared memories are ACL-protected. |
+| `/memory <query>` | Search the agent's memory via the recall pipeline. Accepts queries of any length. Add `--explain` for result rationale. |
+| `/forget <text>` | Forget a memory card. Archive-first guarantee — the card is JSON-archived before deletion. |
+| `/correct <old> zu <new>` | Update a memory card. Archive-first guarantee. Accepts ` zu `, `→`, or `->` as separator. |
+| `/mf <id> +` / `-` / `~` | Feedback on a memory result: 👍 positive, 👎 negative, ~ neutral. Persisted per workspace. |
+| `/share <id>` | Copy a memory card into the workspace-shared pool. ACL-protected. |
 | `/enable <feature>` | Turn on a whitelisted feature (`vaultSync`, `kritischPush`, `dailyConsolidation`). |
-| `/disable <feature>` | Turn off the same. Writes atomically into `openclaw.json`; gateway restart required to apply. |
-| `/plur1bus setup` | Confirm the recommended feature profile and mark all features as active (or customize which ones). Required before advanced features can apply changes. |
+| `/disable <feature>` | Turn off the same. Writes atomically into `openclaw.json`; gateway restart required. |
+| `/plur1bus setup` | Confirm the recommended feature profile. Required before advanced features can apply changes. |
 
 ### `/plur1bus` subcommands
 
@@ -76,13 +93,15 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 | `/plur1bus obsidian dashboards build` | Build Obsidian dashboard pages. |
 | `/plur1bus obsidian conflicts build` | Build conflict report pages. |
 | `/plur1bus doctor` | Run diagnostics and show runtime status. |
+| `/plur1bus internal proactive-check` | Run proactive nudge detection manually. |
+| `/plur1bus internal meta-reflect` | Run meta-cognition reflection manually. |
 
 ## Installation
 
 Drop into an OpenClaw extensions folder and restart the gateway:
 
 ```bash
-git clone https://github.com/<your-org>/plur1bus.git \
+git clone https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git \
   ~/.openclaw/extensions/memory-lancedb-namespaced
 cd ~/.openclaw/extensions/memory-lancedb-namespaced
 npm install --omit=dev
@@ -117,10 +136,14 @@ Minimal config block in `openclaw.json`:
             "auditLog": true,
             "requireVaultPathConfirmation": true
           },
-          "criticalPush": {
-            "enabled": true,
-            "maxPerDay": 3,
-            "model": "${CRITICAL_PUSH_MODEL}"
+          "emotion": {
+            "tier": "auto",
+            "t2": { "enabled": true },
+            "t3": {
+              "enabled": true,
+              "model": "gpt-4o-mini",
+              "apiKey": "${OPENAI_API_KEY}"
+            }
           },
           "dailyConsolidation": {
             "enabled": true
@@ -135,10 +158,6 @@ Minimal config block in `openclaw.json`:
             "timeoutMs": 5000,
             "fallbackOnError": true
           },
-          "schicht15": {
-            "enabled": true,
-            "maxPromotionsPerRun": 0
-          },
           "security": {
             "allowChatConfigCommands": true
           }
@@ -151,7 +170,7 @@ Minimal config block in `openclaw.json`:
 
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
 
-**`criticalPush.model`** — the critical-push classifier needs an OpenAI-compatible chat model to label new cards (it falls back to `merging.model` if unset). Without any chat model configured the classifier is a deliberate no-op: it does **not** label cards, so it never poisons the backlog by marking everything `fakt`.
+**`emotion.t3`** — the tier-3 emotion classifier needs an OpenAI-compatible chat model. Without any chat model configured the classifier falls back to Tier-2 heuristics: it does **not** label cards, so it never poisons results by marking everything `fakt`.
 
 **`security.allowChatConfigCommands`** (default `true`) — the config-mutating chat commands (`/enable`, `/disable`, `/plur1bus setup`) write `openclaw.json`. The plugin SDK does not expose the message sender's identity to command handlers, so per-user authorization isn't possible. On a **shared channel**, set this to `false` to refuse all chat-driven config changes; edit `openclaw.json` directly instead. Writes are guarded by a file lock so concurrent toggles/setups cannot clobber each other.
 
@@ -178,7 +197,7 @@ The recall pipeline runs Query → Embedding → LanceDB Top-N → **Query Refin
 
 ```bash
 npm install
-npm test              # node --test, 550+ tests
+npm test              # node --test, 650+ tests
 ```
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.
@@ -198,13 +217,9 @@ Version 6.x is a major upgrade. If you ran 5.x:
 - **Merging is proposal-only** — `merging.autoApply` defaults to `false`. Merge candidates are written to `merge-proposals.jsonl` instead of being applied automatically. Set `autoApply: true` to restore 5.x behavior.
 - **Obsidian bridge apply mode** — New `mode: "apply"` with safety gates (backups, audit log, vault path confirmation). Default is `mode: "augment"` (read-only). Confirm vault path explicitly before first write.
 - **Command input handling** — Hard length limits removed. Very long inputs are semantically compressed; beyond 100k chars use a file or vault source.
-- **Config keys added** — `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.mode`, `schicht15.maxPromotionsPerRun`, `obsidianBridge.backupBeforeApply`, `obsidianBridge.auditLog`, `obsidianBridge.requireVaultPathConfirmation`, `morningReview.status`, `eveningReview.status`.
+- **Config keys added** — `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.mode`, `obsidianBridge.backupBeforeApply`, `obsidianBridge.auditLog`, `obsidianBridge.requireVaultPathConfirmation`, `morningReview.status`, `eveningReview.status`, `emotion.tier`, `emotion.t2.enabled`, `emotion.t3.enabled`, `emotion.t3.model`, `emotion.t3.apiKey`.
 
 See `v5_TO_v6_MIGRATION.md` for the full migration guide.
-
-## Migration from 4.x
-
-If you ran 4.x, see the 5.x release notes. The bundle approval workflow has been replaced by autonomous learning plus the critical-push classifier.
 
 ## License
 
