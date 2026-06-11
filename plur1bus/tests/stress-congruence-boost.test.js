@@ -69,3 +69,33 @@ describe("computeStressCongruenceBoost", () => {
     assert.strictEqual(computeStressCongruenceBoost({}, { anger: 0.9, fear: 0.9, emotionalIntensity: 1.0 }), 0);
   });
 });
+
+describe("computeStressCongruenceBoost wiring in computeRecallBoost", () => {
+  it("stressed session recalls stress-memory with higher score than calm session", async () => {
+    const { EmotionalState } = await import("../lib/emotional-state.js");
+
+    const stressed = new EmotionalState();
+    // Override current mood to high anger (> 0.5 threshold)
+    stressed.current = {
+      anger: 0.9, fear: 0.1, joy: 0.1, trust: 0.1,
+      anticipation: 0.0, sadness: 0.0, disgust: 0.0, surprise: 0.0,
+    };
+
+    const calm = new EmotionalState();
+    // Default baseline: anger=0.02, far below 0.5 threshold
+
+    const stressMemory = {
+      anger: 0.8, fear: 0.0, joy: 0.0, trust: 0.1,
+      anticipation: 0.0, sadness: 0.0, disgust: 0.0,
+      surprise: 0.0, emotionalIntensity: 0.8,
+    };
+
+    const boostStressed = stressed.computeRecallBoost(stressMemory, 0.5);
+    const boostCalm     = calm.computeRecallBoost(stressMemory, 0.5);
+
+    assert.ok(
+      boostStressed > boostCalm,
+      `Stressed session (${boostStressed}) should outscore calm session (${boostCalm})`,
+    );
+  });
+});
