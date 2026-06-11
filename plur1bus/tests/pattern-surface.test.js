@@ -189,6 +189,41 @@ describe("findBestPattern — gate-aware pattern selection", () => {
     assert.strictEqual(result, null);
   });
 
+  it("verifies counter IS incremented: second call denied after first succeeds", async () => {
+    const gate = new ContinuityGate({ patternThreshold: 0.70 });
+    const sessionState = {
+      associativeSurfacedCount: 0,
+      patternSurfacedCount: 0,
+      surfacedIds: new Set(),
+    };
+
+    const pattern1 = {
+      id: "pat-first",
+      memberIds: ["mem-1", "mem-2", "mem-3"],
+      confidence: 0.95,
+      createdAt: new Date().toISOString(),
+    };
+
+    const pattern2 = {
+      id: "pat-second",
+      memberIds: ["mem-10", "mem-11", "mem-12"],
+      confidence: 0.95,
+      createdAt: new Date().toISOString(),
+    };
+
+    const candidateIds1 = ["mem-1", "mem-2", "mem-3", "mem-other"];
+    const candidateIds2 = ["mem-10", "mem-11", "mem-12", "mem-other"];
+
+    // First call should succeed
+    const result1 = await findBestPattern(candidateIds1, [pattern1], gate, sessionState);
+    assert.ok(result1 !== null, "first call should find a pattern");
+    assert.strictEqual(sessionState.patternSurfacedCount, 1, "counter should be incremented to 1 after first call");
+
+    // Second call with same sessionState should be denied (rate limit hit)
+    const result2 = await findBestPattern(candidateIds2, [pattern2], gate, sessionState);
+    assert.strictEqual(result2, null, "second call should be denied due to rate limit");
+  });
+
   it("returns null for empty patterns array", async () => {
     const gate = new ContinuityGate();
     const sessionState = {
@@ -262,6 +297,39 @@ describe("findBestPattern — gate-aware pattern selection", () => {
     // Should not throw; memberIds defaults to []
     const result = await findBestPattern(candidateIds, [pattern], gate, sessionState);
     assert.strictEqual(result, null); // no overlap, score = 0
+  });
+
+  it("increments patternSurfacedCount after returning a match", async () => {
+    const gate = new ContinuityGate({ patternThreshold: 0.70 });
+    const sessionState = {
+      associativeSurfacedCount: 0,
+      patternSurfacedCount: 0,
+      surfacedIds: new Set(),
+    };
+
+    const pattern = {
+      id: "pat-good",
+      memberIds: ["mem-1", "mem-2", "mem-3"],
+      confidence: 0.95,
+      createdAt: new Date().toISOString(),
+    };
+
+    const candidateIds = ["mem-1", "mem-2", "mem-3", "mem-other"];
+
+    // Verify initial state
+    assert.strictEqual(sessionState.patternSurfacedCount, 0);
+
+    // Call findBestPattern
+    const result = await findBestPattern(candidateIds, [pattern], gate, sessionState);
+
+    // Verify a match was found
+    assert.ok(result !== null, "should find a pattern");
+
+    // Verify patternSurfacedCount was incremented
+    assert.strictEqual(sessionState.patternSurfacedCount, 1, "patternSurfacedCount should be incremented to 1");
+
+    // Verify the pattern ID was added to surfacedIds
+    assert.ok(sessionState.surfacedIds.has("pat-good"), "pattern id should be in surfacedIds");
   });
 });
 
