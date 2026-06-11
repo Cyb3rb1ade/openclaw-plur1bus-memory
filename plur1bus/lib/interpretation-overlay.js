@@ -27,7 +27,8 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, appendFileSync, readFileSync } from "node:fs";
+import { appendFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 export class InterpretationOverlayStore {
@@ -37,6 +38,7 @@ export class InterpretationOverlayStore {
   constructor(workspaceDir) {
     this.workspaceDir = workspaceDir;
     this.filePath = join(workspaceDir, "interpretation-overlays.jsonl");
+    this._writeQueue = Promise.resolve(); // serializes writes to prevent races
   }
 
   /**
@@ -59,13 +61,14 @@ export class InterpretationOverlayStore {
    *
    * @param {string[]} memoryIds
    * @param {number} [maxAgeDays=30]
-   * @returns {Array<object>}
+   * @returns {Promise<Array<object>>}
    */
-  loadFor(memoryIds, maxAgeDays = 30) {
+  async loadFor(memoryIds, maxAgeDays = 30) {
     if (!existsSync(this.filePath)) return [];
 
     const cutoff = Date.now() - maxAgeDays * 24 * 3600 * 1000;
-    const lines = readFileSync(this.filePath, "utf8").split("\n").filter(Boolean);
+    const content = await readFile(this.filePath, "utf8");
+    const lines = content.split("\n").filter(Boolean);
     const results = [];
     const memoryIdSet = new Set(memoryIds);
 
@@ -87,6 +90,7 @@ export class InterpretationOverlayStore {
   /**
    * Append overlay record — idempotent: skip if dedupeKey already exists within cooldownDays.
    * Auto-generates id and createdAt if not provided.
+   * Serializes writes through an internal queue to prevent race conditions.
    *
    * @param {object} overlay
    * @param {string} [overlay.id] — optional UUID; auto-generated if missing
@@ -101,7 +105,22 @@ export class InterpretationOverlayStore {
    * @param {number} [cooldownDays=7]
    * @returns {Promise<boolean>} — true if written, false if duplicate within cooldown
    */
-  async append(overlay, cooldownDays = 7) {
+  append(overlay, cooldownDays = 7) {
+    // Serialize all appends through a promise chain to prevent races
+    this._writeQueue = this._writeQueue.then(() => this._doAppend(overlay, cooldownDays));
+    return this._writeQueue;
+  }
+
+  /**
+   * Internal method that performs the actual append logic.
+   * Called serially via the _writeQueue to ensure atomicity of dedupe-check + write.
+   *
+   * @private
+   * @param {object} overlay
+   * @param {number} cooldownDays
+   * @returns {Promise<boolean>}
+   */
+  async _doAppend(overlay, cooldownDays) {
     const dedupeKey = overlay.dedupeKey ?? this.computeDedupeKey(
       overlay.targetMemoryId,
       overlay.shiftType,
@@ -109,7 +128,7 @@ export class InterpretationOverlayStore {
     );
 
     // Check for existing duplicate within cooldown window
-    const existing = this.loadFor([overlay.targetMemoryId], cooldownDays);
+    const existing = await this.loadFor([overlay.targetMemoryId], cooldownDays);
     if (existing.some((r) => r.dedupeKey === dedupeKey)) {
       return false; // duplicate, skip
     }
@@ -122,8 +141,8 @@ export class InterpretationOverlayStore {
       createdAt: overlay.createdAt ?? new Date().toISOString(),
     };
 
-    // Append atomically
-    appendFileSync(this.filePath, JSON.stringify(record) + "\n");
+    // Append to file
+    await appendFile(this.filePath, JSON.stringify(record) + "\n");
     return true;
   }
 
