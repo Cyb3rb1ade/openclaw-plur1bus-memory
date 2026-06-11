@@ -3848,6 +3848,8 @@ const plugin = {
               id: r.entry.id,
               category: r.entry.category,
               source: r.entry.origin || "dm",
+              graphSource: r.source ?? "vector",   // "graph" | "vector" | "both"
+              depth: r.depth ?? 0,
               display: r.entry.summary || libGenerateSummary(r.entry.text, summaryMaxWords),
               memoryStrength: computeDecayedStrength(r.entry, Date.now()),
             });
