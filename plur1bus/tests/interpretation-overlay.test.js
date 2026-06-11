@@ -194,7 +194,7 @@ describe("InterpretationOverlayStore — loadFor", () => {
     });
 
     // Load only A and C
-    const results = store.loadFor(["mem-A", "mem-C"]);
+    const results = await store.loadFor(["mem-A", "mem-C"]);
     assert.strictEqual(results.length, 2, "should return 2 overlays");
     assert.strictEqual(results.every((r) => ["mem-A", "mem-C"].includes(r.targetMemoryId)), true);
     assert(results.some((r) => r.targetMemoryId === "mem-A"));
@@ -230,7 +230,7 @@ describe("InterpretationOverlayStore — loadFor", () => {
     });
 
     // Load with maxAgeDays=30 (should exclude old)
-    const results = store.loadFor(["mem-recent", "mem-old"], 30);
+    const results = await store.loadFor(["mem-recent", "mem-old"], 30);
     assert.strictEqual(results.length, 1, "should filter out overlays older than 30 days");
     assert.strictEqual(results[0].targetMemoryId, "mem-recent");
 
@@ -238,11 +238,11 @@ describe("InterpretationOverlayStore — loadFor", () => {
     unlinkSync(store.filePath);
   });
 
-  it("returns [] if file doesn't exist", () => {
+  it("returns [] if file doesn't exist", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
     const store = new InterpretationOverlayStore(tmpDir);
 
-    const results = store.loadFor(["mem-any"]);
+    const results = await store.loadFor(["mem-any"]);
     assert.deepStrictEqual(results, [], "should return empty array if file doesn't exist");
   });
 
@@ -273,7 +273,7 @@ describe("InterpretationOverlayStore — loadFor", () => {
     appendFileSync(store.filePath, lines.join("\n") + "\n");
 
     // Should skip the malformed line
-    const results = store.loadFor(["mem-good-1", "mem-good-2"]);
+    const results = await store.loadFor(["mem-good-1", "mem-good-2"]);
     assert.strictEqual(results.length, 2, "should skip malformed lines and return 2 valid records");
     assert(results.every((r) => r.shiftType === "meaning"));
 
@@ -391,19 +391,19 @@ describe("InterpretationOverlayStore — integration", () => {
     assert.strictEqual(dupResult, false, "duplicate should return false");
 
     // Load for mem-core
-    const memCoreOverlays = store.loadFor(["mem-core"]);
+    const memCoreOverlays = await store.loadFor(["mem-core"]);
     assert.strictEqual(memCoreOverlays.length, 2, "mem-core should have 2 overlays");
 
     // Load for mem-related
-    const memRelatedOverlays = store.loadFor(["mem-related"]);
+    const memRelatedOverlays = await store.loadFor(["mem-related"]);
     assert.strictEqual(memRelatedOverlays.length, 1, "mem-related should have 1 overlay");
 
     // Load for both
-    const bothOverlays = store.loadFor(["mem-core", "mem-related"]);
+    const bothOverlays = await store.loadFor(["mem-core", "mem-related"]);
     assert.strictEqual(bothOverlays.length, 3, "both memories should have 3 overlays total");
 
     // Load for nonexistent
-    const noneOverlays = store.loadFor(["mem-nonexistent"]);
+    const noneOverlays = await store.loadFor(["mem-nonexistent"]);
     assert.strictEqual(noneOverlays.length, 0, "nonexistent memory should have 0 overlays");
 
     // Cleanup
