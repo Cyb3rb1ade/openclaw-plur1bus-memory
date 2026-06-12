@@ -520,6 +520,50 @@
           }
         }
       },
+      "continuityEngine": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "associativeRecall": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": true },
+              "maxDepth": { "type": "number", "default": 3 },
+              "maxNeighborsPerNode": { "type": "number", "default": 8 },
+              "maxAssociatedResults": { "type": "number", "default": 40 },
+              "minCumulativeRelevance": { "type": "number", "default": 0.2 },
+              "assocThreshold": { "type": "number", "default": 0.75 }
+            }
+          },
+          "patternSurfacing": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": false },
+              "patternThreshold": { "type": "number", "default": 0.7 },
+              "maxPerSession": { "type": "number", "default": 1 }
+            }
+          },
+          "tasteGate": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": true },
+              "maxAssociationsPerSession": { "type": "number", "default": 1 },
+              "maxPatternsPerSession": { "type": "number", "default": 1 }
+            }
+          },
+          "overlays": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": true }
+            }
+          }
+        }
+      },
       "obsidianBridge": {
         "type": "object",
         "additionalProperties": false,
