@@ -1,7 +1,7 @@
 // tests/continuity-gate.test.js
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { ContinuityGate } from "../lib/continuity-gate.js";
+import { ContinuityGate, filterAssociativeCandidates, filterPatternCandidates } from "../lib/continuity-gate.js";
 
 describe("ContinuityGate — associative memories", () => {
   it("denies associative when score is below threshold", () => {
@@ -181,6 +181,28 @@ describe("ContinuityGate — pattern surfacing", () => {
     });
     assert.strictEqual(result.allow, true);
     assert.strictEqual(result.reason, "ok");
+  });
+
+  it("respects configurable maxAssociations limit", () => {
+    const gate = new ContinuityGate({ assocThreshold: 0.75, maxAssociations: 2 });
+    const sessionState = { associativeSurfacedCount: 0, patternSurfacedCount: 0, surfacedIds: new Set() };
+    assert.strictEqual(gate.shouldSurface("associative", 0.80, sessionState).allow, true);
+    gate.record(sessionState, "associative");
+    assert.strictEqual(gate.shouldSurface("associative", 0.80, sessionState).allow, true);
+    gate.record(sessionState, "associative");
+    assert.strictEqual(gate.shouldSurface("associative", 0.80, sessionState).allow, false);
+    assert.strictEqual(gate.shouldSurface("associative", 0.80, sessionState).reason, "rate_limit");
+  });
+
+  it("respects configurable maxPatterns limit", () => {
+    const gate = new ContinuityGate({ patternThreshold: 0.70, maxPatterns: 2 });
+    const sessionState = { associativeSurfacedCount: 0, patternSurfacedCount: 0, surfacedIds: new Set() };
+    assert.strictEqual(gate.shouldSurface("pattern", 0.75, sessionState).allow, true);
+    gate.record(sessionState, "pattern");
+    assert.strictEqual(gate.shouldSurface("pattern", 0.75, sessionState).allow, true);
+    gate.record(sessionState, "pattern");
+    assert.strictEqual(gate.shouldSurface("pattern", 0.75, sessionState).allow, false);
+    assert.strictEqual(gate.shouldSurface("pattern", 0.75, sessionState).reason, "rate_limit");
   });
 });
 
@@ -368,5 +390,90 @@ describe("ContinuityGate — edge cases", () => {
       currentRegister: "celebration",
     });
     assert.strictEqual(patternResult.allow, true);
+  });
+});
+
+
+describe("filterAssociativeCandidates", () => {
+  it("passes through non-graph items unchanged", () => {
+    const items = [
+      { id: "v1", graphSource: "vector" },
+      { id: "c1", category: "canonical" },
+    ];
+    const result = filterAssociativeCandidates(items, { maxAssociations: 1, sessionState: {} });
+    assert.deepStrictEqual(result, items);
+  });
+
+  it("allows up to maxAssociations graph items", () => {
+    const items = [
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 1 },
+      { id: "g2", graphSource: "graph", memoryStrength: 0.85, depth: 1 },
+      { id: "g3", graphSource: "graph", memoryStrength: 0.8, depth: 1 },
+    ];
+    const result = filterAssociativeCandidates(items, { maxAssociations: 2, sessionState: {} });
+    assert.strictEqual(result.length, 2);
+    assert.strictEqual(result[0].id, "g1");
+    assert.strictEqual(result[1].id, "g2");
+  });
+
+  it("records surfaced count in sessionState", () => {
+    const sessionState = {};
+    const items = [
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 1 },
+      { id: "g2", graphSource: "graph", memoryStrength: 0.85, depth: 1 },
+    ];
+    filterAssociativeCandidates(items, { maxAssociations: 2, sessionState });
+    assert.strictEqual(sessionState.associativeSurfacedCount, 2);
+  });
+
+  it("honors existing sessionState count", () => {
+    const sessionState = { associativeSurfacedCount: 1 };
+    const items = [
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 1 },
+      { id: "g2", graphSource: "graph", memoryStrength: 0.85, depth: 1 },
+    ];
+    const result = filterAssociativeCandidates(items, { maxAssociations: 2, sessionState });
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, "g1");
+    assert.strictEqual(sessionState.associativeSurfacedCount, 2);
+  });
+
+  it("filters graph items below depth threshold", () => {
+    const items = [
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 3 },
+    ];
+    const result = filterAssociativeCandidates(items, { maxAssociations: 1, sessionState: {} });
+    assert.deepStrictEqual(result, []);
+  });
+});
+
+describe("filterPatternCandidates", () => {
+  it("returns null for null input", () => {
+    assert.strictEqual(filterPatternCandidates(null), null);
+  });
+
+  it("returns null when maxPatterns reached", () => {
+    const sessionState = { patternSurfacedCount: 1 };
+    const matched = { pattern: { id: "p1" }, score: 0.9 };
+    assert.strictEqual(
+      filterPatternCandidates(matched, { maxPatterns: 1, sessionState }),
+      null
+    );
+  });
+
+  it("returns pattern when allowed and records sessionState", () => {
+    const sessionState = {};
+    const matched = { pattern: { id: "p1" }, score: 0.9 };
+    const result = filterPatternCandidates(matched, { maxPatterns: 1, sessionState });
+    assert.strictEqual(result, matched);
+    assert.strictEqual(sessionState.patternSurfacedCount, 1);
+  });
+
+  it("returns pattern up to maxPatterns", () => {
+    const sessionState = {};
+    const matched = { pattern: { id: "p1" }, score: 0.9 };
+    assert.strictEqual(filterPatternCandidates(matched, { maxPatterns: 2, sessionState }), matched);
+    assert.strictEqual(filterPatternCandidates(matched, { maxPatterns: 2, sessionState }), matched);
+    assert.strictEqual(filterPatternCandidates(matched, { maxPatterns: 2, sessionState }), null);
   });
 });
