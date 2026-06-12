@@ -4044,7 +4044,9 @@ const plugin = {
           let overlays = [];
           if (continuityEnabled && overlayCfg.enabled !== false && ctx?.workspaceDir) {
             try {
-              const overlayStore = new InterpretationOverlayStore(ctx.workspaceDir);
+              if (!overlayStore) {
+                overlayStore = new InterpretationOverlayStore(ctx.workspaceDir);
+              }
               const targetIds = associativeItems.map(i => i.id);
               overlays = await overlayStore.loadForTargets(targetIds, overlayCfg.maxAgeDays ?? 30);
             } catch (e) {
