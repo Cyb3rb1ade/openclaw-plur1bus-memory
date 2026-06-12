@@ -120,6 +120,9 @@ import {
   formatRelevantMemoriesContext,
   resolveFadedThreshold,
 } from "./lib/relevant-memory-context.js";
+import { filterAssociativeCandidates, filterPatternCandidates } from "./lib/continuity-gate.js";
+import { findBestPattern } from "./lib/pattern-surface.js";
+import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
@@ -3910,6 +3913,14 @@ const plugin = {
             const neoStore = getNeoStore(ctx, event);
             graphEdges = neoStore.readGraphEdges(5_000);
           } catch (_e) { dbg(_e); }
+          // Inner Continuity Engine config (Phase 1)
+          const continuityCfg = cfg.continuityEngine || {};
+          const continuityEnabled = continuityCfg.enabled === true;
+          const assocCfg = continuityCfg.associativeRecall || {};
+          const patternCfg = continuityCfg.patternSurfacing || {};
+          const tasteCfg = continuityCfg.tasteGate || {};
+          const overlayCfg = continuityCfg.overlays || {};
+          const useAssociative = continuityEnabled ? assocCfg.enabled !== false : true;
           // v1.9.0 — komplette Pipeline aus shared module
           const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
             query: event.prompt,
@@ -3933,8 +3944,13 @@ const plugin = {
             logger: api.logger,
             emotionalState: emotionalPool.get(agentId),
             graphEdges,
-            associativeEnabled: true,
-            graphConfig: {},
+            associativeEnabled: useAssociative,
+            graphConfig: useAssociative ? {
+              maxDepth: assocCfg.maxDepth ?? 3,
+              maxNeighborsPerNode: assocCfg.maxNeighborsPerNode ?? 8,
+              maxAssociatedResults: assocCfg.maxAssociatedResults ?? 40,
+              minCumulativeRelevance: assocCfg.minCumulativeRelevance ?? 0.2,
+            } : {},
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             agentId,
             retrievalLogger: (ledgerInfo) => {
@@ -3970,9 +3986,57 @@ const plugin = {
               depth: r.depth,
             });
           }
+
+          // Inner Continuity Engine: taste gate + pattern surfacing
+          let associativeItems = items;
+          let matchedPattern = null;
+          const sessionState = {}; // per-recall session state
+          const tasteEnabled = tasteCfg.enabled !== false;
+          if (continuityEnabled) {
+            if (tasteEnabled) {
+              associativeItems = filterAssociativeCandidates(items, {
+                maxAssociations: tasteCfg.maxAssociationsPerSession ?? 1,
+                sessionState,
+              });
+            }
+
+            if (patternCfg.enabled !== false) {
+              try {
+                matchedPattern = await findBestPattern({
+                  recentMemoryIds: ordered.map(r => r.entry.id),
+                  threshold: patternCfg.patternThreshold ?? 0.7,
+                  patternRecords: [], // safe fallback; no pattern store yet in root
+                });
+                if (tasteEnabled) {
+                  matchedPattern = filterPatternCandidates(matchedPattern, {
+                    maxPatterns: patternCfg.maxPerSession ?? tasteCfg.maxPatternsPerSession ?? 1,
+                    sessionState,
+                  });
+                }
+              } catch (e) {
+                api.logger.warn?.(`continuity-engine: pattern surfacing failed: ${String(e)}`);
+                matchedPattern = null;
+              }
+            }
+          }
+
+          // Inner Continuity Engine: interpretation overlays
+          let overlays = [];
+          if (continuityEnabled && overlayCfg.enabled !== false && ctx?.workspaceDir) {
+            try {
+              const overlayStore = new InterpretationOverlayStore(ctx.workspaceDir);
+              const targetIds = associativeItems.map(i => i.id);
+              overlays = await overlayStore.loadForTargets(targetIds);
+            } catch (e) {
+              api.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
+            }
+          }
+
           const recallCfg = cfg.recall || {};
-          const memoriesContext = formatRelevantMemoriesContext(items, {
+          const memoriesContext = formatRelevantMemoriesContext(associativeItems, {
             fadedThreshold: resolveFadedThreshold(recallCfg),
+            overlays,
+            matchedPattern,
           });
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
