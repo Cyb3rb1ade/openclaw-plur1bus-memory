@@ -3931,6 +3931,7 @@ const plugin = {
               llm: (messages) => callLlm(messages, mergingLlmCfg),
               confidenceThreshold: overlayCfg.confidenceThreshold ?? 0.7,
               maxPerSession: overlayCfg.maxPerSession ?? 3,
+              provisionalByDefault: overlayCfg.provisionalByDefault ?? true,
               overlayStore,
             });
           }
@@ -4045,7 +4046,7 @@ const plugin = {
             try {
               const overlayStore = new InterpretationOverlayStore(ctx.workspaceDir);
               const targetIds = associativeItems.map(i => i.id);
-              overlays = await overlayStore.loadForTargets(targetIds);
+              overlays = await overlayStore.loadForTargets(targetIds, overlayCfg.maxAgeDays ?? 30);
             } catch (e) {
               api.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
             }
