@@ -533,7 +533,8 @@
               "maxDepth": { "type": "number", "default": 3 },
               "maxNeighborsPerNode": { "type": "number", "default": 8 },
               "maxAssociatedResults": { "type": "number", "default": 40 },
-              "minCumulativeRelevance": { "type": "number", "default": 0.2 }
+              "minCumulativeRelevance": { "type": "number", "default": 0.2 },
+              "assocThreshold": { "type": "number", "default": 0.75 }
             }
           },
           "patternSurfacing": {
