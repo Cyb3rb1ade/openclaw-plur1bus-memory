@@ -124,6 +124,7 @@ import { filterAssociativeCandidates, filterPatternCandidates } from "./lib/cont
 import { findBestPattern } from "./lib/pattern-surface.js";
 import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
 import { OverlayGenerator } from "./lib/overlay-generator.js";
+import { runOverlayAuditCommand } from "./lib/overlay-commands.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
@@ -2423,6 +2424,32 @@ const plugin = {
               return formatJsonCommandResult(filtered);
             }
             if (action === "memory") {
+              // Overlay audit subcommands do not require a neo record lookup.
+              const subKey = sub.toLowerCase();
+              if (["overlays", "overlay", "disable-overlay", "contradictions"].includes(subKey)) {
+                if (subKey === "disable-overlay") {
+                  const denied = checkAuth(commandCtx, { destructive: true });
+                  if (denied) return denied;
+                }
+                const result = await runOverlayAuditCommand({
+                  subCommand: subKey,
+                  id,
+                  workspaceDir: commandCtx?.workspaceDir,
+                  callLlm,
+                  mergingLlmCfg,
+                });
+                if (subKey === "disable-overlay" && result.ok) {
+                  appendDestructiveOpLog(commandCtx?.workspaceDir, {
+                    event: "overlay.disabled",
+                    source: "plur1bus_memory",
+                    agentId: commandCtx.agentId || "command",
+                    overlayId: id,
+                    timestamp: new Date().toISOString(),
+                  });
+                }
+                return result;
+              }
+
               if (!id && ["origin", "explain", "promote", "demote", "prune", "tombstone"].includes(sub)) {
                 return { text: `Usage: /plur1bus memory ${sub} <id>` };
               }
