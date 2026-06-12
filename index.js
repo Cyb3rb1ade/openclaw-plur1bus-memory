@@ -123,6 +123,7 @@ import {
 import { filterAssociativeCandidates, filterPatternCandidates } from "./lib/continuity-gate.js";
 import { findBestPattern } from "./lib/pattern-surface.js";
 import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
+import { OverlayGenerator } from "./lib/overlay-generator.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
@@ -3920,6 +3921,19 @@ const plugin = {
           const patternCfg = continuityCfg.patternSurfacing || {};
           const tasteCfg = continuityCfg.tasteGate || {};
           const overlayCfg = continuityCfg.overlays || {};
+          const autoCreateOverlays = continuityEnabled && overlayCfg.autoCreateOnRecall === true;
+          let overlayGenerator = null;
+          let overlayStore = null;
+          if (autoCreateOverlays && ctx?.workspaceDir) {
+            overlayStore = new InterpretationOverlayStore(ctx.workspaceDir);
+            overlayGenerator = new OverlayGenerator({
+              enabled: true,
+              llm: (messages) => callLlm(messages, mergingLlmCfg),
+              confidenceThreshold: overlayCfg.confidenceThreshold ?? 0.7,
+              maxPerSession: overlayCfg.maxPerSession ?? 3,
+              overlayStore,
+            });
+          }
           const useAssociative = continuityEnabled ? assocCfg.enabled !== false : true;
           // v1.9.0 — komplette Pipeline aus shared module
           const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
@@ -3984,6 +3998,7 @@ const plugin = {
               memoryStrength: r.entry.memoryStrength ?? 1.0,
               graphSource: r.source,
               depth: r.depth,
+              relevanceScore: r.score,
             });
           }
 
@@ -4033,6 +4048,32 @@ const plugin = {
               overlays = await overlayStore.loadForTargets(targetIds);
             } catch (e) {
               api.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
+            }
+            if (autoCreateOverlays && overlayGenerator && overlayStore) {
+              const emotionalState = emotionalPool.get(agentId);
+              const currentRegister = emotionalState?.describeMood?.().dominant || null;
+              const overlaySessionState = sessionState && typeof sessionState === "object" ? sessionState : {};
+              for (const item of associativeItems) {
+                if (!item.id || String(item.id).startsWith("canonical:")) continue;
+                const memory = ordered.find(r => r.entry.id === item.id)?.entry;
+                if (!memory) continue;
+                try {
+                  const newOverlay = await overlayGenerator.generate({
+                    memory,
+                    relevanceScore: item.relevanceScore ?? 0,
+                    currentRegister,
+                    conversationContext: event.prompt,
+                    triggerMemoryIds: [item.id],
+                    sessionState: overlaySessionState,
+                  });
+                  if (newOverlay) {
+                    const written = await overlayStore.append(newOverlay);
+                    if (written) overlays.push(newOverlay);
+                  }
+                } catch (e) {
+                  api.logger.warn?.(`continuity-engine: overlay generation failed: ${String(e)}`);
+                }
+              }
             }
           }
 
