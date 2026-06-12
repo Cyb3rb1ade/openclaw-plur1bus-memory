@@ -559,7 +559,12 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean", "default": true }
+              "enabled": { "type": "boolean", "default": true },
+              "autoCreateOnRecall": { "type": "boolean", "default": false },
+              "maxAgeDays": { "type": "number", "default": 30 },
+              "confidenceThreshold": { "type": "number", "default": 0.7 },
+              "maxPerSession": { "type": "number", "default": 3 },
+              "provisionalByDefault": { "type": "boolean", "default": true }
             }
           }
         }
