@@ -14,7 +14,7 @@ describe("OverlayGenerator", () => {
     assert.strictEqual(result, null);
   });
 
-  it("does not call LLM when evidence threshold is not met", async () => {
+  it("does not call LLM for canonical or knowledge memory", async () => {
     let called = false;
     const generator = new OverlayGenerator({
       enabled: true,
@@ -26,7 +26,22 @@ describe("OverlayGenerator", () => {
       relevanceScore: 0.95,
     });
     assert.strictEqual(result, null);
-    assert.strictEqual(called, false, "LLM must not be called for canonical memory");
+    assert.strictEqual(called, false, "LLM must not be called for canonical or knowledge memory");
+  });
+
+  it("does not call LLM when relevance score is below threshold", async () => {
+    let called = false;
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => { called = true; return "no shift"; },
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We chose Postgres." },
+      conversationContext: "Since then we keep using Postgres.",
+      relevanceScore: 0.5,
+    });
+    assert.strictEqual(result, null);
+    assert.strictEqual(called, false, "LLM must not be called when relevance score is below threshold");
   });
 
   it("returns null when LLM says 'no shift'", async () => {
@@ -149,5 +164,169 @@ describe("OverlayGenerator", () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("returns null when LLM returns malformed JSON", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => "{not valid json",
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We decided to use Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+  });
+
+  it("returns null when LLM returns confidence out of range", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({ shiftType: "meaning", shiftDescription: "x", confidence: 1.5 }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We decided to use Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+  });
+
+  it("returns null when LLM returns confidence NaN", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({ shiftType: "meaning", shiftDescription: "x", confidence: NaN }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We decided to use Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+  });
+
+  it("returns null when LLM returns missing shiftDescription", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({ shiftType: "meaning", confidence: 0.9 }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We decided to use Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+  });
+
+  it("returns null when LLM returns empty shiftDescription", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({ shiftType: "meaning", shiftDescription: "", confidence: 0.9 }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We decided to use Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+  });
+
+  it("returns null when LLM returns invalid shiftType", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({ shiftType: "invalid-type", shiftDescription: "x", confidence: 0.9 }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We decided to use Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+  });
+
+  it("returns null for knowledge source memory", async () => {
+    let called = false;
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => { called = true; return "no shift"; },
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We chose Postgres.", source: "knowledge" },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+    assert.strictEqual(called, false, "LLM must not be called for knowledge source memory");
+  });
+
+  it("returns null when memory lacks text and summary", async () => {
+    let called = false;
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => { called = true; return "no shift"; },
+    });
+    const result = await generator.generate({
+      memory: { id: "m1" },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+    assert.strictEqual(called, false, "LLM must not be called when memory lacks text and summary");
+  });
+
+  it("handles emotional mismatch signal", async () => {
+    let called = false;
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => { called = true; return "no shift"; },
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We lost a dear friend.", emotionalValence: { grief: 0.9 } },
+      conversationContext: "Today we celebrate the launch.",
+      currentRegister: "celebration",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+    assert.strictEqual(called, true, "LLM should be reached when emotional mismatch signal is present");
+  });
+
+  it("propagates triggerMemoryIds to provenance.triggerMemoryIds", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({
+        shiftType: "meaning",
+        shiftDescription: "x",
+        confidence: 0.9,
+      }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "a" },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+      triggerMemoryIds: ["m1", "m2", "m3"],
+    });
+    assert.ok(result);
+    assert.deepStrictEqual(result.provenance.triggerMemoryIds, ["m1", "m2", "m3"]);
+  });
+
+  it("truncates shiftDescription and triggerContext", async () => {
+    const longDescription = "x".repeat(600);
+    const longContext = "Since then, " + "y".repeat(700);
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({
+        shiftType: "meaning",
+        shiftDescription: longDescription,
+        confidence: 0.9,
+      }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "a" },
+      conversationContext: longContext,
+      relevanceScore: 0.9,
+    });
+    assert.ok(result);
+    assert.strictEqual(result.shiftDescription.length, 400);
+    assert.strictEqual(result.triggerContext.length, 500);
   });
 });
