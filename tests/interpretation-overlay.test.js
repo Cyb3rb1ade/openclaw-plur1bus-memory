@@ -555,3 +555,61 @@ describe("InterpretationOverlayStore — shouldSkipLlmResponse static helper", (
     assert.strictEqual(InterpretationOverlayStore.shouldSkipLlmResponse(""), true);
   });
 });
+
+describe("InterpretationOverlayStore — loadForTargets render path", () => {
+  it("returns only the latest overlay per target", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      const now = Date.now();
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "First interpretation",
+        triggerContext: "context 1",
+        createdAt: new Date(now - 1000).toISOString(),
+      });
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "Latest interpretation",
+        triggerContext: "context 2",
+        createdAt: new Date(now).toISOString(),
+      });
+
+      const loaded = await store.loadForTargets(["mem-core"]);
+      assert.strictEqual(loaded.length, 1, "only one overlay per target");
+      assert.strictEqual(loaded[0].shiftDescription, "Latest interpretation", "latest overlay wins");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("filters out superseded overlays", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "Superseded interpretation",
+        triggerContext: "context 1",
+        supersededBy: "ov-2",
+      });
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "Current interpretation",
+        triggerContext: "context 2",
+      });
+
+      const loaded = await store.loadForTargets(["mem-core"]);
+      assert.strictEqual(loaded.length, 1, "superseded overlay excluded");
+      assert.strictEqual(loaded[0].shiftDescription, "Current interpretation", "current overlay returned");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

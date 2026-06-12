@@ -445,6 +445,16 @@ describe("filterAssociativeCandidates", () => {
     const result = filterAssociativeCandidates(items, { maxAssociations: 1, sessionState: {} });
     assert.deepStrictEqual(result, []);
   });
+
+  it("honors configured assocThreshold", () => {
+    const items = [
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 1 },
+      { id: "g2", graphSource: "graph", memoryStrength: 0.5, depth: 1 },
+    ];
+    const result = filterAssociativeCandidates(items, { maxAssociations: 2, assocThreshold: 0.75, sessionState: {} });
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].id, "g1");
+  });
 });
 
 describe("filterPatternCandidates", () => {
@@ -475,5 +485,19 @@ describe("filterPatternCandidates", () => {
     assert.strictEqual(filterPatternCandidates(matched, { maxPatterns: 2, sessionState }), matched);
     assert.strictEqual(filterPatternCandidates(matched, { maxPatterns: 2, sessionState }), matched);
     assert.strictEqual(filterPatternCandidates(matched, { maxPatterns: 2, sessionState }), null);
+  });
+
+  it("honors currentRegister emotional mismatch", () => {
+    const sessionState = {};
+    const matched = {
+      pattern: { id: "p1", emotionalTrajectory: "grief and loss" },
+      score: 0.9,
+    };
+    const result = filterPatternCandidates(matched, {
+      maxPatterns: 1,
+      currentRegister: "celebration mode",
+      sessionState,
+    });
+    assert.strictEqual(result, null);
   });
 });
