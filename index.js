@@ -102,18 +102,21 @@ import {
   buildNeoWorkspaceAliases,
   captureNeoFromAgentEnd,
   createNeoStore,
-  escapeMemoryText,
   findLatestNeoRecord,
   formatNeoRecallContext,
   isInjectedContextText,
   migrateNeoWorkspaces,
   neoSessionKeysFromContext,
   routeNeoRecall,
-  sanitizeMemoryTextForPrompt,
   transitionRecordStatus,
   workspaceKeyFromContext,
   turnEventsFromMessages,
 } from "./lib/neo-arch.js";
+import {
+  DISPLAY_SOURCES,
+  sanitizeMemoryContextAttribute,
+  sanitizeMemoryTextForPrompt,
+} from "./lib/memory-context-sanitize.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
@@ -1034,8 +1037,6 @@ class Embeddings {
 
 // categorizeMemory kommt jetzt aus lib/categorize.js
 
-const DISPLAY_SOURCES = new Set(["group", "cron", "internal"]);
-
 function formatRelevantMemoriesContext(memories) {
   if (!memories || memories.length === 0) return "";
   const items = memories.map((m) => {
@@ -1103,11 +1104,6 @@ function buildMaintenanceNudges({ workspaceDir, schicht15Enabled, lang = "en", t
   }
 
   return { knowledgeNudge, conflictNudge };
-}
-
-function sanitizeMemoryContextAttribute(value, fallback = "memory") {
-  const raw = String(value || fallback).replace(/[^\w:.-]+/g, "_").slice(0, 160);
-  return escapeMemoryText(raw || fallback);
 }
 
 function resolveNeoHooksConfig(api, commandConfig) {
