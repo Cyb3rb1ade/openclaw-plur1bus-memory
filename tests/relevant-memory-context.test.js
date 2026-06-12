@@ -204,6 +204,20 @@ describe("formatRelevantMemoriesContext — interpretation overlays", () => {
     assert.ok(overlayIdx > recordOpenIdx, "overlay must be after <memory-record open tag");
     assert.ok(overlayIdx < recordCloseIdx, "overlay must be before </memory-record> close tag");
   });
+
+  it("sanitizes provenance trigger ids in interpretation-overlay attribute", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      provenance: { triggerMemoryIds: ["m1", 'm2" data-x="y'] },
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(!out.includes('trigger-memory-ids="m1,m2"'), "raw double quotes must not survive in attribute");
+    assert.ok(!out.includes('data-x="y"'), "attribute injection must not survive");
+    assert.ok(out.includes("m2_data-x_y"), "malicious id should be sanitized to underscore form");
+  });
 });
 
 // ── Pattern continuity block ────────────────────────────────────────────────
