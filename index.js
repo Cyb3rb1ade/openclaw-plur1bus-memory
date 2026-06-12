@@ -3996,7 +3996,7 @@ const plugin = {
             if (tasteEnabled) {
               associativeItems = filterAssociativeCandidates(items, {
                 maxAssociations: tasteCfg.maxAssociationsPerSession ?? 1,
-                assocThreshold: assocCfg.assocThreshold ?? 0,
+                assocThreshold: assocCfg.assocThreshold ?? 0.75,
                 sessionState,
               });
             }

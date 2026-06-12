@@ -296,4 +296,11 @@ describe("formatRelevantMemoriesContext — associative source attributes", () =
     assert.ok(!out.includes('faded="true"'), "depth 1 must not force faded");
     assert.ok(!out.includes('very-faded="true"'), "depth 1 must not force very-faded");
   });
+
+  it("coerces invalid depth values to safe integers", () => {
+    const mem = { id: "g1c", category: "work", source: "dm", graphSource: "graph", depth: "2\" data-x=\"y", display: "bad depth", memoryStrength: 1.0 };
+    const out = formatRelevantMemoriesContext([mem]);
+    assert.ok(out.includes('depth="2"'), "invalid depth must be coerced to a safe integer");
+    assert.ok(!out.includes('data-x="y"'), "attribute injection via depth must not survive");
+  });
 });
