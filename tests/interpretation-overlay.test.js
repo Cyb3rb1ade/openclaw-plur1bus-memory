@@ -690,3 +690,67 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
     }
   });
 });
+
+describe("InterpretationOverlayStore — non-blocking record regression", () => {
+  it("superseded, provisional, and forgotten records do not block live duplicates", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      // Superseded overlay should not block a live duplicate.
+      await store.append({
+        targetMemoryId: "mem-superseded",
+        shiftType: "meaning",
+        shiftDescription: "Superseded overlay",
+        triggerContext: "shared context",
+        supersededBy: "ov-superseder",
+      });
+      const supersededLive = await store.append({
+        targetMemoryId: "mem-superseded",
+        shiftType: "meaning",
+        shiftDescription: "Live overlay after superseded",
+        triggerContext: "shared context",
+      });
+      assert.strictEqual(supersededLive, true, "superseded record should not block live duplicate");
+
+      // Provisional overlay should not block a live duplicate.
+      await store.append({
+        targetMemoryId: "mem-provisional",
+        shiftType: "meaning",
+        shiftDescription: "Provisional overlay",
+        triggerContext: "shared context",
+        status: "provisional",
+      });
+      const provisionalLive = await store.append({
+        targetMemoryId: "mem-provisional",
+        shiftType: "meaning",
+        shiftDescription: "Live overlay after provisional",
+        triggerContext: "shared context",
+      });
+      assert.strictEqual(provisionalLive, true, "provisional record should not block live duplicate");
+
+      // Forgotten overlay should not block a live duplicate.
+      await store.append({
+        targetMemoryId: "mem-forgotten",
+        shiftType: "meaning",
+        shiftDescription: "Forgotten overlay",
+        triggerContext: "shared context",
+        status: "forgotten",
+      });
+      const forgottenLive = await store.append({
+        targetMemoryId: "mem-forgotten",
+        shiftType: "meaning",
+        shiftDescription: "Live overlay after forgotten",
+        triggerContext: "shared context",
+      });
+      assert.strictEqual(forgottenLive, true, "forgotten record should not block live duplicate");
+
+      // Verify file contains exactly 6 records (3 non-blocking + 3 live).
+      const content = readFileSync(store.filePath, "utf8");
+      const lines = content.split("\n").filter(Boolean);
+      assert.strictEqual(lines.length, 6, "should have 3 non-blocking + 3 live records");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
