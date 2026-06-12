@@ -218,6 +218,33 @@ describe("formatRelevantMemoriesContext — interpretation overlays", () => {
     assert.ok(!out.includes('data-x="y"'), "attribute injection must not survive");
     assert.ok(out.includes("m2_data-x_y"), "malicious id should be sanitized to underscore form");
   });
+
+  it("renders overlay confidence from overlay.confidence", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidence: 0.85,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.85"'), "overlay confidence should be rendered");
+  });
+
+  it("does not render provisional overlays", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "provisional shift",
+      createdAt: new Date().toISOString(),
+      status: "provisional",
+      confidence: 0.9,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(!out.includes("<interpretation-overlay"), "provisional overlay must not render");
+  });
 });
 
 // ── Pattern continuity block ────────────────────────────────────────────────
