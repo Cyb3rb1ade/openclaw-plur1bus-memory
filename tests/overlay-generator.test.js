@@ -400,6 +400,59 @@ describe("OverlayGenerator", () => {
     assert.strictEqual(result.confidenceDelta, 1);
   });
 
+  it("clamps confidenceDelta to -1 when LLM returns -2.0", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({
+        shiftType: "confidence",
+        shiftDescription: "Confidence has collapsed.",
+        confidence: 0.9,
+        confidenceDelta: -2.0,
+      }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We chose Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.ok(result);
+    assert.strictEqual(result.confidenceDelta, -1);
+  });
+
+  it("early-dedupes unresolved-thread without calling LLM again", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+    const sharedContext = "This is still unresolved.";
+
+    try {
+      await store.append({
+        targetMemoryId: "m1",
+        shiftType: "unresolved-thread",
+        shiftDescription: "Existing unresolved thread.",
+        triggerContext: sharedContext,
+        status: "provisional",
+      });
+
+      let called = false;
+      const generator = new OverlayGenerator({
+        enabled: true,
+        llm: async () => { called = true; return "no shift"; },
+        overlayStore: store,
+      });
+
+      const result = await generator.generate({
+        memory: { id: "m1", text: "We left the issue open." },
+        conversationContext: sharedContext,
+        relevanceScore: 0.9,
+      });
+
+      assert.strictEqual(result, null, "duplicate unresolved-thread must be deduped before LLM");
+      assert.strictEqual(called, false, "LLM must not be called for early dedupe");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not throw when emotionalValence is malformed", async () => {
     const generator = new OverlayGenerator({
       enabled: true,
