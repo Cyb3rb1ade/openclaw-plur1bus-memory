@@ -113,6 +113,46 @@ describe("InterpretationOverlayStore — append", () => {
     }
   });
 
+  it("blocks a new append when a live record only matches the legacy dedupe key", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      const overlay = {
+        targetMemoryId: "mem-legacy",
+        shiftType: "meaning",
+        shiftDescription: "Legacy-key overlay",
+        triggerContext: "legacy context",
+      };
+
+      const legacyKey = store._computeLegacyDedupeKey(
+        overlay.targetMemoryId,
+        overlay.shiftType,
+        overlay.triggerContext,
+      );
+
+      const { appendFileSync } = await import("node:fs");
+      appendFileSync(
+        store.filePath,
+        JSON.stringify({
+          ...overlay,
+          id: "legacy-record-1",
+          createdAt: new Date().toISOString(),
+          dedupeKey: legacyKey,
+        }) + "\n",
+      );
+
+      const result = await store.append(overlay);
+      assert.strictEqual(result, false, "legacy dedupe key should block new append");
+
+      const content = readFileSync(store.filePath, "utf8");
+      const lines = content.split("\n").filter(Boolean);
+      assert.strictEqual(lines.length, 1, "only the legacy record should exist");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("auto-generates id and createdAt if not provided", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
     const store = new InterpretationOverlayStore(tmpDir);
