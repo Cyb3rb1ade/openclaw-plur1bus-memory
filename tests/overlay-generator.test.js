@@ -77,6 +77,26 @@ describe("OverlayGenerator", () => {
     assert.ok(Array.isArray(result.provenance.triggerMemoryIds));
   });
 
+  it("honors provisionalByDefault: false and marks overlay active", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      provisionalByDefault: false,
+      llm: async () => JSON.stringify({
+        shiftType: "meaning",
+        shiftDescription: "Postgres is now the default for new projects.",
+        confidence: 0.85,
+      }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We decided to use Postgres." },
+      conversationContext: "Since then, Postgres is now the default for new projects.",
+      relevanceScore: 0.9,
+      currentRegister: "neutral",
+    });
+    assert.ok(result);
+    assert.strictEqual(result.status, "active");
+  });
+
   it("drops generated overlays below confidenceThreshold", async () => {
     const generator = new OverlayGenerator({
       enabled: true,
