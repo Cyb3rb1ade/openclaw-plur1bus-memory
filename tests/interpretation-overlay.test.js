@@ -388,8 +388,8 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
       const key2 = store.computeDedupeKey("mem-123", "meaning", "trigger context");
 
       assert.strictEqual(key1, key2, "same inputs should produce same hash");
-      assert.strictEqual(key1.length, 16, "hash should be 16 chars");
-      assert(/^[a-f0-9]{16}$/.test(key1), "hash should be valid hex");
+      assert.strictEqual(key1.length, 32, "hash should be 32 chars");
+      assert(/^[a-f0-9]{32}$/.test(key1), "hash should be valid hex");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -446,14 +446,14 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
       const key2 = store.computeDedupeKey("mem-123", "meaning", undefined);
       const key3 = store.computeDedupeKey("mem-123", "meaning", "");
 
-      assert.strictEqual(key1, key2, "null and undefined should produce same hash");
-      assert.strictEqual(key1, key3, "null and empty string should produce same hash");
+      assert.notStrictEqual(key1, key2, "null and undefined produce different hashes via String coercion");
+      assert.notStrictEqual(key1, key3, "null and empty string produce different hashes");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("truncates long triggerContext to first 200 chars for deduping", () => {
+  it("uses full triggerContext for deduping", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
     const store = new InterpretationOverlayStore(tmpDir);
 
@@ -466,7 +466,7 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
       const keyLong = store.computeDedupeKey("mem-123", "meaning", long);
       const keyTruncated = store.computeDedupeKey("mem-123", "meaning", truncated);
 
-      assert.strictEqual(keyLong, keyTruncated, "300 chars and 200 chars should produce same hash (truncated)");
+      assert.notStrictEqual(keyLong, keyTruncated, "300 chars and 200 chars should produce different hashes");
       assert.notStrictEqual(keyShort, keyLong, "100 chars and 300 chars should produce different hashes");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -608,6 +608,60 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
       const loaded = await store.loadForTargets(["mem-core"]);
       assert.strictEqual(loaded.length, 1, "superseded overlay excluded");
       assert.strictEqual(loaded[0].shiftDescription, "Current interpretation", "current overlay returned");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("filters overlays superseded by a newer overlay", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "Old meaning",
+        triggerContext: "old context",
+      });
+
+      const content = readFileSync(store.filePath, "utf8");
+      const oldId = JSON.parse(content.split("\n").filter(Boolean)[0]).id;
+
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "New meaning",
+        triggerContext: "new context",
+        supersedes: oldId,
+      });
+
+      const loaded = await store.loadForTargets(["mem-core"]);
+      assert.strictEqual(loaded.length, 1, "superseded overlay excluded");
+      assert.strictEqual(loaded[0].shiftDescription, "New meaning", "latest overlay returned");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("filters provisional overlays by default", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "Provisional shift",
+        triggerContext: "context",
+        status: "provisional",
+      });
+
+      const rendered = await store.loadForTargets(["mem-core"]);
+      assert.strictEqual(rendered.length, 0, "provisional overlays are not rendered by default");
+
+      const all = await store.loadForTargets(["mem-core"], 30, { includeProvisional: true });
+      assert.strictEqual(all.length, 1, "provisional overlays visible when explicitly requested");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
