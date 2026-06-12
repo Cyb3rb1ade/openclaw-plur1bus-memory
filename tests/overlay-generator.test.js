@@ -329,4 +329,94 @@ describe("OverlayGenerator", () => {
     assert.strictEqual(result.shiftDescription.length, 400);
     assert.strictEqual(result.triggerContext.length, 500);
   });
+
+  it("returns null for memory id starting with canonical:", async () => {
+    let called = false;
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => { called = true; return "no shift"; },
+    });
+    const result = await generator.generate({
+      memory: { id: "canonical:some-id", text: "We chose Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+    assert.strictEqual(called, false, "LLM must not be called for canonical: memory id");
+  });
+
+  it("allows confidence overlay after stored meaning overlay for same memory/context", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+    const sharedContext = "Since then, the meaning has shifted.";
+
+    try {
+      await store.append({
+        targetMemoryId: "m1",
+        shiftType: "meaning",
+        shiftDescription: "Earlier meaning shift.",
+        triggerContext: sharedContext,
+      });
+
+      const generator = new OverlayGenerator({
+        enabled: true,
+        llm: async () => JSON.stringify({
+          shiftType: "confidence",
+          shiftDescription: "Confidence has increased.",
+          confidence: 0.9,
+        }),
+        overlayStore: store,
+      });
+
+      const result = await generator.generate({
+        memory: { id: "m1", text: "We chose Postgres." },
+        conversationContext: sharedContext,
+        relevanceScore: 0.9,
+      });
+
+      assert.ok(result, "confidence overlay must still be generated after a meaning overlay");
+      assert.strictEqual(result.shiftType, "confidence");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clamps confidenceDelta to 1 when LLM returns 2.0", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({
+        shiftType: "confidence",
+        shiftDescription: "Confidence has surged.",
+        confidence: 0.9,
+        confidenceDelta: 2.0,
+      }),
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We chose Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.ok(result);
+    assert.strictEqual(result.confidenceDelta, 1);
+  });
+
+  it("does not throw when emotionalValence is malformed", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({
+        shiftType: "meaning",
+        shiftDescription: "x",
+        confidence: 0.9,
+      }),
+    });
+    for (const emotionalValence of ["grief", ["grief"]]) {
+      const result = await generator.generate({
+        memory: { id: "m1", text: "We lost a dear friend.", emotionalValence },
+        conversationContext: "Today we discuss the launch.",
+        currentRegister: "celebration",
+        relevanceScore: 0.9,
+      });
+      assert.strictEqual(result, null);
+    }
+  });
 });
