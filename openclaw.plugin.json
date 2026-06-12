@@ -540,7 +540,7 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean", "default": true },
+              "enabled": { "type": "boolean", "default": false },
               "patternThreshold": { "type": "number", "default": 0.7 },
               "maxPerSession": { "type": "number", "default": 1 }
             }
