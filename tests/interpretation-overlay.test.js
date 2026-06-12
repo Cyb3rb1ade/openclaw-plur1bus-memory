@@ -666,4 +666,27 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("excludes forgotten tombstone overlays from loadFor and loadForTargets", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      await store.append({
+        targetMemoryId: "mem-tombstone",
+        shiftType: "meaning",
+        shiftDescription: "Forgotten interpretation",
+        triggerContext: "context",
+        status: "forgotten",
+      });
+
+      const loaded = await store.loadFor(["mem-tombstone"]);
+      assert.deepStrictEqual(loaded, [], "forgotten overlays are excluded from loadFor");
+
+      const rendered = await store.loadForTargets(["mem-tombstone"]);
+      assert.deepStrictEqual(rendered, [], "forgotten overlays are excluded from loadForTargets");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
