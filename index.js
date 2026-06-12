@@ -3933,6 +3933,7 @@ const plugin = {
               maxPerSession: overlayCfg.maxPerSession ?? 3,
               provisionalByDefault: overlayCfg.provisionalByDefault ?? true,
               overlayStore,
+              logger: api.logger,
             });
           }
           const useAssociative = continuityEnabled ? assocCfg.enabled !== false : true;
