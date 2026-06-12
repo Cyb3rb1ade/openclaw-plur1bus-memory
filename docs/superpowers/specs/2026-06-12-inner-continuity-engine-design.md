@@ -2,7 +2,7 @@
 
 **Plugin:** `cyb3rb1ade-plur1bus-memory`  
 **Date:** 2026-06-12  
-**Status:** Phase 1 implemented — pending integration verification  
+**Status:** Phase 2 implemented — provisional reconsolidation overlays available behind guardrails  
 **Depends on:**
 - Spec A (2026-06-11-human-memory-spec-a.md) — degraded-recall framing
 - Spec B (2026-06-11-spec-b-retroactive-interference.md) — retroactive interference
