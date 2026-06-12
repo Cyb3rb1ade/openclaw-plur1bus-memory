@@ -3996,11 +3996,12 @@ const plugin = {
             if (tasteEnabled) {
               associativeItems = filterAssociativeCandidates(items, {
                 maxAssociations: tasteCfg.maxAssociationsPerSession ?? 1,
+                assocThreshold: assocCfg.assocThreshold ?? 0,
                 sessionState,
               });
             }
 
-            if (patternCfg.enabled !== false) {
+            if (patternCfg.enabled === true) {
               try {
                 matchedPattern = await findBestPattern({
                   recentMemoryIds: ordered.map(r => r.entry.id),
@@ -4008,8 +4009,11 @@ const plugin = {
                   patternRecords: [], // safe fallback; no pattern store yet in root
                 });
                 if (tasteEnabled) {
+                  const emotionalState = emotionalPool.get(agentId);
+                  const currentRegister = emotionalState?.describeMood?.().dominant || null;
                   matchedPattern = filterPatternCandidates(matchedPattern, {
                     maxPatterns: patternCfg.maxPerSession ?? tasteCfg.maxPatternsPerSession ?? 1,
+                    currentRegister,
                     sessionState,
                   });
                 }

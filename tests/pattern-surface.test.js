@@ -105,4 +105,12 @@ describe("formatPatternBlock", () => {
     assert.ok(block.includes('confidence="0.81"'));
     assert.ok(block.includes('trigger-memory-ids="m1,m2"'));
   });
+
+  it("sanitizes trigger ids in memory-continuity attribute", () => {
+    const pattern = { patternName: "X" };
+    const block = formatPatternBlock(pattern, ["m1", 'm2" data-x="y'], 0.81);
+    assert.ok(!block.includes('trigger-memory-ids="m1,m2"'), "raw double quotes must not survive in attribute");
+    assert.ok(!block.includes('data-x="y"'), "attribute injection must not survive");
+    assert.ok(block.includes("m2_data-x_y"), "malicious id should be sanitized to underscore form");
+  });
 });
