@@ -570,6 +570,20 @@
                 "default": false
               }
             }
+          },
+          "doctor": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "maxAgeDays": {
+                "type": "number",
+                "default": 90
+              }
+            }
           }
         }
       },
