@@ -19,6 +19,7 @@ describe("ContradictionDetector — flagContradictoryOverlays", () => {
       writeFileSync(
         contradictionPath,
         JSON.stringify({
+          recordType: "contradiction",
           targetMemoryId: "m1",
           overlayA: "ov-a",
           overlayB: "ov-b",
@@ -74,6 +75,7 @@ describe("ContradictionDetector — flagContradictoryOverlays", () => {
       writeFileSync(
         join(tmpDir, "contradictions.jsonl"),
         JSON.stringify({
+          recordType: "contradiction",
           targetMemoryId: "m1",
           overlayA: "ov-a",
           overlayB: "ov-b",
