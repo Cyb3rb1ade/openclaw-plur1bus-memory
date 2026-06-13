@@ -115,6 +115,23 @@ describe("overlay audit commands", () => {
     }
   });
 
+  it("contradictions returns not configured when LLM merging is disabled", async () => {
+    const dir = tmpDir();
+    try {
+      const store = new InterpretationOverlayStore(dir);
+      await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Postgres", triggerContext: "a" });
+      const result = await runOverlayAuditCommand({
+        subCommand: "contradictions",
+        workspaceDir: dir,
+        callLlm: null,
+        mergingLlmCfg: null,
+      });
+      assert.strictEqual(result.text, "LLM merging is not configured; cannot scan for contradictions.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("contradictions returns invalid id error for malformed ids", async () => {
     const dir = tmpDir();
     try {
