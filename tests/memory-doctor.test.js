@@ -199,6 +199,31 @@ describe("MemoryDoctor", () => {
     }
   });
 
+  it("diagnoseOverlay produces a disable suggestion when a weaker provisional overlay is the target", async () => {
+    const dir = tmpDir();
+    try {
+      const store = new InterpretationOverlayStore(dir);
+      await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Weak provisional.", triggerContext: "a", confidence: 0.4, status: "provisional" });
+      await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Strong active.", triggerContext: "b", confidence: 0.9 });
+      const overlays = await store.loadAllOverlays(["m1"], { includeProvisional: true });
+      const weak = overlays.find((o) => o.status === "provisional");
+      const strong = overlays.find((o) => o.status !== "provisional");
+
+      const detector = new ContradictionDetector({ workspaceDir: dir });
+      await detector.persistContradiction({ targetMemoryId: "m1", overlayA: weak.id, overlayB: strong.id, descriptionA: weak.shiftDescription, descriptionB: strong.shiftDescription });
+
+      const doctor = new MemoryDoctor({ workspaceDir: dir });
+      const report = await doctor.diagnoseOverlay(weak.id);
+      const disable = report.suggestions.find((s) => s.action === "disable");
+      assert.ok(disable, "expected a disable suggestion");
+      assert.strictEqual(disable.targetOverlayId, weak.id);
+      assert.ok(disable.command.includes("disable-overlay"));
+      assert.ok(disable.command.includes(weak.id));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("diagnoseOverlay produces a supersede suggestion when the target overlay is the weaker interpretation", async () => {
     const dir = tmpDir();
     try {
