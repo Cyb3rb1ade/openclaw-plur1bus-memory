@@ -79,4 +79,35 @@ describe("overlay-commands doctor", () => {
     });
     assert.ok(result.text.includes("disabled"));
   });
+
+  it("doctor memory without id returns usage", async () => {
+    const result = await runOverlayAuditCommand({
+      subCommand: "doctor",
+      id: "memory",
+      workspaceDir: "/tmp/plur1bus-test-unused",
+      doctorCfg: { enabled: true },
+    });
+    assert.strictEqual(result.text, "Usage: /plur1bus memory doctor memory <memoryId>");
+  });
+
+  it("doctor overlay without id returns usage", async () => {
+    const result = await runOverlayAuditCommand({
+      subCommand: "doctor",
+      id: "overlay",
+      workspaceDir: "/tmp/plur1bus-test-unused",
+      doctorCfg: { enabled: true },
+    });
+    assert.strictEqual(result.text, "Usage: /plur1bus memory doctor overlay <overlayId>");
+  });
+
+  it("doctor overlay with malformed id returns invalid message", async () => {
+    const result = await runOverlayAuditCommand({
+      subCommand: "doctor",
+      id: "overlay",
+      extraArgs: ["not-a-uuid"],
+      workspaceDir: "/tmp/plur1bus-test-unused",
+      doctorCfg: { enabled: true },
+    });
+    assert.strictEqual(result.text, "Invalid overlay id: not-a-uuid");
+  });
 });
