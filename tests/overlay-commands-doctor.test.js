@@ -27,6 +27,27 @@ describe("overlay-commands doctor", () => {
     }
   });
 
+  it("doctor memory <id> works with a non-UUID memory id", async () => {
+    const dir = tmpDir();
+    try {
+      const store = new InterpretationOverlayStore(dir);
+      await store.append({ targetMemoryId: "custom-mem-123", shiftType: "meaning", shiftDescription: "Custom memory.", triggerContext: "a" });
+      const result = await runOverlayAuditCommand({
+        subCommand: "doctor",
+        id: "memory",
+        extraArgs: ["custom-mem-123"],
+        workspaceDir: dir,
+        doctorCfg: { enabled: true, maxAgeDays: 90 },
+      });
+      const parsed = JSON.parse(result.text);
+      assert.strictEqual(parsed.type, "memory");
+      assert.strictEqual(parsed.memoryId, "custom-mem-123");
+      assert.strictEqual(parsed.active.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("doctor memory <id> diagnoses a memory", async () => {
     const dir = tmpDir();
     try {
