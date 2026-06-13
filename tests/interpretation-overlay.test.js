@@ -113,6 +113,46 @@ describe("InterpretationOverlayStore — append", () => {
     }
   });
 
+  it("blocks a new append when a live record only matches the legacy dedupe key", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      const overlay = {
+        targetMemoryId: "mem-legacy",
+        shiftType: "meaning",
+        shiftDescription: "Legacy-key overlay",
+        triggerContext: "legacy context",
+      };
+
+      const legacyKey = store._computeLegacyDedupeKey(
+        overlay.targetMemoryId,
+        overlay.shiftType,
+        overlay.triggerContext,
+      );
+
+      const { appendFileSync } = await import("node:fs");
+      appendFileSync(
+        store.filePath,
+        JSON.stringify({
+          ...overlay,
+          id: "legacy-record-1",
+          createdAt: new Date().toISOString(),
+          dedupeKey: legacyKey,
+        }) + "\n",
+      );
+
+      const result = await store.append(overlay);
+      assert.strictEqual(result, false, "legacy dedupe key should block new append");
+
+      const content = readFileSync(store.filePath, "utf8");
+      const lines = content.split("\n").filter(Boolean);
+      assert.strictEqual(lines.length, 1, "only the legacy record should exist");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("auto-generates id and createdAt if not provided", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
     const store = new InterpretationOverlayStore(tmpDir);
@@ -388,8 +428,8 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
       const key2 = store.computeDedupeKey("mem-123", "meaning", "trigger context");
 
       assert.strictEqual(key1, key2, "same inputs should produce same hash");
-      assert.strictEqual(key1.length, 16, "hash should be 16 chars");
-      assert(/^[a-f0-9]{16}$/.test(key1), "hash should be valid hex");
+      assert.strictEqual(key1.length, 32, "hash should be 32 chars");
+      assert(/^[a-f0-9]{32}$/.test(key1), "hash should be valid hex");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -446,14 +486,14 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
       const key2 = store.computeDedupeKey("mem-123", "meaning", undefined);
       const key3 = store.computeDedupeKey("mem-123", "meaning", "");
 
-      assert.strictEqual(key1, key2, "null and undefined should produce same hash");
-      assert.strictEqual(key1, key3, "null and empty string should produce same hash");
+      assert.notStrictEqual(key1, key2, "null and undefined produce different hashes via String coercion");
+      assert.notStrictEqual(key1, key3, "null and empty string produce different hashes");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("truncates long triggerContext to first 200 chars for deduping", () => {
+  it("uses full triggerContext for deduping", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
     const store = new InterpretationOverlayStore(tmpDir);
 
@@ -466,7 +506,7 @@ describe("InterpretationOverlayStore — computeDedupeKey", () => {
       const keyLong = store.computeDedupeKey("mem-123", "meaning", long);
       const keyTruncated = store.computeDedupeKey("mem-123", "meaning", truncated);
 
-      assert.strictEqual(keyLong, keyTruncated, "300 chars and 200 chars should produce same hash (truncated)");
+      assert.notStrictEqual(keyLong, keyTruncated, "300 chars and 200 chars should produce different hashes");
       assert.notStrictEqual(keyShort, keyLong, "100 chars and 300 chars should produce different hashes");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -608,6 +648,147 @@ describe("InterpretationOverlayStore — loadForTargets render path", () => {
       const loaded = await store.loadForTargets(["mem-core"]);
       assert.strictEqual(loaded.length, 1, "superseded overlay excluded");
       assert.strictEqual(loaded[0].shiftDescription, "Current interpretation", "current overlay returned");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("filters overlays superseded by a newer overlay", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "Old meaning",
+        triggerContext: "old context",
+      });
+
+      const content = readFileSync(store.filePath, "utf8");
+      const oldId = JSON.parse(content.split("\n").filter(Boolean)[0]).id;
+
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "New meaning",
+        triggerContext: "new context",
+        supersedes: oldId,
+      });
+
+      const loaded = await store.loadForTargets(["mem-core"]);
+      assert.strictEqual(loaded.length, 1, "superseded overlay excluded");
+      assert.strictEqual(loaded[0].shiftDescription, "New meaning", "latest overlay returned");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("filters provisional overlays by default", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      await store.append({
+        targetMemoryId: "mem-core",
+        shiftType: "meaning",
+        shiftDescription: "Provisional shift",
+        triggerContext: "context",
+        status: "provisional",
+      });
+
+      const rendered = await store.loadForTargets(["mem-core"]);
+      assert.strictEqual(rendered.length, 0, "provisional overlays are not rendered by default");
+
+      const all = await store.loadForTargets(["mem-core"], 30, { includeProvisional: true });
+      assert.strictEqual(all.length, 1, "provisional overlays visible when explicitly requested");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes forgotten tombstone overlays from loadFor and loadForTargets", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      await store.append({
+        targetMemoryId: "mem-tombstone",
+        shiftType: "meaning",
+        shiftDescription: "Forgotten interpretation",
+        triggerContext: "context",
+        status: "forgotten",
+      });
+
+      const loaded = await store.loadFor(["mem-tombstone"]);
+      assert.deepStrictEqual(loaded, [], "forgotten overlays are excluded from loadFor");
+
+      const rendered = await store.loadForTargets(["mem-tombstone"]);
+      assert.deepStrictEqual(rendered, [], "forgotten overlays are excluded from loadForTargets");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("InterpretationOverlayStore — non-blocking record regression", () => {
+  it("superseded, provisional, and forgotten records do not block live duplicates", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-test-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      // Superseded overlay should not block a live duplicate.
+      await store.append({
+        targetMemoryId: "mem-superseded",
+        shiftType: "meaning",
+        shiftDescription: "Superseded overlay",
+        triggerContext: "shared context",
+        supersededBy: "ov-superseder",
+      });
+      const supersededLive = await store.append({
+        targetMemoryId: "mem-superseded",
+        shiftType: "meaning",
+        shiftDescription: "Live overlay after superseded",
+        triggerContext: "shared context",
+      });
+      assert.strictEqual(supersededLive, true, "superseded record should not block live duplicate");
+
+      // Provisional overlay should not block a live duplicate.
+      await store.append({
+        targetMemoryId: "mem-provisional",
+        shiftType: "meaning",
+        shiftDescription: "Provisional overlay",
+        triggerContext: "shared context",
+        status: "provisional",
+      });
+      const provisionalLive = await store.append({
+        targetMemoryId: "mem-provisional",
+        shiftType: "meaning",
+        shiftDescription: "Live overlay after provisional",
+        triggerContext: "shared context",
+      });
+      assert.strictEqual(provisionalLive, true, "provisional record should not block live duplicate");
+
+      // Forgotten overlay should not block a live duplicate.
+      await store.append({
+        targetMemoryId: "mem-forgotten",
+        shiftType: "meaning",
+        shiftDescription: "Forgotten overlay",
+        triggerContext: "shared context",
+        status: "forgotten",
+      });
+      const forgottenLive = await store.append({
+        targetMemoryId: "mem-forgotten",
+        shiftType: "meaning",
+        shiftDescription: "Live overlay after forgotten",
+        triggerContext: "shared context",
+      });
+      assert.strictEqual(forgottenLive, true, "forgotten record should not block live duplicate");
+
+      // Verify file contains exactly 6 records (3 non-blocking + 3 live).
+      const content = readFileSync(store.filePath, "utf8");
+      const lines = content.split("\n").filter(Boolean);
+      assert.strictEqual(lines.length, 6, "should have 3 non-blocking + 3 live records");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
