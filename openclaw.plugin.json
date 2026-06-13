@@ -564,7 +564,11 @@
               "maxAgeDays": { "type": "number", "default": 30 },
               "confidenceThreshold": { "type": "number", "default": 0.7 },
               "maxPerSession": { "type": "number", "default": 3 },
-              "provisionalByDefault": { "type": "boolean", "default": true }
+              "provisionalByDefault": { "type": "boolean", "default": true },
+              "autoResolveContradictions": {
+                "type": "boolean",
+                "default": false
+              }
             }
           }
         }

@@ -3959,6 +3959,11 @@ const plugin = {
             overlayGenerator = new OverlayGenerator({
               enabled: true,
               llm: (messages) => callLlm(messages, mergingLlmCfg),
+              contradictionLlm: overlayCfg.autoResolveContradictions
+                ? async (messages) => callLlm(messages, mergingLlmCfg)
+                : null,
+              autoResolveContradictions: overlayCfg.autoResolveContradictions ?? false,
+              workspaceDir: ctx?.workspaceDir,
               confidenceThreshold: overlayCfg.confidenceThreshold ?? 0.7,
               maxPerSession: overlayCfg.maxPerSession ?? 3,
               provisionalByDefault: overlayCfg.provisionalByDefault ?? true,
@@ -4116,6 +4121,14 @@ const plugin = {
                   });
                   if (newOverlay) {
                     const written = await overlayStore.append(newOverlay);
+                    if (written && newOverlay.autoContradiction) {
+                      try {
+                        const detector = new ContradictionDetector({ workspaceDir: ctx?.workspaceDir });
+                        await detector.persistContradiction(newOverlay.autoContradiction);
+                      } catch (e) {
+                        api.logger.warn?.(`continuity-engine: contradiction audit append failed: ${String(e)}`);
+                      }
+                    }
                     if (written) overlays.push(newOverlay);
                   }
                 } catch (e) {
