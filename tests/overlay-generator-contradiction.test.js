@@ -239,4 +239,54 @@ describe("OverlayGenerator auto-contradiction handling", () => {
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("includes descriptionA and descriptionB in the persisted contradiction record", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-ogen-contra-desc-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+
+    try {
+      await store.append({
+        targetMemoryId: "m1",
+        shiftType: "meaning",
+        shiftDescription: "We use Postgres.",
+        triggerContext: "We use Postgres.",
+      });
+
+      const generator = new OverlayGenerator({
+        enabled: true,
+        llm: async () => JSON.stringify({
+          shiftType: "meaning",
+          shiftDescription: "We switched to MySQL.",
+          confidence: 0.9,
+        }),
+        contradictionLlm: async () => "yes",
+        autoResolveContradictions: true,
+        overlayStore: store,
+        workspaceDir: tmpDir,
+      });
+
+      const overlay = await generator.generate({
+        memory: { id: "m1", text: "We decided to use Postgres." },
+        conversationContext: "Since then, we switched to MySQL.",
+        relevanceScore: 0.9,
+      });
+
+      assert.ok(overlay);
+      assert.strictEqual(overlay.autoContradiction.descriptionA, "We switched to MySQL.");
+      assert.strictEqual(overlay.autoContradiction.descriptionB, "We use Postgres.");
+
+      await store.append(overlay);
+
+      const detector = new ContradictionDetector({ workspaceDir: tmpDir });
+      await detector.persistContradiction(overlay.autoContradiction);
+
+      const content = readFileSync(join(tmpDir, "contradictions.jsonl"), "utf8");
+      const record = JSON.parse(content.split("\n").filter(Boolean)[0]);
+      assert.strictEqual(record.recordType, "contradiction");
+      assert.strictEqual(record.descriptionA, "We switched to MySQL.");
+      assert.strictEqual(record.descriptionB, "We use Postgres.");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -3967,6 +3967,7 @@ const plugin = {
               confidenceThreshold: overlayCfg.confidenceThreshold ?? 0.7,
               maxPerSession: overlayCfg.maxPerSession ?? 3,
               provisionalByDefault: overlayCfg.provisionalByDefault ?? true,
+              maxAgeDays: overlayCfg.maxAgeDays ?? 30,
               overlayStore,
               logger: api.logger,
             });
