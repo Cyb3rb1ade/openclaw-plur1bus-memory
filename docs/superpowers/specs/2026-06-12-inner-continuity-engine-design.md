@@ -2,7 +2,7 @@
 
 **Plugin:** `cyb3rb1ade-plur1bus-memory`  
 **Date:** 2026-06-12  
-**Status:** Phase 5 implemented — auto-contradiction resolution on overlay generation available behind guardrails  
+**Status:** Phase 6 implemented — operator-facing memory doctor / contradiction dashboard available behind guardrails  
 **Depends on:**
 - Spec A (2026-06-11-human-memory-spec-a.md) — degraded-recall framing
 - Spec B (2026-06-11-spec-b-retroactive-interference.md) — retroactive interference
@@ -52,7 +52,7 @@ Factual memory records are append-only. Reconsolidation must never mutate or ove
 
 ### Gap
 
-The Inner Continuity Engine is now integrated into the production root code path via `index.js`. The remaining work is stabilization, expanded test coverage, and optional multi-agent shared overlays.
+The Inner Continuity Engine is now integrated into the production root code path via `index.js`. Phase 6 adds operator-facing inspection tooling. The remaining work is stabilization, expanded test coverage, and optional multi-agent shared overlays.
 
 ---
 
@@ -149,6 +149,21 @@ Do **not** reimplement. Port and wire the existing `plur1bus/` modules into root
 - `supersedes`: id of an older overlay this record replaces.
 - `autoContradiction`: optional metadata attached during generation when the overlay auto-resolves a contradiction; contains `targetMemoryId`, `overlayA` (new), `overlayB` (existing).
 
+### Phase 6: Memory Doctor / Contradiction Dashboard
+
+**Goal:** Give operators visibility into overlay health and contradiction state, with actionable, non-destructive suggestions.
+
+1. Add a `MemoryDoctor` class that reads the append-only overlay and contradiction JSONL stores.
+2. Classify overlays per target memory as `active`, `provisional`, `superseded`, or `disabled`.
+3. Surface persisted contradictions and match them against currently active/provisional overlays.
+4. Generate deterministic suggestions: supersede a weaker active overlay, disable a provisional overlay that contradicts an active one, or review an unreviewed provisional overlay.
+5. Add `plur1bus memory doctor` subcommands:
+   - `plur1bus memory doctor` — workspace summary.
+   - `plur1bus memory doctor memory <memoryId>` — diagnosis for one memory.
+   - `plur1bus memory doctor overlay <overlayId>` — diagnosis for one overlay.
+6. Gate the command behind `continuityEngine.doctor.enabled` (default `false`).
+7. Keep all storage append-only; the doctor never mutates factual memory or existing overlay records.
+
 ---
 
 ## Configuration
@@ -185,6 +200,10 @@ Default configuration (features are individually gated; enable as needed):
       "maxAgeDays": 30,
       "confidenceThreshold": 0.7,
       "maxPerSession": 3
+    },
+    "doctor": {
+      "enabled": false,
+      "maxAgeDays": 90
     }
   }
 }
