@@ -218,6 +218,150 @@ describe("formatRelevantMemoriesContext — interpretation overlays", () => {
     assert.ok(!out.includes('data-x="y"'), "attribute injection must not survive");
     assert.ok(out.includes("m2_data-x_y"), "malicious id should be sanitized to underscore form");
   });
+
+  it("renders overlay confidence from overlay.confidence", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidence: 0.85,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.85"'), "overlay confidence should be rendered");
+  });
+
+  it("does not render provisional overlays", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "provisional shift",
+      createdAt: new Date().toISOString(),
+      status: "provisional",
+      confidence: 0.9,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(!out.includes("<interpretation-overlay"), "provisional overlay must not render");
+  });
+
+  it("missing confidence renders confidence=\"0.60\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.60"'), "missing confidence should default to 0.60");
+  });
+
+  it("confidenceDelta: 0.2 renders confidence=\"0.80\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidenceDelta: 0.2,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.80"'), "confidenceDelta +0.2 should render 0.80");
+  });
+
+  it("confidenceDelta: -0.3 renders confidence=\"0.30\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidenceDelta: -0.3,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.30"'), "confidenceDelta -0.3 should render 0.30");
+  });
+
+  it("confidenceDelta: 0.5 clamps to confidence=\"1.00\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidenceDelta: 0.5,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="1.00"'), "confidenceDelta +0.5 should clamp to 1.00");
+  });
+
+  it("confidenceDelta: -1.0 clamps to confidence=\"0.00\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidenceDelta: -1.0,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.00"'), "confidenceDelta -1.0 should clamp to 0.00");
+  });
+
+  it("confidenceDelta: NaN renders confidence=\"0.60\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidenceDelta: NaN,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.60"'), "NaN confidenceDelta should fall back to 0.60");
+  });
+
+  it("out-of-range confidence: 1.5 with valid confidenceDelta: 0.2 renders confidence=\"0.80\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidence: 1.5,
+      confidenceDelta: 0.2,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.80"'), "out-of-range confidence should fall back to confidenceDelta");
+  });
+
+  it("boundary confidence: 0 renders confidence=\"0.00\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidence: 0,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="0.00"'), "confidence 0 should render 0.00");
+  });
+
+  it("boundary confidence: 1 renders confidence=\"1.00\"", () => {
+    const overlays = [{
+      targetMemoryId: "mem1",
+      shiftType: "meaning",
+      shiftDescription: "shifted meaning",
+      createdAt: new Date().toISOString(),
+      confidence: 1,
+      provenance: {},
+    }];
+    const out = formatRelevantMemoriesContext([baseMemory], { overlays });
+    assert.ok(out.includes('confidence="1.00"'), "confidence 1 should render 1.00");
+  });
 });
 
 // ── Pattern continuity block ────────────────────────────────────────────────
