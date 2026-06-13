@@ -4086,7 +4086,14 @@ const plugin = {
             // Enrich loaded overlays with contradiction flags from persisted records.
             try {
               const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir });
-              await detector.flagContradictoryOverlays(overlays);
+              const allActive = await overlayStore.loadAllOverlays(targetIds, {
+                includeProvisional: false,
+                includeSuperseded: false,
+                includeDisabled: false,
+                maxAgeDays: overlayCfg.maxAgeDays ?? 30,
+              });
+              const activeIds = new Set(allActive.map((o) => o.id));
+              await detector.flagContradictoryOverlays(overlays, activeIds);
             } catch (e) {
               api.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${String(e)}`);
             }
