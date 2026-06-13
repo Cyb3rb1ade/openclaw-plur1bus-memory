@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ContradictionDetector } from "../lib/contradiction-detector.js";
+import { InterpretationOverlayStore } from "../lib/interpretation-overlay.js";
 
 describe("ContradictionDetector — flagContradictoryOverlays", () => {
   it("flags overlays that appear in persisted contradiction records", async () => {
@@ -98,6 +99,33 @@ describe("ContradictionDetector — flagContradictoryOverlays", () => {
       const onlyA = [{ id: "ov-a", targetMemoryId: "m1" }];
       await detector.flagContradictoryOverlays(onlyA);
       assert.strictEqual(onlyA[0].contradiction, undefined, "ov-a not flagged after partner is gone");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("flags a surviving overlay when its partner is active but not in the input list", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-contradiction-collapse-"));
+    try {
+      const store = new InterpretationOverlayStore(tmpDir);
+      await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Postgres.", triggerContext: "a" });
+      await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "MySQL.", triggerContext: "b" });
+      const all = await store.loadAllOverlays(["m1"], { includeSuperseded: false, includeProvisional: false });
+      const [ovA, ovB] = all;
+
+      writeFileSync(
+        join(tmpDir, "contradictions.jsonl"),
+        JSON.stringify({ recordType: "contradiction", targetMemoryId: "m1", overlayA: ovA.id, overlayB: ovB.id }) + "\n",
+      );
+
+      const collapsed = await store.loadForTargets(["m1"]);
+      assert.strictEqual(collapsed.length, 1, "loadForTargets collapses to one overlay per target");
+
+      const activeIds = new Set(all.map((o) => o.id));
+      const detector = new ContradictionDetector({ workspaceDir: tmpDir });
+      await detector.flagContradictoryOverlays(collapsed, activeIds);
+
+      assert.strictEqual(collapsed[0].contradiction, true, "surviving overlay flagged because partner is still active");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
