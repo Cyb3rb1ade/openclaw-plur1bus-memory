@@ -124,6 +124,7 @@ import { filterAssociativeCandidates, filterPatternCandidates } from "./lib/cont
 import { findBestPattern } from "./lib/pattern-surface.js";
 import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
 import { OverlayGenerator } from "./lib/overlay-generator.js";
+import { ContradictionDetector } from "./lib/contradiction-detector.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
@@ -4052,6 +4053,13 @@ const plugin = {
               overlays = await overlayStore.loadForTargets(targetIds, overlayCfg.maxAgeDays ?? 30);
             } catch (e) {
               api.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
+            }
+            // Enrich loaded overlays with contradiction flags from persisted records.
+            try {
+              const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir });
+              await detector.flagContradictoryOverlays(overlays);
+            } catch (e) {
+              api.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${String(e)}`);
             }
             if (autoCreateOverlays && overlayGenerator && overlayStore) {
               const emotionalState = emotionalPool.get(agentId);
