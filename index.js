@@ -124,6 +124,7 @@ import { filterAssociativeCandidates, filterPatternCandidates } from "./lib/cont
 import { findBestPattern } from "./lib/pattern-surface.js";
 import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
 import { OverlayGenerator } from "./lib/overlay-generator.js";
+import { ContradictionDetector } from "./lib/contradiction-detector.js";
 import { runOverlayAuditCommand } from "./lib/overlay-commands.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
@@ -2426,21 +2427,23 @@ const plugin = {
             if (action === "memory") {
               // Overlay audit subcommands do not require a neo record lookup.
               const subKey = sub.toLowerCase();
-              if (["overlays", "overlay", "disable-overlay", "contradictions"].includes(subKey)) {
-                if (subKey === "disable-overlay") {
+              if (["overlays", "overlay", "disable-overlay", "contradictions", "supersede-overlay"].includes(subKey)) {
+                if (subKey === "disable-overlay" || subKey === "supersede-overlay") {
                   const denied = checkAuth(commandCtx, { destructive: true });
                   if (denied) return denied;
                 }
+                const extraArgs = subKey === "supersede-overlay" ? tokens.slice(3) : [];
                 const result = await runOverlayAuditCommand({
                   subCommand: subKey,
                   id,
+                  extraArgs,
                   workspaceDir: commandCtx?.workspaceDir,
                   callLlm,
                   mergingLlmCfg,
                 });
-                if (subKey === "disable-overlay" && result.ok) {
+                if ((subKey === "disable-overlay" || subKey === "supersede-overlay") && result.ok) {
                   appendDestructiveOpLog(commandCtx?.workspaceDir, {
-                    event: "overlay.disabled",
+                    event: subKey === "disable-overlay" ? "overlay.disabled" : "overlay.superseded",
                     source: "plur1bus_memory",
                     agentId: commandCtx.agentId || "command",
                     overlayId: id,
@@ -4079,6 +4082,20 @@ const plugin = {
               overlays = await overlayStore.loadForTargets(targetIds, overlayCfg.maxAgeDays ?? 30);
             } catch (e) {
               api.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
+            }
+            // Enrich loaded overlays with contradiction flags from persisted records.
+            try {
+              const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir });
+              const allActive = await overlayStore.loadAllOverlays(targetIds, {
+                includeProvisional: false,
+                includeSuperseded: false,
+                includeDisabled: false,
+                maxAgeDays: overlayCfg.maxAgeDays ?? 30,
+              });
+              const activeIds = new Set(allActive.map((o) => o.id));
+              await detector.flagContradictoryOverlays(overlays, activeIds);
+            } catch (e) {
+              api.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${String(e)}`);
             }
             if (autoCreateOverlays && overlayGenerator && overlayStore) {
               const emotionalState = emotionalPool.get(agentId);
