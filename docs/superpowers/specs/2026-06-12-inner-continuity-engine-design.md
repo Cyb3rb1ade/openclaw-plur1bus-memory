@@ -2,7 +2,7 @@
 
 **Plugin:** `cyb3rb1ade-plur1bus-memory`  
 **Date:** 2026-06-12  
-**Status:** Phase 4 implemented — contradiction-aware recall rendering and operator supersession available  
+**Status:** Phase 6 implemented — operator-facing memory doctor / contradiction dashboard available behind guardrails  
 **Depends on:**
 - Spec A (2026-06-11-human-memory-spec-a.md) — degraded-recall framing
 - Spec B (2026-06-11-spec-b-retroactive-interference.md) — retroactive interference
@@ -39,12 +39,20 @@ Factual memory records are append-only. Reconsolidation must never mutate or ove
 |--------|--------|-------|
 | `lib/memory-graph.js` | ✅ Implemented | Graph traversal, edge building, merge logic |
 | `lib/emotional-state.js` | ✅ Implemented | Stress-congruent recall boost (Spec A) |
-| `lib/recall-pipeline.js` | ⚠️ Partial | Has `graphEdges` + `associativeEnabled`, but **no** ContinuityGate, pattern surfacing, or overlay rendering |
+| `lib/recall-pipeline.js` | ✅ Implemented | Orchestrator with associative spread + pattern surfacing + overlay rendering |
 | `lib/retroactive-interference.js` | ✅ Implemented | Spec B |
+| `lib/contradiction-detector.js` | ✅ Implemented | Detects and persists contradictions between meaning overlays |
+| `lib/overlay-generator.js` | ✅ Implemented | Generates provisional overlays on recall |
+| `lib/overlay-commands.js` | ✅ Implemented | `plur1bus memory` overlay audit subcommands |
+| `lib/continuity-gate.js` | ✅ Implemented | Taste gate for associative + pattern surfacing |
+| `lib/interpretation-overlay.js` | ✅ Implemented | Append-only JSONL overlay store |
+| `lib/pattern-surface.js` | ✅ Implemented | REM pattern scoring + humility formatting |
+| `lib/relevant-memory-context.js` | ✅ Implemented | Context formatter with depth/faded/overlay support |
+| `lib/memory-context-sanitize.js` | ✅ Implemented | Context sanitizers extracted from `index.js` |
 
 ### Gap
 
-The Inner Continuity Engine is **functionally complete in `plur1bus/`**, but **not integrated into the production root code path**. Root `index.js` still uses root `lib/recall-pipeline.js` and root `lib/relevant-memory-context.js` (the latter does not exist — formatting is inline in `index.js`).
+The Inner Continuity Engine is now integrated into the production root code path via `index.js`. Phase 6 adds operator-facing inspection tooling. The remaining work is stabilization, expanded test coverage, and optional multi-agent shared overlays.
 
 ---
 
@@ -102,7 +110,7 @@ Do **not** reimplement. Port and wire the existing `plur1bus/` modules into root
 1. Auto-create overlays when a memory is recalled in a new emotional/contextual frame
 2. Overlay types: `meaning`, `confidence`, `context`, `unresolved-thread`
 3. Provenance chain: every overlay points to `triggerMemoryIds` and source conversation
-4. Superseding without rewriting: overlay marks previous interpretation as `supersededBy` another overlay ID, not by mutating the factual record
+4. Superseding without rewriting: a new overlay record links to the previous interpretation via `supersedes`, leaving the original record append-only.
 
 ### Phase 3: Contradiction Tracking + Inspection
 
@@ -114,22 +122,68 @@ Do **not** reimplement. Port and wire the existing `plur1bus/` modules into root
 4. Audit/inspection tooling (CLI or memory-doctor command)
 5. Stronger humility language for contradictory memories
 
+### Phase 4: Contradiction-Aware Recall + Operator Resolution
+
+**Goal:** Surface contradictions during recall rendering and give operators a way to resolve them.
+
+1. Add `ContradictionDetector.flagContradictoryOverlays` to mark active overlays that participate in a persisted contradiction.
+2. Wire the enrichment into the recall path so contradictory memories render stronger humility language.
+3. Add `InterpretationOverlayStore.supersedeOverlay(oldId, newDescription, reason)` for explicit operator resolution.
+4. Add the `plur1bus memory supersede-overlay` command, gated by destructive auth and audit logging.
+
+### Phase 5: Auto-Contradiction Resolution on Generation
+
+**Goal:** Detect when a newly generated meaning overlay contradicts an existing active meaning overlay and automatically append it as a supersession resolution.
+
+1. Extend `ContradictionDetector` with single-pair and single-vs-list helpers and a public `persistContradiction` audit writer.
+2. Extend `OverlayGenerator` to check active meaning overlays for the same target after a `meaning` shift is generated.
+3. When a contradiction is found, set `supersedes` on the new overlay, mark it `active`, and attach `autoContradiction` metadata.
+4. The caller appends the new overlay and then persists the contradiction record, so audit entries are never written for failed appends.
+5. Gate the behavior behind `continuityEngine.overlays.autoResolveContradictions` (default `false`).
+6. Wire the merging LLM through `index.js` for the contradiction check.
+
+#### Overlay record fields
+
+- `id` (UUID), `targetMemoryId`, `createdAt`, `shiftType`, `shiftDescription`, `confidence`, `confidenceDelta`, `triggerContext`, `dedupeKey`, `provenance`.
+- `status`: `"active"`, `"provisional"`, or `"forgotten"`.
+- `supersedes`: id of an older overlay this record replaces.
+- `autoContradiction`: optional metadata attached during generation when the overlay auto-resolves a contradiction; contains `targetMemoryId`, `overlayA` (new), `overlayB` (existing).
+
+### Phase 6: Memory Doctor / Contradiction Dashboard
+
+**Goal:** Give operators visibility into overlay health and contradiction state, with actionable, non-destructive suggestions.
+
+1. Add a `MemoryDoctor` class that reads the append-only overlay and contradiction JSONL stores.
+2. Classify overlays per target memory as `active`, `provisional`, `superseded`, or `disabled`.
+3. Surface persisted contradictions and match them against currently active/provisional overlays.
+4. Generate deterministic suggestions: supersede a weaker active overlay, disable a provisional overlay that contradicts an active one, or review an unreviewed provisional overlay.
+5. Add `plur1bus memory doctor` subcommands:
+   - `plur1bus memory doctor` — workspace summary.
+   - `plur1bus memory doctor memory <memoryId>` — diagnosis for one memory.
+   - `plur1bus memory doctor overlay <overlayId>` — diagnosis for one overlay.
+6. Gate the command behind `continuityEngine.doctor.enabled` (default `false`).
+7. Keep all storage append-only; the doctor never mutates factual memory or existing overlay records.
+
 ---
 
 ## Configuration
 
+Default configuration (features are individually gated; enable as needed):
+
 ```json
 {
   "continuityEngine": {
-    "enabled": true,
+    "enabled": false,
     "associativeRecall": {
       "enabled": true,
       "maxDepth": 3,
       "assocThreshold": 0.75,
-      "maxTotal": 15
+      "maxNeighborsPerNode": 8,
+      "maxAssociatedResults": 40,
+      "minCumulativeRelevance": 0.2
     },
     "patternSurfacing": {
-      "enabled": true,
+      "enabled": false,
       "patternThreshold": 0.70,
       "maxPerSession": 1
     },
@@ -138,13 +192,18 @@ Do **not** reimplement. Port and wire the existing `plur1bus/` modules into root
       "maxAssociationsPerSession": 1,
       "maxPatternsPerSession": 1
     },
-    "humility": {
-      "enabled": true
-    },
     "overlays": {
       "enabled": true,
       "autoCreateOnRecall": false,
-      "maxAgeDays": 30
+      "autoResolveContradictions": false,
+      "provisionalByDefault": true,
+      "maxAgeDays": 30,
+      "confidenceThreshold": 0.7,
+      "maxPerSession": 3
+    },
+    "doctor": {
+      "enabled": false,
+      "maxAgeDays": 90
     }
   }
 }
