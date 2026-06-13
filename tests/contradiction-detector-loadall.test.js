@@ -34,4 +34,30 @@ describe("ContradictionDetector.loadAll", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("returns an empty array when workspaceDir is omitted", async () => {
+    const detector = new ContradictionDetector({});
+    const all = await detector.loadAll();
+    assert.deepStrictEqual(all, []);
+  });
+
+  it("skips malformed JSON lines and non-contradiction records", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-contra-skip-"));
+    try {
+      writeFileSync(
+        join(dir, "contradictions.jsonl"),
+        JSON.stringify({ recordType: "contradiction", targetMemoryId: "m1", overlayA: "a", overlayB: "b" }) + "\n" +
+        "not-json\n" +
+        JSON.stringify({ recordType: "other", targetMemoryId: "m2", overlayA: "c", overlayB: "d" }) + "\n" +
+        JSON.stringify({ recordType: "contradiction", targetMemoryId: "m3", overlayA: "e", overlayB: "f" }) + "\n",
+      );
+      const detector = new ContradictionDetector({ workspaceDir: dir });
+      const all = await detector.loadAll();
+      assert.strictEqual(all.length, 2);
+      assert.ok(all.some((r) => r.targetMemoryId === "m1"));
+      assert.ok(all.some((r) => r.targetMemoryId === "m3"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
