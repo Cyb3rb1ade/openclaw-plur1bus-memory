@@ -2427,21 +2427,23 @@ const plugin = {
             if (action === "memory") {
               // Overlay audit subcommands do not require a neo record lookup.
               const subKey = sub.toLowerCase();
-              if (["overlays", "overlay", "disable-overlay", "contradictions"].includes(subKey)) {
-                if (subKey === "disable-overlay") {
+              if (["overlays", "overlay", "disable-overlay", "contradictions", "supersede-overlay"].includes(subKey)) {
+                if (subKey === "disable-overlay" || subKey === "supersede-overlay") {
                   const denied = checkAuth(commandCtx, { destructive: true });
                   if (denied) return denied;
                 }
+                const extraArgs = subKey === "supersede-overlay" ? tokens.slice(3) : [];
                 const result = await runOverlayAuditCommand({
                   subCommand: subKey,
                   id,
+                  extraArgs,
                   workspaceDir: commandCtx?.workspaceDir,
                   callLlm,
                   mergingLlmCfg,
                 });
-                if (subKey === "disable-overlay" && result.ok) {
+                if ((subKey === "disable-overlay" || subKey === "supersede-overlay") && result.ok) {
                   appendDestructiveOpLog(commandCtx?.workspaceDir, {
-                    event: "overlay.disabled",
+                    event: subKey === "disable-overlay" ? "overlay.disabled" : "overlay.superseded",
                     source: "plur1bus_memory",
                     agentId: commandCtx.agentId || "command",
                     overlayId: id,
