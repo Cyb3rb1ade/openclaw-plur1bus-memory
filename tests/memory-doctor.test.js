@@ -139,6 +139,25 @@ describe("MemoryDoctor", () => {
     }
   });
 
+  it("classifies a superseded provisional overlay as superseded", async () => {
+    const dir = tmpDir();
+    try {
+      const store = new InterpretationOverlayStore(dir);
+      await store.append({ targetMemoryId: "m1", shiftType: "meaning", shiftDescription: "Provisional.", triggerContext: "a", status: "provisional", confidence: 0.5 });
+      const overlays = await store.loadAllOverlays(["m1"], { includeProvisional: true });
+      const provId = overlays[0].id;
+      await store.supersedeOverlay(provId, "Replacement.");
+
+      const doctor = new MemoryDoctor({ workspaceDir: dir });
+      const report = await doctor.diagnoseMemory("m1");
+      assert.strictEqual(report.provisional.length, 0);
+      assert.strictEqual(report.superseded.length, 1);
+      assert.strictEqual(report.active.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("emits a note suggestion when a superseded overlay has no active successor", async () => {
     const dir = tmpDir();
     try {
