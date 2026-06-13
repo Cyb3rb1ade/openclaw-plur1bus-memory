@@ -132,11 +132,25 @@ describe("overlay audit commands", () => {
     }
   });
 
-  it("contradictions returns invalid id error for malformed ids", async () => {
+  it("contradictions accepts a non-uuid memory id", async () => {
     const dir = tmpDir();
     try {
-      const result = await runOverlayAuditCommand({ subCommand: "contradictions", id: "not-a-uuid", workspaceDir: dir });
-      assert.strictEqual(result.text, "Invalid overlay id: not-a-uuid");
+      const store = new InterpretationOverlayStore(dir);
+      await store.append({ targetMemoryId: "custom-mem-123", shiftType: "meaning", shiftDescription: "Postgres", triggerContext: "a" });
+      await store.append({ targetMemoryId: "custom-mem-123", shiftType: "meaning", shiftDescription: "MySQL", triggerContext: "b" });
+
+      const result = await runOverlayAuditCommand({
+        subCommand: "contradictions",
+        id: "custom-mem-123",
+        workspaceDir: dir,
+        callLlm: async () => "yes",
+        mergingLlmCfg: {},
+      });
+      assert.ok(!result.text.startsWith("Invalid"));
+      const parsed = JSON.parse(result.text);
+      assert.strictEqual(typeof parsed.scanned, "number");
+      assert.strictEqual(parsed.scanned, 2);
+      assert.ok(Array.isArray(parsed.contradictions));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
