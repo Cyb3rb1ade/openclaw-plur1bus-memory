@@ -3,7 +3,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +14,8 @@ import {
   saveLinkIndex,
 } from "../lib/obsidian/link-index.js";
 import {
+  applySemanticLinkIndex,
+  loadLanceDbVectorSidecar,
   joinMemoryMirrorVectorSidecar,
   planSemanticLinkIndexDryRun,
   readMemoryMirrorRecords,
@@ -371,13 +373,35 @@ describe("semantic-link dry-run from memory mirrors", () => {
     assert.strictEqual(result.skippedScopeMismatch, 1);
   });
 
-  it("plans semantic links deterministically without writing link-index.json", () => {
+  it("loads LanceDB vector sidecar with typed/toArray vectors and scope filtering", async () => {
+    const result = await loadLanceDbVectorSidecar({}, {
+      agentId: "main",
+      workspaceId: "main",
+      loadLanceDbRows: async () => [
+        { id: "mem-main", type: "memory", vector: { toArray: () => Float32Array.from([0.1, 0.2, 0.3]) }, agentId: "main", workspaceId: "main" },
+        { id: "mem-generated", type: "provenance", vector: [0.1, 0.2, 0.3], agentId: "main", workspaceId: "main" },
+        { id: "mem-other", type: "memory", vector: Float32Array.from([0.1, 0.2, 0.3]), agentId: "other", workspaceId: "other" },
+      ],
+    });
+
+    assert.strictEqual(result.records.length, 1);
+    const vector = result.records[0].vector;
+    assert.ok(Math.abs(vector[0] - 0.1) < 1e-6);
+    assert.ok(Math.abs(vector[1] - 0.2) < 1e-6);
+    assert.ok(Math.abs(vector[2] - 0.3) < 1e-6);
+    assert.strictEqual(result.records[0].memory_id, "mem-main");
+    assert.strictEqual(result.skipped.generated, 1);
+    assert.strictEqual(result.skipped.scopeMismatch, 1);
+    assert.strictEqual(result.skipped.withoutVector, 0);
+  });
+
+  it("plans semantic links deterministically without writing link-index.json", async () => {
     const vault = makeMirrorVault();
     writeMirror(vault, "mem-a", {}, "Alpha topic body.");
     writeMirror(vault, "mem-b", {}, "Beta topic body.");
     writeMirror(vault, "mem-c", {}, "Gamma topic body.");
 
-    const result = planSemanticLinkIndexDryRun({
+    const result = await planSemanticLinkIndexDryRun({
       vaultPath: vault,
       reviewRoot: "plur1bus",
       agentId: "main",
@@ -397,12 +421,12 @@ describe("semantic-link dry-run from memory mirrors", () => {
     assert.strictEqual(existsSync(join(vault, ".plur1bus", "link-index.json")), false);
   });
 
-  it("does not index records without vectors", () => {
+  it("does not index records without vectors", async () => {
     const vault = makeMirrorVault();
     writeMirror(vault, "mem-a");
     writeMirror(vault, "mem-b");
 
-    const result = planSemanticLinkIndexDryRun({
+    const result = await planSemanticLinkIndexDryRun({
       vaultPath: vault,
       reviewRoot: "plur1bus",
       agentId: "main",
@@ -417,5 +441,226 @@ describe("semantic-link dry-run from memory mirrors", () => {
     assert.strictEqual(result.indexableRecords, 1);
     assert.strictEqual(result.skippedWithoutVector, 1);
     assert.deepStrictEqual(Object.keys(result.entries), ["mem-a"]);
+  });
+
+  it("blocks semantic link-index apply without explicit confirm", async () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-a", {}, "One body.");
+
+    const result = await applySemanticLinkIndex(
+      {
+        vaultPath: vault,
+        reviewRoot: "plur1bus",
+        agentId: "main",
+        workspaceKey: "main",
+      },
+      {
+        sidecarRecords: [
+          { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+        ],
+      },
+    );
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.blocked, true);
+    assert.strictEqual(result.updated, 0);
+    assert.strictEqual(existsSync(join(vault, ".plur1bus", "link-index.json")), false);
+  });
+
+  it("applies index only when confirm is true and keeps mirror files unchanged", async () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-a", {}, "Alpha body.");
+    writeMirror(vault, "mem-b", {}, "Beta body.");
+    const before = readFileSync(join(vault, "plur1bus", "memories", "mem-a.md"), "utf8");
+
+    const result = await applySemanticLinkIndex(
+      {
+        vaultPath: vault,
+        reviewRoot: "plur1bus",
+        agentId: "main",
+        workspaceKey: "main",
+      },
+      {
+        confirm: true,
+        sidecarRecords: [
+          { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+          { id: "mem-b", vector: [0.99, 0.01], agent_id: "main", workspace_id: "main" },
+        ],
+      },
+    );
+
+    const path = join(vault, ".plur1bus", "link-index.json");
+    const afterMemA = readFileSync(join(vault, "plur1bus", "memories", "mem-a.md"), "utf8");
+    const index = JSON.parse(readFileSync(path, "utf8"));
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.updated, 1);
+    assert.ok(existsSync(path));
+    assert.deepStrictEqual(Object.keys(index.entries).sort(), ["mem-a", "mem-b"]);
+    assert.strictEqual(before, afterMemA);
+    assert.ok(result.manifestPath);
+    assert.ok(existsSync(result.manifestPath));
+  });
+
+  it("is idempotent on second confirmed apply", async () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-a", {}, "Same body.");
+    writeMirror(vault, "mem-b", {}, "Same body one.");
+    const baseCfg = {
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      agentId: "main",
+      workspaceKey: "main",
+    };
+    const options = {
+      confirm: true,
+      sidecarRecords: [
+        { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+        { id: "mem-b", vector: [0.99, 0.01], agent_id: "main", workspace_id: "main" },
+      ],
+    };
+    const first = await applySemanticLinkIndex(baseCfg, options);
+    const second = await applySemanticLinkIndex(baseCfg, options);
+
+    assert.strictEqual(first.updated, 1);
+    assert.strictEqual(second.updated, 0);
+    assert.strictEqual(second.unchanged, 1);
+    assert.deepStrictEqual(loadLinkIndex(vault).entries["mem-a"].similar.length > 0, true);
+  });
+
+  it("writes only workspace-scoped records into the index", async () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-main", { agent_id: "main", workspace_id: "main" }, "Main body.");
+    writeMirror(vault, "mem-other", { agent_id: "other", workspace_id: "other" }, "Other body.");
+    const result = await applySemanticLinkIndex(
+      {
+        vaultPath: vault,
+        reviewRoot: "plur1bus",
+        agentId: "main",
+        workspaceKey: "main",
+      },
+      {
+        confirm: true,
+        sidecarRecords: [
+          { id: "mem-main", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+          { id: "mem-other", vector: [0.9, 0.1], agent_id: "other", workspace_id: "other" },
+        ],
+      },
+    );
+
+    const index = loadLinkIndex(vault);
+    const keys = Object.keys(index.entries).sort();
+    assert.strictEqual(result.updated, 1);
+    assert.deepStrictEqual(keys, ["mem-main"]);
+  });
+
+  it("excludes generated records from confirmed apply index writes", async () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-good", {}, "Good body.");
+    writeMirror(vault, "mem-provenance", { plur1bus_type: "provenance" }, "Bad body.");
+    const result = await applySemanticLinkIndex(
+      {
+        vaultPath: vault,
+        reviewRoot: "plur1bus",
+        agentId: "main",
+        workspaceKey: "main",
+      },
+      {
+        confirm: true,
+        sidecarRecords: [
+          { id: "mem-good", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+          { id: "mem-provenance", vector: [0.8, 0.2], agent_id: "main", workspace_id: "main" },
+        ],
+      },
+    );
+
+    const index = loadLinkIndex(vault);
+    assert.strictEqual(result.updated, 1);
+    assert.ok(index.entries["mem-good"]);
+    assert.strictEqual(index.entries["mem-provenance"], undefined);
+  });
+
+  it("does not write index when no vectors are joinable", async () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-no-vector");
+    const result = await applySemanticLinkIndex(
+      {
+        vaultPath: vault,
+        reviewRoot: "plur1bus",
+        agentId: "main",
+        workspaceKey: "main",
+      },
+      {
+        confirm: true,
+        sidecarRecords: [],
+      },
+    );
+
+    assert.strictEqual(result.updated, 0);
+    assert.strictEqual(result.unchanged, 1);
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reason, "no_vector_matches");
+    assert.strictEqual(existsSync(join(vault, ".plur1bus", "link-index.json")), false);
+  });
+
+  it("does not write when dedicated LanceDB loader has no vectors", async () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-no-loader");
+    const result = await applySemanticLinkIndex(
+      {
+        vaultPath: vault,
+        reviewRoot: "plur1bus",
+        agentId: "main",
+        workspaceKey: "main",
+      },
+      {
+        confirm: true,
+        loadLanceDbRows: async () => [
+          {
+            id: "mem-no-loader",
+            type: "memory",
+            vector: null,
+            agentId: "main",
+            workspaceId: "main",
+          },
+        ],
+      },
+    );
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.reason, "no_vector_matches");
+    assert.strictEqual(result.updated, 0);
+  });
+
+  it("writes manifest before writing link-index", async () => {
+    const vault = makeMirrorVault();
+    const manifestDir = join(vault, ".plur1bus", "apply-manifests");
+    writeMirror(vault, "mem-a", {}, "Alpha.");
+    writeMirror(vault, "mem-b", {}, "Beta.");
+
+    const result = await applySemanticLinkIndex(
+      {
+        vaultPath: vault,
+        reviewRoot: "plur1bus",
+        agentId: "main",
+        workspaceKey: "main",
+      },
+      {
+        confirm: true,
+        manifestDir,
+        sidecarRecords: [
+          { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+          { id: "mem-b", vector: [0.4, 0.6], agent_id: "main", workspace_id: "main" },
+        ],
+      },
+    );
+
+    assert.ok(result.ok);
+    assert.ok(result.manifestPath);
+    assert.ok(result.manifestPath.startsWith(manifestDir));
+    assert.ok(existsSync(result.manifestPath));
+    const manifest = JSON.parse(readFileSync(result.manifestPath, "utf8"));
+    assert.strictEqual(manifest.kind, "semantic-link-index");
+    assert.strictEqual(manifest.entriesTotal, 2);
   });
 });
