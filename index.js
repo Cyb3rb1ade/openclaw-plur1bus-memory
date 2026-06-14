@@ -97,6 +97,7 @@ import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
+import { applySemanticLensToRecall } from "./lib/semantic-lens-index.js";
 import {
   buildNeoDoctorReport,
   buildNeoWorkspaceAliases,
@@ -1515,6 +1516,7 @@ const plugin = {
     const maxPromptMemories = recallCfg.maxPromptMemories ?? 12;
     const candidateTopK     = recallCfg.candidateTopK     ?? 40;
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
+    const semanticLensCfg   = cfg.semanticLens || recallCfg.semanticLens || {};
 
     const riCfg = cfg.retroactiveInterference ?? {};
 
@@ -4042,6 +4044,23 @@ const plugin = {
             });
           }
 
+          const semanticLensResult = await applySemanticLensToRecall(ordered, {
+            semanticLens: semanticLensCfg,
+            workspaceDir: ctx?.workspaceDir,
+            getMemoryById: async (memoryId) => db.getById(memoryId),
+          });
+          const semanticLensItems = semanticLensResult.lensMemories.map((r) => ({
+            id: r.entry.id,
+            category: r.entry.category,
+            source: "semantic-lens",
+            display: r.entry.summary || libGenerateSummary(r.entry.text || "", summaryMaxWords),
+            memoryStrength: r.entry.memoryStrength ?? 1.0,
+            relevanceScore: r.score,
+          }));
+          if (semanticLensItems.length > 0) {
+            api.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);
+          }
+
           // Inner Continuity Engine: taste gate + pattern surfacing
           let associativeItems = items;
           let matchedPattern = null;
@@ -4146,6 +4165,7 @@ const plugin = {
             fadedThreshold: resolveFadedThreshold(recallCfg),
             overlays,
             matchedPattern,
+            semanticLensMemories: semanticLensItems,
           });
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;

@@ -105,6 +105,21 @@ describe("Schema-Default-Typen (Runtime / Cache)", () => {
     assertNumberDefault("runtime.metricsDebounceMs", 5000));
 });
 
+describe("Schema-Default-Typen (Semantic Lens)", () => {
+  it("semanticLens.enabled ist default false", () =>
+    assertBooleanDefault("semanticLens.enabled", false));
+  it("semanticLens.maxLensMemories ist 3", () =>
+    assertNumberDefault("semanticLens.maxLensMemories", 3));
+  it("semanticLens.maxBridgeMemories ist 2", () =>
+    assertNumberDefault("semanticLens.maxBridgeMemories", 2));
+  it("semanticLens.maxFadedMemories ist 1", () =>
+    assertNumberDefault("semanticLens.maxFadedMemories", 1));
+  it("semanticLens.maxCommunities ist 2", () =>
+    assertNumberDefault("semanticLens.maxCommunities", 2));
+  it("semanticLens.timeoutMs ist 50", () =>
+    assertNumberDefault("semanticLens.timeoutMs", 50));
+});
+
 describe("Schema-Default-Typen (Sonstige)", () => {
   it("recallMinScore ist eine Zahl", () =>
     assertNumberDefault("recallMinScore", 0.15));

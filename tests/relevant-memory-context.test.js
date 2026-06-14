@@ -72,6 +72,21 @@ describe("formatRelevantMemoriesContext", () => {
     assert.ok(out.includes("RECALL SAFETY:"), "missing RECALL SAFETY preamble");
   });
 
+  it("renders semantic lens memories in a separate quiet context block", () => {
+    const out = formatRelevantMemoriesContext(
+      [{ id: "1", category: "work", source: "dm", display: "primary memory", memoryStrength: 1.0 }],
+      {
+        semanticLensMemories: [
+          { id: "lens1", category: "fact", source: "semantic-lens", display: "nearby bridge memory", memoryStrength: 1.0 },
+        ],
+      },
+    );
+    assert.ok(out.includes("<memory-semantic-lens>"), "missing semantic lens block");
+    assert.ok(out.includes("Ergänzende assoziative Erinnerungen"), "missing quiet lens description");
+    assert.ok(out.includes('source="semantic-lens"'), "lens source should be marked");
+    assert.ok(out.indexOf("</relevant-memories>") < out.indexOf("<memory-semantic-lens>"), "lens block should not be inside primary recall block");
+  });
+
   it("does NOT add faded attribute when strength is above threshold", () => {
     const out = formatRelevantMemoriesContext(
       [{ id: "1", category: "work", source: "dm", display: "hello", memoryStrength: 0.3 }],
