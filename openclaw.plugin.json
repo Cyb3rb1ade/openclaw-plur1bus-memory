@@ -621,6 +621,21 @@
           }
         }
       },
+      "conversationReactivationRecall": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "idleThresholdMinutes": { "type": "number", "default": 45 },
+          "cooldownMinutes": { "type": "number", "default": 30 },
+          "maxReactivationMemories": { "type": "number", "default": 3 },
+          "maxFadedReactivationMemories": { "type": "number", "default": 1 },
+          "maxOpenThreads": { "type": "number", "default": 3 },
+          "maxCommunities": { "type": "number", "default": 2 },
+          "timeoutMs": { "type": "number", "default": 50 },
+          "visibleHints": { "type": "boolean", "default": false }
+        }
+      },
       "obsidianBridge": {
         "type": "object",
         "additionalProperties": false,
