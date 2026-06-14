@@ -120,6 +120,27 @@ describe("Schema-Default-Typen (Semantic Lens)", () => {
     assertNumberDefault("semanticLens.timeoutMs", 50));
 });
 
+describe("Schema-Default-Typen (Conversation Reactivation Recall)", () => {
+  it("conversationReactivationRecall.enabled ist false", () =>
+    assertBooleanDefault("conversationReactivationRecall.enabled", false));
+  it("conversationReactivationRecall.idleThresholdMinutes ist eine Zahl", () =>
+    assertNumberDefault("conversationReactivationRecall.idleThresholdMinutes", 45));
+  it("conversationReactivationRecall.cooldownMinutes ist eine Zahl", () =>
+    assertNumberDefault("conversationReactivationRecall.cooldownMinutes", 30));
+  it("conversationReactivationRecall.maxReactivationMemories ist eine Zahl", () =>
+    assertNumberDefault("conversationReactivationRecall.maxReactivationMemories", 3));
+  it("conversationReactivationRecall.maxFadedReactivationMemories ist eine Zahl", () =>
+    assertNumberDefault("conversationReactivationRecall.maxFadedReactivationMemories", 1));
+  it("conversationReactivationRecall.maxOpenThreads ist eine Zahl", () =>
+    assertNumberDefault("conversationReactivationRecall.maxOpenThreads", 3));
+  it("conversationReactivationRecall.maxCommunities ist eine Zahl", () =>
+    assertNumberDefault("conversationReactivationRecall.maxCommunities", 2));
+  it("conversationReactivationRecall.timeoutMs ist eine Zahl", () =>
+    assertNumberDefault("conversationReactivationRecall.timeoutMs", 50));
+  it("conversationReactivationRecall.visibleHints ist false", () =>
+    assertBooleanDefault("conversationReactivationRecall.visibleHints", false));
+});
+
 describe("Schema-Default-Typen (Sonstige)", () => {
   it("recallMinScore ist eine Zahl", () =>
     assertNumberDefault("recallMinScore", 0.15));

@@ -121,6 +121,7 @@ import {
   formatRelevantMemoriesContext,
   resolveFadedThreshold,
 } from "./lib/relevant-memory-context.js";
+import { runConversationReactivationRecall } from "./lib/conversation-reactivation-recall.js";
 import { filterAssociativeCandidates, filterPatternCandidates } from "./lib/continuity-gate.js";
 import { findBestPattern } from "./lib/pattern-surface.js";
 import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
@@ -4160,6 +4161,44 @@ const plugin = {
             }
           }
 
+          let reactivationContext = "";
+          let reactivationAdditions = [];
+          const crrCfg = cfg.conversationReactivationRecall || {};
+          if (crrCfg.enabled === true) {
+            try {
+              const baseRecallIds = new Set(associativeItems.map(i => i.id));
+              const baseRecallTopScore = associativeItems[0]?.relevanceScore
+                ?? ordered[0]?.score
+                ?? 0;
+              const neoStore = getNeoStore(ctx, event);
+              const crrResult = await Promise.race([
+                runConversationReactivationRecall({
+                  prompt: event.prompt,
+                  messageText: event.prompt,
+                  baseRecallIds,
+                  baseRecallTopScore,
+                  workspaceDir: ctx?.workspaceDir,
+                  neoStore,
+                  graphEdges,
+                  cfg: crrCfg,
+                  agentId,
+                  sessionKey: ctx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "",
+                  now: Date.now(),
+                  logger: api.logger,
+                  compactedAt: event?.compactedAt || ctx?.compactedAt || null,
+                  getMemoryById: async (memoryId) => db.getById(memoryId),
+                }),
+                new Promise((_, reject) =>
+                  setTimeout(() => reject(new Error("crr_timeout")), crrCfg.timeoutMs ?? 50)
+                ),
+              ]);
+              reactivationContext = crrResult?.context || "";
+              reactivationAdditions = crrResult?.additions || [];
+            } catch (crrErr) {
+              api.logger.warn?.(`conversation-reactivation-recall: ${crrErr.message}`);
+            }
+          }
+
           const recallCfg = cfg.recall || {};
           const memoriesContext = formatRelevantMemoriesContext(associativeItems, {
             fadedThreshold: resolveFadedThreshold(recallCfg),
@@ -4167,6 +4206,9 @@ const plugin = {
             matchedPattern,
             semanticLensMemories: semanticLensItems,
           });
+          const fullMemoriesContext = reactivationContext
+            ? memoriesContext + "\n\n" + reactivationContext
+            : memoriesContext;
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
@@ -4231,7 +4273,7 @@ const plugin = {
           } catch (reminderErr) {
             api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
-          return { prependContext: [neoContext, memoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, reminderNudge].filter(Boolean).join("\n\n") };
+          return { prependContext: [neoContext, fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, reminderNudge].filter(Boolean).join("\n\n") };
         } catch (err) {
           api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
           if (neoContext) return { prependContext: neoContext };
