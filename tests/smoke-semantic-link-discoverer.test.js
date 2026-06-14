@@ -4,6 +4,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync, mkdirSync, existsSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +13,11 @@ import {
   loadLinkIndex,
   saveLinkIndex,
 } from "../lib/obsidian/link-index.js";
+import {
+  joinMemoryMirrorVectorSidecar,
+  planSemanticLinkIndexDryRun,
+  readMemoryMirrorRecords,
+} from "../lib/obsidian/semantic-link-discoverer.js";
 
 describe("link-index: computeContentHash", () => {
   it("returns deterministic sha256 string", () => {
@@ -270,5 +276,146 @@ describe("discoverSemanticLinks", () => {
     };
     const result = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
     assert.strictEqual(result.batchAborted, true);
+  });
+});
+
+describe("semantic-link dry-run from memory mirrors", () => {
+  function makeMirrorVault() {
+    const vault = mkdtempSync(join(tmpdir(), "plur1bus-mirror-dry-"));
+    mkdirSync(join(vault, "plur1bus", "memories"), { recursive: true });
+    return vault;
+  }
+
+  function writeMirror(vault, id, frontmatter = {}, body = "Body text with enough content for indexing.") {
+    const fm = {
+      memory_id: id,
+      plur1bus_type: "memory",
+      agent_id: "main",
+      workspace_id: "main",
+      content_hash: `sha256:${id.padEnd(64, "0").slice(0, 64)}`,
+      ...frontmatter,
+    };
+    const lines = ["---"];
+    for (const [key, value] of Object.entries(fm)) lines.push(`${key}: ${value}`);
+    lines.push("---", "", `# Title ${id}`, "", body);
+    writeFileSync(join(vault, "plur1bus", "memories", `${id}.md`), lines.join("\n"), "utf8");
+  }
+
+  it("reads memory mirror records with body text and workspace scope", () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-a");
+
+    const result = readMemoryMirrorRecords({
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      agentId: "main",
+      workspaceKey: "main",
+    });
+
+    assert.strictEqual(result.records.length, 1);
+    assert.strictEqual(result.skipped.scopeMismatch, 0);
+    assert.strictEqual(result.records[0].id, "mem-a");
+    assert.strictEqual(result.records[0].memory_id, "mem-a");
+    assert.strictEqual(result.records[0].agent_id, "main");
+    assert.strictEqual(result.records[0].workspace_id, "main");
+    assert.match(result.records[0].text, /Body text/);
+    assert.strictEqual(result.records[0].title, "Title mem-a");
+  });
+
+  it("excludes generated records from memory mirror input", () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-generated", { plur1bus_type: "provenance" });
+
+    const result = readMemoryMirrorRecords({
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      agentId: "main",
+      workspaceKey: "main",
+    });
+
+    assert.strictEqual(result.records.length, 0);
+    assert.strictEqual(result.skipped.generated, 1);
+  });
+
+  it("skips memory mirrors with mismatched workspace scope", () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-wrong-scope", { workspace_id: "other" });
+
+    const result = readMemoryMirrorRecords({
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      agentId: "main",
+      workspaceKey: "main",
+    });
+
+    assert.strictEqual(result.records.length, 0);
+    assert.strictEqual(result.skipped.scopeMismatch, 1);
+  });
+
+  it("joins LanceDB vectors only for matching workspace and agent scope", () => {
+    const mirrors = [
+      { id: "mem-a", memory_id: "mem-a", agent_id: "main", workspace_id: "main", text: "a" },
+      { id: "mem-b", memory_id: "mem-b", agent_id: "main", workspace_id: "main", text: "b" },
+    ];
+    const sidecar = [
+      { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+      { id: "mem-b", vector: [0, 1], agent_id: "other", workspace_id: "other" },
+    ];
+
+    const result = joinMemoryMirrorVectorSidecar(mirrors, sidecar, { agentId: "main", workspaceId: "main" });
+
+    assert.strictEqual(result.records.length, 1);
+    assert.strictEqual(result.records[0].id, "mem-a");
+    assert.deepStrictEqual(result.records[0].vector, [1, 0]);
+    assert.strictEqual(result.skippedWithoutVector, 1);
+    assert.strictEqual(result.skippedScopeMismatch, 1);
+  });
+
+  it("plans semantic links deterministically without writing link-index.json", () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-a", {}, "Alpha topic body.");
+    writeMirror(vault, "mem-b", {}, "Beta topic body.");
+    writeMirror(vault, "mem-c", {}, "Gamma topic body.");
+
+    const result = planSemanticLinkIndexDryRun({
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      agentId: "main",
+      workspaceKey: "main",
+    }, {
+      sidecarRecords: [
+        { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+        { id: "mem-c", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+        { id: "mem-b", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+      ],
+      maxSimilar: 2,
+    });
+
+    assert.strictEqual(result.indexableRecords, 3);
+    assert.deepStrictEqual(result.entries["mem-a"].similar, ["mem-b", "mem-c"]);
+    assert.ok(result.entries["mem-a"].links.every((link) => typeof link.score === "number"));
+    assert.strictEqual(existsSync(join(vault, ".plur1bus", "link-index.json")), false);
+  });
+
+  it("does not index records without vectors", () => {
+    const vault = makeMirrorVault();
+    writeMirror(vault, "mem-a");
+    writeMirror(vault, "mem-b");
+
+    const result = planSemanticLinkIndexDryRun({
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      agentId: "main",
+      workspaceKey: "main",
+    }, {
+      sidecarRecords: [
+        { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
+      ],
+      maxSimilar: 5,
+    });
+
+    assert.strictEqual(result.indexableRecords, 1);
+    assert.strictEqual(result.skippedWithoutVector, 1);
+    assert.deepStrictEqual(Object.keys(result.entries), ["mem-a"]);
   });
 });
