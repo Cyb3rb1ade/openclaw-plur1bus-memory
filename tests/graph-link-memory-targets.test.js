@@ -181,6 +181,41 @@ describe("graph link memory target resolution", () => {
     assert.strictEqual(result.unchanged, 1);
     assert.doesNotMatch(content, /plur1bus:managed:start/);
   });
+
+  it("does not create empty graph blocks when semantic tier has no index links", async () => {
+    const vault = makeVault("graph-semantic-no-empty-");
+    const noteDir = join(vault, "plur1bus", "memories");
+    mkdirSync(noteDir, { recursive: true });
+    const notePath = join(noteDir, "mem-a.md");
+    writeFileSync(notePath, [
+      "---",
+      "memory_id: mem-a",
+      "plur1bus_type: memory",
+      "agent_id: main",
+      "workspace_id: main",
+      "---",
+      "",
+      "# Memory A",
+      "",
+      "Body",
+    ].join("\n"), "utf8");
+
+    const result = await writeGraphLinks({
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      graphLinks: { tiers: ["semantic"], includeSemantic: true, maxPerNote: 5 },
+    }, [{
+      memory_id: "mem-a",
+      plur1bus_type: "memory",
+      path: "memories/mem-a.md",
+      title: "Memory A",
+    }], { linkIndex: { version: "1", entries: {} } });
+
+    const content = readFileSync(notePath, "utf8");
+    assert.strictEqual(result.updated, 0);
+    assert.strictEqual(result.unchanged, 1);
+    assert.doesNotMatch(content, /plur1bus:managed:start/);
+  });
 });
 
 describe("memory note workspace metadata", () => {
