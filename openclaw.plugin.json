@@ -520,6 +520,40 @@
           }
         }
       },
+      "semanticLens": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "maxLensMemories": {
+            "type": "number",
+            "default": 3
+          },
+          "maxBridgeMemories": {
+            "type": "number",
+            "default": 2
+          },
+          "maxFadedMemories": {
+            "type": "number",
+            "default": 1
+          },
+          "maxCommunities": {
+            "type": "number",
+            "default": 2
+          },
+          "timeoutMs": {
+            "type": "number",
+            "default": 50
+          },
+          "cacheTtlMs": {
+            "type": "number",
+            "default": 30000
+          }
+        }
+      },
       "continuityEngine": {
         "type": "object",
         "additionalProperties": false,
