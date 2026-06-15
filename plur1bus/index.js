@@ -1763,11 +1763,25 @@ const plugin = {
             }
             const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
             if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
-              await storeDb.delete(mergeCandidate.entry.id);
-              appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
+              // DATA-003: prepare the merged entry and archive the original BEFORE
+              // deleting it. If embedding or archiving fails, the original remains intact.
               const mergedVector = await embeddings.embed(mergeResult.mergedText);
               const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
-              await storeDb.store(mergedEntry);
+              let archivePath;
+              try {
+                archivePath = archiveCard(mergeCandidate.entry, storeAgentId);
+              } catch (archiveErr) {
+                api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
+                throw archiveErr;
+              }
+              await storeDb.delete(mergeCandidate.entry.id);
+              appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
+              try {
+                await storeDb.store(mergedEntry);
+              } catch (storeErr) {
+                api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
+                throw storeErr;
+              }
               if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
               if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
                 trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
@@ -3433,8 +3447,8 @@ const plugin = {
                   }
                   const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
                   if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
-                    await db.delete(mergeCandidate.entry.id);
-                    appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", timestamp: new Date().toISOString() });
+                    // DATA-003: prepare the merged entry and archive the original BEFORE
+                    // deleting it. If embedding/archiving fails, the original remains intact.
                     const mergedVector = await embeddings.embed(mergeResult.mergedText);
                     const mergedEmotion = inferEmotionalValence(mergeResult.mergedText, category);
                     const mergedMoodContext = emotionalPool.snapshot(agentId);
@@ -3447,7 +3461,21 @@ const plugin = {
                       emotionalDominant: mergedEmotion.emotionalDominant,
                       moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
                     }, Date.now(), halfLifeOverrides);
-                    await db.store(mergedEntry);
+                    let archivePath;
+                    try {
+                      archivePath = archiveCard(mergeCandidate.entry, agentId);
+                    } catch (archiveErr) {
+                      api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
+                      throw archiveErr;
+                    }
+                    await db.delete(mergeCandidate.entry.id);
+                    appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
+                    try {
+                      await db.store(mergedEntry);
+                    } catch (storeErr) {
+                      api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
+                      throw storeErr;
+                    }
                     if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
                     if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
                       trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
