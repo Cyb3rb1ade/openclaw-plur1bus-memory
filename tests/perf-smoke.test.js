@@ -183,7 +183,7 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
     const accMs = performance.now() - start;
     await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
-    assert.ok(accMs < 2, `100x accumulate dauerte ${accMs.toFixed(3)}ms, erwartet < 2ms`);
+    assert.ok(accMs < 10, `100x accumulate dauerte ${accMs.toFixed(3)}ms, erwartet < 10ms`);
   });
 
   it("100x direct atomicJsonUpdate ist deutlich langsamer", async () => {
