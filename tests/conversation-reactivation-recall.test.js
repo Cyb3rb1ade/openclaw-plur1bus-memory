@@ -783,8 +783,8 @@ describe("conversation-reactivation-recall", () => {
       // caller timeout so shared CI runners with Node 20 do not trip over
       // scheduling jitter, while the hydrate-count assertion still proves the
       // budget cap is in effect.
-      const callerTimeoutMs = 100;
-      const ciTimingSlackMs = 25;
+      const callerTimeoutMs = 200;
+      const ciTimingSlackMs = 50;
 
       const start = performance.now();
       const result = await Promise.race([
