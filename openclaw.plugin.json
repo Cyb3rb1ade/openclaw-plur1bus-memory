@@ -1139,6 +1139,65 @@
               }
             }
           },
+          "graphLinks": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "maxPerNote": {
+                "type": "number",
+                "default": 5
+              },
+              "includeSemantic": {
+                "type": "boolean",
+                "default": false
+              },
+              "semanticThreshold": {
+                "type": "number",
+                "default": 0.78
+              },
+              "blockId": {
+                "type": "string",
+                "default": "graph-links"
+              },
+              "tiers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": [
+                  "explicit",
+                  "type",
+                  "semantic"
+                ]
+              },
+              "semanticDiscovery": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "maxPerRun": {
+                    "type": "number",
+                    "default": 500
+                  },
+                  "threshold": {
+                    "type": "number",
+                    "default": 0.78
+                  },
+                  "maxLinksPerRecord": {
+                    "type": "number",
+                    "default": 5
+                  },
+                  "topK": {
+                    "type": "number",
+                    "default": 20
+                  }
+                }
+              }
+            }
+          },
           "weekly": {
             "type": "object",
             "additionalProperties": false,
@@ -1306,6 +1365,52 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "emotion": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tier": {
+            "type": "string",
+            "enum": [
+              "t1",
+              "t2",
+              "t3",
+              "auto"
+            ],
+            "default": "auto"
+          },
+          "t2": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "t3": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "model": {
+                "type": "string",
+                "default": "gpt-4o-mini"
+              },
+              "apiKey": {
+                "type": "string"
+              },
+              "baseUrl": {
+                "type": "string"
+              }
+            }
           }
         }
       }
