@@ -1609,6 +1609,10 @@ const plugin = {
       api.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
     }
 
+    // Base DB path — früh auflösen, damit Meta-Cognition-State-Read (und
+    // spätere Initialisierung) denselben Pfad verwenden.
+    const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
+
     // Meta-Cognition Config
     const metaCognitionCfg = cfg.metaCognition || {};
     const metaCognitionEnabled = metaCognitionCfg.enabled !== false;
@@ -1654,7 +1658,6 @@ const plugin = {
         }
       }
     }
-    const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const neoCfg = cfg.neo || {};
     const neoEnabled = neoCfg.enabled !== false; // 3.0 default: additive cognitive layer on
     const neoRoot = api.resolvePath(neoCfg.statePath || join(baseDbPath, "_neo"));
