@@ -2002,6 +2002,7 @@ const plugin = {
                 neoRoot,
                 commandCtx,
                 workspaceDir: commandCtx.workspaceDir,
+                pluginConfig: cfg,
                 commandStore,
                 records: [
                   ...commandStore.readCandidates(500).map((record) => ({ ...record, type: "memory_candidate", id: record.id, summary: record.statement || record.summary || record.text || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
