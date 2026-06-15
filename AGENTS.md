@@ -12,6 +12,46 @@ PLUR1BUS is an OpenClaw v6 plugin that provides per-agent long-term memory using
 - **Telegram/Chat Commands** — user-facing inspection and editing without leaving the chat
 - **Background Jobs** — daily consolidation, critical-push classification, skill mining, REM dreaming
 
+## Recall boosters (additive only)
+
+These features sit **after** normal recall and only append results. They must never replace primary recall or write memory data.
+
+### Semantic Lens
+
+- Loads precomputed `.plur1bus/semantic-lens-index.json` from the workspace.
+- Adds community/bridge/faded memories after normal recall; dedupes against base recall IDs.
+- Default `enabled: false`; caps `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
+- Hard timeout 50 ms; fallback returns base recall unchanged.
+- No writes, no live graph recompute, no second recall path.
+
+### Conversation Reactivation Recall (CRR)
+
+- MVP reactivation hook that appends a `<memory-reactivation>` block.
+- Triggers: idle gap (45 min), continuation signal, first substantive message, post-compaction gap.
+- Default `enabled: false`; `visibleHints: false`.
+- Hard caps: `maxReactivationMemories: 3`, `maxFadedReactivationMemories: 1`, `maxOpenThreads: 3`, `maxCommunities: 2`.
+- Hard timeout 50 ms; silent fallback on error.
+- Module-level in-memory state only; no persistence, no writes to cards/tags/graph/records/quarantine.
+
+### Graph-link managed blocks / semanticDiscovery
+
+- Record notes contain an idempotent managed block (`id="graph-links"`) with wikilinks.
+- Tiers: `explicit`, `type`, `semantic`; default semantic threshold 0.78.
+- `semanticDiscovery` builds `.plur1bus/link-index.json` from memory mirrors + vectors behind a confirmation gate.
+- Conflicts with manual edits are reported, not overwritten.
+
+### Technical frontmatter tags
+
+Memory mirrors use technical filter tags, not semantic content tags:
+
+- `plur1bus/memory`
+- `plur1bus/agent/<id>`
+- `plur1bus/workspace/<id>`
+- `plur1bus/category/<cat>`
+- `plur1bus/scope/<scope>`
+
+Use these for filtering and grouping only.
+
 ## Coding Standards
 
 ### Naming
@@ -79,7 +119,7 @@ node --test tests/*.test.js
 
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
-- Current baseline: 190 tests, all passing.
+- Current baseline: 1,106 tests, all passing.
 
 ## Dependency Audit
 

@@ -65,6 +65,49 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 - **Obsidian bridge apply mode (safe)** — `mode: "apply"` creates per-file backups, manifest (beforeHash/afterHash), and audit-log entry. Vault path confirmation required before first write.
 - **Rate-limited background jobs** — Daily consolidation capped at 1×/day/agent; REM dreaming at 1×/week.
 
+## Recall boosters (additive)
+
+These features run **after** normal recall and only append results; they never replace the primary recall result and never write memory data.
+
+### Semantic Lens
+
+Reads a precomputed `.plur1bus/semantic-lens-index.json` from the workspace and adds a small number of community/bridge/faded memories that normal recall may have missed.
+
+- Default: `enabled: false` in schema.
+- Caps: `maxLensMemories: 3`, `maxBridgeMemories: 2`, `maxFadedMemories: 1`, `maxCommunities: 2`.
+- Hard timeout: 50 ms; fallback returns base recall unchanged.
+- No live graph recompute, no second recall path, no writes.
+
+### Conversation Reactivation Recall (CRR)
+
+MVP reactivation hook that appends a `<memory-reactivation>` block when a conversation appears to resume after an idle gap, a compaction, or a continuation signal.
+
+- Default: `enabled: false` in schema; `visibleHints: false`.
+- Triggers: idle threshold (45 min), continuation signal, first substantive message, or post-compaction gap.
+- Caps: `maxReactivationMemories: 3`, `maxFadedReactivationMemories: 1`, `maxOpenThreads: 3`, `maxCommunities: 2`.
+- Hard timeout: 50 ms; silent fallback on error.
+- State is module-level in-memory only; no writes to cards, tags, graph links, records, or quarantine.
+
+### Graph-link managed blocks / semanticDiscovery
+
+Record notes can contain an idempotent managed block (`id="graph-links"`) with wikilink edges. The block is regenerated, not appended, and conflicts with manual edits are reported.
+
+- Tiers: `explicit` (memoryIds/sourceRefs), `type` (type-based rules), `semantic` (precomputed link index).
+- Default semantic threshold: 0.78.
+- `semanticDiscovery` builds `.plur1bus/link-index.json` from memory mirrors + vectors behind a confirmation gate; it is not auto-applied.
+
+### Technical frontmatter tags
+
+Memory mirrors use technical filter tags, not semantic memory tags:
+
+- `plur1bus/memory`
+- `plur1bus/agent/<id>`
+- `plur1bus/workspace/<id>`
+- `plur1bus/category/<cat>`
+- `plur1bus/scope/<scope>`
+
+These tags are used for vault filtering and graph grouping; they do not carry semantic memory content.
+
 ## User Commands
 
 | Command | What it does |
@@ -191,13 +234,13 @@ LanceDB is the authoritative store: every memory card lives there first, indexed
 
 A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The plugin SDK currently exposes no outbound send API, so these messages are returned in the job result (`pushMessages`) for the cron carrier agent to deliver; once the SDK gains a reply-send hook, the same `telegramSend` path delivers them directly. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
 
-The recall pipeline runs Query → Embedding → LanceDB Top-N → **Query Refinement** (optional, on poor first results) → **Temporal Filter** (when time expressions detected) → Importance-Boost → optional Rerank (with timeout/fallback) → Inter-Result-Dedup → Canonical-First (KNOWLEDGE.md) → **ACL Filter** (agent/workspace scoped) → Top-5 as `<relevant-memories>` injected into the prompt.
+The recall pipeline runs Query → Embedding → LanceDB Top-N → **Query Refinement** (optional, on poor first results) → **Temporal Filter** (when time expressions detected) → Importance-Boost → optional Rerank (with timeout/fallback) → Inter-Result-Dedup → Canonical-First (KNOWLEDGE.md) → **ACL Filter** (agent/workspace scoped) → optional **Semantic Lens** append → optional **Conversation Reactivation Recall** append → Top results injected into the prompt.
 
 ## Development
 
 ```bash
 npm install
-npm test              # node --test, 650+ tests
+npm test              # node --test, 1,106 tests
 ```
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.

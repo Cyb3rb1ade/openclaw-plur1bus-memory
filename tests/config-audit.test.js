@@ -295,3 +295,45 @@ describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
     assert.strictEqual(parseFloat(m[1]), 5000);
   });
 });
+
+describe("Schema-Default-Typen (Obsidian Bridge Graph Links)", () => {
+  it("obsidianBridge.graphLinks.maxPerNote ist 5", () =>
+    assertNumberDefault("obsidianBridge.graphLinks.maxPerNote", 5));
+  it("obsidianBridge.graphLinks.includeSemantic ist false", () =>
+    assertBooleanDefault("obsidianBridge.graphLinks.includeSemantic", false));
+  it("obsidianBridge.graphLinks.semanticThreshold ist 0.78", () =>
+    assertNumberDefault("obsidianBridge.graphLinks.semanticThreshold", 0.78));
+  it("obsidianBridge.graphLinks.blockId ist 'graph-links'", () => {
+    assert.strictEqual(getDefault("obsidianBridge.graphLinks.blockId"), "graph-links");
+  });
+  it("obsidianBridge.graphLinks.tiers entspricht dem Default", () => {
+    assert.deepStrictEqual(getDefault("obsidianBridge.graphLinks.tiers"), [
+      "explicit",
+      "type",
+      "semantic",
+    ]);
+  });
+  it("obsidianBridge.graphLinks.semanticDiscovery.maxPerRun ist 500", () =>
+    assertNumberDefault("obsidianBridge.graphLinks.semanticDiscovery.maxPerRun", 500));
+  it("obsidianBridge.graphLinks.semanticDiscovery.threshold ist 0.78", () =>
+    assertNumberDefault("obsidianBridge.graphLinks.semanticDiscovery.threshold", 0.78));
+  it("obsidianBridge.graphLinks.semanticDiscovery.maxLinksPerRecord ist 5", () =>
+    assertNumberDefault("obsidianBridge.graphLinks.semanticDiscovery.maxLinksPerRecord", 5));
+  it("obsidianBridge.graphLinks.semanticDiscovery.enabled ist false", () =>
+    assertBooleanDefault("obsidianBridge.graphLinks.semanticDiscovery.enabled", false));
+  it("obsidianBridge.graphLinks.semanticDiscovery.topK ist 20", () =>
+    assertNumberDefault("obsidianBridge.graphLinks.semanticDiscovery.topK", 20));
+});
+
+describe("Schema-Default-Typen (Emotion)", () => {
+  it("emotion.tier ist 'auto'", () => {
+    assert.strictEqual(getDefault("emotion.tier"), "auto");
+  });
+  it("emotion.t2.enabled ist true", () =>
+    assertBooleanDefault("emotion.t2.enabled", true));
+  it("emotion.t3.enabled ist false", () =>
+    assertBooleanDefault("emotion.t3.enabled", false));
+  it("emotion.t3.model ist 'gpt-4o-mini'", () => {
+    assert.strictEqual(getDefault("emotion.t3.model"), "gpt-4o-mini");
+  });
+});

@@ -364,6 +364,82 @@ describe("conversation-reactivation-recall", () => {
       });
       assert.strictEqual(result.memories.length, 3);
     });
+
+    it("does not hydrate in-map community candidates that do not overlap", async () => {
+      let hydrateCalls = 0;
+      const getMemoryById = async (id) => {
+        hydrateCalls++;
+        return { id, category: "topic", display: `hydrated ${id}` };
+      };
+      const result = await selectReactivationMemories({
+        prompt: "only specific tokens match",
+        baseRecallIds: new Set(),
+        semanticLens: {
+          communities: [{ id: "c1", representativeMemoryIds: ["m1", "m2", "m3", "m4"] }],
+          memories: [
+            { id: "m1", category: "topic", display: "alpha beta gamma" },
+            { id: "m2", category: "topic", display: "alpha beta gamma" },
+            { id: "m3", category: "topic", display: "match specific tokens" },
+            { id: "m4", category: "topic", display: "alpha beta gamma" },
+          ],
+          entries: {},
+        },
+        cfg: baseCfg,
+        getMemoryById,
+      });
+      assert.strictEqual(result.memories.length, 1);
+      assert.strictEqual(result.memories[0].id, "m3");
+      assert.strictEqual(hydrateCalls, 0, "in-map candidates should not trigger getMemoryById");
+    });
+
+    it("limits getMemoryById calls for community candidates missing from lens map", async () => {
+      let hydrateCalls = 0;
+      const getMemoryById = async (id) => {
+        hydrateCalls++;
+        return { id, category: "topic", display: `hydrated ${id}` };
+      };
+      const communities = [];
+      for (let c = 0; c < 20; c++) {
+        const reps = [];
+        for (let i = 0; i < 10; i++) reps.push(`c${c}-m${i}`);
+        communities.push({ id: `c${c}`, representativeMemoryIds: reps, bridgeMemoryIds: [] });
+      }
+      const result = await selectReactivationMemories({
+        prompt: "no overlap anywhere",
+        baseRecallIds: new Set(),
+        semanticLens: { communities, memories: [], entries: {} },
+        cfg: baseCfg,
+        getMemoryById,
+      });
+      assert.strictEqual(result.memories.length, 0);
+      assert.ok(hydrateCalls > 0, "should attempt some hydration");
+      assert.ok(hydrateCalls <= 12, `expected <=12 hydrations, got ${hydrateCalls}`);
+    });
+
+    it("still hydrates selected memories that are not in the lens map", async () => {
+      let hydrateCalls = 0;
+      const getMemoryById = async (id) => {
+        hydrateCalls++;
+        if (id === "m1") {
+          return { id: "m1", category: "project", display: "dashboard project plan" };
+        }
+        return null;
+      };
+      const result = await selectReactivationMemories({
+        prompt: "continue dashboard project",
+        baseRecallIds: new Set(),
+        semanticLens: {
+          communities: [{ id: "c1", representativeMemoryIds: ["m1"] }],
+          memories: [],
+          entries: {},
+        },
+        cfg: baseCfg,
+        getMemoryById,
+      });
+      assert.strictEqual(result.memories.length, 1);
+      assert.strictEqual(result.memories[0].id, "m1");
+      assert.strictEqual(hydrateCalls, 1, "selected missing memory should be hydrated exactly once");
+    });
   });
 
   // ── formatReactivationContext ───────────────────────────────────────────────
@@ -659,6 +735,58 @@ describe("conversation-reactivation-recall", () => {
       ]);
       assert.strictEqual(typeof result.context, "string");
       assert.ok(Array.isArray(result.additions));
+    });
+
+    it("delivers additions under caller timeout despite many missing community candidates", async () => {
+      const agentId = `timeout-deliver-agent-${Math.random()}`;
+      const sessionKey = `timeout-deliver-session-${Math.random()}`;
+      markUserTurn(agentId, sessionKey, now - 60 * 60 * 1000);
+      const tmpDir = mkdtempSync(join(tmpdir(), "crr-timeout-deliver-"));
+      mkdirSync(join(tmpDir, ".plur1bus"), { recursive: true });
+
+      const communities = [];
+      for (let c = 0; c < 20; c++) {
+        const reps = [];
+        for (let i = 0; i < 10; i++) reps.push(`c${c}-m${i}`);
+        communities.push({ id: `c${c}`, representativeMemoryIds: reps, bridgeMemoryIds: [] });
+      }
+      // First community contains the only matching candidate at position 2.
+      // Without a hydration cap this would resolve 100 candidates and timeout.
+      writeFileSync(
+        join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
+        JSON.stringify({ version: 1, memoryToCommunity: {}, communities }),
+        "utf8"
+      );
+
+      let hydrateCalls = 0;
+      const getMemoryById = async (id) => {
+        hydrateCalls++;
+        await new Promise((r) => setTimeout(r, 1));
+        return {
+          id,
+          category: "topic",
+          display: id === "c0-m2" ? "match target memory" : `community text ${id}`,
+        };
+      };
+
+      const args = makeArgs({
+        agentId,
+        sessionKey,
+        workspaceDir: tmpDir,
+        getMemoryById,
+        prompt: "match target exactly",
+        messageText: "match target exactly",
+      });
+      const start = performance.now();
+      const result = await Promise.race([
+        runConversationReactivationRecall(args),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("crr_timeout")), 50)),
+      ]);
+      const elapsed = performance.now() - start;
+      assert.ok(elapsed < 50, `expected <50ms, got ${elapsed}ms`);
+      assert.strictEqual(result.additions.length, 1);
+      assert.strictEqual(result.additions[0].id, "c0-m2");
+      assert.ok(hydrateCalls <= 12, `expected <=12 hydrations, got ${hydrateCalls}`);
     });
   });
 });
