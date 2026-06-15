@@ -1,7 +1,7 @@
 # Design-Spec: Conversation Reactivation Recall (Warm-Recall)
 
 > **Arbeitsname:** Conversation Reactivation Recall / First-User-Turn Warm Recall / Associative Warm-Recall
-> **Scope:** Design-Spec, noch keine Implementierung.
+> **Scope:** Design-Spec. The implemented runtime is a reduced MVP; this document describes the full target design, with the implemented subset noted in section 1.5.
 > **Ziel:** Einen menschlicher wirkenden, graduierten Warm-Recall entwerfen, der bei Gesprächsreaktivierung (nicht beim nackten technischen Session-Start) kurz Orientierung schafft.
 
 ---
@@ -15,6 +15,33 @@
 - was nur als leise Orientierung dient (nicht sichtbar).
 
 CRR ergänzt den normalen Auto-Recall, ersetzt ihn nicht. Es soll vor allem verhindern, dass der Agent bei Wiederaufnahme eines Gesprächs klinisch „kalt“ wirkt, ohne dabei Fakten zu erfinden oder schwache Treffer als sichere Erinnerung zu verkaufen.
+
+---
+
+## 1.5. Implementierungsstatus: Reduced MVP
+
+Das in `lib/conversation-reactivation-recall.js` umgesetzte Feature ist **nicht** die vollständige Spezifikation, sondern ein bewusst reduziertes MVP:
+
+**Implementiert (MVP):**
+
+- Trigger auf erstem User-Turn, Idle-Threshold, Fortsetzungssignalen und post-Compaction.
+- Cooldown (`lastCrrAt`).
+- In-memory `Map`-State pro Agent/Session; wird beim Gateway-Restart zurückgesetzt.
+- Token-Overlap-Auswahl gegen den Semantic-Lens-Index plus harte Caps.
+- Harte Obergrenzen: `maxReactivationMemories` (3), `maxFadedReactivationMemories` (1), `maxOpenThreads` (3), `maxCommunities` (2).
+- Flacher `<memory-reactivation>`-Block mit `<memory-record>`-Einträgen, `visibleHints=false`.
+- Feature-Flag und timeout-sicheres Verhalten; schreibt keine Memory-/Tag-/Graph-/Lens-Daten.
+
+**Noch nicht implementiert:**
+
+- Persistenter JSON-State-Store pro Workspace/Agent.
+- Episode- und Stunden-Budgets (`maxWarmRecallsPerConversationEpisode`, `maxWarmRecallsPerHour`).
+- Seed-Hash-Idempotenz.
+- Detailliertes Scoring-Modell; stattdessen einfacher Token-Overlap + Kategorie-Heuristiken.
+- Richer `<conversation-reactivation-recall>`-Orientierungsblock mit Confidence/Modus.
+- Sichtbare Sprach-Gates für direct/likely/faint (aktuell ausschließlich `visibleHints=false`).
+
+Die folgenden Abschnitte beschreiben weiterhin das **Ziel-Design**; abweichende MVP-Realität ist jeweils mit *(MVP-Abweichung)* markiert.
 
 ---
 
@@ -43,6 +70,8 @@ CRR triggert nur, wenn **alle** folgenden Bedingungen erfüllt sind:
 5. Das Episode-Limit `maxWarmRecallsPerConversationEpisode` ist nicht erreicht.
 6. Der Feature-Flag ist aktiv.
 7. Der gleiche Seed wurde nicht gerade erst verarbeitet (Idempotenz via Hash).
+
+> *(MVP-Abweichung: Episode-Limit, Stunden-Limit und Seed-Hash-Idempotenz sind im MVP nicht implementiert; stattdessen greifen ein globaler Cooldown und harte Memory-Caps.)*
 
 **Nicht triggern bei:**
 - nacktem technischen Sessionstart ohne User-Input,
@@ -74,6 +103,8 @@ CRR triggert nur, wenn **alle** folgenden Bedingungen erfüllt sind:
 | `lastWarmRecallMode` | string | Modus des letzten CRR |
 | `lastWarmRecallConfidence` | number | Confidence des letzten CRR |
 
+> *(MVP-Abweichung: Der State ist eine im Speicher gehaltene `Map` pro Agent/Session und wird beim Gateway-Restart zurückgesetzt. Episode-/Stunden-Counter, Seed-Hash und Confidence-/Mode-Felder sind nicht implementiert.)*
+
 ### Beispielregeln
 
 - Kein `lastUserTurnAt` → erster User-Turn triggert CRR.
@@ -85,6 +116,8 @@ CRR triggert nur, wenn **alle** folgenden Bedingungen erfüllt sind:
 - `warmRecallsThisEpisode >= maxWarmRecallsPerConversationEpisode` → kein CRR.
 - `warmRecallsThisHour >= maxWarmRecallsPerHour` → kein CRR.
 
+> *(MVP-Abweichung: Die mit Episode- und Stunden-Budgets verbundenen Regeln sind nicht aktiv. Episoden-Wechsel-Logik ist nicht implementiert.)*
+
 ### Episoden-Wechsel-Logik
 
 Eine neue Conversation-Episode beginnt, wenn:
@@ -93,6 +126,8 @@ Eine neue Conversation-Episode beginnt, wenn:
 - eine Context-Compaction stattgefunden hat.
 
 Die Episode-ID wird mit einem neuen UUID ersetzt und `conversationEpisodeStartedAt` auf `now` gesetzt.
+
+> *(MVP-Abweichung: Episoden-IDs und -Zeitstempel werden nicht verwaltet.)*
 
 ---
 
@@ -122,6 +157,8 @@ CRR zieht gezielt breitere Quellen als der normale Auto-Recall heran, gewichtet 
 ## 6. Scoring-Modell
 
 Jeder Kandidat erhält einen kombinierten `confidence`-Score (0..1), der neben Relevanz auch die Erinnerungsqualität abbildet.
+
+> *(MVP-Abweichung: Das detaillierte Scoring-Modell ist nicht implementiert. Das MVP wählt Kandidaten über Token-Overlap, Kategorie-Heuristiken und harte Caps aus; es gibt keine Confidence-Werte und keine direct/likely/faint-Klassifikation.)*
 
 ### Faktoren
 
@@ -183,6 +220,8 @@ confidence = clamp01(baseScore + adjustments)
 
 CRR klassifiziert jeden Treffer und den Gesamtmodus in eine von vier Stufen.
 
+> *(MVP-Abweichung: Die Modi `direct_memory`, `likely_memory`, `faint_memory` und `silent_context` sind nicht implementiert; das MVP verwendet einen einheitlichen, als `untrusted` markierten `<memory-reactivation>`-Block mit `visibleHints=false`.)*
+
 ### 7.1 `direct_memory`
 
 **Bedingungen:**
@@ -235,6 +274,8 @@ CRR klassifiziert jeden Treffer und den Gesamtmodus in eine von vier Stufen.
 ## 8. Interner Kontextblock
 
 CRR injiziert keinen neuen Block in die User-Sicht, sondern einen kompakten, XML-ähnlichen Orientierungsblock für den Agenten. Er soll kompakt sein und eine Antwortstrategie liefern.
+
+> *(MVP-Abweichung: Der tatsächlich gerenderte Block ist `<memory-reactivation untrusted="true" mode="historical-evidence-only">` mit `<memory-record>`-Einträgen, nicht der folgende `<conversation-reactivation-recall>`-Block.)*
 
 ```xml
 <conversation-reactivation-recall>
@@ -313,6 +354,8 @@ else:
 
 ## 10. Konfiguration
 
+> *(MVP-Abweichung: Die tatsächliche Laufzeitkonfiguration verwendet andere Schlüssel: `idleThresholdMinutes`, `cooldownMinutes`, `maxReactivationMemories`, `maxFadedReactivationMemories`, `maxOpenThreads`, `maxCommunities`, `timeoutMs`, `visibleHints`. Die folgenden Werte beschreiben das Ziel-Design.)*
+
 ```js
 conversationReactivationRecall: {
   enabled: true,
@@ -375,12 +418,12 @@ conversationReactivationRecall: {
 
 | Komponente | Verantwortung | Datei |
 |------------|---------------|-------|
-| Trigger-Erkennung + State | Prüft, ob CRR laufen soll; verwaltet Episode-/Cooldown-State | `lib/conversation-reactivation-recall.js` (Hauptmodul) |
-| Seed-Bildung | Extrahiert aus dem User-Turn einen kompakten Such-Seed | `lib/conversation-reactivation-recall/seed-builder.js` |
-| Scoring + Modus | Berechnet Confidence und klassifiziert in direct/likely/faint/silent | `lib/conversation-reactivation-recall/scorer.js` |
-| Context-Block Renderer | Erzeugt den internen `<conversation-reactivation-recall>`-Block | `lib/conversation-reactivation-recall/context-renderer.js` |
-| State Store | Persistiert State pro Workspace/Agent in einer JSON-Datei | `lib/conversation-reactivation-recall/state-store.js` |
-| Integration Auto-Recall | Hook in `index.js` `before_prompt_build` nach normalem Recall | `index.js` |
+| Trigger-Erkennung + State | Prüft, ob CRR laufen soll; verwaltet Cooldown-State *(keine Episoden im MVP)* | `lib/conversation-reactivation-recall.js` (Hauptmodul) |
+| Seed-Bildung | Extrahiert aus dem User-Turn einen kompakten Such-Seed *(im MVP nicht ausgelagert)* | `lib/conversation-reactivation-recall/seed-builder.js` *(nicht im MVP)* |
+| Scoring + Modus | Berechnet Confidence und klassifiziert in direct/likely/faint/silent *(im MVP nicht implementiert)* | `lib/conversation-reactivation-recall/scorer.js` *(nicht im MVP)* |
+| Context-Block Renderer | Erzeugt den internen `<conversation-reactivation-recall>`-Block *(MVP rendert `<memory-reactivation>`)* | `lib/conversation-reactivation-recall/context-renderer.js` *(nicht im MVP)* |
+| State Store | Persistiert State pro Workspace/Agent in einer JSON-Datei *(MVP: in-memory `Map`)* | `lib/conversation-reactivation-recall/state-store.js` *(nicht im MVP)* |
+| Integration Auto-Recall | Hook in `index.js` nach normalem Recall + Semantic Lens | `index.js` |
 
 ### Trigger-Erkennung
 
@@ -395,11 +438,15 @@ conversationReactivationRecall: {
 - Schreiben erfolgt atomar (tmp + rename), Lesen vor dem Recall.
 - State ist workspace-/agent-isoliert, da Pfad aus `ctx.workspaceDir` und `ctx.agentId` gebildet wird.
 
+> *(MVP-Abweichung: Der State ist eine moduleigene, nicht persistierte `Map` (`sessionState`) pro Agent/Session. Er wird beim Gateway-Restart verworfen.)*
+
 ### Rendering des internen Blocks
 
 - Der Block wird in `index.js` **zusätzlich** zum normalen `<relevant-memories>`-Block erzeugt.
 - Er wird dem Agenten als separates XML-Element injiziert, erscheint aber nicht in der User-Antwort.
 - Formatierung in `lib/conversation-reactivation-recall/context-renderer.js`.
+
+> *(MVP-Abweichung: Der gerenderte Block ist `<memory-reactivation>` mit `<memory-record>`-Einträgen; Formatierung erfolgt inline in `lib/conversation-reactivation-recall.js`.)*
 
 ### Doppeltes Triggern verhindern
 
@@ -408,6 +455,8 @@ conversationReactivationRecall: {
 - Episode-Counter (`maxPerConversationEpisode`).
 - Hourly-Counter (`maxPerHour`).
 - Idempotente State-Schreibweise (nur aktualisieren, wenn tatsächlich gelaufen).
+
+> *(MVP-Abweichung: Nur der Cooldown-Zeitstempel ist aktiv. Seed-Hash, Episode-Counter und Hourly-Counter sind nicht implementiert.)*
 
 ### Workspace-/Agent-Sicherheit
 
@@ -423,36 +472,42 @@ conversationReactivationRecall: {
 
 ---
 
-## 12. Minimal Viable Implementation (MVP)
+## 12. Minimal Viable Implementation (MVP) — implementiert
 
 ### MVP-Ziel
 
 Der kleinste sinnvolle erste Schritt, der das Verhalten sofort beobachtbar macht, ohne die Architektur zu überlasten.
 
-### MVP-Umfang
+### Implementierter MVP-Umfang
 
-1. **Trigger nur bei:**
-   - erstem User-Turn nach `idleThresholdMinutes`, oder
-   - erstem User-Turn nach Context-Compaction.
-2. **Keine** Trigger bei technischem Session-Start ohne User-Input.
-3. **Kleiner synchroner Recall** mit begrenztem Budget (`synchronousBudgetMs: 1500`).
-4. **Keine neue DB-Spalte** — State als JSON-Datei pro Workspace/Agent.
-5. **Nur interner Orientierungsblock**.
-6. **Sichtbare Erwähnung** nur bei `direct_memory` oder `likely_memory`.
-7. `faint_memory` zunächst nur intern oder sehr vorsichtig.
-8. **Feature-Flag** zum Abschalten.
-9. **Tests** für die 18 im User-Request genannten Fälle (soweit MVP-relevant).
+1. **Trigger bei:**
+   - erstem User-Turn nach technischem Start,
+   - Idle-Zeit über `idleThresholdMinutes`,
+   - Fortsetzungssignalen (z. B. „weiter", „status"),
+   - post-Compaction (`compactedAt > lastCrrAt`).
+2. **Keine** Trigger bei sehr kurzen oder inhaltsarmen Nachrichten.
+3. **Cooldown** (`cooldownMinutes`) verhindert doppeltes Triggern.
+4. **State im Speicher** (`Map` pro Agent/Session) — kein persistierter JSON-Store, Reset bei Gateway-Restart.
+5. **Auswahl via Token-Overlap** gegen den Semantic-Lens-Index, Graph-Bridges und offene Project-/Plan-Memories; harte Caps erzwingen Begrenzung.
+6. **Flacher `<memory-reactivation>`-Block** mit `untrusted="true"` und `<memory-record>`-Einträgen; `visibleHints=false`.
+7. **Keine** Confidence-/Modus-Klassifikation (`direct/likely/faint/silent`) und keine sichtbaren Sprach-Gates.
+8. **Feature-Flag** (`enabled`) zum Abschalten.
+9. **Timeout-sicher** durch Caller-Budget (`timeoutMs`); stiller Fallback bei Fehlern.
+10. **Schreibt keine** Memory-Card-/Tag-/Graph-/Lens-Daten.
+11. **Tests** in `tests/conversation-reactivation-recall.test.js` (Trigger, Auswahl, Formatierung, Caps, Cooldown).
 
 ### MVP-Dateien
 
-- `lib/conversation-reactivation-recall.js` — Hauptlogik, Trigger, Orchestrierung.
-- `lib/conversation-reactivation-recall/seed-builder.js` — Seed-Extraktion.
-- `lib/conversation-reactivation-recall/scorer.js` — Confidence + Modus.
-- `lib/conversation-reactivation-recall/context-renderer.js` — interner Block.
-- `lib/conversation-reactivation-recall/state-store.js` — State-Persistenz.
+- `lib/conversation-reactivation-recall.js` — Hauptlogik, Trigger, State, Auswahl, Formatierung.
 - `tests/conversation-reactivation-recall.test.js` — Unit-Tests.
-- Änderungen in `index.js` — Hook-Integration.
-- Änderungen in `lib/providers/config-normalize.js` — Config-Defaults (falls zentralisiert).
+- Änderungen in `index.js` — Hook-Integration nach normalem Recall + Semantic Lens.
+
+Die folgenden Dateien aus dem Ziel-Design sind **nicht** im MVP vorhanden:
+
+- `lib/conversation-reactivation-recall/seed-builder.js`
+- `lib/conversation-reactivation-recall/scorer.js`
+- `lib/conversation-reactivation-recall/context-renderer.js`
+- `lib/conversation-reactivation-recall/state-store.js`
 
 ### MVP-Bewertung
 
@@ -466,6 +521,8 @@ Der MVP ist **sinnvoll**, weil er:
 ---
 
 ## 13. Tests
+
+> *(MVP-Abweichung: Die folgende Liste beschreibt Tests für das Ziel-Design. Im MVP sind die Tests in `tests/conversation-reactivation-recall.test.js` auf Trigger, Token-Overlap-Auswahl, Formatierung, Caps und Cooldown fokussiert. Tests zu Confidence-Klassifikation, Episode-/Stunden-Budgets, Seed-Hash-Idempotenz und State-Store-Persistenz existieren nicht.)*
 
 Konkrete Unit-Tests (DB-frei, deterministisch):
 
@@ -551,9 +608,9 @@ Konkrete Unit-Tests (DB-frei, deterministisch):
 
 ## 15. Empfehlung: Vor oder nach der rückwirkenden Obsidian-Graph-Zuordnung?
 
-**Empfehlung: Zuerst die rückwirkende Obsidian-/Memory-Card-Graph-Zuordnung abschließen, danach CRR implementieren.**
+**Status:** Das CRR-MVP ist implementiert. Die rückwirkende Obsidian-/Memory-Card-Graph-Zuordnung ist bereits abgeschlossen.
 
-Das ist die aktuelle operative Priorität für dieses Projekt. Die Datenbasis soll vor dem neuen Runtime-Feature verbessert werden.
+**Empfehlung:** CRR iterativ verbessern, sobald die Betriebsevaluation (Timeout-Verhalten, Nervfaktor, Hilfreichkeit) Priorität erhält. Eine vollständige Umsetzung des Ziel-Designs (persistierter State, Episode-/Stunden-Budgets, Seed-Hash-Idempotenz, Scoring-Modus) bleibt optional.
 
 Begründung:
 
@@ -573,10 +630,12 @@ Begründung:
 
 ## 16. Offene Punkte / Nächste Schritte
 
-1. **Priorität 1:** Abschluss der rückwirkenden Obsidian-/Memory-Card-Graph-Zuordnung in den Workspaces.
-2. Klärung, ob `lib/providers/config-normalize.js` die beste Stelle für die Defaults ist oder ob die Config besser in `index.js` direkt normalisiert wird.
-3. Entscheidung, ob der async-Erweiterungs-Teil direkt mit dem MVP gebaut oder in Phase 2 verschoben wird.
-4. Definition der konkreten LLM-Prompts für den Seed-Builder (falls Keyword-Extraktion nicht ausreicht).
-5. Festlegung, wie Context-Compaction-Ereignisse (`lastCompactionAt`) aktuell an das Plugin gemeldet werden (Event-Listener vs. expliziter Call).
-6. Festlegung, ob der interne Block dem Agenten als eigenes XML-Element oder als Teil des System-Prompts zugeführt wird.
-7. Abstimmung, welche Obsidian-/Graph-Quellen konkret in CRR eingebunden werden, sobald die Zuordnung abgeschlossen ist.
+1. **Betriebsevaluation:** Timeout-Rate und Latenz des MVP unter Last prüfen (`timeoutMs` ggf. anheben oder Index vorladen).
+2. **Optionale Erweiterungen (nicht MVP):**
+   - Persistenter JSON-State-Store pro Workspace/Agent.
+   - Episode- und Stunden-Budgets (`maxWarmRecallsPerConversationEpisode`, `maxWarmRecallsPerHour`).
+   - Seed-Hash-Idempotenz.
+   - Vollständiges Scoring-Modell mit Confidence- und Modus-Klassifikation.
+   - Richer `<conversation-reactivation-recall>`-Orientierungsblock.
+3. Entscheidung, ob der async-Erweiterungs-Teil gebaut oder bei Bedarf verschoben wird.
+4. Abstimmung, welche Obsidian-/Graph-Quellen zukünftig stärker in CRR einbezogen werden.

@@ -11,10 +11,10 @@ Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jew
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
 | `maxPromptMemories` | `number` | `12` | Maximale Anzahl Memories, die in den Prompt-Kontext aufgenommen werden |
-| `candidateTopK` | `number` | `50` | Anzahl Kandidaten aus der initialen Vector-Search |
-| `importanceBoost` | `boolean` | `true` | Aktiviert den Importance-Boost vor dem Re-Ranking |
+| `candidateTopK` | `number` | `40` | Anzahl Kandidaten aus der initialen Vector-Search |
+| `importanceBoost` | `number` | `0.3` | Faktor des Importance-Boost vor dem Re-Ranking (0.0–1.0) |
 | `canonicalFirst` | `boolean` | `true` | Kanonische Repräsentanten vor nicht-kanonischen bevorzugen |
-| `canonicalMinScore` | `number` | `0.65` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
+| `canonicalMinScore` | `number` | `0.30` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
 | `canonicalMaxItems` | `number` | `5` | Maximal `N` kanonische Items pro Cluster im finalen Prompt |
 
 ---
@@ -23,8 +23,8 @@ Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jew
 
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
-| `dedup` | `number` | `0.78` | Jaccard-ähnlichkeits-Threshold für Near-Duplicate-Erkennung (0.0–1.0) |
-| `dedupJaccard` | `boolean` | `true` | Nutzt Jaccard-Ähnlichkeit statt reiner Cosine-Similarity für Dedup |
+| `dedup` | `boolean` | `true` | Near-Duplicate-Erkennung aktivieren |
+| `dedupJaccard` | `number` | `0.78` | Jaccard-ähnlichkeits-Threshold für Near-Duplicates (0.0–1.0) |
 
 > **Hinweis:** Ein höherer `dedup`-Wert führt zu aggressiverer Entfernung. `0.78` bedeutet, dass Memories mit ≥78 % Token-Überlappung als Duplikate gelten.
 
@@ -59,9 +59,9 @@ Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jew
 
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
-| `embeddingCacheEnabled` | `boolean` | `true` | LRU-Cache für Embedding-Vektoren aktivieren |
-| `embeddingCacheTtlMs` | `number` | `300000` | TTL eines Cache-Eintrags in Millisekunden (5 Minuten) |
-| `embeddingCacheMaxEntries` | `number` | `1000` | Maximale Anzahl gecachter Vektoren |
+| `embeddingCacheEnabled` | `boolean` | `false` | LRU-Cache für Embedding-Vektoren aktivieren |
+| `embeddingCacheTtlMs` | `number` | `1800000` | TTL eines Cache-Eintrags in Millisekunden (30 Minuten) |
+| `embeddingCacheMaxEntries` | `number` | `500` | Maximale Anzahl gecachter Vektoren |
 
 ### Verhalten
 
@@ -78,21 +78,22 @@ Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jew
 {
   "recall": {
     "maxPromptMemories": 12,
-    "candidateTopK": 50,
-    "dedup": 0.78,
-    "dedupJaccard": true,
+    "candidateTopK": 40,
+    "importanceBoost": 0.3,
+    "dedup": true,
+    "dedupJaccard": 0.78,
     "canonicalFirst": true,
-    "canonicalMinScore": 0.65,
+    "canonicalMinScore": 0.30,
     "canonicalMaxItems": 5,
     "halfLifeDaysMap": {
       "transient": 60,
       "episodic": 180,
-      "longContext": 365,
-      "project": 365
+      "longContext": 600,
+      "project": 600
     },
-    "embeddingCacheEnabled": true,
-    "embeddingCacheTtlMs": 300000,
-    "embeddingCacheMaxEntries": 1000
+    "embeddingCacheEnabled": false,
+    "embeddingCacheTtlMs": 1800000,
+    "embeddingCacheMaxEntries": 500
   }
 }
 ```
@@ -139,3 +140,35 @@ Der Feature-Toggle `/enable emotionTier` (bzw. `/disable emotionTier`) steuert `
   }
 }
 ```
+
+---
+
+## Obsidian Bridge — Graph Links & Semantic Discovery
+
+Diese Optionen steuern die wikilink-basierten Graph-Blöcke in Record-Notes und den optionalen semantischen Link-Index.
+
+### `obsidianBridge.graphLinks`
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `maxPerNote` | `number` | `5` | Maximale Anzahl Links pro Note |
+| `tiers` | `string[]` | `["explicit", "type", "semantic"]` | Verwendete Link-Tiers |
+| `includeSemantic` | `boolean` | `false` | Semantische Links aus `.plur1bus/link-index.json` einbinden |
+| `semanticThreshold` | `number` | `0.78` | Ähnlichkeits-Threshold für semantische Links |
+| `blockId` | `string` | `"graph-links"` | ID des Managed Blocks |
+
+- **Tier `explicit`**: Verweise aus `memoryIds`, `source_memories` und `sourceRefs`.
+- **Tier `type`**: Typ-basierte Regeln (z. B. Kandidat ↔ Entscheidung, Review-Items im selben Bundle).
+- **Tier `semantic`**: Vorberechnete Ähnlichkeits-Links aus dem Link-Index.
+
+### `obsidianBridge.graphLinks.semanticDiscovery`
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `enabled` | `boolean` | `false` | Automatischen Bau des semantischen Link-Index aktivieren |
+| `maxPerRun` | `number` | `500` | Maximal zu verarbeitende Records pro Lauf |
+| `maxLinksPerRecord` | `number` | `5` | Maximale semantische Links pro Record |
+| `threshold` | `number` | `0.78` | Cosine-Similarity-Threshold für semantische Paare |
+| `topK` | `number` | `20` | Kandidaten-Fenster für die ANN-Suche |
+
+> Der semantische Link-Index wird nur geschrieben, wenn er explizit bestätigt (`confirm: true`) oder über einen internen Befehl mit Bestätigung angestoßen wird. Er wird nicht automatisch beim Recall angewendet.
