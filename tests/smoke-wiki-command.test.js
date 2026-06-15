@@ -4,8 +4,11 @@
  * Unit tests for /wiki command — wikiAdd, wikiSearch, wikiDelete.
  * All DB I/O is mocked; no real LanceDB instance.
  */
-import { describe, it } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert";
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { runWikiCommand } from "../lib/wiki-command.js";
 
@@ -73,7 +76,7 @@ function makeCtx(args, extra = {}) {
   };
 }
 
-function makeDeps(db, { callLlm } = {}) {
+function makeDeps(db, { callLlm, archiveDir } = {}) {
   return {
     pool: { getDb: () => db },
     embeddings: { embed: async () => new Float32Array(4).fill(0.1) },
@@ -82,16 +85,28 @@ function makeDeps(db, { callLlm } = {}) {
     cfg: { security: { allowedUserIds: ["test-user-42"] } },
     api: { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } },
     llmCfg: { model: "test-model", maxTokens: 400 },
+    archiveDir,
   };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("wiki-command smoke", () => {
+  let archiveDir;
+
+  before(() => {
+    archiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-archive-"));
+    mkdirSync(join(archiveDir, "test-agent"), { recursive: true });
+  });
+
+  after(() => {
+    rmSync(archiveDir, { recursive: true, force: true });
+  });
+
   it("wikiAdd stores entry with memoryKind: 'wiki'", async () => {
     const stored = [];
     const db = makeDb({ storeSpy: async (entry) => { stored.push(entry); } });
-    const result = await runWikiCommand(makeCtx("add Kimi API: Der Key endet auf wKxqM"), makeDeps(db));
+    const result = await runWikiCommand(makeCtx("add Kimi API: Der Key endet auf wKxqM"), makeDeps(db, { archiveDir }));
     assert.ok(!result.text.includes("Fehler") && !result.text.includes("error"), `unexpected error: ${result.text}`);
     assert.strictEqual(stored.length, 1, "store should have been called once");
     assert.strictEqual(stored[0].memoryKind, "wiki", "memoryKind must be 'wiki'");
@@ -107,7 +122,7 @@ describe("wiki-command smoke", () => {
       wikiRows,
       deleteSpy: async (sql) => { deleted.push(sql); },
     });
-    const result = await runWikiCommand(makeCtx("delete Kimi"), makeDeps(db));
+    const result = await runWikiCommand(makeCtx("delete Kimi"), makeDeps(db, { archiveDir }));
     assert.ok(deleted.length > 0, `delete should have been called, result: ${result.text}`);
     assert.ok(deleted[0].includes("aaaaaaaa"), "should delete the wiki entry by its UUID");
   });
@@ -125,12 +140,35 @@ describe("wiki-command smoke", () => {
     });
     const result = await runWikiCommand(
       makeCtx("delete id:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
-      makeDeps(db),
+      makeDeps(db, { archiveDir }),
     );
     assert.strictEqual(deleted.length, 0, "delete must NOT be called for a non-wiki entry");
     assert.ok(
       result.text.includes("Normal memories") || result.text.includes("Normale Erinnerungen"),
       `expected wiki.delete_not_wiki message, got: ${result.text}`,
+    );
+  });
+
+  it("wikiDelete aborts when archive fails — does not call delete", async () => {
+    const deleted = [];
+    const db = makeDb({
+      getByIdFn: async () => ({
+        id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        memoryKind: "wiki",
+        text: "wiki entry",
+        summary: "wiki entry",
+      }),
+      deleteSpy: async (sql) => { deleted.push(sql); },
+    });
+    // Invalid agentId forces archiveCard to throw via safeAgentId.
+    const result = await runWikiCommand(
+      makeCtx("delete id:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", { agentId: "../../etc" }),
+      makeDeps(db, { archiveDir }),
+    );
+    assert.strictEqual(deleted.length, 0, "delete must NOT be called when archive fails");
+    assert.ok(
+      result.text.includes("Archive failed") || result.text.includes("NICHT gelöscht"),
+      `expected wiki.archive_failed message, got: ${result.text}`,
     );
   });
 
@@ -140,7 +178,7 @@ describe("wiki-command smoke", () => {
         status: "active", text: "Kimi: LLM provider", summary: "[Wiki] Kimi" },
     ];
     const db = makeDb({ wikiRows });
-    const result = await runWikiCommand(makeCtx("Kimi"), makeDeps(db));
+    const result = await runWikiCommand(makeCtx("Kimi"), makeDeps(db, { archiveDir }));
     assert.ok(
       result.text.includes("(Wiki)"),
       `expected wiki.result_wiki label, got: ${result.text}`,
@@ -153,7 +191,7 @@ describe("wiki-command smoke", () => {
         status: "active", text: "Kimi memory entry", summary: "Kimi memory" },
     ];
     const db = makeDb({ memoryRows });
-    const result = await runWikiCommand(makeCtx("Kimi"), makeDeps(db));
+    const result = await runWikiCommand(makeCtx("Kimi"), makeDeps(db, { archiveDir }));
     assert.ok(
       result.text.includes("No curated wiki entry") || result.text.includes("kuratierter"),
       `expected wiki.result_fallback label, got: ${result.text}`,
@@ -176,7 +214,7 @@ describe("wiki-command smoke", () => {
       supportsWhere: false,
       deleteSpy: async (sql) => { deleted.push(sql); },
     });
-    const result = await runWikiCommand(makeCtx("delete Kimi"), makeDeps(db));
+    const result = await runWikiCommand(makeCtx("delete Kimi"), makeDeps(db, { archiveDir }));
     assert.ok(deleted.length > 0, `should have deleted something, result: ${result.text}`);
     assert.ok(deleted.every(sql => sql.includes("ffff")), "must only delete the wiki entry (fff...)");
     assert.ok(!deleted.some(sql => sql.includes("eeee")), "must NOT delete the normal memory (eee...)");
