@@ -2288,10 +2288,15 @@ const plugin = {
                 }
                 const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
                 if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };
-                active.sort((a, b) => (a.remindAt || 0) - (b.remindAt || 0));
+                const remindAtMs = (value) => {
+                  const n = Number(value ?? 0);
+                  return Number.isFinite(n) ? n : 0;
+                };
+                active.sort((a, b) => remindAtMs(a.remindAt) - remindAtMs(b.remindAt));
                 const lines = [t("reminder.list_header", { lang, tone })];
                 for (const r of active) {
-                  const when = r.remindAt ? new Date(r.remindAt).toISOString().replace("T", " ").slice(0, 16) : "?";
+                  const ts = remindAtMs(r.remindAt);
+                  const when = ts ? new Date(ts).toISOString().replace("T", " ").slice(0, 16) : "?";
                   lines.push(t("reminder.list_item", { lang, tone, vars: {
                     when,
                     text: String(r.text || "").slice(0, 80),
