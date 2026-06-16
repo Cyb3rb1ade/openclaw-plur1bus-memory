@@ -152,6 +152,10 @@ describe("Schema-Default-Typen (Sonstige)", () => {
     assertNumberDefault("forgetThreshold", 0.3));
   it("summaryMaxWords ist eine Zahl", () =>
     assertNumberDefault("summaryMaxWords", 150));
+  it("continuityEngine.contradictionDetection.enabled ist false", () =>
+    assertBooleanDefault("continuityEngine.contradictionDetection.enabled", false));
+  it("continuityEngine.contradictionDetection.maxPairsPerRecall ist 20", () =>
+    assertNumberDefault("continuityEngine.contradictionDetection.maxPairsPerRecall", 20));
 });
 
 describe("halfLifeDaysMap-Gruppen sind vollständig", () => {
