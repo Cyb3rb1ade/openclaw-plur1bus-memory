@@ -4141,6 +4141,15 @@ const plugin = {
               graphSource: r.source,
               depth: r.depth,
               relevanceScore: r.score,
+              versionNumber: r.entry.versionNumber ?? 1,
+              previousVersion: r.entry.previousVersion || "",
+              supersededBy: r.entry.supersededBy || "",
+              updateSource: r.entry.updateSource || "",
+              updateEvidence: r.entry.updateEvidence || "",
+              reconsolidationConfidence: r.entry.reconsolidationConfidence ?? 0.0,
+              status: r.entry.status || "active",
+              versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
+              createdAt: r.entry.createdAt ?? 0,
             });
           }
 
@@ -4156,6 +4165,11 @@ const plugin = {
             display: r.entry.summary || libGenerateSummary(r.entry.text || "", summaryMaxWords),
             memoryStrength: r.entry.memoryStrength ?? 1.0,
             relevanceScore: r.score,
+            versionNumber: r.entry.versionNumber ?? 1,
+            supersededBy: r.entry.supersededBy || "",
+            updateSource: r.entry.updateSource || "",
+            status: r.entry.status || "active",
+            versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
           }));
           if (semanticLensItems.length > 0) {
             api.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);
@@ -4257,6 +4271,65 @@ const plugin = {
                   api.logger.warn?.(`continuity-engine: overlay generation failed: ${String(e)}`);
                 }
               }
+            }
+          }
+
+          // K1-06: detect contradictory factual memories among recalled items.
+          let memoryTextContradictions = [];
+          const contraCfg = cfg?.continuityEngine?.contradictionDetection || {};
+          if (contraCfg.enabled === true && ctx?.workspaceDir) {
+            try {
+              const llm = typeof api?.llm === "function"
+                ? api.llm.bind(api)
+                : (mergingLlmCfg?.model
+                    ? (messages) => callLlm(messages, mergingLlmCfg)
+                    : null);
+              const detector = new ContradictionDetector({
+                llm,
+                workspaceDir: ctx.workspaceDir,
+                logger: api.logger,
+              });
+              memoryTextContradictions = await detector.findMemoryTextContradictions(associativeItems, {
+                maxPairs: contraCfg.maxPairsPerRecall ?? 20,
+              });
+            } catch (e) {
+              api.logger?.warn?.(`continuity-engine: memory-text contradiction detection failed: ${String(e)}`);
+            }
+          }
+          if (memoryTextContradictions.length > 0) {
+            const { resolveContradictionWinner } = await import("./lib/memory-text-contradiction.js");
+            const byId = new Map(associativeItems.map((m) => [m.id, m]));
+            for (const rec of memoryTextContradictions) {
+              const a = byId.get(rec.memoryA);
+              const b = byId.get(rec.memoryB);
+              if (!a || !b) continue;
+              const winner = resolveContradictionWinner(a, b);
+              const loser = winner.id === a.id ? b : a;
+              if (!loser.supersededBy) {
+                loser.supersededBy = winner.id;
+                loser.status = "superseded-in-context";
+              }
+            }
+            try {
+              const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir, logger: api.logger });
+              for (const rec of memoryTextContradictions) {
+                await detector.persistContradiction({
+                  targetMemoryId: rec.memoryA,
+                  overlayA: rec.memoryA,
+                  overlayB: rec.memoryB,
+                  descriptionA: rec.descriptionA,
+                  descriptionB: rec.descriptionB,
+                });
+                await detector.persistContradiction({
+                  targetMemoryId: rec.memoryB,
+                  overlayA: rec.memoryA,
+                  overlayB: rec.memoryB,
+                  descriptionA: rec.descriptionA,
+                  descriptionB: rec.descriptionB,
+                });
+              }
+            } catch (e) {
+              api.logger?.warn?.(`continuity-engine: failed to persist memory-text contradictions: ${String(e)}`);
             }
           }
 
