@@ -888,6 +888,7 @@ class AgentDbPool {
         try { await db.shutdown(); } catch (_) { /* ignore */ }
       }
     }
+    await this.dbs.awaitPendingEvictions();
     this.dbs.clear();
   }
 
