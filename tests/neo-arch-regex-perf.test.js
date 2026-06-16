@@ -62,4 +62,12 @@ describe("neo-arch regex performance regression", () => {
     assert.strictEqual(result, false);
     assert.ok(ms < 100, `adversarial text took ${ms.toFixed(1)} ms`);
   });
+
+  it("preserves case-insensitive behaviour", () => {
+    assert.strictEqual(isInjectedContextText("<PLUR1BUS-RECALL>"), true);
+    assert.strictEqual(isInjectedContextText("RECALL safety rules"), true);
+    assert.strictEqual(isInjectedContextText('{"CHAT_ID": "telegram:123"}'), true);
+    assert.strictEqual(isInjectedContextText('{"Message_ID": "456"}'), true);
+    assert.strictEqual(isInjectedContextText('{"SENDER_ID": "u"}'), true);
+  });
 });
