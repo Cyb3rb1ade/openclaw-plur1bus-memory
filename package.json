@@ -30,6 +30,17 @@
     "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test tests/*.test.js test/*.test.js",
     "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test tests/*.test.js test/*.test.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/issues"
+  },
+  "homepage": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory#readme",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
     "openai": "^6.27.0"
@@ -39,5 +50,10 @@
   },
   "devDependencies": {
     "c8": "^11.0.0"
+  },
+  "overrides": {
+    "@huggingface/transformers": {
+      "onnxruntime-web": "1.26.0"
+    }
   }
 }
