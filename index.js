@@ -102,6 +102,14 @@ import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, computeUseAssociative } from "./lib/recall-pipeline.js";
+import {
+  createRecallDecisionTrace,
+  addTraceDecision,
+  addTraceStoreDecision,
+  attachTraceToMemory,
+  summarizeTrace,
+  textPreview,
+} from "./lib/recall-decision-trace.js";
 import { applySemanticLensToRecall } from "./lib/semantic-lens-index.js";
 import {
   buildNeoDoctorReport,
@@ -1585,6 +1593,12 @@ const plugin = {
     const candidateTopK     = recallCfg.candidateTopK     ?? 40;
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
     const semanticLensCfg   = cfg.semanticLens || recallCfg.semanticLens || {};
+
+    // P2 Recall Decision Trace config
+    const traceCfg = cfg.recall?.decisionTrace || {};
+    const traceEnabled = traceCfg.enabled === true;
+    const traceInPrompt = traceEnabled && traceCfg.includeInPrompt === true;
+    const tracePersist = traceEnabled && traceCfg.persist === true;
 
     const riCfg = cfg.retroactiveInterference ?? {};
 
@@ -3555,7 +3569,15 @@ const plugin = {
                 graphEdges = neoStore.readGraphEdges(5_000);
               } catch (_e) { dbg(_e); }
               // v1.9.0 — komplette Pipeline aus shared module
-              const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
+              const trace = traceEnabled
+                ? createRecallDecisionTrace({
+                    query: params.query,
+                    mode: "recall",
+                    maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+                    maxCandidates: traceCfg.maxCandidates ?? 50,
+                  })
+                : undefined;
+              const { canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
                 query: params.query,
                 dbTable: db.table,
                 embeddings,
@@ -3584,6 +3606,7 @@ const plugin = {
                 },
                 workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
                 agentId,
+                decisionTrace: trace,
                 retrievalLogger: (ledgerInfo) => {
                   try {
                     const neoStore = getNeoStore(ctx, {});
@@ -3611,6 +3634,10 @@ const plugin = {
                   : (r.entry.summary || libGenerateSummary(r.entry.text, summaryMaxWords));
                 const orig = DISPLAY_SOURCES.has(r.entry.origin) ? `|${r.entry.origin}` : "";
                 lines.push(`[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id})`);
+              }
+              if (traceEnabled && returnedTrace) {
+                const summary = summarizeTrace(returnedTrace);
+                lines.push(`[decision-trace] totalCandidates:${summary.totalCandidates} included:${summary.included} rejected:${summary.rejected} downranked:${summary.downranked} superseded:${summary.superseded} deduped:${summary.deduped} merged:${summary.merged} guardPass:${summary.guardPass} guardFail:${summary.guardFail}`);
               }
               return { content: [{ type: "text", text: lines.join("\n") }] };
             } catch (err) {
@@ -4106,8 +4133,17 @@ const plugin = {
             });
           }
           const useAssociative = computeUseAssociative(continuityEnabled, assocCfg);
+          // P2 Recall Decision Trace
+          let trace = traceEnabled
+            ? createRecallDecisionTrace({
+                query: event.prompt,
+                mode: "auto-recall",
+                maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+                maxCandidates: traceCfg.maxCandidates ?? 50,
+              })
+            : null;
           // v1.9.0 — komplette Pipeline aus shared module
-          const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
+          const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runRecallPipeline({
             query: event.prompt,
             dbTable: db.table,
             embeddings,
@@ -4140,6 +4176,7 @@ const plugin = {
             } : {},
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             agentId,
+            decisionTrace: trace,
             retrievalLogger: (ledgerInfo) => {
               try {
                 const neoStore = getNeoStore(ctx, event);
@@ -4150,6 +4187,7 @@ const plugin = {
               } catch (_e) { dbg(_e); }
             },
           });
+          trace = pipelineTrace || trace;
           if (ordered.length === 0 && canonicalHits.length === 0) {
             return neoContext ? { prependContext: neoContext } : undefined;
           }
@@ -4160,10 +4198,15 @@ const plugin = {
           for (const c of canonicalHits) {
             const head = c.heading.replace(/\s+/g, " ").slice(0, 80);
             const snippet = libGenerateSummary(c.text.replace(/^#+\s+.+\n/, "").trim(), 60);
-            items.push({ id: `canonical:${head}`, category: "canonical", source: "knowledge", display: `${head} — ${snippet}` });
+            const item = { id: `canonical:${head}`, category: "canonical", source: "knowledge", display: `${head} — ${snippet}` };
+            if (traceEnabled) {
+              attachTraceToMemory(item, { sourceStage: "canonical", score: c.score, reason: "canonical KNOWLEDGE.md hit" });
+            }
+            items.push(item);
           }
           for (const r of ordered) {
-            items.push({
+            const sourceStage = r.source === "graph" || r.source === "both" ? "graph" : "vector";
+            const item = {
               id: r.entry.id,
               category: r.entry.category,
               source: r.entry.origin || "dm",
@@ -4181,7 +4224,16 @@ const plugin = {
               status: r.entry.status || "active",
               versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
               createdAt: r.entry.createdAt ?? 0,
-            });
+            };
+            if (traceEnabled) {
+              attachTraceToMemory(item, {
+                sourceStage,
+                score: r.score,
+                graphSource: r.source,
+                reason: sourceStage === "graph" ? "associative graph" : "vector recall",
+              });
+            }
+            items.push(item);
           }
 
           const semanticLensResult = await applySemanticLensToRecall(ordered, {
@@ -4217,6 +4269,7 @@ const plugin = {
                 maxAssociations: tasteCfg.maxAssociationsPerSession ?? 1,
                 assocThreshold: assocCfg.assocThreshold ?? 0.75,
                 sessionState,
+                decisionTrace: traceEnabled ? trace : null,
               });
             }
 
@@ -4234,6 +4287,7 @@ const plugin = {
                     maxPatterns: patternCfg.maxPerSession ?? tasteCfg.maxPatternsPerSession ?? 1,
                     currentRegister,
                     sessionState,
+                    decisionTrace: traceEnabled ? trace : null,
                   });
                 }
               } catch (e) {
@@ -4266,6 +4320,18 @@ const plugin = {
               });
               const activeIds = new Set(allActive.map((o) => o.id));
               await detector.flagContradictoryOverlays(overlays, activeIds);
+              if (traceEnabled && trace) {
+                for (const ov of overlays) {
+                  if (ov.contradiction) {
+                    addTraceDecision(trace, {
+                      memoryId: ov.targetMemoryId || ov.id,
+                      action: "rejection",
+                      stage: "overlay-contradiction",
+                      reason: "contradiction_detected",
+                    });
+                  }
+                }
+              }
             } catch (e) {
               api.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${String(e)}`);
             }
@@ -4336,6 +4402,15 @@ const plugin = {
               if (!a || !b) continue;
               const winner = resolveContradictionWinner(a, b);
               const loser = winner.id === a.id ? b : a;
+              if (traceEnabled && trace) {
+                addTraceStoreDecision(trace, {
+                  action: "superseded",
+                  memoryId: loser.id,
+                  relatedMemoryId: winner.id,
+                  reason: "memory-text contradiction winner",
+                  score: null,
+                });
+              }
               if (!loser.supersededBy) {
                 loser.supersededBy = winner.id;
                 loser.status = "superseded-in-context";
@@ -4390,6 +4465,7 @@ const plugin = {
                   logger: api.logger,
                   compactedAt: event?.compactedAt || ctx?.compactedAt || null,
                   getMemoryById: async (memoryId) => db.getById(memoryId),
+                  decisionTrace: traceEnabled ? trace : null,
                 }),
                 new Promise((_, reject) =>
                   setTimeout(() => reject(new Error("crr_timeout")), crrCfg.timeoutMs ?? 50)
@@ -4397,6 +4473,9 @@ const plugin = {
               ]);
               reactivationContext = crrResult?.context || "";
               reactivationAdditions = crrResult?.additions || [];
+              if (traceEnabled && crrResult?.trace) {
+                trace = crrResult.trace;
+              }
             } catch (crrErr) {
               api.logger.warn?.(`conversation-reactivation-recall: ${crrErr.message}`);
             }
@@ -4408,6 +4487,11 @@ const plugin = {
             overlays,
             matchedPattern,
             semanticLensMemories: semanticLensItems,
+            decisionTrace: traceEnabled ? trace : null,
+            traceOptions: {
+              includeInPrompt: traceInPrompt,
+              maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+            },
           });
           const fullMemoriesContext = reactivationContext
             ? memoriesContext + "\n\n" + reactivationContext
