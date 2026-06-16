@@ -38,6 +38,11 @@ import { distanceToScore } from "./lib/score.js";
 import { flushMetrics } from "./lib/metrics.js";
 import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary } from "./lib/text-utils.js";
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory } from "./lib/categorize.js";
+import {
+  hasMeaningfulDifference,
+  isSafeDuplicate,
+  validateMergedTextPreservesFacts,
+} from "./lib/memory-merge-safety.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
@@ -1828,8 +1833,13 @@ const plugin = {
         // 1. Duplicate check
         const existing = await storeDb.findSimilar(vector, params.text, duplicateThreshold);
         if (existing.length > 0) {
-          if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: existing[0].entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${existing[0].score.toFixed(3)}`, relatedId: existing[0].entry.id });
-          return { content: [{ type: "text", text: `Similar memory already exists: "${existing[0].entry.text}"` }], details: { action: "duplicate", id: existing[0].entry.id } };
+          const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
+          if (!safeDuplicate) {
+            api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+          } else {
+            if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
+            return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }], details: { action: "duplicate", id: safeDuplicate.entry.id } };
+          }
         }
 
         // 2. Merge check (+ conflict detection for decision category)
@@ -1837,13 +1847,17 @@ const plugin = {
           const mergeCandidate = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
           if (mergeCandidate) {
             let mergeResult = null;
-            try {
-              mergeResult = await Promise.race([
-                callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg),
-                new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
-              ]);
-            } catch (mergeErr) {
-              api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+            if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
+              api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
+            } else {
+              try {
+                mergeResult = await Promise.race([
+                  callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
+                ]);
+              } catch (mergeErr) {
+                api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+              }
             }
             if (category === "decision" && storeCtx.workspaceDir && mergeCandidate.entry.storedBy && mergeCandidate.entry.storedBy !== storeAgentId) {
               const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
@@ -1851,30 +1865,34 @@ const plugin = {
             }
             const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
             if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
-              // DATA-003: prepare the merged entry and archive the original BEFORE
-              // deleting it. If embedding or archiving fails, the original remains intact.
-              const mergedVector = await embeddings.embed(mergeResult.mergedText);
-              const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
-              let archivePath;
-              try {
-                archivePath = archiveCard(mergeCandidate.entry, storeAgentId);
-              } catch (archiveErr) {
-                api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
-                throw archiveErr;
+              if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
+                api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+              } else {
+                // DATA-003: prepare the merged entry and archive the original BEFORE
+                // deleting it. If embedding or archiving fails, the original remains intact.
+                const mergedVector = await embeddings.embed(mergeResult.mergedText);
+                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+                let archivePath;
+                try {
+                  archivePath = archiveCard(mergeCandidate.entry, storeAgentId);
+                } catch (archiveErr) {
+                  api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
+                  throw archiveErr;
+                }
+                await storeDb.delete(mergeCandidate.entry.id);
+                appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
+                try {
+                  await storeDb.store(mergedEntry);
+                } catch (storeErr) {
+                  api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
+                  throw storeErr;
+                }
+                if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
+                if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
+                  trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
+                }
+                return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
               }
-              await storeDb.delete(mergeCandidate.entry.id);
-              appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
-              try {
-                await storeDb.store(mergedEntry);
-              } catch (storeErr) {
-                api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
-                throw storeErr;
-              }
-              if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
-              if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
-                trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
-              }
-              return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
             }
           }
         } else if (category === "decision" && storeCtx.workspaceDir) {
@@ -3642,8 +3660,13 @@ const plugin = {
               // 1. Duplicate check
               const existing = await db.findSimilar(vector, params.text, duplicateThreshold);
               if (existing.length > 0) {
-                if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: existing[0].entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${existing[0].score.toFixed(3)}`, relatedId: existing[0].entry.id });
-                return { content: [{ type: "text", text: `Similar memory already exists: "${existing[0].entry.text}"` }] };
+                const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
+                if (!safeDuplicate) {
+                  api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+                } else {
+                  if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
+                  return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }] };
+                }
               }
 
               // 2. Merge check (+ conflict detection for decision category)
@@ -3651,13 +3674,17 @@ const plugin = {
                 const mergeCandidate = await db.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
                 if (mergeCandidate) {
                   let mergeResult = null;
-                  try {
-                    mergeResult = await Promise.race([
-                      callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg),
-                      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
-                    ]);
-                  } catch (mergeErr) {
-                    api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+                  if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
+                    api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
+                  } else {
+                    try {
+                      mergeResult = await Promise.race([
+                        callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg),
+                        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
+                      ]);
+                    } catch (mergeErr) {
+                      api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+                    }
                   }
                   // Conflict detection: log if decision from different agent
                   if (category === "decision" && ctx.workspaceDir && mergeCandidate.entry.storedBy && mergeCandidate.entry.storedBy !== agentId) {
@@ -3666,40 +3693,44 @@ const plugin = {
                   }
                   const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
                   if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
-                    // DATA-003: prepare the merged entry and archive the original BEFORE
-                    // deleting it. If embedding/archiving fails, the original remains intact.
-                    const mergedVector = await embeddings.embed(mergeResult.mergedText);
-                    const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user");
-                    const mergedMoodContext = emotionalPool.snapshot(agentId);
-                    const mergedEntry = applyDynamicsDefaults({
-                      id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
-                      importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
-                      expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
-                      emotionalValence: serializeEmotionalValence(mergedEmotion),
-                      emotionalIntensity: mergedEmotion.emotionalIntensity,
-                      emotionalDominant: mergedEmotion.emotionalDominant,
-                      moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
-                    }, Date.now(), halfLifeOverrides);
-                    let archivePath;
-                    try {
-                      archivePath = archiveCard(mergeCandidate.entry, agentId);
-                    } catch (archiveErr) {
-                      api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
-                      throw archiveErr;
+                    if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
+                      api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                    } else {
+                      // DATA-003: prepare the merged entry and archive the original BEFORE
+                      // deleting it. If embedding/archiving fails, the original remains intact.
+                      const mergedVector = await embeddings.embed(mergeResult.mergedText);
+                      const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user");
+                      const mergedMoodContext = emotionalPool.snapshot(agentId);
+                      const mergedEntry = applyDynamicsDefaults({
+                        id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
+                        importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
+                        expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                        emotionalValence: serializeEmotionalValence(mergedEmotion),
+                        emotionalIntensity: mergedEmotion.emotionalIntensity,
+                        emotionalDominant: mergedEmotion.emotionalDominant,
+                        moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
+                      }, Date.now(), halfLifeOverrides);
+                      let archivePath;
+                      try {
+                        archivePath = archiveCard(mergeCandidate.entry, agentId);
+                      } catch (archiveErr) {
+                        api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
+                        throw archiveErr;
+                      }
+                      await db.delete(mergeCandidate.entry.id);
+                      appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
+                      try {
+                        await db.store(mergedEntry);
+                      } catch (storeErr) {
+                        api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
+                        throw storeErr;
+                      }
+                      if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
+                      if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
+                        trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
+                      }
+                      return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
                     }
-                    await db.delete(mergeCandidate.entry.id);
-                    appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
-                    try {
-                      await db.store(mergedEntry);
-                    } catch (storeErr) {
-                      api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
-                      throw storeErr;
-                    }
-                    if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
-                    if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
-                      trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
-                    }
-                    return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
                   }
                 }
               } else if (category === "decision" && ctx.workspaceDir) {

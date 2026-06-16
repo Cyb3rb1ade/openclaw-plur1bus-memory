@@ -84,6 +84,12 @@ describe("hasMeaningfulDifference", () => {
   it("detects temporal/status differences", () => {
     assert.strictEqual(hasMeaningfulDifference("Wir nutzen Postgres.", "Früher nutzten wir Postgres."), true);
   });
+  it("returns false for single-word variants of otherwise identical facts", () => {
+    assert.strictEqual(
+      hasMeaningfulDifference("Projekt Alpha nutzt den Auth-Service intern.", "Projekt Alpha nutzt den Auth-Service extern."),
+      false
+    );
+  });
 });
 
 describe("isSafeDuplicate", () => {
@@ -107,6 +113,15 @@ describe("isSafeDuplicate", () => {
   });
   it("rejects different versions", () => {
     assert.strictEqual(isSafeDuplicate("Deployment läuft auf Node 20.", "Deployment läuft auf Node 22."), false);
+  });
+  it("rejects complementary phrases that should be merged", () => {
+    assert.strictEqual(
+      isSafeDuplicate("Original fact about cats", "Additional cat fact"),
+      false
+    );
+  });
+  it("accepts canonicalised tech synonyms", () => {
+    assert.strictEqual(isSafeDuplicate("Wir nutzen Postgres.", "Wir nutzen PostgreSQL."), true);
   });
 });
 
@@ -149,6 +164,16 @@ describe("validateMergedTextPreservesFacts", () => {
         "Dreamdale ist etwas."
       ),
       false
+    );
+  });
+  it("accepts singular/plural variants", () => {
+    assert.strictEqual(
+      validateMergedTextPreservesFacts(
+        "Original fact about cats",
+        "Another cat fact",
+        "Original fact about cats and another cat fact"
+      ),
+      true
     );
   });
 });
