@@ -72,4 +72,72 @@ describe("ContradictionDetector memory-text pairs", () => {
     const result = await detector.detectMemoryTextContradiction(a, b);
     assert.strictEqual(result, false);
   });
+
+  it("returns false when first argument is null", async () => {
+    const detector = new ContradictionDetector({ llm: async () => "yes" });
+    const b = { id: "m2", text: "B." };
+    const result = await detector.detectMemoryTextContradiction(null, b);
+    assert.strictEqual(result, false);
+  });
+
+  it("returns false when second argument is null", async () => {
+    const detector = new ContradictionDetector({ llm: async () => "yes" });
+    const a = { id: "m1", text: "A." };
+    const result = await detector.detectMemoryTextContradiction(a, null);
+    assert.strictEqual(result, false);
+  });
+
+  it("falls back to summary when text is absent", async () => {
+    let promptSeen = "";
+    const detector = new ContradictionDetector({
+      llm: async (messages) => {
+        promptSeen = messages[messages.length - 1].content;
+        return "yes";
+      },
+    });
+    const a = { id: "m1", summary: "Summary A." };
+    const b = { id: "m2", summary: "Summary B." };
+    const result = await detector.detectMemoryTextContradiction(a, b);
+    assert.strictEqual(result, true);
+    assert.ok(promptSeen.includes("Summary A."));
+    assert.ok(promptSeen.includes("Summary B."));
+  });
+
+  it("treats whitespace-only text as empty", async () => {
+    const detector = new ContradictionDetector({ llm: async () => "yes" });
+    const a = { id: "m1", text: "   " };
+    const b = { id: "m2", text: "B." };
+    const result = await detector.detectMemoryTextContradiction(a, b);
+    assert.strictEqual(result, false);
+  });
+
+  it("does not throw when opts is null", async () => {
+    const detector = new ContradictionDetector({ llm: async () => "yes" });
+    const memories = [
+      { id: "m1", text: "A." },
+      { id: "m2", text: "B." },
+    ];
+    const result = await detector.findMemoryTextContradictions(memories, null);
+    assert.strictEqual(result.length, 1);
+  });
+
+  it("returns empty array when maxPairs is 0", async () => {
+    const detector = new ContradictionDetector({ llm: async () => "yes" });
+    const memories = [
+      { id: "m1", text: "A." },
+      { id: "m2", text: "B." },
+    ];
+    const result = await detector.findMemoryTextContradictions(memories, { maxPairs: 0 });
+    assert.deepStrictEqual(result, []);
+  });
+
+  it("does not crash or emit records when memory ids are missing", async () => {
+    const detector = new ContradictionDetector({ llm: async () => "yes" });
+    const memories = [
+      { text: "A." },
+      { text: "B." },
+    ];
+    const result = await detector.findMemoryTextContradictions(memories);
+    assert.deepStrictEqual(result, []);
+  });
 });
