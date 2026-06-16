@@ -406,9 +406,9 @@ describe("filterAssociativeCandidates", () => {
 
   it("allows up to maxAssociations graph items", () => {
     const items = [
-      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 1 },
-      { id: "g2", graphSource: "graph", memoryStrength: 0.85, depth: 1 },
-      { id: "g3", graphSource: "graph", memoryStrength: 0.8, depth: 1 },
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, relevanceScore: 0.9, depth: 1 },
+      { id: "g2", graphSource: "graph", memoryStrength: 0.85, relevanceScore: 0.85, depth: 1 },
+      { id: "g3", graphSource: "graph", memoryStrength: 0.8, relevanceScore: 0.8, depth: 1 },
     ];
     const result = filterAssociativeCandidates(items, { maxAssociations: 2, sessionState: {} });
     assert.strictEqual(result.length, 2);
@@ -419,8 +419,8 @@ describe("filterAssociativeCandidates", () => {
   it("records surfaced count in sessionState", () => {
     const sessionState = {};
     const items = [
-      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 1 },
-      { id: "g2", graphSource: "graph", memoryStrength: 0.85, depth: 1 },
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, relevanceScore: 0.9, depth: 1 },
+      { id: "g2", graphSource: "graph", memoryStrength: 0.85, relevanceScore: 0.85, depth: 1 },
     ];
     filterAssociativeCandidates(items, { maxAssociations: 2, sessionState });
     assert.strictEqual(sessionState.associativeSurfacedCount, 2);
@@ -429,8 +429,8 @@ describe("filterAssociativeCandidates", () => {
   it("honors existing sessionState count", () => {
     const sessionState = { associativeSurfacedCount: 1 };
     const items = [
-      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 1 },
-      { id: "g2", graphSource: "graph", memoryStrength: 0.85, depth: 1 },
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, relevanceScore: 0.9, depth: 1 },
+      { id: "g2", graphSource: "graph", memoryStrength: 0.85, relevanceScore: 0.85, depth: 1 },
     ];
     const result = filterAssociativeCandidates(items, { maxAssociations: 2, sessionState });
     assert.strictEqual(result.length, 1);
@@ -440,7 +440,7 @@ describe("filterAssociativeCandidates", () => {
 
   it("filters graph items below depth threshold", () => {
     const items = [
-      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 3 },
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, relevanceScore: 0.9, depth: 3 },
     ];
     const result = filterAssociativeCandidates(items, { maxAssociations: 1, sessionState: {} });
     assert.deepStrictEqual(result, []);
@@ -448,8 +448,8 @@ describe("filterAssociativeCandidates", () => {
 
   it("honors configured assocThreshold", () => {
     const items = [
-      { id: "g1", graphSource: "graph", memoryStrength: 0.9, depth: 1 },
-      { id: "g2", graphSource: "graph", memoryStrength: 0.5, depth: 1 },
+      { id: "g1", graphSource: "graph", memoryStrength: 0.9, relevanceScore: 0.9, depth: 1 },
+      { id: "g2", graphSource: "graph", memoryStrength: 0.5, relevanceScore: 0.5, depth: 1 },
     ];
     const result = filterAssociativeCandidates(items, { maxAssociations: 2, assocThreshold: 0.75, sessionState: {} });
     assert.strictEqual(result.length, 1);
