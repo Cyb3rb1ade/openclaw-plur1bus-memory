@@ -84,6 +84,21 @@ describe("Schema-Default-Typen (Recall)", () => {
     assertBooleanDefault("recall.canonicalFirst", true));
 });
 
+describe("Schema-Default-Typen (Recall Decision Trace)", () => {
+  it("recall.decisionTrace.enabled ist false", () =>
+    assertBooleanDefault("recall.decisionTrace.enabled", false));
+  it("recall.decisionTrace.includeInPrompt ist false", () =>
+    assertBooleanDefault("recall.decisionTrace.includeInPrompt", false));
+  it("recall.decisionTrace.maxCandidates ist 50", () =>
+    assertNumberDefault("recall.decisionTrace.maxCandidates", 50));
+  it("recall.decisionTrace.maxTextPreviewChars ist 160", () =>
+    assertNumberDefault("recall.decisionTrace.maxTextPreviewChars", 160));
+  it("recall.decisionTrace.persist ist false", () =>
+    assertBooleanDefault("recall.decisionTrace.persist", false));
+  it("recall.decisionTrace.visibleHints ist false", () =>
+    assertBooleanDefault("recall.decisionTrace.visibleHints", false));
+});
+
 describe("Schema-Default-Typen (Runtime / Cache)", () => {
   it("runtime.recallTimeoutMs ist eine Zahl", () =>
     assertNumberDefault("runtime.recallTimeoutMs", 45000));
