@@ -140,4 +140,53 @@ describe("ContradictionDetector memory-text pairs", () => {
     const result = await detector.findMemoryTextContradictions(memories);
     assert.deepStrictEqual(result, []);
   });
+
+  it("does not call the LLM when memory ids are missing", async () => {
+    let calls = 0;
+    const detector = new ContradictionDetector({
+      llm: async () => {
+        calls++;
+        return "yes";
+      },
+    });
+    const memories = [
+      { text: "A." },
+      { text: "B." },
+    ];
+    const result = await detector.findMemoryTextContradictions(memories);
+    assert.deepStrictEqual(result, []);
+    assert.strictEqual(calls, 0);
+  });
+
+  it("does not call the LLM for a pair with a non-string id", async () => {
+    let calls = 0;
+    const detector = new ContradictionDetector({
+      llm: async () => {
+        calls++;
+        return "yes";
+      },
+    });
+    const memories = [
+      { id: "m1", text: "A." },
+      { id: 123, text: "B." },
+    ];
+    const result = await detector.findMemoryTextContradictions(memories);
+    assert.deepStrictEqual(result, []);
+    assert.strictEqual(calls, 0);
+  });
+
+  it("detectMemoryTextContradiction returns false when an id is missing", async () => {
+    let calls = 0;
+    const detector = new ContradictionDetector({
+      llm: async () => {
+        calls++;
+        return "yes";
+      },
+    });
+    const a = { text: "A." };
+    const b = { id: "m2", text: "B." };
+    const result = await detector.detectMemoryTextContradiction(a, b);
+    assert.strictEqual(result, false);
+    assert.strictEqual(calls, 0);
+  });
 });
