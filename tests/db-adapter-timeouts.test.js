@@ -12,6 +12,7 @@ import { createDbAdapter } from "../lib/db-adapter.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 
 const never = () => new Promise(() => {});
+let counter = 0;
 
 function makeFakeTable(overrides = {}) {
   const queryFn = overrides.query || (() => Promise.resolve([]));
@@ -34,6 +35,7 @@ function makeFakeTable(overrides = {}) {
 
 function makeAdapter(fakeTable, opts = {}) {
   return createDbAdapter({
+    basePath: `/tmp/db-adapter-timeout-test-${counter++}`,
     getTable: async () => fakeTable,
     readTimeoutMs: 50,
     writeTimeoutMs: 50,
