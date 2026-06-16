@@ -46,4 +46,69 @@ describe("formatRelevantMemoriesContext — memory-text contradictions", () => {
     ]);
     assert.ok(!out.includes('version="1"'), "expected no version attribute for v1");
   });
+
+  it("omits superseded-by attribute when supersededBy is empty", () => {
+    const out = formatRelevantMemoriesContext([
+      { id: "old", category: "fact", source: "dm", display: "Old.", memoryStrength: 1.0, status: "superseded", supersededBy: "" },
+    ]);
+    assert.ok(out.includes('status="superseded"'), "expected status attribute");
+    assert.ok(!out.includes("superseded-by"), "expected no superseded-by attribute for empty value");
+    assert.ok(out.includes("[superseded]"), "expected visible superseded marker");
+  });
+
+  it("omits superseded-by attribute when supersededBy is missing", () => {
+    const out = formatRelevantMemoriesContext([
+      { id: "old", category: "fact", source: "dm", display: "Old.", memoryStrength: 1.0, status: "superseded" },
+    ]);
+    assert.ok(out.includes('status="superseded"'), "expected status attribute");
+    assert.ok(!out.includes("superseded-by"), "expected no superseded-by attribute when missing");
+  });
+
+  it("sanitizes superseded-by value against quote injection", () => {
+    const out = formatRelevantMemoriesContext([
+      { id: "old", category: "fact", source: "dm", display: "Old.", memoryStrength: 1.0, status: "superseded", supersededBy: 'new" data-x="y' },
+    ]);
+    assert.ok(out.includes('superseded-by="new_data-x_y"'), "expected sanitized superseded-by value");
+    assert.ok(!out.includes('data-x="y"'), "attribute injection must not survive");
+  });
+
+  it("sanitizes update-source value against quote injection", () => {
+    const out = formatRelevantMemoriesContext([
+      { id: "m1", category: "fact", source: "dm", display: "x", memoryStrength: 1.0, updateSource: 'user" data-x="y' },
+    ]);
+    assert.ok(out.includes('update-source="user_data-x_y"'), "expected sanitized update-source value");
+    assert.ok(!out.includes('data-x="y"'), "attribute injection must not survive");
+  });
+
+  it("does not render malformed status as superseded", () => {
+    const out = formatRelevantMemoriesContext([
+      { id: "m1", category: "fact", source: "dm", display: "x", memoryStrength: 1.0, status: 'superseded" data-x="y', supersededBy: "new" },
+    ]);
+    assert.ok(!out.includes("superseded-by"), "malformed status must not trigger superseded-by");
+    assert.ok(!out.includes('status="superseded"'), "malformed status must not render superseded status");
+  });
+
+  it("ignores non-finite version numbers", () => {
+    const outInfinity = formatRelevantMemoriesContext([
+      { id: "m1", category: "fact", source: "dm", display: "x", memoryStrength: 1.0, versionNumber: Infinity },
+    ]);
+    assert.ok(!outInfinity.includes('version="Infinity"'), "Infinity must not render as version");
+
+    const outNaN = formatRelevantMemoriesContext([
+      { id: "m2", category: "fact", source: "dm", display: "x", memoryStrength: 1.0, versionNumber: NaN },
+    ]);
+    assert.ok(!outNaN.includes("version="), "NaN must not render as version");
+
+    const outNegative = formatRelevantMemoriesContext([
+      { id: "m3", category: "fact", source: "dm", display: "x", memoryStrength: 1.0, versionNumber: -5 },
+    ]);
+    assert.ok(!outNegative.includes("version="), "negative version must not render");
+  });
+
+  it("floors decimal version numbers", () => {
+    const out = formatRelevantMemoriesContext([
+      { id: "m1", category: "fact", source: "dm", display: "x", memoryStrength: 1.0, versionNumber: 3.9 },
+    ]);
+    assert.ok(out.includes('version="3"'), "expected floored version attribute");
+  });
 });
