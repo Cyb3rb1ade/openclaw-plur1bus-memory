@@ -61,12 +61,12 @@ function sampleIndex() {
 }
 
 const memoryById = new Map([
-  ["bridge1", { id: "bridge1", category: "fact", origin: "dm", summary: "Bridge one" }],
-  ["bridge2", { id: "bridge2", category: "fact", origin: "dm", summary: "Bridge two" }],
-  ["rep1", { id: "rep1", category: "fact", origin: "dm", summary: "Representative" }],
-  ["faded1", { id: "faded1", category: "fact", origin: "dm", summary: "Faded", memoryStrength: 0.1 }],
-  ["c2bridge", { id: "c2bridge", category: "decision", origin: "dm", summary: "Second bridge" }],
-  ["c2rep", { id: "c2rep", category: "decision", origin: "dm", summary: "Second representative" }],
+  ["bridge1", { id: "bridge1", category: "fact", origin: "dm", summary: "Bridge one alpha" }],
+  ["bridge2", { id: "bridge2", category: "fact", origin: "dm", summary: "Bridge two alpha" }],
+  ["rep1", { id: "rep1", category: "fact", origin: "dm", summary: "Representative alpha" }],
+  ["faded1", { id: "faded1", category: "fact", origin: "dm", summary: "Faded alpha", memoryStrength: 0.1 }],
+  ["c2bridge", { id: "c2bridge", category: "decision", origin: "dm", summary: "Second bridge alpha" }],
+  ["c2rep", { id: "c2rep", category: "decision", origin: "dm", summary: "Second representative alpha" }],
 ]);
 
 describe("semantic lens index", () => {
@@ -118,7 +118,7 @@ describe("semantic lens index", () => {
   });
 
   it("adds bridge and representative memories without replacing base recall", async () => {
-    const baseMemories = [{ entry: { id: "base1", summary: "Base" }, score: 0.9 }];
+    const baseMemories = [{ entry: { id: "base1", summary: "Base bridge one alpha representative" }, score: 0.9 }];
     const result = await applySemanticLensToRecall(baseMemories, {
       semanticLens: { enabled: true, maxLensMemories: 3, maxBridgeMemories: 2, maxFadedMemories: 1, maxCommunities: 2, timeoutMs: 50 },
       index: sampleIndex(),
@@ -132,7 +132,7 @@ describe("semantic lens index", () => {
   it("dedupes lens memories already present in base recall", async () => {
     const baseMemories = [
       { entry: { id: "base1", summary: "Base" }, score: 0.9 },
-      { entry: { id: "bridge1", summary: "Already present" }, score: 0.8 },
+      { entry: { id: "bridge1", summary: "Bridge one alpha already present" }, score: 0.8 },
     ];
     const result = await applySemanticLensToRecall(baseMemories, {
       semanticLens: { enabled: true, maxLensMemories: 3, maxBridgeMemories: 2, maxFadedMemories: 1, maxCommunities: 2, timeoutMs: 50 },
@@ -144,8 +144,8 @@ describe("semantic lens index", () => {
 
   it("respects max communities and faded limits", async () => {
     const baseMemories = [
-      { entry: { id: "base1", summary: "Base one" }, score: 0.9 },
-      { entry: { id: "base2", summary: "Base two" }, score: 0.8 },
+      { entry: { id: "base1", summary: "Base one alpha representative" }, score: 0.9 },
+      { entry: { id: "base2", summary: "Base two alpha" }, score: 0.8 },
     ];
     const result = await applySemanticLensToRecall(baseMemories, {
       semanticLens: { enabled: true, maxLensMemories: 4, maxBridgeMemories: 2, maxFadedMemories: 1, maxCommunities: 1, timeoutMs: 50 },

@@ -194,10 +194,10 @@ describe("conversation-reactivation-recall", () => {
       const memory = {
         id: "m1",
         category: "project",
-        display: "dashboard project architecture decisions",
+        display: "dashboard architecture decisions plan",
       };
       const result = await selectReactivationMemories({
-        prompt,
+        prompt: "we should continue the dashboard architecture decisions",
         baseRecallIds: new Set(),
         semanticLens: {
           communities: [
@@ -255,13 +255,13 @@ describe("conversation-reactivation-recall", () => {
 
     it("respects maxReactivationMemories limit", async () => {
       const memories = [
-        { id: "m1", category: "project", display: "dashboard one" },
-        { id: "m2", category: "project", display: "dashboard two" },
-        { id: "m3", category: "project", display: "dashboard three" },
-        { id: "m4", category: "project", display: "dashboard four" },
+        { id: "m1", category: "project", display: "dashboard architecture one" },
+        { id: "m2", category: "project", display: "dashboard architecture two" },
+        { id: "m3", category: "project", display: "dashboard architecture three" },
+        { id: "m4", category: "project", display: "dashboard architecture four" },
       ];
       const result = await selectReactivationMemories({
-        prompt,
+        prompt: "we should continue the dashboard architecture",
         baseRecallIds: new Set(),
         semanticLens: {
           communities: [{ id: "c1", representativeMemoryIds: ["m1", "m2", "m3", "m4"] }],
@@ -347,13 +347,13 @@ describe("conversation-reactivation-recall", () => {
 
     it("enforces hard caps even when config exceeds them", async () => {
       const memories = [
-        { id: "m1", category: "project", display: "dashboard one" },
-        { id: "m2", category: "project", display: "dashboard two" },
-        { id: "m3", category: "project", display: "dashboard three" },
-        { id: "m4", category: "project", display: "dashboard four" },
+        { id: "m1", category: "project", display: "dashboard architecture one" },
+        { id: "m2", category: "project", display: "dashboard architecture two" },
+        { id: "m3", category: "project", display: "dashboard architecture three" },
+        { id: "m4", category: "project", display: "dashboard architecture four" },
       ];
       const result = await selectReactivationMemories({
-        prompt: "dashboard project",
+        prompt: "dashboard architecture",
         baseRecallIds: new Set(),
         semanticLens: {
           communities: [{ id: "c1", representativeMemoryIds: ["m1", "m2", "m3", "m4"] }],
@@ -421,12 +421,12 @@ describe("conversation-reactivation-recall", () => {
       const getMemoryById = async (id) => {
         hydrateCalls++;
         if (id === "m1") {
-          return { id: "m1", category: "project", display: "dashboard project plan" };
+          return { id: "m1", category: "project", display: "dashboard architecture plan" };
         }
         return null;
       };
       const result = await selectReactivationMemories({
-        prompt: "continue dashboard project",
+        prompt: "continue dashboard architecture",
         baseRecallIds: new Set(),
         semanticLens: {
           communities: [{ id: "c1", representativeMemoryIds: ["m1"] }],
@@ -546,12 +546,12 @@ describe("conversation-reactivation-recall", () => {
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
         JSON.stringify({
           communities: [{ id: "c1", representativeMemoryIds: ["m1"] }],
-          memories: [{ id: "m1", category: "project", display: "dashboard project plan" }],
+          memories: [{ id: "m1", category: "project", display: "dashboard architecture plan" }],
           entries: {},
         }),
         "utf8"
       );
-      const args = makeArgs({ agentId, sessionKey, workspaceDir: tmpDir });
+      const args = makeArgs({ agentId, sessionKey, workspaceDir: tmpDir, prompt: "continue dashboard architecture", messageText: "continue dashboard architecture" });
       const result = await runConversationReactivationRecall(args);
       assert.ok(result.context.includes("<memory-reactivation"));
       assert.strictEqual(result.additions.length, 1);
@@ -577,7 +577,7 @@ describe("conversation-reactivation-recall", () => {
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
         JSON.stringify({
           communities: [{ id: "c1", representativeMemoryIds: ["m1"] }],
-          memories: [{ id: "m1", category: "project", display: "dashboard plan weiter" }],
+          memories: [{ id: "m1", category: "project", display: "dashboard plan weiter machen" }],
           entries: {},
         }),
         "utf8"
@@ -652,7 +652,7 @@ describe("conversation-reactivation-recall", () => {
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
         JSON.stringify({
           communities: [{ id: "c1", representativeMemoryIds: ["m1"] }],
-          memories: [{ id: "m1", category: "project", display: "dashboard plan" }],
+          memories: [{ id: "m1", category: "project", display: "dashboard architecture plan" }],
           entries: {},
         }),
         "utf8"
@@ -661,7 +661,7 @@ describe("conversation-reactivation-recall", () => {
       const filesBefore = readdirSync(tmpDir, { recursive: true })
         .filter((name) => statSync(join(tmpDir, name)).isFile())
         .sort();
-      const args = makeArgs({ agentId, sessionKey, workspaceDir: tmpDir });
+      const args = makeArgs({ agentId, sessionKey, workspaceDir: tmpDir, prompt: "continue dashboard architecture", messageText: "continue dashboard architecture" });
       await runConversationReactivationRecall(args);
       const filesAfter = readdirSync(tmpDir, { recursive: true })
         .filter((name) => statSync(join(tmpDir, name)).isFile())
@@ -684,11 +684,11 @@ describe("conversation-reactivation-recall", () => {
             { id: "c3", representativeMemoryIds: ["m5"] },
           ],
           memories: [
-            { id: "m1", category: "project", display: "dashboard project alpha" },
-            { id: "m2", category: "project", display: "dashboard project beta" },
-            { id: "m3", category: "plan", display: "dashboard plan gamma" },
-            { id: "m4", category: "plan", display: "dashboard plan delta" },
-            { id: "m5", category: "goal", display: "dashboard goal epsilon" },
+            { id: "m1", category: "project", display: "dashboard architecture alpha" },
+            { id: "m2", category: "project", display: "dashboard architecture beta" },
+            { id: "m3", category: "plan", display: "dashboard architecture gamma" },
+            { id: "m4", category: "plan", display: "dashboard architecture delta" },
+            { id: "m5", category: "goal", display: "dashboard architecture epsilon" },
           ],
           entries: {},
         }),
@@ -700,8 +700,8 @@ describe("conversation-reactivation-recall", () => {
         sessionKey,
         workspaceDir: tmpDir,
         baseRecallIds,
-        prompt: "continue dashboard project",
-        messageText: "continue dashboard project",
+        prompt: "continue dashboard architecture",
+        messageText: "continue dashboard architecture",
       });
       const start = performance.now();
       const result = await runConversationReactivationRecall(args);

@@ -96,7 +96,7 @@ import { runProactiveCheck } from "./lib/jobs/proactive-check.js";
 import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
-import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline } from "./lib/recall-pipeline.js";
+import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, computeUseAssociative } from "./lib/recall-pipeline.js";
 import { applySemanticLensToRecall } from "./lib/semantic-lens-index.js";
 import {
   buildNeoDoctorReport,
@@ -4071,7 +4071,7 @@ const plugin = {
               logger: api.logger,
             });
           }
-          const useAssociative = continuityEnabled ? assocCfg.enabled !== false : true;
+          const useAssociative = computeUseAssociative(continuityEnabled, assocCfg);
           // v1.9.0 — komplette Pipeline aus shared module
           const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
             query: event.prompt,
