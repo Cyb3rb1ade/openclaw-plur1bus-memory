@@ -3561,7 +3561,9 @@ const plugin = {
                 emotionalState: emotionalPool.get(agentId),
                 graphEdges,
                 associativeEnabled: true,
-                graphConfig: {},
+                graphConfig: {
+                  graphHydrationRelevanceThreshold: assocCfg.graphHydrationRelevanceThreshold ?? 0.25,
+                },
                 workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
                 agentId,
                 retrievalLogger: (ledgerInfo) => {
@@ -4099,10 +4101,11 @@ const plugin = {
             graphEdges,
             associativeEnabled: useAssociative,
             graphConfig: useAssociative ? {
-              maxDepth: assocCfg.maxDepth ?? 3,
+              maxDepth: assocCfg.maxDepth ?? 2,
               maxNeighborsPerNode: assocCfg.maxNeighborsPerNode ?? 8,
               maxAssociatedResults: assocCfg.maxAssociatedResults ?? 40,
               minCumulativeRelevance: assocCfg.minCumulativeRelevance ?? 0.2,
+              graphHydrationRelevanceThreshold: assocCfg.graphHydrationRelevanceThreshold ?? 0.25,
             } : {},
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             agentId,
