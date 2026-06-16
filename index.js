@@ -102,6 +102,14 @@ import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
 import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, computeUseAssociative } from "./lib/recall-pipeline.js";
+import {
+  createRecallDecisionTrace,
+  addTraceDecision,
+  addTraceStoreDecision,
+  attachTraceToMemory,
+  summarizeTrace,
+  textPreview,
+} from "./lib/recall-decision-trace.js";
 import { applySemanticLensToRecall } from "./lib/semantic-lens-index.js";
 import {
   buildNeoDoctorReport,
@@ -1586,6 +1594,12 @@ const plugin = {
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
     const semanticLensCfg   = cfg.semanticLens || recallCfg.semanticLens || {};
 
+    // P2 Recall Decision Trace config
+    const traceCfg = cfg.recall?.decisionTrace || {};
+    const traceEnabled = traceCfg.enabled === true;
+    const traceInPrompt = traceEnabled && traceCfg.includeInPrompt === true;
+    const tracePersist = traceEnabled && traceCfg.persist === true;
+
     const riCfg = cfg.retroactiveInterference ?? {};
 
     // GC config
@@ -1820,6 +1834,12 @@ const plugin = {
       if (!textValidation.ok) {
         return { error: textValidation.error };
       }
+      const trace = createRecallDecisionTrace({
+        query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
+        mode: "store",
+        maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+        maxCandidates: traceCfg.maxCandidates ?? 50,
+      });
       try {
         const vector = await embeddings.embed(params.text);
         const category = params.category || categorizeMemory(params.text);
@@ -1836,9 +1856,11 @@ const plugin = {
           const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
           if (!safeDuplicate) {
             api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+            addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
           } else {
             if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
-            return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }], details: { action: "duplicate", id: safeDuplicate.entry.id } };
+            addTraceStoreDecision(trace, { action: "safe_duplicate", memoryId: safeDuplicate.entry.id, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}` });
+            return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }], details: { action: "duplicate", id: safeDuplicate.entry.id, decisionTrace: trace } };
           }
         }
 
@@ -1846,9 +1868,11 @@ const plugin = {
         if (mergingEnabled && mergingLlmCfg) {
           const mergeCandidate = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
           if (mergeCandidate) {
+            addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
             let mergeResult = null;
             if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
               api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
+              addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "meaningful difference" });
             } else {
               try {
                 mergeResult = await Promise.race([
@@ -1867,6 +1891,7 @@ const plugin = {
             if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
               if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
                 api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "LLM mergedText loses facts" });
               } else {
                 // DATA-003: prepare the merged entry and archive the original BEFORE
                 // deleting it. If embedding or archiving fails, the original remains intact.
@@ -1891,7 +1916,8 @@ const plugin = {
                 if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
                   trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
                 }
-                return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
+                addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
+                return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
               }
             }
           }
@@ -1923,7 +1949,8 @@ const plugin = {
         if (storeCtx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
           trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: entry.id, category, importance });
         }
-        return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id } };
+        addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
+        return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id, decisionTrace: trace } };
       } catch (err) {
         return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
       }
@@ -3555,7 +3582,15 @@ const plugin = {
                 graphEdges = neoStore.readGraphEdges(5_000);
               } catch (_e) { dbg(_e); }
               // v1.9.0 — komplette Pipeline aus shared module
-              const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
+              const trace = traceEnabled
+                ? createRecallDecisionTrace({
+                    query: params.query,
+                    mode: "recall",
+                    maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+                    maxCandidates: traceCfg.maxCandidates ?? 50,
+                  })
+                : undefined;
+              const { canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
                 query: params.query,
                 dbTable: db.table,
                 embeddings,
@@ -3584,6 +3619,7 @@ const plugin = {
                 },
                 workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
                 agentId,
+                decisionTrace: trace,
                 retrievalLogger: (ledgerInfo) => {
                   try {
                     const neoStore = getNeoStore(ctx, {});
@@ -3611,6 +3647,10 @@ const plugin = {
                   : (r.entry.summary || libGenerateSummary(r.entry.text, summaryMaxWords));
                 const orig = DISPLAY_SOURCES.has(r.entry.origin) ? `|${r.entry.origin}` : "";
                 lines.push(`[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id})`);
+              }
+              if (traceEnabled && returnedTrace) {
+                const summary = summarizeTrace(returnedTrace);
+                lines.push(`[decision-trace] totalCandidates:${summary.totalCandidates} included:${summary.included} rejected:${summary.rejected} downranked:${summary.downranked} superseded:${summary.superseded} deduped:${summary.deduped} merged:${summary.merged} guardPass:${summary.guardPass} guardFail:${summary.guardFail}`);
               }
               return { content: [{ type: "text", text: lines.join("\n") }] };
             } catch (err) {
@@ -3648,6 +3688,12 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
+              const trace = createRecallDecisionTrace({
+                query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
+                mode: "store",
+                maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+                maxCandidates: traceCfg.maxCandidates ?? 50,
+              });
               const vector = await embeddings.embed(params.text);
               const category = params.category || categorizeMemory(params.text);
               const origin = MEMORY_ORIGINS.includes(params.origin) ? params.origin : "dm";
@@ -3663,9 +3709,11 @@ const plugin = {
                 const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
                 if (!safeDuplicate) {
                   api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+                  addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
                 } else {
                   if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
-                  return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }] };
+                  addTraceStoreDecision(trace, { action: "safe_duplicate", memoryId: safeDuplicate.entry.id, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}` });
+                  return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }], details: { action: "duplicate", id: safeDuplicate.entry.id, decisionTrace: trace } };
                 }
               }
 
@@ -3673,9 +3721,11 @@ const plugin = {
               if (mergingEnabled && mergingLlmCfg) {
                 const mergeCandidate = await db.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
                 if (mergeCandidate) {
+                  addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
                   let mergeResult = null;
                   if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
                     api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
+                    addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "meaningful difference" });
                   } else {
                     try {
                       mergeResult = await Promise.race([
@@ -3695,6 +3745,7 @@ const plugin = {
                   if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
                     if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
                       api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                      addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "LLM mergedText loses facts" });
                     } else {
                       // DATA-003: prepare the merged entry and archive the original BEFORE
                       // deleting it. If embedding/archiving fails, the original remains intact.
@@ -3729,7 +3780,8 @@ const plugin = {
                       if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
                         trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
                       }
-                      return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
+                      addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
+                      return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
                     }
                   }
                 }
@@ -3761,7 +3813,8 @@ const plugin = {
               if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
                 trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: entry.id, category, importance });
               }
-              return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id } };
+              addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
+              return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id, decisionTrace: trace } };
             } catch (err) {
               return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
             }
@@ -4106,8 +4159,17 @@ const plugin = {
             });
           }
           const useAssociative = computeUseAssociative(continuityEnabled, assocCfg);
+          // P2 Recall Decision Trace
+          let trace = traceEnabled
+            ? createRecallDecisionTrace({
+                query: event.prompt,
+                mode: "auto-recall",
+                maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+                maxCandidates: traceCfg.maxCandidates ?? 50,
+              })
+            : null;
           // v1.9.0 — komplette Pipeline aus shared module
-          const { canonical: canonicalHits, memories: ordered } = await runRecallPipeline({
+          const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runRecallPipeline({
             query: event.prompt,
             dbTable: db.table,
             embeddings,
@@ -4140,6 +4202,7 @@ const plugin = {
             } : {},
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             agentId,
+            decisionTrace: trace,
             retrievalLogger: (ledgerInfo) => {
               try {
                 const neoStore = getNeoStore(ctx, event);
@@ -4150,6 +4213,7 @@ const plugin = {
               } catch (_e) { dbg(_e); }
             },
           });
+          trace = pipelineTrace || trace;
           if (ordered.length === 0 && canonicalHits.length === 0) {
             return neoContext ? { prependContext: neoContext } : undefined;
           }
@@ -4160,10 +4224,15 @@ const plugin = {
           for (const c of canonicalHits) {
             const head = c.heading.replace(/\s+/g, " ").slice(0, 80);
             const snippet = libGenerateSummary(c.text.replace(/^#+\s+.+\n/, "").trim(), 60);
-            items.push({ id: `canonical:${head}`, category: "canonical", source: "knowledge", display: `${head} — ${snippet}` });
+            const item = { id: `canonical:${head}`, category: "canonical", source: "knowledge", display: `${head} — ${snippet}` };
+            if (traceEnabled) {
+              attachTraceToMemory(item, { sourceStage: "canonical", score: c.score, reason: "canonical KNOWLEDGE.md hit" });
+            }
+            items.push(item);
           }
           for (const r of ordered) {
-            items.push({
+            const sourceStage = r.source === "graph" || r.source === "both" ? "graph" : "vector";
+            const item = {
               id: r.entry.id,
               category: r.entry.category,
               source: r.entry.origin || "dm",
@@ -4181,7 +4250,16 @@ const plugin = {
               status: r.entry.status || "active",
               versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
               createdAt: r.entry.createdAt ?? 0,
-            });
+            };
+            if (traceEnabled) {
+              attachTraceToMemory(item, {
+                sourceStage,
+                score: r.score,
+                graphSource: r.source,
+                reason: sourceStage === "graph" ? "associative graph" : "vector recall",
+              });
+            }
+            items.push(item);
           }
 
           const semanticLensResult = await applySemanticLensToRecall(ordered, {
@@ -4217,6 +4295,7 @@ const plugin = {
                 maxAssociations: tasteCfg.maxAssociationsPerSession ?? 1,
                 assocThreshold: assocCfg.assocThreshold ?? 0.75,
                 sessionState,
+                decisionTrace: traceEnabled ? trace : null,
               });
             }
 
@@ -4234,6 +4313,7 @@ const plugin = {
                     maxPatterns: patternCfg.maxPerSession ?? tasteCfg.maxPatternsPerSession ?? 1,
                     currentRegister,
                     sessionState,
+                    decisionTrace: traceEnabled ? trace : null,
                   });
                 }
               } catch (e) {
@@ -4266,6 +4346,18 @@ const plugin = {
               });
               const activeIds = new Set(allActive.map((o) => o.id));
               await detector.flagContradictoryOverlays(overlays, activeIds);
+              if (traceEnabled && trace) {
+                for (const ov of overlays) {
+                  if (ov.contradiction) {
+                    addTraceDecision(trace, {
+                      memoryId: ov.targetMemoryId || ov.id,
+                      action: "rejection",
+                      stage: "overlay-contradiction",
+                      reason: "contradiction_detected",
+                    });
+                  }
+                }
+              }
             } catch (e) {
               api.logger.warn?.(`continuity-engine: contradiction enrichment failed: ${String(e)}`);
             }
@@ -4336,6 +4428,15 @@ const plugin = {
               if (!a || !b) continue;
               const winner = resolveContradictionWinner(a, b);
               const loser = winner.id === a.id ? b : a;
+              if (traceEnabled && trace) {
+                addTraceStoreDecision(trace, {
+                  action: "superseded",
+                  memoryId: loser.id,
+                  relatedMemoryId: winner.id,
+                  reason: "memory-text contradiction winner",
+                  score: null,
+                });
+              }
               if (!loser.supersededBy) {
                 loser.supersededBy = winner.id;
                 loser.status = "superseded-in-context";
@@ -4390,6 +4491,7 @@ const plugin = {
                   logger: api.logger,
                   compactedAt: event?.compactedAt || ctx?.compactedAt || null,
                   getMemoryById: async (memoryId) => db.getById(memoryId),
+                  decisionTrace: traceEnabled ? trace : null,
                 }),
                 new Promise((_, reject) =>
                   setTimeout(() => reject(new Error("crr_timeout")), crrCfg.timeoutMs ?? 50)
@@ -4397,6 +4499,9 @@ const plugin = {
               ]);
               reactivationContext = crrResult?.context || "";
               reactivationAdditions = crrResult?.additions || [];
+              if (traceEnabled && crrResult?.trace) {
+                trace = crrResult.trace;
+              }
             } catch (crrErr) {
               api.logger.warn?.(`conversation-reactivation-recall: ${crrErr.message}`);
             }
@@ -4408,6 +4513,11 @@ const plugin = {
             overlays,
             matchedPattern,
             semanticLensMemories: semanticLensItems,
+            decisionTrace: traceEnabled ? trace : null,
+            traceOptions: {
+              includeInPrompt: traceInPrompt,
+              maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+            },
           });
           const fullMemoriesContext = reactivationContext
             ? memoriesContext + "\n\n" + reactivationContext
