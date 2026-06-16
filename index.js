@@ -138,6 +138,7 @@ import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-loca
 import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import { createBackgroundMemoryScheduler, isBackgroundTurn } from "./lib/runtime-scheduler.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
+import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import {
   inferEmotionalValence,
   inferEmotionalValenceAsync,
@@ -317,6 +318,25 @@ function commandOption(tokens = [], flag, fallback = "") {
 // generateSummary kommt jetzt aus lib/text-utils.js — re-export für Tests
 const generateSummary = libGenerateSummary;
 
+// Liest die ersten `maxBytes` einer Datei synchron als String.
+// Verwendet explizite Datei-Handles, um große Dateien nicht komplett in den
+// Speicher zu laden (P1 Performance-Audit H1).
+function readFileHeadSync(path, maxBytes = 8192) {
+  let fd;
+  try {
+    fd = openSync(path, "r");
+    const size = fstatSync(fd).size;
+    const toRead = Math.min(size, maxBytes);
+    const buf = Buffer.alloc(toRead);
+    readSync(fd, buf, 0, toRead, 0);
+    return buf.toString("utf8");
+  } catch (_) {
+    return "";
+  } finally {
+    if (typeof fd === "number") closeSync(fd);
+  }
+}
+
 // ============================================================================
 // LLM-based summarization for long messages (auto-capture)
 // ============================================================================
@@ -362,6 +382,10 @@ const REINDEX_WRITE_THRESHOLD = 5000; // Rebuild ANN index every N writes (v6.2.
 const REINDEX_MIN_ROWS = 256;         // Minimum rows before creating an index
 const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fix)
 
+// Operation-level timeouts for LanceDB calls (P0 Performance-Audit K3).
+const LANCEDB_READ_TIMEOUT_MS = 10_000;
+const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
+
 class MemoryDB {
   constructor(dbPath, vectorDim) {
     this.dbPath = dbPath;
@@ -382,10 +406,10 @@ class MemoryDB {
     this.isShuttingDown = true;
     try {
       if (this.table && typeof this.table.close === "function") {
-        try { await this.table.close(); } catch (_) { /* ignore */ }
+        try { await this._write(this.table.close(), "MemoryDB.table.close"); } catch (_) { /* ignore */ }
       }
       if (this.db && typeof this.db.close === "function") {
-        try { await this.db.close(); } catch (_) { /* ignore */ }
+        try { await this._write(this.db.close(), "MemoryDB.db.close"); } catch (_) { /* ignore */ }
       }
     } finally {
       this.table = null;
@@ -396,9 +420,17 @@ class MemoryDB {
     }
   }
 
+  _read(promise, label) {
+    return withTimeout(promise, LANCEDB_READ_TIMEOUT_MS, label);
+  }
+
+  _write(promise, label) {
+    return withTimeout(promise, LANCEDB_WRITE_TIMEOUT_MS, label);
+  }
+
   async refreshSchemaFields() {
     if (!this.table) return;
-    const schema = await this.table.schema();
+    const schema = await this._read(this.table.schema(), "MemoryDB.schema");
     this.schemaFieldNames = new Set((schema.fields || []).map(f => f.name));
   }
 
@@ -468,17 +500,17 @@ class MemoryDB {
     if (this.initPromise) return this.initPromise;
     this.initPromise = (async () => {
       const lancedb = await getLanceDB();
-      this.db = await lancedb.connect(this.dbPath);
-      const tables = await this.db.tableNames();
+      this.db = await this._write(lancedb.connect(this.dbPath), "MemoryDB.connect");
+      const tables = await this._read(this.db.tableNames(), "MemoryDB.tableNames");
       if (tables.includes(TABLE_NAME)) {
-        this.table = await this.db.openTable(TABLE_NAME);
+        this.table = await this._write(this.db.openTable(TABLE_NAME), "MemoryDB.openTable");
         // Migrate: add missing columns
         // Statt eines großen try/catch: Schema einmal lesen, dann pro Spalte
         // einzeln migrieren. So verhindert ein Fehler bei einer Spalte nicht
         // die Migration der übrigen.
         let schema;
         try {
-          schema = await this.table.schema();
+          schema = await this._read(this.table.schema(), "MemoryDB.schema");
         } catch (e) {
           console.error(`[memory-lancedb-namespaced] schema read failed for ${this.dbPath}: ${e.message}`);
         }
@@ -540,7 +572,7 @@ class MemoryDB {
             try {
               const hasCol = schema.fields.some(f => f.name === col.name);
               if (!hasCol) {
-                await this.table.addColumns([col]);
+                await this._write(this.table.addColumns([col]), `MemoryDB.addColumns:${col.name}`);
               }
             } catch (e) {
               console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${e.message}`);
@@ -548,7 +580,7 @@ class MemoryDB {
           }
         }
       } else {
-        this.table = await this.db.createTable(TABLE_NAME, [
+        this.table = await this._write(this.db.createTable(TABLE_NAME, [
           {
             id: "__schema__",
             type: "memory",
@@ -595,8 +627,8 @@ class MemoryDB {
             versionCreatedAt: 0,
             updatedAt: 0,
           },
-        ]);
-        await this.table.delete('id = "__schema__"');
+        ]), "MemoryDB.createTable");
+        await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
       }
       await this.refreshSchemaFields();
     })();
@@ -610,7 +642,7 @@ class MemoryDB {
     if (!text && !summary) {
       throw new Error("store() rejected: entry text and summary are both empty — refusing to store a memory without content.");
     }
-    await this.table.add([this.normalizeEntryForTable(entry)]);
+    await this._write(this.table.add([this.normalizeEntryForTable(entry)]), "MemoryDB.store");
     this._writeCounter++;
     if (this._writeCounter % REINDEX_WRITE_THRESHOLD === 0) {
       this._maybeReindex().catch(() => {});
@@ -629,10 +661,13 @@ class MemoryDB {
     await this.init();
     if (!this.table) return [];
     try {
-      let rows = await this.table.query()
-        .where("memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = ''")
-        .limit(limit * 2)
-        .toArray();
+      let rows = await this._read(
+        this.table.query()
+          .where("memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = ''")
+          .limit(limit * 2)
+          .toArray(),
+        "MemoryDB.getRecentForGraph",
+      );
 
       // Sort by createdAt DESC
       rows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -670,13 +705,13 @@ class MemoryDB {
     if (Date.now() - this._lastReindexAt < REINDEX_MIN_INTERVAL_MS) return;
     this._reindexing = true;
     try {
-      const count = await this.table.countRows();
+      const count = await this._read(this.table.countRows(), "MemoryDB.countRows");
       if (count < REINDEX_MIN_ROWS) return;
       const lance = await getLanceDB();
-      await this.table.createIndex("vector", {
+      await this._write(this.table.createIndex("vector", {
         config: lance.Index.hnswPq({ m: 16, efConstruction: 100, numSubVectors: 96 }),
         replace: true,
-      });
+      }), "MemoryDB.createIndex");
       // v6.2.1 — Counter reset nach erfolgreichem Reindex (P0-Fix)
       this._writeCounter = 0;
       this._lastReindexAt = Date.now();
@@ -689,7 +724,7 @@ class MemoryDB {
 
   async search(vector, limit = 5, minScore = 0.3) {
     await this.init();
-    const count = await this.table.countRows();
+    const count = await this._read(this.table.countRows(), "MemoryDB.search.countRows");
     if (count === 0) return [];
     const results = await this.vectorSearchActive(vector, limit);
     const mapped = results.map((r) => ({
@@ -750,7 +785,7 @@ class MemoryDB {
 
   async findSimilar(vector, text, threshold = 0.95) {
     await this.init();
-    const count = await this.table.countRows();
+    const count = await this._read(this.table.countRows(), "MemoryDB.findSimilar.countRows");
     if (count === 0) return [];
     const results = await this.vectorSearchActive(vector, 10);
     return results
@@ -763,7 +798,7 @@ class MemoryDB {
 
   async findMergeCandidate(vector, mergeThreshold, duplicateThreshold) {
     await this.init();
-    const count = await this.table.countRows();
+    const count = await this._read(this.table.countRows(), "MemoryDB.findMergeCandidate.countRows");
     if (count === 0) return null;
     const results = await this.vectorSearchActive(vector, 5);
     const candidates = results
@@ -778,12 +813,14 @@ class MemoryDB {
     try {
       const builder = this.table.vectorSearch(vector);
       if (typeof builder.where === "function") {
-        return await builder.where("status = 'active' OR status IS NULL").limit(limit).toArray();
+        return await this._read(builder.where("status = 'active' OR status IS NULL").limit(limit).toArray(), "MemoryDB.vectorSearchActive");
       }
-    } catch (_) {
+    } catch (err) {
       // Older LanceDB/query-builder surfaces and old schemas fall back here.
+      // Timeouts must not be swallowed by the fallback path.
+      if (err instanceof TimeoutError) throw err;
     }
-    const rows = await this.table.vectorSearch(vector).limit(fetchLimit).toArray();
+    const rows = await this._read(this.table.vectorSearch(vector).limit(fetchLimit).toArray(), "MemoryDB.vectorSearchActive.fallback");
     return rows.filter((row) => !row.status || row.status === "active").slice(0, limit);
   }
 
@@ -791,35 +828,35 @@ class MemoryDB {
     await this.init();
     // safeUuid wirft Error wenn id nicht exakt UUID-Format hat
     const safe = safeUuid(id);
-    await this.table.delete(`id = "${safe}"`);
+    await this._write(this.table.delete(`id = "${safe}"`), `MemoryDB.delete:${safe}`);
   }
 
   async getById(id) {
     await this.init();
     const safe = safeUuid(id);
-    const rows = await this.table.query().where(`id = "${safe}"`).limit(1).toArray();
+    const rows = await this._read(this.table.query().where(`id = "${safe}"`).limit(1).toArray(), `MemoryDB.getById:${safe}`);
     return rows && rows.length > 0 ? rows[0] : null;
   }
 
   async update(id, patch) {
     await this.init();
     const safe = safeUuid(id);
-    const rows = await this.table.query().where(`id = "${safe}"`).limit(1).toArray();
+    const rows = await this._read(this.table.query().where(`id = "${safe}"`).limit(1).toArray(), `MemoryDB.update.query:${safe}`);
     if (!rows || rows.length === 0) {
       throw new Error(`Memory not found: ${id}`);
     }
     const existing = rows[0];
     const updated = { ...existing, ...patch };
     const normalizedUpdated = this.normalizeEntryForTable(updated);
-    await this.table.delete(`id = "${safe}"`);
+    await this._write(this.table.delete(`id = "${safe}"`), `MemoryDB.update.delete:${safe}`);
     try {
-      await this.table.add([normalizedUpdated]);
+      await this._write(this.table.add([normalizedUpdated]), `MemoryDB.update.add:${safe}`);
     } catch (addErr) {
       // delete+add ist nicht atomar — wenn das add fehlschlägt, würde die Row
       // verloren gehen. Best-effort: das Original wiederherstellen, dann den
       // Fehler weiterreichen.
       try {
-        await this.table.add([this.normalizeEntryForTable(existing)]);
+        await this._write(this.table.add([this.normalizeEntryForTable(existing)]), `MemoryDB.update.restore:${safe}`);
       } catch (_) { /* Original-Restore ebenfalls failed — Fehler unten */ }
       throw addErr;
     }
@@ -827,11 +864,11 @@ class MemoryDB {
 
   async scanActive() {
     await this.init();
-    const count = await this.table.countRows();
+    const count = await this._read(this.table.countRows(), "MemoryDB.scanActive.countRows");
     if (count === 0) return [];
-    const rows = await this.table.query()
+    const rows = await this._read(this.table.query()
       .where("status IS NULL OR (status != 'deleted' AND status != 'archived')")
-      .toArray();
+      .toArray(), "MemoryDB.scanActive");
     return rows.map((r) => ({
       id: r.id,
       vector: (Array.isArray(r.vector) && r.vector.length > 0) ? r.vector : null,
@@ -848,7 +885,7 @@ class MemoryDB {
   async purgeExpired() {
     await this.init();
     const now = safeTimestamp(Date.now());
-    await this.table.delete(`expiresAt > 0 AND expiresAt < ${now}`);
+    await this._write(this.table.delete(`expiresAt > 0 AND expiresAt < ${now}`), "MemoryDB.purgeExpired");
   }
 }
 
@@ -888,6 +925,7 @@ class AgentDbPool {
         try { await db.shutdown(); } catch (_) { /* ignore */ }
       }
     }
+    await this.dbs.awaitPendingEvictions();
     this.dbs.clear();
   }
 
@@ -1079,22 +1117,46 @@ function buildMaintenanceNudges({ workspaceDir, schicht15Enabled, lang = "en", t
     }
   }
 
-  // Conflict-log reminder — Datei nur EINMAL lesen (erste Zeile + Zeilenzahl).
+  // Conflict-log reminder — Limit-Read: große Logs nicht komplett einlesen.
   try {
     const conflictLogPath = join(workspaceDir, ".adaptive-learning", "conflict-log.jsonl");
     if (existsSync(conflictLogPath)) {
       const stat = statSync(conflictLogPath);
-      const lines = readFileSync(conflictLogPath, "utf8").split("\n").filter(l => l.trim());
+      const sizeKb = Math.round(stat.size / 1024);
       let showNudge = stat.size > 1_048_576;
-      if (!showNudge && lines.length > 0) {
-        try {
-          const oldest = JSON.parse(lines[0]);
-          if (Date.now() - new Date(oldest.timestamp).getTime() > 30 * 86_400_000) showNudge = true;
-        } catch (_) { /* erste Zeile nicht parsebar — kein Alters-Trigger */ }
+      let lineCount = 0;
+      let oldestTimestamp = null;
+
+      if (stat.size <= 1_048_576) {
+        // Kleine Logs: komplett einlesen wie bisher (exakte Zahl + Alters-Check).
+        const lines = readFileSync(conflictLogPath, "utf8").split("\n").filter(l => l.trim());
+        lineCount = lines.length;
+        for (const line of lines) {
+          try {
+            oldestTimestamp = new Date(JSON.parse(line).timestamp).getTime();
+            break;
+          } catch (_) { /* Zeile nicht parsebar - naechste versuchen */ }
+        }
+      } else {
+        // Große Logs: nur den Kopf (erste 8 KB) scannen, um Zeilenzahl zu
+        // schätzen und das älteste parsbare Item zu prüfen.
+        const head = readFileHeadSync(conflictLogPath, 8192);
+        const headLines = head.split("\n").filter(l => l.trim());
+        lineCount = Math.max(headLines.length, Math.round(stat.size / 200)); // conservative estimate
+        for (const line of headLines) {
+          try {
+            oldestTimestamp = new Date(JSON.parse(line).timestamp).getTime();
+            break;
+          } catch (_) { /* Zeile nicht parsebar - naechste versuchen */ }
+        }
       }
+
+      if (!showNudge && oldestTimestamp && Date.now() - oldestTimestamp > 30 * 86_400_000) {
+        showNudge = true;
+      }
+
       if (showNudge) {
-        const sizeKb = Math.round(stat.size / 1024);
-        const body = t("nudge.conflict_review", { lang, tone, vars: { count: lines.length, sizeKb } });
+        const body = t("nudge.conflict_review", { lang, tone, vars: { count: lineCount, sizeKb } });
         conflictNudge = `\n<conflict-review-reminder>\n${body}\n</conflict-review-reminder>`;
       }
     }
@@ -4405,5 +4467,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB };
+export { MemoryDB, buildMaintenanceNudges };
 export default plugin;
