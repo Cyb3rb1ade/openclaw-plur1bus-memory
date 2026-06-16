@@ -36,6 +36,27 @@ npm audit       # 0 vulnerabilities
 Alle neuen und bestehenden Tests sind grün, einschließlich des vorhandenen
 `memory_store merge archive-first (DATA-003)`-Tests.
 
+## Vector-DB-Dimension-Invariance-Prüfung
+
+```text
+Vector DB dimension invariance checked:
+- no embedding model change
+- no embedding dimension change
+- no LanceDB vector schema change
+- no re-embedding/migration required
+```
+
+Begründung:
+- `git diff origin/main..HEAD` zeigt keine Änderungen an
+  `lib/memory-db.js`, `lib/db-adapter.js`, `lib/embedding-cache.js`,
+  `lib/*embedding*`, `openclaw.plugin.json`, `package.json` oder
+  `package-lock.json`.
+- Alle Vektoroperationen (Embedding, `MemoryDB.vectorDim`, LanceDB-Index,
+  `findSimilar`, `findMergeCandidate`) wurden nicht berührt.
+- Die einzigen geänderten Produktionsdateien sind `index.js` (rein textbasierte
+  Guards um die bestehenden Merge-/Dedup-Checks) und `lib/memory-merge-safety.js`
+  (neue, embedding-freie String-Heuristiken).
+
 ## Verbleibende Risiken und bewusste Kompromisse
 
 1. **Heuristische Entity-Erkennung**
@@ -95,6 +116,13 @@ Alle neuen und bestehenden Tests sind grün, einschließlich des vorhandenen
 5. **Test-Refactoring**
    - Dedup-Tests auf `beforeEach` mit isolierter DB umstellen, um zukünftige
      Flakiness zu vermeiden.
+
+6. **Installer auf aktuellen Stand bringen** (nicht in diesem Branch)
+   - Neue Config-Keys aus #49/#50/#51/K1-04-K1-05 berücksichtigen.
+   - `openclaw.plugin.json` Defaults sauber in Installer übernehmen.
+   - Bestehende Installationen ohne destruktive Config-Überschreibung migrieren.
+   - Keine Vektor-DB-Dimensionen oder Embedding-Modelle ändern.
+   - Upgrade-/Dry-Run-Test ergänzen.
 
 ## PR-Empfehlung
 
