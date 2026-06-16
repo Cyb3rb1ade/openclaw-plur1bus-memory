@@ -606,6 +606,14 @@
               }
             }
           },
+          "contradictionDetection": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": false },
+              "maxPairsPerRecall": { "type": "number", "default": 20 }
+            }
+          },
           "doctor": {
             "type": "object",
             "additionalProperties": false,
