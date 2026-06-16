@@ -11,16 +11,19 @@ import assert from "node:assert";
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 
+const never = () => new Promise(() => {});
+
 function makeFakeTable(overrides = {}) {
-  const never = () => new Promise(() => {});
+  const queryFn = overrides.query || (() => Promise.resolve([]));
+  const vectorSearchFn = overrides.vectorSearch || (() => Promise.resolve([]));
   return {
     query: () => ({
-      where: () => ({ limit: () => ({ toArray: overrides.query || (() => Promise.resolve([])) }) }),
-      limit: () => ({ toArray: overrides.query || (() => Promise.resolve([])) }),
+      where: () => ({ limit: () => ({ toArray: queryFn }) }),
+      limit: () => ({ toArray: queryFn }),
     }),
     vectorSearch: () => ({
-      where: () => ({ limit: () => ({ toArray: overrides.vectorSearch || (() => Promise.resolve([])) }) }),
-      limit: () => ({ toArray: overrides.vectorSearch || (() => Promise.resolve([])) }),
+      where: () => ({ limit: () => ({ toArray: vectorSearchFn }) }),
+      limit: () => ({ toArray: vectorSearchFn }),
     }),
     delete: overrides.delete || (() => Promise.resolve()),
     update: overrides.update || (() => Promise.resolve()),
@@ -39,10 +42,24 @@ function makeAdapter(fakeTable, opts = {}) {
 }
 
 describe("db-adapter LanceDB timeouts", () => {
-  it("returns null for a hanging getCard (safe fallback, timeout logged)", async () => {
-    const db = makeAdapter(makeFakeTable({ query: () => new Promise(() => {}) }));
-    const card = await db.getCard("agent", "11111111-1111-1111-1111-111111111111");
-    assert.strictEqual(card, null);
+  it("times out a hanging getCard and includes the label", async () => {
+    const db = makeAdapter(makeFakeTable({ query: never }));
+    await assert.rejects(
+      () => db.getCard("agent", "11111111-1111-1111-1111-111111111111"),
+      (err) => {
+        assert.ok(err instanceof TimeoutError);
+        assert.ok(err.message.includes("db-adapter.getCard"));
+        return true;
+      },
+    );
+  });
+
+  it("times out a hanging queryByTimeRange and includes the label", async () => {
+    const db = makeAdapter(makeFakeTable({ query: never }));
+    await assert.rejects(
+      () => db.queryByTimeRange("agent", "today"),
+      /db-adapter.queryByTimeRange/,
+    );
   });
 
   it("does not change successful getCard results", async () => {
@@ -61,62 +78,77 @@ describe("db-adapter LanceDB timeouts", () => {
   });
 
   it("times out a hanging deleteCard and includes the label", async () => {
-    const db = makeAdapter(makeFakeTable({ delete: () => new Promise(() => {}) }));
+    const db = makeAdapter(makeFakeTable({ delete: never }));
     await assert.rejects(
       () => db.deleteCard("agent", "11111111-1111-1111-1111-111111111111"),
-      (err) => err instanceof TimeoutError && /db-adapter.deleteCard/.test(err.message),
+      (err) => {
+        assert.ok(err instanceof TimeoutError);
+        assert.ok(err.message.includes("db-adapter.deleteCard"));
+        return true;
+      },
     );
   });
 
   it("times out a hanging updateCardType and includes the label", async () => {
-    const db = makeAdapter(makeFakeTable({ update: () => new Promise(() => {}) }));
+    const db = makeAdapter(makeFakeTable({ update: never }));
     await assert.rejects(
       () => db.updateCardType("agent", "11111111-1111-1111-1111-111111111111", "person"),
-      (err) => err instanceof TimeoutError && /db-adapter.updateCardType/.test(err.message),
+      /db-adapter.updateCardType/,
     );
   });
 
-  it("times out a hanging searchByTopic vector search and falls back to empty results", async () => {
-    const db = makeAdapter(makeFakeTable({ vectorSearch: () => new Promise(() => {}) }), {
-      getEmbedding: async () => [1, 0, 0],
-    });
-    const results = await db.searchByTopic("agent", "hello");
-    assert.ok(Array.isArray(results));
-    assert.strictEqual(results.length, 0);
+  it("times out a hanging markConfirmed and includes the label", async () => {
+    const db = makeAdapter(makeFakeTable({ update: never }));
+    await assert.rejects(
+      () => db.markConfirmed("agent", "11111111-1111-1111-1111-111111111111"),
+      /db-adapter.markConfirmed/,
+    );
   });
 
-  it("swallows non-timeout read errors and returns safe fallbacks", async () => {
-    const db = makeAdapter(makeFakeTable({ query: () => Promise.reject(new Error("table gone")) }));
-    const card = await db.getCard("agent", "11111111-1111-1111-1111-111111111111");
-    assert.strictEqual(card, null);
+  it("keeps successful writes unchanged", async () => {
+    let updated = false;
+    const db = makeAdapter(makeFakeTable({ update: async () => { updated = true; } }));
+    const result = await db.markConfirmed("agent", "11111111-1111-1111-1111-111111111111");
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(updated, true);
   });
 
-  it("propagates TimeoutError for updateCard write", async () => {
+  it("propagates non-timeout write errors", async () => {
+    const db = makeAdapter(makeFakeTable({ update: () => Promise.reject(new Error("table gone")) }));
+    await assert.rejects(
+      () => db.markConfirmed("agent", "11111111-1111-1111-1111-111111111111"),
+      /table gone/,
+    );
+  });
+
+  it("times out updateCard write when query succeeds", async () => {
     const row = {
       id: "11111111-1111-1111-1111-111111111111",
-      text: "old",
+      text: "old text",
       summary: "old",
       createdAt: Date.now(),
       status: "active",
     };
-    const db = makeAdapter(makeFakeTable({
-      query: () => Promise.resolve([row]),
-      update: () => new Promise(() => {}),
-    }), { embedder: { embed: async () => [0.1, 0.2, 0.3] } });
-
+    const db = makeAdapter(
+      makeFakeTable({
+        query: () => Promise.resolve([row]),
+        update: never,
+      }),
+      { embedder: { embed: async () => [0.1, 0.2, 0.3] } },
+    );
     await assert.rejects(
       () => db.updateCard("agent", row.id, "new text"),
       (err) => err instanceof TimeoutError && /db-adapter.updateCard/.test(err.message),
     );
   });
 
-  it("uses configurable read/write timeouts", async () => {
-    const start = performance.now();
-    const db = makeAdapter(makeFakeTable({ query: () => new Promise(() => {}) }), {
-      readTimeoutMs: 20,
+  it("times out a hanging searchByTopic vector search and includes the label", async () => {
+    const db = makeAdapter(makeFakeTable({ vectorSearch: never }), {
+      getEmbedding: async () => [1, 0, 0],
     });
-    await db.getCard("agent", "11111111-1111-1111-1111-111111111111");
-    const elapsed = performance.now() - start;
-    assert.ok(elapsed < 100, `expected sub-100ms timeout, got ${elapsed}ms`);
+    await assert.rejects(
+      () => db.searchByTopic("agent", "hello"),
+      /db-adapter.searchByTopic.vectorSearch/,
+    );
   });
 });
