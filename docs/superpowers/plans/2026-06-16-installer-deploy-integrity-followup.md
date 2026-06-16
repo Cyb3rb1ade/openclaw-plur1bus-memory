@@ -179,9 +179,35 @@ repaired); non-zero = unresolved violations remain.
 - Manually re-ran the fixed `protect-plur1bus-deploy.sh`: exits 0, no drift
   detected (previously it detected drift and corrupted the deploy on
   essentially every run since 2026-05-29).
+- Full-tree check beyond the 7 validated files — `diff -rq /root/lib
+  /root/.openclaw/extensions/memory-lancedb-namespaced/lib`, plus `cmp` on
+  `index.js`, `openclaw.plugin.json`, `package.json`: all clean, no
+  remaining drift anywhere in the deployed tree.
 
 ## 8. Offene Risiken
 
+- **Recall/capture errors observed during the incident, not confirmed
+  resolved.** While the deploy was still corrupted, the journal showed
+  (20:06–20:11): `recall-pipeline: rerank failed/timeout... TypeError:
+  Cannot read properties of undefined (reading 'summary')`,
+  `memory-lancedb-namespaced: recall failed for agent=bernhardine`, and
+  `MemoryDB.store timed out after 15000ms` / `capture worker timed out
+  after 60000ms`. These are plausibly downstream of the stale
+  `relevant-memory-context.js` (the `summary` property read) rather than a
+  separate bug — but that's a hypothesis, not verified. After the fix +
+  restart, zero recurrences of these specific messages in the journal as of
+  this writing — but that only shows registration succeeded and the errors
+  haven't fired again in a short window, **not** that recall/capture are
+  functionally correct end-to-end. This hotfix verified deploy-integrity
+  (files match repo, plugin registers cleanly across a real restart); it did
+  not verify memory functionality, which is explicitly out of scope here.
+  If these recur, treat as a separate memory-logic bug report.
+- **`SRC=/root` coupling:** `protect-plur1bus-deploy.sh` now enforces
+  whatever is currently checked out in the `/root` working tree onto the
+  live deploy, every 15 minutes. Harmless today (this branch's new files
+  aren't in the protect script's `FILES` list, so its enforced content is
+  identical to `main`), but worth knowing: checking out a different branch
+  in `/root` now has a live, automatic effect on the running extension.
 - **`update-openclaw.sh` is not mirrored into this repo.** It lives at
   `/root/.openclaw/scripts/update-openclaw.sh`, outside any git tree, and is
   a large (1700+ line) general OpenClaw-gateway operator script, not specific
