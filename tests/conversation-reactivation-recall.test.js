@@ -413,7 +413,7 @@ describe("conversation-reactivation-recall", () => {
       });
       assert.strictEqual(result.memories.length, 0);
       assert.ok(hydrateCalls > 0, "should attempt some hydration");
-      assert.ok(hydrateCalls <= 12, `expected <=12 hydrations, got ${hydrateCalls}`);
+      assert.ok(hydrateCalls <= 3, `expected <=3 hydrations, got ${hydrateCalls}`);
     });
 
     it("still hydrates selected memories that are not in the lens map", async () => {
@@ -798,7 +798,7 @@ describe("conversation-reactivation-recall", () => {
       assert.ok(elapsed < callerTimeoutMs + ciTimingSlackMs, `expected <${callerTimeoutMs + ciTimingSlackMs}ms, got ${elapsed}ms`);
       assert.strictEqual(result.additions.length, 1);
       assert.strictEqual(result.additions[0].id, "c0-m2");
-      assert.ok(hydrateCalls <= 12, `expected <=12 hydrations, got ${hydrateCalls}`);
+      assert.ok(hydrateCalls <= 3, `expected <=3 hydrations, got ${hydrateCalls}`);
     });
   });
 });
