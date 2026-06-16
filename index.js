@@ -4311,10 +4311,17 @@ const plugin = {
               }
             }
             try {
-              const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir });
+              const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir, logger: api.logger });
               for (const rec of memoryTextContradictions) {
                 await detector.persistContradiction({
                   targetMemoryId: rec.memoryA,
+                  overlayA: rec.memoryA,
+                  overlayB: rec.memoryB,
+                  descriptionA: rec.descriptionA,
+                  descriptionB: rec.descriptionB,
+                });
+                await detector.persistContradiction({
+                  targetMemoryId: rec.memoryB,
                   overlayA: rec.memoryA,
                   overlayB: rec.memoryB,
                   descriptionA: rec.descriptionA,
