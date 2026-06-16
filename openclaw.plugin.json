@@ -611,9 +611,7 @@
             "additionalProperties": false,
             "properties": {
               "enabled": { "type": "boolean", "default": false },
-              "mode": { "type": "string", "enum": ["llm", "heuristic"], "default": "llm" },
-              "maxPairsPerRecall": { "type": "number", "default": 20 },
-              "minScore": { "type": "number", "default": 0.6 }
+              "maxPairsPerRecall": { "type": "number", "default": 20 }
             }
           },
           "doctor": {
