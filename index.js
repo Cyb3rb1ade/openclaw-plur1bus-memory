@@ -1834,6 +1834,12 @@ const plugin = {
       if (!textValidation.ok) {
         return { error: textValidation.error };
       }
+      const trace = createRecallDecisionTrace({
+        query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
+        mode: "store",
+        maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+        maxCandidates: traceCfg.maxCandidates ?? 50,
+      });
       try {
         const vector = await embeddings.embed(params.text);
         const category = params.category || categorizeMemory(params.text);
@@ -1850,9 +1856,11 @@ const plugin = {
           const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
           if (!safeDuplicate) {
             api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+            addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
           } else {
             if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
-            return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }], details: { action: "duplicate", id: safeDuplicate.entry.id } };
+            addTraceStoreDecision(trace, { action: "safe_duplicate", memoryId: safeDuplicate.entry.id, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}` });
+            return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }], details: { action: "duplicate", id: safeDuplicate.entry.id, decisionTrace: trace } };
           }
         }
 
@@ -1860,9 +1868,11 @@ const plugin = {
         if (mergingEnabled && mergingLlmCfg) {
           const mergeCandidate = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
           if (mergeCandidate) {
+            addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
             let mergeResult = null;
             if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
               api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
+              addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "meaningful difference" });
             } else {
               try {
                 mergeResult = await Promise.race([
@@ -1881,6 +1891,7 @@ const plugin = {
             if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
               if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
                 api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "LLM mergedText loses facts" });
               } else {
                 // DATA-003: prepare the merged entry and archive the original BEFORE
                 // deleting it. If embedding or archiving fails, the original remains intact.
@@ -1905,7 +1916,8 @@ const plugin = {
                 if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
                   trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
                 }
-                return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
+                addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
+                return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
               }
             }
           }
@@ -1937,7 +1949,8 @@ const plugin = {
         if (storeCtx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
           trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: entry.id, category, importance });
         }
-        return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id } };
+        addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
+        return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id, decisionTrace: trace } };
       } catch (err) {
         return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
       }
@@ -3675,6 +3688,12 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
+              const trace = createRecallDecisionTrace({
+                query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
+                mode: "store",
+                maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
+                maxCandidates: traceCfg.maxCandidates ?? 50,
+              });
               const vector = await embeddings.embed(params.text);
               const category = params.category || categorizeMemory(params.text);
               const origin = MEMORY_ORIGINS.includes(params.origin) ? params.origin : "dm";
@@ -3690,9 +3709,11 @@ const plugin = {
                 const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
                 if (!safeDuplicate) {
                   api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+                  addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
                 } else {
                   if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
-                  return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }] };
+                  addTraceStoreDecision(trace, { action: "safe_duplicate", memoryId: safeDuplicate.entry.id, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}` });
+                  return { content: [{ type: "text", text: `Similar memory already exists: "${safeDuplicate.entry.text}"` }], details: { action: "duplicate", id: safeDuplicate.entry.id, decisionTrace: trace } };
                 }
               }
 
@@ -3700,9 +3721,11 @@ const plugin = {
               if (mergingEnabled && mergingLlmCfg) {
                 const mergeCandidate = await db.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
                 if (mergeCandidate) {
+                  addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
                   let mergeResult = null;
                   if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
                     api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
+                    addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "meaningful difference" });
                   } else {
                     try {
                       mergeResult = await Promise.race([
@@ -3722,6 +3745,7 @@ const plugin = {
                   if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
                     if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
                       api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                      addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "LLM mergedText loses facts" });
                     } else {
                       // DATA-003: prepare the merged entry and archive the original BEFORE
                       // deleting it. If embedding/archiving fails, the original remains intact.
@@ -3756,7 +3780,8 @@ const plugin = {
                       if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
                         trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
                       }
-                      return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id } };
+                      addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
+                      return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
                     }
                   }
                 }
@@ -3788,7 +3813,8 @@ const plugin = {
               if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
                 trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: entry.id, category, importance });
               }
-              return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id } };
+              addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
+              return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id, decisionTrace: trace } };
             } catch (err) {
               return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
             }
