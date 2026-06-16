@@ -564,7 +564,7 @@
             "additionalProperties": false,
             "properties": {
               "enabled": { "type": "boolean", "default": true },
-              "maxDepth": { "type": "number", "default": 3 },
+              "maxDepth": { "type": "number", "default": 2 },
               "maxNeighborsPerNode": { "type": "number", "default": 8 },
               "maxAssociatedResults": { "type": "number", "default": 40 },
               "minCumulativeRelevance": { "type": "number", "default": 0.2 },
