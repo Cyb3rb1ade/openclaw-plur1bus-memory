@@ -517,6 +517,14 @@
                 "default": 600
               }
             }
+          },
+          "decisionTrace": {
+            "enabled": { "type": "boolean", "default": false },
+            "includeInPrompt": { "type": "boolean", "default": false },
+            "maxCandidates": { "type": "number", "default": 50 },
+            "maxTextPreviewChars": { "type": "number", "default": 160 },
+            "persist": { "type": "boolean", "default": false },
+            "visibleHints": { "type": "boolean", "default": false }
           }
         }
       },
