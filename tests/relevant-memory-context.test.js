@@ -422,10 +422,11 @@ describe("formatRelevantMemoriesContext — matchedPattern continuity block", ()
 // ── Associative (graph-sourced) attributes ──────────────────────────────────
 
 describe("formatRelevantMemoriesContext — associative source attributes", () => {
-  it("graph-sourced item gets source='associative' and depth attribute", () => {
-    const mem = { id: "g1", category: "work", source: "dm", graphSource: "graph", depth: 2, display: "graph hit", memoryStrength: 0.9 };
+  it("graph-sourced item keeps source, adds graph-source='associative' and depth attribute", () => {
+    const mem = { id: "g1", category: "work", source: "group", graphSource: "graph", depth: 2, display: "graph hit", memoryStrength: 0.9 };
     const out = formatRelevantMemoriesContext([mem]);
-    assert.ok(out.includes('source="associative"'), "missing source=associative for graph item");
+    assert.ok(out.includes('source="group"'), "original source must be preserved");
+    assert.ok(out.includes('graph-source="associative"'), "missing graph-source=associative for graph item");
     assert.ok(out.includes('depth="2"'), "missing depth attribute");
   });
 
@@ -443,16 +444,17 @@ describe("formatRelevantMemoriesContext — associative source attributes", () =
   });
 
   it("graph-sourced item with depth >= 3 gets faded='true' even if memoryStrength is high", () => {
-    const mem = { id: "g3", category: "work", source: "dm", graphSource: "graph", depth: 3, display: "deep hit", memoryStrength: 1.0 };
+    const mem = { id: "g3", category: "work", source: "group", graphSource: "graph", depth: 3, display: "deep hit", memoryStrength: 1.0 };
     const out = formatRelevantMemoriesContext([mem], { fadedThreshold: 0.25 });
     assert.ok(out.includes('faded="true"'), "depth >= 3 must be faded even with high strength");
-    assert.ok(out.includes('source="associative"'), "must also have associative label");
+    assert.ok(out.includes('graph-source="associative"'), "must also have associative label");
+    assert.ok(out.includes('source="group"'), "original source must be preserved");
   });
 
-  it("graph-sourced item with depth 1 does NOT get faded solely due to depth", () => {
-    const mem = { id: "g1b", category: "work", source: "dm", graphSource: "graph", depth: 1, display: "shallow graph", memoryStrength: 1.0 };
+  it("graph-sourced item with depth 1 gets faded='true' due to depth", () => {
+    const mem = { id: "g1b", category: "work", source: "group", graphSource: "graph", depth: 1, display: "shallow graph", memoryStrength: 1.0 };
     const out = formatRelevantMemoriesContext([mem], { fadedThreshold: 0.25 });
-    assert.ok(!out.includes('faded="true"'), "depth 1 must not force faded");
+    assert.ok(out.includes('faded="true"'), "depth 1 must be faded for graph-sourced items");
     assert.ok(!out.includes('very-faded="true"'), "depth 1 must not force very-faded");
   });
 
