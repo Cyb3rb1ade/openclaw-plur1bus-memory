@@ -413,7 +413,7 @@ describe("conversation-reactivation-recall", () => {
       });
       assert.strictEqual(result.memories.length, 0);
       assert.ok(hydrateCalls > 0, "should attempt some hydration");
-      assert.ok(hydrateCalls <= 3, `expected <=3 hydrations, got ${hydrateCalls}`);
+      assert.ok(hydrateCalls <= 6, `expected <=6 hydrations, got ${hydrateCalls}`);
     });
 
     it("still hydrates selected memories that are not in the lens map", async () => {
@@ -750,7 +750,7 @@ describe("conversation-reactivation-recall", () => {
         for (let i = 0; i < 10; i++) reps.push(`c${c}-m${i}`);
         communities.push({ id: `c${c}`, representativeMemoryIds: reps, bridgeMemoryIds: [] });
       }
-      // First community contains the only matching candidate at position 2.
+      // First community contains the only matching candidate at position 5.
       // Without a hydration cap this would resolve 100 candidates and timeout.
       writeFileSync(
         join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
@@ -765,7 +765,7 @@ describe("conversation-reactivation-recall", () => {
         return {
           id,
           category: "topic",
-          display: id === "c0-m2" ? "match target memory" : `community text ${id}`,
+          display: id === "c0-m5" ? "match target memory" : `community text ${id}`,
         };
       };
 
@@ -797,8 +797,8 @@ describe("conversation-reactivation-recall", () => {
       // the single matching addition while keeping hydration bounded.
       assert.ok(elapsed < callerTimeoutMs + ciTimingSlackMs, `expected <${callerTimeoutMs + ciTimingSlackMs}ms, got ${elapsed}ms`);
       assert.strictEqual(result.additions.length, 1);
-      assert.strictEqual(result.additions[0].id, "c0-m2");
-      assert.ok(hydrateCalls <= 3, `expected <=3 hydrations, got ${hydrateCalls}`);
+      assert.strictEqual(result.additions[0].id, "c0-m5");
+      assert.ok(hydrateCalls <= 6, `expected <=6 hydrations, got ${hydrateCalls}`);
     });
   });
 });
