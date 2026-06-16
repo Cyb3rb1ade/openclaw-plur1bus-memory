@@ -37,7 +37,8 @@ import { fileURLToPath } from "node:url";
 import { distanceToScore } from "./lib/score.js";
 import { flushMetrics } from "./lib/metrics.js";
 import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary } from "./lib/text-utils.js";
-import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory } from "./lib/categorize.js";
+import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
+import { computeMemoryImportance, shouldPromoteMemory } from "./lib/memory-fact-quality.js";
 import {
   hasMeaningfulDifference,
   isSafeDuplicate,
@@ -1842,9 +1843,25 @@ const plugin = {
       });
       try {
         const vector = await embeddings.embed(params.text);
-        const category = params.category || categorizeMemory(params.text);
+        const categoryResult = params.category
+          ? { category: params.category, reason: "caller-provided" }
+          : categorizeMemoryWithReason(params.text);
+        const category = categoryResult.category;
+        const categoryReason = categoryResult.reason;
         const origin = MEMORY_ORIGINS.includes(params.origin) ? params.origin : "dm";
-        const importance = params.importance ?? 0.5;
+        const importanceResult = computeMemoryImportance({
+          text: params.text,
+          category,
+          categoryReason,
+          explicitImportance: params.importance,
+          origin,
+        });
+        const importance = importanceResult.importance;
+        addTraceStoreDecision(trace, {
+          action: "importance_assessed",
+          memoryId: null,
+          reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
+        });
         const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
         const scope = MEMORY_SCOPES.includes(params.scope) ? params.scope : "agent-private";
         const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
@@ -1913,7 +1930,7 @@ const plugin = {
                   throw storeErr;
                 }
                 if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
-                if (storeCtx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
+                if (storeCtx.workspaceDir && shouldPromoteMemory(category, Math.max(importance, mergeCandidate.entry.importance), importanceResult.factQuality, schicht15MinImportance)) {
                   trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
                 }
                 addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
@@ -1946,7 +1963,7 @@ const plugin = {
           });
         }
         if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
-        if (storeCtx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
+        if (storeCtx.workspaceDir && shouldPromoteMemory(category, importance, importanceResult.factQuality, schicht15MinImportance)) {
           trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: entry.id, category, importance });
         }
         addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
@@ -3252,7 +3269,15 @@ const plugin = {
             const storedMemoryRows = [];
             for (const p of toStore) {
               try {
-                const category = categorizeMemory(p.text);
+                const categoryResult = categorizeMemoryWithReason(p.text);
+                const category = categoryResult.category;
+                const categoryReason = categoryResult.reason;
+                const captureImportanceResult = computeMemoryImportance({
+                  text: p.text,
+                  category,
+                  categoryReason,
+                  origin: captureOrigin,
+                });
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
                 const captureEmotion = await inferEmotionalValenceAsync(p.text, "user");
@@ -3266,7 +3291,7 @@ const plugin = {
                   summary,
                   origin: captureOrigin,
                   vector: p.vector,
-                  importance: 0.7,
+                  importance: captureImportanceResult.importance,
                   category,
                   createdAt: captureTimestamp,
                   mergedFrom: "[]",
@@ -3695,9 +3720,25 @@ const plugin = {
                 maxCandidates: traceCfg.maxCandidates ?? 50,
               });
               const vector = await embeddings.embed(params.text);
-              const category = params.category || categorizeMemory(params.text);
+              const categoryResult = params.category
+                ? { category: params.category, reason: "caller-provided" }
+                : categorizeMemoryWithReason(params.text);
+              const category = categoryResult.category;
+              const categoryReason = categoryResult.reason;
               const origin = MEMORY_ORIGINS.includes(params.origin) ? params.origin : "dm";
-              const importance = params.importance ?? 0.5;
+              const importanceResult = computeMemoryImportance({
+                text: params.text,
+                category,
+                categoryReason,
+                explicitImportance: params.importance,
+                origin,
+              });
+              const importance = importanceResult.importance;
+              addTraceStoreDecision(trace, {
+                action: "importance_assessed",
+                memoryId: null,
+                reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
+              });
               const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
               const scope = MEMORY_SCOPES.includes(params.scope) ? params.scope : "agent-private";
               const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
@@ -3777,7 +3818,7 @@ const plugin = {
                         throw storeErr;
                       }
                       if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
-                      if (ctx.workspaceDir && Math.max(importance, mergeCandidate.entry.importance) >= schicht15MinImportance && (category === "decision" || category === "fact")) {
+                      if (ctx.workspaceDir && shouldPromoteMemory(category, Math.max(importance, mergeCandidate.entry.importance), importanceResult.factQuality, schicht15MinImportance)) {
                         trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
                       }
                       addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
@@ -3810,7 +3851,7 @@ const plugin = {
               }, Date.now(), halfLifeOverrides);
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
-              if (ctx.workspaceDir && importance >= schicht15MinImportance && (category === "decision" || category === "fact")) {
+              if (ctx.workspaceDir && shouldPromoteMemory(category, importance, importanceResult.factQuality, schicht15MinImportance)) {
                 trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: entry.id, category, importance });
               }
               addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
