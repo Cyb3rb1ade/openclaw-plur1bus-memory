@@ -606,6 +606,16 @@
               }
             }
           },
+          "contradictionDetection": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": false },
+              "mode": { "type": "string", "enum": ["llm", "heuristic"], "default": "llm" },
+              "maxPairsPerRecall": { "type": "number", "default": 20 },
+              "minScore": { "type": "number", "default": 0.6 }
+            }
+          },
           "doctor": {
             "type": "object",
             "additionalProperties": false,
