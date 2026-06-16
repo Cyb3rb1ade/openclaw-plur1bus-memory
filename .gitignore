@@ -1,6 +1,10 @@
 node_modules/
 .worktrees/
 .openclaw/openclaw.json
+.env
+.env.*
+.openclaw/.env
+!.env.example
 *.bak
 *.bak.*
 .DS_Store
