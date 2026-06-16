@@ -30,3 +30,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/cleanup-vault-missing-tasks.mjs
 !scripts/run-graph-links-once.mjs
 !scripts/run-semantic-discover-once.mjs
+!scripts/verify-plugin-deploy.mjs
+!scripts/protect-plur1bus-deploy.sh
+!scripts/lib/
+!scripts/lib/deploy-integrity.mjs
