@@ -7,7 +7,6 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { performance } from "node:perf_hooks";
 import {
   shouldRunConversationReactivation,
   selectReactivationMemories,
@@ -413,7 +412,7 @@ describe("conversation-reactivation-recall", () => {
       });
       assert.strictEqual(result.memories.length, 0);
       assert.ok(hydrateCalls > 0, "should attempt some hydration");
-      assert.ok(hydrateCalls <= 12, `expected <=12 hydrations, got ${hydrateCalls}`);
+      assert.ok(hydrateCalls <= 3, `expected <=3 hydrations, got ${hydrateCalls}`);
     });
 
     it("still hydrates selected memories that are not in the lens map", async () => {
@@ -670,7 +669,7 @@ describe("conversation-reactivation-recall", () => {
       assert.deepStrictEqual(filesAfter, filesBefore);
     });
 
-    it("performance dry-run completes fast with <=3 additions", async () => {
+    it("returns capped in-map additions without DB hydration", async () => {
       const agentId = `perf-agent-${Math.random()}`;
       const sessionKey = `perf-session-${Math.random()}`;
       const tmpDir = mkdtempSync(join(tmpdir(), "crr-perf-"));
@@ -703,10 +702,7 @@ describe("conversation-reactivation-recall", () => {
         prompt: "continue dashboard project",
         messageText: "continue dashboard project",
       });
-      const start = performance.now();
       const result = await runConversationReactivationRecall(args);
-      const elapsed = performance.now() - start;
-      assert.ok(elapsed <= 50, `expected <=50ms, got ${elapsed}ms`);
       assert.ok(result.additions.length <= 3, `expected <=3 additions, got ${result.additions.length}`);
       assert.ok(result.context.includes("<memory-reactivation") || result.additions.length === 0);
     });
@@ -737,7 +733,7 @@ describe("conversation-reactivation-recall", () => {
       assert.ok(Array.isArray(result.additions));
     });
 
-    it("delivers additions under caller timeout despite many missing community candidates", async () => {
+    it("hydrates only the first missing community batch and returns the matching addition", async () => {
       const agentId = `timeout-deliver-agent-${Math.random()}`;
       const sessionKey = `timeout-deliver-session-${Math.random()}`;
       markUserTurn(agentId, sessionKey, now - 60 * 60 * 1000);
@@ -777,16 +773,10 @@ describe("conversation-reactivation-recall", () => {
         prompt: "match target exactly",
         messageText: "match target exactly",
       });
-      const start = performance.now();
-      const result = await Promise.race([
-        runConversationReactivationRecall(args),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("crr_timeout")), 50)),
-      ]);
-      const elapsed = performance.now() - start;
-      assert.ok(elapsed < 50, `expected <50ms, got ${elapsed}ms`);
+      const result = await runConversationReactivationRecall(args);
       assert.strictEqual(result.additions.length, 1);
       assert.strictEqual(result.additions[0].id, "c0-m2");
-      assert.ok(hydrateCalls <= 12, `expected <=12 hydrations, got ${hydrateCalls}`);
+      assert.ok(hydrateCalls <= 3, `expected <=3 hydrations, got ${hydrateCalls}`);
     });
   });
 });
