@@ -72,7 +72,56 @@ describe("resolveContradictionWinner", () => {
   });
 });
 
+describe("resolveContradictionWinner edge cases", () => {
+  it("handles null or undefined inputs by returning the non-null one", () => {
+    const b = { id: "b", text: "y", versionNumber: 1 };
+    assert.strictEqual(resolveContradictionWinner(null, b), b);
+    assert.strictEqual(resolveContradictionWinner(undefined, b), b);
+    assert.strictEqual(resolveContradictionWinner(b, null), b);
+    assert.strictEqual(resolveContradictionWinner(b, undefined), b);
+  });
+
+  it("returns null when both inputs are null", () => {
+    assert.strictEqual(resolveContradictionWinner(null, null), null);
+  });
+
+  it("falls back to default ordering when versionNumber is NaN", () => {
+    const a = { id: "a", text: "x", versionNumber: NaN, status: "active" };
+    const b = { id: "b", text: "y", versionNumber: NaN, status: "superseded" };
+    assert.strictEqual(resolveContradictionWinner(a, b), a);
+  });
+
+  it("uses createdAt fallback when versionCreatedAt is absent", () => {
+    const now = Date.now();
+    const a = { id: "a", text: "x", versionNumber: 1, createdAt: now - 1000 };
+    const b = { id: "b", text: "y", versionNumber: 1, createdAt: now };
+    assert.strictEqual(resolveContradictionWinner(a, b), b);
+  });
+});
+
 describe("rankMemoryVersions", () => {
+  it("returns an empty array for empty input", () => {
+    assert.deepStrictEqual(rankMemoryVersions([]), []);
+  });
+
+  it("returns an empty array for null or undefined input", () => {
+    assert.deepStrictEqual(rankMemoryVersions(null), []);
+    assert.deepStrictEqual(rankMemoryVersions(undefined), []);
+  });
+
+  it("preserves original order for equivalent items", () => {
+    const memories = [
+      { id: "first", text: "x", versionNumber: 1 },
+      { id: "second", text: "y", versionNumber: 1 },
+      { id: "third", text: "z", versionNumber: 1 },
+    ];
+    const ranked = rankMemoryVersions(memories);
+    assert.deepStrictEqual(
+      ranked.map((m) => m.id),
+      ["first", "second", "third"],
+    );
+  });
+
   it("ranks corrected memories first", () => {
     const memories = [
       { id: "old", text: "Postgres.", versionNumber: 1, status: "superseded", supersededBy: "new" },
