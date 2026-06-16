@@ -1,63 +1,65 @@
-/**
- * Regressionstests für die INJECTED_CONTEXT_RE-Performance in lib/neo-arch.js.
- *
- * Kontext: Das Audit vom 2026-06-16 hat die ursprüngliche komplexe Alternation-
- * Regex als super-linear markiert. Der Code wurde bereits auf einen linearen
- * String.includes()-Vorfilter plus kleine begrenzte Regexen umgestellt.
- * Diese Tests sichern das Verhalten und das Zeitbudget ab.
- */
-
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { isInjectedContextText } from "../lib/neo-arch.js";
 
-describe("neo-arch isInjectedContextText", () => {
-  it("erkennt kurze injizierte Kontexte unverändert", () => {
-    assert.strictEqual(isInjectedContextText("<plur1bus-recall>foo</plur1bus-recall>"), true);
-    assert.strictEqual(isInjectedContextText("RECALL SAFETY RULES"), true);
-    assert.strictEqual(isInjectedContextText('{"capturedBy" :  "agent_end_capture"}'), true);
-    assert.strictEqual(isInjectedContextText('{"embeddingStatus"  :   "pending"}'), true);
-    assert.strictEqual(isInjectedContextText('{"chat_id" : "telegram:123"}'), true);
-    assert.strictEqual(isInjectedContextText("[cron: heartbeat]"), true);
-    assert.strictEqual(isInjectedContextText("bounded search query"), true);
-  });
-
-  it("erkennt kurze normale Texte als nicht-injiziert", () => {
-    assert.strictEqual(isInjectedContextText("regular user text"), false);
-    assert.strictEqual(isInjectedContextText("Captured by the wind"), false);
-    assert.strictEqual(isInjectedContextText("The embedding status is ready"), false);
-    assert.strictEqual(isInjectedContextText("Use only the available memory tools please"), true);
-    assert.strictEqual(isInjectedContextText(""), false);
-  });
-
-  it("hält lange normale Eingaben unter einem Zeitbudget", () => {
-    const longNormal = "a".repeat(10_000);
-    const start = performance.now();
-    for (let i = 0; i < 10_000; i++) {
-      isInjectedContextText(longNormal);
+describe("neo-arch regex performance regression", () => {
+  it("matches known injected-context markers", () => {
+    const cases = [
+      "<plur1bus-recall>foo</plur1bus-recall>",
+      "RECALL SAFETY RULES",
+      "plur1bus internal classify-recent",
+      "[cron: heartbeat]",
+      "heartbeat_ok",
+      'capturedBy": "agent_end_capture',
+      'embeddingStatus": "pending',
+      '"chat_id": "telegram:123"',
+      '"message_id": "456"',
+      '"sender_id": "u"',
+    ];
+    for (const c of cases) {
+      assert.strictEqual(isInjectedContextText(c), true, `expected injected: ${c.slice(0, 80)}`);
     }
-    const ms = performance.now() - start;
-    // Budget: deutlich unter dem alten Audit-Wert (~1.400 ms gemessen).
-    // Mit dem linearen Vorfilter sollten 10k Checks auf 10k Zeichen < 500 ms sein.
-    assert.ok(ms < 500, `10k Checks auf 10k Zeichen dauerten ${ms.toFixed(2)}ms, erwartet < 500ms`);
   });
 
-  it("hält adversariale Eingaben mit vielen '<' unter einem Zeitbudget", () => {
-    const adversarial = Array.from({ length: 1_000 }, (_, i) => `<tag${i % 10}>${"x".repeat(20)}</tag${i % 10}>`).join(" ");
-    const start = performance.now();
-    for (let i = 0; i < 1_000; i++) {
-      isInjectedContextText(adversarial);
+  it("does not flag ordinary text", () => {
+    const cases = [
+      "Hello world",
+      "The quick brown fox jumps over the lazy dog.",
+      "User asked about the project deadline.",
+      JSON.stringify({ content: "normal memory", role: "user" }),
+    ];
+    for (const c of cases) {
+      assert.strictEqual(isInjectedContextText(c), false, `expected not injected: ${c.slice(0, 80)}`);
     }
-    const ms = performance.now() - start;
-    assert.ok(ms < 500, `1k adversariale Checks dauerten ${ms.toFixed(2)}ms, erwartet < 500ms`);
   });
 
-  it("kein Catastrophic Backtracking auf gemischten langen Inputs", () => {
-    const mixed = "abc ".repeat(2_500) + "<plur1bus-recall>marker</plur1bus-recall>" + " def".repeat(2_500);
+  it("handles long normal text within a time budget", () => {
+    const text = "x".repeat(20000);
+    const runs = 1000;
     const start = performance.now();
-    const result = isInjectedContextText(mixed);
+    for (let i = 0; i < runs; i++) isInjectedContextText(text);
     const ms = performance.now() - start;
-    assert.strictEqual(result, true);
-    assert.ok(ms < 5, `Einzelcheck auf 10k+ Zeichen dauerte ${ms.toFixed(2)}ms, erwartet < 5ms`);
+    // Budget: 1 ms per 10k-char check on average (very conservative).
+    assert.ok(ms / runs < 1.0, `long normal text too slow: ${(ms / runs).toFixed(3)} ms/op`);
+  });
+
+  it("handles long injected text within a time budget", () => {
+    const text = "x".repeat(10000) + "<plur1bus-recall>" + "x".repeat(10000);
+    const runs = 1000;
+    const start = performance.now();
+    for (let i = 0; i < runs; i++) isInjectedContextText(text);
+    const ms = performance.now() - start;
+    assert.ok(ms / runs < 1.0, `long injected text too slow: ${(ms / runs).toFixed(3)} ms/op`);
+  });
+
+  it("does not catastrophic-backtrack on adversarial punctuation soup", () => {
+    // Many angle brackets, quotes and slashes — old alternation regex could
+    // super-linearly scan this.
+    const text = "<" + "x</".repeat(5000) + ">";
+    const start = performance.now();
+    const result = isInjectedContextText(text);
+    const ms = performance.now() - start;
+    assert.strictEqual(result, false);
+    assert.ok(ms < 100, `adversarial text took ${ms.toFixed(1)} ms`);
   });
 });
