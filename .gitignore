@@ -34,5 +34,8 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/run-semantic-discover-once.mjs
 !scripts/verify-plugin-deploy.mjs
 !scripts/protect-plur1bus-deploy.sh
+!scripts/repair-installed-plugin.mjs
+!scripts/maintain-lancedb.mjs
+!scripts/repair-dreaming-cron.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
