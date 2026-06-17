@@ -3624,6 +3624,7 @@ const plugin = {
           async execute(_toolCallId, params) {
             try {
               const limit = params.limit || maxPromptMemories;
+              const assocCfg = cfg?.continuityEngine?.associativeRecall || {};
               await db.init();
               // v5.4.0 — Graph-Edges für assoziativen Spread laden
               let graphEdges = [];
