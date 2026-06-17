@@ -13,6 +13,8 @@ node_modules/
 docs/**
 !docs/audits/
 !docs/audits/**
+!docs/runbooks/
+!docs/runbooks/**
 !docs/superpowers/
 !docs/superpowers/**
 !docs/configuration.md
