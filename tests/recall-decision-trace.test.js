@@ -281,3 +281,46 @@ describe("attachTraceToMemory / getMemoryTrace", () => {
     assert.throws(() => attachTraceToMemory(null, {}), TypeError);
   });
 });
+
+
+// ── Trace array caps ───────────────────────────────────────────────────────
+
+describe("addTraceDecision cap", () => {
+  it("caps decisions at maxDecisions and keeps the most recent entries", () => {
+    const trace = createRecallDecisionTrace({ maxDecisions: 3 });
+    for (let i = 0; i < 5; i++) {
+      addTraceDecision(trace, { memoryId: `m${i}`, action: "inclusion", reason: `r${i}` });
+    }
+    assert.strictEqual(trace.decisions.length, 3);
+    assert.strictEqual(trace.decisions[0].memoryId, "m2");
+    assert.strictEqual(trace.decisions[2].memoryId, "m4");
+  });
+});
+
+describe("addTraceGuard cap", () => {
+  it("caps guards at maxGuards and keeps the most recent entries", () => {
+    const trace = createRecallDecisionTrace({ maxGuards: 3 });
+    for (let i = 0; i < 5; i++) {
+      addTraceGuard(trace, { name: `g${i}`, passed: i % 2 === 0, reason: `r${i}` });
+    }
+    assert.strictEqual(trace.guards.length, 3);
+    assert.strictEqual(trace.guards[0].name, "g2");
+    assert.strictEqual(trace.guards[2].name, "g4");
+  });
+});
+
+describe("addTraceStoreDecision cap", () => {
+  it("caps store decisions at maxStoreDecisions and keeps the most recent entries", () => {
+    const trace = createRecallDecisionTrace({ maxStoreDecisions: 3 });
+    for (let i = 0; i < 5; i++) {
+      addTraceStoreDecision(trace, {
+        memoryId: `m${i}`,
+        action: i % 2 === 0 ? "stored" : "deduped",
+        reason: `r${i}`,
+      });
+    }
+    assert.strictEqual(trace.storeDecisions.length, 3);
+    assert.strictEqual(trace.storeDecisions[0].memoryId, "m2");
+    assert.strictEqual(trace.storeDecisions[2].memoryId, "m4");
+  });
+});

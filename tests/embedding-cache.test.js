@@ -7,6 +7,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { createEmbeddingCache } from "../lib/embedding-cache.js";
+import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
 
 describe("createEmbeddingCache", () => {
   it("returns a cache instance with default options", () => {
@@ -119,5 +120,69 @@ describe("cache.size", () => {
 
     await new Promise(resolve => setTimeout(resolve, 60));
     assert.strictEqual(cache.size, 0);
+  });
+});
+
+
+describe("embedding-cache defaults", () => {
+  it("uses lowered default maxEntries of 128", () => {
+    const cache = createEmbeddingCache();
+    for (let i = 0; i < 130; i++) {
+      cache.set("agent-1", `query ${i}`, "model@1", [i]);
+    }
+    assert.strictEqual(cache.size, 128);
+    assert.strictEqual(cache.get("agent-1", "query 0", "model@1"), undefined);
+    assert.deepStrictEqual(cache.get("agent-1", "query 129", "model@1"), { vector: [129] });
+  });
+
+  it("uses lowered default ttlMs of 300000", async () => {
+    const cache = createEmbeddingCache();
+    cache.set("agent-1", "hello", "model@1", [1]);
+    assert.deepStrictEqual(cache.get("agent-1", "hello", "model@1"), { vector: [1] });
+    // The entry should still be alive well before the new 5-minute TTL.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.deepStrictEqual(cache.get("agent-1", "hello", "model@1"), { vector: [1] });
+  });
+});
+
+describe("embedding-cache key capping", () => {
+  it("caps the normalized query portion of the key at 256 chars", () => {
+    const cache = createEmbeddingCache();
+    const prefix = "x".repeat(256);
+    const queryA = prefix + "a";
+    const queryB = prefix + "b";
+    cache.set("agent-1", queryA, "model@1", [42]);
+    assert.deepStrictEqual(cache.get("agent-1", queryA, "model@1"), { vector: [42] });
+    assert.deepStrictEqual(
+      cache.get("agent-1", queryB, "model@1"),
+      { vector: [42] },
+      "queries differing after the 256th char should share a capped key"
+    );
+  });
+});
+
+describe("embedding-cache config passthrough", () => {
+  it("passes embeddingCache* options through normalizeEmbeddingConfig", () => {
+    const cfg = normalizeEmbeddingConfig({
+      provider: "openai",
+      apiKey: "test",
+      embeddingCacheEnabled: true,
+      embeddingCacheMaxEntries: 256,
+      embeddingCacheTtlMs: 60000,
+    });
+    assert.strictEqual(cfg.embeddingCacheEnabled, true);
+    assert.strictEqual(cfg.cacheMaxEntries, 256);
+    assert.strictEqual(cfg.cacheTtlMs, 60000);
+  });
+
+  it("falls back to legacy cacheMaxEntries / cacheTtlMs field names", () => {
+    const cfg = normalizeEmbeddingConfig({
+      provider: "openai",
+      apiKey: "test",
+      cacheMaxEntries: 64,
+      cacheTtlMs: 120000,
+    });
+    assert.strictEqual(cfg.cacheMaxEntries, 64);
+    assert.strictEqual(cfg.cacheTtlMs, 120000);
   });
 });
