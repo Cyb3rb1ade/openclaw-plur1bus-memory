@@ -247,6 +247,26 @@
             "type": "number",
             "default": 120000
           },
+          "maxQueueDepthRecall": {
+            "type": "number",
+            "default": 20
+          },
+          "maxQueueDepthCapturePerAgent": {
+            "type": "number",
+            "default": 10
+          },
+          "pressureGateEnabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "rssWarningBytes": {
+            "type": "number",
+            "default": 3221225472
+          },
+          "rssCriticalBytes": {
+            "type": "number",
+            "default": 4831838208
+          },
           "embeddingCacheEnabled": {
             "type": "boolean",
             "default": false
