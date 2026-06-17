@@ -113,9 +113,9 @@ describe("Schema-Default-Typen (Runtime / Cache)", () => {
   it("runtime.embeddingCacheEnabled ist ein Boolean", () =>
     assertBooleanDefault("runtime.embeddingCacheEnabled", false));
   it("runtime.embeddingCacheTtlMs ist eine Zahl", () =>
-    assertNumberDefault("runtime.embeddingCacheTtlMs", 1800000));
+    assertNumberDefault("runtime.embeddingCacheTtlMs", 300000));
   it("runtime.embeddingCacheMaxEntries ist eine Zahl", () =>
-    assertNumberDefault("runtime.embeddingCacheMaxEntries", 500));
+    assertNumberDefault("runtime.embeddingCacheMaxEntries", 128));
   it("runtime.metricsDebounceMs ist eine Zahl", () =>
     assertNumberDefault("runtime.metricsDebounceMs", 5000));
 });
@@ -290,20 +290,20 @@ describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
     assert.match(block, /project:\s*600/);
   });
 
-  it("lib/embedding-cache.js: maxEntries default = 500", () => {
+  it("lib/embedding-cache.js: maxEntries default = 128", () => {
     const cachePath = join(__dirname, "..", "lib", "embedding-cache.js");
     const src = readFileSync(cachePath, "utf8");
     const m = src.match(/maxEntries\s*=\s*([0-9.]+)/);
     assert.ok(m, "maxEntries default nicht gefunden");
-    assert.strictEqual(parseFloat(m[1]), 500);
+    assert.strictEqual(parseFloat(m[1]), 128);
   });
 
-  it("lib/embedding-cache.js: ttlMs default = 1800000", () => {
+  it("lib/embedding-cache.js: ttlMs default = 300000", () => {
     const cachePath = join(__dirname, "..", "lib", "embedding-cache.js");
     const src = readFileSync(cachePath, "utf8");
     const m = src.match(/ttlMs\s*=\s*([0-9.]+)/);
     assert.ok(m, "ttlMs default nicht gefunden");
-    assert.strictEqual(parseFloat(m[1]), 1800000);
+    assert.strictEqual(parseFloat(m[1]), 300000);
   });
 
   it("lib/metrics-debounce.js: debounceMs default = 5000", () => {

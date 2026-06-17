@@ -199,6 +199,9 @@ const TABLE_NAME = "memories";
 // können auch leere best-effort-catches (#10) ihren Fehler auf Debug-Level
 // loggen statt ihn komplett zu schlucken — ohne in jedem Helper api zu haben.
 let pluginLogger = null;
+// Lightweight per-DB throttle for hot-path purgeExpired() calls (Scope C).
+const PURGE_THROTTLE_MS = 5 * 60 * 1000;
+const purgeThrottleMap = new Map();
 function dbg(e, scope = "") {
   try {
     pluginLogger?.debug?.(`[plur1bus]${scope ? " " + scope : ""}: ${e?.message ?? e}`);
@@ -900,6 +903,21 @@ class MemoryDB {
     await this.init();
     const now = safeTimestamp(Date.now());
     await this._write(this.table.delete(`expiresAt > 0 AND expiresAt < ${now}`), "MemoryDB.purgeExpired");
+  }
+
+  /**
+   * Hot-path wrapper that skips purgeExpired() if it ran for this DB recently.
+   * Used by before_prompt_build; explicit/admin calls still use purgeExpired().
+   */
+  purgeExpiredThrottled(logger) {
+    const last = purgeThrottleMap.get(this.dbPath);
+    if (last && Date.now() - last < PURGE_THROTTLE_MS) {
+      return Promise.resolve();
+    }
+    purgeThrottleMap.set(this.dbPath, Date.now());
+    return this.purgeExpired().catch((e) => {
+      logger?.warn?.(`memory-lancedb-namespaced: purgeExpired failed: ${String(e)}`);
+    });
   }
 }
 
@@ -4157,9 +4175,9 @@ const plugin = {
         if (!event.prompt || event.prompt.length < 5) return neoContext ? { prependContext: neoContext } : undefined;
         const agentId = ctx?.agentId;
         const db = pool.getDb(agentId);
-        // GC: purge expired memories (non-blocking)
+        // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
-          db.purgeExpired().catch(e => api.logger.warn(`memory-lancedb-namespaced: purgeExpired failed: ${String(e)}`));
+          db.purgeExpiredThrottled(api.logger);
         }
         try {
           await db.init();
@@ -4677,9 +4695,9 @@ const plugin = {
             api.logger.warn(`plur1bus-neo: before_prompt_build dispatch tracking failed: ${String(neoErr)}`);
           }
         }
-        // GC: purge expired memories (non-blocking)
+        // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
-          db.purgeExpired().catch(e => api.logger.warn(`memory-lancedb-namespaced: purgeExpired failed: ${String(e)}`));
+          db.purgeExpiredThrottled(api.logger);
         }
         if (!ctx?.workspaceDir) return undefined;
 
