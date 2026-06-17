@@ -8,6 +8,9 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { tokenize } from "../lib/text-utils.js";
 import { dedupResults, runRecallPipeline } from "../lib/recall-pipeline.js";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("P0 tokenize acronyms", () => {
   it("preserves 2-3 letter tech acronyms: AI, API, GPU, SQL, CSS, HTML, IoT", () => {
@@ -87,22 +90,39 @@ describe("P0 recall defaults", () => {
   });
 
   it("runRecallPipeline allows up to 5 canonical items by default (canonicalMaxItems)", async () => {
-    const rows = makeRows(20);
-    const { memories } = await runRecallPipeline({
-      query: "test",
-      dbTable: makeDbTable(rows),
-      embeddings,
-      canonicalEnabled: true,
-      canonicalMinScore: -1, // force all rows to qualify as canonical
-      dedupEnabled: false,
-      logger: { warn: () => {}, info: () => {} },
-      // canonicalMaxItems intentionally omitted → should default to 5
-    });
-    // canonical items are prepended; with canonicalMaxItems=5 we expect
-    // up to 5 canonical + up to 12 vector = 17, but limited by available rows (20)
-    assert.ok(
-      memories.length >= 5,
-      `expected at least 5 canonical memories, got ${memories.length}`
-    );
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-canonical-"));
+    try {
+      const memoryDir = join(tmpDir, "memory");
+      mkdirSync(memoryDir, { recursive: true });
+      const sections = Array.from({ length: 10 }, (_, i) =>
+        `# Section ${i + 1}\n\nThis is canonical content number ${i + 1} with more than thirty characters to pass the filter.\n`
+      );
+      writeFileSync(join(memoryDir, "KNOWLEDGE.md"), sections.join(""), "utf8");
+
+      const rows = makeRows(20);
+      const { memories, canonical } = await runRecallPipeline({
+        query: "test",
+        dbTable: makeDbTable(rows),
+        embeddings,
+        workspaceDir: tmpDir,
+        canonicalEnabled: true,
+        canonicalMinScore: -1, // force all rows to qualify as canonical
+        dedupEnabled: false,
+        logger: { warn: () => {}, info: () => {} },
+        // canonicalMaxItems intentionally omitted → should default to 5
+      });
+      // canonical items are returned separately; callers prepend them to vector results.
+      assert.ok(
+        canonical.length >= 5,
+        `expected at least 5 canonical memories, got ${canonical.length}`
+      );
+      // vector results are capped to the remaining slots.
+      assert.ok(
+        memories.length <= 12,
+        `expected at most 12 vector memories, got ${memories.length}`
+      );
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
