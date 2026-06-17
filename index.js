@@ -4291,6 +4291,8 @@ const plugin = {
               status: r.entry.status || "active",
               versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
               createdAt: r.entry.createdAt ?? 0,
+              updatedAt: r.entry.updatedAt ?? 0,
+              lastRetrievedAt: r.entry.lastRetrievedAt ?? 0,
             };
             if (traceEnabled) {
               attachTraceToMemory(item, {
@@ -4549,6 +4551,15 @@ const plugin = {
           }
 
           const recallCfg = cfg.recall || {};
+          const nowMs = Date.now();
+          if (traceEnabled && trace) {
+            try {
+              const { enrichTraceWithTemporalProvenance } = await import("./lib/temporal-provenance.js");
+              enrichTraceWithTemporalProvenance(trace, associativeItems, { now: nowMs });
+            } catch (e) {
+              api.logger?.warn?.(`temporal-provenance: trace enrichment failed: ${String(e)}`);
+            }
+          }
           const memoriesContext = formatRelevantMemoriesContext(associativeItems, {
             fadedThreshold: resolveFadedThreshold(recallCfg),
             overlays,
@@ -4559,6 +4570,7 @@ const plugin = {
               includeInPrompt: traceInPrompt,
               maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
             },
+            now: nowMs,
           });
           const fullMemoriesContext = reactivationContext
             ? memoriesContext + "\n\n" + reactivationContext
