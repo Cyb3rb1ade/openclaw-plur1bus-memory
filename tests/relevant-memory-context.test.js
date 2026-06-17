@@ -465,3 +465,46 @@ describe("formatRelevantMemoriesContext — associative source attributes", () =
     assert.ok(!out.includes('data-x="y"'), "attribute injection via depth must not survive");
   });
 });
+
+
+// ── Context size cap ───────────────────────────────────────────────────────
+
+describe("formatRelevantMemoriesContext — maxTotalChars", () => {
+  it("truncates a huge memory list to the default maxTotalChars", () => {
+    const memories = [];
+    for (let i = 0; i < 40; i++) {
+      memories.push({ id: `big${i}`, category: "work", source: "dm", display: "x".repeat(400), memoryStrength: 1.0 });
+    }
+    const out = formatRelevantMemoriesContext(memories);
+    assert.ok(out.includes("<!-- memory context truncated -->"), "truncation marker missing");
+    assert.ok(out.length <= 12_000 + "\n<!-- memory context truncated -->".length,
+      `output too long: ${out.length}`);
+  });
+
+  it("preserves the operational-memory-warning block when truncation would cut it", () => {
+    const memories = [
+      { id: "op", category: "work", source: "dm", display: "cronjob is running", memoryStrength: 1.0 },
+    ];
+    for (let i = 0; i < 5; i++) {
+      memories.push({ id: `f${i}`, category: "work", source: "dm", display: "y".repeat(400), memoryStrength: 1.0 });
+    }
+    const out = formatRelevantMemoriesContext(memories, { maxTotalChars: 700 });
+    assert.ok(out.includes("<operational-memory-warning>"), "operational warning missing");
+    assert.ok(out.includes("<!-- memory context truncated -->"), "truncation marker missing");
+    const markerIdx = out.indexOf("<!-- memory context truncated -->");
+    const warningCloseIdx = out.indexOf("</operational-memory-warning>");
+    assert.ok(warningCloseIdx > markerIdx,
+      "operational warning should be preserved after truncation marker");
+  });
+
+  it("respects a custom maxTotalChars option", () => {
+    const memories = [{ id: "big2", category: "work", source: "dm", display: "z".repeat(400), memoryStrength: 1.0 }];
+    for (let i = 0; i < 5; i++) {
+      memories.push({ id: `c${i}`, category: "work", source: "dm", display: "z".repeat(400), memoryStrength: 1.0 });
+    }
+    const out = formatRelevantMemoriesContext(memories, { maxTotalChars: 1_000 });
+    assert.ok(out.includes("<!-- memory context truncated -->"), "truncation marker missing for custom cap");
+    assert.ok(out.length <= 1_000 + "\n<!-- memory context truncated -->".length + 200,
+      `custom cap output too long: ${out.length}`);
+  });
+});
