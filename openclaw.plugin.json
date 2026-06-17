@@ -253,11 +253,11 @@
           },
           "embeddingCacheTtlMs": {
             "type": "number",
-            "default": 1800000
+            "default": 300000
           },
           "embeddingCacheMaxEntries": {
             "type": "number",
-            "default": 500
+            "default": 128
           },
           "metricsDebounceMs": {
             "type": "number",

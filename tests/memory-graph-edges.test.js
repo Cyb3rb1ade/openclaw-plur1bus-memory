@@ -47,3 +47,43 @@ describe('buildEdgesForSession – H1-04 edge quality', () => {
     assert.ok(emotional.strength <= 0.5, `emotional edge strength ${emotional.strength} must be <= 0.5`);
   });
 });
+
+describe('buildEdgesForSession – timeout fallback', () => {
+  it('returns empty semantic edges when vectorSearch hangs', async () => {
+    const dbTable = {
+      vectorSearch: () => ({
+        limit: () => ({
+          toArray: () => new Promise(() => {}),
+        }),
+      }),
+    };
+    const mem = { id: 'm1', vector: [0.1, 0.2], createdAt: new Date().toISOString() };
+    const edges = await buildEdgesForSession([mem], [], dbTable, null);
+    const semanticEdges = edges.filter(e => e.type === 'semantic');
+    assert.strictEqual(semanticEdges.length, 0, 'hanging vectorSearch must not block edge building');
+  });
+
+  it('still creates temporal/entity edges when semantic vectorSearch times out', async () => {
+    const dbTable = {
+      vectorSearch: () => ({
+        limit: () => ({
+          toArray: () => new Promise(() => {}),
+        }),
+      }),
+    };
+    const existing = [
+      { id: 'e1', topics: ['api', 'memory'], createdAt: new Date().toISOString(), sessionId: 's1' },
+    ];
+    const mem = {
+      id: 'm1',
+      vector: [0.1, 0.2],
+      topics: ['api', 'memory'],
+      sessionId: 's1',
+      createdAt: new Date().toISOString(),
+    };
+    const edges = await buildEdgesForSession([mem], existing, dbTable, null);
+    assert.ok(edges.length > 0, 'non-semantic edges should still be built');
+    const semanticEdges = edges.filter(e => e.type === 'semantic');
+    assert.strictEqual(semanticEdges.length, 0);
+  });
+});
