@@ -4291,8 +4291,8 @@ const plugin = {
               status: r.entry.status || "active",
               versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
               createdAt: r.entry.createdAt ?? 0,
-              updatedAt: r.entry.updatedAt ?? 0,
-              lastRetrievedAt: r.entry.lastRetrievedAt ?? 0,
+              updatedAt: r.entry.updatedAt ?? undefined,
+              lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
             };
             if (traceEnabled) {
               attachTraceToMemory(item, {

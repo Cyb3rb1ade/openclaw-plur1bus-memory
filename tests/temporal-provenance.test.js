@@ -52,6 +52,11 @@ describe("parseMemoryTimestamp", () => {
   it("returns undefined for invalid strings", () => {
     assert.strictEqual(parseMemoryTimestamp("not-a-date"), undefined);
   });
+
+  it("treats 0 as missing (not Unix epoch)", () => {
+    assert.strictEqual(parseMemoryTimestamp(0), undefined);
+    assert.strictEqual(parseMemoryTimestamp(new Date(0)), undefined);
+  });
 });
 
 describe("computeMemoryAge", () => {
@@ -68,13 +73,14 @@ describe("computeMemoryAge", () => {
     assert.strictEqual(age.ageMs, 60 * 60 * 1000);
   });
 
-  it("prefers lastRetrievedAt when it is most recent", () => {
+  it("ignores lastRetrievedAt for age because it is recall time, not observation time", () => {
     const age = computeMemoryAge(mem({
       createdAt: "2026-06-16T12:00:00.000Z",
       updatedAt: "2026-06-17T00:00:00.000Z",
       lastRetrievedAt: "2026-06-17T00:30:00.000Z",
     }), { now: NOW_MS });
-    assert.strictEqual(age.ageMs, 30 * 60 * 1000);
+    assert.strictEqual(age.ageMs, 60 * 60 * 1000);
+    assert.strictEqual(age.timestampField, "updatedAt");
   });
 
   it("returns undefined age when no timestamp exists", () => {
