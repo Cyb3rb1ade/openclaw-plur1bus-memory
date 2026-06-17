@@ -282,6 +282,10 @@
           "metricsDebounceMs": {
             "type": "number",
             "default": 5000
+          },
+          "eventLoopLagResolutionMs": {
+            "type": "number",
+            "default": 10
           }
         }
       },
@@ -515,6 +519,18 @@
           "candidateTopK": {
             "type": "number",
             "default": 40
+          },
+          "softBudgetMs": {
+            "type": "number",
+            "default": 35000
+          },
+          "softBudgetFallback": {
+            "type": "boolean",
+            "default": true
+          },
+          "eventLoopLagSnapshot": {
+            "type": "boolean",
+            "default": true
           },
           "halfLifeDaysMap": {
             "type": "object",

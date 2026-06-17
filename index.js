@@ -151,6 +151,7 @@ import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
 import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import { createBackgroundMemoryScheduler, isBackgroundTurn } from "./lib/runtime-scheduler.js";
+import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import {
@@ -1591,16 +1592,8 @@ const plugin = {
     if (fallbackEmbeddingCfg) api.logger.info(`memory-lancedb-namespaced: embedding fallback configured (${fallbackEmbeddingCfg.model} @ ${fallbackEmbeddingCfg.baseUrl || "openai"})`);
     const autoCapture = cfg.autoCapture !== false;
     const autoRecall = cfg.autoRecall !== false;
-    const runtimeScheduler = createBackgroundMemoryScheduler({ config: cfg.runtime || {}, logger: api.logger });
 
-    // Configurable thresholds
-    const recallMinScore     = cfg.recallMinScore     ?? 0.15;
-    const autoRecallMinScore = cfg.autoRecallMinScore ?? 0.2;
-    const duplicateThreshold = cfg.duplicateThreshold ?? 0.95;
-    const forgetThreshold    = cfg.forgetThreshold    ?? 0.3;
-    const summaryMaxWords    = cfg.summaryMaxWords    ?? 150;
-
-    // v1.8.0 — Recall-Quality knobs
+    // v1.8.0 — Recall-Quality knobs (declared early because runtime scheduler consumes eventLoopLagSnapshot)
     const recallCfg = cfg.recall || {};
     const importanceBoost  = recallCfg.importanceBoost  ?? 0.3;
     const dedupEnabled     = recallCfg.dedup            !== false; // default on
@@ -1611,6 +1604,20 @@ const plugin = {
     const maxPromptMemories = recallCfg.maxPromptMemories ?? 12;
     const candidateTopK     = recallCfg.candidateTopK     ?? 40;
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
+    const softBudgetMs      = recallCfg.softBudgetMs      ?? 35_000;
+    const softBudgetFallback = recallCfg.softBudgetFallback !== false;
+    const recallEventLoopLagSnapshot = recallCfg.eventLoopLagSnapshot !== false;
+    const runtimeScheduler = createBackgroundMemoryScheduler({
+      config: { ...(cfg.runtime || {}), eventLoopLagSnapshot: recallEventLoopLagSnapshot },
+      logger: api.logger,
+    });
+
+    // Configurable thresholds
+    const recallMinScore     = cfg.recallMinScore     ?? 0.15;
+    const autoRecallMinScore = cfg.autoRecallMinScore ?? 0.2;
+    const duplicateThreshold = cfg.duplicateThreshold ?? 0.95;
+    const forgetThreshold    = cfg.forgetThreshold    ?? 0.3;
+    const summaryMaxWords    = cfg.summaryMaxWords    ?? 150;
     const semanticLensCfg   = cfg.semanticLens || recallCfg.semanticLens || {};
 
     // P2 Recall Decision Trace config
@@ -3633,8 +3640,15 @@ const plugin = {
                     maxCandidates: traceCfg.maxCandidates ?? 50,
                   })
                 : undefined;
+              const phaseTimer = createRecallPhaseTimer({
+                softBudgetMs,
+                hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
+                logger: api.logger,
+              });
               const { canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
                 query: params.query,
+                phaseTimer,
+                softBudgetFallback,
                 dbTable: db.table,
                 embeddings,
                 workspaceDir: ctx?.workspaceDir,
@@ -4146,11 +4160,17 @@ const plugin = {
         const agentIdForCache = ctx?.agentId || "default";
         const sessionKeyForCache = ctx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
         const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
+        const phaseTimer = createRecallPhaseTimer({
+          softBudgetMs,
+          hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
+          logger: api.logger,
+        });
         const scheduledRecall = await runtimeScheduler.runRecall({
           background,
           cacheKey,
           priority: background ? "low" : "normal",
-        }, async () => {
+          phaseTimer,
+        }, async (signal, timer) => {
         let neoContext = "";
         if (neoEnabled) {
           try {
@@ -4230,6 +4250,8 @@ const plugin = {
           // v1.9.0 — komplette Pipeline aus shared module
           const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runRecallPipeline({
             query: event.prompt,
+            phaseTimer: timer,
+            softBudgetFallback,
             dbTable: db.table,
             embeddings,
             workspaceDir: ctx?.workspaceDir,
