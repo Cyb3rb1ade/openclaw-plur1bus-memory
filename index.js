@@ -1300,10 +1300,16 @@ function buildConflictSummaryFromLog(workspaceDir, options = {}) {
 function updateConflictSummary(workspaceDir, entry) {
   let summary = readConflictSummary(workspaceDir);
   if (!summary) {
-    // Beim ersten Append starten wir mit einer leeren Summary; der gerade
-    // geschriebene Eintrag wird unten inkrementell hinzugefügt. Bestehende
-    // Logs (vor diesem Feature) werden beim nächsten buildMaintenanceNudges
-    // via dessen Fallback-Funktion zusammengefasst.
+    // Bootstrap: appendConflictLog hat den neuen Eintrag bereits in das Log
+    // geschrieben bevor dieser Aufruf erfolgt. buildConflictSummaryFromLog
+    // zählt ihn daher schon mit — kein weiteres Inkrement nötig.
+    const fromLog = buildConflictSummaryFromLog(workspaceDir);
+    if (fromLog) {
+      fromLog.lastUpdatedAt = new Date().toISOString();
+      writeConflictSummary(workspaceDir, fromLog);
+      return;
+    }
+    // Log existiert (noch) nicht — mit Null starten, unten inkrementieren.
     summary = {
       count: 0,
       oldestTimestamp: null,
@@ -2101,6 +2107,13 @@ const plugin = {
       }
     }
 
+    if (!neoEnabled && typeof api.registerMemoryPromptSupplement === "function") {
+      // Wenn Neo deaktiviert ist, gibt es keinen anderen Pfad für den vollen
+      // Action-Safety-Header. Compact-Marker in relevant-memory-context reicht
+      // nicht — explizit registrieren.
+      api.registerMemoryPromptSupplement(() => [buildRecallSafetyPreamble()]);
+    }
+
     if (neoEnabled) {
       if (typeof api.registerMemoryPromptSupplement === "function") {
         api.registerMemoryPromptSupplement(() => [
@@ -2798,7 +2811,7 @@ const plugin = {
             name: command.name,
             description: command.description,
             acceptsArgs: command.acceptsArgs ?? false,
-            channels: ["telegram", "discord", "slack", "mattermost"],
+            channels: ["telegram", "discord", "slack", "mattermost", "cron"],
             handler: (commandCtx) => runPlur1busCommand(commandCtx, command.prefixTokens),
           });
         }
