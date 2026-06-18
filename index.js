@@ -183,6 +183,8 @@ import {
   writeGraphConstellationReport,
   extractGraphSignals,
 } from "./lib/memory-graph.js";
+import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
+import { DEFAULT_NAMESPACE } from "./lib/namespace-config.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -1908,7 +1910,33 @@ const plugin = {
       return `plur1bus:${key}`;
     };
 
-    const pool = new AgentDbPool(baseDbPath, vectorDim);
+    const nsCfg = cfg.namespaces || {};
+    // MultiNamespacePool stores agents at: join(memoryBaseDir, namespace, agentId).
+    // Production default: baseDbPath = ~/.openclaw/memory/lancedb-namespaced
+    //   → resolveWriteNamespace({}) = "lancedb-namespaced"
+    //   → memoryBaseDir = join(baseDbPath, "..") = ~/.openclaw/memory
+    //   → effective agent path = join(memoryBaseDir, "lancedb-namespaced", agentId) = baseDbPath/agentId ✓
+    // Tests / custom cfg.baseDbPath: path like /tmp/test-XXX (not ending with namespace name).
+    //   → activeWriteNamespace overridden to "." so join(baseDbPath, ".", agentId) = baseDbPath/agentId ✓
+    const _writeNsName = nsCfg.activeWriteNamespace || DEFAULT_NAMESPACE;
+    const _basePathEndsWithNs = baseDbPath.endsWith("/" + _writeNsName) || baseDbPath.endsWith("\\" + _writeNsName);
+    let _memoryBaseDir, _effectiveNsCfg;
+    if (_basePathEndsWithNs) {
+      // Normal production path: strip the namespace segment, let MultiNamespacePool re-append it.
+      _memoryBaseDir = join(baseDbPath, "..");
+      _effectiveNsCfg = nsCfg;
+    } else {
+      // Non-namespaced baseDbPath (tests, custom path): agents live directly in baseDbPath.
+      // Use "." as namespace so join(baseDbPath, ".", agentId) normalises to baseDbPath/agentId.
+      _memoryBaseDir = baseDbPath;
+      _effectiveNsCfg = {
+        ...nsCfg,
+        activeWriteNamespace: ".",
+        activeRecallNamespaces: ["."],
+        // legacyReadOnlyNamespaces intentionally not set — no cross-ns recall for flat paths.
+      };
+    }
+    const pool = new MultiNamespacePool(_memoryBaseDir, _effectiveNsCfg, vectorDim, AgentDbPool);
     const emotionalPool = createEmotionalStatePool();
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? new LocalTransformersEmbeddingProvider({ ...normalizedEmbeddingCfg.local, dimensions: dimensions || vectorDim })
@@ -1941,7 +1969,7 @@ const plugin = {
 
     async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
       const storeAgentId = storeCtx.agentId || "default";
-      const storeDb = pool.getDb(storeAgentId);
+      const storeDb = pool.getWriteDb(storeAgentId);
       // v6.2.1 — Input-Validierung für Memory-Text (P0-Fix)
       const textValidation = validateMemoryText(params.text);
       if (!textValidation.ok) {
@@ -3731,7 +3759,8 @@ const plugin = {
 
     api.registerTool((ctx) => {
       const agentId = ctx.agentId;
-      const db = pool.getDb(agentId);
+      const db = pool.getWriteDb(agentId);        // write-db — used by memory_store/forget
+      const readDbs = pool.getReadDbs(agentId);   // read namespaces — used by memory_recall
 
       const recallTool = {
           name: "memory_recall",
@@ -3750,7 +3779,7 @@ const plugin = {
             try {
               const limit = params.limit || maxPromptMemories;
               const assocCfg = cfg?.continuityEngine?.associativeRecall || {};
-              await db.init();
+              for (const { db: rdb } of readDbs) { await rdb.init(); }
               // v5.4.0 — Graph-Edges für assoziativen Spread laden
               let graphEdges = [];
               try {
@@ -3771,11 +3800,10 @@ const plugin = {
                 hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
                 logger: api.logger,
               });
-              const { canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
+              const _recallBaseParams = {
                 query: params.query,
                 phaseTimer,
                 softBudgetFallback,
-                dbTable: db.table,
                 embeddings,
                 workspaceDir: ctx?.workspaceDir,
                 topN: limit,
@@ -3812,7 +3840,24 @@ const plugin = {
                     })]);
                   } catch (_e) { dbg(_e); }
                 },
-              });
+              };
+              let canonicalHits, ordered, returnedTrace;
+              if (readDbs.length === 1) {
+                ({ canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
+                  ..._recallBaseParams,
+                  dbTable: readDbs[0].db.table,
+                }));
+              } else {
+                const nsResults = await Promise.all(
+                  readDbs.map(({ db: nsDb }) => runRecallPipeline({
+                    ..._recallBaseParams,
+                    dbTable: nsDb.table,
+                  }))
+                );
+                canonicalHits = nsResults.flatMap(r => r.canonical || []);
+                returnedTrace = nsResults[0]?.trace;
+                ordered = dedupResults(nsResults.flatMap(r => r.memories || []), dedupJaccard);
+              }
               if (ordered.length === 0 && canonicalHits.length === 0) {
                 return { content: [{ type: "text", text: "No relevant memories found." }] };
               }
@@ -4363,13 +4408,16 @@ const plugin = {
           event.prompt === "__openclaw_memory_core_rem_sleep__"
         ) { return neoContext ? { prependContext: neoContext } : undefined; }
         const agentId = ctx?.agentId;
-        const db = pool.getDb(agentId);
+        const db = pool.getDb(agentId);       // write-db — used for GC/maintenance
+        const readDbs = pool.getReadDbs(agentId); // read namespaces — used for recall
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
           db.purgeExpiredThrottled(api.logger);
         }
         try {
           await db.init();
+          // Init additional read namespaces (skip write-db instance — already inited above)
+          for (const { db: rdb } of readDbs) { if (rdb !== db) await rdb.init(); }
           // v5.3.0 — Stimmung aus aktueller Konversation ableiten
           emotionalPool.get(agentId).updateFromMessages(event.messages || []);
           // v5.4.0 — Graph-Edges für assoziativen Spread laden
@@ -4417,11 +4465,10 @@ const plugin = {
               })
             : null;
           // v1.9.0 — komplette Pipeline aus shared module
-          const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runRecallPipeline({
+          const _autoRecallBaseParams = {
             query: event.prompt,
             phaseTimer: timer,
             softBudgetFallback,
-            dbTable: db.table,
             embeddings,
             workspaceDir: ctx?.workspaceDir,
             topN: maxPromptMemories,
@@ -4462,7 +4509,24 @@ const plugin = {
                 })]);
               } catch (_e) { dbg(_e); }
             },
-          });
+          };
+          let canonicalHits, ordered, pipelineTrace;
+          if (readDbs.length === 1) {
+            ({ canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runRecallPipeline({
+              ..._autoRecallBaseParams,
+              dbTable: readDbs[0].db.table,
+            }));
+          } else {
+            const nsResults = await Promise.all(
+              readDbs.map(({ db: nsDb }) => runRecallPipeline({
+                ..._autoRecallBaseParams,
+                dbTable: nsDb.table,
+              }))
+            );
+            canonicalHits = nsResults.flatMap(r => r.canonical || []);
+            pipelineTrace = nsResults[0]?.trace;
+            ordered = dedupResults(nsResults.flatMap(r => r.memories || []), dedupJaccard);
+          }
           trace = pipelineTrace || trace;
           if (ordered.length === 0 && canonicalHits.length === 0) {
             return neoContext ? { prependContext: neoContext } : undefined;
