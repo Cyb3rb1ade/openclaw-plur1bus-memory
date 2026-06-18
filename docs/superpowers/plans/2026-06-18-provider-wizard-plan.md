@@ -140,6 +140,15 @@ import { t } from "../lib/i18n.js";
 import { dictionary } from "../lib/i18n-dictionary.js";
 
 const REQUIRED_KEYS = [
+  // Embedding keys
+  "setup.embedding.title",
+  "setup.embedding.description",
+  "setup.embedding.option.openai",
+  "setup.embedding.option.openai_help",
+  "setup.embedding.option.local_e5",
+  "setup.embedding.option.local_e5_help",
+  "setup.embedding.api_key_ask",
+  // Reranker keys
   "setup.reranker.title",
   "setup.reranker.description",
   "setup.reranker.option.cohere",
@@ -220,9 +229,39 @@ node --test tests/i18n-setup-reranker.test.js
 
 - [ ] **Step 3: Keys in `lib/i18n-dictionary.js` einfügen**
 
-Am Ende der `dictionary`-Exports-Objekt (vor dem schließenden `}`), neue Sektion einfügen:
+Am Ende der `dictionary`-Exports-Objekt (vor dem schließenden `}`), zwei neue Sektionen einfügen — **zuerst** `setup.embedding.*`, dann `setup.reranker.*`:
 
 ```js
+  // ─── Setup: Embedding Wizard ─────────────────────────────────────────────────
+  "setup.embedding.title": {
+    de: { default: "Schritt 1/2: Embedding-Provider" },
+    en: { default: "Step 1/2: Embedding Provider" },
+  },
+  "setup.embedding.description": {
+    de: { default: "Welchen Embedding-Provider möchtest du nutzen?" },
+    en: { default: "Which embedding provider do you want to use?" },
+  },
+  "setup.embedding.option.openai": {
+    de: { default: "OpenAI text-embedding-3-large (3072 dims, kostenpflichtig, empfohlen)" },
+    en: { default: "OpenAI text-embedding-3-large (3072 dims, paid, recommended)" },
+  },
+  "setup.embedding.option.openai_help": {
+    de: { default: "Benötigt OPENAI_API_KEY. Bester Recall-Score. Keine lokale GPU/CPU-Last." },
+    en: { default: "Requires OPENAI_API_KEY. Best recall quality. No local GPU/CPU load." },
+  },
+  "setup.embedding.option.local_e5": {
+    de: { default: "Lokal: intfloat/multilingual-e5-small (384 dims, mehrsprachig, kein API-Key)" },
+    en: { default: "Local: intfloat/multilingual-e5-small (384 dims, multilingual, no API key)" },
+  },
+  "setup.embedding.option.local_e5_help": {
+    de: { default: "CPU-tauglich, gut für Deutsch/Mehrsprachig. Download ~135 MB beim ersten Start." },
+    en: { default: "CPU-friendly, good for German/multilingual. ~135 MB download on first run." },
+  },
+  "setup.embedding.api_key_ask": {
+    de: { default: "OPENAI_API_KEY speichern als [1] Env-Var-Referenz (bevorzugt) / [2] Literal?" },
+    en: { default: "Store OPENAI_API_KEY as [1] env-ref (recommended) / [2] literal?" },
+  },
+
   // ─── Setup: Reranker Wizard ─────────────────────────────────────────────────
   "setup.reranker.title": {
     de: { default: "Schritt 2/2: Reranker" },
@@ -1118,10 +1157,23 @@ import { join, homedir } from "node:path";
 
 const TMP_BASE = join(homedir(), ".openclaw", "memory");
 
+// FakeAgentDbPool — kein echtes LanceDB, nur Pfad-Tracking
+class FakeAgentDbPool {
+  constructor(basePath, _vectorDim) {
+    this.basePath = basePath;
+    this.isShutdown = false;
+  }
+  getDb(agentId) {
+    if (this.isShutdown) throw new Error("FakeAgentDbPool is shutdown");
+    return { dbPath: join(this.basePath, agentId) };
+  }
+  async shutdown() { this.isShutdown = true; }
+}
+
 describe("MultiNamespacePool", () => {
   it("getWriteDb gibt DB aus activeWriteNamespace", () => {
     const nsCfg = { activeWriteNamespace: "lancedb-local", activeRecallNamespaces: ["lancedb-local"] };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
     const db = pool.getWriteDb("default");
     assert.ok(db);
     assert.ok(db.dbPath.includes("lancedb-local"), `Erwartet lancedb-local in: ${db.dbPath}`);
@@ -1132,7 +1184,7 @@ describe("MultiNamespacePool", () => {
       activeWriteNamespace: "lancedb-new",
       legacyReadOnlyNamespaces: ["lancedb-old"],
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
     const db = pool.getWriteDb("default");
     assert.ok(!db.dbPath.includes("lancedb-old"), `Write-DB zeigt auf legacyReadOnly: ${db.dbPath}`);
   });
@@ -1144,7 +1196,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: true,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
     const dbs = pool.getReadDbs("default");
     assert.strictEqual(dbs.length, 2);
     assert.ok(dbs.some(d => d.namespace === "lancedb-new"));
@@ -1158,7 +1210,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: false,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
     const dbs = pool.getReadDbs("default");
     assert.strictEqual(dbs.length, 1);
     assert.strictEqual(dbs[0].namespace, "lancedb-new");
@@ -1166,7 +1218,7 @@ describe("MultiNamespacePool", () => {
 
   it("getDb (backward-compat) delegiert auf getWriteDb", () => {
     const nsCfg = { activeWriteNamespace: "lancedb-local" };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
     const a = pool.getDb("default");
     const b = pool.getWriteDb("default");
     assert.strictEqual(a.dbPath, b.dbPath);
@@ -1179,7 +1231,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: true,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
     pool.getReadDbs("default"); // pools initialisieren
     await assert.doesNotReject(() => pool.shutdown());
   });
@@ -1557,7 +1609,8 @@ describe("provider-wizard i18n rendering", () => {
     assert.ok(label.includes("paid"), `"paid" fehlt: ${label}`);
   });
 
-  it("ungültige Auswahl nutzt setup.reranker.invalid_choice (de)", () => {
+  it("ungültige Auswahl nutzt setup.reranker.invalid_choice (de)", async () => {
+    // async wegen await import()
     const { t } = await import("../lib/i18n.js");
     const msg = t("setup.reranker.invalid_choice", { lang: "de", tone: "default" });
     assert.ok(msg.includes("1") && msg.includes("4"), `Keine Optionszahlen in: ${msg}`);
@@ -1568,9 +1621,19 @@ describe("provider-wizard i18n rendering", () => {
     assert.strictEqual(options[0].key, "openai");
   });
 
-  it("Embedding-Option lokal enthält 'multilingual'", () => {
+  it("Embedding OpenAI-Label enthält 'kostenpflichtig' (de)", () => {
+    const label = formatWizardOption("embedding", "openai", { lang: "de" });
+    assert.ok(label.toLowerCase().includes("kostenpflichtig"), `'kostenpflichtig' fehlt: ${label}`);
+  });
+
+  it("Embedding lokales Modell enthält 'multilingual' (de)", () => {
     const label = formatWizardOption("embedding", "local-transformers", { lang: "de" });
     assert.ok(label.toLowerCase().includes("multilingual"), `'multilingual' fehlt: ${label}`);
+  });
+
+  it("Embedding OpenAI-Label enthält 'paid' (en)", () => {
+    const label = formatWizardOption("embedding", "openai", { lang: "en" });
+    assert.ok(label.toLowerCase().includes("paid"), `'paid' fehlt: ${label}`);
   });
 });
 ```
@@ -1620,8 +1683,8 @@ const RERANKER_OPTIONS = [
 ];
 
 const EMBEDDING_OPTIONS = [
-  { key: "openai",            label: `OpenAI text-embedding-3-large (3072 dims)` },
-  { key: "local-transformers", label: `Local: intfloat/multilingual-e5-small (384 dims)` },
+  { key: "openai",             i18nLabel: "setup.embedding.option.openai",     i18nHelp: "setup.embedding.option.openai_help" },
+  { key: "local-transformers", i18nLabel: "setup.embedding.option.local_e5",   i18nHelp: "setup.embedding.option.local_e5_help" },
 ];
 
 const ADVANCED_RERANKER_MODELS = [
@@ -1637,18 +1700,12 @@ export function buildWizardOptions(type, { lang: l = "en" } = {}) {
   return [];
 }
 
-/** Exportiert für Tests — rendert ein Option-Label */
+/** Exportiert für Tests — rendert ein Option-Label via i18n (beide Typen) */
 export function formatWizardOption(type, key, { lang: l = "en" } = {}) {
-  if (type === "reranker") {
-    const opt = RERANKER_OPTIONS.find(o => o.key === key);
-    if (!opt) return key;
-    return t(opt.i18nLabel, { lang: l, tone: "default" });
-  }
-  if (type === "embedding") {
-    const opt = EMBEDDING_OPTIONS.find(o => o.key === key);
-    return opt?.label || key;
-  }
-  return key;
+  const options = type === "reranker" ? RERANKER_OPTIONS : EMBEDDING_OPTIONS;
+  const opt = options.find(o => o.key === key);
+  if (!opt?.i18nLabel) return key;
+  return t(opt.i18nLabel, { lang: l, tone: "default" });
 }
 
 // ─── Wizard-Ablauf ────────────────────────────────────────────────────────────
@@ -1663,7 +1720,9 @@ async function wizardEmbedding() {
   console.error("");
 
   for (let i = 0; i < EMBEDDING_OPTIONS.length; i++) {
-    console.error(`[${i + 1}] ${EMBEDDING_OPTIONS[i].label}`);
+    const opt = EMBEDDING_OPTIONS[i];
+    console.error(`[${i + 1}] ${t(opt.i18nLabel, { lang, tone })}`);
+    console.error(`    ${t(opt.i18nHelp, { lang, tone })}`);
   }
 
   let choice;
@@ -1674,7 +1733,8 @@ async function wizardEmbedding() {
   }
 
   if (choice === "1") {
-    const keyChoice = await askLine("OPENAI_API_KEY store as [1] env-ref (recommended) / [2] literal: ");
+    console.error(t("setup.embedding.api_key_ask", { lang, tone }));
+    const keyChoice = await askLine("[1/2]: ");
     if (keyChoice === "2") {
       const literal = await askLine("Enter key: ");
       return { provider: "openai", apiKey: literal, model: "text-embedding-3-large", dimensions: 3072 };
