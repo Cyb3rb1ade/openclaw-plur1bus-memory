@@ -21,47 +21,16 @@
  *
  * Exit codes:
  *   0  All checks passed (or repaired successfully)
- *   1  Unresolved integrity violations remain
+ *   1  Unresolved deploy-integrity violations remain
  *   2  Unexpected error
+ *   3  Warnings only — integrity OK but LanceDB elevated or Dreaming cron in error state
  */
 
 import { existsSync, readFileSync, mkdirSync, copyFileSync, readdirSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { validateDeployment, smokeTestExports } from "./lib/deploy-integrity.mjs";
-
-const DEPLOY_FILES = [
-  "index.js",
-  "openclaw.plugin.json",
-  // core lib — always sync
-  "lib/neo-arch.js",
-  "lib/relevant-memory-context.js",
-  "lib/memory-merge-safety.js",
-  "lib/contradiction-detector.js",
-  "lib/recall-pipeline.js",
-  "lib/runtime-scheduler.js",
-  // new lib files added in recent commits
-  "lib/bounded-operation-queue.js",
-  "lib/continuity-gate.js",
-  "lib/conversation-reactivation-recall.js",
-  "lib/event-loop-lag-snapshot.js",
-  "lib/interpretation-overlay.js",
-  "lib/memory-context-sanitize.js",
-  "lib/memory-doctor.js",
-  "lib/memory-fact-quality.js",
-  "lib/memory-text-contradiction.js",
-  "lib/overlay-commands.js",
-  "lib/overlay-generator.js",
-  "lib/pattern-surface.js",
-  "lib/recall-decision-trace.js",
-  "lib/recall-phase-timer.js",
-  "lib/runtime-pressure-gate.js",
-  "lib/semantic-lens-index.js",
-  "lib/temporal-provenance.js",
-  "lib/with-timeout.js",
-  "lib/recall-budget.js",
-];
+import { validateDeployment, smokeTestExports, DEPLOY_FILES } from "./lib/deploy-integrity.mjs";
 
 const SMOKE_EXPECTATIONS = [
   { file: "lib/neo-arch.js",                exports: ["buildNeoWorkspaceAliases", "isInjectedContextText"] },
@@ -72,13 +41,14 @@ const SMOKE_EXPECTATIONS = [
 ];
 
 function parseArgs(argv) {
-  const opts = { dryRun: false, maintainLancedb: false, runCron: false, deployDir: null, help: false };
+  const opts = { dryRun: false, maintainLancedb: false, runCron: false, deployDir: null, noSmoke: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run")           opts.dryRun = true;
     else if (a === "--maintain-lancedb") opts.maintainLancedb = true;
     else if (a === "--run-cron")     opts.runCron = true;
     else if (a === "--deploy-dir")   opts.deployDir = argv[++i];
+    else if (a === "--no-smoke")     opts.noSmoke = true;
     else if (a === "--help")         opts.help = true;
   }
   return opts;
@@ -197,30 +167,42 @@ async function main() {
 
   // 1. Deploy integrity
   section("1/3  Deploy integrity");
+
+  // Check-only pass first so we know whether a backup is needed before any
+  // files are modified.
+  const checkReport = validateDeployment({ deployDir, repoDir, files: DEPLOY_FILES, repair: false });
+  const hasViolations = !checkReport.ok;
+  if (hasViolations && !opts.dryRun) {
+    const backupDir = backupDeployDir(deployDir, DEPLOY_FILES);
+    console.log(`  backup → ${backupDir}`);
+  }
+
+  // Repair pass (no-op in dry-run).
   const report = validateDeployment({ deployDir, repoDir, files: DEPLOY_FILES, repair: !opts.dryRun, dryRun: opts.dryRun });
-  let backedUp = false;
   for (const r of report.results) {
-    if (!r.ok && !backedUp && !opts.dryRun) {
-      console.log(`  backup → ${backupDeployDir(deployDir, DEPLOY_FILES)}`);
-      backedUp = true;
-    }
     const icon = r.ok || r.repaired ? "✓" : "✗";
     const label = r.ok ? "OK   " : r.repaired ? "FIXED" : "FAIL ";
     const detail = r.repaired ? ` (was: ${r.reasons.join(", ")})` : r.reasons.length ? ` (${r.reasons.join(", ")})` : "";
     console.log(`  ${icon} ${label} ${r.file}${detail}`);
   }
 
-  const smokeExpectations = SMOKE_EXPECTATIONS.map(({ file, exports: ex }) => ({
-    filePath: resolve(deployDir, file), exports: ex,
-  }));
-  const smoke = await smokeTestExports(smokeExpectations);
-  console.log("\n  smoke test:");
-  for (const r of smoke.results) {
-    const icon = r.ok ? "✓" : "✗";
-    const detail = r.importError ? " (import failed)" : r.missing.length ? ` (missing: ${r.missing.join(", ")})` : "";
-    console.log(`  ${icon} ${r.filePath.replace(deployDir + "/", "")}${detail}`);
+  let smokeOk = true;
+  if (!opts.noSmoke) {
+    const smokeExpectations = SMOKE_EXPECTATIONS.map(({ file, exports: ex }) => ({
+      filePath: resolve(deployDir, file), exports: ex,
+    }));
+    const smoke = await smokeTestExports(smokeExpectations);
+    console.log("\n  smoke test:");
+    for (const r of smoke.results) {
+      const icon = r.ok ? "✓" : "✗";
+      const detail = r.importError ? " (import failed)" : r.missing.length ? ` (missing: ${r.missing.join(", ")})` : "";
+      console.log(`  ${icon} ${r.filePath.replace(deployDir + "/", "")}${detail}`);
+    }
+    smokeOk = smoke.ok;
+  } else {
+    console.log("\n  smoke test: skipped (--no-smoke)");
   }
-  const integrityOk = report.ok && smoke.ok;
+  const integrityOk = report.ok && smokeOk;
   console.log(`\n  ${integrityOk ? "✓ PASS" : "✗ FAIL"} deploy integrity`);
 
   // 2. LanceDB
@@ -248,7 +230,9 @@ async function main() {
     console.log("  ✓ All checks passed — no action needed.");
   }
 
-  process.exit(integrityOk ? 0 : 1);
+  if (!integrityOk) process.exit(1);
+  if (!lancedbOk || !cronOk) process.exit(3);
+  process.exit(0);
 }
 
 main().catch((err) => { console.error("repair-installed-plugin:", err); process.exit(2); });

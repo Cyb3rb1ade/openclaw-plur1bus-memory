@@ -38,5 +38,6 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/maintain-lancedb.mjs
 !scripts/repair-dreaming-cron.mjs
 !scripts/verify-workspace-writer.mjs
+!scripts/auto-capture-lancedb.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
