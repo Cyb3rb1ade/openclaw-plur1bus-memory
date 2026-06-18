@@ -18,6 +18,9 @@
 - Option C (Reindex): niemals alte DB löschen — Snapshot zuerst, atomarer Switch nach Validierung
 - `status: "unknown"` in Dimension-Guard blockiert immer Provider-Wechsel
 - `activeWriteNamespace` darf nur beschrieben werden; `legacyReadOnlyNamespaces` sind read-only
+- **`resolveApiKey(cfg, { defaultEnv, optional, label })`**: Kein globaler `OPENAI_API_KEY`-Fallback in der Funktion selbst. Jeder Aufrufer übergibt `defaultEnv` explizit — `"OPENAI_API_KEY"` für Embedding, `"COHERE_API_KEY"` für Cohere-Reranker. Cohere darf niemals versehentlich den OpenAI-Key nutzen.
+- **Wizard-i18n**: Keine user-facing Texte in Bash. Wizard-UX ausschließlich in `scripts/provider-wizard.mjs` via `resolveLocale()` + `t(key, ...)`. `install-memory-system.sh` ruft nur den Node-Wizard auf.
+- **Reindex (diese Iteration)**: `scripts/reindex-provider.mjs` ist dry-run + report-only. Kein Re-Embedding, kein Config-Switch, kein `cp -r` ohne `--apply`. Echter Reindex = eigener Folgepatch.
 - Spec-Referenz: `docs/superpowers/specs/2026-06-18-provider-wizard-design.md` (rev 2)
 
 ---
@@ -34,8 +37,10 @@
 | `lib/providers/reranker-cohere.js` | ÄNDERN | 2 |
 | `lib/providers/dimension-guard.js` | NEU | 3 |
 | `lib/namespace-config.js` | NEU | 4 |
-| `scripts/reindex-provider.mjs` | NEU | 4 |
-| `scripts/install-memory-system.sh` | ÄNDERN | 4 |
+| `lib/multi-namespace-pool.js` | NEU | 4 |
+| `scripts/reindex-provider.mjs` | NEU (dry-run only) | 4 |
+| `scripts/provider-wizard.mjs` | NEU | 4 |
+| `scripts/install-memory-system.sh` | ÄNDERN (ruft wizard auf) | 4 |
 | `.openclaw/scripts/auto-capture-lancedb.mjs` | ÄNDERN | 5 |
 | `lib/providers/reranker-chained.js` | ÄNDERN | 6 |
 | `tests/dimension-guard.test.js` | NEU | 7 |
@@ -44,6 +49,8 @@
 | `tests/auto-capture-import.test.js` | NEU | 7 |
 | `tests/i18n-setup-reranker.test.js` | NEU | 7 |
 | `tests/chained-reranker-null-fallback.test.js` | NEU | 7 |
+| `tests/multi-namespace-pool.test.js` | NEU | 4 |
+| `tests/provider-wizard.test.js` | NEU | 4 |
 | `CHANGELOG.md` | ÄNDERN | 8 |
 
 ---
@@ -425,15 +432,16 @@ git commit -m "feat(config): apiKeyEnv + fallbackProvider support in normalize f
 
 ## Phase 2: Provider-Factory + apiKeyEnv
 
-### Task 2.1 — `env.js`: resolveApiKey(cfg)
+### Task 2.1 — `env.js`: resolveApiKey(cfg, opts) — provider-sicher
 
 **Files:**
 - Modify: `lib/providers/env.js`
 
 **Interfaces:**
-- Produces: `export function resolveApiKey(cfg)` — löst `cfg.apiKeyEnv` (bevorzugt) oder `cfg.apiKey` auf
+- Produces: `export function resolveApiKey(cfg, { defaultEnv, optional, label } = {})` — löst `cfg.apiKeyEnv` (bevorzugt) oder `cfg.apiKey` auf; `defaultEnv` nur wenn explizit vom Aufrufer gesetzt; kein globaler OPENAI-Fallback
+- **Wichtig:** Die Funktion MUSS provider-neutral sein. Cohere darf niemals auf `OPENAI_API_KEY` zurückfallen, weil kein `defaultEnv` übergeben wurde.
 
-- [ ] **Step 1: Test in bestehendem env-Test oder neuer Datei**
+- [ ] **Step 1: Test schreiben**
 
 ```js
 // tests/provider-env-resolve.test.js (NEU)
@@ -443,21 +451,30 @@ import { resolveApiKey } from "../lib/providers/env.js";
 
 describe("resolveApiKey", () => {
   before(() => {
-    process.env._TEST_KEY = "test-api-key-123";
+    process.env._TEST_OPENAI_KEY = "sk-openai-test";
+    process.env._TEST_COHERE_KEY = "co-test-key";
   });
   after(() => {
-    delete process.env._TEST_KEY;
+    delete process.env._TEST_OPENAI_KEY;
+    delete process.env._TEST_COHERE_KEY;
   });
 
-  it("löst apiKeyEnv aus process.env auf", () => {
-    const key = resolveApiKey({ apiKeyEnv: "_TEST_KEY" });
-    assert.strictEqual(key, "test-api-key-123");
+  it("löst apiKeyEnv aus process.env auf (höchste Priorität)", () => {
+    const key = resolveApiKey({ apiKeyEnv: "_TEST_OPENAI_KEY" });
+    assert.strictEqual(key, "sk-openai-test");
   });
 
-  it("wirft wenn apiKeyEnv gesetzt aber Env-Var leer", () => {
+  it("wirft wenn apiKeyEnv gesetzt aber Env-Var fehlt", () => {
     assert.throws(
       () => resolveApiKey({ apiKeyEnv: "_NONEXISTENT_VAR_XYZ" }),
       /Env var _NONEXISTENT_VAR_XYZ not set/
+    );
+  });
+
+  it("wirft bei leerem Env-Var mit Label in der Fehlermeldung", () => {
+    assert.throws(
+      () => resolveApiKey({ apiKeyEnv: "_NONEXISTENT_VAR_XYZ" }, { label: "OpenAI embedding" }),
+      /OpenAI embedding/
     );
   });
 
@@ -467,13 +484,36 @@ describe("resolveApiKey", () => {
   });
 
   it("apiKeyEnv hat Vorrang vor apiKey", () => {
-    const key = resolveApiKey({ apiKeyEnv: "_TEST_KEY", apiKey: "sk-should-not-be-used" });
-    assert.strictEqual(key, "test-api-key-123");
+    const key = resolveApiKey({ apiKeyEnv: "_TEST_OPENAI_KEY", apiKey: "sk-should-not-be-used" });
+    assert.strictEqual(key, "sk-openai-test");
   });
 
-  it("gibt undefined zurück wenn beides nicht gesetzt (soft fallback)", () => {
-    // Für optionalen Kontext — nutzt resolveApiKey mit { optional: true }
-    const key = resolveApiKey({ optional: true });
+  it("defaultEnv wird genutzt wenn apiKeyEnv + apiKey beide fehlen", () => {
+    const key = resolveApiKey({}, { defaultEnv: "_TEST_OPENAI_KEY" });
+    assert.strictEqual(key, "sk-openai-test");
+  });
+
+  it("defaultEnv='_TEST_COHERE_KEY' → Cohere-Key, NICHT OpenAI-Key", () => {
+    const key = resolveApiKey({}, { defaultEnv: "_TEST_COHERE_KEY" });
+    assert.strictEqual(key, "co-test-key");
+    assert.notStrictEqual(key, "sk-openai-test");
+  });
+
+  it("KEIN globaler OPENAI-Fallback ohne defaultEnv — wirft statt OPENAI_API_KEY zu raten", () => {
+    // Auch wenn OPENAI_API_KEY in process.env wäre: ohne defaultEnv kein Fallback
+    assert.throws(
+      () => resolveApiKey({}),
+      /no API key/i
+    );
+  });
+
+  it("optional=true: gibt undefined wenn kein Key gefunden", () => {
+    const key = resolveApiKey({}, { optional: true });
+    assert.strictEqual(key, undefined);
+  });
+
+  it("optional=true mit defaultEnv: gibt undefined wenn Env-Var fehlt (kein Wurf)", () => {
+    const key = resolveApiKey({}, { defaultEnv: "_NONEXISTENT_VAR_XYZ", optional: true });
     assert.strictEqual(key, undefined);
   });
 });
@@ -483,7 +523,7 @@ describe("resolveApiKey", () => {
 
 ```bash
 node --test tests/provider-env-resolve.test.js
-# Expected: FAIL — resolveApiKey ist nicht exportiert
+# Expected: FAIL — resolveApiKey nicht exportiert
 ```
 
 - [ ] **Step 3: `resolveApiKey` in `lib/providers/env.js` ergänzen**
@@ -493,38 +533,67 @@ node --test tests/provider-env-resolve.test.js
 
 /**
  * Löst einen API-Key aus Config auf.
- * Bevorzugt: cfg.apiKeyEnv → process.env[name]
- * Fallback: cfg.apiKey → Literal oder ${VAR}-Syntax via resolveOptionalEnvVars
- * Optional-Modus: wenn cfg.optional=true, kein Wurf bei fehlendem Key
+ *
+ * Priorität: cfg.apiKeyEnv → cfg.apiKey → opts.defaultEnv
+ * KEIN globaler OPENAI-Fallback — jeder Aufrufer muss defaultEnv explizit setzen.
+ * Cohere: defaultEnv: "COHERE_API_KEY"
+ * OpenAI Embedding: defaultEnv: "OPENAI_API_KEY"
+ *
+ * @param {object} cfg — { apiKeyEnv?, apiKey? }
+ * @param {object} opts — { defaultEnv?, optional?, label? }
  */
-export function resolveApiKey(cfg = {}) {
+export function resolveApiKey(cfg = {}, { defaultEnv, optional = false, label = "API key" } = {}) {
+  // 1. cfg.apiKeyEnv hat höchste Priorität
   if (cfg.apiKeyEnv) {
     const val = process.env[cfg.apiKeyEnv];
-    if (!val && !cfg.optional) {
-      throw new Error(`Env var ${cfg.apiKeyEnv} not set`);
+    if (!val) {
+      if (optional) return undefined;
+      throw new Error(`Env var ${cfg.apiKeyEnv} not set — required for ${label}`);
     }
-    return val || undefined;
+    return val;
   }
+  // 2. cfg.apiKey als Literal (${VAR}-Syntax wird aufgelöst)
   if (cfg.apiKey) {
     return resolveOptionalEnvVars(cfg.apiKey) || cfg.apiKey;
   }
-  if (cfg.optional) return undefined;
-  return resolveOptionalEnvVars("${OPENAI_API_KEY}");
+  // 3. defaultEnv — nur wenn vom Aufrufer explizit gesetzt
+  if (defaultEnv) {
+    const val = process.env[defaultEnv];
+    if (!val) {
+      if (optional) return undefined;
+      throw new Error(`Env var ${defaultEnv} not set — required for ${label}`);
+    }
+    return val;
+  }
+  // 4. Kein Key gefunden — kein globaler Fallback
+  if (optional) return undefined;
+  throw new Error(`no API key configured for ${label} (set apiKeyEnv, apiKey, or pass defaultEnv)`);
 }
 ```
 
-- [ ] **Step 4: Tests laufen lassen**
+- [ ] **Step 4: factory.js Aufruf-Pattern sicherstellen**
+
+In `factory.js` (Task 2.2) MUSS der Aufrufer den Kontext mitgeben:
+```js
+// Embedding (OpenAI):
+const apiKey = resolveApiKey(normalizedCfg, { defaultEnv: "OPENAI_API_KEY", label: "OpenAI embedding" });
+
+// Reranker (Cohere) — in CohereRerankerProvider:
+const apiKey = resolveApiKey({ apiKeyEnv: this.apiKeyEnv, apiKey: this.apiKeyRef }, { defaultEnv: "COHERE_API_KEY", label: "Cohere reranker" });
+```
+
+- [ ] **Step 5: Tests laufen lassen**
 
 ```bash
 node --test tests/provider-env-resolve.test.js
-# Expected: 5 tests pass
+# Expected: 10 tests pass
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add lib/providers/env.js tests/provider-env-resolve.test.js
-git commit -m "feat(env): add resolveApiKey(cfg) — apiKeyEnv bevorzugt"
+git commit -m "feat(env): resolveApiKey(cfg, {defaultEnv,optional,label}) — provider-sicher, kein OPENAI-Fallback"
 ```
 
 ---
@@ -1001,167 +1070,418 @@ git commit -m "feat(namespace): resolveRecallReadNamespaces + write/legacy-reado
 
 ---
 
-### Task 4.2 — `scripts/reindex-provider.mjs`: Sicherer Reindex
+### Task 4.1b — `lib/multi-namespace-pool.js` + index.js Integration
+
+> **Warum dieser Sub-Task:** `lib/namespace-config.js` allein greift nicht — `index.js:1911` instanziiert `AgentDbPool` mit einem einzigen `basePath`. Store (Zeile 1944) und Recall (Zeilen 3774, 4420) nutzen alle dieselbe Pool-Instanz. Ohne diese Änderung bleibt `activeWriteNamespace` nur Konfig-Kommentar.
+
+**Files:**
+- Create: `lib/multi-namespace-pool.js`
+- Modify: `index.js:1911` (Pool-Initialisierung), `index.js:1944` (storeMemoryFromToolParams), `index.js:3774 + 4420` (recall-Pfade)
+- Test: `tests/multi-namespace-pool.test.js`
+
+**Interfaces:**
+- Produces:
+  - `class MultiNamespacePool` — verwaltet einen `AgentDbPool` pro Namespace
+  - `pool.getWriteDb(agentId)` → gibt MemoryDB aus `activeWriteNamespace`-Pool
+  - `pool.getReadDbs(agentId, nsCfg)` → gibt Array von `{ namespace, db }` für alle `recallReadNamespaces`
+  - `pool.getDb(agentId)` → Backward-compat: delegiert auf `getWriteDb` (kein Breaking Change)
+- Consumes: `AgentDbPool` (intern), `lib/namespace-config.js` (`resolveWriteNamespace`, `resolveRecallReadNamespaces`)
+
+**Integration in `index.js`:**
+- `index.js:1911` — `const pool = new AgentDbPool(baseDbPath, vectorDim)` → `const pool = new MultiNamespacePool(memoryBaseDir, nsCfg, vectorDim)`
+- `index.js:1944` — `pool.getDb(storeAgentId)` → `pool.getWriteDb(storeAgentId)` (keine write in legacyReadOnly)
+- `index.js:3774, 4420` — `runRecallPipeline({ db, ... })` → cross-namespace recall (s.u.)
+
+**Cross-Namespace Recall-Pattern (index.js):**
+```js
+// Statt: const { memories } = await runRecallPipeline({ db: pool.getDb(agentId), ... })
+// Neu:
+const readDbs = pool.getReadDbs(agentId, nsCfg);
+const allResults = await Promise.all(
+  readDbs.map(({ namespace, db }) =>
+    runRecallPipeline({ db, ...pipelineOpts }).then(r => r.memories)
+  )
+);
+// Merge: flatten → dedupResults → applyImportanceBoost → rerank
+const merged = dedupResults(allResults.flat(), dedupJaccard);
+```
+Wenn `readDbs.length === 1`: kein Merge-Overhead, gleicher Code-Pfad wie bisher.
+
+- [ ] **Step 1: Test schreiben**
+
+```js
+// tests/multi-namespace-pool.test.js (NEU)
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
+import { join, homedir } from "node:path";
+
+const TMP_BASE = join(homedir(), ".openclaw", "memory");
+
+describe("MultiNamespacePool", () => {
+  it("getWriteDb gibt DB aus activeWriteNamespace", () => {
+    const nsCfg = { activeWriteNamespace: "lancedb-local", activeRecallNamespaces: ["lancedb-local"] };
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const db = pool.getWriteDb("default");
+    assert.ok(db);
+    assert.ok(db.dbPath.includes("lancedb-local"), `Erwartet lancedb-local in: ${db.dbPath}`);
+  });
+
+  it("getWriteDb gibt NICHT einen legacyReadOnly-Namespace zurück", () => {
+    const nsCfg = {
+      activeWriteNamespace: "lancedb-new",
+      legacyReadOnlyNamespaces: ["lancedb-old"],
+    };
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const db = pool.getWriteDb("default");
+    assert.ok(!db.dbPath.includes("lancedb-old"), `Write-DB zeigt auf legacyReadOnly: ${db.dbPath}`);
+  });
+
+  it("getReadDbs gibt active + legacy wenn crossNamespaceRecall=true", () => {
+    const nsCfg = {
+      activeWriteNamespace: "lancedb-new",
+      activeRecallNamespaces: ["lancedb-new"],
+      legacyReadOnlyNamespaces: ["lancedb-old"],
+      crossNamespaceRecall: true,
+    };
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const dbs = pool.getReadDbs("default");
+    assert.strictEqual(dbs.length, 2);
+    assert.ok(dbs.some(d => d.namespace === "lancedb-new"));
+    assert.ok(dbs.some(d => d.namespace === "lancedb-old"));
+  });
+
+  it("getReadDbs gibt nur active wenn crossNamespaceRecall=false", () => {
+    const nsCfg = {
+      activeWriteNamespace: "lancedb-new",
+      activeRecallNamespaces: ["lancedb-new"],
+      legacyReadOnlyNamespaces: ["lancedb-old"],
+      crossNamespaceRecall: false,
+    };
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const dbs = pool.getReadDbs("default");
+    assert.strictEqual(dbs.length, 1);
+    assert.strictEqual(dbs[0].namespace, "lancedb-new");
+  });
+
+  it("getDb (backward-compat) delegiert auf getWriteDb", () => {
+    const nsCfg = { activeWriteNamespace: "lancedb-local" };
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    const a = pool.getDb("default");
+    const b = pool.getWriteDb("default");
+    assert.strictEqual(a.dbPath, b.dbPath);
+  });
+
+  it("shutdown zerstört alle Pools", async () => {
+    const nsCfg = {
+      activeWriteNamespace: "lancedb-new",
+      activeRecallNamespaces: ["lancedb-new"],
+      legacyReadOnlyNamespaces: ["lancedb-old"],
+      crossNamespaceRecall: true,
+    };
+    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384);
+    pool.getReadDbs("default"); // pools initialisieren
+    await assert.doesNotReject(() => pool.shutdown());
+  });
+});
+```
+
+- [ ] **Step 2: Test laufen lassen — erwartet FAIL**
+
+```bash
+node --test tests/multi-namespace-pool.test.js
+# Expected: FAIL — multi-namespace-pool.js nicht gefunden
+```
+
+- [ ] **Step 3: `lib/multi-namespace-pool.js` erstellen**
+
+```js
+/**
+ * lib/multi-namespace-pool.js — Namespace-aware Wrapper um AgentDbPool.
+ *
+ * Hält einen AgentDbPool pro aktivem Namespace.
+ * getWriteDb → nur activeWriteNamespace (legacyReadOnly ist gesperrt)
+ * getReadDbs → alle recallReadNamespaces (active + legacy wenn crossNamespaceRecall=true)
+ * getDb      → Backward-compat alias für getWriteDb
+ */
+
+import { join } from "node:path";
+import { resolveWriteNamespace, resolveRecallReadNamespaces } from "./namespace-config.js";
+
+// AgentDbPool wird lazy importiert um zirkuläre Imports zu vermeiden
+// (AgentDbPool ist im gleichen Paket in index.js definiert — hier nutzen wir
+// die exportierte Klasse oder übergeben sie als Konstruktor-Parameter)
+
+export class MultiNamespacePool {
+  /**
+   * @param {string} baseDir — z.B. ~/.openclaw/memory
+   * @param {object} nsCfg   — Namespace-Config aus openclaw.json
+   * @param {number} vectorDim — Vektor-Dimension
+   * @param {Function} AgentDbPoolClass — AgentDbPool Klasse (Dependency Injection für Tests)
+   */
+  constructor(baseDir, nsCfg = {}, vectorDim, AgentDbPoolClass) {
+    this.baseDir = baseDir;
+    this.nsCfg = nsCfg;
+    this.vectorDim = vectorDim;
+    this.AgentDbPool = AgentDbPoolClass;
+    this._pools = new Map(); // namespace → AgentDbPool
+  }
+
+  _getPool(namespace) {
+    if (!this._pools.has(namespace)) {
+      const nsPath = join(this.baseDir, namespace);
+      this._pools.set(namespace, new this.AgentDbPool(nsPath, this.vectorDim));
+    }
+    return this._pools.get(namespace);
+  }
+
+  getWriteDb(agentId) {
+    const writeNs = resolveWriteNamespace(this.nsCfg);
+    return this._getPool(writeNs).getDb(agentId);
+  }
+
+  getReadDbs(agentId) {
+    const readNs = resolveRecallReadNamespaces(this.nsCfg);
+    return readNs.map(ns => ({
+      namespace: ns,
+      db: this._getPool(ns).getDb(agentId),
+    }));
+  }
+
+  getDb(agentId) {
+    return this.getWriteDb(agentId);
+  }
+
+  async shutdown() {
+    const shutdowns = [...this._pools.values()].map(p =>
+      typeof p.shutdown === "function" ? p.shutdown().catch(() => {}) : Promise.resolve()
+    );
+    await Promise.all(shutdowns);
+    this._pools.clear();
+  }
+}
+```
+
+- [ ] **Step 4: `index.js` anpassen — Pool-Initialisierung (Zeile 1911)**
+
+```js
+// Vorher (index.js:1911):
+const pool = new AgentDbPool(baseDbPath, vectorDim);
+
+// Nachher:
+import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
+const nsCfg = cfg.namespaces || {};
+const memoryBaseDir = join(homedir(), ".openclaw", "memory");
+const pool = new MultiNamespacePool(memoryBaseDir, nsCfg, vectorDim, AgentDbPool);
+```
+
+- [ ] **Step 5: `index.js` anpassen — Store-Pfad (Zeile 1944)**
+
+```js
+// Vorher:
+const storeDb = pool.getDb(storeAgentId);
+
+// Nachher:
+const storeDb = pool.getWriteDb(storeAgentId);
+// Guard: legacyReadOnly darf nie beschrieben werden
+```
+
+- [ ] **Step 6: `index.js` anpassen — Recall-Pfade (Zeilen 3774 + 4420)**
+
+```js
+// Vorher (index.js ~3774):
+const { canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
+  db: pool.getDb(agentId),
+  ...pipelineOpts,
+});
+
+// Nachher:
+const readDbs = pool.getReadDbs(agentId);
+let ordered, canonicalHits, returnedTrace;
+if (readDbs.length === 1) {
+  // Single-namespace: kein Merge-Overhead
+  ({ canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
+    db: readDbs[0].db,
+    ...pipelineOpts,
+  }));
+} else {
+  // Multi-namespace: parallel recall + merge
+  const nsResults = await Promise.all(
+    readDbs.map(({ db }) => runRecallPipeline({ db, ...pipelineOpts }))
+  );
+  canonicalHits = nsResults.flatMap(r => r.canonical || []);
+  returnedTrace = nsResults[0]?.trace;
+  const merged = nsResults.flatMap(r => r.memories || []);
+  ordered = dedupResults(merged, dedupJaccard);
+  // Ggf. nochmal reranken wenn Reranker vorhanden
+}
+// Dasselbe Pattern für den zweiten runRecallPipeline-Aufruf bei ~4420
+```
+
+- [ ] **Step 7: Tests laufen lassen**
+
+```bash
+node --test tests/multi-namespace-pool.test.js
+# Expected: 6 tests pass
+node --test tests/namespace-config.test.js
+# Expected: kein Bruch
+node --test tests/*.test.js 2>&1 | grep -c "^not ok"
+# Expected: 0
+```
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add lib/multi-namespace-pool.js tests/multi-namespace-pool.test.js index.js
+git commit -m "feat(namespace): MultiNamespacePool + index.js store/recall auf write/read-namespaces"
+```
+
+---
+
+### Task 4.2 — `scripts/reindex-provider.mjs`: Dry-Run / Report-Only Scaffold
+
+> **Scope dieser Iteration:** Nur Schema-Erkennung, Record-Zählung und Report. Kein Re-Embedding, kein Config-Switch, kein `cp -r`. Echter Reindex = eigener Folgepatch.
+> **Warum:** Row-Schema (`row.text` vs. andere Felder), echte DB-Pfade und Namespace-Struktur müssen erst gegen den Live-Code verifiziert werden. Dieser Task legt das sichere Gerüst + Audit-Report an.
 
 **Files:**
 - Create: `scripts/reindex-provider.mjs`
 
 **Interfaces:**
-- Produces: CLI-Script `node scripts/reindex-provider.mjs --agent <id> --from-namespace <src> --to-namespace <dst>`
-- Ablauf: Snapshot → re-embed → strikte Validierung → atomarer Config-Switch → keine Delete
-- Consumes: `lib/providers/factory.js`, `lib/providers/dimension-guard.js`, `lib/namespace-config.js`
+- Produces: CLI-Script `node scripts/reindex-provider.mjs --agent <id> --from <ns> --to <ns>`
+- Default-Verhalten: immer `--dry-run` (kein `--apply` ohne expliziten Flag)
+- Output: stdout-Report + JSON-Report in `~/.openclaw/reindex-report-<ts>.json`
+- Consumes: `lib/providers/dimension-guard.js`, `lib/providers/config-normalize.js`
 
 - [ ] **Step 1: Script erstellen**
 
 ```js
 // scripts/reindex-provider.mjs
 /**
- * Sicherer Reindex: Löscht niemals zuerst.
- * Ablauf:
- *   1. Snapshot (cp -r)
- *   2. Neuer Namespace aufbauen + alle Memories dort re-einbetten
- *   3. Strikte Validierung (row count, schema, sample recall)
- *   4. Atomarer Config-Switch
- *   5. Alte DB bleibt als Rollback
+ * Reindex-Scaffold: Dry-Run + Report-Only.
  *
- * Jeder nicht-reindexierbare Eintrag blockiert den Switch + Report.
+ * Liest Config, erkennt Namespace-Pfade, prüft Dimensions via Dimension-Guard,
+ * zählt Records, schreibt Audit-Report.
+ *
+ * KEIN Re-Embedding, KEIN Config-Switch, KEIN cp -r ohne --apply.
+ * Echter Reindex wird eigener Folgepatch (Schema + Pfade erst verifizieren).
  *
  * Usage:
- *   node scripts/reindex-provider.mjs \
- *     --agent main \
- *     --from lancedb-namespaced \
- *     --to lancedb-local \
- *     --dry-run
+ *   node scripts/reindex-provider.mjs --agent main --from lancedb-namespaced --to lancedb-local
+ *   # --apply Flag existiert noch nicht in dieser Iteration
  */
 
-import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, homedir } from "node:path";
-import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
-import { createEmbeddingProvider } from "../lib/providers/factory.js";
 import { readExistingTableDimension } from "../lib/providers/dimension-guard.js";
+import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
 
 const args = process.argv.slice(2);
-const getArg = (name) => {
-  const idx = args.indexOf(`--${name}`);
-  return idx >= 0 ? args[idx + 1] : null;
-};
-const isDryRun = args.includes("--dry-run");
+const getArg = (name) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : null; };
+
 const agentId = getArg("agent") || "main";
 const fromNamespace = getArg("from");
 const toNamespace = getArg("to");
 
 if (!fromNamespace || !toNamespace) {
   console.error("Usage: node scripts/reindex-provider.mjs --agent <id> --from <ns> --to <ns>");
+  console.error("Note: Actual re-embedding requires --apply flag (not yet implemented — this iteration is report-only)");
+  process.exit(1);
+}
+
+if (args.includes("--apply")) {
+  console.error("[reindex] --apply ist in dieser Iteration noch nicht implementiert.");
+  console.error("[reindex] Schema und Row-Format müssen erst gegen den Live-Code verifiziert werden.");
+  console.error("[reindex] Bitte Folgepatch abwarten.");
   process.exit(1);
 }
 
 const OPENCLAW_DIR = join(homedir(), ".openclaw");
 const CONFIG_PATH = join(OPENCLAW_DIR, "openclaw.json");
-const BASE_DB_PATH = join(OPENCLAW_DIR, "memory");
-const FROM_PATH = join(BASE_DB_PATH, fromNamespace, agentId);
-const TO_PATH = join(BASE_DB_PATH, toNamespace, agentId);
-const SNAPSHOT_PATH = `${FROM_PATH}.backup-${Date.now()}`;
+const MEMORY_BASE = join(OPENCLAW_DIR, "memory");
 
 async function main() {
-  console.log(`[reindex] Agent: ${agentId}, ${fromNamespace} → ${toNamespace}${isDryRun ? " [DRY RUN]" : ""}`);
+  console.log(`[reindex] REPORT-ONLY — Agent: ${agentId}, ${fromNamespace} → ${toNamespace}`);
+  console.log(`[reindex] Echter Reindex noch nicht implementiert. Nur Audit.`);
 
-  // 1. Validiere Quelle
-  const srcGuard = await readExistingTableDimension(FROM_PATH);
-  if (srcGuard.status !== "ok") {
-    console.error(`[reindex] Quell-DB nicht lesbar: ${srcGuard.error || srcGuard.status}`);
+  // 1. Config lesen
+  let config;
+  try {
+    config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
+  } catch (e) {
+    console.error(`[reindex] Kann openclaw.json nicht lesen: ${e.message}`);
     process.exit(1);
   }
-  console.log(`[reindex] Quelle: ${srcGuard.dimension} dims, ${FROM_PATH}`);
-
-  // 2. Ziel-Provider aus Config laden
-  const config = JSON.parse(readFileSync(CONFIG_PATH, "utf8"));
   const pluginCfg = config?.plugins?.entries?.["memory-lancedb-namespaced"] || {};
   const embCfg = normalizeEmbeddingConfig(pluginCfg.embedding || {});
-  console.log(`[reindex] Ziel-Provider: ${embCfg.provider}, ${embCfg.dimensions} dims`);
+  console.log(`[reindex] Ziel-Provider: ${embCfg.provider}, ${embCfg.dimensions ?? "?"} dims`);
 
-  if (embCfg.dimensions === srcGuard.dimension) {
-    console.warn("[reindex] WARNUNG: Quelle und Ziel haben gleiche Dimension — Reindex unnötig?");
+  // 2. Quell-DB prüfen
+  const FROM_PATH = join(MEMORY_BASE, fromNamespace, agentId);
+  const srcGuard = await readExistingTableDimension(FROM_PATH);
+  console.log(`[reindex] Quelle (${FROM_PATH}):`);
+  console.log(`  status: ${srcGuard.status}`);
+  if (srcGuard.status === "ok") {
+    console.log(`  dimension: ${srcGuard.dimension}`);
+  } else if (srcGuard.error) {
+    console.log(`  error: ${srcGuard.error}`);
   }
 
-  if (isDryRun) {
-    console.log("[reindex] DRY RUN — keine Änderungen.");
-    return;
+  // 3. Ziel-DB prüfen
+  const TO_PATH = join(MEMORY_BASE, toNamespace, agentId);
+  const dstGuard = await readExistingTableDimension(TO_PATH);
+  console.log(`[reindex] Ziel (${TO_PATH}):`);
+  console.log(`  status: ${dstGuard.status}`);
+  if (dstGuard.status === "ok") {
+    console.log(`  dimension: ${dstGuard.dimension}`);
   }
 
-  // 3. Snapshot der Quelle
-  console.log(`[reindex] Erstelle Snapshot: ${SNAPSHOT_PATH}`);
-  execSync(`cp -r "${FROM_PATH}" "${SNAPSHOT_PATH}"`);
-  console.log("[reindex] Snapshot OK");
-
-  // 4. Ziel anlegen + re-einbetten
-  mkdirSync(TO_PATH, { recursive: true });
-  const lancedb = await import("@lancedb/lancedb");
-  const srcDb = await lancedb.connect(FROM_PATH);
-  const srcTable = await srcDb.openTable("memories");
-  const srcRows = await srcTable.query().toArray();
-
-  const provider = createEmbeddingProvider(embCfg);
-  const dstDb = await lancedb.connect(TO_PATH);
-
-  const failed = [];
-  const succeeded = [];
-
-  for (const row of srcRows) {
+  // 4. Row-Count ermitteln (nur wenn Quelle lesbar)
+  let rowCount = null;
+  let schemaFields = null;
+  if (srcGuard.status === "ok") {
     try {
-      const vector = await provider.embed(row.text);
-      succeeded.push({ ...row, vector });
+      const lancedb = await import("@lancedb/lancedb");
+      const srcDb = await lancedb.connect(FROM_PATH);
+      const srcTable = await srcDb.openTable("memories");
+      const schema = await srcTable.schema();
+      schemaFields = schema.fields.map(f => f.name);
+      // Count nur — kein toArray() (zu groß für Report)
+      const countResult = await srcTable.countRows();
+      rowCount = countResult;
+      console.log(`[reindex] Records in Quelle: ${rowCount}`);
+      console.log(`[reindex] Schema-Felder: ${schemaFields.join(", ")}`);
+      // Hinweis welches Feld für Text-Embedding genutzt werden soll
+      const textField = schemaFields.includes("text") ? "text"
+        : schemaFields.find(f => f.includes("content") || f.includes("body")) || "UNBEKANNT";
+      console.log(`[reindex] AUDIT: Text-Feld für Re-Embedding wäre: '${textField}'`);
+      if (textField === "UNBEKANNT") {
+        console.warn(`[reindex] WARNUNG: Kein 'text'-Feld gefunden — echter Reindex bräuchte Schema-Mapping.`);
+      }
     } catch (e) {
-      failed.push({ id: row.id, error: e.message });
+      console.error(`[reindex] Record-Count fehlgeschlagen: ${e.message}`);
     }
   }
 
-  // 5. Strikte Validierung — kein stiller Verlust
-  if (failed.length > 0) {
-    console.error(`[reindex] ${failed.length} Einträge konnten nicht re-eingebettet werden:`);
-    for (const f of failed) console.error(`  - ${f.id}: ${f.error}`);
-    const reportPath = join(OPENCLAW_DIR, `reindex-failed-${Date.now()}.json`);
-    writeFileSync(reportPath, JSON.stringify(failed, null, 2));
-    console.error(`[reindex] Report: ${reportPath}`);
-    console.error("[reindex] SWITCH BLOCKIERT — alte DB bleibt aktiv.");
-    process.exit(2);
-  }
-
-  if (succeeded.length < srcRows.length) {
-    console.error(`[reindex] Row-Count-Mismatch: src=${srcRows.length}, dst=${succeeded.length}`);
-    console.error("[reindex] SWITCH BLOCKIERT.");
-    process.exit(2);
-  }
-
-  // 6. Ziel-Tabelle schreiben
-  await dstDb.createTable("memories", succeeded, { mode: "overwrite" });
-
-  // 7. Sample-Recall validieren
-  const dstTable = await dstDb.openTable("memories");
-  const sampleQuery = await provider.embedQuery(srcRows[0].text);
-  const sampleResults = await dstTable.vectorSearch(sampleQuery).limit(1).toArray();
-  if (sampleResults.length === 0) {
-    console.error("[reindex] Sample-Recall liefert 0 Ergebnisse — SWITCH BLOCKIERT.");
-    process.exit(2);
-  }
-
-  console.log(`[reindex] Validierung OK: ${succeeded.length} Einträge, Sample-Recall funktioniert.`);
-
-  // 8. Atomarer Config-Switch (Namespace-Config aktualisieren)
-  const nsCfg = pluginCfg.namespaces || {};
-  nsCfg.activeWriteNamespace = toNamespace;
-  nsCfg.activeRecallNamespaces = [toNamespace];
-  nsCfg.legacyReadOnlyNamespaces = [fromNamespace];
-  nsCfg.crossNamespaceRecall = true;
-
-  pluginCfg.namespaces = nsCfg;
-  if (!config.plugins) config.plugins = {};
-  if (!config.plugins.entries) config.plugins.entries = {};
-  config.plugins.entries["memory-lancedb-namespaced"] = pluginCfg;
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-
-  console.log(`[reindex] Config-Switch OK. Alte DB Rollback: ${SNAPSHOT_PATH}`);
-  console.log(`[reindex] Abgeschlossen: ${toNamespace} ist jetzt aktiv.`);
+  // 5. Report schreiben
+  const report = {
+    timestamp: new Date().toISOString(),
+    agent: agentId,
+    fromNamespace,
+    toNamespace,
+    fromPath: FROM_PATH,
+    toPath: TO_PATH,
+    sourceGuard: srcGuard,
+    targetGuard: dstGuard,
+    targetProvider: { provider: embCfg.provider, dimensions: embCfg.dimensions },
+    rowCount,
+    schemaFields,
+    applyImplemented: false,
+    notes: "Echter Reindex in Folgepatch. Schema-Felder und Pfad-Struktur zuerst verifizieren.",
+  };
+  const reportPath = join(OPENCLAW_DIR, `reindex-report-${Date.now()}.json`);
+  writeFileSync(reportPath, JSON.stringify(report, null, 2));
+  console.log(`[reindex] Report geschrieben: ${reportPath}`);
+  console.log(`[reindex] REPORT DONE — keine Produktionsdaten verändert.`);
 }
 
 main().catch(e => {
@@ -1170,262 +1490,336 @@ main().catch(e => {
 });
 ```
 
-- [ ] **Step 2: Script-Syntax prüfen**
+- [ ] **Step 2: Syntax prüfen**
 
 ```bash
 node --check scripts/reindex-provider.mjs
 # Expected: keine Fehler
 ```
 
-- [ ] **Step 3: Dry-Run testen**
+- [ ] **Step 3: Dry-Run ohne live DB**
 
 ```bash
-node scripts/reindex-provider.mjs --agent main --from lancedb-namespaced --to lancedb-local --dry-run
-# Expected: "[reindex] DRY RUN — keine Änderungen."
+node scripts/reindex-provider.mjs --agent main --from lancedb-namespaced --to lancedb-local 2>&1
+# Expected: Report-Ausgabe, keine Produktionsdaten verändert
+node scripts/reindex-provider.mjs --apply 2>&1 | head -3
+# Expected: "--apply ist in dieser Iteration noch nicht implementiert"
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add scripts/reindex-provider.mjs
-git commit -m "feat(reindex): safe reindex script — snapshot-first, strict validation, no delete"
+git commit -m "feat(reindex): dry-run/report-only scaffold — kein Apply ohne expliziten Folgepatch"
 ```
 
 ---
 
-### Task 4.3 — `install-memory-system.sh`: Wizard-Erweiterung
+### Task 4.3 — `scripts/provider-wizard.mjs`: i18n-konformer Node-Wizard
+
+> **Warum Node statt Bash:** Bash-Strings wären hart verdrahtet und widersprechen dem i18n-Ziel (Task 1.2). `install-memory-system.sh` bleibt Installer-Orchestrator — alle user-facing Texte kommen aus `lib/i18n.js` via `t(key, { lang, tone, vars })`.
 
 **Files:**
-- Modify: `scripts/install-memory-system.sh`
+- Create: `scripts/provider-wizard.mjs`
+- Modify: `scripts/install-memory-system.sh` (ruft `node scripts/provider-wizard.mjs` auf, keine eigenen Wizard-Strings)
+- Test: `tests/provider-wizard.test.js`
 
-> **Hinweis:** Dieser Task ändert ein Bash-Script. Kein Node-Test möglich. Manuelle Verifikation per `--dry-run` und `--help`.
+**Interfaces:**
+- Produces: `scripts/provider-wizard.mjs` — interaktiver Wizard, gibt Config-JSON auf stdout aus (wird von install-memory-system.sh gelesen), Exit-Code 0 = OK, 1 = Abbruch
+- Consumes: `lib/i18n.js` (`t`, `resolveLocale`), `lib/providers/config-normalize.js`
 
-- [ ] **Step 1: Embedding-Wizard-Funktion einfügen**
+- [ ] **Step 1: Test schreiben**
 
-Im Script eine neue Funktion `wizard_embedding_provider()` nach dem bestehenden Key-Setup einfügen:
+```js
+// tests/provider-wizard.test.js (NEU)
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { buildWizardOptions, formatWizardOption } from "../scripts/provider-wizard.mjs";
+
+describe("provider-wizard i18n rendering", () => {
+  it("Cohere ist Option 1 (erster Eintrag) in der Reranker-Liste (de)", () => {
+    const options = buildWizardOptions("reranker", { lang: "de" });
+    assert.strictEqual(options[0].key, "cohere");
+  });
+
+  it("Cohere ist Option 1 in der Reranker-Liste (en)", () => {
+    const options = buildWizardOptions("reranker", { lang: "en" });
+    assert.strictEqual(options[0].key, "cohere");
+  });
+
+  it("Cohere-Label enthält 'kostenpflichtig' (de)", () => {
+    const label = formatWizardOption("reranker", "cohere", { lang: "de" });
+    assert.ok(label.includes("kostenpflichtig"), `"kostenpflichtig" fehlt: ${label}`);
+  });
+
+  it("Cohere-Label enthält 'paid' (en)", () => {
+    const label = formatWizardOption("reranker", "cohere", { lang: "en" });
+    assert.ok(label.includes("paid"), `"paid" fehlt: ${label}`);
+  });
+
+  it("ungültige Auswahl nutzt setup.reranker.invalid_choice (de)", () => {
+    const { t } = await import("../lib/i18n.js");
+    const msg = t("setup.reranker.invalid_choice", { lang: "de", tone: "default" });
+    assert.ok(msg.includes("1") && msg.includes("4"), `Keine Optionszahlen in: ${msg}`);
+  });
+
+  it("OpenAI ist Option 1 in der Embedding-Liste", () => {
+    const options = buildWizardOptions("embedding", { lang: "de" });
+    assert.strictEqual(options[0].key, "openai");
+  });
+
+  it("Embedding-Option lokal enthält 'multilingual'", () => {
+    const label = formatWizardOption("embedding", "local-transformers", { lang: "de" });
+    assert.ok(label.toLowerCase().includes("multilingual"), `'multilingual' fehlt: ${label}`);
+  });
+});
+```
+
+> **Hinweis:** Die Tests importieren `buildWizardOptions` und `formatWizardOption` aus dem Wizard-Script — diese Funktionen müssen als Named Exports vorhanden sein.
+
+- [ ] **Step 2: Test laufen lassen — erwartet FAIL**
 
 ```bash
-wizard_embedding_provider() {
-  local lang="${WIZARD_LANG:-en}"
-  
-  echo ""
-  echo "=== Schritt 1/2: Embedding-Provider ==="
-  echo ""
-  echo "OpenAI API Key vorhanden? (text-embedding-3-large, 3072 dims)"
-  read -p "[y/n]: " has_openai
+node --test tests/provider-wizard.test.js
+# Expected: FAIL — provider-wizard.mjs nicht gefunden
+```
 
-  if [[ "$has_openai" == "y" || "$has_openai" == "Y" ]]; then
-    read -p "OPENAI_API_KEY eingeben: " openai_key
-    echo ""
-    echo "Speichern als:"
-    echo "  [1] Env-Var-Referenz OPENAI_API_KEY (bevorzugt — Key bleibt in .env)"
-    echo "  [2] Literal in openclaw.json (Key in Config-Datei sichtbar)"
-    read -p "[1/2]: " key_store_mode
+- [ ] **Step 3: `scripts/provider-wizard.mjs` erstellen**
 
-    if [[ "$key_store_mode" == "2" ]]; then
-      echo "WARNUNG: Literal-Keys in openclaw.json sind weniger sicher als .env-Referenzen."
-      EMBEDDING_PROVIDER="openai"
-      EMBEDDING_API_KEY="$openai_key"
-      EMBEDDING_API_KEY_ENV=""
-    else
-      echo "export OPENAI_API_KEY=$openai_key" >> "$OPENCLAW_DIR/.env"
-      EMBEDDING_PROVIDER="openai"
-      EMBEDDING_API_KEY=""
-      EMBEDDING_API_KEY_ENV="OPENAI_API_KEY"
-    fi
-    EMBEDDING_MODEL="text-embedding-3-large"
-    EMBEDDING_DIMENSIONS=3072
-  else
-    echo ""
-    echo "Lokales Modell: intfloat/multilingual-e5-small (384 dims)"
-    echo "CPU-tauglich, gut für Deutsch/Mehrsprachig. Download ~135 MB beim ersten Start."
-    EMBEDDING_PROVIDER="local-transformers"
-    EMBEDDING_API_KEY=""
-    EMBEDDING_API_KEY_ENV=""
-    EMBEDDING_MODEL="intfloat/multilingual-e5-small"
-    EMBEDDING_DIMENSIONS=384
-  fi
+```js
+#!/usr/bin/env node
+/**
+ * scripts/provider-wizard.mjs — i18n-konformer Provider-Wizard.
+ *
+ * Gibt bei Erfolg JSON auf stdout aus (wird von install-memory-system.sh gelesen):
+ *   { embedding: {...}, reranker: {...} }
+ *
+ * Alle user-facing Texte via t(key, {lang, tone, vars}).
+ * Kein hard-coded Deutsch/Englisch in diesem Script.
+ */
+
+import { createInterface } from "node:readline/promises";
+import { stdin, stdout } from "node:process";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dir = dirname(fileURLToPath(import.meta.url));
+const { t, resolveLocale } = await import(join(__dir, "../lib/i18n.js"));
+
+const lang = resolveLocale();
+const tone = "default";
+const rl = createInterface({ input: stdin, output: stdout });
+
+// ─── Wizard-Optionen (reine Daten, i18n-unabhängig) ──────────────────────────
+
+const RERANKER_OPTIONS = [
+  { key: "cohere",            i18nLabel: "setup.reranker.option.cohere",      i18nHelp: "setup.reranker.option.cohere_help" },
+  { key: "local-transformers", i18nLabel: "setup.reranker.option.local_bge",  i18nHelp: "setup.reranker.option.local_bge_help" },
+  { key: "disabled",          i18nLabel: "setup.reranker.option.disabled",     i18nHelp: "setup.reranker.option.disabled_help" },
+  { key: "advanced",          i18nLabel: "setup.reranker.option.advanced",     i18nHelp: "setup.reranker.option.advanced_help" },
+];
+
+const EMBEDDING_OPTIONS = [
+  { key: "openai",            label: `OpenAI text-embedding-3-large (3072 dims)` },
+  { key: "local-transformers", label: `Local: intfloat/multilingual-e5-small (384 dims)` },
+];
+
+const ADVANCED_RERANKER_MODELS = [
+  "Alibaba-NLP/gte-reranker-modernbert-base",
+  "jinaai/jina-reranker-v2-base-multilingual",
+  "mixedbread-ai/mxbai-rerank-base-v2",
+];
+
+/** Exportiert für Tests — gibt Option-Array zurück */
+export function buildWizardOptions(type, { lang: l = "en" } = {}) {
+  if (type === "reranker") return RERANKER_OPTIONS;
+  if (type === "embedding") return EMBEDDING_OPTIONS;
+  return [];
 }
 
-wizard_reranker_provider() {
-  echo ""
-  echo "=== Schritt 2/2: Reranker ==="
-  echo ""
-  echo "Reranker verbessert die Recall-Qualität, kostet aber zusätzliche Laufzeit."
-  echo ""
-  echo "[1] Cohere rerank-v3.5 (kostenpflichtig, empfohlen für beste Qualität)"
-  echo "    Benötigt COHERE_API_KEY. Keine lokale CPU-/RAM-Last."
-  echo "[2] Lokal: BAAI/bge-reranker-v2-m3 (mehrsprachig, kein API-Key)"
-  echo "    Lazy load ~570 MB. Kostet CPU/RAM."
-  echo "[3] Kein Reranker (schnellste und stabilste Basis)"
-  echo "[4] Advanced-Optionen"
-  read -p "[1/2/3/4]: " reranker_choice
+/** Exportiert für Tests — rendert ein Option-Label */
+export function formatWizardOption(type, key, { lang: l = "en" } = {}) {
+  if (type === "reranker") {
+    const opt = RERANKER_OPTIONS.find(o => o.key === key);
+    if (!opt) return key;
+    return t(opt.i18nLabel, { lang: l, tone: "default" });
+  }
+  if (type === "embedding") {
+    const opt = EMBEDDING_OPTIONS.find(o => o.key === key);
+    return opt?.label || key;
+  }
+  return key;
+}
 
-  case "$reranker_choice" in
-    1)
-      read -p "COHERE_API_KEY eingeben: " cohere_key
-      echo ""
-      echo "Speichern als [1] Env-Var-Referenz (bevorzugt) / [2] Literal?"
-      read -p "[1/2]: " cohere_store_mode
-      
-      if [[ "$cohere_store_mode" == "2" ]]; then
-        RERANKER_PROVIDER="cohere"
-        RERANKER_API_KEY="$cohere_key"
-        RERANKER_API_KEY_ENV=""
-      else
-        echo "export COHERE_API_KEY=$cohere_key" >> "$OPENCLAW_DIR/.env"
-        RERANKER_PROVIDER="cohere"
-        RERANKER_API_KEY=""
-        RERANKER_API_KEY_ENV="COHERE_API_KEY"
-      fi
-      RERANKER_MODEL="rerank-v3.5"
-      
-      echo ""
-      echo "Bei Cohere-Fehler:"
-      echo "  [1] Recall ohne Reranker fortsetzen (default — keine CPU-Last)"
-      echo "  [2] Lokalen BAAI/bge-reranker-v2-m3 als Fallback laden (~570 MB)"
-      read -p "[1/2]: " cohere_fallback
-      if [[ "$cohere_fallback" == "2" ]]; then
-        RERANKER_FALLBACK_PROVIDER="local-transformers"
-        RERANKER_FALLBACK_MODEL="BAAI/bge-reranker-v2-m3"
-      else
-        RERANKER_FALLBACK_PROVIDER="disabled"
-        RERANKER_FALLBACK_MODEL=""
-      fi
-      ;;
-    2)
-      echo "Hinweis: Lokaler Reranker ist CPU-intensiv. Empfohlen bei ≥8 GB RAM."
-      echo "Modell wird beim ersten Recall geladen (~570 MB). Kein Download jetzt."
-      RERANKER_PROVIDER="local-transformers"
-      RERANKER_MODEL="BAAI/bge-reranker-v2-m3"
-      RERANKER_API_KEY=""
-      RERANKER_API_KEY_ENV=""
-      RERANKER_FALLBACK_PROVIDER=""
-      RERANKER_FALLBACK_MODEL=""
-      ;;
-    3)
-      RERANKER_PROVIDER="disabled"
-      RERANKER_MODEL=""
-      RERANKER_API_KEY=""
-      RERANKER_API_KEY_ENV=""
-      RERANKER_FALLBACK_PROVIDER=""
-      RERANKER_FALLBACK_MODEL=""
-      ;;
-    4)
-      echo ""
-      echo "Advanced-Modelle:"
-      echo "  [a] Alibaba-NLP/gte-reranker-modernbert-base (Englisch/Long-Context/Code)"
-      echo "  [b] jinaai/jina-reranker-v2-base-multilingual"
-      echo "  [c] mixedbread-ai/mxbai-rerank-base-v2"
-      read -p "[a/b/c]: " adv_choice
-      case "$adv_choice" in
-        a) RERANKER_MODEL="Alibaba-NLP/gte-reranker-modernbert-base" ;;
-        b) RERANKER_MODEL="jinaai/jina-reranker-v2-base-multilingual" ;;
-        c) RERANKER_MODEL="mixedbread-ai/mxbai-rerank-base-v2" ;;
-        *) echo "Ungültig — kein Reranker."; RERANKER_PROVIDER="disabled"; RERANKER_MODEL="" ;;
-      esac
-      if [[ "$RERANKER_PROVIDER" != "disabled" ]]; then
-        RERANKER_PROVIDER="local-transformers"
-        RERANKER_API_KEY=""
-        RERANKER_API_KEY_ENV=""
-        RERANKER_FALLBACK_PROVIDER=""
-        RERANKER_FALLBACK_MODEL=""
-      fi
-      ;;
-    *)
-      echo "Ungültige Auswahl. Setze auf 'kein Reranker'."
-      RERANKER_PROVIDER="disabled"
-      RERANKER_MODEL=""
-      ;;
-  esac
+// ─── Wizard-Ablauf ────────────────────────────────────────────────────────────
+
+async function askLine(prompt) {
+  return (await rl.question(prompt)).trim();
+}
+
+async function wizardEmbedding() {
+  console.error(t("setup.embedding.title", { lang, tone }));
+  console.error(t("setup.embedding.description", { lang, tone }));
+  console.error("");
+
+  for (let i = 0; i < EMBEDDING_OPTIONS.length; i++) {
+    console.error(`[${i + 1}] ${EMBEDDING_OPTIONS[i].label}`);
+  }
+
+  let choice;
+  while (true) {
+    choice = await askLine("[1/2]: ");
+    if (choice === "1" || choice === "2") break;
+    console.error(t("setup.reranker.invalid_choice", { lang, tone }));
+  }
+
+  if (choice === "1") {
+    const keyChoice = await askLine("OPENAI_API_KEY store as [1] env-ref (recommended) / [2] literal: ");
+    if (keyChoice === "2") {
+      const literal = await askLine("Enter key: ");
+      return { provider: "openai", apiKey: literal, model: "text-embedding-3-large", dimensions: 3072 };
+    }
+    // Store to .env is the caller's (install-memory-system.sh) responsibility
+    return { provider: "openai", apiKeyEnv: "OPENAI_API_KEY", model: "text-embedding-3-large", dimensions: 3072 };
+  } else {
+    return { provider: "local-transformers", model: "intfloat/multilingual-e5-small", dimensions: 384 };
+  }
+}
+
+async function wizardReranker() {
+  console.error(t("setup.reranker.title", { lang, tone }));
+  console.error(t("setup.reranker.description", { lang, tone }));
+  console.error("");
+
+  for (let i = 0; i < RERANKER_OPTIONS.length; i++) {
+    const opt = RERANKER_OPTIONS[i];
+    console.error(`[${i + 1}] ${t(opt.i18nLabel, { lang, tone })}`);
+    console.error(`    ${t(opt.i18nHelp, { lang, tone })}`);
+  }
+
+  let choice;
+  while (true) {
+    choice = await askLine("[1/2/3/4]: ");
+    if (["1", "2", "3", "4"].includes(choice)) break;
+    console.error(t("setup.reranker.invalid_choice", { lang, tone }));
+  }
+
+  if (choice === "1") {
+    const keyChoice = await askLine("COHERE_API_KEY store as [1] env-ref (recommended) / [2] literal: ");
+    let rerankerCfg;
+    if (keyChoice === "2") {
+      const literal = await askLine("Enter key: ");
+      rerankerCfg = { provider: "cohere", apiKey: literal, model: "rerank-v3.5", candidates: 20, timeoutMs: 5000, fallbackOnError: true, fallbackProvider: "disabled" };
+    } else {
+      rerankerCfg = { provider: "cohere", apiKeyEnv: "COHERE_API_KEY", model: "rerank-v3.5", candidates: 20, timeoutMs: 5000, fallbackOnError: true, fallbackProvider: "disabled" };
+    }
+    console.error(t("setup.reranker.cohere_fallback_ask", { lang, tone }));
+    const fbChoice = await askLine("[1/2]: ");
+    if (fbChoice === "2") {
+      rerankerCfg.fallbackProvider = "local-transformers";
+      rerankerCfg.fallbackModel = "BAAI/bge-reranker-v2-m3";
+      console.error(t("setup.reranker.lazy_load_notice", { lang, tone, vars: { sizeMb: "570" } }));
+    }
+    return rerankerCfg;
+  } else if (choice === "2") {
+    console.error(t("setup.reranker.local_cpu_warning", { lang, tone }));
+    console.error(t("setup.reranker.lazy_load_notice", { lang, tone, vars: { sizeMb: "570" } }));
+    return { provider: "local-transformers", model: "BAAI/bge-reranker-v2-m3", candidates: 20, timeoutMs: 5000, fallbackOnError: true };
+  } else if (choice === "3") {
+    return { provider: "disabled", enabled: false, candidates: 20 };
+  } else {
+    // Advanced
+    for (let i = 0; i < ADVANCED_RERANKER_MODELS.length; i++) {
+      console.error(`  [${String.fromCharCode(97 + i)}] ${ADVANCED_RERANKER_MODELS[i]}`);
+    }
+    const adv = await askLine("[a/b/c]: ");
+    const modelIdx = adv.charCodeAt(0) - 97;
+    if (modelIdx >= 0 && modelIdx < ADVANCED_RERANKER_MODELS.length) {
+      console.error(t("setup.reranker.local_cpu_warning", { lang, tone }));
+      return { provider: "local-transformers", model: ADVANCED_RERANKER_MODELS[modelIdx], candidates: 20, timeoutMs: 5000, fallbackOnError: true };
+    }
+    console.error(t("setup.reranker.invalid_choice", { lang, tone }));
+    return { provider: "disabled", enabled: false, candidates: 20 };
+  }
+}
+
+// ─── Wenn direkt aufgerufen ───────────────────────────────────────────────────
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  try {
+    const embedding = await wizardEmbedding();
+    const reranker = await wizardReranker();
+    rl.close();
+    // Ausgabe als JSON auf stdout — install-memory-system.sh liest das
+    process.stdout.write(JSON.stringify({ embedding, reranker }, null, 2) + "\n");
+    process.exit(0);
+  } catch (e) {
+    rl.close();
+    console.error(`[wizard] Fehler: ${e.message}`);
+    process.exit(1);
+  }
 }
 ```
 
-- [ ] **Step 2: Wizard in den Haupt-Flow einbinden**
+- [ ] **Step 4: `install-memory-system.sh` auf Wizard-Aufruf reduzieren**
 
-Die `wizard_embedding_provider` und `wizard_reranker_provider` Funktionen im Haupt-Setup-Flow nach dem Erstellen der Basis-Config aufrufen. Dann `write_provider_config()` aus den gesetzten Variablen schreiben (JSON-Manipulation via `jq`):
+Im Bash-Script, wo vorher `wizard_embedding_provider()` und `wizard_reranker_provider()` aufgerufen wurden, ersetzen durch:
 
 ```bash
-write_provider_config() {
-  local cfg_file="$OPENCLAW_DIR/openclaw.json"
-  
-  # Embedding-Config bauen
-  local emb_json
-  if [[ "$EMBEDDING_PROVIDER" == "local-transformers" ]]; then
-    emb_json=$(jq -n \
-      --arg p "$EMBEDDING_PROVIDER" \
-      --arg m "$EMBEDDING_MODEL" \
-      --argjson d "$EMBEDDING_DIMENSIONS" \
-      '{provider: $p, model: $m, dimensions: $d}')
-  elif [[ -n "$EMBEDDING_API_KEY_ENV" ]]; then
-    emb_json=$(jq -n \
-      --arg p "$EMBEDDING_PROVIDER" \
-      --arg env "$EMBEDDING_API_KEY_ENV" \
-      --arg m "$EMBEDDING_MODEL" \
-      --argjson d "$EMBEDDING_DIMENSIONS" \
-      '{provider: $p, apiKeyEnv: $env, model: $m, dimensions: $d}')
-  else
-    emb_json=$(jq -n \
-      --arg p "$EMBEDDING_PROVIDER" \
-      --arg k "$EMBEDDING_API_KEY" \
-      --arg m "$EMBEDDING_MODEL" \
-      --argjson d "$EMBEDDING_DIMENSIONS" \
-      '{provider: $p, apiKey: $k, model: $m, dimensions: $d}')
-  fi
+# Wizard-Ausgabe als JSON-Datei einlesen
+WIZARD_OUTPUT_FILE=$(mktemp /tmp/provider-wizard-XXXXX.json)
+if ! node "$(dirname "$0")/provider-wizard.mjs" > "$WIZARD_OUTPUT_FILE"; then
+  echo "[install] Wizard abgebrochen." >&2
+  rm -f "$WIZARD_OUTPUT_FILE"
+  exit 1
+fi
 
-  # Reranker-Config bauen
-  local rer_json
-  if [[ "$RERANKER_PROVIDER" == "disabled" ]]; then
-    rer_json='{"provider":"disabled","enabled":false,"candidates":20}'
-  elif [[ "$RERANKER_PROVIDER" == "cohere" ]]; then
-    rer_json=$(jq -n \
-      --arg env "${RERANKER_API_KEY_ENV:-}" \
-      --arg key "${RERANKER_API_KEY:-}" \
-      --arg m "$RERANKER_MODEL" \
-      --arg fp "${RERANKER_FALLBACK_PROVIDER:-disabled}" \
-      --arg fm "${RERANKER_FALLBACK_MODEL:-}" \
-      '{provider:"cohere", model:$m, candidates:20, timeoutMs:5000,
-        fallbackOnError:true, fallbackProvider:$fp} |
-       if $env != "" then . + {apiKeyEnv: $env} else . + {apiKey: $key} end |
-       if $fm != "" then . + {fallbackModel: $fm} else . end')
-  else
-    rer_json=$(jq -n \
-      --arg m "$RERANKER_MODEL" \
-      '{provider:"local-transformers", model:$m, candidates:20,
-        timeoutMs:5000, fallbackOnError:true,
-        local: {model:$m, cacheDir:"${OPENCLAW_HOME}/models/plur1bus"}}')
-  fi
+# Config aus JSON extrahieren (via jq)
+EMBEDDING_CFG=$(jq '.embedding' "$WIZARD_OUTPUT_FILE")
+RERANKER_CFG=$(jq '.reranker' "$WIZARD_OUTPUT_FILE")
+rm -f "$WIZARD_OUTPUT_FILE"
 
-  # Atomar in openclaw.json schreiben
-  local tmp_cfg
-  tmp_cfg=$(jq --argjson emb "$emb_json" --argjson rer "$rer_json" \
-    '.plugins.entries["memory-lancedb-namespaced"].embedding = $emb |
-     .plugins.entries["memory-lancedb-namespaced"].reranker = $rer' \
-    "$cfg_file")
-  echo "$tmp_cfg" > "$cfg_file"
-  echo "[wizard] Provider-Config geschrieben."
-}
+# In openclaw.json schreiben
+jq --argjson emb "$EMBEDDING_CFG" --argjson rer "$RERANKER_CFG" \
+  '.plugins.entries["memory-lancedb-namespaced"].embedding = $emb |
+   .plugins.entries["memory-lancedb-namespaced"].reranker = $rer' \
+  "$OPENCLAW_DIR/openclaw.json" > /tmp/openclaw-cfg-tmp.json && \
+  mv /tmp/openclaw-cfg-tmp.json "$OPENCLAW_DIR/openclaw.json"
+
+echo "[install] Provider-Config geschrieben."
 ```
 
-- [ ] **Step 3: Syntax prüfen**
+Die bestehenden Bash-`echo`-Wizard-Strings vollständig entfernen (alle `echo "=== Schritt..."`, `echo "Cohere rerank-v3.5..."` etc.).
+
+- [ ] **Step 5: i18n-Lücken prüfen (setup.embedding.*)**
 
 ```bash
+node -e "
+import('../lib/i18n-dictionary.js').then(({dictionary}) => {
+  const needed = ['setup.embedding.title','setup.embedding.description'];
+  for (const k of needed) {
+    if (!dictionary[k]) console.log('FEHLT:', k);
+    else console.log('OK:', k);
+  }
+});
+"
+# Falls Keys fehlen: in lib/i18n-dictionary.js ergänzen (analog Task 1.2)
+```
+
+- [ ] **Step 6: Tests laufen lassen**
+
+```bash
+node --test tests/provider-wizard.test.js
+# Expected: alle pass
 bash -n scripts/install-memory-system.sh
-# Expected: keine Fehler
+# Expected: keine Syntax-Fehler
 ```
 
-- [ ] **Step 4: Dry-Run mit --help**
+- [ ] **Step 7: Commit**
 
 ```bash
-bash scripts/install-memory-system.sh --help 2>&1 | head -20
-# Expected: Script zeigt Hilfe ohne Fehler
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add scripts/install-memory-system.sh
-git commit -m "feat(wizard): embedding + reranker provider selection mit Dimension-Guard + apiKeyEnv"
+git add scripts/provider-wizard.mjs scripts/install-memory-system.sh tests/provider-wizard.test.js
+git commit -m "feat(wizard): i18n-konformer Node-Wizard, Bash ruft nur noch Node auf"
 ```
 
 ---
@@ -1900,14 +2294,21 @@ git log --oneline -12
 4. `readExistingTableDimension()` wirft nie — gibt immer Status-Objekt zurück
 5. `DEFAULT_LOCAL_RERANKER_MODEL === "BAAI/bge-reranker-v2-m3"`
 6. `ChainedRerankerProvider(primary, null, logger).rerank()` crasht nicht
+7. `resolveApiKey({}, {})` wirft — kein impliziter OPENAI-Key-Fallback
+8. `resolveApiKey({}, { defaultEnv: "COHERE_API_KEY" })` liest aus `process.env.COHERE_API_KEY` — nicht aus `OPENAI_API_KEY`
+9. `scripts/provider-wizard.mjs` gibt user-facing Text via `t(key, { lang, tone })` aus — kein hard-coded Deutsch
+10. `scripts/reindex-provider.mjs --apply` gibt klare Fehlermeldung ("nicht implementiert") — keine Produktionsdaten werden verändert
+11. `pool.getWriteDb(agentId).dbPath` liegt in `activeWriteNamespace`, niemals in `legacyReadOnlyNamespaces`
+12. `pool.getReadDbs(agentId).length === 2` wenn `crossNamespaceRecall=true` mit active + legacy
 
 ### Was NICHT Teil dieser Implementierung ist
 
-- Runtime-Integration von `namespace-config.js` in `index.js` / `AgentDbPool` (Follow-up)
-- Cross-Namespace-Recall in der Live-Recall-Pipeline (Follow-up nach namespace-config)
+- **Echter Reindex** (Re-Embedding, atomarer Config-Switch) — eigener Folgepatch; erst Schema/Pfad gegen Live-Code verifizieren
 - Download-Fortschrittsanzeige für HuggingFace-Modelle
 - Crontab-Eintrag durch Plugin (Root-Rechte bewusst ausgeschlossen)
 - Automatischer Reindex bei Dimension-Mismatch ohne User-Aktion
 - Löschen alter LanceDB-Dateien (immer Sache des Users)
 - Legacy-Staging-Kopien oder externe Deployments
 - Änderungen an Dreaming / Forgetting-Curve
+- **`resolveApiKey` globaler OPENAI-Fallback** — bewusst entfernt; jeder Aufrufer muss `defaultEnv` explizit setzen
+- Bash-seitiger Wizard-Text (hard-coded Strings) — ausschließlich via `provider-wizard.mjs` + i18n
