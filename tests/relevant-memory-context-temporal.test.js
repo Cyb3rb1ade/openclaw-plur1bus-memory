@@ -109,7 +109,7 @@ describe("formatRelevantMemoriesContext — temporal provenance", () => {
     ], { now: NOW_MS });
     assert.ok(out.includes('category="fact"'), "category preserved");
     assert.ok(out.includes('id="m1"'), "id preserved");
-    assert.ok(out.includes("RECALL SAFETY"), "RECALL SAFETY preamble preserved");
+    assert.ok(out.includes("Recall safety"), "compact recall safety marker preserved");
   });
 
   it("uses summary when text/display is absent", () => {

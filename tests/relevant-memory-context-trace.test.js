@@ -92,7 +92,7 @@ describe("formatRelevantMemoriesContext — decision trace disabled", () => {
 });
 
 describe("formatRelevantMemoriesContext — decision trace enabled", () => {
-  it("renders a compact <memory-decision-trace> block after RECALL SAFETY", () => {
+  it("renders a compact <memory-decision-trace> block after compact recall safety marker", () => {
     const trace = buildTrace();
     const out = formatRelevantMemoriesContext([baseMemory], {
       decisionTrace: trace,
@@ -105,10 +105,10 @@ describe("formatRelevantMemoriesContext — decision trace enabled", () => {
     assert.ok(out.includes('included="2"'), "expected 2 included decisions");
     assert.ok(out.includes('rejected="1"'), "expected 1 rejected decision");
 
-    const safetyPos = out.indexOf("RECALL SAFETY:");
+    const safetyPos = out.indexOf("Recall safety:");
     const tracePos = out.indexOf("<memory-decision-trace>");
     const firstRecordPos = out.indexOf("<memory-record");
-    assert.ok(safetyPos < tracePos, "trace block must appear after RECALL SAFETY");
+    assert.ok(safetyPos < tracePos, "trace block must appear after compact recall safety marker");
     assert.ok(tracePos < firstRecordPos, "trace block must appear before memory records");
   });
 
