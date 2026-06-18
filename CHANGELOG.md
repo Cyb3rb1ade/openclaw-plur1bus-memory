@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.6.2] — 2026-06-18 — Dreaming Cron Fix
+
+### Fixed
+
+- **Dreaming Cron Lane-Timeout** (`index.js`): Die `before_prompt_build`-Hook führte für interne Dreaming/Sleep-Magic-Messages (`__openclaw_memory_core_short_term_promotion_dream__`, `__openclaw_memory_core_light_sleep__`, `__openclaw_memory_core_rem_sleep__`) die komplette LanceDB-Recall-Pipeline aus. Bei 8 Workspaces × ~130s Event-Loop-Blocking = ~1040s gesamt, was den `cron-nested`-Lane-Timeout (bisher 300s, jetzt 900s) konsequent riss. Fix: Diese drei Magic-Messages werden am Anfang des Hooks erkannt und mit Early-Return übersprungen. Das Dreaming benötigt keinen Recall-Kontext — es erzeugt ihn selbst. Behebt `consecutiveErrors: 14`.
+
 ## [6.6.1] — 2026-06-18 — Repair-Fix
 
 ### Fixed
