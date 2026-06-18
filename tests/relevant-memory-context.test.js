@@ -65,11 +65,13 @@ describe("formatRelevantMemoriesContext", () => {
     assert.ok(out.includes('mode="historical-evidence-only"'), "missing mode attribute");
   });
 
-  it("always includes RECALL SAFETY preamble", () => {
+  it("always includes compact recall safety marker", () => {
     const out = formatRelevantMemoriesContext([
       { id: "1", category: "work", source: "dm", display: "hello", memoryStrength: 1.0 },
     ]);
-    assert.ok(out.includes("RECALL SAFETY:"), "missing RECALL SAFETY preamble");
+    assert.ok(out.includes("Recall safety:"), "missing compact recall safety marker");
+    // Der volle Safety-Header darf in Sub-Blöcken nicht mehr redundant stehen.
+    assert.ok(!out.includes("RECALL SAFETY:"), "sub-block should not repeat the full RECALL SAFETY header");
   });
 
   it("renders semantic lens memories in a separate quiet context block", () => {
@@ -488,7 +490,9 @@ describe("formatRelevantMemoriesContext — maxTotalChars", () => {
     for (let i = 0; i < 5; i++) {
       memories.push({ id: `f${i}`, category: "work", source: "dm", display: "y".repeat(400), memoryStrength: 1.0 });
     }
-    const out = formatRelevantMemoriesContext(memories, { maxTotalChars: 700 });
+    // Mit kompaktem Recall-Safety-Marker muss das Limit niedrig genug sein,
+    // damit die Warnung dennoch durch den Spezialpfad erhalten bleibt.
+    const out = formatRelevantMemoriesContext(memories, { maxTotalChars: 500 });
     assert.ok(out.includes("<operational-memory-warning>"), "operational warning missing");
     assert.ok(out.includes("<!-- memory context truncated -->"), "truncation marker missing");
     const markerIdx = out.indexOf("<!-- memory context truncated -->");
