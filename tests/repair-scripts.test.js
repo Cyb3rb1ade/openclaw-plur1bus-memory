@@ -384,31 +384,34 @@ describe("verify-workspace-writer", () => {
     assert.strictEqual(r.status, 0, `expected 0, got ${r.status}\n${r.stderr}`);
   });
 
-  it("writes healthcheck to tmp/ only, never to memory dir", () => {
+  it("writes healthcheck to memory/.healthcheck/, not directly to memory dir", () => {
     mkdirSync(join(dir, "workspace", "memory"), { recursive: true });
 
     runScript(WORKSPACE_SCRIPT, ["--openclaw-home", dir]);
 
-    // tmp/.healthcheck-* files are written and deleted; tmp/ dir may exist
-    const memFiles = existsSync(join(dir, "workspace", "memory"))
-      ? readdirSync(join(dir, "workspace", "memory"))
-      : [];
-    assert.strictEqual(memFiles.length, 0, "no files should be written to workspace/memory/");
+    // .healthcheck/ sub-dir may be created; no probe files should remain
+    const hcDir = join(dir, "workspace", "memory", ".healthcheck");
+    const memFiles = readdirSync(join(dir, "workspace", "memory")).filter(f => f !== ".healthcheck");
+    assert.strictEqual(memFiles.length, 0, "no real files should be written directly to workspace/memory/");
+    if (existsSync(hcDir)) {
+      const probes = readdirSync(hcDir);
+      assert.strictEqual(probes.length, 0, "probe file should be deleted after healthcheck");
+    }
   });
 
-  it("exits 1 when tmp/ directory is not writable", { skip: process.getuid?.() === 0 }, () => {
+  it("exits 1 when memory/.healthcheck/ directory is not writable", { skip: process.getuid?.() === 0 }, () => {
     // Root can always write everywhere, so skip if running as root.
     mkdirSync(join(dir, "workspace", "memory"), { recursive: true });
-    const tmpDir = join(dir, "tmp");
-    mkdirSync(tmpDir, { recursive: true });
-    chmodSync(tmpDir, 0o444); // read-only
+    const hcDir = join(dir, "workspace", "memory", ".healthcheck");
+    mkdirSync(hcDir, { recursive: true });
+    chmodSync(hcDir, 0o444); // read-only
 
     let r;
     try {
       r = runScript(WORKSPACE_SCRIPT, ["--openclaw-home", dir]);
-      assert.strictEqual(r.status, 1, `expected 1 (unwritable tmp), got ${r.status}`);
+      assert.strictEqual(r.status, 1, `expected 1 (unwritable .healthcheck), got ${r.status}`);
     } finally {
-      chmodSync(tmpDir, 0o755);
+      chmodSync(hcDir, 0o755);
     }
   });
 });
