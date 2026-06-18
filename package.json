@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "6.6.0",
+  "version": "6.6.3",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -21,12 +21,14 @@
   "files": [
     "index.js",
     "lib/",
+    "scripts/",
+    "docs/",
     "openclaw.plugin.json",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "lint": "node --check index.js && find lib tests test -name '*.js' -exec node --check {} +",
+    "lint": "node --check index.js && find lib tests test -name '*.js' -exec node --check {} + && find scripts -name '*.mjs' -exec node --check {} +",
     "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test tests/*.test.js test/*.test.js",
     "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test tests/*.test.js test/*.test.js",
     "repair": "node scripts/repair-installed-plugin.mjs",

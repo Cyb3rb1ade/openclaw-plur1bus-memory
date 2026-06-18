@@ -586,6 +586,7 @@ class MemoryDB {
             { name: 'dispatchCount', valueSql: '0' },
             { name: 'lastDispatchAttemptAt', valueSql: '0' },
             { name: 'nextDispatchAttemptAt', valueSql: '0' },
+            { name: 'workspaceKey', valueSql: "''" },
           ];
 
           for (const col of allColumns) {
@@ -646,6 +647,7 @@ class MemoryDB {
             status: "active",
             versionCreatedAt: 0,
             updatedAt: 0,
+            workspaceKey: "",
           },
         ]), "MemoryDB.createTable");
         await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
@@ -4339,6 +4341,14 @@ const plugin = {
           }
         }
         if (!event.prompt || event.prompt.length < 5) return neoContext ? { prependContext: neoContext } : undefined;
+        // Skip heavy LanceDB recall for internal dreaming/sleep magic messages —
+        // these cron turns don't need memory context and the recall would block
+        // the event loop for each workspace, causing lane timeouts.
+        if (
+          event.prompt === "__openclaw_memory_core_short_term_promotion_dream__" ||
+          event.prompt === "__openclaw_memory_core_light_sleep__" ||
+          event.prompt === "__openclaw_memory_core_rem_sleep__"
+        ) { return neoContext ? { prependContext: neoContext } : undefined; }
         const agentId = ctx?.agentId;
         const db = pool.getDb(agentId);
         // GC: purge expired memories (non-blocking, throttled on hot path)
