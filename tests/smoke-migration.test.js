@@ -79,6 +79,7 @@ const TABLE_NAME = "memories";
       "dispatchCount",
       "lastDispatchAttemptAt",
       "nextDispatchAttemptAt",
+      "workspaceKey",
     ];
 
     for (const col of v6Columns) {
@@ -173,6 +174,7 @@ const TABLE_NAME = "memories";
         dispatchCount: 0,
         lastDispatchAttemptAt: 0,
         nextDispatchAttemptAt: 0,
+        workspaceKey: "",
       },
     ]);
 

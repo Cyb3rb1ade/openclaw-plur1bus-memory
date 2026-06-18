@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.6.3] — 2026-06-18 — workspaceKey Schema Migration
+
+### Fixed
+
+- **`workspaceKey` fehlt in automatischer Schema-Migration** (`index.js`, `lib/db-adapter.js`): Das Feld `workspaceKey` wurde in 6.6.1 zum Datenmodell hinzugefügt, aber weder in der `allColumns`-Migrationsliste in `MemoryDB.init()` noch in `ensureReminderColumns()` in `db-adapter.js` ergänzt. Bestehende Tabellen, die vor 6.6.1 angelegt wurden, erhielten die Spalte beim Update deshalb nicht automatisch — `table.add()` warf `Found field not in schema: workspaceKey at row 0`. Fix: `workspaceKey` ist jetzt in allen drei Migrationspfaden enthalten (`allColumns`-Liste, `ensureReminderColumns`, `createTable`-Schema für neue Tabellen).
+
 ## [6.6.2] — 2026-06-18 — Dreaming Cron Fix
 
 ### Fixed
