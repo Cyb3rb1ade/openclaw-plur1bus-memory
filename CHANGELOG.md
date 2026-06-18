@@ -5,6 +5,38 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.6.3] — 2026-06-18 — workspaceKey Schema Migration
+
+### Fixed
+
+- **`workspaceKey` fehlt in automatischer Schema-Migration** (`index.js`, `lib/db-adapter.js`): Das Feld `workspaceKey` wurde in 6.6.1 zum Datenmodell hinzugefügt, aber weder in der `allColumns`-Migrationsliste in `MemoryDB.init()` noch in `ensureReminderColumns()` in `db-adapter.js` ergänzt. Bestehende Tabellen, die vor 6.6.1 angelegt wurden, erhielten die Spalte beim Update deshalb nicht automatisch — `table.add()` warf `Found field not in schema: workspaceKey at row 0`. Fix: `workspaceKey` ist jetzt in allen drei Migrationspfaden enthalten (`allColumns`-Liste, `ensureReminderColumns`, `createTable`-Schema für neue Tabellen).
+
+## [6.6.2] — 2026-06-18 — Dreaming Cron Fix
+
+### Fixed
+
+- **Dreaming Cron Lane-Timeout** (`index.js`): Die `before_prompt_build`-Hook führte für interne Dreaming/Sleep-Magic-Messages (`__openclaw_memory_core_short_term_promotion_dream__`, `__openclaw_memory_core_light_sleep__`, `__openclaw_memory_core_rem_sleep__`) die komplette LanceDB-Recall-Pipeline aus. Bei 8 Workspaces × ~130s Event-Loop-Blocking = ~1040s gesamt, was den `cron-nested`-Lane-Timeout (bisher 300s, jetzt 900s) konsequent riss. Fix: Diese drei Magic-Messages werden am Anfang des Hooks erkannt und mit Early-Return übersprungen. Das Dreaming benötigt keinen Recall-Kontext — es erzeugt ihn selbst. Behebt `consecutiveErrors: 14`.
+
+## [6.6.1] — 2026-06-18 — Repair-Fix
+
+### Fixed
+
+- **Auto-Capture Schema-Mismatch** (`scripts/auto-capture-lancedb.mjs` v2.3.0): `table.add()` schrieb mit dem alten Basis-Schema (16 Felder) in PLUR1BUS-verwaltete LanceDB-Tabellen, die das erweiterte 57-Spalten-Schema haben. LanceDB warf `Append with different schema: fields did not match` für alle 37 fehlenden Felder (u.a. `retrievalCount`, `memoryKind`, `workspaceKey`, `remindAt` etc.). Fix: Alle PLUR1BUS-Schema-Felder mit sinnvollen Defaults ergänzt. Cron-Key-Quelle von `auth-profiles.json` (nicht mehr vorhanden) auf `grep '^OPENAI_API_KEY=' .env` migriert — konsistent mit `embed-promoted-memories`.
+
+### Changed — Ops/Repair Tooling
+
+- **`scripts/lib/deploy-integrity.mjs`**: Kanonische `DEPLOY_FILES`-Liste (27 Einträge) jetzt als exportiertes Modul-Const. Wird von beiden Verify- und Repair-Scripts importiert — keine Divergenz mehr möglich.
+- **`scripts/verify-plugin-deploy.mjs`**: Importiert `DEPLOY_FILES` aus `deploy-integrity.mjs` statt eigene kürzere Liste zu pflegen.
+- **`scripts/repair-installed-plugin.mjs`**: (a) Importiert `DEPLOY_FILES` aus `deploy-integrity.mjs`. (b) Backup wird jetzt **vor** `validateDeployment(repair:true)` erstellt (vorher: nach erster Modifikation). (c) Exit-Codes präzisiert: 0=alles OK, 1=Integrity-Failures, 2=Unexpected Error, 3=Warnings (LanceDB elevated / Dreaming Cron error, Integrity OK).
+- **`scripts/maintain-lancedb.mjs`**: `--apply` erstellt jetzt vor dem Löschen ein Prune-Backup unter `~/.openclaw-backups/lancedb-prune-{ts}/` mit Kopien aller zu löschenden Manifest-JSON-Dateien und einem `_prune-manifest.json`-Index.
+- **`scripts/verify-workspace-writer.mjs`** (neu): Erkennt Workspace-`memory`-Verzeichnisse und Dream-Diary-Pfade aus `openclaw.json` (Fallback: main/bernhardine/heisenberg), schreibt Healthcheck nur nach `tmp/.healthcheck-{agent}`, berührt keine echten Memory-Daten.
+
+### Added
+
+- **`package.json` `files`**: `scripts/` und `docs/` werden jetzt mit dem npm-Paket ausgeliefert — Repair/Ops-Scripts und Dokumentation sind nach Installation per `npx`/`npm exec` verfügbar.
+- **`package.json` `lint`**: Scripts-Verzeichnis (`find scripts -name '*.mjs'`) wird jetzt ebenfalls per `node --check` geprüft.
+- **Tests** (`tests/repair-scripts.test.js`): Neue Tests für Backup-vor-Repair, Exit-Codes, maintain-lancedb dry-run/apply/snapshot, verify-workspace-writer Healthcheck, keine Memory-Daten berührt.
+
 ## [6.6.0] — 2026-06-10 — Engram
 
 ### Added — Meta-Cognition (PR #21)

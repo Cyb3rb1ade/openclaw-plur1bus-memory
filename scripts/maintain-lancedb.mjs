@@ -21,7 +21,7 @@
  *   1  Error
  */
 
-import { existsSync, readdirSync, statSync, unlinkSync, mkdirSync, copyFileSync } from "node:fs";
+import { existsSync, readdirSync, statSync, unlinkSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
 import { join, extname } from "node:path";
 import { homedir } from "node:os";
 
@@ -47,7 +47,20 @@ function sortedManifests(versionsDir) {
     .sort((a, b) => b.mtime - a.mtime); // newest first
 }
 
-function pruneTable(versionsDir, keep, apply) {
+function backupPrunedManifests(versionsDir, toRemove, backupRoot) {
+  const relPath = versionsDir.split("/").slice(-3).join("/");
+  const destDir = join(backupRoot, relPath);
+  mkdirSync(destDir, { recursive: true });
+  for (const m of toRemove) {
+    copyFileSync(join(versionsDir, m.name), join(destDir, m.name));
+  }
+  writeFileSync(
+    join(destDir, "_prune-manifest.json"),
+    JSON.stringify({ prunedAt: new Date().toISOString(), count: toRemove.length, files: toRemove.map((m) => m.name) }, null, 2),
+  );
+}
+
+function pruneTable(versionsDir, keep, apply, backupRoot) {
   const manifests = sortedManifests(versionsDir);
   const total = manifests.length;
   const toRemove = manifests.slice(keep);
@@ -64,6 +77,7 @@ function pruneTable(versionsDir, keep, apply) {
   console.log(`  ${icon} ${versionsDir.split("/").slice(-3).join("/")}/_versions: ${total} versions  [${status}]  (${label})`);
 
   if (apply) {
+    backupPrunedManifests(versionsDir, toRemove, backupRoot);
     for (const m of toRemove) {
       unlinkSync(join(versionsDir, m.name));
     }
@@ -88,6 +102,14 @@ async function main() {
   let tablesProcessed = 0;
   let elevated = 0;
 
+  // Create a timestamped backup root once for this run (only used if --apply).
+  const ts = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
+  const backupRoot = join(homedir(), ".openclaw-backups", `lancedb-prune-${ts}`);
+  if (opts.apply) {
+    mkdirSync(backupRoot, { recursive: true });
+    console.log(`  backup root: ${backupRoot}`);
+  }
+
   const agentDirs = readdirSync(base, { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name);
@@ -103,7 +125,7 @@ async function main() {
       if (!existsSync(versionsDir)) continue;
 
       tablesProcessed++;
-      const { removed, total, status } = pruneTable(versionsDir, opts.keep, opts.apply);
+      const { removed, total, status } = pruneTable(versionsDir, opts.keep, opts.apply, backupRoot);
       totalRemoved += removed;
       if (status !== "ok") elevated++;
     }
