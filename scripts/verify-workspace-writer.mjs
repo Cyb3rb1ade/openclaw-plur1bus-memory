@@ -80,14 +80,15 @@ function checkDirAccessible(dir) {
 }
 
 /**
- * Verifies write access by creating and deleting a file in
- * <openclawHome>/tmp/ — never inside memDir itself.
+ * Verifies write access by creating and immediately deleting a file inside
+ * memDir/.healthcheck/ — a dedicated sub-directory that never holds real
+ * memory data, so the probe touches the actual storage path.
  */
-function checkWritable(openclawHome, agentId) {
-  const tmpDir = join(openclawHome, "tmp");
-  const checkPath = join(tmpDir, `.healthcheck-${agentId}-${Date.now()}`);
+function checkWritable(memDir, agentId) {
+  const hcDir = join(memDir, ".healthcheck");
+  const checkPath = join(hcDir, `.probe-${agentId}-${Date.now()}`);
   try {
-    mkdirSync(tmpDir, { recursive: true });
+    mkdirSync(hcDir, { recursive: true });
     writeFileSync(checkPath, `healthcheck ${agentId} ${new Date().toISOString()}\n`);
     unlinkSync(checkPath);
     return { ok: true };
@@ -121,7 +122,7 @@ async function main() {
       continue;
     }
 
-    const writable = checkWritable(openclawHome, agentId);
+    const writable = checkWritable(memDir, agentId);
     if (writable.ok) {
       log(quiet, `  ✓ ${agentId}/memory`);
     } else {
