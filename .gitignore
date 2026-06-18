@@ -39,5 +39,6 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/repair-dreaming-cron.mjs
 !scripts/verify-workspace-writer.mjs
 !scripts/auto-capture-lancedb.mjs
+!scripts/reindex-provider.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
