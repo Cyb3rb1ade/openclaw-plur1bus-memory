@@ -584,6 +584,7 @@ class MemoryDB {
             { name: 'dispatchCount', valueSql: '0' },
             { name: 'lastDispatchAttemptAt', valueSql: '0' },
             { name: 'nextDispatchAttemptAt', valueSql: '0' },
+            { name: 'workspaceKey', valueSql: "''" },
           ];
 
           for (const col of allColumns) {
@@ -644,6 +645,7 @@ class MemoryDB {
             status: "active",
             versionCreatedAt: 0,
             updatedAt: 0,
+            workspaceKey: "",
           },
         ]), "MemoryDB.createTable");
         await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
