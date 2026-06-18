@@ -16,19 +16,7 @@
 // Exit code 0 = healthy (or successfully repaired). Non-zero = unresolved violations.
 
 import { resolve } from "node:path";
-import { validateDeployment, smokeTestExports } from "./lib/deploy-integrity.mjs";
-
-// Repo-relative paths, mirrored 1:1 into the deploy dir. Verified against the
-// real source files — see the followup doc for how each name was confirmed.
-const FILES = [
-  "index.js",
-  "openclaw.plugin.json",
-  "lib/neo-arch.js",
-  "lib/relevant-memory-context.js",
-  "lib/memory-merge-safety.js",
-  "lib/contradiction-detector.js",
-  "lib/recall-pipeline.js",
-];
+import { validateDeployment, smokeTestExports, DEPLOY_FILES } from "./lib/deploy-integrity.mjs";
 
 // Named exports confirmed to exist in the real files (no guessing).
 const EXPORT_EXPECTATIONS = [
@@ -67,7 +55,7 @@ async function main() {
   const report = validateDeployment({
     deployDir,
     repoDir,
-    files: FILES,
+    files: DEPLOY_FILES,
     repair: opts.repair,
     dryRun: opts.dryRun,
   });
