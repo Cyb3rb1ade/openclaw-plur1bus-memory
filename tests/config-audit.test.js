@@ -104,8 +104,8 @@ describe("Schema-Default-Typen (Runtime / Cache)", () => {
     assertNumberDefault("runtime.recallTimeoutMs", 45000));
   it("runtime.captureTimeoutMs ist eine Zahl", () =>
     assertNumberDefault("runtime.captureTimeoutMs", 60000));
-  it("runtime.maxConcurrentRecall ist eine Zahl", () =>
-    assertNumberDefault("runtime.maxConcurrentRecall", 2));
+  it("runtime.maxConcurrentRecall ist eine Zahl (konservativ 1 für Stabilität/Event-Loop-Schutz)", () =>
+    assertNumberDefault("runtime.maxConcurrentRecall", 1));
   it("runtime.maxConcurrentCapturePerAgent ist eine Zahl", () =>
     assertNumberDefault("runtime.maxConcurrentCapturePerAgent", 1));
   it("runtime.recallCacheTtlMs ist eine Zahl", () =>

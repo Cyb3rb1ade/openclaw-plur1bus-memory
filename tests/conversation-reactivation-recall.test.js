@@ -460,7 +460,7 @@ describe("conversation-reactivation-recall", () => {
       assert.ok(out.includes("<memory-reactivation"));
       assert.ok(out.includes('untrusted="true"'));
       assert.ok(out.includes('mode="historical-evidence-only"'));
-      assert.ok(out.includes("RECALL SAFETY:"));
+      assert.ok(out.includes("Recall safety:"));
       assert.ok(out.includes("<memory-record"));
       assert.ok(out.includes('source="reactivation"'));
     });

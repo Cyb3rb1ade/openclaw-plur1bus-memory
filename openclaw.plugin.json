@@ -229,7 +229,7 @@
           },
           "maxConcurrentRecall": {
             "type": "number",
-            "default": 2
+            "default": 1
           },
           "maxConcurrentCapturePerAgent": {
             "type": "number",
