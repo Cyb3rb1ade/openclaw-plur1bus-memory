@@ -2,6 +2,43 @@ import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve as resolvePath } from "node:path";
 
+/**
+ * Canonical list of files that must be present and byte-identical in the
+ * deployed extension directory. Shared by verify-plugin-deploy.mjs and
+ * repair-installed-plugin.mjs so both always check the same set.
+ */
+export const DEPLOY_FILES = [
+  "index.js",
+  "openclaw.plugin.json",
+  // core lib — always sync
+  "lib/neo-arch.js",
+  "lib/relevant-memory-context.js",
+  "lib/memory-merge-safety.js",
+  "lib/contradiction-detector.js",
+  "lib/recall-pipeline.js",
+  "lib/runtime-scheduler.js",
+  // lib files added in recent commits
+  "lib/bounded-operation-queue.js",
+  "lib/continuity-gate.js",
+  "lib/conversation-reactivation-recall.js",
+  "lib/event-loop-lag-snapshot.js",
+  "lib/interpretation-overlay.js",
+  "lib/memory-context-sanitize.js",
+  "lib/memory-doctor.js",
+  "lib/memory-fact-quality.js",
+  "lib/memory-text-contradiction.js",
+  "lib/overlay-commands.js",
+  "lib/overlay-generator.js",
+  "lib/pattern-surface.js",
+  "lib/recall-decision-trace.js",
+  "lib/recall-phase-timer.js",
+  "lib/runtime-pressure-gate.js",
+  "lib/semantic-lens-index.js",
+  "lib/temporal-provenance.js",
+  "lib/with-timeout.js",
+  "lib/recall-budget.js",
+];
+
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;
 
 function sha256(filePath) {
