@@ -2,13 +2,13 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Version 6.6.3** — the Temporal Continuity + Full Experience policy release — enables the complete PLUR1BUS memory, recall, continuity, review, graph, emotion, and meta-cognition experience by default while preserving existing opt-outs during normal updates.
+**Version 6.7.0** — the Temporal Continuity + Full Experience policy release — enables the complete PLUR1BUS memory, recall, continuity, review, graph, emotion, and meta-cognition experience by default while preserving existing opt-outs during normal updates.
 
 ## What it does
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
-### New in v6.6.3 — PLUR1BUS Full Experience Defaults
+### New in v6.7.0 — PLUR1BUS Full Experience Defaults + Temporal Continuity
 
 - **Core features default ON** — Fresh installs get auto-capture, auto-recall, temporal continuity, embedding cache, reranker, emotion, meta-cognition, merging, Schicht 1.5, skill mining, daily consolidation, graph layers, reviews, dashboard, Obsidian bridge, critical push, and SoulPatch enabled by default.
 - **Updates preserve current choices** — Existing configured feature values remain the source of truth. Missing new core features are added as enabled by default and can be opted out individually.
