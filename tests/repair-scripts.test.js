@@ -378,10 +378,11 @@ describe("verify-workspace-writer", () => {
     assert.strictEqual(r.status, 0, `expected 0, got ${r.status}\n${r.stderr}`);
   });
 
-  it("skips (does not fail) when workspace memory dir does not exist", () => {
-    // No workspace dirs — should exit 0 with a warning, not 1
+  it("warns and exits 1 when no workspace memory dirs exist", () => {
+    // No workspace dirs — script returns 1 with a warning (documented exit code)
     const r = runScript(WORKSPACE_SCRIPT, ["--openclaw-home", dir]);
-    assert.strictEqual(r.status, 0, `expected 0, got ${r.status}\n${r.stderr}`);
+    assert.strictEqual(r.status, 1, `expected 1, got ${r.status}\n${r.stderr}`);
+    assert.ok(r.stdout.includes("no workspace memory paths found"), "expected missing-workspaces warning");
   });
 
   it("writes healthcheck to memory/.healthcheck/, not directly to memory dir", () => {
