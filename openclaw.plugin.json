@@ -689,6 +689,16 @@
           "visibleHints": { "type": "boolean", "default": false }
         }
       },
+      "temporalContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
       "obsidianBridge": {
         "type": "object",
         "additionalProperties": false,
