@@ -47,3 +47,13 @@
 | metricsDebounceMs hartcodiert | Niedrig | ✅ Behoben | v6.2.x |
 | 60+ Over-Exports | Niedrig | Offen | — |
 | atomic-json Reentrancy-Deadlock | Niedrig-Mittel | ✅ Behoben | v6.x |
+
+---
+
+## Verbleibende offene Punkte / Follow-ups (Low/Info)
+
+Die folgenden Punkte sind als unkritische Folgearbeiten identifiziert und dokumentiert:
+
+1. **Staubiges Testverzeichnis aufräumen**: Das veraltete Testverzeichnis `plur1bus/tests/` archivieren bzw. entfernen (Entwicklung erfolgt ausschließlich unter `tests/` und `test/`).
+2. **Local-only Script-Anpassung**: Das lokale Hilfsskript `.openclaw/scripts/embed-promoted-memories.mjs` auf das neue Provider-Factory-Pattern (`lib/providers/factory.js`) umstellen.
+3. **Local PostToolUse Hook Warning**: Die Warnungen bezüglich des lokalen `PostToolUse`-Hooks beruhen auf einer Kimi/Claude-Lokalkonfiguration und betreffen nicht den Code des Repositories selbst.

@@ -11,7 +11,7 @@ User Query / Kontext
         │
         ▼
 ┌───────────────────┐
-│  Embedding Cache  │◄──────── LRU (TTL 5 min, max 1000)
+│  Embedding Cache  │◄──────── LRU (TTL 5 min, max 128)
 │   (optional Hit)  │
 └─────────┬─────────┘
           │ Miss

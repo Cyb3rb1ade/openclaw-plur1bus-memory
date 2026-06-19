@@ -2,7 +2,7 @@
 
 Diese Datei dokumentiert alle Konfigurationsoptionen im Bereich **Recall**, **Deduplizierung** und **Embedding-Cache**.
 
-Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jeweiligen Plugin-Defaults) gesetzt.
+Alle Werte werden in `openclaw.json` unter dem Key `recall` (oder den jeweiligen Plugin-Defaults) gesetzt.
 
 ---
 

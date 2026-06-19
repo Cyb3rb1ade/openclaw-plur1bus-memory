@@ -5,7 +5,7 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
-## [6.7.0] — 2026-06-19
+## [6.7.0] — 2026-06-19 — PLUR1BUS Full Experience Defaults
 
 ### Added
 - **Full Experience Defaults** (`lib/setup/feature-profiles.js`): 28 `CORE_FEATURES` sind default ON. Frische Installs bekommen die vollständige PLUR1BUS-Experience. Updates bewahren konfigurierte Werte; fehlende neue Core-Features werden als enabled-Default ergänzt (opt-out, nicht opt-in).
