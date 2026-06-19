@@ -1968,16 +1968,22 @@ const plugin = {
         });
 
     // Reranker (optional — provider-aware since v3.1)
-    // Cohere → local-transformers fallback wenn Cohere API fehlschlägt
+    // Cohere reranker — lokaler Fallback nur wenn fallbackProvider="local-transformers" explizit gesetzt
     const rerankerCfg = normalizeRerankerConfig(cfg.reranker || {});
     let reranker = null;
     if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
       const primary = new CohereRerankerProvider(rerankerCfg);
-      const fallback = new LocalTransformersRerankerProvider({
-        model: DEFAULT_LOCAL_RERANKER_MODEL,
-        ...(rerankerCfg.local || {}),
-      });
-      reranker = new ChainedRerankerProvider(primary, fallback, api.logger);
+      if ((rerankerCfg.fallbackProvider ?? "disabled") === "local-transformers") {
+        const fallback = new LocalTransformersRerankerProvider({
+          model: DEFAULT_LOCAL_RERANKER_MODEL,
+          ...(rerankerCfg.local || {}),
+        });
+        reranker = new ChainedRerankerProvider(primary, fallback, api.logger);
+      } else {
+        const chained = new ChainedRerankerProvider(primary, { id: "none" }, api.logger);
+        chained.fallback = null;
+        reranker = chained;
+      }
     } else if (rerankerCfg.provider === "local-transformers" && rerankerCfg.enabled) {
       reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
     }
