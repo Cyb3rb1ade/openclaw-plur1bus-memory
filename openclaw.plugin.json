@@ -207,10 +207,12 @@
         }
       },
       "autoCapture": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "autoRecall": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "captureMaxChars": {
         "type": "number"
@@ -269,7 +271,7 @@
           },
           "embeddingCacheEnabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "embeddingCacheTtlMs": {
             "type": "number",
@@ -314,7 +316,8 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": true
           },
           "provider": {
             "type": "string",
@@ -362,7 +365,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "threshold": {
             "type": "number",
@@ -385,7 +388,7 @@
           },
           "autoApply": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "mode": {
             "type": "string",
@@ -393,6 +396,25 @@
               "safe-versioned"
             ],
             "default": "safe-versioned"
+          },
+          "autoApplyRisk": {
+            "type": "string",
+            "default": "low-only",
+            "enum": [
+              "low-only"
+            ]
+          },
+          "backupBeforeApply": {
+            "type": "boolean",
+            "default": true
+          },
+          "auditLog": {
+            "type": "boolean",
+            "default": true
+          },
+          "maxAutoApplyPerRun": {
+            "type": "number",
+            "default": 5
           }
         }
       },
@@ -402,7 +424,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "model": {
             "type": "string"
@@ -425,7 +447,7 @@
           },
           "maxPromotionsPerRun": {
             "type": "number",
-            "default": 0
+            "default": 3
           }
         }
       },
@@ -435,7 +457,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "cron": {
             "type": "string",
@@ -555,12 +577,30 @@
             }
           },
           "decisionTrace": {
-            "enabled": { "type": "boolean", "default": false },
-            "includeInPrompt": { "type": "boolean", "default": false },
-            "maxCandidates": { "type": "number", "default": 50 },
-            "maxTextPreviewChars": { "type": "number", "default": 160 },
-            "persist": { "type": "boolean", "default": false },
-            "visibleHints": { "type": "boolean", "default": false }
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "includeInPrompt": {
+              "type": "boolean",
+              "default": false
+            },
+            "maxCandidates": {
+              "type": "number",
+              "default": 50
+            },
+            "maxTextPreviewChars": {
+              "type": "number",
+              "default": 160
+            },
+            "persist": {
+              "type": "boolean",
+              "default": false
+            },
+            "visibleHints": {
+              "type": "boolean",
+              "default": false
+            }
           }
         }
       },
@@ -602,48 +642,108 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "default": false },
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
           "associativeRecall": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean", "default": true },
-              "maxDepth": { "type": "number", "default": 2 },
-              "maxNeighborsPerNode": { "type": "number", "default": 8 },
-              "maxAssociatedResults": { "type": "number", "default": 40 },
-              "minCumulativeRelevance": { "type": "number", "default": 0.2 },
-              "graphHydrationRelevanceThreshold": { "type": "number", "default": 0.25 },
-              "assocThreshold": { "type": "number", "default": 0.75 }
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "maxDepth": {
+                "type": "number",
+                "default": 2
+              },
+              "maxNeighborsPerNode": {
+                "type": "number",
+                "default": 8
+              },
+              "maxAssociatedResults": {
+                "type": "number",
+                "default": 40
+              },
+              "minCumulativeRelevance": {
+                "type": "number",
+                "default": 0.2
+              },
+              "graphHydrationRelevanceThreshold": {
+                "type": "number",
+                "default": 0.25
+              },
+              "assocThreshold": {
+                "type": "number",
+                "default": 0.75
+              }
             }
           },
           "patternSurfacing": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean", "default": false },
-              "patternThreshold": { "type": "number", "default": 0.7 },
-              "maxPerSession": { "type": "number", "default": 1 }
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "patternThreshold": {
+                "type": "number",
+                "default": 0.7
+              },
+              "maxPerSession": {
+                "type": "number",
+                "default": 1
+              }
             }
           },
           "tasteGate": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean", "default": true },
-              "maxAssociationsPerSession": { "type": "number", "default": 1 },
-              "maxPatternsPerSession": { "type": "number", "default": 1 }
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "maxAssociationsPerSession": {
+                "type": "number",
+                "default": 1
+              },
+              "maxPatternsPerSession": {
+                "type": "number",
+                "default": 1
+              }
             }
           },
           "overlays": {
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean", "default": true },
-              "autoCreateOnRecall": { "type": "boolean", "default": false },
-              "maxAgeDays": { "type": "number", "default": 30 },
-              "confidenceThreshold": { "type": "number", "default": 0.7 },
-              "maxPerSession": { "type": "number", "default": 3 },
-              "provisionalByDefault": { "type": "boolean", "default": true },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "autoCreateOnRecall": {
+                "type": "boolean",
+                "default": false
+              },
+              "maxAgeDays": {
+                "type": "number",
+                "default": 30
+              },
+              "confidenceThreshold": {
+                "type": "number",
+                "default": 0.7
+              },
+              "maxPerSession": {
+                "type": "number",
+                "default": 3
+              },
+              "provisionalByDefault": {
+                "type": "boolean",
+                "default": true
+              },
               "autoResolveContradictions": {
                 "type": "boolean",
                 "default": false
@@ -654,8 +754,14 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
-              "enabled": { "type": "boolean", "default": false },
-              "maxPairsPerRecall": { "type": "number", "default": 20 }
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "maxPairsPerRecall": {
+                "type": "number",
+                "default": 20
+              }
             }
           },
           "doctor": {
@@ -678,15 +784,42 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "default": false },
-          "idleThresholdMinutes": { "type": "number", "default": 45 },
-          "cooldownMinutes": { "type": "number", "default": 30 },
-          "maxReactivationMemories": { "type": "number", "default": 3 },
-          "maxFadedReactivationMemories": { "type": "number", "default": 1 },
-          "maxOpenThreads": { "type": "number", "default": 3 },
-          "maxCommunities": { "type": "number", "default": 2 },
-          "timeoutMs": { "type": "number", "default": 50 },
-          "visibleHints": { "type": "boolean", "default": false }
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "idleThresholdMinutes": {
+            "type": "number",
+            "default": 45
+          },
+          "cooldownMinutes": {
+            "type": "number",
+            "default": 30
+          },
+          "maxReactivationMemories": {
+            "type": "number",
+            "default": 3
+          },
+          "maxFadedReactivationMemories": {
+            "type": "number",
+            "default": 1
+          },
+          "maxOpenThreads": {
+            "type": "number",
+            "default": 3
+          },
+          "maxCommunities": {
+            "type": "number",
+            "default": 2
+          },
+          "timeoutMs": {
+            "type": "number",
+            "default": 50
+          },
+          "visibleHints": {
+            "type": "boolean",
+            "default": false
+          }
         }
       },
       "temporalContext": {
@@ -695,7 +828,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           }
         }
       },
@@ -705,7 +838,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "mode": {
             "type": "string",
@@ -713,7 +846,7 @@
               "augment",
               "apply"
             ],
-            "default": "augment"
+            "default": "apply"
           },
           "vaultPath": {
             "type": [
@@ -763,7 +896,7 @@
           },
           "requireVaultPathConfirmation": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "capabilityPack": {
             "type": "string",
@@ -813,7 +946,7 @@
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "default": false
+                "default": true
               },
               "cron": {
                 "type": "string",
@@ -856,7 +989,7 @@
                   "pending_setup",
                   "active"
                 ],
-                "default": "pending_setup"
+                "default": "active"
               }
             }
           },
@@ -866,7 +999,7 @@
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "default": false
+                "default": true
               },
               "cron": {
                 "type": "string",
@@ -905,7 +1038,7 @@
                   "pending_setup",
                   "active"
                 ],
-                "default": "pending_setup"
+                "default": "active"
               }
             }
           },
@@ -985,11 +1118,11 @@
           },
           "autoApplyLowRisk": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "dryRun": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "watch": {
             "type": "boolean",
@@ -1156,7 +1289,15 @@
               },
               "llmClassifier": {
                 "type": "boolean",
-                "default": false
+                "default": true
+              },
+              "fallbackOnError": {
+                "type": "boolean",
+                "default": true
+              },
+              "onlyWhenProviderAvailable": {
+                "type": "boolean",
+                "default": true
               }
             }
           },
@@ -1170,11 +1311,15 @@
               },
               "proposalOnly": {
                 "type": "boolean",
-                "default": true
+                "default": false
               },
               "mutateMemory": {
                 "type": "boolean",
                 "default": false
+              },
+              "writeDerivedEdges": {
+                "type": "boolean",
+                "default": true
               }
             }
           },
@@ -1239,7 +1384,7 @@
                 "properties": {
                   "enabled": {
                     "type": "boolean",
-                    "default": false
+                    "default": true
                   },
                   "maxPerRun": {
                     "type": "number",
@@ -1302,6 +1447,10 @@
               "backup": {
                 "type": "boolean",
                 "default": true
+              },
+              "promptForLegacyMigration": {
+                "type": "boolean",
+                "default": true
               }
             }
           }
@@ -1342,7 +1491,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           }
         }
       },
@@ -1393,7 +1542,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "cron": {
             "type": "string"
@@ -1405,7 +1554,8 @@
             "type": "string"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "default": "active"
           }
         }
       },
@@ -1415,7 +1565,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "cron": {
             "type": "string"
@@ -1427,7 +1577,8 @@
             "type": "string"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "default": "active"
           }
         }
       },
@@ -1461,7 +1612,7 @@
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "default": false
+                "default": true
               },
               "model": {
                 "type": "string",
@@ -1472,8 +1623,49 @@
               },
               "baseUrl": {
                 "type": "string"
+              },
+              "fallbackOnError": {
+                "type": "boolean",
+                "default": true
+              },
+              "onlyWhenProviderAvailable": {
+                "type": "boolean",
+                "default": true
               }
             }
+          }
+        }
+      },
+      "metaCognition": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "sessionThreshold": {
+            "type": "number",
+            "default": 50
+          },
+          "intervalDays": {
+            "type": "number",
+            "default": 7
+          },
+          "llmReport": {
+            "type": "boolean",
+            "default": true
+          },
+          "llmReportMode": {
+            "type": "string",
+            "default": "budgeted",
+            "enum": [
+              "budgeted"
+            ]
+          },
+          "fallbackOnError": {
+            "type": "boolean",
+            "default": true
           }
         }
       }
