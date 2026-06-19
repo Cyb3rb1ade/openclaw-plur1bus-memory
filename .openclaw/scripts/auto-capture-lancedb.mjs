@@ -4,7 +4,7 @@
  * Liest die neuesten Session-Nachrichten der drei Hauptagenten und speichert sie in LanceDB.
  *
  * Cron: alle 5 Minuten
- * Usage: OPENAI_API_KEY=... node auto-capture-lancedb.mjs
+ * Usage: node auto-capture-lancedb.mjs [agent-id...]
  *
  * v2.2.0: Gruppen-Erkennung + Sender-Attribution + saubere Textextraktion
  */
@@ -31,7 +31,39 @@ const MAX_TEXT_LEN = 15000;
 const DUPLICATE_THRESHOLD = 0.95;
 const SUMMARY_MAX_WORDS = 150;
 const MIN_TEXT_LEN = 10;
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-large";
+// ─── Plugin-Dir Auflösung ────────────────────────────────────────────────────
+const PLUR1BUS_PLUGIN_DIR = process.env.PLUR1BUS_PLUGIN_DIR
+  || join(homedir(), ".openclaw", "extensions", "memory-lancedb-namespaced");
+
+const FACTORY_PATH = join(PLUR1BUS_PLUGIN_DIR, "lib/providers/factory.js");
+const CONFIG_NORMALIZE_PATH = join(PLUR1BUS_PLUGIN_DIR, "lib/providers/config-normalize.js");
+
+async function loadProviderFactory() {
+  try {
+    const [factoryMod, normalizeMod] = await Promise.all([
+      import(FACTORY_PATH),
+      import(CONFIG_NORMALIZE_PATH),
+    ]);
+    return {
+      createEmbeddingProvider: factoryMod.createEmbeddingProvider,
+      normalizeEmbeddingConfig: normalizeMod.normalizeEmbeddingConfig,
+    };
+  } catch (e) {
+    throw new Error(
+      `[auto-capture] Provider-Factory nicht gefunden unter ${FACTORY_PATH}. ` +
+      `Ist memory-lancedb-namespaced installiert? Setze PLUR1BUS_PLUGIN_DIR. (${e.message})`
+    );
+  }
+}
+
+function readPluginEmbeddingConfig(configPath) {
+  try {
+    const cfg = JSON.parse(readFileSync(configPath, "utf8"));
+    return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.embedding || {};
+  } catch (_) {
+    return {};
+  }
+}
 
 // ─── Injected-Context-Filter (verhindert Re-Capture von PLUR1BUS-Blöcken) ───
 const INJECTED_CONTEXT_RE = /<\/?plur1bus-recall|<\/?relevant-memories|<\/?knowledge-update-reminder|<\/?adaptive-learning|RECALL SAFETY RULES|capturedBy"\s*:\s*"agent_end_capture|embeddingStatus"\s*:\s*"pending|plur1bus internal classify-recent|critical-memory-classifier|TTS-STATUS|\[cron:|heartbeat_ok|Reference UTC:|Current time:|You are a memory search agent|memory search agent\. Another model|bounded search query|Use only the available memory tools|Conversation info \(untrusted metadata\)|"chat_id"\s*:\s*"telegram:|"message_id"\s*:\s*"|"sender_id"\s*:/i;
@@ -62,38 +94,14 @@ function discoverAgents() {
   }
 }
 
-// ─── LanceDB + OpenAI imports ────────────────────────────────────────────────
+// ─── LanceDB import ──────────────────────────────────────────────────────────
 const PLUGIN_DIR = join(homedir(), ".openclaw", "extensions", "memory-lancedb-namespaced");
 const LANCEDB_PATH = join(PLUGIN_DIR, "../memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js");
-const OPENAI_PATH = join(PLUGIN_DIR, "../memory-lancedb-stock/node_modules/openai/index.js");
 
-const EMBEDDING_DIMENSIONS = {
-  "text-embedding-3-small": 1536,
-  "text-embedding-3-large": 3072,
-};
-
-let lancedb, OpenAI;
+let lancedb;
 
 async function init() {
   lancedb = await import(LANCEDB_PATH);
-  const openaiMod = await import(OPENAI_PATH);
-  OpenAI = openaiMod.default || openaiMod.OpenAI;
-}
-
-// ─── Embedding ───────────────────────────────────────────────────────────────
-function createEmbeddings(apiKey, model) {
-  const openai = new OpenAI({ apiKey });
-  const dim = EMBEDDING_DIMENSIONS[model] || 3072;
-  return {
-    dim,
-    async embed(text) {
-      const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
-      const req = { model, input: text.slice(0, 8000), encoding_format: "float" };
-      if (isOpenAi) req.dimensions = dim;
-      const resp = await openai.embeddings.create(req);
-      return Array.from(resp.data[0].embedding);
-    },
-  };
 }
 
 // ─── LanceDB ─────────────────────────────────────────────────────────────────
@@ -491,11 +499,9 @@ async function captureAgent(agentId, embeddings) {
 }
 
 async function main() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    console.error("OPENAI_API_KEY not set");
-    process.exit(1);
-  }
+  const { createEmbeddingProvider, normalizeEmbeddingConfig } = await loadProviderFactory();
+  const rawEmbeddingCfg = readPluginEmbeddingConfig(CONFIG_PATH);
+  const embCfg = normalizeEmbeddingConfig(rawEmbeddingCfg);
 
   const filterArgs = process.argv.slice(2).filter(a => !a.startsWith("--"));
   const allAgents = discoverAgents();
@@ -506,7 +512,12 @@ async function main() {
   console.log(`[main] processing ${agents.length} agents${filterArgs.length ? ` (filtered)` : ""}: ${agents.join(", ")}`);
 
   await init();
-  const embeddings = createEmbeddings(apiKey, EMBEDDING_MODEL);
+  const embeddings = createEmbeddingProvider(embCfg);
+  if (!embeddings) {
+    console.error("[auto-capture] Embedding-Provider konnte nicht initialisiert werden. " +
+      "Prüfe openclaw.json → plugins.entries.memory-lancedb-namespaced.embedding");
+    process.exit(1);
+  }
 
   let totalStored = 0, totalCands = 0, errors = 0;
   for (const agent of agents) {
