@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { smokeTestExports } from "../scripts/lib/deploy-integrity.mjs";
@@ -10,6 +10,18 @@ let dir;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "installer-stub-guard-test-"));
   mkdirSync(join(dir, "lib"), { recursive: true });
+});
+
+describe("install-memory-system non-interactive guard", () => {
+  it("supports non-interactive defaults and writes the PLUR1BUS start notice", () => {
+    const script = readFileSync(join(process.cwd(), "scripts", "install-memory-system.sh"), "utf8");
+    assert.match(script, /--accept-defaults/);
+    assert.match(script, /--non-interactive/);
+    assert.match(script, /NON_INTERACTIVE=1/);
+    assert.match(script, /plur1bus-pending-notice\.json/);
+    assert.match(script, /\+\+\+ PLUR1BUS — Make your agent yours! \+\+\+/);
+    assert.match(script, /\/plur1bus start/);
+  });
 });
 
 afterEach(() => {
