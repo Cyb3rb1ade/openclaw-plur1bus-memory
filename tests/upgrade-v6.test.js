@@ -56,7 +56,7 @@ describe("Upgrade-Simulation: Alte Config ohne neue Felder", () => {
   });
 
   it("Schema-Defaults für Runtime-Felder sind korrekt", () => {
-    assert.strictEqual(getSchemaDefault("runtime.embeddingCacheEnabled"), false);
+    assert.strictEqual(getSchemaDefault("runtime.embeddingCacheEnabled"), true);
     assert.strictEqual(getSchemaDefault("runtime.metricsDebounceMs"), 5000);
   });
 
@@ -91,10 +91,10 @@ describe("Upgrade-Simulation: Alte Config ohne neue Felder", () => {
     const cfg = {};
     const runtimeCfg = cfg.runtime || {};
 
-    const embeddingCacheEnabled = runtimeCfg.embeddingCacheEnabled ?? false;
+    const embeddingCacheEnabled = runtimeCfg.embeddingCacheEnabled ?? true;
     const metricsDebounceMs = runtimeCfg.metricsDebounceMs ?? 5000;
 
-    assert.strictEqual(embeddingCacheEnabled, false);
+    assert.strictEqual(embeddingCacheEnabled, true);
     assert.strictEqual(metricsDebounceMs, 5000);
   });
 });

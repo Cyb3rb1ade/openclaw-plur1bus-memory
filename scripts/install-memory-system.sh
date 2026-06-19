@@ -69,6 +69,8 @@ Optionen:
   --dry-run              Vorschau ohne Änderungen
   --update-plugin-only   Nur Plugin-Dateien und Registry aktualisieren; Memory-Daten, Embeddings und Provider-Config bleiben erhalten
   --rollback             Letzten Snapshot wiederherstellen
+  --accept-defaults      Keine Prompts; sichere Defaults verwenden
+  --non-interactive      Alias für --accept-defaults
   --legacy-host-cron     Legacy-User-Crontab-Jobs für GC/KNOWLEDGE explizit einrichten
   -h, --help             Diese Hilfe anzeigen
 EOF
@@ -123,6 +125,11 @@ confirm() {
     [[ "$default" =~ ^[Yy]$ ]]
     return $?
   fi
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    info "Non-interactive: $prompt (default=$default)"
+    [[ "$default" =~ ^[Yy]$ ]]
+    return $?
+  fi
   read -rp "$prompt [y/n, default=$default]: " yn
   yn="${yn:-$default}"
   [[ "$yn" =~ ^[Yy]$ ]]
@@ -135,6 +142,11 @@ prompt_choice() {
   local val valid
   if [[ "$DRY_RUN" == "1" ]]; then
     dryrun "Würde Auswahl fragen: $prompt_text (default=$default_val; Optionen: ${choices[*]})"
+    printf -v "$var_name" '%s' "$default_val"
+    return 0
+  fi
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    info "Non-interactive: $prompt_text -> $default_val"
     printf -v "$var_name" '%s' "$default_val"
     return 0
   fi
@@ -166,6 +178,11 @@ prompt_secret() {
     printf -v "$var_name" '%s' "$default_hint"
     return 0
   fi
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    info "Non-interactive: Secret-Prompt übersprungen: $prompt_text"
+    printf -v "$var_name" '%s' "$default_hint"
+    return 0
+  fi
   read -rs val
   echo
   printf -v "$var_name" '%s' "$val"
@@ -176,6 +193,11 @@ prompt_input() {
   local val
   if [[ "$DRY_RUN" == "1" ]]; then
     dryrun "Würde Eingabe abfragen: $prompt_text [$(display_default "$prompt_text" "$default_val")]"
+    printf -v "$var_name" '%s' "$default_val"
+    return 0
+  fi
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    info "Non-interactive: $prompt_text -> $(display_default "$prompt_text" "$default_val")"
     printf -v "$var_name" '%s' "$default_val"
     return 0
   fi
@@ -259,6 +281,7 @@ DRY_RUN=0
 UPDATE_ONLY=0
 ROLLBACK=0
 LEGACY_HOST_CRON=0
+NON_INTERACTIVE=0
 TARGET=""
 
 for arg in "$@"; do
@@ -267,6 +290,7 @@ for arg in "$@"; do
     --dry-run)            DRY_RUN=1 ;;
     --update-plugin-only) UPDATE_ONLY=1 ;;
     --rollback)           ROLLBACK=1 ;;
+    --accept-defaults|--non-interactive) NON_INTERACTIVE=1 ;;
     --legacy-host-cron)    LEGACY_HOST_CRON=1 ;;
     --*)                  error "Unbekannte Option: $arg"; usage; exit 2 ;;
     *) TARGET="$arg" ;;
@@ -317,12 +341,17 @@ if [[ -z "$TARGET" ]]; then
     echo -e "${BOLD}Gefundene OpenClaw-Installation:${RESET}"
     echo "  ${FOUND_INSTALLS[0]}"
     echo
-    read -rp "Diese Installation verwenden? [Y/n]: " yn
-    yn="${yn:-y}"
-    if [[ ! "$yn" =~ ^[Yy]$ ]]; then
-      read -rp "Pfad manuell eingeben: " TARGET
-    else
+    if [[ "$NON_INTERACTIVE" == "1" ]]; then
+      info "Non-interactive: verwende gefundene Installation ${FOUND_INSTALLS[0]}"
       TARGET="${FOUND_INSTALLS[0]}"
+    else
+      read -rp "Diese Installation verwenden? [Y/n]: " yn
+      yn="${yn:-y}"
+      if [[ ! "$yn" =~ ^[Yy]$ ]]; then
+        read -rp "Pfad manuell eingeben: " TARGET
+      else
+        TARGET="${FOUND_INSTALLS[0]}"
+      fi
     fi
 
   else
@@ -341,18 +370,23 @@ except: print('?')
     done
     echo "  [m] Pfad manuell eingeben"
     echo
-    while true; do
-      read -rp "Auswahl [1-${#FOUND_INSTALLS[@]}]: " sel
-      if [[ "$sel" == "m" ]]; then
-        read -rp "Pfad: " TARGET
-        break
-      elif [[ "$sel" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= ${#FOUND_INSTALLS[@]} )); then
-        TARGET="${FOUND_INSTALLS[$((sel-1))]}"
-        break
-      else
-        warn "Ungültige Auswahl. Bitte Zahl zwischen 1 und ${#FOUND_INSTALLS[@]} eingeben."
-      fi
-    done
+    if [[ "$NON_INTERACTIVE" == "1" ]]; then
+      TARGET="${FOUND_INSTALLS[0]}"
+      info "Non-interactive: verwende erste gefundene Installation $TARGET"
+    else
+      while true; do
+        read -rp "Auswahl [1-${#FOUND_INSTALLS[@]}]: " sel
+        if [[ "$sel" == "m" ]]; then
+          read -rp "Pfad: " TARGET
+          break
+        elif [[ "$sel" =~ ^[0-9]+$ ]] && (( sel >= 1 && sel <= ${#FOUND_INSTALLS[@]} )); then
+          TARGET="${FOUND_INSTALLS[$((sel-1))]}"
+          break
+        else
+          warn "Ungültige Auswahl. Bitte Zahl zwischen 1 und ${#FOUND_INSTALLS[@]} eingeben."
+        fi
+      done
+    fi
   fi
 
   [[ -z "$TARGET" ]] && { error "Kein Ziel gewählt."; exit 1; }
@@ -1465,6 +1499,15 @@ echo
 if [[ "$DRY_RUN" == "1" ]]; then
   warn "DRY-RUN: Keine Änderungen vorgenommen. Erneut ohne --dry-run ausführen."
   exit 0
+fi
+
+if [[ "$NON_INTERACTIVE" == "1" ]]; then
+  NOTICE_PATH="$TARGET_DIR/state/plur1bus-pending-notice.json"
+  NOTICE_TEXT=$'+++ PLUR1BUS — Make your agent yours! +++\n\nPlease complete the installation by running:\n\n/plur1bus start'
+  NOTICE_JSON=$(NOTICE_TEXT="$NOTICE_TEXT" node -e 'console.log(JSON.stringify({ kind: "plur1bus_start_notice", text: process.env.NOTICE_TEXT, createdAt: new Date().toISOString(), ttlMs: 604800000 }, null, 2))')
+  run_target "mkdir -p '$TARGET_DIR/state'"
+  write_target_file "$NOTICE_PATH" "$NOTICE_JSON"
+  ok "PLUR1BUS Start Notice bereitgestellt: $NOTICE_PATH"
 fi
 
 echo -e "${BOLD}Nächste Schritte:${RESET}"

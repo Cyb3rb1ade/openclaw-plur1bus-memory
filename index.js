@@ -89,7 +89,20 @@ import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import { resolveLocale, readSoulToneCached, pickTone, t } from "./lib/i18n.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions, computeContentHash } from "./lib/jobs/schicht15-tracker.js";
-import { isApplyBlocked, detectPendingFeatures, recommendedProfile, safeProfile, applyFeatureProfile, detectObsidianVaults, describeProfileDiff } from "./lib/setup/feature-profiles.js";
+import {
+  PLUGIN_KEY,
+  applyFullExperiencePolicy,
+  applyFeatureProfile,
+  consumePlur1busStartNotice,
+  describeProfileDiff,
+  detectMissingCoreFeatures,
+  detectObsidianVaults,
+  detectPendingFeatures,
+  isApplyBlocked,
+  recommendedProfile,
+  renderPlur1busStartStatus,
+  safeProfile,
+} from "./lib/setup/feature-profiles.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
@@ -1640,22 +1653,20 @@ const plugin = {
   kind: "extension",
 
   register(api) {
-    const cfg = api.pluginConfig || {};
+    const rawCfg = api.pluginConfig || {};
+    const cfg = applyFullExperiencePolicy(rawCfg);
     pluginLogger = api.logger;
 
-    // v6 Feature Profile Confirmation Gate
+    // Full Experience setup notices: pending setup still warns, but feature
+    // selection itself is config-as-truth and no prompted/confirmed history is required.
     const applyBlocked = isApplyBlocked(cfg);
     if (applyBlocked.blocked) {
-      if (applyBlocked.reason === "features_not_confirmed") {
-        api.logger.warn("memory-lancedb-namespaced: FEATURES NOT CONFIRMED. Run /plur1bus setup to confirm the Recommended Profile and activate v6 features.");
-      } else if (applyBlocked.reason === "pending_setup") {
+      if (applyBlocked.reason === "pending_setup") {
         const pending = detectPendingFeatures(cfg);
         for (const p of pending) {
-          api.logger.warn(`memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Confirm before apply.`);
+          api.logger.warn(`memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`);
         }
       }
-      // Do NOT hard-block plugin registration — core memory still works.
-      // But warn prominently so the user knows v6 features are gated.
     }
 
     registerOpenClawMemoryEmbeddingProviders(api, cfg);
@@ -1712,7 +1723,7 @@ const plugin = {
 
     // Temporal continuity context config
     const temporalContextCfg = cfg.temporalContext || {};
-    const temporalContextEnabled = temporalContextCfg.enabled === true;
+    const temporalContextEnabled = temporalContextCfg.enabled !== false;
 
     // P2 Recall Decision Trace config
     const traceCfg = cfg.recall?.decisionTrace || {};
@@ -1735,6 +1746,7 @@ const plugin = {
     const mergingRequested = mergingCfg.enabled === true;
     const mergingModel = typeof mergingCfg.model === "string" ? mergingCfg.model.trim() : "";
     const mergingEnabled = mergingRequested && mergingModel !== "";
+    const mergingAutoApply = mergingCfg.autoApply === true;
     const mergingThreshold = mergingCfg.threshold ?? 0.70;
     const mergingLlmCfg = mergingEnabled ? {
       model: mergingModel,
@@ -1756,7 +1768,7 @@ const plugin = {
       : mergingModel;
     const schicht15Enabled = schicht15Requested && schicht15Model !== "";
     const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
-    const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 0;
+    const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 3;
     const schicht15LlmCfg = schicht15Enabled ? {
       model: schicht15Model,
       baseUrl: schicht15Cfg.baseUrl || mergingCfg.baseUrl || undefined,
@@ -1945,7 +1957,15 @@ const plugin = {
     const emotionalPool = createEmotionalStatePool();
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? new LocalTransformersEmbeddingProvider({ ...normalizedEmbeddingCfg.local, dimensions: dimensions || vectorDim })
-      : new OpenAIEmbeddingProvider({ ...normalizedEmbeddingCfg, apiKey: embeddingCfg.apiKey, fallback: embeddingCfg.fallback, dimensions: dimensions || vectorDim });
+      : new OpenAIEmbeddingProvider({
+          ...normalizedEmbeddingCfg,
+          apiKey: embeddingCfg.apiKey,
+          fallback: embeddingCfg.fallback,
+          dimensions: dimensions || vectorDim,
+          embeddingCacheEnabled: cfg.runtime?.embeddingCacheEnabled,
+          cacheMaxEntries: cfg.runtime?.embeddingCacheMaxEntries ?? normalizedEmbeddingCfg.cacheMaxEntries,
+          cacheTtlMs: cfg.runtime?.embeddingCacheTtlMs ?? normalizedEmbeddingCfg.cacheTtlMs,
+        });
 
     // Reranker (optional — provider-aware since v3.1)
     // Cohere → local-transformers fallback wenn Cohere API fehlschlägt
@@ -2027,7 +2047,7 @@ const plugin = {
         }
 
         // 2. Merge check (+ conflict detection for decision category)
-        if (mergingEnabled && mergingLlmCfg) {
+        if (mergingEnabled && mergingLlmCfg && mergingAutoApply) {
           const mergeCandidate = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
           if (mergeCandidate) {
             addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
@@ -2295,6 +2315,10 @@ const plugin = {
               const subKey = (sub || "").toLowerCase();
               const internalAgent = commandCtx.agentId || "default";
               if (subKey === "consolidate-daily") {
+                const dcCfg = cfg.dailyConsolidation || {};
+                if (dcCfg.enabled === false) {
+                  return formatJsonCommandResult({ job: "consolidate-daily", skipped: true, reason: "dailyConsolidation_disabled" });
+                }
                 const rawDb = pool.getDb(internalAgent);
                 await rawDb.init();
                 const result = await runDailyConsolidation(rawDb, internalAgent, {
@@ -2504,6 +2528,25 @@ const plugin = {
               }
               return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check", "meta-reflect"] });
             }
+            if (actionKey === "start") {
+              const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
+              const rawMissing = detectMissingCoreFeatures(rawCfg);
+              const statusText = renderPlur1busStartStatus(cfg, {
+                vaultPath: cfg.obsidianBridge?.vaultPath || null,
+                workspaceRoot: cfg.obsidianBridge?.workspaceRoot || null,
+                reviewRoot: cfg.obsidianBridge?.reviewRoot || "plur1bus",
+              });
+              const notice = consumePlur1busStartNotice(openclawHome);
+              const lines = [];
+              if (notice) lines.push(notice, "");
+              lines.push(statusText);
+              if (rawMissing.length > 0) {
+                lines.push("", "New core features defaulted on for this update:");
+                for (const feature of rawMissing) lines.push(`- ${feature.label}`);
+              }
+              lines.push("", "To intentionally reapply the full core selection, run: /plur1bus setup recommended --full");
+              return { text: lines.join("\n") };
+            }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
               const denied = checkAuth(commandCtx, { destructive: true });
@@ -2528,7 +2571,7 @@ const plugin = {
                 } catch (err) {
                   return { error: `openclaw.json not readable: ${err.message}` };
                 }
-                const pluginKey = "memory-lancedb-namespaced";
+                const pluginKey = PLUGIN_KEY;
                 const existingPluginCfg = rawCfg.plugins?.entries?.[pluginKey]?.config || null;
 
                 // Auto-detect Obsidian vaults before applying profile
@@ -2540,7 +2583,9 @@ const plugin = {
                 // Compute diff before applying (shows what changes)
                 const diff = describeProfileDiff(existingPluginCfg, profile);
 
-                const merged = applyFeatureProfile(rawCfg, profile, { confirmed: true });
+                const merged = applyFeatureProfile(rawCfg, profile, {
+                  forceFullExperience: tokens.includes("--full"),
+                });
                 const pendingInner = detectPendingFeatures(merged.plugins?.entries?.[pluginKey]?.config);
                 try {
                   const tmp = `${openclawConfigPath}.tmp-${process.pid}-${Date.now()}`;
@@ -2569,10 +2614,7 @@ const plugin = {
 
               // Install type header
               if (diff.isUpdate) {
-                const confirmedAt = existingPluginCfg?.featuresConfirmedAt
-                  ? new Date(existingPluginCfg.featuresConfirmedAt).toLocaleDateString(lang === "de" ? "de-DE" : "en-US")
-                  : "?";
-                lines.push(t("plur1bus.setup_update_mode", { lang, tone, vars: { date: confirmedAt } }));
+                lines.push(t("plur1bus.setup_update_mode", { lang, tone, vars: { date: "current config" } }));
               } else {
                 lines.push(t("plur1bus.setup_fresh_install", { lang, tone }));
               }
@@ -2828,6 +2870,7 @@ const plugin = {
           };
         const plur1busCommands = [
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
+          { name: "plur1bus_start", description: "Complete PLUR1BUS installation and show Full Experience status.", acceptsArgs: false, prefixTokens: ["start"] },
           { name: "plur1bus_status", description: "Show PLUR1BUS memory status.", acceptsArgs: true, prefixTokens: ["status"] },
           { name: "plur1bus_doctor", description: "Run PLUR1BUS diagnostics.", acceptsArgs: true, prefixTokens: ["doctor"] },
           { name: "plur1bus_state", description: "Show PLUR1BUS system state.", acceptsArgs: false, prefixTokens: ["state"] },
@@ -3967,7 +4010,7 @@ const plugin = {
               }
 
               // 2. Merge check (+ conflict detection for decision category)
-              if (mergingEnabled && mergingLlmCfg) {
+              if (mergingEnabled && mergingLlmCfg && mergingAutoApply) {
                 const mergeCandidate = await db.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
                 if (mergeCandidate) {
                   addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
@@ -4412,6 +4455,10 @@ const plugin = {
           event.prompt === "__openclaw_memory_core_light_sleep__" ||
           event.prompt === "__openclaw_memory_core_rem_sleep__"
         ) { return neoContext ? { prependContext: neoContext } : undefined; }
+        const pendingStartNotice = consumePlur1busStartNotice(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
+        const startNoticeContext = pendingStartNotice
+          ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
+          : "";
         const agentId = ctx?.agentId;
         const db = pool.getDb(agentId);       // write-db — used for GC/maintenance
         const readDbs = pool.getReadDbs(agentId); // read namespaces — used for recall
@@ -4534,7 +4581,8 @@ const plugin = {
           }
           trace = pipelineTrace || trace;
           if (ordered.length === 0 && canonicalHits.length === 0) {
-            return neoContext ? { prependContext: neoContext } : undefined;
+            const noMemoryContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
+            return noMemoryContext ? { prependContext: noMemoryContext } : undefined;
           }
 
           api.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
@@ -4928,10 +4976,11 @@ const plugin = {
           } catch (reminderErr) {
             api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
-          return { prependContext: [neoContext, fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
+          return { prependContext: [neoContext, startNoticeContext, fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
         } catch (err) {
           api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
-          if (neoContext) return { prependContext: neoContext };
+          const fallbackContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
+          if (fallbackContext) return { prependContext: fallbackContext };
         }
         });
         if (scheduledRecall.ok) {
@@ -4975,6 +5024,10 @@ const plugin = {
           return undefined;
         }
         if (!ctx?.workspaceDir) return undefined;
+        const pendingStartNotice = consumePlur1busStartNotice(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
+        const startNoticeContext = pendingStartNotice
+          ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
+          : "";
 
         // Knowledge-update + conflict-review nudges (shared, localized helper;
         // conflict-log is read only once). #9 dedup + #11 i18n.
@@ -5029,8 +5082,8 @@ const plugin = {
         } catch (reminderErr) {
           api.logger.warn(`plur1bus-reminder: nudge injection failed (auto-recall off): ${String(reminderErr)}`);
         }
-        if (nudge || conflictNudge || timeContext || temporalContinuityContext || reminderNudge) {
-          return { prependContext: [nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
+        if (nudge || conflictNudge || startNoticeContext || timeContext || temporalContinuityContext || reminderNudge) {
+          return { prependContext: [startNoticeContext, nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
         }
       });
     }

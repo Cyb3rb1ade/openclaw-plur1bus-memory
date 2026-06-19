@@ -5,7 +5,7 @@
  *   1. Recommended Profile erkannt
  *   2. Rate-Limit für Daily Consolidation
  *   3. Status Command: echte cardCount, transparenter Sync
- *   4. Feature Confirmation Gate blockiert Apply
+ *   4. Full Experience Policy writes no feature-selection history
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
@@ -18,22 +18,23 @@ import { checkJobRateLimit, recordJobRun } from "../lib/job-rate-limit.js";
 import { collectStatusData } from "../lib/telegram-commands/status-data.js";
 
 describe("recommended-mode-full", () => {
-  it("recommendedProfile has all features enabled with pending_setup where needed", () => {
+  it("recommendedProfile has all full-experience features enabled", () => {
     const p = recommendedProfile();
-    assert.strictEqual(p.setupProfile, "recommended");
-    assert.strictEqual(p.featuresConfirmedAt, null);
     assert.strictEqual(p.morningReview.enabled, true);
-    assert.strictEqual(p.morningReview.status, "pending_setup");
+    assert.strictEqual(p.morningReview.status, "active");
     assert.strictEqual(p.eveningReview.enabled, true);
-    assert.strictEqual(p.eveningReview.status, "pending_setup");
+    assert.strictEqual(p.eveningReview.status, "active");
     assert.strictEqual(p.reranker.enabled, true);
     assert.strictEqual(p.reranker.fallbackOnError, true);
     assert.strictEqual(p.reranker.timeoutMs, 2500);
     assert.strictEqual(p.merging.enabled, true);
-    assert.strictEqual(p.merging.autoApply, false);
+    assert.strictEqual(p.merging.autoApply, true);
+    assert.strictEqual(p.merging.autoApplyRisk, "low-only");
     assert.strictEqual(p.schicht15.enabled, true);
     assert.strictEqual(p.obsidianBridge.enabled, true);
-    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, false);
+    assert.strictEqual(p.temporalContext.enabled, true);
+    assert.strictEqual(p.metaCognition.enabled, true);
   });
 
   it("applyFeatureProfile merges only missing keys", () => {
@@ -44,15 +45,14 @@ describe("recommended-mode-full", () => {
     assert.strictEqual(cfg.schicht15.enabled, true, "missing key added");
   });
 
-  it("isApplyBlocked when features not confirmed", () => {
+  it("isApplyBlocked does not require feature-selection history", () => {
     const p = recommendedProfile();
     const blocked = isApplyBlocked(p);
-    assert.strictEqual(blocked.blocked, true);
-    assert.strictEqual(blocked.reason, "features_not_confirmed");
+    assert.strictEqual(blocked.blocked, false);
   });
 
   it("isApplyBlocked when pending setup exists", () => {
-    const p = { ...recommendedProfile(), featuresConfirmedAt: new Date().toISOString() };
+    const p = { ...recommendedProfile(), morningReview: { enabled: true, status: "pending_setup" } };
     const blocked = isApplyBlocked(p);
     assert.strictEqual(blocked.blocked, true);
     assert.strictEqual(blocked.reason, "pending_setup");

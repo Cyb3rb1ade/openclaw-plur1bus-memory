@@ -17,11 +17,18 @@ function makeTmpConfig(initial = {}) {
   return { path, dir };
 }
 
-test('FEATURE_WHITELIST hat die vier spezifizierten Features', () => {
+test('FEATURE_WHITELIST enthält Legacy-Aliase und Full-Experience-Core-Features', () => {
   assert.ok(FEATURE_WHITELIST.vaultSync);
   assert.ok(FEATURE_WHITELIST.kritischPush);
   assert.ok(FEATURE_WHITELIST.dailyConsolidation);
   assert.ok(FEATURE_WHITELIST.emotionTier);
+  assert.ok(FEATURE_WHITELIST.temporalContext);
+  assert.ok(FEATURE_WHITELIST.embeddingCache);
+  assert.ok(FEATURE_WHITELIST.reranker);
+  assert.ok(FEATURE_WHITELIST.metaCognition);
+  assert.ok(FEATURE_WHITELIST.skillMiner);
+  assert.ok(FEATURE_WHITELIST.semanticGraph);
+  assert.ok(FEATURE_WHITELIST.soulPatch);
   assert.deepStrictEqual(
     FEATURE_WHITELIST.vaultSync.configPath,
     ['plugins', 'entries', 'memory-lancedb-namespaced', 'config', 'obsidianBridge', 'enabled'],
@@ -109,7 +116,9 @@ test('renderToggleResult Fehler enthält Feature-Liste', () => {
   assert.match(out, /emotionTier/);
 });
 
-test('listFeatures liefert alle vier Featurenamen', () => {
+test('listFeatures liefert Legacy- und Core-Featurenamen', () => {
   const list = listFeatures();
-  assert.deepStrictEqual(list.sort(), ['dailyConsolidation', 'emotionTier', 'kritischPush', 'vaultSync']);
+  for (const expected of ['dailyConsolidation', 'emotionTier', 'kritischPush', 'vaultSync', 'temporalContext', 'embeddingCache', 'reranker', 'metaCognition', 'skillMiner', 'semanticGraph', 'soulPatch']) {
+    assert.ok(list.includes(expected), `missing ${expected}`);
+  }
 });
