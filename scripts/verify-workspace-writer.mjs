@@ -181,7 +181,13 @@ export async function run(options = {}) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  run().then((result) => process.exit(result.exitCode)).catch((err) => {
+  let env = process.env;
+  const openclawHomeIndex = process.argv.indexOf("--openclaw-home");
+  if (openclawHomeIndex !== -1 && process.argv[openclawHomeIndex + 1]) {
+    env = { ...process.env, OPENCLAW_HOME: process.argv[openclawHomeIndex + 1] };
+  }
+
+  run({ env }).then((result) => process.exit(result.exitCode)).catch((err) => {
     console.error("[workspace-writer] unexpected error:", err.message);
     process.exit(2);
   });
