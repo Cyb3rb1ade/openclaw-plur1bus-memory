@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -10,6 +11,10 @@ import {
   renderTemporalContext,
   formatTemporalContinuityContext,
 } from "../lib/temporal-context.js";
+import { recordActivity } from "../lib/session-time.js";
+import { shouldSkipAutoRecallForInternalTurn } from "../lib/runtime-scheduler.js";
+
+const MS_PER_HOUR = 60 * 60 * 1000;
 
 
 const TIMEZONE = "Europe/Berlin";
@@ -23,6 +28,12 @@ function isoBeforeNow(ms) {
 function expectedLocalNow() {
   return new Date(FIXED_NOW)
     .toLocaleString("sv-SE", { timeZone: TIMEZONE, hour12: false })
+    .slice(0, 16);
+}
+
+function expectedLocalTime(value, timezone = TIMEZONE) {
+  return new Date(value)
+    .toLocaleString("sv-SE", { timeZone: timezone, hour12: false })
     .slice(0, 16);
 }
 
@@ -256,6 +267,109 @@ describe("temporal continuity context", () => {
       assert.ok(result.includes("Gap bucket: same_day"));
       assert.ok(result.includes("6 hours"));
       assert.ok(result.includes("Never pretend to have experienced waiting"));
+    });
+
+    it("recordActivity ordering: uses the previous timestamp, not a newly recorded one", async () => {
+      const now = Date.parse("2026-06-18T21:14:00.000Z");
+      const previousUserTurnAt = now - 6 * MS_PER_HOUR;
+
+      const runStatePath = join(tmpDir, "run-state.json");
+      const seededState = {
+        sessionTime: { "ws-1": { "agent-1": { lastActivityAt: previousUserTurnAt } } },
+      };
+      await writeFile(runStatePath, JSON.stringify(seededState, null, 2), "utf8");
+
+      // Capture the previous activity before recording the current turn, as the
+      // production hook does in index.js.
+      const capturedPrevious = previousUserTurnAt;
+      await recordActivity("agent-1", "ws-1", tmpDir);
+
+      const result = await formatTemporalContinuityContext(
+        "agent-1",
+        "ws-1",
+        tmpDir,
+        {
+          enabled: true,
+          lang: "en",
+          now: capturedPrevious + 6 * MS_PER_HOUR,
+          previousUserTurnAt: capturedPrevious,
+          timezone: TIMEZONE,
+        }
+      );
+
+      assert.ok(result.includes("<temporal-context>"));
+      assert.ok(result.includes("Gap bucket: same_day"));
+      assert.ok(result.includes("6 hours"));
+    });
+
+    it("second user turn sees the first turn as the previous turn", async () => {
+      const T = Date.parse("2026-06-18T18:00:00.000Z");
+
+      const runStatePath = join(tmpDir, "run-state.json");
+      const seededState = {
+        sessionTime: { "ws-1": { "agent-1": { lastActivityAt: T } } },
+      };
+      await writeFile(runStatePath, JSON.stringify(seededState, null, 2), "utf8");
+
+      const result = await formatTemporalContinuityContext(
+        "agent-1",
+        "ws-1",
+        tmpDir,
+        {
+          enabled: true,
+          lang: "en",
+          now: T + 2 * 60 * 1000,
+          timezone: TIMEZONE,
+        }
+      );
+
+      assert.ok(result.includes("<temporal-context>"));
+      assert.ok(result.includes("Gap bucket: immediate"));
+      assert.ok(
+        result.includes(`Previous user-visible turn: ${expectedLocalTime(T, TIMEZONE)}`),
+        "rendered previous turn time must match the seeded first turn"
+      );
+    });
+
+    it("does not treat internal/background activity as a user-visible turn", async () => {
+      const T = Date.parse("2026-06-18T18:00:00.000Z");
+
+      const runStatePath = join(tmpDir, "run-state.json");
+      const seededState = {
+        sessionTime: { "ws-1": { "agent-1": { lastActivityAt: T } } },
+      };
+      await writeFile(runStatePath, JSON.stringify(seededState, null, 2), "utf8");
+
+      const result = await formatTemporalContinuityContext(
+        "agent-1",
+        "ws-1",
+        tmpDir,
+        {
+          enabled: true,
+          lang: "en",
+          now: T + 2 * 60 * 1000,
+          previousUserTurnAt: T,
+          timezone: TIMEZONE,
+        }
+      );
+
+      assert.ok(result.includes("<temporal-context>"));
+      assert.ok(result.includes("Gap bucket: immediate"));
+
+      // formatTemporalContinuityContext must not mutate the stored activity
+      // timestamp itself; only the caller (index.js) records activity.
+      const stateAfter = JSON.parse(await (await import("node:fs/promises")).readFile(runStatePath, "utf8"));
+      assert.strictEqual(
+        stateAfter.sessionTime["ws-1"]["agent-1"].lastActivityAt,
+        T,
+        "stored lastActivityAt must remain unchanged"
+      );
+
+      // Background markers must still be skipped by the runtime scheduler so
+      // cron/heartbeat/background turns never reach this user-visible path.
+      assert.strictEqual(shouldSkipAutoRecallForInternalTurn({ origin: "cron" }, {}), true);
+      assert.strictEqual(shouldSkipAutoRecallForInternalTurn({ kind: "heartbeat" }, {}), true);
+      assert.strictEqual(shouldSkipAutoRecallForInternalTurn({ kind: "background" }, {}), true);
     });
   });
 });
