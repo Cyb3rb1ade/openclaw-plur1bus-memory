@@ -5,6 +5,32 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.7.0] — 2026-06-18
+
+### Added
+- Provider Wizard: interaktive Wahl zwischen OpenAI und lokalem Embedding (intfloat/multilingual-e5-small)
+- Provider Wizard: Reranker-Wahl Cohere / lokaler BGE / disabled / Advanced
+- `lib/providers/factory.js`: gemeinsame Provider-Factory für index.js + auto-capture
+- `lib/providers/dimension-guard.js`: Status-Objekt, blockiert Provider-Wechsel bei unknown
+- `lib/namespace-config.js`: recallReadNamespaces-Semantik, write/legacy-readonly-Trennung
+- `lib/multi-namespace-pool.js`: MultiNamespacePool — ein AgentDbPool pro Namespace
+- `scripts/provider-wizard.mjs`: i18n-konformer Node-Wizard (alle Texte via lib/i18n.js)
+- `scripts/reindex-provider.mjs`: Dry-Run/Report-Only Scaffold (kein --apply ohne Folgepatch)
+- i18n: `setup.reranker.*` + `setup.embedding.*` Keys (de + en)
+- `apiKeyEnv` als bevorzugtes Credential-Schema in normalizeEmbeddingConfig + normalizeRerankerConfig
+- `resolveApiKey(cfg, {defaultEnv, optional, label})` — provider-sicher, kein globaler OPENAI-Fallback
+
+### Changed
+- `DEFAULT_LOCAL_RERANKER_MODEL`: Alibaba-NLP/gte-reranker-modernbert-base → BAAI/bge-reranker-v2-m3
+- `auto-capture-lancedb.mjs`: liest Plugin-Config aus openclaw.json via PLUR1BUS_PLUGIN_DIR, kein harter OPENAI_API_KEY-Check
+- `index.js`: Pool-Initialisierung → MultiNamespacePool; Store → getWriteDb; Recall → getReadDbs mit single/multi-namespace Branch
+- `ChainedRerankerProvider`: null-Fallback sicher (kein Crash bei fallbackProvider=disabled)
+- Cohere-Fallback default: `fallbackProvider=disabled` statt Auto-Local-BGE
+
+### Fixed
+- auto-capture: OPENAI_API_KEY nicht mehr aus process.env erforderlich (import aus PLUR1BUS_PLUGIN_DIR)
+- ChainedRerankerProvider: constructor und rerank() crashen nicht mehr bei fallback=null
+
 ## [6.6.3] — 2026-06-18 — workspaceKey Schema Migration
 
 ### Fixed
