@@ -5,9 +5,14 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
-## [6.7.0] — 2026-06-18
+## [6.7.0] — 2026-06-19
 
 ### Added
+- **Full Experience Defaults** (`lib/setup/feature-profiles.js`): 28 `CORE_FEATURES` sind default ON. Frische Installs bekommen die vollständige PLUR1BUS-Experience. Updates bewahren konfigurierte Werte; fehlende neue Core-Features werden als enabled-Default ergänzt (opt-out, nicht opt-in).
+- **`/plur1bus start`** — Installations-Abschluss-Command: zeigt aktive Features, deaktivierte Features, Safety-Gates und Obsidian/Review/Dashboard-Status. Schreibt keine Feature-Selection-History.
+- **Non-interactive Start Notice** — Pending-Notice-System (`writePlur1busStartNotice` / `consumePlur1busStartNotice`): Bei Non-Interactive-Updates wird eine Startup-Notice nach `~/.openclaw/state/plur1bus-pending-notice.json` geschrieben und beim nächsten Turn consume-after-display in `<plur1bus-start-notice>` injiziert.
+- **Temporal Continuity Context** (`lib/temporal-context.js`): Injiziert bei jedem Turn den aktuellen Timestamp, das Delta seit dem letzten User-Turn und einen Gap-Bucket-Hint in `<temporal-context>`. Default ON, nie als Memory gespeichert.
+- **`applyFullExperiencePolicy`** — Merge-Logik: Missing Core Features werden als enabled ergänzt; `stripFeatureSelectionHistory` entfernt `featurePolicy`, `featuresConfirmedAt`, `setupProfile` bei jedem Schreibvorgang.
 - Provider Wizard: interaktive Wahl zwischen OpenAI und lokalem Embedding (intfloat/multilingual-e5-small)
 - Provider Wizard: Reranker-Wahl Cohere / lokaler BGE / disabled / Advanced
 - `lib/providers/factory.js`: gemeinsame Provider-Factory für index.js + auto-capture
