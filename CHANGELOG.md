@@ -5,6 +5,11 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.7.1] — 2026-06-20 — Reranker Bugfix
+
+### Fixed
+- **Reranker: `local-transformers` kein automatischer Fallback mehr** (`index.js`): Bei Cohere-Reranker-Config wurde `LocalTransformersRerankerProvider` (ONNX/HuggingFace) immer instanziert, auch wenn `fallbackProvider` nicht gesetzt war. Das blockierte den Node.js-Event-Loop für 3–8 Sekunden pro Session-Start und erhöhte den Gateway-RSS auf 1.5–1.7 GiB. Fix: `LocalTransformersRerankerProvider` wird nur noch erstellt wenn `rerankerCfg.fallbackProvider === "local-transformers"` explizit in der Config steht. Default (kein `fallbackProvider` oder `"disabled"`) verwendet Cohere direkt ohne lokalen Fallback. Spiegelt das korrekte Verhalten aus `lib/providers/factory.js`.
+
 ## [6.7.0] — 2026-06-19 — PLUR1BUS Full Experience Defaults
 
 ### Added
