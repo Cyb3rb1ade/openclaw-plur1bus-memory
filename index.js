@@ -170,7 +170,8 @@ import { applyRetroactiveInterference } from "./lib/retroactive-interference.js"
 import { parseReminderIntent } from "./lib/reminder-parser.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
 import { formatReminderNudge } from "./lib/reminder-nudge.js";
-import { recordActivity, formatTimeContext } from "./lib/session-time.js";
+import { recordActivity, formatTimeContext, getLastActivity } from "./lib/session-time.js";
+import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
 import { runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
@@ -1708,6 +1709,10 @@ const plugin = {
     const forgetThreshold    = cfg.forgetThreshold    ?? 0.3;
     const summaryMaxWords    = cfg.summaryMaxWords    ?? 150;
     const semanticLensCfg   = cfg.semanticLens || recallCfg.semanticLens || {};
+
+    // Temporal continuity context config
+    const temporalContextCfg = cfg.temporalContext || {};
+    const temporalContextEnabled = temporalContextCfg.enabled === true;
 
     // P2 Recall Decision Trace config
     const traceCfg = cfg.recall?.decisionTrace || {};
@@ -4878,12 +4883,23 @@ const plugin = {
           }
           // --- Time Context & Reminder Nudge Injection ---
           let timeContext = "";
+          let temporalContinuityContext = "";
           let reminderNudge = "";
           try {
             // lang/tone bereits oben via resolveCommandLocale aufgelöst.
             const wsKey = ctx?.workspaceDir || "default";
+            // Capture previous activity before recording the current turn
+            const previousUserTurnAt = await getLastActivity(agentId, wsKey, ctx?.workspaceDir);
             // Inject time context BEFORE recording activity
             timeContext = await formatTimeContext(agentId, wsKey, ctx?.workspaceDir, lang);
+            if (temporalContextEnabled) {
+              temporalContinuityContext = await formatTemporalContinuityContext(
+                agentId,
+                wsKey,
+                ctx?.workspaceDir,
+                { enabled: true, lang, now: Date.now(), previousUserTurnAt }
+              );
+            }
             await recordActivity(agentId, wsKey, ctx?.workspaceDir);
             // Check DB for due reminders
             const dueFromDb = await listDueReminders(db, agentId, wsKey);
@@ -4912,7 +4928,7 @@ const plugin = {
           } catch (reminderErr) {
             api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
-          return { prependContext: [neoContext, fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, reminderNudge].filter(Boolean).join("\n\n") };
+          return { prependContext: [neoContext, fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
         } catch (err) {
           api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
           if (neoContext) return { prependContext: neoContext };
@@ -4971,14 +4987,24 @@ const plugin = {
           logger: api.logger,
         });
 
-        if (nudge || conflictNudge) {
         // --- Time Context & Reminder Nudge (auto-recall off) ---
         let timeContext = "";
+        let temporalContinuityContext = "";
         let reminderNudge = "";
         try {
           // lang/tone bereits oben via resolveCommandLocale aufgelöst.
           const wsKey = ctx?.workspaceDir || "default";
+          // Capture previous activity before recording the current turn
+          const previousUserTurnAt = await getLastActivity(agentId, wsKey, ctx?.workspaceDir);
           timeContext = await formatTimeContext(agentId, wsKey, ctx?.workspaceDir, lang);
+          if (temporalContextEnabled) {
+            temporalContinuityContext = await formatTemporalContinuityContext(
+              agentId,
+              wsKey,
+              ctx?.workspaceDir,
+              { enabled: true, lang, now: Date.now(), previousUserTurnAt }
+            );
+          }
           await recordActivity(agentId, wsKey, ctx?.workspaceDir);
           const dueFromDb = await listDueReminders(db, agentId, wsKey);
           const pendingData = await readPendingReminders(ctx?.workspaceDir, wsKey, agentId);
@@ -5003,9 +5029,8 @@ const plugin = {
         } catch (reminderErr) {
           api.logger.warn(`plur1bus-reminder: nudge injection failed (auto-recall off): ${String(reminderErr)}`);
         }
-        if (nudge || conflictNudge || timeContext || reminderNudge) {
-          return { prependContext: [nudge + conflictNudge, timeContext, reminderNudge].filter(Boolean).join("\n\n") };
-        }
+        if (nudge || conflictNudge || timeContext || temporalContinuityContext || reminderNudge) {
+          return { prependContext: [nudge + conflictNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
         }
       });
     }
