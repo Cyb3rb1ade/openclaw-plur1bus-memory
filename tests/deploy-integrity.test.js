@@ -2,12 +2,14 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   detectBrokenStub,
   validateFile,
   repairFile,
   validateDeployment,
+  DEPLOY_FILES,
 } from "../scripts/lib/deploy-integrity.mjs";
 
 let dir;
@@ -210,5 +212,47 @@ describe("validateDeployment", () => {
     });
 
     assert.strictEqual(report.ok, true);
+  });
+});
+
+// ── DEPLOY_FILES coverage regression ──────────────────────────────────────────
+// These tests guard against new lib imports in index.js being silently absent
+// from the deploy manifest, which would prevent repair from fixing them.
+
+const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "../..");
+
+describe("DEPLOY_FILES coverage", () => {
+  it("contains all v6.7.0 critical new runtime modules", () => {
+    const v670Critical = [
+      "lib/temporal-context.js",
+      "lib/session-time.js",
+      "lib/setup/feature-profiles.js",
+      "lib/multi-namespace-pool.js",
+      "lib/namespace-config.js",
+      "lib/providers/factory.js",
+      "lib/providers/dimension-guard.js",
+      "lib/providers/config-normalize.js",
+    ];
+    const missing = v670Critical.filter((f) => !DEPLOY_FILES.includes(f));
+    assert.deepStrictEqual(missing, [], `v6.7.0 critical files missing from DEPLOY_FILES: ${missing.join(", ")}`);
+  });
+
+  it("every file in DEPLOY_FILES exists on disk in the repo", () => {
+    const missing = DEPLOY_FILES.filter((f) => !existsSync(join(REPO_ROOT, f)));
+    assert.deepStrictEqual(missing, [], `DEPLOY_FILES lists files that do not exist on disk: ${missing.join(", ")}`);
+  });
+
+  it("all direct lib/ imports in index.js are covered by DEPLOY_FILES", () => {
+    const indexSrc = readFileSync(join(REPO_ROOT, "index.js"), "utf8");
+    const deploySet = new Set(DEPLOY_FILES);
+    // Match all from "./lib/..." import paths
+    const importMatches = [...indexSrc.matchAll(/from ["']\.(\/lib\/[^"']+)["']/g)];
+    const imports = [...new Set(importMatches.map((m) => m[1].slice(1)))]; // strip leading "."
+    const uncovered = imports.filter((f) => !deploySet.has(f));
+    assert.deepStrictEqual(
+      uncovered,
+      [],
+      `index.js imports lib modules not in DEPLOY_FILES — add them or add to an explicit exclusion list:\n  ${uncovered.join("\n  ")}`
+    );
   });
 });
