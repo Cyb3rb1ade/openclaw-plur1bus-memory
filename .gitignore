@@ -40,5 +40,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/verify-workspace-writer.mjs
 !scripts/auto-capture-lancedb.mjs
 !scripts/reindex-provider.mjs
+!scripts/install-memory-system.sh
+!scripts/provider-wizard.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
