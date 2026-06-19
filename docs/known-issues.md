@@ -1,33 +1,23 @@
 # Known Issues — v6.1.0 (Engram) GA
 
-> Stand: 2026-06-07  
+> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-06-19 (v6.7.0 Auflösungsmarkierungen)
 > Release: v6.1.0 General Availability
 
-Die folgenden Einschränkungen sind bekannt und werden in einem zukünftigen Patch adressiert. Sie blockieren den Produktivbetrieb nicht.
+---
+
+## 1. ~~Embedding-Cache noch nicht hot-verdrahtet~~ — ✅ Behoben in v6.2.1
+
+**Beschreibung (original):** Die Embedding-Cache-Implementierung war vollständig vorhanden, aber noch nicht in den Recall-Hot-Path eingebunden.
+
+**Auflösung (v6.2.1):** `OpenAIEmbeddingProvider` verdrahtet den Cache direkt (`lib/providers/embedding-openai.js`). Ab v6.7.0 ist `runtime.embeddingCacheEnabled` im Full Experience Default auf `true` gesetzt. Der Cache läuft pro Plugin-Instanz im Speicher (LRU, configurable TTL/maxEntries).
 
 ---
 
-## 1. Embedding-Cache noch nicht hot-verdrahtet
+## 2. ~~metricsDebounceMs hartcodiert~~ — ✅ Behoben in v6.2.x
 
-**Beschreibung:** Die Embedding-Cache-Implementierung (`embeddingCacheEnabled`, `embeddingCacheTtlMs`, `embeddingCacheMaxEntries`) ist vollständig vorhanden, aber noch nicht in den Recall-Hot-Path von `index.js` eingebunden.
+**Beschreibung (original):** Debounce-Wert für Telemetrie-Flush war hartcodiert auf 250 ms.
 
-**Impact:** Der Cache wird aktuell nicht genutzt; jeder Recall-Aufruf berechnet Embeddings neu.
-
-**Workaround:** Keiner erforderlich – Performance-Regression gegenüber v6.0.x liegt im Messrauschen.
-
-**Fix-Target:** v6.2.0
-
----
-
-## 2. metricsDebounceMs hartcodiert
-
-**Beschreibung:** Der Debounce-Wert für den Telemetrie-Flush im Recall-Hot-Path ist auf `250 ms` hartcodiert (`metricsDebounceMs` existiert als Config-Key, wird aber noch nicht vom Hot-Path gelesen).
-
-**Impact:** In hochfrequenzigen Setups kann der Wert nicht ohne Code-Änderung angepasst werden.
-
-**Workaround:** Direkte Modifikation der Konstante in `lib/recall-pipeline.js`.
-
-**Fix-Target:** v6.2.0
+**Auflösung:** `lib/metrics-debounce.js` exportiert `createMetricsDebouncer({ debounceMs })` mit konfigurierbarem Default (5000 ms). Kein Hardcode mehr in `lib/recall-pipeline.js`.
 
 ---
 
@@ -37,36 +27,23 @@ Die folgenden Einschränkungen sind bekannt und werden in einem zukünftigen Pat
 
 **Impact:** Reines Hygiene-Thema; keine Laufzeit-Auswirkungen.
 
-**Workaround:** Keiner erforderlich.
-
-**Fix-Target:** v6.2.0
+**Status:** Offen — kein Fix-Zieldatum. Kein Produktionsrisiko.
 
 ---
 
-## 4. atomic-json.js: Reentrancy-Deadlock bei nested Updates
+## 4. ~~atomic-json.js: Reentrancy-Deadlock bei nested Updates~~ — ✅ Behoben
 
-**Beschreibung:** `atomicJsonUpdate` in `lib/atomic-json.js` verwendet einen `activeFiles`-Set-Schutz gegen Reentrancy. Wenn ein `async updater` innerhalb seiner Ausführung **awaited** ein weiteres `atomicJsonUpdate` für dieselbe Datei aufruft, entsteht ein Deadlock:
+**Beschreibung (original):** Verschachtelte `atomicJsonUpdate`-Aufrufe auf derselben Datei konnten zu einem Deadlock führen.
 
-```js
-await atomicJsonUpdate(filePath, async () => {
-  await atomicJsonUpdate(filePath, () => ({ nested: true }));
-  return { outer: true };
-});
-```
-
-**Impact:** Produktions-Abstürze sind unwahrscheinlich, da typische Nutzung keine verschachtelten Updates auf derselben Datei ausführt. Bei fehleranfälligen Callbacks kann der Prozess jedoch hängen bleiben.
-
-**Workaround:** Vermeidung von verschachtelten `atomicJsonUpdate`-Aufrufen auf derselben Datei innerhalb eines Updaters.
-
-**Fix-Target:** v6.2.0 — `activeFiles`-Check vor Queue-Einfügung verschieben oder Timeout/Rejection-Mechanismus einbauen.
+**Auflösung:** `lib/atomic-json.js` wirft jetzt sofort mit `"Nested atomicJsonUpdate for same file is not allowed"` bei erkannter Reentrancy. Kein Deadlock mehr — stattdessen ein sofortiger, erklärender Fehler der die Nutzung korrigiert.
 
 ---
 
 ## Zusammenfassung
 
-| Issue | Schwere | Workaround | Fix-Target |
-|-------|---------|------------|------------|
-| Embedding-Cache nicht hot-verdrahtet | Mittel | Nein | v6.2.0 |
-| metricsDebounceMs hartcodiert | Niedrig | Ja (Code-Edit) | v6.2.0 |
-| 60+ Over-Exports | Niedrig | Nein | v6.2.0 |
-| atomic-json Reentrancy-Deadlock | Niedrig-Mittel | Ja (Pattern vermeiden) | v6.2.0 |
+| Issue | Schwere | Status | Behoben in |
+|-------|---------|--------|------------|
+| Embedding-Cache nicht hot-verdrahtet | Mittel | ✅ Behoben | v6.2.1 |
+| metricsDebounceMs hartcodiert | Niedrig | ✅ Behoben | v6.2.x |
+| 60+ Over-Exports | Niedrig | Offen | — |
+| atomic-json Reentrancy-Deadlock | Niedrig-Mittel | ✅ Behoben | v6.x |

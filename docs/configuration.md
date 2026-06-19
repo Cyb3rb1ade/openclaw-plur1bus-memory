@@ -59,9 +59,9 @@ Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jew
 
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
-| `embeddingCacheEnabled` | `boolean` | `false` | LRU-Cache für Embedding-Vektoren aktivieren |
-| `embeddingCacheTtlMs` | `number` | `1800000` | TTL eines Cache-Eintrags in Millisekunden (30 Minuten) |
-| `embeddingCacheMaxEntries` | `number` | `500` | Maximale Anzahl gecachter Vektoren |
+| `embeddingCacheEnabled` | `boolean` | `true` | LRU-Cache für Embedding-Vektoren aktivieren (seit v6.2.1 aktiv verdrahtet) |
+| `embeddingCacheTtlMs` | `number` | `300000` | TTL eines Cache-Eintrags in Millisekunden (5 Minuten) |
+| `embeddingCacheMaxEntries` | `number` | `128` | Maximale Anzahl gecachter Vektoren |
 
 ### Verhalten
 
@@ -91,9 +91,9 @@ Alle Werte werden in `openclaw.plugin.json` unter dem Key `recall` (oder den jew
       "longContext": 600,
       "project": 600
     },
-    "embeddingCacheEnabled": false,
-    "embeddingCacheTtlMs": 1800000,
-    "embeddingCacheMaxEntries": 500
+    "embeddingCacheEnabled": true,
+    "embeddingCacheTtlMs": 300000,
+    "embeddingCacheMaxEntries": 128
   }
 }
 ```
@@ -108,18 +108,20 @@ Steuert die 3-Tier-Emotions-Inferenz beim Memory-Capture.
 |-----|-----|---------|--------------|
 | `emotion.tier` | `"t1" \| "t2" \| "t3" \| "auto"` | `"auto"` | Festes Tier oder automatisches Routing |
 | `emotion.t2.enabled` | `boolean` | `true` | Tier-2 (Keyword-Fallback) aktivieren |
-| `emotion.t3.enabled` | `boolean` | `false` | Tier-3 (LLM-basiert) aktivieren — **kostet API-Calls** |
+| `emotion.t3.enabled` | `boolean` | `true` | Tier-3 (LLM-basiert) aktivieren — **provider-gated/fail-soft**: kein API-Call ohne konfigurierten Provider |
 | `emotion.t3.model` | `string` | `"gpt-4o-mini"` | Modell für Tier-3 |
 | `emotion.t3.apiKey` | `string` | — | Optionaler API-Key (fallback zu `OPENAI_API_KEY`) |
 | `emotion.t3.baseUrl` | `string` | — | Optionaler Base-URL für OpenAI-compatible Provider |
 
 ### Budget-Gate
 
-Tier-3 läuft **niemals heimlich**. Es wird nur aktiviert, wenn:
-1. `emotion.t3.enabled === true`
-2. Ein gültiger API-Key verfügbar ist
+Tier-3 läuft **niemals heimlich**. Es ist default ON, führt aber **keinen API-Call aus**, wenn:
+- Kein Provider konfiguriert ist (`onlyWhenProviderAvailable: true`)
+- Der Provider nicht antwortet (`fallbackOnError: true` → Fallback auf Tier-2)
 
-Der Feature-Toggle `/enable emotionTier` (bzw. `/disable emotionTier`) steuert `emotion.t3.enabled`.
+Ab v6.7.0 ist `emotion.t3.enabled` im Full Experience Default aktiv. Ohne konfigurierten Embedding-/LLM-Provider bleibt Tier-3 stumm.
+
+Der Feature-Toggle `/disable emotionTier` steuert `emotion.t3.enabled` auf `false`.
 
 ### Beispiel
 
@@ -132,7 +134,7 @@ Der Feature-Toggle `/enable emotionTier` (bzw. `/disable emotionTier`) steuert `
           "emotion": {
             "tier": "auto",
             "t2": { "enabled": true },
-            "t3": { "enabled": false, "model": "gpt-4o-mini" }
+            "t3": { "enabled": true, "model": "gpt-4o-mini", "fallbackOnError": true, "onlyWhenProviderAvailable": true }
           }
         }
       }
