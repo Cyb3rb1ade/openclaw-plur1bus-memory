@@ -1,72 +1,80 @@
 # PLUR1BUS v5 → v6 Migration Guide
 
-**Datum:** 2026-06-02
-**Version:** 6.0.0
+**Datum:** 2026-06-19
+**Version:** 6.7.0 (PLUR1BUS Full Experience Defaults)
 
 ---
 
-## Breaking Changes
+## Breaking Changes & Core Behaviors
 
-### 1. Schema Migration (Automatic)
+### 1. Schema Migration (Automatic & Idempotent)
 - **What:** LanceDB table schema is auto-migrated on first `init()`
 - **New columns:** `status`, `versionNumber`, `previousVersion`, `supersededBy`, `updateSource`, `updateEvidence`, `reconsolidationConfidence`, `versionCreatedAt`, `updatedAt`
-- **Action required:** None — migration is idempotent and non-destructive
-- **Verify:** Check logs for `memory-lancedb-namespaced: schema migrated v5.2.11 → v6`
+- **Action required:** None — migration is idempotent and non-destructive.
 
-### 2. Command Input Handling (Semantic)
+### 2. Command Input Handling (Semantic Compression)
 - **What:** Hard command length limits removed (`/memory` >2000, `/vergiss` >1000, `/korrigier` >1000)
-- **New behavior:** Long inputs are semantically compressed via `lib/semantic-input.js`
-- **Hard limit:** 100,000 chars — above this, user is asked to use a file/vault source
-- **Action required:** None — existing commands work unchanged, but now accept longer inputs
+- **New behavior:** Long inputs (>6k characters) are semantically compressed. Above 100k characters, the agent will prompt the user to use a file or vault source instead.
 
-### 3. Merging (`autoApply: false`)
-- **What:** Memory Compaction no longer auto-applies merge candidates
-- **New behavior:** Proposals are written to `.adaptive-learning/merge-proposals.jsonl`
-- **Action required:** Review proposals and set `compaction.autoApply: true` if you want the old behavior
+### 3. Low-Risk Merge Auto-Apply
+- **What:** Memory Compaction auto-applies merge candidates only when they are classified as low risk.
+- **New behavior:** High-risk or meaning-changing merges remain proposals in `.adaptive-learning/merge-proposals.jsonl` or separate memories.
+- **Config Key:** `merging.autoApply` is `true` by default with `merging.autoApplyRisk: "low-only"`.
 
 ### 4. Obsidian Bridge Apply Mode
-- **What:** New `mode: "apply"` option with safety gates
-- **New behavior:** Requires `requireVaultPathConfirmation: true`, creates per-batch backups + manifest + audit-log
-- **Action required:** If using Obsidian Bridge, confirm vault path explicitly or set `mode: "augment"` for read-only
+- **What:** Managed writes to the markdown vault with safety checks.
+- **New behavior:** Uses `mode: "apply"`. Backups, managed manifests (beforeHash/afterHash), and audit logs are kept. It blocks unbefugt writes to `.obsidian` (`allowDotObsidianWrite: false`).
+- **Path Behavior:** If no workspace or vault path is configured, the bridge features remain enabled but inert (no directories are silently created without a canonical configured path).
 
-### 5. Feature Profile Confirmation Gate
-- **What:** v6 features require explicit confirmation via `featuresConfirmedAt`
-- **New behavior:** On first start, plugin warns about unconfirmed features
-- **Action required:** Run `/plur1bus setup` and confirm the Recommended Profile, or manually set `featuresConfirmedAt` in config
+### 5. Full Experience Feature Policy & Defaults
+- **What:** Fresh installs get the complete PLUR1BUS core features default-on. Updates preserve your current choices.
+- **New behavior:**
+  - Fresh installs enable all core features.
+  - Updates preserve existing configured settings.
+  - Missing new core features are enabled as default-on (opt-out).
+  - No feature-selection history is written (no `fullExperiencePromptedAt`, `explicitOptOuts`, or `featuresConfirmedAt`).
+  - Non-interactive updates do not block; they preserve config, enable missing defaults, and write the Start Notice.
 
-### 6. Config Schema Updates
-- **New keys in `openclaw.plugin.json`:**
-  - `reranker.timeoutMs` (default: 5000)
-  - `reranker.fallbackOnError` (default: true)
-  - `merging.autoApply` (default: false)
-  - `merging.mode` (default: "safe-versioned")
-  - `schicht15.maxPromotionsPerRun` (default: 0 = unlimited)
-  - `obsidianBridge.backupBeforeApply` (default: true)
-  - `obsidianBridge.auditLog` (default: true)
-  - `obsidianBridge.requireVaultPathConfirmation` (default: true)
-  - `morningReview.status` / `eveningReview.status` (default: "pending_setup")
-  - `criticalPush.model` (no default — falls back to `merging.model`; without any chat model the classifier no-ops instead of mislabeling cards as `fakt`)
-  - `criticalPush.maxPerDay` (default: 3 — now read from config instead of hard-coded)
-  - `security.allowChatConfigCommands` (default: true — set `false` on shared channels to refuse chat-driven `openclaw.json` mutation)
+### 6. Installations-Abschluss via `/plur1bus start`
+- **What:** Shows installation completion summary.
+- **New behavior:** Shows Full Experience status, active/disabled features, safety gates, and Obsidian/Review/Dashboard paths. It consumes the pending Start Notice without writing memories or history.
 
-> **Schema note:** the v6 config keys `criticalPush`, `dailyConsolidation`, `security`, `setupProfile`, `featuresConfirmedAt`, `morningReview` and `eveningReview` are now declared at the config root in `openclaw.plugin.json`. Earlier 6.0.0 shipped with `additionalProperties: false` at the config root but without these keys, so strict schema validators could reject a valid v6 config (including the `featuresConfirmedAt` gate written by `/plur1bus setup`).
+---
+
+## Shipped Configuration Keys (under `plugins.entries["memory-lancedb-namespaced"].config`)
+
+The following features and configurations are available in v6.7.0:
+
+* `temporalContext.enabled` (default: `true`)
+* `runtime.embeddingCacheEnabled` (default: `true`)
+* `reranker.enabled` (default: `true`)
+* `merging.autoApply` (default: `true`)
+* `merging.autoApplyRisk` (default: `"low-only"`)
+* `obsidianBridge.soulPatch.enabled` (default: `true`)
+* `obsidianBridge.soulPatch.createIfMissing` (default: `true`)
+* `obsidianBridge.soulPatch.backup` (default: `true`)
+* `obsidianBridge.soulPatch.force` (default: `false`)
+* `obsidianBridge.soulPatch.migrateLegacy` (default: `false`)
+* `emotion.t2.enabled` (default: `true`)
+* `emotion.t3.enabled` (default: `true`, provider-gated/fail-soft)
+* `metaCognition.enabled` (default: `true`)
+* `metaCognition.llmReport` (default: `true`, budgeted/fail-soft)
 
 ---
 
 ## Recommended Migration Steps
 
-1. **Backup** your `openclaw.json` and `.adaptive-learning/` directory
-2. **Update** `openclaw.plugin.json` schema (or let the plugin merge defaults automatically)
-3. **Start** the plugin — schema migration runs automatically
-4. **Confirm** features via `/plur1bus setup` or manually set `featuresConfirmedAt`
-5. **Review** `how-to-memory.md` for any changed command behavior
-6. **Check** logs for pending_setup warnings and resolve them
+1. **Backup** your `openclaw.json` configuration file.
+2. **Update** the plugin package (dependencies are automatically verified).
+3. **Restart** the gateway. LanceDB schema migration will run automatically.
+4. **Complete** the installation by running `/plur1bus start` in the chat.
+5. **Review** `how-to-memory.md` for daily commands and usage details.
 
 ---
 
 ## Rollback
 
-If issues occur:
-1. Set plugin config `setupProfile: "safe"` to disable all v6 features
-2. Restore `openclaw.json` from backup
-3. The LanceDB schema is forward-compatible — v5 code can read v6 tables (new columns are ignored)
+If you need to roll back to a pre-v6 version:
+1. Revert the plugin directory to the desired commit/version.
+2. The LanceDB schema is backward-compatible — v5 code can safely read v6 tables (the new columns are ignored).
+3. You can safely remove the v6-specific configuration keys from your `openclaw.json` file.

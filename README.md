@@ -275,7 +275,10 @@ Non-interactive installs or updates (`--non-interactive` / `--accept-defaults`) 
 
 ```text
 +++ PLUR1BUS — Make your agent yours! +++
-Please complete the installation by running: /plur1bus start
+
+Please complete the installation by running:
+
+/plur1bus start
 ```
 
 The notice is not stored as memory, is not embedded, and is not promoted to knowledge.

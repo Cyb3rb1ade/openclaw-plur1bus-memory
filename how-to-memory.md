@@ -1,8 +1,8 @@
-# How-To: Memory-System — PLUR1BUS 6.2.0 (Stand 2026-06-10)
+# How-To: Memory-System — PLUR1BUS 6.7.0 (Stand 2026-06-19)
 
 > **Single Source of Truth** für die tägliche Nutzung. Architektur-Details (Schicht 1/2/3, Dreaming, Adaptive Learning, Meta-Cognition) stehen in `how-to-memory-perfect.md`.
 
-**Plugin-Version:** `memory-lancedb-namespaced` 6.2.0. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
+**Plugin-Version:** `memory-lancedb-namespaced` 6.7.0. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
 
 ---
 
@@ -91,12 +91,28 @@ Toggle für Features:
 
 | Feature | Effekt |
 | --- | --- |
-| `vaultSync` | Obsidian-Mirror an/aus |
-| `kritischPush` | Telegram-Push bei kritischen Treffern an/aus |
+| `temporalContext` | Temporal Continuity Context an/aus |
+| `embeddingCache` | LRU-Cache für Embedding-Vektoren an/aus |
+| `autoCapture` | Auto-Capture an/aus |
+| `autoRecall` | Auto-Recall an/aus |
+| `vaultSync` / `obsidianBridge` | Obsidian-Mirror an/aus |
+| `kritischPush` / `criticalPush` | Telegram-Push bei kritischen Treffern an/aus |
 | `dailyConsolidation` | Nächtliche Karten-Konsolidierung an/aus |
-| `proactiveNudge` | Proaktive Erinnerungs-Vorschläge an/aus |
+| `reranker` | Reranker-Stufe an/aus |
+| `emotionTier` | Emotion Tier-3 (LLM-basiert) an/aus |
+| `emotion` | Emotion Tier-2 an/aus |
 | `metaCognition` | Wöchentliche Reflexions-Jobs an/aus |
-| `queryRefinement` | Automatische Query-Verfeinerung an/aus |
+| `merging` | Merging/Konsolidierung an/aus |
+| `lowRiskMergeAutoApply` | Low-risk Merge Auto-Apply an/aus |
+| `schicht15` | Schicht 1.5 Knowledge Promotion an/aus |
+| `skillMiner` | Skill Miner an/aus |
+| `morningReview` | Morning Review an/aus |
+| `eveningReview` | Evening Review an/aus |
+| `dashboardLayer` | Dashboard Layer im Obsidian-Bridge an/aus |
+| `semanticGraph` | Semantic Graph an/aus |
+| `provenanceGraph` | Provenance Graph an/aus |
+| `adversarialDeep` | Adversarial Deep an/aus |
+| `soulPatch` | SoulPatch an/aus |
 
 Schreibt atomar nach `openclaw.json`. **Gateway-Restart nötig**, damit die Änderung greift.
 
@@ -325,9 +341,9 @@ Cron-Jobs `morning-review` / `evening-review` wurden via `update-openclaw.sh` en
 
 ## Tests & Distribution
 
-Plugin: **550/550 Tests passing** (`npm test`).
+Plugin: **1841/1841 Tests passing** (`npm test`).
 Distribution: Source-Repo. Live deployed nach `~/.openclaw/extensions/memory-lancedb-namespaced/` (per `git pull` + Gateway-Restart).
 
 ---
 
-*Letzter Refresh: 2026-06-09 (PLUR1BUS 6.1.4 Consolidation). Vorgängerstände: siehe Git-History und `CHANGELOG.md`.*
+*Letzter Refresh: 2026-06-19 (PLUR1BUS 6.7.0 Full Experience Defaults). Vorgängerstände: siehe Git-History und `CHANGELOG.md`.*

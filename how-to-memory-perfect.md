@@ -1,9 +1,9 @@
 # Perfektes Gedächtnis für OpenClaw-Agenten
 ## Ein vollständiges How-To für alle Deployments
 
-> **Status (2026-06-02):** Dieses Dokument beschreibt die **Architektur** der drei Memory-Schichten (Flat-File, Workspace-Indexer, LanceDB) plus Dreaming und Adaptive Learning. Diese Konzepte bleiben mit **plur1bus 6.0.0** unverändert gültig.
+> **Status (2026-06-19):** Dieses Dokument beschreibt die **Architektur** der drei Memory-Schichten (Flat-File, Workspace-Indexer, LanceDB) plus Dreaming und Adaptive Learning. Diese Konzepte bleiben mit **plur1bus 6.7.0** unverändert gültig.
 >
-> **Neu in 6.0.0:** Feature Profiles (Recommended/Safe/Custom) mit Confirmation-Gate, Semantic Long-Input Handling (keine harten Command-Limits mehr), Pipeline-weiter Reranker-Fallback/Timeout, Merging Approval-Gate (`autoApply: false`), Obsidian Bridge Apply-Modus mit per-Batch Backup + Manifest + Audit-Log, schicht15 Dedupe (`promotedKnowledgeIds` pro Workspace/Agent), persistente Rate-Limits für Heavy Jobs.
+> **Neu in v6.7.0:** PLUR1BUS Full Experience Policy (28 Core-Features standardmäßig aktiv), Temporal Continuity Context (Zeitempfinden über `<temporal-context>`), Start-Befehl `/plur1bus start` und Non-Interactive/Start Notice Support.
 >
 > **Für die tägliche Nutzung** (Commands `/zustand`, `/memory`, `/vergiss`, `/korrigier`, `/einschalten`, `/ausschalten`; Kritisch-Push-Mechanismus; Vault-Layout `/memory/cards/YYYY/MM/`) ist **`how-to-memory.md`** die Single Source of Truth.
 >
