@@ -13,6 +13,7 @@ import {
 } from "../lib/temporal-context.js";
 import { recordActivity } from "../lib/session-time.js";
 import { shouldSkipAutoRecallForInternalTurn } from "../lib/runtime-scheduler.js";
+import { isInjectedContextText } from "../lib/neo-arch.js";
 
 const MS_PER_HOUR = 60 * 60 * 1000;
 
@@ -371,5 +372,32 @@ describe("temporal continuity context", () => {
       assert.strictEqual(shouldSkipAutoRecallForInternalTurn({ kind: "heartbeat" }, {}), true);
       assert.strictEqual(shouldSkipAutoRecallForInternalTurn({ kind: "background" }, {}), true);
     });
+  });
+});
+
+describe("temporal context — memory pollution guard", () => {
+  it("renderTemporalContext output is caught by isInjectedContextText (not captured as memory)", () => {
+    const ctx = computeTemporalContinuityContext({
+      agentId: "test-agent",
+      workspaceKey: "test-ws",
+      now: FIXED_NOW,
+      timezone: TIMEZONE,
+      previousUserTurnAt: isoBeforeNow(5 * MS_PER_HOUR),
+    });
+    const rendered = renderTemporalContext(ctx);
+    assert.ok(rendered.includes("<temporal-context>"), "rendered output must include opening tag");
+    assert.ok(isInjectedContextText(rendered), "renderTemporalContext output must be caught by isInjectedContextText — must not be stored as memory");
+  });
+
+  it("isInjectedContextText catches the bare opening tag", () => {
+    assert.ok(isInjectedContextText("<temporal-context>"));
+  });
+
+  it("isInjectedContextText catches the bare closing tag", () => {
+    assert.ok(isInjectedContextText("</temporal-context>"));
+  });
+
+  it("isInjectedContextText does not catch unrelated text", () => {
+    assert.ok(!isInjectedContextText("The user asked about temporal reasoning in SQL."));
   });
 });
