@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
+import { OpenAIEmbeddingProvider } from "../lib/providers/embedding-openai.js";
 
 describe("createEmbeddingCache", () => {
   it("returns a cache instance with default options", () => {
@@ -184,5 +185,15 @@ describe("embedding-cache config passthrough", () => {
     });
     assert.strictEqual(cfg.cacheMaxEntries, 64);
     assert.strictEqual(cfg.cacheTtlMs, 120000);
+  });
+
+  it("OpenAIEmbeddingProvider respects explicit embeddingCacheEnabled=false", () => {
+    const provider = new OpenAIEmbeddingProvider({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimensions: 1536,
+      embeddingCacheEnabled: false,
+    });
+    assert.strictEqual(provider._cache, null);
   });
 });

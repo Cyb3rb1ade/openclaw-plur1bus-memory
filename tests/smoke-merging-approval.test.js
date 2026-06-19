@@ -89,7 +89,7 @@ describe("merging-approval-gate", () => {
     }
   });
 
-  it("defaults to autoApply=false (no DB changes)", async () => {
+  it("defaults to autoApply=true but low-risk only", async () => {
     const table = makeDbTable(candidates);
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-"));
     const result = await runMemoryCompaction(
@@ -103,9 +103,11 @@ describe("merging-approval-gate", () => {
         workspaceDir,
       }
     );
-    assert.strictEqual(table._archived.size, 0, "default should not archive");
-    assert.strictEqual(table._added.length, 0, "default should not add");
-    assert.ok(result.autoApply === false || result.proposals > 0 || result.compacted === 0, "should report proposals or no clusters");
+    assert.strictEqual(result.autoApply, true);
+    assert.strictEqual(result.autoApplyRisk, "low-only");
+    if (result.deleted > 0) {
+      assert.ok(table._archived.size > 0, "identical low-risk duplicate should archive as alias");
+    }
   });
 
   it("respects dryRun even with autoApply=true", async () => {

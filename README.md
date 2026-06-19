@@ -2,11 +2,19 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Version 6.6.0** — the Meta-Cognition release — adds self-reflection over memory usage, embedding-based proactive nudges, and configurable emotion inference tiers. All atop the Engram recall-hardening foundation with full P5 validation.
+**Version 6.6.3** — the Temporal Continuity + Full Experience policy release — enables the complete PLUR1BUS memory, recall, continuity, review, graph, emotion, and meta-cognition experience by default while preserving existing opt-outs during normal updates.
 
 ## What it does
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v6.6.3 — PLUR1BUS Full Experience Defaults
+
+- **Core features default ON** — Fresh installs get auto-capture, auto-recall, temporal continuity, embedding cache, reranker, emotion, meta-cognition, merging, Schicht 1.5, skill mining, daily consolidation, graph layers, reviews, dashboard, Obsidian bridge, critical push, and SoulPatch enabled by default.
+- **Updates preserve current choices** — Existing configured feature values remain the source of truth. Missing new core features are added as enabled by default and can be opted out individually.
+- **No feature-selection history** — The plugin does not write `fullExperiencePromptedAt`, `explicitOptOuts`, or `featuresConfirmedAt` as a separate selection ledger.
+- **Start command** — `/plur1bus start` is the installation-completion command and shows active features, disabled features, safety gates, and Obsidian/review/dashboard status.
+- **Non-interactive notice** — `--non-interactive` / `--accept-defaults` updates do not hang; they preserve configured values, enable missing core defaults, and write an operational start notice asking the agent/user to run `/plur1bus start`.
 
 ### New in v6.6.0 — Meta-Cognition
 
@@ -57,8 +65,8 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 ### New in v6 (Base)
 
 - **Semantic long-input handling** — `/memory`, `/forget`, `/correct` accept any length. >6k chars are semantically compressed; >100k chars prompts for file/vault source.
-- **Feature activation profiles** — On first start proposes a `recommended` profile (all features active, Obsidian/reviews marked `pending_setup`). Core memory works immediately; advanced features require explicit confirmation.
-- **Proposal-only merging** — Daily compaction detects duplicates, generates merge proposals in `merge-proposals.jsonl`, **never auto-applies**.
+- **Full Experience feature policy** — Core features install default-on and remain opt-out. Existing updates preserve current configured values; new core features appear as enabled defaults.
+- **Low-risk merge auto-apply** — Merging defaults on, but auto-apply is constrained to low-risk/safe-versioned paths. High-risk or meaning-changing merges remain proposals or separate memories.
 - **Conflict resolver** — Scans for contradictions, emits `recommendation` (`review_only` or `apply_via_safe_reconsolidation`), **never modifies** memory directly.
 - **Reranker timeout & fallback** — Configurable timeout (default 5s) with automatic fallback to vector-only ranking.
 - **schicht15 deduplication** — KNOWLEDGE.md promotions tracked per workspace+agent. Double-promotion prevented via `memoryId` + optional `contentHash`.
@@ -171,13 +179,35 @@ Minimal config block in `openclaw.json`:
         "enabled": true,
         "config": {
           "baseDbPath": "~/.openclaw/memory/lancedb-namespaced",
+          "runtime": {
+            "embeddingCacheEnabled": true
+          },
+          "temporalContext": {
+            "enabled": true
+          },
           "obsidianBridge": {
             "enabled": true,
-            "mode": "augment",
+            "mode": "apply",
             "vaultPath": "~/.openclaw/vault",
+            "reviewRoot": "plur1bus",
             "backupBeforeApply": true,
             "auditLog": true,
-            "requireVaultPathConfirmation": true
+            "requireVaultPathConfirmation": false,
+            "allowDotObsidianWrite": false,
+            "dashboardLayer": { "enabled": true },
+            "semanticGraph": {
+              "enabled": true,
+              "writeDerivedEdges": true,
+              "mutateMemory": false
+            },
+            "provenanceGraph": { "enabled": true },
+            "soulPatch": {
+              "enabled": true,
+              "createIfMissing": true,
+              "backup": true,
+              "force": false,
+              "migrateLegacy": false
+            }
           },
           "emotion": {
             "tier": "auto",
@@ -194,8 +224,20 @@ Minimal config block in `openclaw.json`:
           "merging": {
             "enabled": true,
             "mode": "safe-versioned",
-            "autoApply": false
+            "autoApply": true,
+            "autoApplyRisk": "low-only",
+            "backupBeforeApply": true,
+            "auditLog": true
           },
+          "metaCognition": {
+            "enabled": true,
+            "llmReport": true,
+            "llmReportMode": "budgeted",
+            "fallbackOnError": true
+          },
+          "skillMiner": { "enabled": true },
+          "morningReview": { "enabled": true },
+          "eveningReview": { "enabled": true },
           "reranker": {
             "enabled": true,
             "timeoutMs": 5000,
@@ -217,16 +259,26 @@ All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` an
 
 **`security.allowChatConfigCommands`** (default `true`) — the config-mutating chat commands (`/enable`, `/disable`, `/plur1bus setup`) write `openclaw.json`. The plugin SDK does not expose the message sender's identity to command handlers, so per-user authorization isn't possible. On a **shared channel**, set this to `false` to refuse all chat-driven config changes; edit `openclaw.json` directly instead. Writes are guarded by a file lock so concurrent toggles/setups cannot clobber each other.
 
-### Feature profile confirmation
+### PLUR1BUS Full Experience Policy
 
-On first start v6 warns about unconfirmed features. Core memory (capture, recall, search) works immediately. To enable advanced features (Obsidian apply mode, morning/evening reviews, merging), run:
+Fresh installs enable the PLUR1BUS Core Experience by default. Normal updates preserve existing configured feature choices and only add missing new core features as enabled defaults. Users opt out with `/disable <feature>` or `/plur1bus disable <feature>`. To intentionally reapply the full core selection, run:
 
 ```bash
-# In Telegram
-/plur1bus setup
+/plur1bus setup recommended --full
 ```
 
-This sets `featuresConfirmedAt` in the plugin state and marks features as `active`.
+No separate feature-selection history is written; the current config is the source of truth.
+
+`/plur1bus start` completes the installation flow and reports active/disabled features, safety gates, and Obsidian/review/dashboard status.
+
+Non-interactive installs or updates (`--non-interactive` / `--accept-defaults`) do not prompt. They preserve current configured values, enable missing core defaults, run safe setup steps, skip confirm-gated risky actions, and create an operational notice:
+
+```text
++++ PLUR1BUS — Make your agent yours! +++
+Please complete the installation by running: /plur1bus start
+```
+
+The notice is not stored as memory, is not embedded, and is not promoted to knowledge.
 
 ## Architecture
 
@@ -256,11 +308,11 @@ The recall block uses escaped metadata attributes and wraps recalled text in `qu
 Version 6.x is a major upgrade. If you ran 5.x:
 
 - **Schema migration** — LanceDB table schema is auto-migrated on first `init()`. New columns: `status`, `versionNumber`, `previousVersion`, `supersededBy`, `updateSource`, `updateEvidence`, `reconsolidationConfidence`, `versionCreatedAt`, `updatedAt`. Migration is idempotent and non-destructive.
-- **Feature confirmation required** — Advanced features now require explicit confirmation via `featuresConfirmedAt`. Run `/plur1bus setup` on first start, or manually set `featuresConfirmedAt` in the plugin state.
-- **Merging is proposal-only** — `merging.autoApply` defaults to `false`. Merge candidates are written to `merge-proposals.jsonl` instead of being applied automatically. Set `autoApply: true` to restore 5.x behavior.
-- **Obsidian bridge apply mode** — New `mode: "apply"` with safety gates (backups, audit log, vault path confirmation). Default is `mode: "augment"` (read-only). Confirm vault path explicitly before first write.
+- **Feature choices are config-as-truth** — Existing `enabled:false` values stay disabled during normal updates. Missing new core features default on and can be opted out.
+- **Merging auto-apply is low-risk only** — `merging.autoApply` defaults to `true` with `autoApplyRisk: "low-only"`. High-risk or meaning-changing merges remain proposals/separate memories.
+- **Obsidian bridge apply mode** — Default is `mode: "apply"` with managed writes only, backups, manifests, audit logs, and `.obsidian` writes blocked unless explicitly allowed. No existing notes are overwritten outside PLUR1BUS-managed areas.
 - **Command input handling** — Hard length limits removed. Very long inputs are semantically compressed; beyond 100k chars use a file or vault source.
-- **Config keys added** — `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.mode`, `obsidianBridge.backupBeforeApply`, `obsidianBridge.auditLog`, `obsidianBridge.requireVaultPathConfirmation`, `morningReview.status`, `eveningReview.status`, `emotion.tier`, `emotion.t2.enabled`, `emotion.t3.enabled`, `emotion.t3.model`, `emotion.t3.apiKey`.
+- **Config keys added** — `temporalContext.enabled`, `runtime.embeddingCacheEnabled`, `reranker.enabled`, `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.autoApplyRisk`, `merging.mode`, `metaCognition.*`, `obsidianBridge.semanticGraph.*`, `obsidianBridge.provenanceGraph.*`, `obsidianBridge.soulPatch.*`, `morningReview.status`, `eveningReview.status`, `emotion.tier`, `emotion.t2.enabled`, `emotion.t3.enabled`, `emotion.t3.model`, `emotion.t3.apiKey`.
 
 See `v5_TO_v6_MIGRATION.md` for the full migration guide.
 
