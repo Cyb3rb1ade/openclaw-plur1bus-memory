@@ -36,6 +36,7 @@ export const DEPLOY_FILES = [
   "lib/explainability.js",
   "lib/feedback-log.js",
   "lib/frontmatter.js",
+  "lib/reply-outcome-tracking.js",
   "lib/input-limits.js",
   "lib/memory-context-sanitize.js",
   "lib/memory-doctor.js",
