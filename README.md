@@ -8,6 +8,15 @@ PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolate
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
+### New in v6.7.x — Multi-Namespace, Temporal Continuity & Source Sync
+
+- **Multi-Namespace Pool** — Each agent gets its own isolated LanceDB namespace; cross-agent recall stays opt-in.
+- **Temporal Continuity Context** — Auto-injected time-anchor block lets the agent orient itself after gaps or compactions without hallucinating dates.
+- **Conflict Summary Management** — Contradiction detector now emits structured conflict summaries; `/plur1bus obsidian conflicts build` renders them as Obsidian pages.
+- **`/plur1bus start` onboarding** — Single command walks new users through feature-profile confirmation and vault setup.
+- **Auto-capture schema sync** — `scripts/auto-capture-lancedb.mjs` gains `workspaceKey` field; schema migration is backward-compatible and idempotent.
+- **Internal-turn skip guard** — `shouldSkipAutoRecallForInternalTurn` prevents feedback loops when the gateway injects synthetic cron messages.
+
 ### New in v6.6.0 — Meta-Cognition
 
 - **Self-reflection on recall quality** — Precision, Recall, F1 computed from user feedback (`/mf +/-/~`). Coverage-gap detection finds topics with few or weak memories.
