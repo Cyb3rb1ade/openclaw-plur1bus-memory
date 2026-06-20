@@ -197,6 +197,13 @@ import {
   writeGraphConstellationReport,
   extractGraphSignals,
 } from "./lib/memory-graph.js";
+import {
+  completePendingReplyOutcomes,
+  lastMessageText,
+  recordAgentReplyForOutcome,
+  recordPendingReplyOutcome,
+  sessionKeyFrom,
+} from "./lib/reply-outcome-tracking.js";
 import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
 import { DEFAULT_NAMESPACE } from "./lib/namespace-config.js";
 
@@ -1720,6 +1727,14 @@ const plugin = {
     const forgetThreshold    = cfg.forgetThreshold    ?? 0.3;
     const summaryMaxWords    = cfg.summaryMaxWords    ?? 150;
     const semanticLensCfg   = cfg.semanticLens || recallCfg.semanticLens || {};
+
+    // Reply-based Outcome Tracking config (default ON — additive, append-only feedback loop)
+    const replyOutcomeCfg = cfg.replyOutcomeTracking || {};
+    const replyOutcomeEnabled = replyOutcomeCfg.enabled !== false;
+    const replyOutcomeMaxAgeMs = replyOutcomeCfg.maxAgeMs;
+    const replyOutcomeMaxMemoryIds = replyOutcomeCfg.maxMemoryIds;
+    const replyOutcomeMaxReplyChars = replyOutcomeCfg.maxReplyChars;
+    const replyOutcomeMaxAssistantChars = replyOutcomeCfg.maxAssistantChars;
 
     // Temporal continuity context config
     const temporalContextCfg = cfg.temporalContext || {};
@@ -3807,6 +3822,27 @@ const plugin = {
       }, { timeoutMs: 60_000 });
     }
 
+    // Reply-based Outcome Tracking: Assistant-Antwort an das Pending-Outcome anhängen.
+    if (replyOutcomeEnabled && typeof api.on === "function") {
+      api.on("agent_end", (event, ctx) => {
+        const background = isBackgroundTurn(event, ctx);
+        if (background || !ctx?.workspaceDir) return;
+        const assistantText = lastMessageText(event.messages || [], ["assistant"]);
+        if (!assistantText) return;
+        try {
+          recordAgentReplyForOutcome(ctx.workspaceDir, {
+            agentId: ctx?.agentId || "default",
+            sessionKey: sessionKeyFrom(event, ctx),
+            assistantText,
+            now: Date.now(),
+            maxAssistantChars: replyOutcomeMaxAssistantChars,
+          });
+        } catch (err) {
+          api.logger?.warn?.(`reply-outcome-tracking: recording agent reply failed: ${String(err)}`);
+        }
+      });
+    }
+
     // ========================================================================
     // Tools (per-Agent via Factory)
     // ========================================================================
@@ -4409,6 +4445,31 @@ const plugin = {
       return undefined;
     }
 
+    // Reply-based Outcome Tracking: vor dem Recall die vorherige Pending-Antwort abschließen.
+    if (replyOutcomeEnabled && typeof api.on === "function") {
+      api.on("before_prompt_build", async (event, ctx) => {
+        const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
+        if (!ctx?.workspaceDir || !event?.prompt || skipInternalRecall) return;
+        try {
+          await completePendingReplyOutcomes(ctx.workspaceDir, {
+            agentId: ctx?.agentId || "default",
+            sessionKey: sessionKeyFrom(event, ctx),
+            workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
+            replyText: event.prompt,
+            dbPool: pool,
+            applyDynamics: true,
+            logger: api.logger,
+            maxAgeMs: replyOutcomeMaxAgeMs,
+            maxMemoryIds: replyOutcomeMaxMemoryIds,
+            maxReplyChars: replyOutcomeMaxReplyChars,
+            maxAssistantChars: replyOutcomeMaxAssistantChars,
+          });
+        } catch (err) {
+          api.logger?.warn?.(`reply-outcome-tracking: completing pending outcomes failed: ${String(err)}`);
+        }
+      });
+    }
+
     if (autoRecall) {
       api.on("before_prompt_build", async (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
@@ -4884,6 +4945,29 @@ const plugin = {
 
           const recallCfg = cfg.recall || {};
           const nowMs = Date.now();
+
+          // Reply-based Outcome Tracking: merke die tatsächlich injizierten Memory-IDs,
+          // damit die nächste User-Antwort als Feedback dafür gewertet werden kann.
+          if (replyOutcomeEnabled && ctx?.workspaceDir && event?.prompt && !skipInternalRecall) {
+            try {
+              recordPendingReplyOutcome(ctx.workspaceDir, {
+                agentId,
+                sessionKey: sessionKeyFrom(event, ctx),
+                workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
+                userPrompt: event.prompt,
+                memoryIds: [
+                  ...associativeItems.map((i) => i.id),
+                  ...semanticLensItems.map((i) => i.id),
+                ],
+                now: nowMs,
+                maxMemoryIds: replyOutcomeMaxMemoryIds,
+                maxAssistantChars: replyOutcomeMaxAssistantChars,
+              });
+            } catch (err) {
+              api.logger?.warn?.(`reply-outcome-tracking: recording pending outcome failed: ${String(err)}`);
+            }
+          }
+
           if (traceEnabled && trace) {
             try {
               const { enrichTraceWithTemporalProvenance } = await import("./lib/temporal-provenance.js");
