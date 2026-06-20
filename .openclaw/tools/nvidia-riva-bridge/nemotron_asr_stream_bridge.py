@@ -144,7 +144,7 @@ def _grpc_worker(
             for result in resp.results:
                 alt = result.alternatives[0] if result.alternatives else None
                 transcript = alt.transcript if alt else ""
-                confidence = float(alt.confidence) if (alt and alt.confidence) else None
+                confidence = float(alt.confidence) if (alt and alt.confidence is not None) else None
                 is_final = bool(result.is_final)
 
                 words: list[dict] | None = None
@@ -238,7 +238,7 @@ async def handle_connection(websocket: ServerConnection) -> None:
         # ------------------------------------------------------------------
         # Phase 2: start gRPC worker
         # ------------------------------------------------------------------
-        audio_q = queue.Queue()
+        audio_q = queue.Queue(maxsize=500)
         result_q = asyncio.Queue()
 
         grpc_task = loop.run_in_executor(
