@@ -147,6 +147,14 @@ export function splitIntoTtsChunks(text, maxChars = TTS_MAX_CHARS) {
   const normalised = text.replace(/\s+/g, " ").trim();
   if (!normalised) return [];
   if (normalised.length <= maxChars) return [normalised];
+  // Hard split for no-space inputs that exceed maxChars
+  if (!/\s/.test(normalised)) {
+    const out = [];
+    let s = normalised;
+    while (s.length > maxChars) { out.push(s.slice(0, maxChars)); s = s.slice(maxChars); }
+    if (s.length > 0) out.push(s);
+    return out;
+  }
 
   const chunks = [];
 
@@ -183,17 +191,34 @@ export function splitIntoTtsChunks(text, maxChars = TTS_MAX_CHARS) {
   function splitAtWords(s) {
     const words = s.split(" ");
     let current = "";
+    const result = [];
     for (const word of words) {
       if (!current) {
         current = word;
       } else if ((current + " " + word).length <= maxChars) {
         current += " " + word;
       } else {
-        if (current) chunks.push(current);
+        if (current) result.push(current);
         current = word;
       }
     }
-    if (current) chunks.push(current);
+    if (current) result.push(current);
+
+    // Hard fallback: if any piece still exceeds maxChars (e.g. URL, no-space token), slice it
+    const hardSplit = [];
+    for (const piece of result) {
+      if (piece.length <= maxChars) {
+        hardSplit.push(piece);
+      } else {
+        let s = piece;
+        while (s.length > maxChars) {
+          hardSplit.push(s.slice(0, maxChars));
+          s = s.slice(maxChars);
+        }
+        if (s.length > 0) hardSplit.push(s);
+      }
+    }
+    for (const piece of hardSplit) chunks.push(piece);
   }
 
   splitAtSentences(normalised);
@@ -1158,7 +1183,7 @@ function subscribeUserBatch(connection, channel, userId, member) {
       const text = await transcribe(wav, displayName);
       if (text && text.trim()) {
         await channel.send(`**${displayName}:** ${text.trim()}`).catch(() => {});
-        console.log(`[discord-voice-stt] [${channel.guild.name}#${channel.name}] ${displayName}: ${text.trim()}`);
+        if (VOICE_DEBUG) console.log(`[discord-voice-stt] [${channel.guild.name}#${channel.name}] ${displayName}: ${text.trim()}`);
       }
     } catch (err) {
       console.error(`[discord-voice-stt] transcription error for ${displayName}:`, err.message);
