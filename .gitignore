@@ -1,9 +1,7 @@
 node_modules/
 .worktrees/
-.openclaw/openclaw.json
 .env
 .env.*
-.openclaw/.env
 !.env.example
 *.bak
 *.bak.*
@@ -44,3 +42,4 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/provider-wizard.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
+.openclaw/

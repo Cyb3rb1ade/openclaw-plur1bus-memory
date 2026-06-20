@@ -18,12 +18,27 @@ const REQUIRED_FIELDS = [
   "scope", "trustLevel", "origin", "agentId", "createdAt", "updatedAt",
 ];
 
-const WORKSPACES = [
-  { name: "main (Bernd)",        path: join(homedir(), ".openclaw", "workspace",              "plur1bus") },
-  { name: "bernhardine (Eva)",   path: join(homedir(), ".openclaw", "workspace-bernhardine",  "plur1bus") },
-  { name: "heisenberg (Erik)",   path: join(homedir(), ".openclaw", "workspace-heisenberg",   "plur1bus") },
-  { name: "faxpert",             path: join(homedir(), ".openclaw", "workspace-faxpert",       "plur1bus") },
-];
+// Operator-local agent list. Keep personal names/IDs out of the public repo.
+// Set PLUR1BUS_VAULTS as JSON or comma-separated agent IDs, e.g.:
+//   PLUR1BUS_VAULTS='main,agent-a,agent-b'
+function loadWorkspaces() {
+  const env = process.env.PLUR1BUS_VAULTS;
+  if (!env) return [];
+  try {
+    const parsed = JSON.parse(env);
+    if (Array.isArray(parsed)) {
+      return parsed.map(({ name, path }) => ({ name, path }));
+    }
+  } catch (_) {
+    // not JSON, treat as comma-separated agent IDs
+  }
+  return env.split(",").map(id => id.trim()).filter(Boolean).map(id => ({
+    name: id,
+    path: join(homedir(), ".openclaw", `workspace-${id}`, "plur1bus"),
+  }));
+}
+
+const WORKSPACES = loadWorkspaces();
 
 function parseFrontmatter(content) {
   const m = content.match(/^---\n([\s\S]*?)\n---/);
