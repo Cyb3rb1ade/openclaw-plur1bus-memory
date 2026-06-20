@@ -112,6 +112,7 @@ async function getOrCreateTable(dbPath, dim) {
         ["sourceUrl", "''"],
         ["evidenceQuote", "''"],
         ["scope", "'agent-private'"],
+        ["workspaceKey", "''"],
       ];
       for (const [name, sql] of newCols) {
         if (!fields.includes(name)) {
@@ -140,6 +141,7 @@ async function getOrCreateTable(dbPath, dim) {
       sourceUrl: "",
       evidenceQuote: "",
       scope: "agent-private",
+      workspaceKey: "",
     },
   ]);
 }

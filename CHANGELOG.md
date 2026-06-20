@@ -5,6 +5,21 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.7.3] — 2026-06-20 — Source Sync + Multi-Namespace + Temporal Continuity
+
+### Added
+
+- **MultiNamespacePool** (`lib/multi-namespace-pool.js`): Shared pool für namespace-übergreifende LanceDB-Zugriffe. Ermöglicht Recall über mehrere Workspaces hinweg mit einheitlicher ACL-Prüfung.
+- **Temporal Continuity Context** (`lib/temporal-context.js`, `formatTemporalContinuityContext`): Injects zeitlichen Kontinuitäts-Kontext in Recall-Blöcke — der Agent weiß, wie lange die letzte Session her ist und kann Lücken korrekt einordnen.
+- **Conflict Summary Management** (`buildConflictSummaryFromLog`, `readConflictSummary`, `writeConflictSummary`): Verdichtet den Conflict-Log in eine persistente Summary-Datei pro Workspace. Reduces LLM-Kosten für Conflict-Review.
+- **`shouldSkipAutoRecallForInternalTurn`** (`lib/runtime-scheduler.js`): Background-Turns (Dreaming, Cron) überspringen jetzt den Auto-Recall vollständig — verhindert unnötige LanceDB-Abfragen im Hintergrund.
+- **`/plur1bus start` Onboarding** (`renderPlur1busStartStatus`, `consumePlur1busStartNotice`): Geführtes Setup mit Status-Anzeige beim ersten Start.
+
+### Fixed
+
+- **`workspaceKey` in auto-capture-lancedb.mjs** (`scripts/auto-capture-lancedb.mjs`): Schema-Mismatch bei `table.add()` behoben — `workspaceKey` war in der Spalten-Migrations-Liste und im Default-Row-Template des Cron-Scripts nicht vorhanden.
+- **Source-Sync** (`patches/apply-memory-patches.sh`): Deploy-Source `/root/index.js` wird beim Gateway-Start automatisch mit der kanonischen Repo-Version abgeglichen (Nachfolge-Fix zu v6.7.2).
+
 ## [6.6.3] — 2026-06-18 — workspaceKey Schema Migration
 
 ### Fixed

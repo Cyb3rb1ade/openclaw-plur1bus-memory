@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Version 6.6.0** — the Meta-Cognition release — adds self-reflection over memory usage, embedding-based proactive nudges, and configurable emotion inference tiers. All atop the Engram recall-hardening foundation with full P5 validation.
+**Current version: 6.7.3** — Multi-Namespace Pool, Temporal Continuity Context, Conflict Summary Management, and `/plur1bus start` onboarding. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
