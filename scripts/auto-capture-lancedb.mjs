@@ -31,7 +31,7 @@ const MAX_TEXT_LEN = 15000;
 const DUPLICATE_THRESHOLD = 0.95;
 const SUMMARY_MAX_WORDS = 150;
 const MIN_TEXT_LEN = 10;
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || "text-embedding-3-large";
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || readEmbeddingModel(CONFIG_PATH) || "text-embedding-3-large";
 
 // ─── Injected-Context-Filter (verhindert Re-Capture von PLUR1BUS-Blöcken) ───
 const INJECTED_CONTEXT_RE = /<\/?plur1bus-recall|<\/?plur1bus-start-notice|PLUR1BUS — Make your agent yours|<\/?relevant-memories|<\/?knowledge-update-reminder|<\/?adaptive-learning|RECALL SAFETY RULES|capturedBy"\s*:\s*"agent_end_capture|embeddingStatus"\s*:\s*"pending|plur1bus internal classify-recent|critical-memory-classifier|TTS-STATUS|\[cron:|heartbeat_ok|Reference UTC:|Current time:|You are a memory search agent|memory search agent\. Another model|bounded search query|Use only the available memory tools|Conversation info \(untrusted metadata\)|"chat_id"\s*:\s*"telegram:|"message_id"\s*:\s*"|"sender_id"\s*:/i;
@@ -39,6 +39,13 @@ const INJECTED_CONTEXT_RE = /<\/?plur1bus-recall|<\/?plur1bus-start-notice|PLUR1
 function isInjectedContextText(text) {
   if (!text || typeof text !== "string") return false;
   return INJECTED_CONTEXT_RE.test(text);
+}
+
+function readEmbeddingModel(configPath) {
+  try {
+    const cfg = JSON.parse(readFileSync(configPath, "utf8"));
+    return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.config?.embedding?.model;
+  } catch (_) {}
 }
 
 // ─── Agent Discovery ─────────────────────────────────────────────────────────
