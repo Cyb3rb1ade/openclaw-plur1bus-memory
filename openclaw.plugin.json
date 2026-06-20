@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "6.7.0",
+  "version": "6.7.3",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -207,12 +207,10 @@
         }
       },
       "autoCapture": {
-        "type": "boolean",
-        "default": true
+        "type": "boolean"
       },
       "autoRecall": {
-        "type": "boolean",
-        "default": true
+        "type": "boolean"
       },
       "captureMaxChars": {
         "type": "number"
@@ -231,7 +229,7 @@
           },
           "maxConcurrentRecall": {
             "type": "number",
-            "default": 1
+            "default": 2
           },
           "maxConcurrentCapturePerAgent": {
             "type": "number",
@@ -271,7 +269,7 @@
           },
           "embeddingCacheEnabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "embeddingCacheTtlMs": {
             "type": "number",
@@ -316,8 +314,7 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean",
-            "default": true
+            "type": "boolean"
           },
           "provider": {
             "type": "string",
@@ -365,7 +362,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "threshold": {
             "type": "number",
@@ -388,7 +385,7 @@
           },
           "autoApply": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "mode": {
             "type": "string",
@@ -396,25 +393,6 @@
               "safe-versioned"
             ],
             "default": "safe-versioned"
-          },
-          "autoApplyRisk": {
-            "type": "string",
-            "default": "low-only",
-            "enum": [
-              "low-only"
-            ]
-          },
-          "backupBeforeApply": {
-            "type": "boolean",
-            "default": true
-          },
-          "auditLog": {
-            "type": "boolean",
-            "default": true
-          },
-          "maxAutoApplyPerRun": {
-            "type": "number",
-            "default": 5
           }
         }
       },
@@ -424,7 +402,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "model": {
             "type": "string"
@@ -447,7 +425,7 @@
           },
           "maxPromotionsPerRun": {
             "type": "number",
-            "default": 3
+            "default": 0
           }
         }
       },
@@ -457,7 +435,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "cron": {
             "type": "string",
@@ -822,23 +800,13 @@
           }
         }
       },
-      "temporalContext": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": true
-          }
-        }
-      },
       "obsidianBridge": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "mode": {
             "type": "string",
@@ -846,7 +814,7 @@
               "augment",
               "apply"
             ],
-            "default": "apply"
+            "default": "augment"
           },
           "vaultPath": {
             "type": [
@@ -896,7 +864,7 @@
           },
           "requireVaultPathConfirmation": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "capabilityPack": {
             "type": "string",
@@ -946,7 +914,7 @@
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "default": true
+                "default": false
               },
               "cron": {
                 "type": "string",
@@ -989,7 +957,7 @@
                   "pending_setup",
                   "active"
                 ],
-                "default": "active"
+                "default": "pending_setup"
               }
             }
           },
@@ -999,7 +967,7 @@
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "default": true
+                "default": false
               },
               "cron": {
                 "type": "string",
@@ -1038,7 +1006,7 @@
                   "pending_setup",
                   "active"
                 ],
-                "default": "active"
+                "default": "pending_setup"
               }
             }
           },
@@ -1118,11 +1086,11 @@
           },
           "autoApplyLowRisk": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "dryRun": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "watch": {
             "type": "boolean",
@@ -1289,15 +1257,7 @@
               },
               "llmClassifier": {
                 "type": "boolean",
-                "default": true
-              },
-              "fallbackOnError": {
-                "type": "boolean",
-                "default": true
-              },
-              "onlyWhenProviderAvailable": {
-                "type": "boolean",
-                "default": true
+                "default": false
               }
             }
           },
@@ -1311,15 +1271,11 @@
               },
               "proposalOnly": {
                 "type": "boolean",
-                "default": false
+                "default": true
               },
               "mutateMemory": {
                 "type": "boolean",
                 "default": false
-              },
-              "writeDerivedEdges": {
-                "type": "boolean",
-                "default": true
               }
             }
           },
@@ -1384,7 +1340,7 @@
                 "properties": {
                   "enabled": {
                     "type": "boolean",
-                    "default": true
+                    "default": false
                   },
                   "maxPerRun": {
                     "type": "number",
@@ -1447,10 +1403,6 @@
               "backup": {
                 "type": "boolean",
                 "default": true
-              },
-              "promptForLegacyMigration": {
-                "type": "boolean",
-                "default": true
               }
             }
           }
@@ -1491,7 +1443,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           }
         }
       },
@@ -1542,7 +1494,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "cron": {
             "type": "string"
@@ -1554,8 +1506,7 @@
             "type": "string"
           },
           "status": {
-            "type": "string",
-            "default": "active"
+            "type": "string"
           }
         }
       },
@@ -1565,7 +1516,7 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "cron": {
             "type": "string"
@@ -1577,8 +1528,7 @@
             "type": "string"
           },
           "status": {
-            "type": "string",
-            "default": "active"
+            "type": "string"
           }
         }
       },
@@ -1612,7 +1562,7 @@
             "properties": {
               "enabled": {
                 "type": "boolean",
-                "default": true
+                "default": false
               },
               "model": {
                 "type": "string",
@@ -1623,49 +1573,8 @@
               },
               "baseUrl": {
                 "type": "string"
-              },
-              "fallbackOnError": {
-                "type": "boolean",
-                "default": true
-              },
-              "onlyWhenProviderAvailable": {
-                "type": "boolean",
-                "default": true
               }
             }
-          }
-        }
-      },
-      "metaCognition": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": true
-          },
-          "sessionThreshold": {
-            "type": "number",
-            "default": 50
-          },
-          "intervalDays": {
-            "type": "number",
-            "default": 7
-          },
-          "llmReport": {
-            "type": "boolean",
-            "default": true
-          },
-          "llmReportMode": {
-            "type": "string",
-            "default": "budgeted",
-            "enum": [
-              "budgeted"
-            ]
-          },
-          "fallbackOnError": {
-            "type": "boolean",
-            "default": true
           }
         }
       }
