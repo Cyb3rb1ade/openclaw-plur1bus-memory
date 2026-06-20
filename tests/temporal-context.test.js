@@ -190,8 +190,38 @@ describe("temporal continuity context", () => {
       assert.ok(xml.includes("Elapsed since previous user-visible turn"));
       assert.ok(xml.includes("Gap bucket"));
       assert.ok(
-        xml.includes("Never pretend to have experienced waiting"),
-        "must contain anti artificial-waiting rule"
+        xml.includes("Treat dreaming as inner continuity, not as ordinary external evidence."),
+        "must frame dreaming as inner continuity"
+      );
+      assert.ok(
+        !xml.includes("Never pretend to have experienced waiting"),
+        "must not sterilize temporal continuity with hard anti-subjective wording"
+      );
+    });
+
+    it("distinguishes dreaming/reflection artifacts from verified external facts", () => {
+      const ctx = computeTemporalContinuityContext({
+        previousUserTurnAt: isoBeforeNow(5 * MS_PER_HOUR),
+        now: FIXED_NOW,
+        timezone: TIMEZONE,
+      });
+      const xml = renderTemporalContext(ctx, { lang: "en" });
+
+      assert.ok(
+        xml.includes("Background activity may occur between user-visible turns"),
+        "must allow logged background activity between user turns"
+      );
+      assert.ok(
+        xml.includes("Dream content may express subjective impressions"),
+        "must allow subjective dream/reflection material"
+      );
+      assert.ok(
+        xml.includes("Do not collapse dream-symbols into facts unless another source confirms them."),
+        "must preserve the anti-factual-confusion guard"
+      );
+      assert.ok(
+        xml.includes("Keep the distinction clear between: what happened externally, what was remembered, what was inferred, and what appeared in dreaming."),
+        "must separate external events, memory, inference, and dream material"
       );
     });
   });
@@ -267,7 +297,7 @@ describe("temporal continuity context", () => {
       assert.ok(result.includes("<temporal-context>"));
       assert.ok(result.includes("Gap bucket: same_day"));
       assert.ok(result.includes("6 hours"));
-      assert.ok(result.includes("Never pretend to have experienced waiting"));
+      assert.ok(result.includes("Treat dreaming as inner continuity, not as ordinary external evidence."));
     });
 
     it("recordActivity ordering: uses the previous timestamp, not a newly recorded one", async () => {
