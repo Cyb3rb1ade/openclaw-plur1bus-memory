@@ -1,0 +1,16 @@
+[Unit]
+Description=NVIDIA Parakeet Multilingual ASR Streaming Bridge (port 8021)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/.openclaw/tools/nvidia-riva-bridge
+EnvironmentFile=-/root/.openclaw/.env.nemotron
+Environment=ASR_STREAM_PORT=8021
+Environment=ASR_STREAM_FUNCTION_ID=71203149-d3b7-4460-8231-1be2543a1fca
+ExecStart=/root/.openclaw/venv/bin/python /root/.openclaw/tools/nvidia-riva-bridge/nemotron_asr_stream_bridge.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,18 @@
+[Unit]
+Description=Discord Voice STT / Voice Agent — joins voice channels, transcribes and responds via Bernd
+After=network-online.target nemotron-speech-bridge.service nemotron-asr-stream.service magpie-tts-bridge.service
+Wants=nemotron-asr-stream.service magpie-tts-bridge.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/.openclaw/tools/discord-voice-stt
+Environment=NEMOTRON_URL=http://127.0.0.1:8020/v1/audio/transcriptions
+Environment=SILENCE_DURATION_MS=700
+Environment=MIN_AUDIO_MS=300
+Environment=VOICE_AGENT_ENABLED=false
+ExecStart=/usr/bin/node discord-voice-stt.mjs
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

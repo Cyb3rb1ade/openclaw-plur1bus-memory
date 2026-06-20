@@ -1,0 +1,16 @@
+[Unit]
+Description=NVIDIA MAGPIE Multilingual TTS Bridge (port 8025)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/.openclaw/tools/nvidia-riva-bridge
+EnvironmentFile=-/root/.openclaw/.env.nemotron
+Environment=MAGPIE_PORT=8025
+Environment=MAGPIE_FUNCTION_ID=877104f7-e885-42b9-8de8-f6e4c6303969
+ExecStart=/root/.openclaw/venv/bin/python /root/.openclaw/tools/nvidia-riva-bridge/magpie_tts_bridge.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
