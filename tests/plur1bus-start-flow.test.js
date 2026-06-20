@@ -48,11 +48,11 @@ describe("/plur1bus start", () => {
 
       const result = await command.handler({ args: "", workspaceDir: baseDbPath, agentId: "agent-a" });
       assert.match(result.text, /PLUR1BUS — Make your agent yours/);
-      assert.match(result.text, /PLUR1BUS Full Experience Status/);
+      assert.match(result.text, /Active: \d+\s+Disabled: \d+\s+New\/missing: \d+/);
       assert.match(result.text, /Temporal Continuity Context/);
-      assert.match(result.text, /Safety Gates:/);
-      assert.match(result.text, /vaultPath:/);
-      assert.match(result.text, /Installation status: complete/);
+      assert.match(result.text, /Obsidian:/);
+      assert.match(result.text, /Reviews:/);
+      assert.match(result.text, /Use \/plur1bus enable\|disable <feature>\./);
     } finally {
       rmSync(baseDbPath, { recursive: true, force: true });
       rmSync(openclawHome, { recursive: true, force: true });
