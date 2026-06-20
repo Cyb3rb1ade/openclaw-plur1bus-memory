@@ -12,6 +12,18 @@ PLUR1BUS is an OpenClaw v6 plugin that provides per-agent long-term memory using
 - **Telegram/Chat Commands** — user-facing inspection and editing without leaving the chat
 - **Background Jobs** — daily consolidation, critical-push classification, skill mining, REM dreaming
 
+## Embedding-Cache v2
+
+`lib/embedding-cache.js` provides the embedding cache with the following behavior:
+
+- **In-memory layer** — LRU+TTL, bounded by `embeddingCacheMaxEntries`.
+- **Persistent SQLite layer** — optional, uses Node.js built-in `node:sqlite` (no external dependency). Enabled with `embeddingCachePersist: true`. WAL mode, `busy_timeout`, atomic UPSERT, `auto_vacuum=INCREMENTAL`.
+- **Cache key** — `provider + model + dimensions + scopeId + cacheVersion + sha256(normalizedText)`. `scopeId` is the agent id when `embeddingCacheScope: "agent"` (default) or `"shared"` when scope is shared.
+- **Request coalescing** — identical cache keys share one in-flight compute promise; errors are not cached.
+- **Size limits** — `embeddingCacheMaxBytes` with soft target at 90% and hard stop on persist writes when the limit is reached.
+- **Metrics** — counters for hits, misses, persist hits/writes/skips, coalesced requests; enabled with `embeddingCacheMetrics: true`.
+- **No plaintext by default** — `debug_text` is only stored when `embeddingCachePersistDebug: true`.
+
 ## Recall boosters (additive only)
 
 These features sit **after** normal recall and only append results. They must never replace primary recall or write memory data.
@@ -119,7 +131,7 @@ node --test tests/*.test.js
 
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
-- Current baseline: 1,106 tests, all passing.
+- Current baseline: 1,854 tests, all passing.
 
 ## Dependency Audit
 
