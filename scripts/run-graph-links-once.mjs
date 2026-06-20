@@ -1,10 +1,13 @@
 #!/usr/bin/env node
-// One-shot: run writeGraphLinks against Bernd's vault
+// One-shot: run writeGraphLinks against the default workspace vault
 import { readRecords } from "../lib/obsidian/record-index.js";
 import { writeGraphLinks } from "../lib/obsidian/graph-link-writer.js";
 
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 const rawConfig = {
-  vaultPath: "/root/.openclaw/workspace",
+  vaultPath: process.env.PLUR1BUS_VAULT_PATH || join(homedir(), ".openclaw", "workspace"),
   reviewRoot: "plur1bus",
 };
 
