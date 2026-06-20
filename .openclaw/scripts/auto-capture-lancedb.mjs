@@ -59,7 +59,7 @@ async function loadProviderFactory() {
 function readPluginEmbeddingConfig(configPath) {
   try {
     const cfg = JSON.parse(readFileSync(configPath, "utf8"));
-    return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.embedding || {};
+    return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.config?.embedding || {};
   } catch (_) {
     return {};
   }
