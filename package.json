@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "6.7.3",
+  "version": "6.7.4",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge \u2014 recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",

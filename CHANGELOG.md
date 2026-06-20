@@ -6,6 +6,23 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [6.7.4] — 2026-06-20 — Reply Outcome Tracking
+
+### Added
+- Reply-based Outcome Tracking: automatische Auswertung der nächsten User-Antwort auf injizierte Memories.
+- Integration mit feedback-log / Memory-Dynamics für positive und negative Outcome-Signale.
+- Append-only Audit-Log unter .adaptive-learning/reply-outcomes.jsonl.
+- Tests für positive/negative Outcomes, Pending-Flow, canonical-ID-Filter und Idempotenz.
+
+### Fixed
+- Config-Schema-Audit-Tests an konservative v6.7.3-Defaults angeglichen (Tests waren gegenüber Full-Experience-Schema-Defaults veraltet).
+- Schema-Defaults für `autoCapture`, `autoRecall`, `runtime.maxConcurrentRecall`, `runtime.embeddingCacheEnabled` und `reranker.enabled` an tatsächliche Code-Fallbacks angeglichen.
+
+### Notes
+- Keine DB-Schema-Änderung.
+- Keine historischen Memory-Rewrites.
+- Additive, rückwärtskompatible Änderung.
+
 ## [6.7.3] — 2026-06-20 — Source Sync + Multi-Namespace + Temporal Continuity
 
 ### Added
