@@ -204,6 +204,11 @@ class MagpieTTSHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": "Not found"})
             return
 
+        # Count all POST requests to /v1/audio/speech (before any validation/error responses)
+        with _counter_lock:
+            global _requests_total
+            _requests_total += 1
+
         # Read request body
         content_length = self.headers.get("Content-Length")
         try:
@@ -240,10 +245,9 @@ class MagpieTTSHandler(BaseHTTPRequestHandler):
             self._send_json(503, {"error": "Bridge not ready: NVIDIA_API_KEY not configured"})
             return
 
-        # Track counters
+        # Track active requests during synthesis
         with _counter_lock:
-            global _requests_total, _requests_active
-            _requests_total += 1
+            global _requests_active
             _requests_active += 1
 
         try:
