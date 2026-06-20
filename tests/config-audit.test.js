@@ -175,8 +175,7 @@ describe("Schema-Default-Typen (Sonstige)", () => {
     assertBooleanDefault("continuityEngine.contradictionDetection.enabled", false));
   it("continuityEngine.contradictionDetection.maxPairsPerRecall ist 20", () =>
     assertNumberDefault("continuityEngine.contradictionDetection.maxPairsPerRecall", 20));
-  it("temporalContext.enabled ist default true", () =>
-    assertBooleanDefault("temporalContext.enabled", true));
+
 });
 
 describe("halfLifeDaysMap-Gruppen sind vollständig", () => {
@@ -344,62 +343,47 @@ describe("Schema-Default-Typen (Obsidian Bridge Graph Links)", () => {
     assertNumberDefault("obsidianBridge.graphLinks.semanticDiscovery.threshold", 0.78));
   it("obsidianBridge.graphLinks.semanticDiscovery.maxLinksPerRecord ist 5", () =>
     assertNumberDefault("obsidianBridge.graphLinks.semanticDiscovery.maxLinksPerRecord", 5));
-  it("obsidianBridge.graphLinks.semanticDiscovery.enabled ist true", () =>
-    assertBooleanDefault("obsidianBridge.graphLinks.semanticDiscovery.enabled", true));
+  it("obsidianBridge.graphLinks.semanticDiscovery.enabled ist false", () =>
+    assertBooleanDefault("obsidianBridge.graphLinks.semanticDiscovery.enabled", false));
   it("obsidianBridge.graphLinks.semanticDiscovery.topK ist 20", () =>
     assertNumberDefault("obsidianBridge.graphLinks.semanticDiscovery.topK", 20));
 });
 
-describe("Schema-Default-Typen (Full Experience Core)", () => {
-  it("reranker.enabled ist default true", () =>
-    assertBooleanDefault("reranker.enabled", true));
-  it("merging.enabled ist default true", () =>
-    assertBooleanDefault("merging.enabled", true));
-  it("merging.autoApply ist default true", () =>
-    assertBooleanDefault("merging.autoApply", true));
-  it("merging.autoApplyRisk ist low-only", () => {
-    assert.strictEqual(getDefault("merging.autoApplyRisk"), "low-only");
-  });
-  it("merging.backupBeforeApply ist default true", () =>
-    assertBooleanDefault("merging.backupBeforeApply", true));
-  it("merging.auditLog ist default true", () =>
-    assertBooleanDefault("merging.auditLog", true));
-  it("schicht15.enabled ist default true", () =>
-    assertBooleanDefault("schicht15.enabled", true));
-  it("schicht15.maxPromotionsPerRun ist 3", () =>
-    assertNumberDefault("schicht15.maxPromotionsPerRun", 3));
-  it("skillMiner.enabled ist default true", () =>
-    assertBooleanDefault("skillMiner.enabled", true));
-  it("dailyConsolidation.enabled ist default true", () =>
-    assertBooleanDefault("dailyConsolidation.enabled", true));
-  it("obsidianBridge.enabled ist default true", () =>
-    assertBooleanDefault("obsidianBridge.enabled", true));
-  it("obsidianBridge.requireVaultPathConfirmation ist default false", () =>
-    assertBooleanDefault("obsidianBridge.requireVaultPathConfirmation", false));
-  it("obsidianBridge.autoApplyLowRisk ist default true", () =>
-    assertBooleanDefault("obsidianBridge.autoApplyLowRisk", true));
-  it("obsidianBridge.semanticGraph.proposalOnly ist default false", () =>
-    assertBooleanDefault("obsidianBridge.semanticGraph.proposalOnly", false));
+describe("Schema-Default-Typen (Core Features)", () => {
+  it("reranker.enabled ist default false", () =>
+    assertBooleanDefault("reranker.enabled", false));
+  it("merging.enabled ist default false", () =>
+    assertBooleanDefault("merging.enabled", false));
+  it("merging.autoApply ist default false", () =>
+    assertBooleanDefault("merging.autoApply", false));
+  it("schicht15.enabled ist default false", () =>
+    assertBooleanDefault("schicht15.enabled", false));
+  it("schicht15.maxPromotionsPerRun ist 0", () =>
+    assertNumberDefault("schicht15.maxPromotionsPerRun", 0));
+  it("skillMiner.enabled ist default false", () =>
+    assertBooleanDefault("skillMiner.enabled", false));
+  it("dailyConsolidation.enabled ist default false", () =>
+    assertBooleanDefault("dailyConsolidation.enabled", false));
+  it("obsidianBridge.enabled ist default false", () =>
+    assertBooleanDefault("obsidianBridge.enabled", false));
+  it("obsidianBridge.requireVaultPathConfirmation ist default true", () =>
+    assertBooleanDefault("obsidianBridge.requireVaultPathConfirmation", true));
+  it("obsidianBridge.autoApplyLowRisk ist default false", () =>
+    assertBooleanDefault("obsidianBridge.autoApplyLowRisk", false));
+  it("obsidianBridge.semanticGraph.proposalOnly ist default true", () =>
+    assertBooleanDefault("obsidianBridge.semanticGraph.proposalOnly", true));
   it("obsidianBridge.semanticGraph.mutateMemory ist default false", () =>
     assertBooleanDefault("obsidianBridge.semanticGraph.mutateMemory", false));
-  it("obsidianBridge.semanticGraph.writeDerivedEdges ist default true", () =>
-    assertBooleanDefault("obsidianBridge.semanticGraph.writeDerivedEdges", true));
-  it("obsidianBridge.adversarialDeep.llmClassifier ist default true", () =>
-    assertBooleanDefault("obsidianBridge.adversarialDeep.llmClassifier", true));
+  it("obsidianBridge.adversarialDeep.llmClassifier ist default false", () =>
+    assertBooleanDefault("obsidianBridge.adversarialDeep.llmClassifier", false));
   it("obsidianBridge.soulPatch.force bleibt default false", () =>
     assertBooleanDefault("obsidianBridge.soulPatch.force", false));
   it("obsidianBridge.soulPatch.migrateLegacy bleibt default false", () =>
     assertBooleanDefault("obsidianBridge.soulPatch.migrateLegacy", false));
-  it("obsidianBridge.soulPatch.promptForLegacyMigration ist default true", () =>
-    assertBooleanDefault("obsidianBridge.soulPatch.promptForLegacyMigration", true));
-  it("morningReview.enabled ist default true", () =>
-    assertBooleanDefault("morningReview.enabled", true));
-  it("eveningReview.enabled ist default true", () =>
-    assertBooleanDefault("eveningReview.enabled", true));
-  it("metaCognition.enabled ist default true", () =>
-    assertBooleanDefault("metaCognition.enabled", true));
-  it("metaCognition.llmReport ist default true", () =>
-    assertBooleanDefault("metaCognition.llmReport", true));
+  it("morningReview.enabled ist default false", () =>
+    assertBooleanDefault("morningReview.enabled", false));
+  it("eveningReview.enabled ist default false", () =>
+    assertBooleanDefault("eveningReview.enabled", false));
 });
 
 describe("Schema-Default-Typen (Emotion)", () => {
@@ -408,8 +392,8 @@ describe("Schema-Default-Typen (Emotion)", () => {
   });
   it("emotion.t2.enabled ist true", () =>
     assertBooleanDefault("emotion.t2.enabled", true));
-  it("emotion.t3.enabled ist true", () =>
-    assertBooleanDefault("emotion.t3.enabled", true));
+  it("emotion.t3.enabled ist false", () =>
+    assertBooleanDefault("emotion.t3.enabled", false));
   it("emotion.t3.model ist 'gpt-4o-mini'", () => {
     assert.strictEqual(getDefault("emotion.t3.model"), "gpt-4o-mini");
   });

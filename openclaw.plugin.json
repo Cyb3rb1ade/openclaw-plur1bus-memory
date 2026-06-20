@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "6.7.3",
+  "version": "6.7.4",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -207,10 +207,12 @@
         }
       },
       "autoCapture": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "autoRecall": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true
       },
       "captureMaxChars": {
         "type": "number"
@@ -229,7 +231,7 @@
           },
           "maxConcurrentRecall": {
             "type": "number",
-            "default": 2
+            "default": 1
           },
           "maxConcurrentCapturePerAgent": {
             "type": "number",
@@ -269,7 +271,7 @@
           },
           "embeddingCacheEnabled": {
             "type": "boolean",
-            "default": false
+            "default": true
           },
           "embeddingCacheTtlMs": {
             "type": "number",
@@ -314,7 +316,8 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": false
           },
           "provider": {
             "type": "string",
