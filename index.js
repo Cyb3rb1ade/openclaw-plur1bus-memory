@@ -1980,6 +1980,14 @@ const plugin = {
           embeddingCacheEnabled: cfg.runtime?.embeddingCacheEnabled,
           cacheMaxEntries: cfg.runtime?.embeddingCacheMaxEntries ?? normalizedEmbeddingCfg.cacheMaxEntries,
           cacheTtlMs: cfg.runtime?.embeddingCacheTtlMs ?? normalizedEmbeddingCfg.cacheTtlMs,
+          embeddingCachePersist: cfg.runtime?.embeddingCachePersist,
+          embeddingCachePersistDebug: cfg.runtime?.embeddingCachePersistDebug,
+          embeddingCacheCoalesce: cfg.runtime?.embeddingCacheCoalesce,
+          embeddingCacheMetrics: cfg.runtime?.embeddingCacheMetrics,
+          embeddingCacheScope: cfg.runtime?.embeddingCacheScope,
+          embeddingCacheMaxBytes: cfg.runtime?.embeddingCacheMaxBytes,
+          cacheBasePath: baseDbPath,
+          logger: api.logger,
         });
 
     // Reranker (optional — provider-aware since v3.1)
@@ -2028,7 +2036,7 @@ const plugin = {
         maxCandidates: traceCfg.maxCandidates ?? 50,
       });
       try {
-        const vector = await embeddings.embed(params.text);
+        const vector = await embeddings.embed(params.text, { agentId: storeAgentId });
         const categoryResult = params.category
           ? { category: params.category, reason: "caller-provided" }
           : categorizeMemoryWithReason(params.text);
@@ -2098,7 +2106,7 @@ const plugin = {
               } else {
                 // DATA-003: prepare the merged entry and archive the original BEFORE
                 // deleting it. If embedding or archiving fails, the original remains intact.
-                const mergedVector = await embeddings.embed(mergeResult.mergedText);
+                const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
                 const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
                 let archivePath;
                 try {
@@ -2527,7 +2535,7 @@ const plugin = {
                 const result = await runProactiveCheck(neoStore, internalAgent, {
                   workspaceDir: commandCtx.workspaceDir,
                   workspaceKey: commandCtx.workspaceKey || "default",
-                  embedFn: async (text) => embeddings.embed(text),
+                  embedFn: async (text) => embeddings.embed(text, { agentId: commandCtx?.agentId || "default" }),
                   logger: api.logger,
                 });
                 api.logger?.info?.(`plur1bus internal proactive-check[${internalAgent}]: ${JSON.stringify(result)}`);
@@ -3160,7 +3168,7 @@ const plugin = {
                 updateMemory: async ({ id, newContent }) => {
                   const rawDb = pool.getDb(agentId);
                   await rawDb.init();
-                  const vector = await embeddings.embed(newContent);
+                  const vector = await embeddings.embed(newContent, { agentId });
                   const neoStore = getNeoStore(commandCtx, {});
                   const { newId } = await safeUpdate(
                     rawDb,
@@ -3470,7 +3478,7 @@ const plugin = {
               try {
                 for (let i = 0; i < textsToEmbed.length; i += batchSize) {
                   const batch = textsToEmbed.slice(i, i + batchSize);
-                  const batchVectors = await embeddings.embedBatch(batch);
+                  const batchVectors = await embeddings.embedBatch(batch, 3, { agentId });
                   for (let j = 0; j < batch.length; j++) {
                     textToVector.set(batch[j], batchVectors[j]);
                   }
@@ -3487,7 +3495,7 @@ const plugin = {
               let vector = textToVector.get(p.text);
               if (!vector) {
                 try {
-                  vector = await embeddings.embed(p.text);
+                  vector = await embeddings.embed(p.text, { agentId });
                 } catch (err) {
                   api.logger.warn(`memory-lancedb-namespaced: embed failed for capture item: ${String(err)}`);
                   return { it: p.it, text: p.text, vector: null, ok: false };
@@ -4012,7 +4020,7 @@ const plugin = {
                 maxTextPreviewChars: traceCfg.maxTextPreviewChars ?? 160,
                 maxCandidates: traceCfg.maxCandidates ?? 50,
               });
-              const vector = await embeddings.embed(params.text);
+              const vector = await embeddings.embed(params.text, { agentId });
               const categoryResult = params.category
                 ? { category: params.category, reason: "caller-provided" }
                 : categorizeMemoryWithReason(params.text);
@@ -4083,7 +4091,7 @@ const plugin = {
                     } else {
                       // DATA-003: prepare the merged entry and archive the original BEFORE
                       // deleting it. If embedding/archiving fails, the original remains intact.
-                      const mergedVector = await embeddings.embed(mergeResult.mergedText);
+                      const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
                       const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user");
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedEntry = applyDynamicsDefaults({
@@ -4184,8 +4192,8 @@ const plugin = {
               }
               if (params.query) {
                 const vector = typeof embeddings.embedQuery === "function"
-                  ? await embeddings.embedQuery(params.query)
-                  : await embeddings.embed(params.query);
+                  ? await embeddings.embedQuery(params.query, { agentId })
+                  : await embeddings.embed(params.query, { agentId });
                 const results = await db.search(vector, 5, forgetThreshold);
                 if (results.length === 0) return { content: [{ type: "text", text: "No matching memory found." }] };
                 if (results.length > 1) {
