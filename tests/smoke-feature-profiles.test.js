@@ -235,18 +235,17 @@ describe("feature-profiles", () => {
     }
   });
 
-  it("renderPlur1busStartStatus shows active disabled safety and Obsidian status", () => {
+  it("renderPlur1busStartStatus shows active disabled and Obsidian status compactly", () => {
     const out = renderPlur1busStartStatus(applyFullExperiencePolicy({ skillMiner: { enabled: false } }), {
       vaultPath: "/vault",
       workspaceRoot: "/workspace",
       reviewRoot: "plur1bus",
     });
-    assert.match(out, /PLUR1BUS Full Experience Status/);
+    assert.match(out, /PLUR1BUS — Make your agent yours!/);
+    assert.match(out, /Active: \d+\s+Disabled: \d+\s+New\/missing: \d+/);
     assert.match(out, /Skill Miner/);
-    assert.match(out, /Safety Gates:/);
-    assert.match(out, /low-risk only/);
-    assert.match(out, /vaultPath: \/vault/);
-    assert.match(out, /Installation status: complete/);
+    assert.match(out, /Obsidian: vaultPath=\/vault workspaceRoot=\/workspace reviewRoot=plur1bus/);
+    assert.match(out, /Use \/plur1bus enable\|disable <feature>\./);
   });
 
   it("DEFAULT_WS_SUFFIXES does not contain user-specific hardcoded names", () => {
