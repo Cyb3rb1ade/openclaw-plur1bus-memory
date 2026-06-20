@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// One-shot: run discoverSemanticLinks against Bernd's vault (maxPerRun=50 for safety)
+// One-shot: run discoverSemanticLinks against the default workspace vault (maxPerRun=50 for safety)
 import { readRecords } from "../lib/obsidian/record-index.js";
 import { discoverSemanticLinks } from "../lib/obsidian/semantic-link-discoverer.js";
 import { loadLinkIndex } from "../lib/obsidian/link-index.js";
@@ -7,8 +7,8 @@ import { MemoryDB } from "../index.js";
 import { makeBoundedCache } from "../lib/bounded-cache.js";
 import { join } from "node:path";
 
-const VAULT_PATH = "/root/.openclaw/workspace";
-const DB_PATH = join("/root/.openclaw/memory", "lancedb-namespaced");
+const VAULT_PATH = process.env.PLUR1BUS_VAULT_PATH || join(homedir(), ".openclaw", "workspace");
+const DB_PATH = join(process.env.PLUR1BUS_DB_BASE || join(homedir(), ".openclaw", "memory"), "lancedb-namespaced");
 
 // Minimal AgentDbPool built from exported MemoryDB + makeBoundedCache,
 // since AgentDbPool itself is not exported from index.js.
