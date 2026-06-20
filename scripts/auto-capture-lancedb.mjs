@@ -20,7 +20,12 @@ import { distanceToScore } from "../extensions/memory-lancedb-namespaced/lib/sco
 import { categorizeMemory } from "../extensions/memory-lancedb-namespaced/lib/categorize.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
-const FALLBACK_AGENTS = ["main", "bernhardine", "heisenberg"];
+// Operator-local fallback agents. Keep personal IDs out of the public repo.
+// Override with PLUR1BUS_AGENTS env var, e.g. PLUR1BUS_AGENTS='main,agent-a,agent-b'
+const FALLBACK_AGENTS = (process.env.PLUR1BUS_AGENTS || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
 const HOME = homedir();
 const BASE = join(HOME, ".openclaw");
 const CONFIG_PATH = join(BASE, "openclaw.json");
