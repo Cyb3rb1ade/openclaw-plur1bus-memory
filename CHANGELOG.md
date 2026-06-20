@@ -6,6 +6,26 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [6.7.8] — 2026-06-20 — Privacy Hardening
+
+### Security
+- Removed `.openclaw/scripts/` from repository tracking and added `.openclaw/` to `.gitignore`.
+- Removed real names and hardcoded agent IDs/paths from operational scripts:
+  - `scripts/cleanup-vault-missing-tasks.mjs`
+  - `scripts/auto-capture-lancedb.mjs`
+  - `scripts/run-semantic-link-index-phase43c.mjs`
+  - `scripts/run-semantic-discover-once.mjs`
+  - `scripts/run-graph-links-once.mjs`
+- Operator-local agent/workspace data now supplied via environment variables:
+  - `PLUR1BUS_VAULTS`
+  - `PLUR1BUS_AGENTS`
+  - `PLUR1BUS_WORKSPACES`
+  - `PLUR1BUS_VAULT_PATH`
+
+### Notes
+- No real API keys were found in the public repository or release history.
+- Remaining references to agent IDs in docs/tests/core constants are non-operational examples or product defaults.
+
 ## [6.7.4] — 2026-06-20 — Reply Outcome Tracking
 
 ### Added
