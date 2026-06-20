@@ -1001,16 +1001,16 @@ async function runVoiceAgentPipeline({ transcript, guildId, channelId, voiceChan
     let ttsQueueRunning = false;
 
     // TTS queue processor
-    async function processTtsQueue() {
+    async function processTtsQueue(abortCtrl = ttsAbortController) {
       if (ttsQueueRunning) return;
       ttsQueueRunning = true;
 
       while (ttsQueue.length > 0) {
-        if (ttsAbortController.signal.aborted) break;
+        if (abortCtrl.signal.aborted) break;
         const chunk = ttsQueue.shift();
         try {
-          const pcmBuffer = await fetchTts(chunk, ttsAbortController.signal);
-          if (ttsAbortController.signal.aborted) break;
+          const pcmBuffer = await fetchTts(chunk, abortCtrl.signal);
+          if (abortCtrl.signal.aborted) break;
 
           // Record time to first audio
           if (!firstAudioPlayed) {
@@ -1032,8 +1032,8 @@ async function runVoiceAgentPipeline({ transcript, guildId, channelId, voiceChan
             player.once("error", onError);
 
             // Abort listener
-            if (ttsAbortController.signal.aborted) resolve();
-            ttsAbortController.signal.addEventListener("abort", resolve);
+            if (abortCtrl.signal.aborted) resolve();
+            abortCtrl.signal.addEventListener("abort", resolve);
           });
 
         } catch (err) {
@@ -1100,10 +1100,11 @@ async function runVoiceAgentPipeline({ transcript, guildId, channelId, voiceChan
         fullText = await gatewayClient.reformulateForSpeech(fullText, reformAbort.signal);
         const chunks = splitIntoTtsChunks(fullText, TTS_MAX_CHARS);
         for (const c of chunks) ttsQueue.push(c);
-        await processTtsQueue();
+        await processTtsQueue(reformAbort);
       } catch (err) {
         if (err.message !== "aborted") {
           console.error("[llm] Reformulation error:", err.message);
+          voiceChannel.send("_(Bernd: Antwort zu lang und Zusammenfassung fehlgeschlagen.)_").catch(() => {});
         }
       }
     } else {
