@@ -13,9 +13,9 @@ import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
 import { OpenAIEmbeddingProvider } from "../lib/providers/embedding-openai.js";
 
-// node:sqlite is only available from Node 22.5+; skip SQLite-backed tests on older runtimes
+// node:sqlite is only stable (no flag) from Node 22.12+; 22.5–22.11 require --experimental-sqlite
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
-const hasSqlite = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 5);
+const hasSqlite = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 12);
 const describeSqlite = hasSqlite ? describe : describe.skip;
 
 describe("createEmbeddingCache", () => {
