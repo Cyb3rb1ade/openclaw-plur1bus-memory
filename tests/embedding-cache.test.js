@@ -13,6 +13,11 @@ import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
 import { OpenAIEmbeddingProvider } from "../lib/providers/embedding-openai.js";
 
+// node:sqlite is only available from Node 22.5+; skip SQLite-backed tests on older runtimes
+const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
+const hasSqlite = nodeMajor > 22 || (nodeMajor === 22 && nodeMinor >= 5);
+const describeSqlite = hasSqlite ? describe : describe.skip;
+
 describe("createEmbeddingCache", () => {
   it("returns a cache instance with default options", () => {
     const cache = createEmbeddingCache();
@@ -328,7 +333,7 @@ describe("embedding-cache v2 getMany", () => {
   });
 });
 
-describe("embedding-cache v2 persistence", () => {
+describeSqlite("embedding-cache v2 persistence", () => {
   function makeTempBase() {
     return mkdtempSync(join(tmpdir(), "plur1bus-emb-cache-"));
   }
@@ -420,7 +425,7 @@ describe("embedding-cache v2 persistence", () => {
   });
 });
 
-describe("embedding-cache v2 size limits", () => {
+describeSqlite("embedding-cache v2 size limits", () => {
   function makeTempBase() {
     return mkdtempSync(join(tmpdir(), "plur1bus-emb-cache-"));
   }
