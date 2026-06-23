@@ -36,12 +36,9 @@ GW="${PLUR1BUS_GW:-openclaw-gateway.service}"
 LOG="${PLUR1BUS_LOG:-/root/.openclaw/logs/protect-deploy.log}"
 
 # Runtime files that carry the fixes and must always match source.
-# Note: scripts/cleanup-stores.mjs was removed from this list because the file
-# does not exist in the repo source. Keeping it here would make every deploy
-# look like a drift/restore candidate for a destructive cleanup script that we
-# intentionally do not ship. The per-file existence guard below already skipped
-# it, but removing it eliminates confusion and prevents accidental future
-# addition of a data-deletion script. See P7 deploy-hygiene notes.
+# NOTE: scripts/cleanup-stores.mjs is intentionally NOT listed here; the file
+# does not exist in this repo and shipping a destructive cleanup helper would
+# create deploy drift and an unnecessary foot-gun.
 FILES=(
   index.js
   openclaw.plugin.json
