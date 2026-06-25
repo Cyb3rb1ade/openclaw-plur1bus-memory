@@ -9,7 +9,7 @@
  * v2.2.0: Gruppen-Erkennung + Sender-Attribution + saubere Textextraktion
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -401,6 +401,47 @@ function isSessionFile(name) {
   return true;
 }
 
+/**
+ * Read complete non-empty JSONL lines from a byte offset without loading the full file.
+ * @param {string} filePath Session JSONL file path.
+ * @param {number} offset Byte offset to start reading from.
+ * @returns {Promise<{ lines: string[], nextOffset: number }>} Complete lines and the next safe byte offset.
+ */
+export async function readSessionLinesSinceOffset(filePath, offset = 0) {
+  const start = Math.max(0, Number(offset) || 0);
+  const lines = [];
+  let nextOffset = start;
+  let pending = "";
+
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath, { start, encoding: "utf8" });
+    stream.on("data", (chunk) => {
+      pending += chunk;
+      const parts = pending.split("\n");
+      pending = parts.pop() || "";
+      for (const line of parts) {
+        nextOffset += Buffer.byteLength(`${line}\n`, "utf8");
+        if (line.trim().length > 0) lines.push(line);
+      }
+    });
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
+
+  return { lines, nextOffset };
+}
+
+/**
+ * Read complete non-empty JSONL lines from a byte offset.
+ * @param {string} filePath Session JSONL file path.
+ * @param {number} offset Byte offset to start reading from.
+ * @returns {Promise<string[]>} Complete non-empty lines after the offset.
+ */
+export async function readLinesFromOffset(filePath, offset = 0) {
+  const { lines } = await readSessionLinesSinceOffset(filePath, offset);
+  return lines;
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function captureAgent(agentId, embeddings) {
   const sessionsDir = join(AGENTS_DIR, agentId, "sessions");
@@ -421,13 +462,15 @@ async function captureAgent(agentId, embeddings) {
     const lastOffset = stateFiles[file.name] || 0;
     if (file.size <= lastOffset) continue;
 
-    const raw = readFileSync(file.path, "utf8");
-    const newPortion = raw.slice(lastOffset);
-    const newLines = newPortion.split("\n").filter(l => l.trim().length > 0);
+    const { lines: newLines, nextOffset } = await readSessionLinesSinceOffset(file.path, lastOffset);
 
     const messages = [];
+    let parseErrors = 0;
     for (const line of newLines) {
-      try { messages.push(JSON.parse(line)); } catch {}
+      try { messages.push(JSON.parse(line)); } catch { parseErrors++; }
+    }
+    if (parseErrors > 0) {
+      console.warn(`[${agentId}] skipped ${parseErrors} unparsable session lines in ${file.name}`);
     }
 
     // v2.2.0: Gruppen-Kontext aus ALLEN Nachrichten (inkl. role="") lesen
@@ -438,7 +481,7 @@ async function captureAgent(agentId, embeddings) {
       it._isGroup = sessionCtx.isGroup;
     }
     allItems.push(...items);
-    stateFiles[file.name] = file.size;
+    stateFiles[file.name] = nextOffset;
   }
 
   if (allItems.length === 0) {
@@ -469,6 +512,7 @@ async function captureAgent(agentId, embeddings) {
     console.warn(`[${agentId}] embedBatch failed, falling back to per-item embeddings: ${err.message}`);
   }
 
+  const rowsToAdd = [];
   for (let i = 0; i < prepared.length; i++) {
     const { it, trimmed } = prepared[i];
     try {
@@ -488,70 +532,84 @@ async function captureAgent(agentId, embeddings) {
         ? `[${it.senderLabel}] ${evidenceBase}`.slice(0, 200)
         : evidenceBase;
 
-      await table.add([
-        {
-          id: randomUUID(),
-          text: trimmed,
-          summary: generateSummary(trimmed, SUMMARY_MAX_WORDS),
-          origin,
-          vector,
-          importance: 0.7,
-          category: categorizeMemory(trimmed),
-          createdAt: captureTimestamp,
-          mergedFrom: "[]",
-          expiresAt: 0,
-          storedBy: agentId,
-          sourceTurnId: it.sourceTurnId || "",
-          sourceMessageRole: it.role || "",
-          sourceTimestamp: it.sourceTimestamp || captureTimestamp,
-          sourceUrl: it.sourceUrl || "",
-          evidenceQuote,
-          scope: "agent-private",
-          // PLUR1BUS schema compat (v2.3.0)
-          type: "memory",
-          confirmed: false,
-          emotionalValence: "",
-          emotionalIntensity: 0,
-          emotionalDominant: "neutral",
-          moodContextAtCapture: "",
-          replayCount: 0,
-          lastReplayed: 0,
-          retrievalCount: 0,
-          lastRetrievedAt: 0,
-          memoryStrength: 1.0,
-          halfLifeDays: 30,
-          lastStrengthenedAt: 0,
-          lastDynamicsAt: 0,
-          memoryClass: "standard",
-          neverForget: 0,
-          coreMemoryScore: 0.0,
-          coreMemoryReason: "",
-          versionNumber: 1,
-          previousVersion: "",
-          supersededBy: "",
-          updateSource: "auto-capture",
-          updateEvidence: "",
-          reconsolidationConfidence: 0.0,
-          status: "active",
-          versionCreatedAt: captureTimestamp,
-          updatedAt: captureTimestamp,
-          memoryKind: "memory",
-          reminderStatus: "",
-          remindAt: 0,
-          remindedAt: 0,
-          dispatchedAt: 0,
-          acknowledgedAt: 0,
-          cancelledAt: 0,
-          reminderKey: "",
-          dispatchCount: 0,
-          lastDispatchAttemptAt: 0,
-          nextDispatchAttemptAt: 0,
-          workspaceKey: "",
-        },
-      ]);
-      stored++;
+      rowsToAdd.push({
+        id: randomUUID(),
+        text: trimmed,
+        summary: generateSummary(trimmed, SUMMARY_MAX_WORDS),
+        origin,
+        vector,
+        importance: 0.7,
+        category: categorizeMemory(trimmed),
+        createdAt: captureTimestamp,
+        mergedFrom: "[]",
+        expiresAt: 0,
+        storedBy: agentId,
+        sourceTurnId: it.sourceTurnId || "",
+        sourceMessageRole: it.role || "",
+        sourceTimestamp: it.sourceTimestamp || captureTimestamp,
+        sourceUrl: it.sourceUrl || "",
+        evidenceQuote,
+        scope: "agent-private",
+        // PLUR1BUS schema compat (v2.3.0)
+        type: "memory",
+        confirmed: false,
+        emotionalValence: "",
+        emotionalIntensity: 0,
+        emotionalDominant: "neutral",
+        moodContextAtCapture: "",
+        replayCount: 0,
+        lastReplayed: 0,
+        retrievalCount: 0,
+        lastRetrievedAt: 0,
+        memoryStrength: 1.0,
+        halfLifeDays: 30,
+        lastStrengthenedAt: 0,
+        lastDynamicsAt: 0,
+        memoryClass: "standard",
+        neverForget: 0,
+        coreMemoryScore: 0.0,
+        coreMemoryReason: "",
+        versionNumber: 1,
+        previousVersion: "",
+        supersededBy: "",
+        updateSource: "auto-capture",
+        updateEvidence: "",
+        reconsolidationConfidence: 0.0,
+        status: "active",
+        versionCreatedAt: captureTimestamp,
+        updatedAt: captureTimestamp,
+        memoryKind: "memory",
+        reminderStatus: "",
+        remindAt: 0,
+        remindedAt: 0,
+        dispatchedAt: 0,
+        acknowledgedAt: 0,
+        cancelledAt: 0,
+        reminderKey: "",
+        dispatchCount: 0,
+        lastDispatchAttemptAt: 0,
+        nextDispatchAttemptAt: 0,
+        workspaceKey: "",
+      });
     } catch (err) {
       console.error(`[${agentId}] capture error: ${err.message}`);
+    }
+  }
+
+  if (rowsToAdd.length > 0) {
+    try {
+      await table.add(rowsToAdd);
+      stored += rowsToAdd.length;
+    } catch (err) {
+      console.error(`[${agentId}] batch capture add error: ${err.message}`);
+      for (const row of rowsToAdd) {
+        try {
+          await table.add([row]);
+          stored++;
+        } catch (rowErr) {
+          console.error(`[${agentId}] capture add error: ${rowErr.message}`);
+        }
+      }
     }
   }
 
