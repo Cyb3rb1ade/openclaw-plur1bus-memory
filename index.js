@@ -87,6 +87,14 @@ import { runSkillMiner } from "./lib/jobs/skill-miner.js";
 import { listPendingProposals, approveProposal, rejectProposal, listActiveSkills, showProposal } from "./lib/telegram-commands/skill-commands.js";
 import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "./lib/jobs/skill-miner/proposal-writer.js";
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
+import {
+  runSpeakerListCommand,
+  runSpeakerNameCommand,
+  runSpeakerProposalsCommand,
+  runSpeakerConfirmCommand,
+  runSpeakerRejectCommand,
+  runSpeakerClearCommand,
+} from "./lib/telegram-commands/speaker-mapping.js";
 import { resolveLocale, readSoulToneCached, pickTone, t } from "./lib/i18n.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions, computeContentHash } from "./lib/jobs/schicht15-tracker.js";
 import {
@@ -206,6 +214,15 @@ import {
 } from "./lib/reply-outcome-tracking.js";
 import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
 import { DEFAULT_NAMESPACE } from "./lib/namespace-config.js";
+import {
+  extractMediaOutputIds,
+  stripMediaOutputIdToken,
+} from "./lib/speaker-segment-schema.js";
+import {
+  getMergeResultByMediaOutputId,
+  resetSpeakerMappingDbForTests,
+} from "./lib/speaker-mapping-store.js";
+import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -232,6 +249,35 @@ function dbg(e, scope = "") {
   try {
     pluginLogger?.debug?.(`[plur1bus]${scope ? " " + scope : ""}: ${e?.message ?? e}`);
   } catch { /* debug darf niemals werfen */ }
+}
+
+async function runSpeakerProposalPipeline(agentId, mediaOutputIds) {
+  if (!mediaOutputIds || mediaOutputIds.length === 0) {
+    return { proposals: 0 };
+  }
+  try {
+    let totalStored = 0;
+    for (const mediaOutputId of mediaOutputIds) {
+      const segments = getMergeResultByMediaOutputId(mediaOutputId);
+      if (!segments || segments.length === 0) {
+        continue;
+      }
+      const proposals = await proposeSpeakerNames(segments, agentId);
+      if (proposals.length > 0) {
+        const { stored } = storeNewProposals(agentId, proposals);
+        totalStored += stored;
+      }
+    }
+    if (totalStored > 0) {
+      pluginLogger?.info?.(
+        `[plur1bus] speaker proposal pipeline: stored ${totalStored} new proposal(s) for agent=${agentId}`,
+      );
+    }
+    return { proposals: totalStored };
+  } catch (err) {
+    pluginLogger?.warn?.(`[plur1bus] speaker proposal pipeline failed: ${String(err)}`);
+    return { proposals: 0 };
+  }
 }
 
 // Lazy-loaded modules
@@ -3045,6 +3091,37 @@ const plugin = {
           handler: (commandCtx) => runFeatureToggle(commandCtx, false),
         });
 
+        api.registerCommand({
+          name: "speaker",
+          description: "PLUR1BUS — Speaker naming. /speaker list | name <label> <name> | proposals | confirm <label> | reject <label> | clear <label>",
+          acceptsArgs: true,
+          channels: ["telegram", "discord", "slack", "mattermost"],
+          handler: (commandCtx) => {
+            const deniedLen = checkArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
+            const { lang } = resolveCommandLocale(commandCtx);
+            const agentId = commandCtx?.agentId || "default";
+            const sub = (commandCtx.args || "").trim().split(/\s+/)[0]?.toLowerCase() || "list";
+            const rest = (commandCtx.args || "").trim().slice(sub.length).trim();
+            const subCtx = { ...commandCtx, args: rest };
+            switch (sub) {
+              case "name":
+                return runSpeakerNameCommand(subCtx, agentId, checkAuth, { lang });
+              case "proposals":
+                return runSpeakerProposalsCommand(agentId, { lang });
+              case "confirm":
+                return runSpeakerConfirmCommand(subCtx, agentId, checkAuth, { lang });
+              case "reject":
+                return runSpeakerRejectCommand(subCtx, agentId, checkAuth, { lang });
+              case "clear":
+                return runSpeakerClearCommand(subCtx, agentId, checkAuth, { lang });
+              case "list":
+              default:
+                return runSpeakerListCommand(agentId, { lang });
+            }
+          },
+        });
+
         // ── /memory, /forget, /correct (Phase 4b) ─────────────────────
         // Lazy-initialisierter DB-Adapter: nutzt den GLEICHEN baseDbPath wie
         // die Plugin-interne MemoryDB. getEmbedding ist optional — wenn der
@@ -3358,6 +3435,7 @@ const plugin = {
             const maxChars = cfg.captureMaxChars || 15000;
             const turnId = event.turnId || event.runId || "";
             const items = [];      // {text, role, isUserUrl, sourceUrl}
+            const mediaOutputIds = new Set();
             const urlPattern = /https?:\/\/[^\s]{10,}/;
 
             const extractUrl = (t) => {
@@ -3376,7 +3454,9 @@ const plugin = {
               if (typeof content === "string") {
                 if (content && content.length > 20) {
                   const sourceUrl = isUser ? extractUrl(content) : "";
-                  items.push({ text: content, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
+                  const cleaned = stripMediaOutputIdToken(content);
+                  extractMediaOutputIds(content).forEach((id) => mediaOutputIds.add(id));
+                  items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
                 }
                 continue;
               }
@@ -3387,7 +3467,9 @@ const plugin = {
 
                   if (block.type === "text" && typeof block.text === "string" && block.text.length > 20) {
                     const sourceUrl = isUser ? extractUrl(block.text) : "";
-                    items.push({ text: block.text, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
+                    const cleaned = stripMediaOutputIdToken(block.text);
+                    extractMediaOutputIds(block.text).forEach((id) => mediaOutputIds.add(id));
+                    items.push({ text: cleaned, role, isUserUrl: isUser && !!sourceUrl, sourceUrl });
                     continue;
                   }
 
@@ -3577,6 +3659,9 @@ const plugin = {
             }
 
             api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
+
+            // Speaker naming pipeline: propose display names from merged diarization segments.
+            await runSpeakerProposalPipeline(agentId, [...mediaOutputIds]);
 
             // Meta-Cognition: Session-Counter erhöhen, ggf. Reflection triggern
             if (metaCognitionEnabled && stored > 0) {
