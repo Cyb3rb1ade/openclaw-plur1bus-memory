@@ -2360,6 +2360,11 @@ const plugin = {
           "morning-review",
           "review",
         ]);
+        const isCronCommandContext = (commandCtx) => {
+          const channel = String(commandCtx?.channel || "").toLowerCase();
+          const origin = String(commandCtx?.origin || commandCtx?.source || commandCtx?.kind || "").toLowerCase();
+          return channel === "cron" || origin === "cron";
+        };
         const runPlur1busCommand = async (commandCtx, prefixTokens = []) => {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
@@ -2410,6 +2415,10 @@ const plugin = {
             // Wird ausschliesslich aus den OpenClaw-managed Cron-Jobs gefeuert
             // (delivery.mode=none).
             if (actionKey === "internal") {
+              if (!isCronCommandContext(commandCtx)) {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
+              }
               const subKey = (sub || "").toLowerCase();
               const internalAgent = commandCtx.agentId || "default";
               if (subKey === "consolidate-daily") {
@@ -2777,11 +2786,15 @@ const plugin = {
                 return { text: showProposal(workspaceDir, id, { lang, tone }).text };
               }
               if (subKey === "approve") {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_approve_usage", { lang, tone }) };
                 const result = approveProposal(workspaceDir, id, { agentId: commandCtx.agentId, workspaceKey: commandCtx.workspaceKey, lang, tone });
                 return { text: result.text };
               }
               if (subKey === "reject") {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
                 const result = rejectProposal(workspaceDir, id, { lang, tone });
                 return { text: result.text };
@@ -2793,6 +2806,19 @@ const plugin = {
               const subKey = sub?.toLowerCase() || "list";
               const reminderAgent = commandCtx.agentId || "default";
               const reminderWsKey = commandCtx.workspaceKey || commandCtx.workspaceDir || "default";
+              if (subKey === "cancel" || subKey === "delete") {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
+                if (!id) return { text: t("reminder.cancel_usage", { lang, tone }) };
+                const rdb = pool.getDb(reminderAgent);
+                await rdb.init();
+                try {
+                  await cancelReminder(rdb, id);
+                  return { text: t("reminder.cancel_success", { lang, tone, vars: { id } }) };
+                } catch (e) {
+                  return { text: t("reminder.cancel_failed", { lang, tone, vars: { id, error: e?.message || String(e) } }) };
+                }
+              }
               const rdb = pool.getDb(reminderAgent);
               await rdb.init();
               if (subKey === "list" || subKey === "show" || subKey === "help") {
@@ -2818,15 +2844,6 @@ const plugin = {
                 lines.push(t("reminder.list_hint", { lang, tone }));
                 return { text: lines.join("\n") };
               }
-              if (subKey === "cancel" || subKey === "delete") {
-                if (!id) return { text: t("reminder.cancel_usage", { lang, tone }) };
-                try {
-                  await cancelReminder(rdb, id);
-                  return { text: t("reminder.cancel_success", { lang, tone, vars: { id } }) };
-                } catch (e) {
-                  return { text: t("reminder.cancel_failed", { lang, tone, vars: { id, error: e?.message || String(e) } }) };
-                }
-              }
               return { text: t("reminder.unknown", { lang, tone, vars: { sub: subKey } }) };
             }
             if (action === "status") return formatJsonCommandResult(summarizeNeoStore(commandStore));
@@ -2840,6 +2857,10 @@ const plugin = {
             }
             if (action === "neo" && sub === "workspaces" && tokens[2] === "migrate") {
               const dryRun = tokens.includes("--dry-run");
+              if (!dryRun) {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
+              }
               const backupDir = commandOption(tokens, "--backup-dir", commandOption(tokens, "--backup", ""));
               return formatJsonCommandResult(migrateNeoWorkspaces(neoRoot, {
                 dryRun,
@@ -2892,6 +2913,10 @@ const plugin = {
               if (!id && ["origin", "explain", "promote", "demote", "prune", "tombstone"].includes(sub)) {
                 return { text: `Usage: /plur1bus memory ${sub} <id>` };
               }
+              if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
+              }
               const record = findNeoRecord(commandStore, id);
               if (!record) return { text: `No PLUR1BUS neo record found for ${id}` };
               if (sub === "origin" || sub === "explain") return formatJsonCommandResult(record);
@@ -2914,6 +2939,10 @@ const plugin = {
               return formatJsonCommandResult({ id, sourceTurnIds: record.sourceTurnIds || record.origin?.sourceTurnIds || [], sourceMemoryIds: record.origin?.sourceMemoryIds || [], sourceToolCallIds: record.origin?.sourceToolCallIds || [], origin: record.origin });
             }
             if (action === "behavior") {
+              if (["promote", "demote", "prune"].includes(sub)) {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
+              }
               const cards = commandStore.readBehaviorCards(500);
               if (sub === "show") return formatJsonCommandResult(cards.filter(c => c.status === "active" || c.status === "promoted"));
               if (sub === "candidates") return formatJsonCommandResult(cards.filter(c => c.status === "candidate"));
