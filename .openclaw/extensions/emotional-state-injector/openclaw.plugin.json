@@ -1,0 +1,7 @@
+{
+  "id": "emotional-state-injector",
+  "name": "Emotional State Injector",
+  "description": "Injects current emotional state into agent context before each prompt build, so all sessions (including isolated cron) always have mood context without requiring LLM file reads.",
+  "version": "1.0.0",
+  "configSchema": {}
+}
