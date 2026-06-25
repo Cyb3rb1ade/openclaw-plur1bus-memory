@@ -442,6 +442,116 @@ export async function readLinesFromOffset(filePath, offset = 0) {
   return lines;
 }
 
+function resolveDistanceToScoreFn(options = {}) {
+  return options.distanceToScoreFn || distanceToScore || ((distance) => 1 / (1 + (distance ?? 0)));
+}
+
+function isDuplicateDistance(distance, options = {}) {
+  const threshold = Number.isFinite(options.duplicateThreshold) ? options.duplicateThreshold : DUPLICATE_THRESHOLD;
+  const score = resolveDistanceToScoreFn(options)(distance);
+  return Number.isFinite(score) && score >= threshold;
+}
+
+function squaredL2Distance(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return Infinity;
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    const diff = Number(a[i]) - Number(b[i]);
+    if (!Number.isFinite(diff)) return Infinity;
+    sum += diff * diff;
+  }
+  return sum;
+}
+
+async function findExistingDuplicateIndexesFallback(table, vectors, options = {}) {
+  const duplicates = new Set();
+  for (let i = 0; i < vectors.length; i++) {
+    try {
+      const results = await table.search(vectors[i]).limit(1).toArray();
+      if (results.length > 0 && results[0]._distance !== undefined && isDuplicateDistance(results[0]._distance, options)) {
+        duplicates.add(i);
+      }
+    } catch (err) {
+      options.onWarn?.(`fallback duplicate check failed for candidate ${i}: ${err.message}`);
+      duplicates.add(i);
+    }
+  }
+  return duplicates;
+}
+
+/**
+ * Find duplicate candidate indexes with one LanceDB multi-query ANN search when available.
+ * @param {Object} table LanceDB table.
+ * @param {number[][]} vectors Candidate vectors in candidate order.
+ * @param {Object} options Duplicate threshold and scoring options.
+ * @returns {Promise<Set<number>>} Candidate indexes that already exist in the table.
+ */
+export async function findExistingDuplicateIndexes(table, vectors, options = {}) {
+  if (!table || !Array.isArray(vectors) || vectors.length === 0) return new Set();
+
+  if (typeof table.query !== "function") {
+    return findExistingDuplicateIndexesFallback(table, vectors, options);
+  }
+
+  try {
+    let builder = table.query().nearestTo(vectors[0]);
+    if (vectors.length > 1 && typeof builder.addQueryVector !== "function") {
+      return findExistingDuplicateIndexesFallback(table, vectors, options);
+    }
+    for (const vector of vectors.slice(1)) {
+      builder = builder.addQueryVector(vector) || builder;
+    }
+    builder = builder.limit(1) || builder;
+    const rows = await builder.toArray();
+    const duplicates = new Set();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const index = Number.isInteger(row?.query_index)
+        ? row.query_index
+        : (vectors.length === 1 ? 0 : -1);
+      if (index < 0 || index >= vectors.length) continue;
+      if (row._distance !== undefined && isDuplicateDistance(row._distance, options)) {
+        duplicates.add(index);
+      }
+    }
+    return duplicates;
+  } catch (err) {
+    options.onWarn?.(`multi-query duplicate check failed, falling back to per-candidate search: ${err.message}`);
+    return findExistingDuplicateIndexesFallback(table, vectors, options);
+  }
+}
+
+function findInBatchDuplicateIndexes(prepared, options = {}) {
+  const duplicates = new Set();
+  for (let i = 0; i < prepared.length; i++) {
+    if (duplicates.has(i)) continue;
+    for (let j = i + 1; j < prepared.length; j++) {
+      if (duplicates.has(j)) continue;
+      const distance = squaredL2Distance(prepared[i]?.vector, prepared[j]?.vector);
+      if (isDuplicateDistance(distance, options)) duplicates.add(j);
+    }
+  }
+  return duplicates;
+}
+
+/**
+ * Remove candidates that already exist in LanceDB or duplicate earlier candidates in the same batch.
+ * @param {Object} table LanceDB table.
+ * @param {Array<Object>} prepared Candidate entries with a vector property.
+ * @param {Object} options Duplicate threshold and scoring options.
+ * @returns {Promise<Array<Object>>} Candidates safe to store.
+ */
+export async function filterPreparedForStorageByBatchDedup(table, prepared, options = {}) {
+  const vectorPrepared = (Array.isArray(prepared) ? prepared : []).filter((entry) => Array.isArray(entry?.vector));
+  const existingDuplicates = await findExistingDuplicateIndexes(
+    table,
+    vectorPrepared.map((entry) => entry.vector),
+    options,
+  );
+  const notExisting = vectorPrepared.filter((_, index) => !existingDuplicates.has(index));
+  const inBatchDuplicates = findInBatchDuplicateIndexes(notExisting, options);
+  return notExisting.filter((_, index) => !inBatchDuplicates.has(index));
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function captureAgent(agentId, embeddings) {
   const sessionsDir = join(AGENTS_DIR, agentId, "sessions");
@@ -512,17 +622,25 @@ async function captureAgent(agentId, embeddings) {
     console.warn(`[${agentId}] embedBatch failed, falling back to per-item embeddings: ${err.message}`);
   }
 
-  const rowsToAdd = [];
+  const preparedWithVectors = [];
   for (let i = 0; i < prepared.length; i++) {
     const { it, trimmed } = prepared[i];
     try {
       const vector = batchVectors[i] || await embeddings.embed(trimmed, { agentId });
+      preparedWithVectors.push({ it, trimmed, vector });
+    } catch (err) {
+      console.error(`[${agentId}] capture vector error: ${err.message}`);
+    }
+  }
 
-      const results = await table.search(vector).limit(1).toArray();
-      if (results.length > 0 && results[0]._distance !== undefined) {
-        if (distanceToScore(results[0]._distance) >= DUPLICATE_THRESHOLD) continue;
-      }
-
+  const toStore = await filterPreparedForStorageByBatchDedup(table, preparedWithVectors, {
+    duplicateThreshold: DUPLICATE_THRESHOLD,
+    distanceToScoreFn: distanceToScore,
+    onWarn: (message) => console.warn(`[${agentId}] ${message}`),
+  });
+  const rowsToAdd = [];
+  for (const { it, trimmed, vector } of toStore) {
+    try {
       // v2.2.0: origin aus Session-Kontext ableiten
       const origin = it._isGroup ? "group" : "dm";
 
