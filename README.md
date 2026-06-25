@@ -14,9 +14,10 @@ PLUR1BUS can build a local JS/TS code index without CocoIndex:
 
 ```bash
 npm run code-index -- /path/to/workspace
+npm run code-index -- /path/to/workspace --query "/plur1bus code-index"
 ```
 
-The index is written to `.plur1bus/code-index.json` and contains normalized files, symbols, import/call/register edges, and symbol chunks. It uses the TypeScript Compiler API through the optional `typescript` dependency and keeps the PLUR1BUS schema independent of the parser implementation.
+The index is written to `.plur1bus/code-index.json` and contains normalized files, symbols, import/call/register edges, and symbol chunks. `--query` prints a bounded `<code-context>` block from the generated index. It uses the TypeScript Compiler API through the optional `typescript` dependency and keeps the PLUR1BUS schema independent of the parser implementation.
 
 ### New in v6.7.x — Multi-Namespace, Temporal Continuity & Source Sync
 
