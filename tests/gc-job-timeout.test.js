@@ -3,7 +3,7 @@ import assert from "node:assert";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runGcJob } from "../lib/jobs/gc-job.js";
+import { collectActiveMemories, runGcJob } from "../lib/jobs/gc-job.js";
 
 describe("gc-job timeout", () => {
   it("returns timeout reason when scanActive hangs", async () => {
@@ -53,5 +53,27 @@ describe("gc-job timeout", () => {
     assert.strictEqual(result.ok, true);
     assert.strictEqual(result.reason, undefined);
     assert.strictEqual(result.processed, 1);
+  });
+
+  it("prefers scanActiveBatches over full scanActive", async () => {
+    let batchScanCalled = false;
+    const db = {
+      async scanActive() {
+        throw new Error("full scan should not be used");
+      },
+      async *scanActiveBatches(options) {
+        batchScanCalled = true;
+        assert.strictEqual(options.batchSize, 2);
+        yield [
+          { id: "1", text: "one" },
+          { id: "2", text: "two" },
+        ];
+      },
+    };
+
+    const memories = await collectActiveMemories(db, { batchSize: 2 });
+
+    assert.strictEqual(batchScanCalled, true);
+    assert.deepStrictEqual(memories.map((m) => m.id), ["1", "2"]);
   });
 });
