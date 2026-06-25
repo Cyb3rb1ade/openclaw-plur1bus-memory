@@ -117,9 +117,14 @@ export const DEPLOY_FILES = [
   "lib/telegram-commands/memory-edit.js",
   "lib/telegram-commands/memory-query.js",
   "lib/telegram-commands/skill-commands.js",
+  "lib/telegram-commands/speaker-mapping.js",
   "lib/telegram-commands/status-data.js",
   "lib/telegram-commands/status.js",
   "lib/wiki-command.js",
+  // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
+  "lib/speaker-segment-schema.js",
+  "lib/speaker-mapping-store.js",
+  "lib/speaker-proposer.js",
 ];
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;

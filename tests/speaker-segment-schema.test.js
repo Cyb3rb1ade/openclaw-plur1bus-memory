@@ -8,12 +8,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
+  applySpeakerMappings,
   createDiscordSpeakerSegment,
   createSpeakerSegment,
   createUnknownSpeakerSegment,
+  extractMediaOutputIds,
   formatSpeakerSegments,
   normalizeSpeakerSegment,
   normalizeSpeakerSegments,
+  stripMediaOutputIdToken,
 } from "../lib/speaker-segment-schema.js";
 
 describe("speaker-segment schema", () => {
@@ -138,11 +141,31 @@ describe("speaker segment formatter", () => {
     assert.strictEqual(formatted, "[speaker_0]: hello\n[speaker_1]: world");
   });
 
-  it("renders discord segments with user-id labels", () => {
+  it("renders confirmed display names when present", () => {
+    const formatted = formatSpeakerSegments([
+      createSpeakerSegment({ speakerLabel: "speaker_0", speakerDisplayName: "Nina", text: "hello" }),
+      createSpeakerSegment({ speakerLabel: "speaker_1", text: "world" }),
+    ]);
+    assert.strictEqual(formatted, "[Nina]: hello\n[speaker_1]: world");
+  });
+
+  it("renders discord segments with display name when present", () => {
     const formatted = formatSpeakerSegments([
       createDiscordSpeakerSegment({
         userId: "123456789",
         displayName: "Eva",
+        text: "hello",
+        startMs: 0,
+        endMs: 1000,
+      }),
+    ]);
+    assert.strictEqual(formatted, "[Eva]: hello");
+  });
+
+  it("renders discord segments with user-id label when no display name", () => {
+    const formatted = formatSpeakerSegments([
+      createDiscordSpeakerSegment({
+        userId: "123456789",
         text: "hello",
         startMs: 0,
         endMs: 1000,
@@ -154,6 +177,30 @@ describe("speaker segment formatter", () => {
   it("returns an empty string for empty segments", () => {
     assert.strictEqual(formatSpeakerSegments([]), "");
     assert.strictEqual(formatSpeakerSegments(null), "");
+  });
+});
+
+describe("media-output-id token helpers", () => {
+  it("strips the hidden media-output-id token", () => {
+    const cleaned = stripMediaOutputIdToken("<!-- media-output-id: abc-123 -->\n[speaker_0]: hello");
+    assert.strictEqual(cleaned, "[speaker_0]: hello");
+  });
+
+  it("extracts media-output-id values from text", () => {
+    const ids = extractMediaOutputIds("<!-- media-output-id: abc-123 -->\n<!-- media-output-id: def-456 -->");
+    assert.deepStrictEqual(ids, ["abc-123", "def-456"]);
+  });
+});
+
+describe("applySpeakerMappings", () => {
+  it("applies confirmed display names to matching labels", () => {
+    const segments = [
+      createSpeakerSegment({ speakerLabel: "speaker_0", text: "hello" }),
+      createSpeakerSegment({ speakerLabel: "speaker_1", text: "world" }),
+    ];
+    const result = applySpeakerMappings(segments, new Map([["speaker_0", "Nina"]]));
+    assert.strictEqual(result[0].speakerDisplayName, "Nina");
+    assert.strictEqual(result[1].speakerDisplayName, null);
   });
 });
 
