@@ -31,12 +31,22 @@ Verification after remediation:
 - Focused remediation suite: 154 tests, 154 pass, 0 fail
 - Full `npm test`: 1917 tests, 1917 pass, 0 fail, 31.82 s
 
+Additional follow-up applied on 2026-06-25 on `fix/plur1bus-performance-audit`:
+
+- `atomicJsonUpdate()` now uses `fs/promises` behind the existing per-file queue, with a static regression guard against sync filesystem calls and a stronger parallel-update assertion.
+- `scripts/auto-capture-lancedb.mjs` now streams complete JSONL lines from the last byte offset instead of reading whole session files, leaves partial trailing records for the next run, and batches LanceDB inserts after duplicate checks with per-row fallback on batch failure.
+
+Verification after follow-up:
+
+- `node --test tests/p2-performance.test.js tests/auto-capture-import.test.js tests/auto-capture-batch.test.js`: 21 tests, 21 pass, 0 fail
+- `node --test tests/*.test.js`: 1797 tests, 1797 pass, 0 fail, 31.87 s
+
 ## What Is Solid Now
 
 - P7/P8 runtime hardening is present on `main`: recall concurrency defaults to 1, background queues are bounded, pressure gating is enabled, recall timeout logs carry phase and event-loop-lag context, and soft-budget fallback exists.
 - The previous critical local-embedding-cache gap is closed for `LocalTransformersEmbeddingProvider`; it now uses `createEmbeddingCache`.
 - Graph traversal/index tests remain healthy. The local benchmark suite reports 10k-edge graph indexing under the 100 ms budget and indexed lookup much faster than array scanning.
-- Metrics writes are no longer a normal recall hot-path problem because `metrics-debounce` batches them; direct `atomicJsonUpdate` remains slower but mostly displaced from the hot path.
+- Metrics writes are no longer a normal recall hot-path problem because `metrics-debounce` batches them; direct `atomicJsonUpdate` is still disk-bound but no longer uses synchronous filesystem calls.
 
 ## Findings
 
@@ -190,4 +200,4 @@ Recommendation:
 
 ## Bottom Line
 
-`main` is substantially healthier than the 2026-06-16 performance audit baseline. The current risks are no longer broad hot-path instability; they are concentrated in scale edges: persistent cache scoping, local-model batching, legacy cron capture, full-table scans, and JSONL full-file reads.
+`main` is substantially healthier than the 2026-06-16 performance audit baseline, and this follow-up closes the remaining direct findings in this audit file. The current watch items are narrower scale edges: per-candidate duplicate vector searches where LanceDB lacks an obvious batch-search API, and normal disk-bound cost for explicit atomic JSON writes.
