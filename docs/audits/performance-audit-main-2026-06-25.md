@@ -38,8 +38,19 @@ Additional follow-up applied on 2026-06-25 on `fix/plur1bus-performance-audit`:
 
 Verification after follow-up:
 
-- `node --test tests/p2-performance.test.js tests/auto-capture-import.test.js tests/auto-capture-batch.test.js`: 21 tests, 21 pass, 0 fail
+- Initial follow-up focused suite before ANN-specific tests: 21 tests, 21 pass, 0 fail
 - `node --test tests/*.test.js`: 1797 tests, 1797 pass, 0 fail, 31.87 s
+
+Additional ANN follow-up applied on 2026-06-26 on `fix/plur1bus-performance-audit`:
+
+- `scripts/auto-capture-lancedb.mjs` now uses LanceDB multi-query ANN duplicate checks via `addQueryVector()` and maps results by `query_index` before batch insert.
+- The legacy cron path now also deduplicates candidates within the same new capture batch before `table.add(rowsToAdd)`.
+
+Verification after ANN follow-up:
+
+- `node --test tests/auto-capture-import.test.js tests/auto-capture-batch.test.js tests/p2-performance.test.js`: 23 tests, 23 pass, 0 fail
+- `npm run lint`: pass
+- `node --test tests/*.test.js`: 1799 tests, 1799 pass, 0 fail, 31.88 s
 
 ## What Is Solid Now
 
@@ -200,4 +211,4 @@ Recommendation:
 
 ## Bottom Line
 
-`main` is substantially healthier than the 2026-06-16 performance audit baseline, and this follow-up closes the remaining direct findings in this audit file. The current watch items are narrower scale edges: per-candidate duplicate vector searches where LanceDB lacks an obvious batch-search API, and normal disk-bound cost for explicit atomic JSON writes.
+`main` is substantially healthier than the 2026-06-16 performance audit baseline, and the follow-ups close the remaining direct findings in this audit file. The current watch item is the normal disk-bound cost for explicit atomic JSON writes.
