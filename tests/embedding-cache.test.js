@@ -6,7 +6,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEmbeddingCache } from "../lib/embedding-cache.js";
@@ -533,5 +533,36 @@ describeSqlite("embedding-cache v2 size limits", () => {
 
     agentDb.close();
     sharedDb.close();
+  });
+
+  it("uses separate DB files for separate agent scopes in one cache instance", async () => {
+    const basePath = makeTempBase();
+    const cache = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      scope: "agent",
+      provider: "test",
+      model: "scope-test",
+      dimensions: 2,
+    });
+
+    await cache.setMany([{ text: "alpha", vector: [1, 1] }], { agentId: "agent-a" });
+    await cache.setMany([{ text: "beta", vector: [2, 2] }], { agentId: "agent-b" });
+
+    const files = readdirSync(join(basePath, "embedding-cache-v2"))
+      .filter((name) => name.endsWith(".db"))
+      .sort();
+    assert.deepStrictEqual(files, ["agent-a.db", "agent-b.db"]);
+
+    const reload = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      scope: "agent",
+      provider: "test",
+      model: "scope-test",
+      dimensions: 2,
+    });
+    assert.deepStrictEqual(await reload.getMany(["alpha"], { agentId: "agent-a" }), [[1, 1]]);
+    assert.deepStrictEqual(await reload.getMany(["beta"], { agentId: "agent-b" }), [[2, 2]]);
   });
 });
