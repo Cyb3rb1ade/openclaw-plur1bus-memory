@@ -1,9 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { homedir } from "node:os";
-import { existsSync } from "node:fs";
-import { buildEmbeddingConfig, createEmbeddings } from "../scripts/auto-capture-lancedb.mjs";
+import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  buildEmbeddingConfig,
+  createEmbeddings,
+  readLinesFromOffset,
+  readSessionLinesSinceOffset,
+} from "../scripts/auto-capture-lancedb.mjs";
 
 describe("auto-capture import path", () => {
   it("PLUR1BUS_PLUGIN_DIR env var can override path", () => {
@@ -29,6 +34,49 @@ describe("auto-capture import path", () => {
   it("auto-capture script exports helpers without running main", () => {
     assert.strictEqual(typeof buildEmbeddingConfig, "function");
     assert.strictEqual(typeof createEmbeddings, "function");
+    assert.strictEqual(typeof readLinesFromOffset, "function");
+    assert.strictEqual(typeof readSessionLinesSinceOffset, "function");
+  });
+
+  it("streams session slices instead of reading whole capture files", () => {
+    const source = readFileSync(join(process.cwd(), "scripts", "auto-capture-lancedb.mjs"), "utf8");
+    assert.doesNotMatch(source, /readFileSync\(file\.path,\s*["']utf8["']\)/);
+    assert.match(source, /createReadStream/);
+  });
+
+  it("reads only complete lines appended after a byte offset", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-capture-offset-"));
+    const path = join(dir, "session.jsonl");
+    const existing = `${JSON.stringify({ message: { role: "user", content: "old memory text" } })}\n`;
+    const appendedLines = [
+      JSON.stringify({ message: { role: "user", content: "new memory text" } }),
+      JSON.stringify({ message: { role: "assistant", content: "new answer text" } }),
+    ];
+    writeFileSync(path, existing + appendedLines.join("\n") + "\n", "utf8");
+
+    const lines = await readLinesFromOffset(path, Buffer.byteLength(existing));
+
+    assert.deepStrictEqual(lines, appendedLines);
+  });
+
+  it("does not advance past a partial trailing JSONL record", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auto-capture-partial-"));
+    const path = join(dir, "session.jsonl");
+    const existing = `${JSON.stringify({ message: { role: "user", content: "old memory text" } })}\n`;
+    const complete = `${JSON.stringify({ message: { role: "user", content: "complete memory text" } })}\n`;
+    const partial = JSON.stringify({ message: { role: "assistant", content: "partial answer text" } }).slice(0, -3);
+    writeFileSync(path, existing + complete + partial, "utf8");
+
+    const result = await readSessionLinesSinceOffset(path, Buffer.byteLength(existing));
+
+    assert.deepStrictEqual(result.lines, [complete.trimEnd()]);
+    assert.strictEqual(result.nextOffset, Buffer.byteLength(existing + complete));
+  });
+
+  it("batches LanceDB inserts after duplicate checks", () => {
+    const source = readFileSync(join(process.cwd(), "scripts", "auto-capture-lancedb.mjs"), "utf8");
+    assert.match(source, /const rowsToAdd = \[\]/);
+    assert.match(source, /await table\.add\(rowsToAdd\)/);
   });
 
   it("builds provider config from plugin config with legacy OPENAI env fallback", () => {
