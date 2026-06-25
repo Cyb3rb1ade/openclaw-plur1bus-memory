@@ -42,4 +42,8 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/provider-wizard.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
-.openclaw/
+.openclaw/*
+!.openclaw/extensions/
+.openclaw/extensions/*
+!.openclaw/extensions/emotional-state-injector/
+!.openclaw/extensions/emotional-state-injector/**
