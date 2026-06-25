@@ -476,9 +476,10 @@ const LANCEDB_READ_TIMEOUT_MS = 10_000;
 const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
 
 class MemoryDB {
-  constructor(dbPath, vectorDim) {
+  constructor(dbPath, vectorDim, logger = null) {
     this.dbPath = dbPath;
     this.vectorDim = vectorDim;
+    this.logger = logger;
     this.db = null;
     this.table = null;
     this.initPromise = null;
@@ -736,7 +737,9 @@ class MemoryDB {
     await this._write(this.table.add([this.normalizeEntryForTable(entry)]), "MemoryDB.store");
     this._writeCounter++;
     if (this._writeCounter % REINDEX_WRITE_THRESHOLD === 0) {
-      this._maybeReindex().catch(() => {});
+      this._maybeReindex().catch((err) => {
+        this.logger?.warn?.(`memory-lancedb-namespaced: reindex scheduling failed: ${String(err)}`);
+      });
     }
   }
 
@@ -806,8 +809,9 @@ class MemoryDB {
       // v6.2.1 — Counter reset nach erfolgreichem Reindex (P0-Fix)
       this._writeCounter = 0;
       this._lastReindexAt = Date.now();
-    } catch (_) {
+    } catch (err) {
       // Non-fatal: falls back to flat scan if reindex fails
+      this.logger?.warn?.(`memory-lancedb-namespaced: reindex failed; falling back to flat scan: ${String(err)}`);
     } finally {
       this._reindexing = false;
     }
@@ -996,9 +1000,10 @@ class MemoryDB {
 }
 
 class AgentDbPool {
-  constructor(basePath, vectorDim) {
+  constructor(basePath, vectorDim, logger = null) {
     this.basePath = basePath;
     this.vectorDim = vectorDim;
+    this.logger = logger;
     this.dbs = makeBoundedCache(50, async (_id, db) => {
       if (db && typeof db.shutdown === "function") {
         try { await db.shutdown(); } catch (_) { /* ignore */ }
@@ -1015,7 +1020,7 @@ class AgentDbPool {
       const cached = this.dbs.get(id);
       if (cached) return cached;
       const dbPath = join(this.basePath, id);
-      const db = new MemoryDB(dbPath, this.vectorDim);
+      const db = new MemoryDB(dbPath, this.vectorDim, this.logger);
       this.dbs.set(id, db);
       return db;
     } finally {
@@ -2018,10 +2023,24 @@ const plugin = {
         // legacyReadOnlyNamespaces intentionally not set — no cross-ns recall for flat paths.
       };
     }
-    const pool = new MultiNamespacePool(_memoryBaseDir, _effectiveNsCfg, vectorDim, AgentDbPool);
+    const pool = new MultiNamespacePool(_memoryBaseDir, _effectiveNsCfg, vectorDim, AgentDbPool, api.logger);
     const emotionalPool = createEmotionalStatePool();
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
-      ? new LocalTransformersEmbeddingProvider({ ...normalizedEmbeddingCfg.local, dimensions: dimensions || vectorDim })
+      ? new LocalTransformersEmbeddingProvider({
+          ...normalizedEmbeddingCfg.local,
+          dimensions: dimensions || vectorDim,
+          embeddingCacheEnabled: cfg.runtime?.embeddingCacheEnabled,
+          cacheMaxEntries: cfg.runtime?.embeddingCacheMaxEntries ?? normalizedEmbeddingCfg.cacheMaxEntries,
+          cacheTtlMs: cfg.runtime?.embeddingCacheTtlMs ?? normalizedEmbeddingCfg.cacheTtlMs,
+          embeddingCachePersist: cfg.runtime?.embeddingCachePersist,
+          embeddingCachePersistDebug: cfg.runtime?.embeddingCachePersistDebug,
+          embeddingCacheCoalesce: cfg.runtime?.embeddingCacheCoalesce,
+          embeddingCacheMetrics: cfg.runtime?.embeddingCacheMetrics,
+          embeddingCacheScope: cfg.runtime?.embeddingCacheScope,
+          embeddingCacheMaxBytes: cfg.runtime?.embeddingCacheMaxBytes,
+          cacheBasePath: baseDbPath,
+          logger: api.logger,
+        })
       : new OpenAIEmbeddingProvider({
           ...normalizedEmbeddingCfg,
           apiKey: embeddingCfg.apiKey,
@@ -2246,8 +2265,8 @@ const plugin = {
       api.registerMemoryPromptSupplement(() => [buildRecallSafetyPreamble()]);
     }
 
-    if (neoEnabled) {
-      if (typeof api.registerMemoryPromptSupplement === "function") {
+    {
+      if (neoEnabled && typeof api.registerMemoryPromptSupplement === "function") {
         api.registerMemoryPromptSupplement(() => [
           buildRecallSafetyPreamble(),
           "Dynamic PLUR1BUS recall is injected once per turn by the configured auto-recall hook; do not duplicate the same recall block.",
@@ -2256,7 +2275,7 @@ const plugin = {
         ]);
       }
 
-      if (typeof api.registerMemoryCorpusSupplement === "function") {
+      if (neoEnabled && typeof api.registerMemoryCorpusSupplement === "function") {
         api.registerMemoryCorpusSupplement({
           async search(params) {
             const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey });
@@ -2488,7 +2507,7 @@ const plugin = {
                       await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger: api.logger });
                       return discoverSemanticLinks(semVaultCfg, lancedbRecords, { pool, logger: api.logger, defaultAgentId: internalAgent });
                     })
-                    .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.batchAborted ? " (aborted-429)" : ""}`))
+                    .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
                     .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
                 }
                 return formatJsonCommandResult({ job: "rem-dream", ...(result.report || result) });
@@ -2556,7 +2575,7 @@ const plugin = {
                 if (!workspaces.length) {
                   return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_workspaces_configured" });
                 }
-                let totalProcessed = 0, totalSkipped = 0, totalUnchanged = 0, totalErrors = 0;
+                let totalProcessed = 0, totalSkipped = 0, totalUnchanged = 0, totalErrors = 0, totalBlocked = 0;
                 for (const ws of workspaces) {
                   try {
                     const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
@@ -2570,12 +2589,13 @@ const plugin = {
                     totalSkipped += semResult.skipped;
                     totalUnchanged += semResult.unchanged;
                     totalErrors += semResult.errors;
+                    if (semResult.blocked) totalBlocked++;
                   } catch (err) {
                     api.logger?.warn?.(`[discover-semantic-links] workspace ${ws.path} failed: ${err.message}`);
                     totalErrors++;
                   }
                 }
-                return formatJsonCommandResult({ job: "discover-semantic-links", processed: totalProcessed, skipped: totalSkipped, unchanged: totalUnchanged, errors: totalErrors });
+                return formatJsonCommandResult({ job: "discover-semantic-links", processed: totalProcessed, skipped: totalSkipped, unchanged: totalUnchanged, errors: totalErrors, blocked: totalBlocked });
               }
               if (subKey === "proactive-check") {
                 if (!commandCtx.workspaceDir) {
@@ -3370,21 +3390,23 @@ const plugin = {
         });
       }
 
-      const startNeoService = () => {
-        api.logger.info(`plur1bus-neo: service ready (state: ${neoRoot}, mode: augment)`);
-      };
-      const stopNeoService = () => {
-        api.logger.info("plur1bus-neo: service stopped");
-      };
-      if (typeof api.on === "function") {
-        api.on("gateway_start", startNeoService, { timeoutMs: 30_000 });
-        api.on("gateway_stop", stopNeoService, { timeoutMs: 30_000 });
-      } else if (typeof api.registerService === "function") {
-        api.registerService({
-          id: "plur1bus-neo-maintenance",
-          start: startNeoService,
-          stop: stopNeoService,
-        });
+      if (neoEnabled) {
+        const startNeoService = () => {
+          api.logger.info(`plur1bus-neo: service ready (state: ${neoRoot}, mode: augment)`);
+        };
+        const stopNeoService = () => {
+          api.logger.info("plur1bus-neo: service stopped");
+        };
+        if (typeof api.on === "function") {
+          api.on("gateway_start", startNeoService, { timeoutMs: 30_000 });
+          api.on("gateway_stop", stopNeoService, { timeoutMs: 30_000 });
+        } else if (typeof api.registerService === "function") {
+          api.registerService({
+            id: "plur1bus-neo-maintenance",
+            start: startNeoService,
+            stop: stopNeoService,
+          });
+        }
       }
     }
 
@@ -5159,7 +5181,9 @@ const plugin = {
             if (allDue.length > 0) {
               reminderNudge = formatReminderNudge(allDue, { lang, tone });
               for (const r of dueFromDb) {
-                await presentReminder(db, r.id).catch(() => {});
+                await presentReminder(db, r.id).catch((err) => {
+                  api.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
+                });
               }
               // Batch remove all from pending file in one write
               if (dueFromPending.length > 0) {
@@ -5266,7 +5290,9 @@ const plugin = {
           if (allDue.length > 0) {
             reminderNudge = formatReminderNudge(allDue, { lang, tone });
             for (const r of dueFromDb) {
-              await presentReminder(db, r.id).catch(() => {});
+              await presentReminder(db, r.id).catch((err) => {
+                api.logger.warn?.(`plur1bus-reminder: present failed for ${r.id}: ${String(err)}`);
+              });
             }
             if (dueFromPending.length > 0) {
               for (const r of allDue) {
