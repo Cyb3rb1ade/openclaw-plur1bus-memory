@@ -2,7 +2,7 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
 import { runReminderDispatch } from "../lib/jobs/reminder-dispatch.js";
 import { readPendingReminders, clearPendingReminders } from "../lib/reminder-pending.js";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -73,5 +73,25 @@ describe("reminder-dispatch", () => {
     const result2 = await runReminderDispatch(db, "agent-1", { workspaceDir: tmpDir, workspaceKey: "ws-1", deliveryMode: "pending_only" });
     assert.strictEqual(result2.skipped, true);
     assert.strictEqual(result2.reason, "rate_limited");
+  });
+
+  it("cleans up stale locks using the dispatch lockStaleMs", async () => {
+    const db = mockDb([]);
+    const locksDir = join(tmpDir, "locks");
+    mkdirSync(locksDir, { recursive: true });
+    const lockPath = join(locksDir, "reminder-dispatch-agent-1.lock");
+    writeFileSync(lockPath, "stale", "utf8");
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, old, old);
+
+    const result = await runReminderDispatch(db, "agent-1", {
+      workspaceDir: tmpDir,
+      workspaceKey: "ws-1",
+      deliveryMode: "pending_only",
+      lockStaleMs: 1,
+    });
+
+    assert.strictEqual(result.skipped, false);
+    assert.strictEqual(existsSync(lockPath), false);
   });
 });
