@@ -92,4 +92,23 @@ describe("speaker-mapping-store", () => {
     deleteSpeakerMapping("agent-1", "speaker_0");
     assert.strictEqual(getSpeakerMapping("agent-1", "speaker_0"), null);
   });
+
+  it("falls back to in-memory mappings when node:sqlite is unavailable", () => {
+    const originalForceMemory = process.env.PLUR1BUS_SPEAKER_MAPPING_FORCE_MEMORY;
+    process.env.PLUR1BUS_SPEAKER_MAPPING_FORCE_MEMORY = "1";
+    resetSpeakerMappingDbForTests();
+    try {
+      setManualSpeakerMapping("agent-1", "speaker_0", "Nina");
+      const mapping = getSpeakerMapping("agent-1", "speaker_0");
+      assert.strictEqual(mapping.speakerDisplayName, "Nina");
+      assert.strictEqual(getConfirmedMappings("agent-1").length, 1);
+    } finally {
+      resetSpeakerMappingDbForTests();
+      if (originalForceMemory === undefined) {
+        delete process.env.PLUR1BUS_SPEAKER_MAPPING_FORCE_MEMORY;
+      } else {
+        process.env.PLUR1BUS_SPEAKER_MAPPING_FORCE_MEMORY = originalForceMemory;
+      }
+    }
+  });
 });
