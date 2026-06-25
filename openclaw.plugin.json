@@ -203,6 +203,31 @@
                 }
               }
             }
+          },
+          "embeddingDrain": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "impact": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical",
+                  "all"
+                ],
+                "default": "low"
+              },
+              "maxItems": {
+                "type": "number",
+                "default": 250
+              }
+            }
           }
         }
       },
