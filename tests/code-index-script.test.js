@@ -29,4 +29,30 @@ describe("build-code-index script", () => {
     assert.equal(index.kind, "plur1bus-code-index");
     assert.equal(index.files.length, 2);
   });
+
+  it("prints a bounded code-context block when --query is provided", () => {
+    const rootDir = tempWorkspace();
+    writeFileSync(join(rootDir, "index.js"), [
+      "export function activate(api) {",
+      "  api.commands.register('/plur1bus code-index', runCodeIndex);",
+      "}",
+      "function runCodeIndex() { return 'ok'; }",
+      "",
+    ].join("\n"), "utf8");
+
+    const result = spawnSync(process.execPath, [
+      "scripts/build-code-index.mjs",
+      rootDir,
+      "--query",
+      "/plur1bus code-index",
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /code-index query="\/plur1bus code-index" results=1/);
+    assert.match(result.stdout, /<code-context source="plur1bus-code-index" query="\/plur1bus code-index">/);
+    assert.match(result.stdout, /<command>\/plur1bus code-index<\/command>/);
+  });
 });
