@@ -207,7 +207,27 @@ describe("discoverSemanticLinks", () => {
     assert.strictEqual(result.processed, 0);
   });
 
-  it("processes a record and writes index", async () => {
+  it("blocks index writes without explicit confirm", async () => {
+    const vault = makeVault();
+    const idA = "aaaaaaaa-0000-0000-0000-000000000001";
+    const idB = "aaaaaaaa-0000-0000-0000-000000000002";
+    const records = [
+      { id: idA, vector: [0.1], text: "hello", summary: "world" },
+      { id: idB, vector: [0.2], text: "bye", summary: "later" },
+    ];
+
+    const result = await discoverSemanticLinks(baseConfig(vault), records, {
+      pool: makePool([idB]),
+      defaultAgentId: "main",
+    });
+
+    assert.strictEqual(result.blocked, true);
+    assert.strictEqual(result.reason, "confirm_required");
+    assert.strictEqual(result.indexUpdated, false);
+    assert.strictEqual(existsSync(join(vault, ".plur1bus", "link-index.json")), false);
+  });
+
+  it("processes a record and writes index when confirmed", async () => {
     const vault = makeVault();
     const idA = "aaaaaaaa-0000-0000-0000-000000000001";
     const idB = "aaaaaaaa-0000-0000-0000-000000000002";
@@ -216,7 +236,7 @@ describe("discoverSemanticLinks", () => {
       { id: idB, vector: [0.2], text: "bye", summary: "later" },
     ];
     const pool = makePool([idB]);
-    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
+    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true });
     assert.ok(result.processed >= 1);
     assert.strictEqual(result.indexUpdated, true);
     const idx = loadLinkIndex(vault);
@@ -234,8 +254,8 @@ describe("discoverSemanticLinks", () => {
     const idA = "aaaaaaaa-0000-0000-0000-000000000001";
     const records = [{ id: idA, vector: [0.1], text: "hello", summary: "world" }];
     const pool = makePool(["aaaaaaaa-0000-0000-0000-000000000002"]);
-    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
-    const second = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
+    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true });
+    const second = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true });
     assert.strictEqual(second.unchanged, 1);
     assert.strictEqual(second.processed, 0);
     assert.strictEqual(second.indexUpdated, false);
@@ -262,7 +282,7 @@ describe("discoverSemanticLinks", () => {
     const records = [{ id: selfId, vector: [0.1], text: "t", summary: "" }];
     // search returns self + other
     const pool = makePool([selfId, "aaaaaaaa-0000-0000-0000-000000000002"]);
-    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main" });
+    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true });
     const idx = loadLinkIndex(vault);
     assert.ok(!idx.entries[selfId]?.similar.includes(selfId));
   });

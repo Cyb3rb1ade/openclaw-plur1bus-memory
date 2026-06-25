@@ -7,7 +7,7 @@ import { join } from "node:path";
 import plugin from "../index.js";
 import { writePlur1busStartNotice } from "../lib/setup/feature-profiles.js";
 
-function makeApi(baseDbPath) {
+function makeApi(baseDbPath, configOverrides = {}) {
   const commands = [];
   const noop = () => {};
   return {
@@ -19,6 +19,7 @@ function makeApi(baseDbPath) {
       neo: { enabled: true },
       obsidianBridge: { enabled: false },
       gc: { enabled: false },
+      ...configOverrides,
     },
     logger: { info: noop, warn: noop, error: noop, debug: noop },
     resolvePath: (p) => p,
@@ -58,6 +59,24 @@ describe("/plur1bus start", () => {
       rmSync(openclawHome, { recursive: true, force: true });
       if (oldHome === undefined) delete process.env.OPENCLAW_HOME;
       else process.env.OPENCLAW_HOME = oldHome;
+    }
+  });
+
+  it("keeps PLUR1BUS control commands registered when neo is disabled", () => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-start-db-"));
+    try {
+      const api = makeApi(baseDbPath, { neo: { enabled: false } });
+      plugin.register(api);
+
+      const names = new Set(api._commands.map((item) => item.name));
+      assert.ok(names.has("plur1bus_start"), "plur1bus_start should remain available");
+      assert.ok(names.has("enable"), "enable should remain available");
+      assert.ok(names.has("disable"), "disable should remain available");
+      assert.ok(names.has("memory"), "memory should remain available");
+      assert.ok(names.has("forget"), "forget should remain available");
+      assert.ok(names.has("correct"), "correct should remain available");
+    } finally {
+      rmSync(baseDbPath, { recursive: true, force: true });
     }
   });
 });

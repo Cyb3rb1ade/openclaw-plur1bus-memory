@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
 import { OpenAIEmbeddingProvider } from "../lib/providers/embedding-openai.js";
+import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 
 // node:sqlite is only stable (no flag) from Node 22.12+; 22.5–22.11 require --experimental-sqlite
 const [nodeMajor, nodeMinor] = process.versions.node.split(".").map(Number);
@@ -203,6 +204,44 @@ describe("embedding-cache config passthrough", () => {
       embeddingCacheEnabled: false,
     });
     assert.strictEqual(provider._cache, null);
+  });
+
+  it("LocalTransformersEmbeddingProvider caches repeated passage embeddings", async () => {
+    const provider = new LocalTransformersEmbeddingProvider({
+      model: "mock-local",
+      dimensions: 2,
+      cacheMaxEntries: 8,
+    });
+    let calls = 0;
+    provider._getPipeline = async () => async (input) => {
+      calls++;
+      return [input.length, calls];
+    };
+
+    const first = await provider.embed("Hello", { agentId: "agent-a" });
+    const second = await provider.embed(" hello ", { agentId: "agent-a" });
+
+    assert.deepStrictEqual(second, first);
+    assert.strictEqual(calls, 1);
+  });
+
+  it("LocalTransformersEmbeddingProvider keeps query and passage cache keys separate", async () => {
+    const provider = new LocalTransformersEmbeddingProvider({
+      model: "mock-local",
+      dimensions: 2,
+      cacheMaxEntries: 8,
+    });
+    let calls = 0;
+    provider._getPipeline = async () => async (input) => {
+      calls++;
+      return [input.startsWith("query: ") ? 1 : 2, calls];
+    };
+
+    const passage = await provider.embedPassage("same", { agentId: "agent-a" });
+    const query = await provider.embedQuery("same", { agentId: "agent-a" });
+
+    assert.notDeepStrictEqual(query, passage);
+    assert.strictEqual(calls, 2);
   });
 });
 
