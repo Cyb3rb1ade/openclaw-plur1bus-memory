@@ -255,6 +255,27 @@ describe("InterpretationOverlayStore — Phase 3", () => {
     }
   });
 
+  it("targeted loadAllOverlays skips unrelated malformed JSONL before parsing", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
+    const store = new InterpretationOverlayStore(tmpDir);
+    const originalWarn = console.warn;
+    const warnings = [];
+    console.warn = (...args) => warnings.push(args);
+    try {
+      appendFileSync(store.filePath, "{ broken json without target id\n");
+      await store.append({ targetMemoryId: "m-target", shiftType: "meaning", shiftDescription: "Target", triggerContext: "a" });
+
+      const all = await store.loadAllOverlays(["m-target"], { includeProvisional: true });
+
+      assert.strictEqual(all.length, 1);
+      assert.strictEqual(all[0].targetMemoryId, "m-target");
+      assert.strictEqual(warnings.length, 0);
+    } finally {
+      console.warn = originalWarn;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("loadForTargets returns the latest overlay when multiple non-superseded overlays exist for one target", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "plur1bus-phase3-"));
     const store = new InterpretationOverlayStore(tmpDir);

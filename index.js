@@ -324,6 +324,58 @@ class Reranker {
   }
 }
 
+function semanticDiscoveryStats() {
+  return {
+    processed: 0,
+    skipped: 0,
+    unchanged: 0,
+    errors: 0,
+    indexUpdated: false,
+    blocked: false,
+    batchAborted: false,
+  };
+}
+
+function addSemanticDiscoveryStats(total, result = {}) {
+  total.processed += result.processed || 0;
+  total.skipped += result.skipped || 0;
+  total.unchanged += result.unchanged || 0;
+  total.errors += result.errors || 0;
+  total.indexUpdated = total.indexUpdated || result.indexUpdated === true;
+  total.blocked = total.blocked || result.blocked === true;
+  total.batchAborted = total.batchAborted || result.batchAborted === true;
+  if (result.reason && !total.reason) total.reason = result.reason;
+  return total;
+}
+
+async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defaultAgentId }) {
+  const discoveryCfg = semVaultCfg?.graphLinks?.semanticDiscovery || {};
+  const batchSize = Math.max(1, Math.min(Number(discoveryCfg.batchSize || 500), 5000));
+  let remaining = Math.max(1, Number(discoveryCfg.maxPerRun || 500));
+  const total = semanticDiscoveryStats();
+
+  const scanBatches = typeof db.scanActiveBatches === "function"
+    ? db.scanActiveBatches({ batchSize })
+    : (async function* fallbackScan() { yield await db.scanActive(); })();
+
+  for await (const lancedbRecords of scanBatches) {
+    if (!Array.isArray(lancedbRecords) || lancedbRecords.length === 0) continue;
+    await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger });
+    const result = await discoverSemanticLinks(semVaultCfg, lancedbRecords, {
+      pool,
+      logger,
+      defaultAgentId,
+      maxPerRun: remaining,
+    });
+    addSemanticDiscoveryStats(total, result);
+    const consumed = (result.processed || 0) + (result.skipped || 0) + (result.unchanged || 0) + (result.errors || 0);
+    remaining -= Math.max(consumed, 0);
+    if (result.batchAborted || remaining <= 0) break;
+  }
+
+  return total;
+}
+
 async function getLanceDB() {
   if (!_lancedb) {
     try {
@@ -957,14 +1009,8 @@ class MemoryDB {
     }
   }
 
-  async scanActive() {
-    await this.init();
-    const count = await this._read(this.table.countRows(), "MemoryDB.scanActive.countRows");
-    if (count === 0) return [];
-    const rows = await this._read(this.table.query()
-      .where("status IS NULL OR (status != 'deleted' AND status != 'archived')")
-      .toArray(), "MemoryDB.scanActive");
-    return rows.map((r) => ({
+  normalizeActiveScanRow(r) {
+    return {
       id: r.id,
       vector: (Array.isArray(r.vector) && r.vector.length > 0) ? r.vector : null,
       text: r.text || "",
@@ -974,7 +1020,45 @@ class MemoryDB {
       createdAt: r.createdAt || "",
       scope: r.scope || "agent-private",
       status: r.status || "active",
-    }));
+    };
+  }
+
+  buildActiveScanQuery() {
+    let query = this.table.query()
+      .where("status IS NULL OR (status != 'deleted' AND status != 'archived')");
+    if (typeof query.select === "function") {
+      query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "status"]);
+    }
+    return query;
+  }
+
+  async *scanActiveBatches(options = {}) {
+    await this.init();
+    const batchSize = Math.max(1, Math.min(Number(options.batchSize || 500), 5000));
+    let offset = 0;
+    while (true) {
+      let query = this.buildActiveScanQuery().limit(batchSize);
+      if (offset > 0) {
+        if (typeof query.offset !== "function") break;
+        query = query.offset(offset);
+      }
+      const rows = await this._read(
+        query.toArray({ maxBatchLength: batchSize }),
+        `MemoryDB.scanActiveBatches:${offset}`,
+      );
+      if (!rows || rows.length === 0) break;
+      yield rows.map((r) => this.normalizeActiveScanRow(r));
+      if (rows.length < batchSize) break;
+      offset += rows.length;
+    }
+  }
+
+  async scanActive(options = {}) {
+    const rows = [];
+    for await (const batch of this.scanActiveBatches(options)) {
+      rows.push(...batch);
+    }
+    return rows;
   }
 
   async purgeExpired() {
@@ -2512,9 +2596,13 @@ const plugin = {
                   const semDb = pool.getDb(internalAgent);
                   Promise.resolve()
                     .then(async () => {
-                      const lancedbRecords = await semDb.scanActive();
-                      await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger: api.logger });
-                      return discoverSemanticLinks(semVaultCfg, lancedbRecords, { pool, logger: api.logger, defaultAgentId: internalAgent });
+                      return runSemanticDiscoveryBatches({
+                        db: semDb,
+                        semVaultCfg,
+                        pool,
+                        logger: api.logger,
+                        defaultAgentId: internalAgent,
+                      });
                     })
                     .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
                     .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
@@ -2590,9 +2678,13 @@ const plugin = {
                     const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
                     const wsAgentId = ws.agentId || internalAgent;
                     const wsDb = pool.getDb(wsAgentId);
-                    const lancedbRecords = await wsDb.scanActive();
-                    await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger: api.logger });
-                    const semResult = await discoverSemanticLinks(semVaultCfg, lancedbRecords, { pool, logger: api.logger, defaultAgentId: wsAgentId });
+                    const semResult = await runSemanticDiscoveryBatches({
+                      db: wsDb,
+                      semVaultCfg,
+                      pool,
+                      logger: api.logger,
+                      defaultAgentId: wsAgentId,
+                    });
                     api.logger?.info?.(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
                     totalProcessed += semResult.processed;
                     totalSkipped += semResult.skipped;
