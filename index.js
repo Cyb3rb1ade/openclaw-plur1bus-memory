@@ -1936,6 +1936,10 @@ const plugin = {
     const neoEnabled = neoCfg.enabled !== false; // 3.0 default: additive cognitive layer on
     const neoRoot = api.resolvePath(neoCfg.statePath || join(baseDbPath, "_neo"));
     const neoMode = neoCfg.mode || "augment";
+    const neoEmbeddingDrainCfg = neoCfg.embeddingDrain || {};
+    const neoEmbeddingAutoDrainEnabled = neoEmbeddingDrainCfg.enabled !== false;
+    const neoEmbeddingDrainImpact = neoEmbeddingDrainCfg.impact || "low";
+    const neoEmbeddingDrainMaxItems = Math.max(1, Number(neoEmbeddingDrainCfg.maxItems || 250));
     const neoWorkspaceAliases = buildNeoWorkspaceAliases({ obsidianBridge: obsidianBridgeCfg, neo: neoCfg });
     if (neoEnabled && neoMode === "slot") {
       api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
@@ -3417,6 +3421,15 @@ const plugin = {
                   workspaceAliases: neoWorkspaceAliases,
                 });
                 api.logger.info(`plur1bus-neo: captured turns=${neoCapture.turns.length}, candidates=${neoCapture.candidates.length}, reactions=${neoCapture.reactions.length}, behaviorCards=${neoCapture.behaviorCards.length}${background ? " (background)" : ""}`);
+              }
+              if (neoEmbeddingAutoDrainEnabled && typeof neoStore.drainEmbeddingQueue === "function") {
+                const drain = neoStore.drainEmbeddingQueue({
+                  impact: neoEmbeddingDrainImpact,
+                  maxItems: neoEmbeddingDrainMaxItems,
+                });
+                if (drain.processed || drain.skipped || drain.parseErrors) {
+                  api.logger.info(`plur1bus-neo: embedding queue auto-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}`);
+                }
               }
             } catch (neoErr) {
               api.logger.warn(`plur1bus-neo: capture failed: ${String(neoErr)}`);
