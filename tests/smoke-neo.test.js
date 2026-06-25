@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { rmSync, mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,7 @@ import {
   normalizeNeoScope,
   normalizeNeoStatus,
   escapeMemoryText,
+  createNeoStore,
 } from "../lib/neo-arch.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "plur1bus-neo-smoke-"));
@@ -78,6 +79,34 @@ describe("neo-arch file I/O", () => {
     writeFileSync(filePath, JSON.stringify(state, null, 2));
     const read = JSON.parse(readFileSync(filePath, "utf-8"));
     assert.strictEqual(read.counters.foo, 1, "counter should persist");
+  });
+
+  it("drains pending low-impact embedding queue entries", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-drain-"));
+    const store = createNeoStore(root, "workspace-test");
+    const candidate = {
+      id: "mem-low-001",
+      workspaceKey: "workspace-test",
+      agentId: "bernhardine",
+      statement: "Low impact recipe note.",
+      sourceTurnIds: ["turn-1"],
+      status: "candidate",
+      embeddingStatus: "pending",
+      impact: "low",
+    };
+    store.appendCandidates([candidate]);
+    store.appendEmbeddingQueue([candidate]);
+
+    assert.equal(typeof store.drainEmbeddingQueue, "function");
+    const result = store.drainEmbeddingQueue({ impact: "low", maxItems: 10 });
+
+    assert.equal(result.processed, 1);
+    assert.equal(result.pending, 0);
+    assert.equal(store.readCandidates(10).at(-1).embeddingStatus, "fresh");
+    assert.ok(
+      readFileSync(store.paths.embeddings, "utf8").includes('"status":"done"'),
+      "queue entry should be rewritten as done",
+    );
   });
 });
 
