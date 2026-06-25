@@ -12,12 +12,8 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
-
-// Shared modules aus dem Plugin (v1.9.0)
-import { distanceToScore } from "../extensions/memory-lancedb-namespaced/lib/score.js";
-import { categorizeMemory } from "../extensions/memory-lancedb-namespaced/lib/categorize.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 // Operator-local fallback agents. Keep personal IDs out of the public repo.
@@ -36,7 +32,10 @@ const MAX_TEXT_LEN = 15000;
 const DUPLICATE_THRESHOLD = 0.95;
 const SUMMARY_MAX_WORDS = 150;
 const MIN_TEXT_LEN = 10;
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || readEmbeddingModel(CONFIG_PATH) || "text-embedding-3-large";
+const PLUGIN_DIR = process.env.PLUR1BUS_PLUGIN_DIR || join(BASE, "extensions", "memory-lancedb-namespaced");
+
+let distanceToScore;
+let categorizeMemory;
 
 // ─── Injected-Context-Filter (verhindert Re-Capture von PLUR1BUS-Blöcken) ───
 const INJECTED_CONTEXT_RE = /<\/?plur1bus-recall|<\/?plur1bus-start-notice|PLUR1BUS — Make your agent yours|<\/?relevant-memories|<\/?knowledge-update-reminder|<\/?adaptive-learning|RECALL SAFETY RULES|capturedBy"\s*:\s*"agent_end_capture|embeddingStatus"\s*:\s*"pending|plur1bus internal classify-recent|critical-memory-classifier|TTS-STATUS|\[cron:|heartbeat_ok|Reference UTC:|Current time:|You are a memory search agent|memory search agent\. Another model|bounded search query|Use only the available memory tools|Conversation info \(untrusted metadata\)|"chat_id"\s*:\s*"telegram:|"message_id"\s*:\s*"|"sender_id"\s*:/i;
@@ -46,11 +45,12 @@ function isInjectedContextText(text) {
   return INJECTED_CONTEXT_RE.test(text);
 }
 
-function readEmbeddingModel(configPath) {
+export function readPluginConfig(configPath = CONFIG_PATH) {
   try {
     const cfg = JSON.parse(readFileSync(configPath, "utf8"));
-    return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.config?.embedding?.model;
+    return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.config || {};
   } catch (_) {}
+  return {};
 }
 
 // ─── Agent Discovery ─────────────────────────────────────────────────────────
@@ -74,36 +74,87 @@ function discoverAgents() {
   }
 }
 
-// ─── LanceDB + OpenAI imports ────────────────────────────────────────────────
-const PLUGIN_DIR = join(homedir(), ".openclaw", "extensions", "memory-lancedb-namespaced");
-const LANCEDB_PATH = join(PLUGIN_DIR, "../memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js");
-const OPENAI_PATH = join(PLUGIN_DIR, "../memory-lancedb-stock/node_modules/openai/index.js");
+// ─── Plugin module imports ───────────────────────────────────────────────────
+let lancedb;
 
-const EMBEDDING_DIMENSIONS = {
-  "text-embedding-3-small": 1536,
-  "text-embedding-3-large": 3072,
-};
+function importLocalModule(filePath) {
+  return import(pathToFileURL(filePath).href);
+}
 
-let lancedb, OpenAI;
+async function importFirstExisting(paths, label) {
+  for (const filePath of paths) {
+    if (!existsSync(filePath)) continue;
+    try {
+      return await importLocalModule(filePath);
+    } catch (err) {
+      console.warn(`[init] ${label} import failed at ${filePath}: ${err.message}`);
+    }
+  }
+  try {
+    return await import(label);
+  } catch (err) {
+    throw new Error(`Unable to import ${label}; set PLUR1BUS_PLUGIN_DIR to the installed plugin directory. (${err.message})`);
+  }
+}
 
-async function init() {
-  lancedb = await import(LANCEDB_PATH);
-  const openaiMod = await import(OPENAI_PATH);
-  OpenAI = openaiMod.default || openaiMod.OpenAI;
+export async function loadPluginModules(pluginDir = PLUGIN_DIR) {
+  const lancedbCandidatePaths = [
+    join(pluginDir, "node_modules", "@lancedb", "lancedb", "dist", "index.js"),
+    join(pluginDir, "..", "memory-lancedb-stock", "node_modules", "@lancedb", "lancedb", "dist", "index.js"),
+  ];
+  const [factoryMod, normalizeMod, scoreMod, categorizeMod, lanceMod] = await Promise.all([
+    importLocalModule(join(pluginDir, "lib", "providers", "factory.js")),
+    importLocalModule(join(pluginDir, "lib", "providers", "config-normalize.js")),
+    importLocalModule(join(pluginDir, "lib", "score.js")),
+    importLocalModule(join(pluginDir, "lib", "categorize.js")),
+    importFirstExisting(lancedbCandidatePaths, "@lancedb/lancedb"),
+  ]);
+  return {
+    createEmbeddingProvider: factoryMod.createEmbeddingProvider,
+    normalizeEmbeddingConfig: normalizeMod.normalizeEmbeddingConfig,
+    distanceToScore: scoreMod.distanceToScore,
+    categorizeMemory: categorizeMod.categorizeMemory,
+    lancedb: lanceMod,
+  };
+}
+
+async function init(pluginDir = PLUGIN_DIR) {
+  const modules = await loadPluginModules(pluginDir);
+  lancedb = modules.lancedb;
+  distanceToScore = modules.distanceToScore;
+  categorizeMemory = modules.categorizeMemory;
+  return modules;
 }
 
 // ─── Embedding ───────────────────────────────────────────────────────────────
-function createEmbeddings(apiKey, model) {
-  const openai = new OpenAI({ apiKey });
-  const dim = EMBEDDING_DIMENSIONS[model] || 3072;
+export function buildEmbeddingConfig(pluginConfig = {}, env = process.env) {
+  const raw = { ...(pluginConfig.embedding || {}) };
+  if (env.EMBEDDING_MODEL) {
+    raw.model = env.EMBEDDING_MODEL;
+    if (raw.provider === "local-transformers") {
+      raw.local = { ...(raw.local || {}), model: env.EMBEDDING_MODEL };
+    }
+  }
+  if (raw.provider !== "local-transformers" && !raw.apiKey && !raw.apiKeyEnv) {
+    raw.apiKeyEnv = "OPENAI_API_KEY";
+  }
+  return raw;
+}
+
+export function createEmbeddings(modules, pluginConfig = readPluginConfig()) {
+  const embeddingConfig = modules.normalizeEmbeddingConfig(buildEmbeddingConfig(pluginConfig));
+  const provider = modules.createEmbeddingProvider(embeddingConfig);
+  const dim = Number(provider.dimensions?.() || embeddingConfig.dimensions || 3072);
   return {
     dim,
-    async embed(text) {
-      const isOpenAi = !model.includes("/") || model.startsWith("openai/") || model.startsWith("text-embedding-");
-      const req = { model, input: text.slice(0, 8000), encoding_format: "float" };
-      if (isOpenAi) req.dimensions = dim;
-      const resp = await openai.embeddings.create(req);
-      return Array.from(resp.data[0].embedding);
+    provider,
+    async embedBatch(texts, options = {}) {
+      const input = (Array.isArray(texts) ? texts : [texts]).map((text) => String(text).slice(0, 8000));
+      return provider.embedBatch(input, 3, options);
+    },
+    async embed(text, options = {}) {
+      const [vector] = await this.embedBatch([text], options);
+      return vector;
     },
   };
 }
@@ -410,10 +461,18 @@ async function captureAgent(agentId, embeddings) {
 
   const captureTimestamp = Date.now();
   let stored = 0;
-  for (const it of toCapture) {
+  const prepared = toCapture.map((it) => ({ it, trimmed: it.text.slice(0, MAX_TEXT_LEN) }));
+  let batchVectors = [];
+  try {
+    batchVectors = await embeddings.embedBatch(prepared.map((entry) => entry.trimmed), { agentId });
+  } catch (err) {
+    console.warn(`[${agentId}] embedBatch failed, falling back to per-item embeddings: ${err.message}`);
+  }
+
+  for (let i = 0; i < prepared.length; i++) {
+    const { it, trimmed } = prepared[i];
     try {
-      const trimmed = it.text.slice(0, MAX_TEXT_LEN);
-      const vector = await embeddings.embed(trimmed);
+      const vector = batchVectors[i] || await embeddings.embed(trimmed, { agentId });
 
       const results = await table.search(vector).limit(1).toArray();
       if (results.length > 0 && results[0]._distance !== undefined) {
@@ -505,12 +564,6 @@ async function captureAgent(agentId, embeddings) {
 }
 
 async function main() {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    console.error("OPENAI_API_KEY not set");
-    process.exit(1);
-  }
-
   const filterArgs = process.argv.slice(2).filter(a => !a.startsWith("--"));
   const allAgents = discoverAgents();
   const agents = filterArgs.length > 0
@@ -519,8 +572,8 @@ async function main() {
 
   console.log(`[main] processing ${agents.length} agents${filterArgs.length ? ` (filtered)` : ""}: ${agents.join(", ")}`);
 
-  await init();
-  const embeddings = createEmbeddings(apiKey, EMBEDDING_MODEL);
+  const modules = await init();
+  const embeddings = createEmbeddings(modules, readPluginConfig(CONFIG_PATH));
 
   let totalStored = 0, totalCands = 0, errors = 0;
   for (const agent of agents) {
@@ -536,7 +589,10 @@ async function main() {
   console.log(`[main] done — stored=${totalStored}, candidates=${totalCands}, errors=${errors}`);
 }
 
-main().catch(err => {
-  console.error("[main] fatal:", err.message);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isDirectRun) {
+  main().catch(err => {
+    console.error("[main] fatal:", err.message);
+    process.exit(1);
+  });
+}
