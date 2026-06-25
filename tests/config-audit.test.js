@@ -370,6 +370,10 @@ describe("Schema-Default-Typen (Core Features)", () => {
     assertBooleanDefault("obsidianBridge.requireVaultPathConfirmation", true));
   it("obsidianBridge.autoApplyLowRisk ist default false", () =>
     assertBooleanDefault("obsidianBridge.autoApplyLowRisk", false));
+  it("neo.embeddingDrain.enabled ist default true", () =>
+    assertBooleanDefault("neo.embeddingDrain.enabled", true));
+  it("neo.embeddingDrain.maxItems ist 250", () =>
+    assertNumberDefault("neo.embeddingDrain.maxItems", 250));
   it("obsidianBridge.semanticGraph.proposalOnly ist default true", () =>
     assertBooleanDefault("obsidianBridge.semanticGraph.proposalOnly", true));
   it("obsidianBridge.semanticGraph.mutateMemory ist default false", () =>
