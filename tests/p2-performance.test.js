@@ -4,7 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { makeBoundedCache } from "../lib/bounded-cache.js";
@@ -48,6 +48,11 @@ describe("makeBoundedCache", () => {
 });
 
 describe("atomicJsonUpdate", () => {
+  it("does not use synchronous filesystem calls", () => {
+    const source = readFileSync(join(process.cwd(), "lib", "atomic-json.js"), "utf8");
+    assert.doesNotMatch(source, /\b(existsSync|readFileSync|writeFileSync|renameSync)\b/);
+  });
+
   it("writes atomically", async () => {
     const dir = mkdtempSync(join(tmpdir(), "atomic-test-"));
     const path = join(dir, "state.json");
@@ -65,7 +70,9 @@ describe("atomicJsonUpdate", () => {
       atomicJsonUpdate(path, (data) => ({ ...data, c: 3 })),
     ]);
     const result = JSON.parse(readFileSync(path, "utf8"));
-    assert.ok(result.a === 1 || result.b === 2 || result.c === 3);
+    assert.strictEqual(result.a, 1);
+    assert.strictEqual(result.b, 2);
+    assert.strictEqual(result.c, 3);
   });
 
   it("continues queue after error", async () => {

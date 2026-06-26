@@ -9,7 +9,7 @@
  * v2.2.0: Gruppen-Erkennung + Sender-Attribution + saubere Textextraktion
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -401,6 +401,157 @@ function isSessionFile(name) {
   return true;
 }
 
+/**
+ * Read complete non-empty JSONL lines from a byte offset without loading the full file.
+ * @param {string} filePath Session JSONL file path.
+ * @param {number} offset Byte offset to start reading from.
+ * @returns {Promise<{ lines: string[], nextOffset: number }>} Complete lines and the next safe byte offset.
+ */
+export async function readSessionLinesSinceOffset(filePath, offset = 0) {
+  const start = Math.max(0, Number(offset) || 0);
+  const lines = [];
+  let nextOffset = start;
+  let pending = "";
+
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath, { start, encoding: "utf8" });
+    stream.on("data", (chunk) => {
+      pending += chunk;
+      const parts = pending.split("\n");
+      pending = parts.pop() || "";
+      for (const line of parts) {
+        nextOffset += Buffer.byteLength(`${line}\n`, "utf8");
+        if (line.trim().length > 0) lines.push(line);
+      }
+    });
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
+
+  return { lines, nextOffset };
+}
+
+/**
+ * Read complete non-empty JSONL lines from a byte offset.
+ * @param {string} filePath Session JSONL file path.
+ * @param {number} offset Byte offset to start reading from.
+ * @returns {Promise<string[]>} Complete non-empty lines after the offset.
+ */
+export async function readLinesFromOffset(filePath, offset = 0) {
+  const { lines } = await readSessionLinesSinceOffset(filePath, offset);
+  return lines;
+}
+
+function resolveDistanceToScoreFn(options = {}) {
+  return options.distanceToScoreFn || distanceToScore || ((distance) => 1 / (1 + (distance ?? 0)));
+}
+
+function isDuplicateDistance(distance, options = {}) {
+  const threshold = Number.isFinite(options.duplicateThreshold) ? options.duplicateThreshold : DUPLICATE_THRESHOLD;
+  const score = resolveDistanceToScoreFn(options)(distance);
+  return Number.isFinite(score) && score >= threshold;
+}
+
+function squaredL2Distance(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return Infinity;
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) {
+    const diff = Number(a[i]) - Number(b[i]);
+    if (!Number.isFinite(diff)) return Infinity;
+    sum += diff * diff;
+  }
+  return sum;
+}
+
+async function findExistingDuplicateIndexesFallback(table, vectors, options = {}) {
+  const duplicates = new Set();
+  for (let i = 0; i < vectors.length; i++) {
+    try {
+      const results = await table.search(vectors[i]).limit(1).toArray();
+      if (results.length > 0 && results[0]._distance !== undefined && isDuplicateDistance(results[0]._distance, options)) {
+        duplicates.add(i);
+      }
+    } catch (err) {
+      options.onWarn?.(`fallback duplicate check failed for candidate ${i}: ${err.message}`);
+      duplicates.add(i);
+    }
+  }
+  return duplicates;
+}
+
+/**
+ * Find duplicate candidate indexes with one LanceDB multi-query ANN search when available.
+ * @param {Object} table LanceDB table.
+ * @param {number[][]} vectors Candidate vectors in candidate order.
+ * @param {Object} options Duplicate threshold and scoring options.
+ * @returns {Promise<Set<number>>} Candidate indexes that already exist in the table.
+ */
+export async function findExistingDuplicateIndexes(table, vectors, options = {}) {
+  if (!table || !Array.isArray(vectors) || vectors.length === 0) return new Set();
+
+  if (typeof table.query !== "function") {
+    return findExistingDuplicateIndexesFallback(table, vectors, options);
+  }
+
+  try {
+    let builder = table.query().nearestTo(vectors[0]);
+    if (vectors.length > 1 && typeof builder.addQueryVector !== "function") {
+      return findExistingDuplicateIndexesFallback(table, vectors, options);
+    }
+    for (const vector of vectors.slice(1)) {
+      builder = builder.addQueryVector(vector) || builder;
+    }
+    builder = builder.limit(1) || builder;
+    const rows = await builder.toArray();
+    const duplicates = new Set();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const index = Number.isInteger(row?.query_index)
+        ? row.query_index
+        : (vectors.length === 1 ? 0 : -1);
+      if (index < 0 || index >= vectors.length) continue;
+      if (row._distance !== undefined && isDuplicateDistance(row._distance, options)) {
+        duplicates.add(index);
+      }
+    }
+    return duplicates;
+  } catch (err) {
+    options.onWarn?.(`multi-query duplicate check failed, falling back to per-candidate search: ${err.message}`);
+    return findExistingDuplicateIndexesFallback(table, vectors, options);
+  }
+}
+
+function findInBatchDuplicateIndexes(prepared, options = {}) {
+  const duplicates = new Set();
+  for (let i = 0; i < prepared.length; i++) {
+    if (duplicates.has(i)) continue;
+    for (let j = i + 1; j < prepared.length; j++) {
+      if (duplicates.has(j)) continue;
+      const distance = squaredL2Distance(prepared[i]?.vector, prepared[j]?.vector);
+      if (isDuplicateDistance(distance, options)) duplicates.add(j);
+    }
+  }
+  return duplicates;
+}
+
+/**
+ * Remove candidates that already exist in LanceDB or duplicate earlier candidates in the same batch.
+ * @param {Object} table LanceDB table.
+ * @param {Array<Object>} prepared Candidate entries with a vector property.
+ * @param {Object} options Duplicate threshold and scoring options.
+ * @returns {Promise<Array<Object>>} Candidates safe to store.
+ */
+export async function filterPreparedForStorageByBatchDedup(table, prepared, options = {}) {
+  const vectorPrepared = (Array.isArray(prepared) ? prepared : []).filter((entry) => Array.isArray(entry?.vector));
+  const existingDuplicates = await findExistingDuplicateIndexes(
+    table,
+    vectorPrepared.map((entry) => entry.vector),
+    options,
+  );
+  const notExisting = vectorPrepared.filter((_, index) => !existingDuplicates.has(index));
+  const inBatchDuplicates = findInBatchDuplicateIndexes(notExisting, options);
+  return notExisting.filter((_, index) => !inBatchDuplicates.has(index));
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 async function captureAgent(agentId, embeddings) {
   const sessionsDir = join(AGENTS_DIR, agentId, "sessions");
@@ -421,13 +572,15 @@ async function captureAgent(agentId, embeddings) {
     const lastOffset = stateFiles[file.name] || 0;
     if (file.size <= lastOffset) continue;
 
-    const raw = readFileSync(file.path, "utf8");
-    const newPortion = raw.slice(lastOffset);
-    const newLines = newPortion.split("\n").filter(l => l.trim().length > 0);
+    const { lines: newLines, nextOffset } = await readSessionLinesSinceOffset(file.path, lastOffset);
 
     const messages = [];
+    let parseErrors = 0;
     for (const line of newLines) {
-      try { messages.push(JSON.parse(line)); } catch {}
+      try { messages.push(JSON.parse(line)); } catch { parseErrors++; }
+    }
+    if (parseErrors > 0) {
+      console.warn(`[${agentId}] skipped ${parseErrors} unparsable session lines in ${file.name}`);
     }
 
     // v2.2.0: Gruppen-Kontext aus ALLEN Nachrichten (inkl. role="") lesen
@@ -438,7 +591,7 @@ async function captureAgent(agentId, embeddings) {
       it._isGroup = sessionCtx.isGroup;
     }
     allItems.push(...items);
-    stateFiles[file.name] = file.size;
+    stateFiles[file.name] = nextOffset;
   }
 
   if (allItems.length === 0) {
@@ -469,16 +622,25 @@ async function captureAgent(agentId, embeddings) {
     console.warn(`[${agentId}] embedBatch failed, falling back to per-item embeddings: ${err.message}`);
   }
 
+  const preparedWithVectors = [];
   for (let i = 0; i < prepared.length; i++) {
     const { it, trimmed } = prepared[i];
     try {
       const vector = batchVectors[i] || await embeddings.embed(trimmed, { agentId });
+      preparedWithVectors.push({ it, trimmed, vector });
+    } catch (err) {
+      console.error(`[${agentId}] capture vector error: ${err.message}`);
+    }
+  }
 
-      const results = await table.search(vector).limit(1).toArray();
-      if (results.length > 0 && results[0]._distance !== undefined) {
-        if (distanceToScore(results[0]._distance) >= DUPLICATE_THRESHOLD) continue;
-      }
-
+  const toStore = await filterPreparedForStorageByBatchDedup(table, preparedWithVectors, {
+    duplicateThreshold: DUPLICATE_THRESHOLD,
+    distanceToScoreFn: distanceToScore,
+    onWarn: (message) => console.warn(`[${agentId}] ${message}`),
+  });
+  const rowsToAdd = [];
+  for (const { it, trimmed, vector } of toStore) {
+    try {
       // v2.2.0: origin aus Session-Kontext ableiten
       const origin = it._isGroup ? "group" : "dm";
 
@@ -488,70 +650,84 @@ async function captureAgent(agentId, embeddings) {
         ? `[${it.senderLabel}] ${evidenceBase}`.slice(0, 200)
         : evidenceBase;
 
-      await table.add([
-        {
-          id: randomUUID(),
-          text: trimmed,
-          summary: generateSummary(trimmed, SUMMARY_MAX_WORDS),
-          origin,
-          vector,
-          importance: 0.7,
-          category: categorizeMemory(trimmed),
-          createdAt: captureTimestamp,
-          mergedFrom: "[]",
-          expiresAt: 0,
-          storedBy: agentId,
-          sourceTurnId: it.sourceTurnId || "",
-          sourceMessageRole: it.role || "",
-          sourceTimestamp: it.sourceTimestamp || captureTimestamp,
-          sourceUrl: it.sourceUrl || "",
-          evidenceQuote,
-          scope: "agent-private",
-          // PLUR1BUS schema compat (v2.3.0)
-          type: "memory",
-          confirmed: false,
-          emotionalValence: "",
-          emotionalIntensity: 0,
-          emotionalDominant: "neutral",
-          moodContextAtCapture: "",
-          replayCount: 0,
-          lastReplayed: 0,
-          retrievalCount: 0,
-          lastRetrievedAt: 0,
-          memoryStrength: 1.0,
-          halfLifeDays: 30,
-          lastStrengthenedAt: 0,
-          lastDynamicsAt: 0,
-          memoryClass: "standard",
-          neverForget: 0,
-          coreMemoryScore: 0.0,
-          coreMemoryReason: "",
-          versionNumber: 1,
-          previousVersion: "",
-          supersededBy: "",
-          updateSource: "auto-capture",
-          updateEvidence: "",
-          reconsolidationConfidence: 0.0,
-          status: "active",
-          versionCreatedAt: captureTimestamp,
-          updatedAt: captureTimestamp,
-          memoryKind: "memory",
-          reminderStatus: "",
-          remindAt: 0,
-          remindedAt: 0,
-          dispatchedAt: 0,
-          acknowledgedAt: 0,
-          cancelledAt: 0,
-          reminderKey: "",
-          dispatchCount: 0,
-          lastDispatchAttemptAt: 0,
-          nextDispatchAttemptAt: 0,
-          workspaceKey: "",
-        },
-      ]);
-      stored++;
+      rowsToAdd.push({
+        id: randomUUID(),
+        text: trimmed,
+        summary: generateSummary(trimmed, SUMMARY_MAX_WORDS),
+        origin,
+        vector,
+        importance: 0.7,
+        category: categorizeMemory(trimmed),
+        createdAt: captureTimestamp,
+        mergedFrom: "[]",
+        expiresAt: 0,
+        storedBy: agentId,
+        sourceTurnId: it.sourceTurnId || "",
+        sourceMessageRole: it.role || "",
+        sourceTimestamp: it.sourceTimestamp || captureTimestamp,
+        sourceUrl: it.sourceUrl || "",
+        evidenceQuote,
+        scope: "agent-private",
+        // PLUR1BUS schema compat (v2.3.0)
+        type: "memory",
+        confirmed: false,
+        emotionalValence: "",
+        emotionalIntensity: 0,
+        emotionalDominant: "neutral",
+        moodContextAtCapture: "",
+        replayCount: 0,
+        lastReplayed: 0,
+        retrievalCount: 0,
+        lastRetrievedAt: 0,
+        memoryStrength: 1.0,
+        halfLifeDays: 30,
+        lastStrengthenedAt: 0,
+        lastDynamicsAt: 0,
+        memoryClass: "standard",
+        neverForget: 0,
+        coreMemoryScore: 0.0,
+        coreMemoryReason: "",
+        versionNumber: 1,
+        previousVersion: "",
+        supersededBy: "",
+        updateSource: "auto-capture",
+        updateEvidence: "",
+        reconsolidationConfidence: 0.0,
+        status: "active",
+        versionCreatedAt: captureTimestamp,
+        updatedAt: captureTimestamp,
+        memoryKind: "memory",
+        reminderStatus: "",
+        remindAt: 0,
+        remindedAt: 0,
+        dispatchedAt: 0,
+        acknowledgedAt: 0,
+        cancelledAt: 0,
+        reminderKey: "",
+        dispatchCount: 0,
+        lastDispatchAttemptAt: 0,
+        nextDispatchAttemptAt: 0,
+        workspaceKey: "",
+      });
     } catch (err) {
       console.error(`[${agentId}] capture error: ${err.message}`);
+    }
+  }
+
+  if (rowsToAdd.length > 0) {
+    try {
+      await table.add(rowsToAdd);
+      stored += rowsToAdd.length;
+    } catch (err) {
+      console.error(`[${agentId}] batch capture add error: ${err.message}`);
+      for (const row of rowsToAdd) {
+        try {
+          await table.add([row]);
+          stored++;
+        } catch (rowErr) {
+          console.error(`[${agentId}] capture add error: ${rowErr.message}`);
+        }
+      }
     }
   }
 
