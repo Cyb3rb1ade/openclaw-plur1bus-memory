@@ -19,6 +19,32 @@ function makeFakeOpenAI(responses) {
 }
 
 describe("OpenAIEmbeddingProvider embedBatch", () => {
+  it("resolves apiKeyEnv before embedding", async () => {
+    const previous = process.env._PLUR1BUS_EMBEDDING_TEST_KEY;
+    process.env._PLUR1BUS_EMBEDDING_TEST_KEY = "env-test-key";
+    try {
+      const provider = new OpenAIEmbeddingProvider({
+        model: "text-embedding-3-small",
+        dimensions: 3,
+        apiKeyEnv: "_PLUR1BUS_EMBEDDING_TEST_KEY",
+      });
+      provider._client = {
+        embeddings: {
+          create: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+        },
+      };
+
+      const vector = await provider.embed("env key");
+      assert.deepStrictEqual(vector, [0.1, 0.2, 0.3]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env._PLUR1BUS_EMBEDDING_TEST_KEY;
+      } else {
+        process.env._PLUR1BUS_EMBEDDING_TEST_KEY = previous;
+      }
+    }
+  });
+
   it("calls client.embeddings.create with input: string[]", async () => {
     const captured = [];
     const provider = new OpenAIEmbeddingProvider({ model: "text-embedding-3-small", dimensions: 3, apiKey: "test-key" });
