@@ -131,7 +131,7 @@ node --test tests/*.test.js
 
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
-- Current baseline: 1,854 tests, all passing.
+- Current baseline: 1,931 tests, all passing.
 
 ## Dependency Audit
 
@@ -145,7 +145,7 @@ Last audit run: 2026-06-05
 | Package | Spec | Resolved | Pinned? |
 |---------|------|----------|---------|
 | `@lancedb/lancedb` | `^0.26.2` | `0.26.2` | No (`^`) — version fixed by `package-lock.json` |
-| `openai` | `^6.27.0` | `6.41.0` | No (`^`) — version fixed by `package-lock.json` |
+| `openai` | `^6.27.0` | `6.42.0` | No (`^`) — version fixed by `package-lock.json` |
 
 ### Optional Dependencies
 
