@@ -69,6 +69,7 @@ export const DEPLOY_FILES = [
   "lib/providers/embedding-openai.js",
   "lib/providers/env.js",
   "lib/providers/factory.js",
+  "lib/providers/legacy-provider-migration.js",
   "lib/providers/openclaw-memory-embedding-adapters.js",
   "lib/providers/reranker-chained.js",
   "lib/providers/reranker-cohere.js",
