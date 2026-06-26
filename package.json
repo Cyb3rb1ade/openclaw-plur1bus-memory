@@ -23,6 +23,7 @@
     "lib/",
     "scripts/",
     "docs/",
+    ".openclaw/extensions/emotional-state-injector/",
     "openclaw.plugin.json",
     "README.md",
     "LICENSE"
