@@ -23,6 +23,7 @@
     "lib/",
     "scripts/",
     "docs/",
+    ".openclaw/extensions/emotional-state-injector/",
     "openclaw.plugin.json",
     "README.md",
     "LICENSE"
@@ -34,6 +35,7 @@
     "repair": "node scripts/repair-installed-plugin.mjs",
     "repair:dry-run": "node scripts/repair-installed-plugin.mjs --dry-run",
     "repair:full": "node scripts/repair-installed-plugin.mjs --maintain-lancedb --run-cron",
+    "code-index": "node scripts/build-code-index.mjs",
     "maintain-lancedb": "node scripts/maintain-lancedb.mjs",
     "maintain-lancedb:apply": "node scripts/maintain-lancedb.mjs --apply",
     "repair-dreaming-cron": "node scripts/repair-dreaming-cron.mjs"
@@ -54,7 +56,8 @@
     "openai": "^6.27.0"
   },
   "optionalDependencies": {
-    "@huggingface/transformers": "4.2.0"
+    "@huggingface/transformers": "4.2.0",
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
     "c8": "^11.0.0"
