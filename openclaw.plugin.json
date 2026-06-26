@@ -28,6 +28,9 @@
           "apiKey": {
             "type": "string"
           },
+          "apiKeyEnv": {
+            "type": "string"
+          },
           "provider": {
             "type": "string",
             "enum": [
@@ -379,6 +382,9 @@
           "apiKey": {
             "type": "string"
           },
+          "apiKeyEnv": {
+            "type": "string"
+          },
           "model": {
             "type": "string"
           },
@@ -392,6 +398,16 @@
           "fallbackOnError": {
             "type": "boolean",
             "default": true
+          },
+          "fallbackProvider": {
+            "type": "string",
+            "enum": [
+              "local-transformers",
+              "disabled"
+            ]
+          },
+          "fallbackModel": {
+            "type": "string"
           },
           "local": {
             "type": "object",
