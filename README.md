@@ -2,11 +2,18 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 6.7.3** — Multi-Namespace Pool, Temporal Continuity Context, Conflict Summary Management, and `/plur1bus start` onboarding. See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 6.8.0** — Media diarization support, packaged emotional-state injection, performance-audit follow-ups, and optional code-index context. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v6.8.0 — Release readiness, code context, and runtime packaging
+
+- **Media diarization context** — Async diarization merge pipeline, manual speaker mapping, contextual speaker-name proposals, and no biometric enrollment.
+- **Emotional-state injector packaged** — Tracked `.openclaw/extensions/emotional-state-injector/` files are included in the npm tarball; runtime activation still requires the OpenClaw plugin entry/allow config and a gateway restart.
+- **Performance follow-up** — Legacy auto-capture duplicate checks are batched, duplicate lookup can use ANN multi-query search when available, JSON hot-path writes are queued asynchronously, and high-cost prompt work is narrowed.
+- **Optional code index** — Local JS/TS index generation writes `.plur1bus/code-index.json` and can render bounded `<code-context>` query output.
 
 ### Experimental code index
 
@@ -260,7 +267,7 @@ The recall pipeline runs Query → Embedding → LanceDB Top-N → **Query Refin
 
 ```bash
 npm install
-npm test              # node --test, 1,106 tests
+npm test              # node --test, 1,931 tests
 ```
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.
