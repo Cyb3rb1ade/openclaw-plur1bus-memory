@@ -166,6 +166,7 @@ import { OverlayGenerator } from "./lib/overlay-generator.js";
 import { ContradictionDetector } from "./lib/contradiction-detector.js";
 import { runOverlayAuditCommand } from "./lib/overlay-commands.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
+import { applyLegacyProviderDefaults } from "./lib/providers/legacy-provider-migration.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
@@ -446,6 +447,16 @@ function resolveOptionalEnvVars(value) {
   } catch (_) {
     return undefined;
   }
+}
+
+function resolveConfiguredApiKey(cfg = {}, defaultRef = "") {
+  if (typeof cfg.apiKeyEnv === "string" && cfg.apiKeyEnv.trim()) {
+    return process.env[cfg.apiKeyEnv.trim()] || undefined;
+  }
+  if (typeof cfg.apiKey === "string" && cfg.apiKey.trim()) {
+    return resolveEnvVars(cfg.apiKey);
+  }
+  return defaultRef ? resolveOptionalEnvVars(defaultRef) : undefined;
 }
 
 function commandOption(tokens = [], flag, fallback = "") {
@@ -1784,6 +1795,28 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
 // searchCanonical, runRecallPipeline kommen jetzt aus lib/recall-pipeline.js.
 // stripFrontmatter, buildFrontmatter, withFrontmatter aus lib/frontmatter.js.
 
+function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null) {
+  const rerankerCfg = normalizeRerankerConfig(rawRerankerCfg || {});
+  let reranker = null;
+  if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
+    const primary = new CohereRerankerProvider(rerankerCfg);
+    if ((rerankerCfg.fallbackProvider ?? "disabled") === "local-transformers") {
+      const fallback = new LocalTransformersRerankerProvider({
+        ...(rerankerCfg.local || {}),
+        model: rerankerCfg.fallbackModel || rerankerCfg.local?.model || DEFAULT_LOCAL_RERANKER_MODEL,
+      });
+      reranker = new ChainedRerankerProvider(primary, fallback, logger);
+    } else {
+      const chained = new ChainedRerankerProvider(primary, { id: "none" }, logger);
+      chained.fallback = null;
+      reranker = chained;
+    }
+  } else if (rerankerCfg.provider === "local-transformers" && rerankerCfg.enabled) {
+    reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
+  }
+  return { reranker, rerankerCfg };
+}
+
 // ============================================================================
 // Plugin Definition
 // ============================================================================
@@ -1796,8 +1829,16 @@ const plugin = {
 
   register(api) {
     const rawCfg = api.pluginConfig || {};
-    const cfg = applyFullExperiencePolicy(rawCfg);
+    let cfg = applyFullExperiencePolicy(rawCfg);
     pluginLogger = api.logger;
+    const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
+    const providerMigration = applyLegacyProviderDefaults(cfg, { baseDbPath });
+    cfg = providerMigration.config;
+    if (providerMigration.changed) {
+      api.logger.info(
+        `memory-lancedb-namespaced: applied local provider defaults for empty legacy install (${providerMigration.migrations.join(", ")})`
+      );
+    }
 
     // Full Experience setup notices: pending setup still warns, but feature
     // selection itself is config-as-truth and no prompted/confirmed history is required.
@@ -1819,7 +1860,7 @@ const plugin = {
     const normalizedEmbeddingCfg = normalizeEmbeddingConfig(embeddingCfg, { mode: "existing" });
     const apiKey = normalizedEmbeddingCfg.provider === "local-transformers"
       ? undefined
-      : (normalizedEmbeddingCfg.apiKey ? resolveEnvVars(normalizedEmbeddingCfg.apiKey) : resolveOptionalEnvVars("${OPENAI_API_KEY}"));
+      : resolveConfiguredApiKey(normalizedEmbeddingCfg, "${OPENAI_API_KEY}");
     const model = normalizedEmbeddingCfg.model || DEFAULT_MODEL;
     const baseUrl = normalizedEmbeddingCfg.baseUrl;
     const dimensions = normalizedEmbeddingCfg.dimensions;
@@ -1974,8 +2015,6 @@ const plugin = {
 
     // Base DB path — früh auflösen, damit Meta-Cognition-State-Read (und
     // spätere Initialisierung) denselben Pfad verwenden.
-    const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
-
     // Meta-Cognition Config
     const metaCognitionCfg = cfg.metaCognition || {};
     const metaCognitionEnabled = metaCognitionCfg.enabled !== false;
@@ -2127,7 +2166,8 @@ const plugin = {
         })
       : new OpenAIEmbeddingProvider({
           ...normalizedEmbeddingCfg,
-          apiKey: embeddingCfg.apiKey,
+          apiKey: normalizedEmbeddingCfg.apiKey,
+          apiKeyEnv: normalizedEmbeddingCfg.apiKeyEnv,
           fallback: embeddingCfg.fallback,
           dimensions: dimensions || vectorDim,
           embeddingCacheEnabled: cfg.runtime?.embeddingCacheEnabled,
@@ -2145,24 +2185,7 @@ const plugin = {
 
     // Reranker (optional — provider-aware since v3.1)
     // Cohere reranker — lokaler Fallback nur wenn fallbackProvider="local-transformers" explizit gesetzt
-    const rerankerCfg = normalizeRerankerConfig(cfg.reranker || {});
-    let reranker = null;
-    if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
-      const primary = new CohereRerankerProvider(rerankerCfg);
-      if ((rerankerCfg.fallbackProvider ?? "disabled") === "local-transformers") {
-        const fallback = new LocalTransformersRerankerProvider({
-          model: DEFAULT_LOCAL_RERANKER_MODEL,
-          ...(rerankerCfg.local || {}),
-        });
-        reranker = new ChainedRerankerProvider(primary, fallback, api.logger);
-      } else {
-        const chained = new ChainedRerankerProvider(primary, { id: "none" }, api.logger);
-        chained.fallback = null;
-        reranker = chained;
-      }
-    } else if (rerankerCfg.provider === "local-transformers" && rerankerCfg.enabled) {
-      reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
-    }
+    const { reranker, rerankerCfg } = createRuntimeRerankerProvider(cfg.reranker || {}, api.logger);
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
     const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
 
@@ -5437,5 +5460,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider };
 export default plugin;
