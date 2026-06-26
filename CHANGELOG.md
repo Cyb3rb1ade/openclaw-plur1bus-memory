@@ -5,6 +5,22 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.0] — 2026-06-26 — Performance, Code Context, Media, and Runtime Packaging
+
+### Added
+- Async media diarization merge pipeline with speaker naming, manual mapping, and contextual speaker-name proposals.
+- Emotional-state injector plugin and shared mood-carrier library for cron-based state injection.
+- Optional local JS/TS code index generation with bounded `<code-context>` query output.
+
+### Changed
+- Legacy auto-capture duplicate handling now batches inserts and can use ANN multi-query duplicate lookup when LanceDB exposes the needed API.
+- Hot-path JSON writes are queued asynchronously and remaining high-cost prompt work was narrowed after the main-branch performance audit.
+- Package metadata, README, release notes, and OpenClaw manifest now target `6.8.0`.
+
+### Fixed
+- Emotional-state injector files are included in the npm package via the tracked `.openclaw/extensions/emotional-state-injector/` package path.
+- Error handling now preserves cause chains in DB/embedding paths and logs failures instead of silently swallowing them in touched hot paths.
+
 
 ## [6.7.8] — 2026-06-20 — Privacy Hardening
 
@@ -97,7 +113,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Fixed
 - auto-capture: OPENAI_API_KEY nicht mehr aus process.env erforderlich (import aus PLUR1BUS_PLUGIN_DIR)
-- ChainedRerankerProvider: constructor und rerank() crashen nicht mehr bei fallback=null>>>>>>> 74cd9ef (feat(v6.7.3): Multi-Namespace Pool, Temporal Continuity, Conflict Summary)
+- ChainedRerankerProvider: constructor und rerank() crashen nicht mehr bei fallback=null
 
 ## [6.6.3] — 2026-06-18 — workspaceKey Schema Migration
 
