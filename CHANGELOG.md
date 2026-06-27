@@ -5,6 +5,15 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.4] — 2026-06-27 — Code-Review Micro-Fixes
+
+### Fixed
+- `lib/code-index/ts-source-indexer.js`: Replace O(n) `symbols.find(symbol => symbol.node === node)` in AST visitor with a `Map` lookup — O(1) per node, avoids repeated linear scan across the symbol array for every visited AST node.
+- `scripts/auto-capture-lancedb.mjs`: Remove dead `const items = allItems` alias; use `allItems` directly in the subsequent filter and slice expressions.
+
+### Notes
+- No DB schema changes. No breaking changes.
+
 ## [6.8.3] — 2026-06-27 — Installer Performance + Robustness
 
 ### Fixed
