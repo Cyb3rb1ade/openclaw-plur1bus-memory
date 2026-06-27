@@ -5,6 +5,17 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.1] — 2026-06-27 — i18n Sync + TypeScript Dep Fix
+
+### Fixed
+- i18n dictionary synced with OpenClaw 2026.6.11: 752 missing keys added for IRC, Feishu, NextcloudTalk, Google Chat, new plugin-wizard and gateway-config screens (`wizard.irc.*`, `wizard.feishu.*`, `wizard.nextcloudTalk.*`, `wizard.googlechat.*`, `wizard.plugins.*`, `wizard.channels.*`, `wizard.remote.*`, `wizard.gateway.*`, `common.*`).
+- `typescript` added as optional dependency (`^5.9.3`) — required by the new code-index feature; was installed in the environment but not declared, causing `ERR_MODULE_NOT_FOUND` in test environments without a pre-existing install.
+
+### Notes
+- No DB schema changes.
+- No breaking changes.
+- Backward-compatible with all v6.8.0 installations.
+
 ## [6.8.0] — 2026-06-26 — Performance, Code Context, Media, and Runtime Packaging
 
 ### Added
