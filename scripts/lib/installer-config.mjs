@@ -177,13 +177,11 @@ export function createFeatureUpdatePlan(input = {}) {
 
   const beforeMissing = featureKeySet(before.missing);
   const beforeDisabled = featureKeySet(before.disabled);
-  const afterActive = featureKeySet(after.active);
-  const afterDisabled = featureKeySet(after.disabled);
 
   const newlyActivated = after.active.filter((feature) => beforeMissing.has(feature.key));
   const preservedDisabled = after.disabled.filter((feature) => beforeDisabled.has(feature.key));
   const reactivated = after.active.filter((feature) => beforeDisabled.has(feature.key));
-  const newlyDisabled = after.disabled.filter((feature) => !beforeDisabled.has(feature.key) && !afterActive.has(feature.key));
+  const newlyDisabled = after.disabled.filter((feature) => !beforeDisabled.has(feature.key));
 
   return {
     isUpdate: detection.isUpdate,
@@ -212,7 +210,7 @@ export function buildInstallLogEvent(input = {}) {
   const plan = createFeatureUpdatePlan({
     existingPluginConfig: input.beforeConfig || {},
     proposedPluginConfig: input.afterConfig || {},
-    mode: "preserve",
+    mode: input.featureMode || "preserve",
   });
 
   return {
