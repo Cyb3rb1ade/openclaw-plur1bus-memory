@@ -499,7 +499,8 @@ export async function findExistingDuplicateIndexes(table, vectors, options = {})
       return findExistingDuplicateIndexesFallback(table, vectors, options);
     }
     for (const vector of vectors.slice(1)) {
-      builder = builder.addQueryVector(vector) || builder;
+      const next = builder.addQueryVector(vector);
+      if (next != null) builder = next;
     }
     builder = builder.limit(1) || builder;
     const rows = await builder.toArray();
@@ -559,8 +560,15 @@ async function captureAgent(agentId, embeddings) {
 
   const files = readdirSync(sessionsDir)
     .filter(isSessionFile)
-    .map((f) => ({ name: f, path: join(sessionsDir, f), size: statSync(join(sessionsDir, f)).size }))
-    .filter((f) => f.size > 0);
+    .map((f) => {
+      const path = join(sessionsDir, f);
+      try {
+        return { name: f, path, size: statSync(path).size };
+      } catch {
+        return null;
+      }
+    })
+    .filter((f) => f != null && f.size > 0);
 
   if (files.length === 0) return { stored: 0, candidates: 0 };
 
@@ -599,11 +607,10 @@ async function captureAgent(agentId, embeddings) {
     return { stored: 0, candidates: 0 };
   }
 
-  const items = allItems;
-  const userUrlItems = items.filter(it => it.sourceUrl);
+  const userUrlItems = allItems.filter(it => it.sourceUrl);
   const seen = new Set();
   const toCapture = [];
-  for (const it of [...userUrlItems.slice(-10), ...items.slice(-50)]) {
+  for (const it of [...userUrlItems.slice(-10), ...allItems.slice(-50)]) {
     if (!seen.has(it.text)) { seen.add(it.text); toCapture.push(it); }
     if (toCapture.length >= 50) break;
   }
