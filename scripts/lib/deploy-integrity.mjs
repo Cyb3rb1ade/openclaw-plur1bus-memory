@@ -16,6 +16,8 @@ export const DEPLOY_FILES = [
   "openclaw.plugin.json",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
+  "lib/neo-worker-runner.js",
+  "lib/neo-worker-runtime.js",
   "lib/relevant-memory-context.js",
   "lib/memory-merge-safety.js",
   "lib/contradiction-detector.js",
