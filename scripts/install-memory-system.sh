@@ -660,13 +660,9 @@ FEATURE_PLAN_INPUT=$(jq -n \
     mode: "preserve"
   }')
 FEATURE_UPDATE_PLAN=$(PLUR1BUS_INSTALLER_INPUT="$FEATURE_PLAN_INPUT" node "$INSTALLER_CONFIG_HELPER" feature-plan)
-FEATURE_UPDATE_IS_UPDATE=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.isUpdate')
+eval "$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '@sh "FEATURE_UPDATE_IS_UPDATE=\(.isUpdate) DETECTED_BY_CONFIG=\(.detectedBy.config) DETECTED_BY_LOG=\(.detectedBy.log) NEW_FEATURE_COUNT=\(.newlyActivated | length) PRESERVED_DISABLED_COUNT=\(.preservedDisabled | length)"')"
 
 if [[ "$FEATURE_UPDATE_IS_UPDATE" == "true" ]]; then
-  DETECTED_BY_CONFIG=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.detectedBy.config')
-  DETECTED_BY_LOG=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.detectedBy.log')
-  NEW_FEATURE_COUNT=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.newlyActivated | length')
-  PRESERVED_DISABLED_COUNT=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.preservedDisabled | length')
   info "Bestehende PLUR1BUS-Installation erkannt (config=$DETECTED_BY_CONFIG, log=$DETECTED_BY_LOG)."
   if [[ "$NEW_FEATURE_COUNT" -gt 0 ]]; then
     info "Fehlende Core-Features, die im sicheren Update-Modus default-on ergänzt werden:"
@@ -1154,8 +1150,7 @@ PLUGIN_POLICY_INPUT=$(jq -n \
   --arg mode "$FEATURE_POLICY_MODE" \
   '{pluginEntry: $pluginEntry, mode: $mode}')
 PLUGIN_CONFIG=$(PLUR1BUS_INSTALLER_INPUT="$PLUGIN_POLICY_INPUT" node "$INSTALLER_CONFIG_HELPER" complete-plugin-entry)
-FINAL_MERGING_ENABLED=$(printf '%s' "$PLUGIN_CONFIG" | jq -r '.config.merging.enabled // false')
-FINAL_MERGING_MODEL=$(printf '%s' "$PLUGIN_CONFIG" | jq -r '.config.merging.model // empty')
+eval "$(printf '%s' "$PLUGIN_CONFIG" | jq -r '@sh "FINAL_MERGING_ENABLED=\(.config.merging.enabled // false) FINAL_MERGING_MODEL=\(.config.merging.model // "")"')"
 
 FINAL_FEATURE_PLAN_INPUT=$(jq -n \
   --argjson existing "$EXISTING_PLUGIN_ENTRY" \
@@ -1616,23 +1611,21 @@ fi
 PACKAGE_VERSION=$(node -e "try { console.log(JSON.parse(require('fs').readFileSync('$SOURCE_DIR/package.json', 'utf8')).version || '') } catch { console.log('') }")
 INSTALL_MODE="install"
 [[ "$FEATURE_UPDATE_IS_UPDATE" == "true" ]] && INSTALL_MODE="update"
-EXISTING_PLUGIN_CONFIG_JSON=$(jq -n --argjson existing "$EXISTING_PLUGIN_ENTRY" 'if $existing == null then {} else ($existing.config // {}) end' | jq -c .)
-FINAL_PLUGIN_CONFIG_JSON=$(printf '%s' "$PLUGIN_CONFIG" | jq -c '.config // {}')
-DETECTED_BY_JSON=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -c '.detectedBy')
+EXISTING_PLUGIN_CONFIG_JSON=$(jq -cn --argjson existing "$EXISTING_PLUGIN_ENTRY" 'if $existing == null then {} else ($existing.config // {}) end')
 INSTALL_EVENT_INPUT=$(jq -n \
   --arg packageVersion "$PACKAGE_VERSION" \
   --arg installMode "$INSTALL_MODE" \
   --arg featureMode "$FEATURE_POLICY_MODE" \
-  --argjson detectedBy "$DETECTED_BY_JSON" \
+  --argjson pluginConfig "$PLUGIN_CONFIG" \
+  --argjson featurePlan "$FEATURE_UPDATE_PLAN" \
   --argjson beforeConfig "$EXISTING_PLUGIN_CONFIG_JSON" \
-  --argjson afterConfig "$FINAL_PLUGIN_CONFIG_JSON" \
   '{
     packageVersion: $packageVersion,
     installMode: $installMode,
     featureMode: $featureMode,
-    detectedBy: $detectedBy,
+    detectedBy: $featurePlan.detectedBy,
     beforeConfig: $beforeConfig,
-    afterConfig: $afterConfig
+    afterConfig: ($pluginConfig.config // {})
   }')
 INSTALL_EVENT=$(PLUR1BUS_INSTALLER_INPUT="$INSTALL_EVENT_INPUT" node "$INSTALLER_CONFIG_HELPER" install-event | jq -c .)
 run_target "mkdir -p '$TARGET_DIR/state'"

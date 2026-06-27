@@ -243,7 +243,11 @@ export function buildInstallLogEvent(input = {}) {
 function readJsonEnv(name, fallback = {}) {
   const raw = process.env[name];
   if (!raw) return fallback;
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`${name} contains invalid JSON: ${err.message}`);
+  }
 }
 
 function writeJson(value) {

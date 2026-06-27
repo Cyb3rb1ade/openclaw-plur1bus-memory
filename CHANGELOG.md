@@ -5,6 +5,18 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.3] — 2026-06-27 — Installer Performance + Robustness
+
+### Fixed
+- `install-memory-system.sh`: 7 sequential `jq` subprocess calls on `$FEATURE_UPDATE_PLAN` consolidated into one batch `eval`+`@sh` extract (5 scalar fields, 1 subprocess instead of 5).
+- `install-memory-system.sh`: 2 sequential `jq` calls on `$PLUGIN_CONFIG` consolidated into one batch `eval`+`@sh` extract.
+- `install-memory-system.sh`: `FINAL_PLUGIN_CONFIG_JSON` and `DETECTED_BY_JSON` intermediate variables eliminated — fields now inlined directly into the `INSTALL_EVENT_INPUT` jq-n call.
+- `install-memory-system.sh`: Redundant `| jq -c .` pipe on `EXISTING_PLUGIN_CONFIG_JSON` removed (first `jq -cn` already produces compact JSON).
+- `installer-config.mjs`: `readJsonEnv` now wraps `JSON.parse` in try/catch — invalid env JSON produces a clear error instead of an unhandled exception crash.
+
+### Notes
+- No DB schema changes. No breaking changes.
+
 ## [6.8.2] — 2026-06-27 — Installer Fixes + Code-Review Cleanup
 
 ### Fixed
