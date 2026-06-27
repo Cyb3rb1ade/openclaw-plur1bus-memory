@@ -137,7 +137,6 @@ import { applySemanticLensToRecall } from "./lib/semantic-lens-index.js";
 import {
   buildNeoDoctorReport,
   buildNeoWorkspaceAliases,
-  captureNeoFromAgentEnd,
   createNeoStore,
   findLatestNeoRecord,
   formatNeoRecallContext,
@@ -149,6 +148,7 @@ import {
   workspaceKeyFromContext,
   turnEventsFromMessages,
 } from "./lib/neo-arch.js";
+import { createNeoWorkerRuntime } from "./lib/neo-worker-runtime.js";
 import {
   DISPLAY_SOURCES,
   sanitizeMemoryTextForPrompt,
@@ -2069,6 +2069,9 @@ const plugin = {
     const neoEmbeddingDrainImpact = neoEmbeddingDrainCfg.impact || "low";
     const neoEmbeddingDrainMaxItems = Math.max(1, Number(neoEmbeddingDrainCfg.maxItems || 250));
     const neoWorkspaceAliases = buildNeoWorkspaceAliases({ obsidianBridge: obsidianBridgeCfg, neo: neoCfg });
+    const neoWorkerRuntime = neoEnabled
+      ? createNeoWorkerRuntime({ logger: api.logger })
+      : null;
     if (neoEnabled && neoMode === "slot") {
       api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
@@ -2100,6 +2103,36 @@ const plugin = {
       return workspaceKey;
     };
     const getNeoStore = (ctx = {}, event = {}) => createNeoStore(neoRoot, rememberNeoWorkspace(ctx, event));
+    const snapshotNeoContent = (content) => {
+      if (typeof content === "string") return content;
+      if (!Array.isArray(content)) return "";
+      return content
+        .filter(block => block && typeof block === "object")
+        .map(block => {
+          if (block.type === "text" && typeof block.text === "string") {
+            return { type: "text", text: block.text };
+          }
+          return {
+            type: typeof block.type === "string" ? block.type : "unknown",
+            name: typeof block.name === "string" ? block.name : undefined,
+            fileName: typeof block.fileName === "string" ? block.fileName : undefined,
+            filename: typeof block.filename === "string" ? block.filename : undefined,
+            mediaType: typeof block.mediaType === "string" ? block.mediaType : undefined,
+            mimeType: typeof block.mimeType === "string" ? block.mimeType : undefined,
+            mime_type: typeof block.mime_type === "string" ? block.mime_type : undefined,
+          };
+        });
+    };
+    const snapshotNeoString = (value) => typeof value === "string" ? value : "";
+    const snapshotNeoMessages = (messages = []) => Array.isArray(messages)
+      ? messages
+          .filter(msg => msg && typeof msg === "object")
+          .map(msg => ({
+            role: msg.role,
+            content: snapshotNeoContent(msg.content),
+            tool_call_id: msg.tool_call_id,
+          }))
+      : [];
     const recallInjectionKeys = new Set();
     const markNeoRecallInjection = (event = {}, ctx = {}) => {
       const key = [
@@ -3538,7 +3571,12 @@ const plugin = {
         const startNeoService = () => {
           api.logger.info(`plur1bus-neo: service ready (state: ${neoRoot}, mode: augment)`);
         };
-        const stopNeoService = () => {
+        const stopNeoService = async () => {
+          try {
+            await neoWorkerRuntime?.close?.();
+          } catch (err) {
+            api.logger.warn?.(`plur1bus-neo: worker shutdown failed: ${String(err)}`);
+          }
           api.logger.info("plur1bus-neo: service stopped");
         };
         if (typeof api.on === "function") {
@@ -3568,37 +3606,61 @@ const plugin = {
         const background = isBackgroundTurn(event, ctx);
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
-        return runtimeScheduler.enqueueCapture(agentId, { background }, async () => {
+        return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
           if (neoEnabled) {
             try {
-              const neoStore = getNeoStore(ctx, event);
-              neoStore.recordHook("agent_end", {
+              const neoWorkspaceKey = rememberNeoWorkspace(ctx, event);
+              const neoStore = createNeoStore(neoRoot, neoWorkspaceKey);
+              const neoHookMeta = {
                 agentId,
-                sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
+                sessionId: event?.sessionId || event?.sessionKey || event?.runId ||
+                  ctx?.sessionId || ctx?.sessionKey || ctx?.runId || "",
                 runner: event?.runner || event?.provider || "",
                 background,
+              };
+              neoStore.recordHook("agent_end", neoHookMeta);
+              const neoEvent = {
+                workspaceKey: neoWorkspaceKey,
+                workspaceId: snapshotNeoString(event?.workspaceId),
+                workspaceDir: snapshotNeoString(event?.workspaceDir),
+                workspace: snapshotNeoString(event?.workspace),
+                agentSessionKey: snapshotNeoString(event?.agentSessionKey),
+                sessionKey: snapshotNeoString(event?.sessionKey),
+                sessionId: snapshotNeoString(event?.sessionId),
+                runId: snapshotNeoString(event?.runId),
+                runner: snapshotNeoString(event?.runner),
+                provider: snapshotNeoString(event?.provider),
+                messages: snapshotNeoMessages(event?.messages),
+              };
+              const neoCtx = {
+                agentId,
+                workspaceKey: neoWorkspaceKey,
+                workspaceId: snapshotNeoString(ctx?.workspaceId),
+                workspaceDir: snapshotNeoString(ctx?.workspaceDir),
+                workspace: snapshotNeoString(ctx?.workspace),
+                agentSessionKey: snapshotNeoString(ctx?.agentSessionKey),
+                sessionKey: snapshotNeoString(ctx?.sessionKey),
+                sessionId: snapshotNeoString(ctx?.sessionId),
+                runId: snapshotNeoString(ctx?.runId),
+              };
+              const neoResult = await neoWorkerRuntime.runNeoAgentEnd(neoEvent, neoCtx, {
+                rootDir: neoRoot,
+                defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+                workspaceAliases: neoWorkspaceAliases,
+                embeddingDrainEnabled: neoEmbeddingAutoDrainEnabled,
+                embeddingDrainImpact: neoEmbeddingDrainImpact,
+                embeddingDrainMaxItems: neoEmbeddingDrainMaxItems,
+                signal,
               });
-              if (event?.messages && event.messages.length > 0) {
-                const neoCapture = captureNeoFromAgentEnd(event, ctx, neoStore, {
-                  defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-                  rootDir: neoRoot,
-                  runtime: api.runtime,
-                  sessionWorkspaceKeys,
-                  workspaceAliases: neoWorkspaceAliases,
-                });
-                api.logger.info(`plur1bus-neo: captured turns=${neoCapture.turns.length}, candidates=${neoCapture.candidates.length}, reactions=${neoCapture.reactions.length}, behaviorCards=${neoCapture.behaviorCards.length}${background ? " (background)" : ""}`);
+              if (neoResult?.capture) {
+                api.logger.info(`plur1bus-neo: worker captured turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${background ? " (background)" : ""}`);
               }
-              if (neoEmbeddingAutoDrainEnabled && typeof neoStore.drainEmbeddingQueue === "function") {
-                const drain = neoStore.drainEmbeddingQueue({
-                  impact: neoEmbeddingDrainImpact,
-                  maxItems: neoEmbeddingDrainMaxItems,
-                });
-                if (drain.processed || drain.skipped || drain.parseErrors) {
-                  api.logger.info(`plur1bus-neo: embedding queue auto-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}`);
-                }
+              const drain = neoResult?.drain;
+              if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
+                api.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}`);
               }
             } catch (neoErr) {
-              api.logger.warn(`plur1bus-neo: capture failed: ${String(neoErr)}`);
+              api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
             }
           }
 

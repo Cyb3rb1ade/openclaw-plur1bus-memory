@@ -13,10 +13,27 @@ import {
   normalizeNeoStatus,
   escapeMemoryText,
   createNeoStore,
+  captureNeoFromAgentEnd,
 } from "../lib/neo-arch.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "plur1bus-neo-smoke-"));
 mkdirSync(TEST_DIR, { recursive: true });
+
+function readJsonl(path) {
+  return readFileSync(path, "utf-8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+
+function latestById(records) {
+  const byId = new Map();
+  for (const record of records) {
+    if (record?.id) byId.set(record.id, record);
+  }
+  return [...byId.values()];
+}
 
 describe("neo-arch constants & helpers", () => {
   it("has defined JSONL files", () => {
@@ -96,6 +113,8 @@ describe("neo-arch file I/O", () => {
     };
     store.appendCandidates([candidate]);
     store.appendEmbeddingQueue([candidate]);
+    store.appendEmbeddingQueue([candidate]);
+    assert.equal(readJsonl(store.paths.embeddings).length, 1, "immediate pending replay should be deduped");
 
     assert.equal(typeof store.drainEmbeddingQueue, "function");
     const result = store.drainEmbeddingQueue({ impact: "low", maxItems: 10 });
@@ -107,6 +126,152 @@ describe("neo-arch file I/O", () => {
       readFileSync(store.paths.embeddings, "utf8").includes('"status":"done"'),
       "queue entry should be rewritten as done",
     );
+
+    store.appendEmbeddingQueue([candidate]);
+    const requeued = readJsonl(store.paths.embeddings);
+    assert.equal(requeued.length, 3, "done queue entries should not suppress legitimate requeue");
+    assert.equal(requeued.at(-1).status, "pending", "requeue should append a fresh pending entry");
+  });
+
+  it("captures identical agent_end events idempotently", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-capture-"));
+    const workspaceKey = "workspace-capture";
+    const store = createNeoStore(root, workspaceKey);
+    const event = {
+      workspaceKey,
+      sessionId: "session-stable-001",
+      messages: [
+        {
+          role: "assistant",
+          content: "I will configure the sync job with a hidden cron fallback.",
+        },
+        {
+          role: "user",
+          content: "No, never use hidden cron jobs. Keep the setup explicit.",
+        },
+      ],
+    };
+    const ctx = { agentId: "bernhardine" };
+
+    const first = captureNeoFromAgentEnd(event, ctx, store);
+    const countsAfterFirst = {
+      turns: store.readTurns(50).length,
+      candidates: store.readCandidates(50).length,
+      reactions: readJsonl(store.paths.reactions).length,
+      behaviorCards: store.readBehaviorCards(50).length,
+      embeddings: readJsonl(store.paths.embeddings).length,
+    };
+    const second = captureNeoFromAgentEnd(event, ctx, store);
+
+    assert.ok(first.turns.length > 0, "test should capture turns");
+    assert.ok(first.candidates.length > 0, "test should capture candidates");
+    assert.ok(first.reactions.length > 0, "test should capture reactions");
+    assert.ok(first.behaviorCards.length > 0, "test should capture behavior cards");
+    assert.deepStrictEqual(second.turns.map((turn) => turn.id), first.turns.map((turn) => turn.id));
+    assert.deepStrictEqual(second.candidates.map((candidate) => candidate.id), first.candidates.map((candidate) => candidate.id));
+    assert.deepStrictEqual(second.reactions.map((reaction) => reaction.id), first.reactions.map((reaction) => reaction.id));
+    assert.deepStrictEqual(second.behaviorCards.map((card) => card.id), first.behaviorCards.map((card) => card.id));
+    assert.deepStrictEqual(
+      {
+        turns: store.readTurns(50).length,
+        candidates: store.readCandidates(50).length,
+        reactions: readJsonl(store.paths.reactions).length,
+        behaviorCards: store.readBehaviorCards(50).length,
+        embeddings: readJsonl(store.paths.embeddings).length,
+      },
+      countsAfterFirst,
+    );
+  });
+
+  it("does not enqueue duplicate capture records when replayed after drain", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-capture-drain-"));
+    const workspaceKey = "workspace-capture-drain";
+    const store = createNeoStore(root, workspaceKey);
+    const event = {
+      workspaceKey,
+      sessionId: "session-stable-drain-001",
+      messages: [
+        {
+          role: "assistant",
+          content: "I will store the current workspace state as a Neo shadow note.",
+        },
+        {
+          role: "user",
+          content: "Yes, keep that memory policy active for this workspace.",
+        },
+      ],
+    };
+    const ctx = { agentId: "bernhardine" };
+
+    captureNeoFromAgentEnd(event, ctx, store);
+    const firstDrain = store.drainEmbeddingQueue({ impact: "low", maxItems: 50 });
+    assert.ok(firstDrain.processed > 0, "test should process queue entries");
+    const queueAfterDrain = readJsonl(store.paths.embeddings);
+    assert.ok(latestById(queueAfterDrain).every((entry) => entry.status === "done"), "all initial latest entries should be done");
+
+    captureNeoFromAgentEnd(event, ctx, store);
+    assert.deepStrictEqual(readJsonl(store.paths.embeddings), queueAfterDrain);
+  });
+
+  it("uses ctx session identity for stable ids when event has no session id", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-ctx-session-"));
+    const workspaceKey = "workspace-ctx-session";
+    const store = createNeoStore(root, workspaceKey);
+    const event = {
+      workspaceKey,
+      messages: [
+        {
+          role: "user",
+          content: "Always keep ctx-only sessions isolated in Neo capture.",
+        },
+      ],
+    };
+
+    const first = captureNeoFromAgentEnd(event, { agentId: "bernhardine", sessionId: "ctx-session-a" }, store);
+    const second = captureNeoFromAgentEnd(event, { agentId: "bernhardine", sessionId: "ctx-session-b" }, store);
+
+    assert.notStrictEqual(first.turns[0].id, second.turns[0].id);
+    assert.equal(store.readTurns(10).length, 2);
+    assert.equal(store.readCandidates(10).length, 2);
+  });
+
+  it("keeps replay idempotent after the original id falls outside the JSONL tail window", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-index-replay-"));
+    const workspaceKey = "workspace-index-replay";
+    const store = createNeoStore(root, workspaceKey);
+    const event = {
+      workspaceKey,
+      sessionId: "session-index-replay-001",
+      messages: [
+        {
+          role: "user",
+          content: "Always keep Neo replay idempotency independent from tail windows.",
+        },
+      ],
+    };
+    const ctx = { agentId: "bernhardine" };
+
+    const first = captureNeoFromAgentEnd(event, ctx, store);
+    const originalTurnId = first.turns[0].id;
+    store.appendTurns(
+      Array.from({ length: 5105 }, (_, index) => ({
+        id: `filler-turn-${index}`,
+        workspaceKey,
+        agentId: "bernhardine",
+        sessionId: `filler-session-${index}`,
+        turnIndex: index,
+        role: "user",
+        content: `filler content ${index}`,
+        createdAt: new Date(0).toISOString(),
+      })),
+    );
+
+    captureNeoFromAgentEnd(event, ctx, store);
+
+    const occurrences = readJsonl(store.paths.turns)
+      .filter((record) => record.id === originalTurnId)
+      .length;
+    assert.equal(occurrences, 1);
   });
 });
 
