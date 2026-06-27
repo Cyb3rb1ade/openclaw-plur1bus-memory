@@ -22,6 +22,18 @@ describe("install-memory-system non-interactive guard", () => {
     assert.match(script, /\+\+\+ PLUR1BUS — Make your agent yours! \+\+\+/);
     assert.match(script, /\/plur1bus start/);
   });
+
+  it("wires update feature detection through an install ledger and masked key prompts", () => {
+    const script = readFileSync(join(process.cwd(), "scripts", "install-memory-system.sh"), "utf8");
+    assert.match(script, /installer-config\.mjs/);
+    assert.match(script, /plur1bus-install-log\.jsonl/);
+    assert.match(script, /Feature-Update-Modus/);
+    assert.match(script, /enable-all/);
+    assert.match(script, /prompt_secret OPENAI_KEY/);
+    assert.match(script, /prompt_secret COHERE_KEY/);
+    assert.match(script, /ActiveMemory installieren\? yes=ja, no=nein" "yes"/);
+    assert.match(script, /Dry-run: LanceDB-Dimensionen wurden nicht live geprüft/);
+  });
 });
 
 afterEach(() => {

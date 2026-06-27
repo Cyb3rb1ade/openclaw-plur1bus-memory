@@ -43,6 +43,8 @@ STOCK_SRC="$SOURCE_DIR/extensions/memory-lancedb-stock"
 DOC_FILES=("README.md" "CHANGELOG.md" "how-to-memory.md" "how-to-memory-perfect.md" "HOW-TO-OBSIDIAN.md" "HOW-TO-UPDATE.md")
 GC_SCRIPT="$SOURCE_DIR/scripts/memory-gc.mjs"
 MIN_OPENCLAW_VERSION="2026.5.10-beta.5"
+INSTALLER_CONFIG_HELPER="$SOURCE_DIR/scripts/lib/installer-config.mjs"
+INSTALL_LOG_FILE="plur1bus-install-log.jsonl"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; RESET='\033[0m'
 BOLD='\033[1m'
@@ -169,7 +171,7 @@ prompt_secret() {
   local var_name="$1" prompt_text="$2" default_hint="${3:-}"
   local val
   if [[ -n "$default_hint" ]]; then
-    echo -e "  ${CYAN}$prompt_text${RESET} [${default_hint}]:"
+    echo -e "  ${CYAN}$prompt_text${RESET} [$(display_default "$prompt_text" "$default_hint")]:"
   else
     echo -e "  ${CYAN}$prompt_text${RESET}:"
   fi
@@ -185,6 +187,7 @@ prompt_secret() {
   fi
   read -rs val
   echo
+  val="${val:-$default_hint}"
   printf -v "$var_name" '%s' "$val"
 }
 
@@ -201,7 +204,7 @@ prompt_input() {
     printf -v "$var_name" '%s' "$default_val"
     return 0
   fi
-  read -rp "  $prompt_text [${default_val}]: " val
+  read -rp "  $prompt_text [$(display_default "$prompt_text" "$default_val")]: " val
   val="${val:-$default_val}"
   printf -v "$var_name" '%s' "$val"
 }
@@ -244,6 +247,22 @@ write_target_file() {
     ssh "$SSH_HOST" "cat > $escaped_path" <<< "$content"
   else
     printf '%s' "$content" > "$path"
+  fi
+}
+
+# Hängt eine JSONL-Zeile oder Text sicher an eine Datei auf dem Ziel an.
+append_target_file() {
+  local path="$1" content="$2"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dryrun "Hänge an '$path' an"
+    return 0
+  fi
+  if [[ "$IS_REMOTE" == "1" ]]; then
+    local escaped_path
+    escaped_path=$(printf '%q' "$path")
+    ssh "$SSH_HOST" "cat >> $escaped_path" <<< "$content"
+  else
+    printf '%s\n' "$content" >> "$path"
   fi
 }
 
@@ -540,6 +559,10 @@ if [[ ! -d "$STOCK_SRC" ]]; then
   error "LanceDB stock nicht gefunden: $STOCK_SRC"
   exit 1
 fi
+if [[ ! -f "$INSTALLER_CONFIG_HELPER" ]]; then
+  error "Installer-Config-Helper nicht gefunden: $INSTALLER_CONFIG_HELPER"
+  exit 1
+fi
 ok "Plugin-Quellen vorhanden"
 
 # Remote-Verbindung testen
@@ -599,6 +622,12 @@ KEEP_EXISTING_MEMORY_CONFIG=0
 KEEP_EXISTING_ACTIVE_MEMORY_CONFIG=0
 MEMORY_CONFIG_MODE=""
 ACTIVE_MEMORY_MODE=""
+FEATURE_UPDATE_MODE="fresh"
+FEATURE_POLICY_MODE="fresh"
+FEATURE_UPDATE_PLAN=""
+FEATURE_UPDATE_IS_UPDATE="false"
+INSTALL_LOG_PATH="$TARGET_DIR/state/$INSTALL_LOG_FILE"
+INSTALL_LOG_CONTENT=""
 
 # Bestehende Config als Default verwenden. Full-Install darf bei Updates nicht
 # versehentlich Keys, Pfade oder moderne 4.x-Konfigurationen überschreiben.
@@ -618,6 +647,46 @@ MEMORY_SEARCH_EMBEDDING_MODEL=$(run_target "jq -r '.agents.defaults.memorySearch
 EXISTING_ACTIVE_MEMORY_ENTRY=$(run_target "jq -c '.plugins.entries[\"active-memory\"] // null' '$TARGET_CONFIG' 2>/dev/null" || echo "null")
 DEFAULT_CHAT_MODEL=$(run_target "jq -r '.agents.defaults.model.primary // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
 DEFAULT_CHAT_FALLBACK=$(run_target "jq -r '.agents.defaults.model.fallbacks[0] // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
+INSTALL_LOG_CONTENT=$(read_target_file "$INSTALL_LOG_PATH" || true)
+
+FEATURE_PLAN_INPUT=$(jq -n \
+  --argjson existing "$EXISTING_PLUGIN_ENTRY" \
+  --arg log "$INSTALL_LOG_CONTENT" \
+  '{
+    existingPluginEntry: (if $existing == null then null else $existing end),
+    existingPluginConfig: (if $existing == null then null else ($existing.config // {}) end),
+    proposedPluginConfig: (if $existing == null then {} else ($existing.config // {}) end),
+    installLogContent: $log,
+    mode: "preserve"
+  }')
+FEATURE_UPDATE_PLAN=$(PLUR1BUS_INSTALLER_INPUT="$FEATURE_PLAN_INPUT" node "$INSTALLER_CONFIG_HELPER" feature-plan)
+FEATURE_UPDATE_IS_UPDATE=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.isUpdate')
+
+if [[ "$FEATURE_UPDATE_IS_UPDATE" == "true" ]]; then
+  DETECTED_BY_CONFIG=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.detectedBy.config')
+  DETECTED_BY_LOG=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.detectedBy.log')
+  NEW_FEATURE_COUNT=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.newlyActivated | length')
+  PRESERVED_DISABLED_COUNT=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '.preservedDisabled | length')
+  info "Bestehende PLUR1BUS-Installation erkannt (config=$DETECTED_BY_CONFIG, log=$DETECTED_BY_LOG)."
+  if [[ "$NEW_FEATURE_COUNT" -gt 0 ]]; then
+    info "Fehlende Core-Features, die im sicheren Update-Modus default-on ergänzt werden:"
+    printf '%s\n' "$FEATURE_UPDATE_PLAN" | jq -r '.newlyActivated[]? | "  - " + .label'
+  fi
+  if [[ "$PRESERVED_DISABLED_COUNT" -gt 0 ]]; then
+    warn "Explizit deaktivierte Features bleiben im sicheren Update-Modus deaktiviert:"
+    printf '%s\n' "$FEATURE_UPDATE_PLAN" | jq -r '.preservedDisabled[]? | "  - " + .label'
+  fi
+  prompt_choice FEATURE_UPDATE_MODE "Feature-Update-Modus: keep=User-Entscheidungen bewahren + fehlende Defaults ergänzen, enable-all=alle Core-Features aktivieren" "keep" "keep" "enable-all"
+else
+  info "Keine bestehende PLUR1BUS-Installation in Config/Install-Log erkannt — Fresh-Install nutzt Full Experience Defaults."
+  FEATURE_UPDATE_MODE="fresh"
+fi
+
+case "$FEATURE_UPDATE_MODE" in
+  keep) FEATURE_POLICY_MODE="preserve" ;;
+  enable-all) FEATURE_POLICY_MODE="enable-all" ;;
+  fresh|*) FEATURE_POLICY_MODE="fresh" ;;
+esac
 EMBEDDING_KEY_DEFAULT="$EXISTING_EMBEDDING_KEY"
 [[ -z "$EMBEDDING_KEY_DEFAULT" ]] && EMBEDDING_KEY_DEFAULT="$MEMORY_SEARCH_EMBEDDING_KEY"
 [[ -z "$EMBEDDING_KEY_DEFAULT" ]] && EMBEDDING_KEY_DEFAULT='${OPENAI_API_KEY}'
@@ -657,7 +726,7 @@ if [[ "$EXISTING_ACTIVE_MEMORY_ENTRY" != "null" && -n "$EXISTING_ACTIVE_MEMORY_E
     USE_ACTIVE_MEMORY="y"
   fi
 else
-  prompt_choice ACTIVE_MEMORY_MODE "ActiveMemory installieren? no=nein, yes=ja" "no" "no" "yes"
+  prompt_choice ACTIVE_MEMORY_MODE "ActiveMemory installieren? yes=ja, no=nein" "yes" "yes" "no"
   [[ "$ACTIVE_MEMORY_MODE" == "yes" ]] && USE_ACTIVE_MEMORY="y"
 fi
 
@@ -687,7 +756,7 @@ case "$EMBEDDING_PROVIDER_MODE" in
   openai)
     EMBEDDING_PROVIDER="openai"
     OPENAI_KEY="${EMBEDDING_KEY_DEFAULT}"
-    prompt_input OPENAI_KEY "OpenAI API Key" "$OPENAI_KEY"
+    prompt_secret OPENAI_KEY "OpenAI API Key" "$OPENAI_KEY"
     EMBEDDING_MODEL="text-embedding-3-large"
     EMBEDDING_DIMENSIONS=3072
     ;;
@@ -700,7 +769,7 @@ case "$EMBEDDING_PROVIDER_MODE" in
     ;;
   custom)
     EMBEDDING_PROVIDER="openai-compatible"
-    prompt_input OPENAI_KEY "Embedding API Key" "$EMBEDDING_KEY_DEFAULT"
+    prompt_secret OPENAI_KEY "Embedding API Key" "$EMBEDDING_KEY_DEFAULT"
     prompt_input EMBEDDING_BASE_URL "Embedding Base-URL" "${EXISTING_EMBEDDING_BASE_URL:-}"
     EMBEDDING_MODEL="$EMBEDDING_MODEL_DEFAULT"
     prompt_input EMBEDDING_MODEL "Embedding-Modell" "$EMBEDDING_MODEL"
@@ -725,7 +794,7 @@ prompt_choice RERANKER_PROVIDER_MODE "Reranker provider: cohere=remote, local=lo
 case "$RERANKER_PROVIDER_MODE" in
   cohere)
     RERANKER_PROVIDER="cohere"
-    prompt_input COHERE_KEY "Cohere API Key" "${EXISTING_COHERE_KEY:-\${COHERE_API_KEY}}"
+    prompt_secret COHERE_KEY "Cohere API Key" "${EXISTING_COHERE_KEY:-\${COHERE_API_KEY}}"
     RERANKER_MODEL="${EXISTING_RERANKER_MODEL:-rerank-v3.5}"
     prompt_input RERANKER_MODEL "Cohere Rerank-Modell" "$RERANKER_MODEL"
     ;;
@@ -745,7 +814,7 @@ info "Embedding-Fallback: zweiter OpenAI/OpenAI-kompatibler Endpunkt falls Prima
 warn "  ⚠️  Fallback MUSS dasselbe Modell / dieselbe Dimension verwenden — LanceDB hat fixes Schema."
 if [[ "$EMBEDDING_PROVIDER" != "local-transformers" ]] && confirm "Embedding-Fallback konfigurieren?" "n"; then
   USE_EMBEDDING_FALLBACK="y"
-  prompt_input EMBEDDING_FALLBACK_KEY     "Fallback API Key" "\${OPENAI_API_KEY_FALLBACK}"
+  prompt_secret EMBEDDING_FALLBACK_KEY     "Fallback API Key" "\${OPENAI_API_KEY_FALLBACK}"
   prompt_input EMBEDDING_FALLBACK_BASEURL "Fallback Base-URL (leer = Provider-Default)" ""
   prompt_input EMBEDDING_FALLBACK_MODEL   "Fallback Modell (leer = wie Primary)" ""
 fi
@@ -762,7 +831,7 @@ if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM —
     [[ -n "$MERGING_MODEL" ]] && break
     warn "Merging braucht ein explizites Modell. Es gibt keinen provider-spezifischen Zwangsdefault."
   done
-  prompt_input MERGING_KEY     "Merging LLM API Key" "${_EXISTING_MERGING_KEY:-}"
+  prompt_secret MERGING_KEY     "Merging LLM API Key" "${_EXISTING_MERGING_KEY:-}"
   echo ""
   info "Optionale provider-spezifische Chat-Optionen:"
   info "  Einige OpenAI-kompatible Anbieter unterstützen disableThinking oder verlangen einen User-Agent."
@@ -792,13 +861,19 @@ TARGET_DB_PATH="$TARGET_DIR/memory/lancedb-namespaced"
 EXISTING_DBS=$(run_target "ls -d '$TARGET_DB_PATH'/*/ 2>/dev/null | xargs -n1 basename 2>/dev/null || true" || echo "")
 if [[ -n "$EXISTING_DBS" ]]; then
   MISMATCH_COUNT=0
+  DIM_CHECK_SKIPPED=0
   while IFS= read -r ag; do
     [[ -z "$ag" ]] && continue
     [[ "$ag" == "defaults" || "$ag" == "list" ]] && continue
     # Schema-Dim per Python aus LanceDB lesen — funktioniert remote nicht direkt, nur lokal
-    if [[ "$IS_REMOTE" == "1" ]]; then continue; fi
     if [[ "$DRY_RUN" == "1" ]]; then
-      dryrun "Würde LanceDB-Dimension für Agent '$ag' prüfen"
+      DIM_CHECK_SKIPPED=1
+      dryrun "Dry-run: LanceDB-Dimensionen wurden nicht live geprüft für Agent '$ag'"
+      continue
+    fi
+    if [[ "$IS_REMOTE" == "1" ]]; then
+      DIM_CHECK_SKIPPED=1
+      warn "Remote-Ziel: LanceDB-Dimension für Agent '$ag' wurde nicht live geprüft."
       continue
     fi
     DB_DIM=$(timeout 10s python3 -c "
@@ -836,6 +911,8 @@ except: pass
       error "Abgebrochen wegen Dim-Mismatch."
       exit 1
     fi
+  elif [[ "$DIM_CHECK_SKIPPED" -gt 0 ]]; then
+    warn "Dry-run: LanceDB-Dimensionen wurden nicht live geprüft; keine Kompatibilitätszusage."
   else
     ok "Alle bestehenden DBs sind kompatibel."
   fi
@@ -1067,6 +1144,28 @@ else
       }
     }')
 fi
+
+PLUGIN_POLICY_INPUT=$(jq -n \
+  --argjson pluginEntry "$PLUGIN_CONFIG" \
+  --arg mode "$FEATURE_POLICY_MODE" \
+  '{pluginEntry: $pluginEntry, mode: $mode}')
+PLUGIN_CONFIG=$(PLUR1BUS_INSTALLER_INPUT="$PLUGIN_POLICY_INPUT" node "$INSTALLER_CONFIG_HELPER" complete-plugin-entry)
+FINAL_MERGING_ENABLED=$(printf '%s' "$PLUGIN_CONFIG" | jq -r '.config.merging.enabled // false')
+FINAL_MERGING_MODEL=$(printf '%s' "$PLUGIN_CONFIG" | jq -r '.config.merging.model // empty')
+
+FINAL_FEATURE_PLAN_INPUT=$(jq -n \
+  --argjson existing "$EXISTING_PLUGIN_ENTRY" \
+  --argjson pluginEntry "$PLUGIN_CONFIG" \
+  --arg log "$INSTALL_LOG_CONTENT" \
+  --arg mode "$FEATURE_POLICY_MODE" \
+  '{
+    existingPluginEntry: (if $existing == null then null else $existing end),
+    existingPluginConfig: (if $existing == null then {} else ($existing.config // {}) end),
+    proposedPluginConfig: ($pluginEntry.config // {}),
+    installLogContent: $log,
+    mode: $mode
+  }')
+FEATURE_UPDATE_PLAN=$(PLUR1BUS_INSTALLER_INPUT="$FINAL_FEATURE_PLAN_INPUT" node "$INSTALLER_CONFIG_HELPER" feature-plan)
 
 # jq-Patch-Script (wird remote oder lokal ausgeführt)
 JQ_PATCH=$(cat <<'JQEOF'
@@ -1510,6 +1609,32 @@ if [[ "$NON_INTERACTIVE" == "1" ]]; then
   ok "PLUR1BUS Start Notice bereitgestellt: $NOTICE_PATH"
 fi
 
+PACKAGE_VERSION=$(node -e "try { console.log(JSON.parse(require('fs').readFileSync('$SOURCE_DIR/package.json', 'utf8')).version || '') } catch { console.log('') }")
+INSTALL_MODE="install"
+[[ "$FEATURE_UPDATE_IS_UPDATE" == "true" ]] && INSTALL_MODE="update"
+EXISTING_PLUGIN_CONFIG_JSON=$(jq -n --argjson existing "$EXISTING_PLUGIN_ENTRY" 'if $existing == null then {} else ($existing.config // {}) end' | jq -c .)
+FINAL_PLUGIN_CONFIG_JSON=$(printf '%s' "$PLUGIN_CONFIG" | jq -c '.config // {}')
+DETECTED_BY_JSON=$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -c '.detectedBy')
+INSTALL_EVENT_INPUT=$(jq -n \
+  --arg packageVersion "$PACKAGE_VERSION" \
+  --arg installMode "$INSTALL_MODE" \
+  --arg featureMode "$FEATURE_POLICY_MODE" \
+  --argjson detectedBy "$DETECTED_BY_JSON" \
+  --argjson beforeConfig "$EXISTING_PLUGIN_CONFIG_JSON" \
+  --argjson afterConfig "$FINAL_PLUGIN_CONFIG_JSON" \
+  '{
+    packageVersion: $packageVersion,
+    installMode: $installMode,
+    featureMode: $featureMode,
+    detectedBy: $detectedBy,
+    beforeConfig: $beforeConfig,
+    afterConfig: $afterConfig
+  }')
+INSTALL_EVENT=$(PLUR1BUS_INSTALLER_INPUT="$INSTALL_EVENT_INPUT" node "$INSTALLER_CONFIG_HELPER" install-event | jq -c .)
+run_target "mkdir -p '$TARGET_DIR/state'"
+append_target_file "$INSTALL_LOG_PATH" "$INSTALL_EVENT"
+ok "PLUR1BUS Install-Log aktualisiert: $INSTALL_LOG_PATH"
+
 echo -e "${BOLD}Nächste Schritte:${RESET}"
 echo
 echo "  1. Gateway neu starten:"
@@ -1536,10 +1661,14 @@ echo "  4. Erster Memory-Store und Recall testen (via Agent-Chat):"
 echo "     memory_store: {text: 'Testfakt', category: 'fact', importance: 0.5}"
 echo "     memory_recall: {query: 'Testfakt'}"
 echo
-if [[ "$USE_MERGING" == "n" ]]; then
+if [[ "$FINAL_MERGING_ENABLED" != "true" ]]; then
   echo -e "${YELLOW}  Hinweis: LLM-Merging wurde nicht aktiviert. Für bessere Memory-Qualität${RESET}"
   echo -e "${YELLOW}  Merging-Config manuell in openclaw.json ergänzen (beliebiger OpenAI-kompatibler Chat-Completions-Anbieter; Modell explizit setzen)${RESET}"
   echo -e "${YELLOW}  Pfad: plugins.entries.memory-lancedb-namespaced.config.merging${RESET}"
+  echo
+elif [[ -z "$FINAL_MERGING_MODEL" ]]; then
+  echo -e "${YELLOW}  Hinweis: LLM-Merging ist als Feature aktiv, aber noch ohne Modell.${RESET}"
+  echo -e "${YELLOW}  Runtime läuft fail-soft/no-op, bis plugins.entries.memory-lancedb-namespaced.config.merging.model gesetzt ist.${RESET}"
   echo
 fi
 if [[ "$USE_ACTIVE_MEMORY" == "n" ]]; then
