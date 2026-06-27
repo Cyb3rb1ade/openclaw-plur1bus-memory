@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 6.8.6** — Code-review hardening series: i18n sync, installer fixes, neo worker drain await fix, and manifest version alignment. See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 6.8.7** — Fixes cron plugin command dispatch regression introduced by OpenClaw 2026.6.11 (gateway patch #16). See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
