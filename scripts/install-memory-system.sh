@@ -912,7 +912,11 @@ except: pass
       exit 1
     fi
   elif [[ "$DIM_CHECK_SKIPPED" -gt 0 ]]; then
-    warn "Dry-run: LanceDB-Dimensionen wurden nicht live geprüft; keine Kompatibilitätszusage."
+    if [[ "$DRY_RUN" == "1" ]]; then
+      warn "Dry-run: LanceDB-Dimensionen wurden nicht live geprüft; keine Kompatibilitätszusage."
+    else
+      warn "Remote-Ziel: LanceDB-Dimensionen wurden nicht live geprüft; keine Kompatibilitätszusage."
+    fi
   else
     ok "Alle bestehenden DBs sind kompatibel."
   fi
