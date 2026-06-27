@@ -5,6 +5,14 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.6] — 2026-06-27 — Manifest Version Sync
+
+### Fixed
+- `openclaw.plugin.json`: version was stuck at `6.8.0` — now aligned with `package.json` (`6.8.6`). Fixes ClawHub package-manifest-version-drift warning.
+
+### Notes
+- No code changes. No DB schema changes.
+
 ## [6.8.5] — 2026-06-27 — Neo Worker Drain Await Fix
 
 ### Fixed
