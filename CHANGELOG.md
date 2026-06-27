@@ -6,6 +6,23 @@ Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 
+## [6.8.7] — 2026-06-27 — Obsidian Bridge Installer Fix
+
+### Fixed
+
+- **Installer (`install-memory-system.sh`)**: `obsidianBridge` was never configured by the installer, leaving the Obsidian bridge permanently disabled after fresh installs. The bridge service requires `enabled: true` to activate; without it, `link-index.json` and `semantic-lens-index.json` silently stagnated.
+- Added full `obsidianBridge` block to `PLUGIN_CONFIG`:
+  - `enabled: true`, `watch: false`, `dryRun: false`, `autoApplyLowRisk: true`
+  - `workspaces` array auto-built from detected agent/workspace pairs (`WORKSPACE_MAP`)
+  - `graphLinks.semanticDiscovery` enabled (`maxPerRun: 500`, `threshold: 0.78`)
+- **New Schritt 9d**: Installer now registers a daily OpenClaw-managed cron job (`plur1bus-semantic-discover-daily`, `0 2 * * * Europe/Berlin`) for `/plur1bus internal discover-semantic-links` — no hardcoded LLM model, no hardcoded thinking level (both `NULL`, gateway defaults apply).
+
+### Notes
+
+- No DB schema changes. No breaking changes.
+- Existing installs: re-run installer or manually add `obsidianBridge` config + cron job.
+- `link-index.json` / `semantic-lens-index.json` will update nightly from 02:00 CET onward.
+
 ## [6.7.8] — 2026-06-20 — Privacy Hardening
 
 ### Security

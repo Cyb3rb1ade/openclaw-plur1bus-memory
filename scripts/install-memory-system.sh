@@ -1003,6 +1003,19 @@ else
     EMBEDDING_FALLBACK_BLOCK='null'
   fi
 
+  # Workspaces-Array für obsidianBridge aus WORKSPACE_MAP bauen
+  OBSIDIAN_WORKSPACES_JSON="["
+  first_ws=1
+  for agent in "${AGENT_LIST[@]}"; do
+    ws_path="${WORKSPACE_MAP[$agent]}"
+    [[ -z "$ws_path" ]] && continue
+    [[ "$first_ws" -eq 0 ]] && OBSIDIAN_WORKSPACES_JSON+=","
+    OBSIDIAN_WORKSPACES_JSON+=$(jq -n --arg id "$agent" --arg path "$ws_path" \
+      '{"workspaceId": $id, "agentId": $id, "path": $path}')
+    first_ws=0
+  done
+  OBSIDIAN_WORKSPACES_JSON+="]"
+
   # Plugin-Config-Objekt
   PLUGIN_CONFIG=$(jq -n \
     --arg embedding_provider "$EMBEDDING_PROVIDER" \
@@ -1013,6 +1026,7 @@ else
     --arg embedding_local_model "$EMBEDDING_LOCAL_MODEL" \
     --arg embedding_local_cache_dir "$EMBEDDING_LOCAL_CACHE_DIR" \
     --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
+    --argjson obsidian_workspaces "$OBSIDIAN_WORKSPACES_JSON" \
     --argjson reranker "$RERANKER_BLOCK" \
     --argjson merging "$MERGING_BLOCK" \
     --argjson schicht15 "$SCHICHT15_BLOCK" \
@@ -1063,7 +1077,21 @@ else
         },
         "reranker": $reranker,
         "merging": $merging,
-        "schicht15": $schicht15
+        "schicht15": $schicht15,
+        "obsidianBridge": {
+          "enabled": true,
+          "watch": false,
+          "dryRun": false,
+          "autoApplyLowRisk": true,
+          "workspaces": $obsidian_workspaces,
+          "graphLinks": {
+            "semanticDiscovery": {
+              "enabled": true,
+              "maxPerRun": 500,
+              "threshold": 0.78
+            }
+          }
+        }
       }
     }')
 fi
@@ -1480,6 +1508,59 @@ else
     ok "KNOWLEDGE.md Fresh-Cron eingerichtet (täglich 04:30, --fresh --max 10)"
   else
     warn "Cron konnte nicht gesetzt werden. Manuell einrichten: $BACKFILL_CRON"
+  fi
+fi
+
+# ─── Schritt 9d: Semantic-Discovery Cron-Job (OpenClaw-managed, kein Modell) ─
+
+step "Schritt 9d: Semantic-Discovery Cron-Job"
+
+SQLITE_DB="$TARGET_DIR/state/openclaw.sqlite"
+SEM_STORE_KEY="$TARGET_DIR/cron/jobs.json"
+SEM_JOB_ID="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  dryrun "Würde OpenClaw-Cron-Job 'plur1bus-semantic-discover-daily' (02:00 CET, kein Modell) in $SQLITE_DB eintragen"
+elif [[ ! -f "$SQLITE_DB" ]]; then
+  warn "openclaw.sqlite nicht gefunden — nach erstem Gateway-Start erneut ausführen"
+else
+  EXISTING=$(run_target "sqlite3 '$SQLITE_DB' \"SELECT COUNT(*) FROM cron_jobs WHERE job_id='$SEM_JOB_ID';\" 2>/dev/null || echo 0")
+  if [[ "${EXISTING:-0}" -gt 0 ]]; then
+    ok "Semantic-Discovery Cron-Job bereits vorhanden"
+  else
+    NOW_MS=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null || node -e "console.log(Date.now())")
+    NOW_S=$(date +%s)
+    NEXT_RUN=$(python3 -c "
+from datetime import datetime, timezone, timedelta
+now = datetime.now(timezone.utc)
+target = now.replace(hour=0, minute=0, second=0, microsecond=0)
+if target <= now: target += timedelta(days=1)
+print(int(target.timestamp() * 1000))
+" 2>/dev/null || echo "$NOW_MS")
+    if run_target "sqlite3 '$SQLITE_DB' \"
+INSERT OR IGNORE INTO cron_jobs (
+  store_key, job_id, name, enabled, created_at_ms,
+  schedule_kind, schedule_expr, schedule_tz,
+  agent_id, session_target, wake_mode,
+  payload_kind, payload_message, payload_model, payload_thinking, payload_timeout_seconds,
+  delivery_mode, failure_alert_disabled,
+  next_run_at_ms, consecutive_errors, consecutive_skipped,
+  job_json, state_json, updated_at, sort_order
+) VALUES (
+  '$SEM_STORE_KEY', '$SEM_JOB_ID', 'plur1bus-semantic-discover-daily', 1, $NOW_MS,
+  'cron', '0 2 * * *', 'Europe/Berlin',
+  'main', 'isolated', 'now',
+  'agentTurn', '/plur1bus internal discover-semantic-links',
+  NULL, NULL, 300,
+  'none', 0,
+  $NEXT_RUN, 0, 0,
+  '{\\\"name\\\":\\\"plur1bus-semantic-discover-daily\\\",\\\"agentId\\\":\\\"main\\\"}',
+  '{}', $NOW_S, 100
+);\"" 2>/dev/null; then
+      ok "Semantic-Discovery Cron-Job eingerichtet (täglich 02:00 CET, kein Modell-Override)"
+    else
+      warn "Cron-Job konnte nicht angelegt werden — Gateway neu starten und Installer wiederholen"
+    fi
   fi
 fi
 
