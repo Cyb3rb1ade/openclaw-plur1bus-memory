@@ -1996,18 +1996,26 @@ const plugin = {
     const emotionCfg = cfg.emotion || {};
     const emotionTier = emotionCfg.tier || "auto";
     const emotionT2Enabled = emotionCfg.t2?.enabled !== false;
-    const emotionT3Enabled = emotionCfg.t3?.enabled === true;
-    const emotionT3Model = emotionCfg.t3?.model || "gpt-4o-mini";
-    const emotionT3ApiKey = emotionCfg.t3?.apiKey ? resolveEnvVars(emotionCfg.t3.apiKey) : apiKey;
-    if (emotionT3Enabled && emotionT3ApiKey) {
-      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled (model: ${emotionT3Model})`);
-    } else if (emotionT3Enabled && !emotionT3ApiKey) {
-      api.logger.warn("memory-lancedb-namespaced: emotion tier-3.enabled=true but no API key available. Set config.emotion.t3.apiKey or OPENAI_API_KEY.");
+    // Tier 3 requires explicit opt-in AND Cohere reranker (design gate: no Cohere → no tier 3)
+    const _emotionT3CohereActive = (() => {
+      const rc = normalizeRerankerConfig(cfg.reranker || {});
+      return rc.provider === "cohere" && rc.enabled;
+    })();
+    const emotionT3Enabled = emotionCfg.t3?.enabled === true && _emotionT3CohereActive;
+    const emotionT3Model = emotionCfg.t3?.model || mergingModel || "kimi-for-coding";
+    // Use plugin-internal callLlm (routes through configured model, no hardcoded OpenAI client)
+    const emotionT3CallLlm = emotionT3Enabled && mergingLlmCfg
+      ? (messages) => callLlm(messages, { ...mergingLlmCfg, model: emotionT3Model, maxTokens: 300, disableThinking: true })
+      : null;
+    if (emotionT3Enabled) {
+      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled via callLlm (model: ${emotionT3Model}, Cohere ✓)`);
+    } else if (emotionCfg.t3?.enabled === true && !_emotionT3CohereActive) {
+      api.logger.info("memory-lancedb-namespaced: emotion tier-3 requested but Cohere not configured — tier-3 disabled");
     }
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
-      t3: { enabled: emotionT3Enabled, model: emotionT3Model, apiKey: emotionT3ApiKey, baseUrl: emotionCfg.t3?.baseUrl || undefined },
+      t3: { enabled: emotionT3Enabled, model: emotionT3Model, callLlm: emotionT3CallLlm, baseUrl: emotionCfg.t3?.baseUrl || undefined },
     });
     if (emotionTier !== "auto") {
       api.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
