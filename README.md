@@ -2,11 +2,22 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 6.8.0** — Media diarization support, packaged emotional-state injection, performance-audit follow-ups, and optional code-index context. See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 6.8.6** — Code-review hardening series: i18n sync, installer fixes, neo worker drain await fix, and manifest version alignment. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v6.8.x — Code-review hardening
+
+- **i18n sync** — 752 missing translation keys added for new OpenClaw channel wizards (IRC, Feishu, NextcloudTalk, Google Chat).
+- **TypeScript optional dep** — `typescript` is now declared as an `optionalDependency` so the code-index feature works out of the box without forcing TS on all users.
+- **Installer fixes** — `buildInstallLogEvent` now correctly passes `featureMode` instead of hardcoding `"preserve"`; dry-run vs. remote-target warnings are properly distinguished; dead code removed.
+- **Installer performance** — 9 sequential `jq` subprocess calls consolidated into batch `eval`+`@sh` extracts.
+- **Neo worker drain** — Missing `await` on `drainEmbeddingQueue()` caused the unresolved Promise to be serialised as `{}` in `postMessage`; callers now receive correct drain results.
+- **Auto-capture robustness** — `statSync` race condition fixed (file deleted between `readdirSync` and `statSync`); `addQueryVector` null-return guard added.
+- **ts-source-indexer** — O(n) `symbols.find()` in AST visitor replaced with a `Map` for O(1) lookup.
+- **Manifest sync** — `openclaw.plugin.json` version aligned with `package.json`.
 
 ### New in v6.8.0 — Release readiness, code context, and runtime packaging
 
