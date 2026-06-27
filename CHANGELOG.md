@@ -5,6 +5,19 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.2] — 2026-06-27 — Installer Fixes + Code-Review Cleanup
+
+### Fixed
+- `installer-config.mjs`: `buildInstallLogEvent` now passes `input.featureMode` to the internal `createFeatureUpdatePlan` call instead of hardcoding `"preserve"` — audit ledger now correctly reflects `fresh` / `enable-all` installs.
+- `installer-config.mjs`: Removed dead `afterDisabled` Set (built but never read in `createFeatureUpdatePlan`).
+- `installer-config.mjs`: Simplified `newlyDisabled` filter — vacuous guard `!afterActive.has(feature.key)` removed (items in `after.disabled` are mutually exclusive with `after.active` by construction).
+- `install-memory-system.sh`: LanceDB dimension-check summary warning now correctly distinguishes dry-run (`"Dry-run: …"`) from remote-live installs (`"Remote-Ziel: …"`) — live remote installs no longer emit a misleading `"Dry-run:"` prefix.
+
+### Notes
+- No DB schema changes.
+- No breaking changes.
+- Includes all installer improvements from v6.8.1 (i18n sync, typescript dep) and the PR #75 installer rewrite.
+
 ## [6.8.1] — 2026-06-27 — i18n Sync + TypeScript Dep Fix
 
 ### Fixed
