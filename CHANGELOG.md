@@ -5,6 +5,14 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.5] — 2026-06-27 — Neo Worker Drain Await Fix
+
+### Fixed
+- `lib/neo-worker-runner.js`: `drainEmbeddingQueue()` call was missing `await` — the unresolved Promise was passed to `postMessage` and serialised as `{}`, so callers never received drain results. Now correctly awaited before posting back to the main thread.
+
+### Notes
+- No DB schema changes. No breaking changes.
+
 ## [6.8.4] — 2026-06-27 — Code-Review Micro-Fixes
 
 ### Fixed
