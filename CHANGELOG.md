@@ -5,6 +5,15 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.7] — 2026-06-27 — Cron Plugin Command Dispatch Fix
+
+### Fixed
+- **Gateway patch #16** (`apply-media-patch.sh`): OpenClaw 2026.6.11 (PR #85341 "internalize agent runtime") broke all `/plur1bus ...` cron `agentTurn` jobs — commands bypassed `handlePluginCommand` and went directly to the LLM, which hallucinated responses. Patch intercepts slash-commands in `runCronIsolatedAgentTurn` (before `executeCronRun`), calls the matching plugin command handler with correct `agentId` + `workspaceDir` from the cron context, then either returns early for silent jobs (e.g. `discover-semantic-links`, `consolidate-daily`) or injects the plugin result into `commandBody` for delivery jobs (e.g. `morning-review`/`evening-review`) so the LLM formats and sends correctly.
+
+### Notes
+- No code changes in plugin JS itself — only `apply-media-patch.sh` updated.
+- No DB schema changes. No breaking changes.
+
 ## [6.8.6] — 2026-06-27 — Manifest Version Sync
 
 ### Fixed
