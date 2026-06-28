@@ -5,6 +5,44 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.10] — 2026-06-28 — Datenverlust-, Korruptions- & Integritäts-Fixes (Review-Audit)
+
+Ergebnis eines vollständigen Bug-/Security-Reviews (Semgrep + manuelle Layer +
+parallele Modul-Reviews). Findings dokumentiert in
+`docs/audits/2026-06-28-review-findings.md`.
+
+### Fixed
+
+- **Datenverlust-Klasse „destruktiv vor durabel" (3 Stellen)**: `db-adapter.updateCard`,
+  `safe-update.safeUpdate` und `light-dream.strengthenMemory` markierten/löschten
+  die alte Memory, BEVOR die neue Version durabel geschrieben war. Crash/Timeout
+  dazwischen = stiller, unwiederbringlicher Verlust. Jetzt: erst neu schreiben,
+  dann alt superseden (bzw. Rollback bei delete+add). Failure wird zur
+  wiederherstellbaren Fork statt zum Verlust.
+- **GC archivierte neverForget/core-Memories**: Die Active-Scan-Projektion
+  (`buildActiveScanQuery.select` + `normalizeActiveScanRow`) strippte
+  `neverForget`/`memoryClass`, und `selectCandidatesForGc` hatte keinen Guard.
+  Geschützte (auch kritische) Memories konnten unter Größendruck archiviert
+  werden. Flags werden jetzt durchgereicht und geschützte Memories vorab
+  ausgeschlossen.
+- **UTF-8-Korruption beim JSONL-Cap** (`neo-arch.readJsonlTailLines`): Backward-
+  64KB-Chunks wurden einzeln dekodiert → Multibyte-Zeichen (ä/ö/ü/ß/Emoji) an
+  Chunk-Grenzen wurden zu U+FFFD und von `capJsonl` zurückgeschrieben. Jetzt
+  werden rohe Bytes gesammelt und einmal dekodiert.
+- **Emotion-Intensität NaN→0 bei Alltagswörtern** (`tier1-lexicon`): Nuance-Labels
+  (love/grateful/proud/relieved/…) ohne EMOTION_VAD-Eintrag erzeugten NaN, das
+  still zu 0 geklemmt wurde (Signalverlust). Fallback EMOTION_VAD → NUANCE_VAD →
+  neutral; `EmotionScore._validate` weist nicht-finite Werte ab.
+- **False Tombstones im Obsidian Apply-Modus**: `scanWorkspace`-Fastpath ließ
+  unveränderte Dateien aus `scan.files`, wodurch der Tombstone-Loop sie als
+  gelöscht behandelte. `scanWorkspace` liefert jetzt die übersprungenen Pfade,
+  `syncWorkspace` nimmt sie in `seen` auf.
+- **Conversation-Reactivation-Recall ohne Status-Filter**: superseded/getombstonte
+  Memories konnten via Semantic-Lens-Index reaktiviert werden. `normalizeMemoryEntry`
+  filtert jetzt explizit-inaktive Status. (Die ursprünglich vermutete Cross-Agent-
+  ACL-Lücke wurde herabgestuft: per-Agent-Namespacing + eigene Workspaces
+  isolieren die CRR-Datenquellen bereits.)
+
 ## [6.8.9] — 2026-06-28 — Feature-Opt-out-Fix (Reranker-Invarianten)
 
 ### Fixed
