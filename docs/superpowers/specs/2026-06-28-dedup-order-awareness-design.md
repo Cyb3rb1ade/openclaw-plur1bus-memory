@@ -101,3 +101,13 @@ pairs) encode order:
 - `< 2` significant tokens → no false order signal (existing behavior).
 - Existing `tests/memory-store-merge-safety.test.js` + merge-safety unit tests
   stay green.
+
+## Implementation note (2026-06-28)
+
+Implemented as an **exact multiset-permutation** check, not the bigram-overlap
+signal described above. During TDD the bigram threshold false-positived on
+tech-synonym + extra-token cases (`"Node 20"` vs `"Node.js 20"` → bigram overlap
+0.4 < 0.5 because the extra `js` token shifts the bigrams). Role reversal is more
+precisely "same significant-token multiset, different order", which has no
+threshold and excludes extra-token variants. `significantBigramOverlap` was not
+shipped. See commit `85486fafe`.
