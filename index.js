@@ -4352,6 +4352,15 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
+              // Keep the agent-facing store path aligned with storeMemoryFromToolParams:
+              // reject invalid text before embedding or writing it.
+              const textValidation = validateMemoryText(params.text);
+              if (!textValidation.ok) {
+                return {
+                  content: [{ type: "text", text: `Memory store rejected: ${textValidation.error}` }],
+                  details: { action: "rejected", reason: "invalid_text" },
+                };
+              }
               const trace = createRecallDecisionTrace({
                 query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
                 mode: "store",
