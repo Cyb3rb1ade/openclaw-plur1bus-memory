@@ -5,7 +5,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -254,6 +254,60 @@ describe("runProactiveCheck End-to-End", () => {
         threshold: 0.1,
       });
       assert.strictEqual(result2.nudgesGenerated, 0, "Sollte innerhalb von 24h keine Nudges generieren");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("begrenzt patterns.jsonl und cooldown state", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-proactive-bounds-"));
+
+    try {
+      const now = Date.now();
+      const adaptiveDir = join(dir, ".adaptive-learning");
+      mkdirSync(adaptiveDir, { recursive: true });
+      writeFileSync(
+        join(adaptiveDir, "patterns.jsonl"),
+        Array.from({ length: 5 }, (_, index) => JSON.stringify({ clusterId: `old-${index}` })).join("\n") + "\n",
+        "utf8",
+      );
+      writeFileSync(
+        join(adaptiveDir, "proactive-nudge-cooldowns.json"),
+        JSON.stringify({
+          old1: now - 1,
+          old2: now - 2,
+          old3: now - 3,
+          old4: now - 4,
+          old5: now - 5,
+        }),
+        "utf8",
+      );
+
+      const turns = [
+        { id: "t1", content: "Ich arbeite an der API", createdAt: now - 26 * 3600_000 },
+        { id: "t2", content: "Ich arbeite an der API heute", createdAt: now - 50 * 3600_000 },
+        { id: "t3", content: "Ich arbeite an der API morgen", createdAt: now - 74 * 3600_000 },
+      ];
+      const mockStore = { readTurns: (n) => turns.slice(-n) };
+
+      await runProactiveCheck(mockStore, "test-agent", {
+        workspaceDir: dir,
+        workspaceKey: "test-ws",
+        now,
+        embedFn: (text) => text.toLowerCase().includes("api") ? [1, 0.1] : [0, 0],
+        threshold: 0.1,
+        maxPatternLogEntries: 3,
+        maxCooldownEntries: 3,
+      });
+
+      const patternLines = readFileSync(join(adaptiveDir, "patterns.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean);
+      assert.ok(patternLines.length <= 3, `patterns.jsonl should be capped, got ${patternLines.length}`);
+
+      const cooldowns = JSON.parse(readFileSync(join(adaptiveDir, "proactive-nudge-cooldowns.json"), "utf8"));
+      assert.ok(Object.keys(cooldowns).length <= 3, `cooldowns should be capped, got ${Object.keys(cooldowns).length}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
