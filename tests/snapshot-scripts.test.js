@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { execSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -23,9 +23,20 @@ function makeTempOpenclawHome() {
 
 function cleanup(dir) {
   try {
-    execSync(`rm -rf "${dir}"`, { shell: true });
+    rmSync(dir, { recursive: true, force: true });
   } catch {
     // best effort
+  }
+}
+
+function runShell(command, options = {}) {
+  try {
+    return execSync(command, options);
+  } catch (err) {
+    if (err.code === "EPERM" && err.status === 0) {
+      return err.stdout ?? "";
+    }
+    throw err;
   }
 }
 
@@ -36,7 +47,7 @@ test("backup creates snapshot with manifest and skips missing optional paths", S
     mkdirSync(join(home, "memory", "lancedb-namespaced"), { recursive: true });
     writeFileSync(join(home, "memory", "lancedb-namespaced", "test.db"), "data");
 
-    const out = execSync(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
+    const out = runShell(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
       env: { ...process.env, OPENCLAW_HOME: home },
       encoding: "utf8",
     });
@@ -75,7 +86,7 @@ test("backup skips symlinks", SKIP, () => {
       join(home, "memory", "lancedb-namespaced", "link.db")
     );
 
-    execSync(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
+    runShell(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
       env: { ...process.env, OPENCLAW_HOME: home },
       encoding: "utf8",
     });
@@ -98,7 +109,7 @@ test("restore dry-run by default", SKIP, () => {
     mkdirSync(join(home, "memory", "lancedb-namespaced"), { recursive: true });
     writeFileSync(join(home, "memory", "lancedb-namespaced", "old.db"), "old");
 
-    execSync(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
+    runShell(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
       env: { ...process.env, OPENCLAW_HOME: home },
       encoding: "utf8",
     });
@@ -111,7 +122,7 @@ test("restore dry-run by default", SKIP, () => {
     writeFileSync(join(home, "memory", "lancedb-namespaced", "old.db"), "modified");
 
     // Dry-run restore
-    const out = execSync(`"${SCRIPT_DIR}/restore-snapshot.sh" "${snapshotPath}"`, {
+    const out = runShell(`"${SCRIPT_DIR}/restore-snapshot.sh" "${snapshotPath}"`, {
       env: { ...process.env, OPENCLAW_HOME: home },
       encoding: "utf8",
     });
@@ -133,7 +144,7 @@ test("restore with --confirm restores files", SKIP, () => {
     mkdirSync(join(home, "memory", "lancedb-namespaced"), { recursive: true });
     writeFileSync(join(home, "memory", "lancedb-namespaced", "old.db"), "original");
 
-    execSync(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
+    runShell(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
       env: { ...process.env, OPENCLAW_HOME: home },
       encoding: "utf8",
     });
@@ -146,7 +157,7 @@ test("restore with --confirm restores files", SKIP, () => {
     writeFileSync(join(home, "memory", "lancedb-namespaced", "old.db"), "modified");
 
     // Live restore
-    execSync(`"${SCRIPT_DIR}/restore-snapshot.sh" --confirm "${snapshotPath}"`, {
+    runShell(`"${SCRIPT_DIR}/restore-snapshot.sh" --confirm "${snapshotPath}"`, {
       env: { ...process.env, OPENCLAW_HOME: home },
       encoding: "utf8",
     });
@@ -164,7 +175,7 @@ test("restore creates safety backup before live restore", SKIP, () => {
     mkdirSync(join(home, "memory", "lancedb-namespaced"), { recursive: true });
     writeFileSync(join(home, "memory", "lancedb-namespaced", "old.db"), "original");
 
-    execSync(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
+    runShell(`"${SCRIPT_DIR}/backup-snapshot.sh"`, {
       env: { ...process.env, OPENCLAW_HOME: home },
       encoding: "utf8",
     });
@@ -177,7 +188,7 @@ test("restore creates safety backup before live restore", SKIP, () => {
     writeFileSync(join(home, "memory", "lancedb-namespaced", "old.db"), "modified");
 
     // Live restore
-    execSync(`"${SCRIPT_DIR}/restore-snapshot.sh" --confirm "${snapshotPath}"`, {
+    runShell(`"${SCRIPT_DIR}/restore-snapshot.sh" --confirm "${snapshotPath}"`, {
       env: { ...process.env, OPENCLAW_HOME: home },
       encoding: "utf8",
     });
@@ -204,7 +215,7 @@ test("restore rejects invalid snapshot path", SKIP, () => {
 
     let threw = false;
     try {
-      execSync(`"${SCRIPT_DIR}/restore-snapshot.sh" "${evilDir}"`, {
+      runShell(`"${SCRIPT_DIR}/restore-snapshot.sh" "${evilDir}"`, {
         env: { ...process.env, OPENCLAW_HOME: home },
         encoding: "utf8",
       });
@@ -228,7 +239,7 @@ test("restore rejects snapshot without manifest", SKIP, () => {
 
     let threw = false;
     try {
-      execSync(`"${SCRIPT_DIR}/restore-snapshot.sh" "${badSnapshot}"`, {
+      runShell(`"${SCRIPT_DIR}/restore-snapshot.sh" "${badSnapshot}"`, {
         env: { ...process.env, OPENCLAW_HOME: home },
         encoding: "utf8",
       });

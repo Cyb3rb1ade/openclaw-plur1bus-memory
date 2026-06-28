@@ -7,7 +7,7 @@
  * making connection startup visibly slow and causing gateway timeouts.
  *
  * This script prunes each table's _versions directory to the N most-recent
- * manifests (default 50). It is safe: only manifest JSON files are removed,
+ * manifests (default 50). It is safe: only manifest metadata files are removed,
  * the actual .lance data files are never touched.
  *
  * Usage:
@@ -42,7 +42,7 @@ function parseArgs(argv) {
 
 function sortedManifests(versionsDir) {
   return readdirSync(versionsDir)
-    .filter((f) => extname(f) === ".json")
+    .filter((f) => [".json", ".manifest"].includes(extname(f)))
     .map((f) => ({ name: f, mtime: statSync(join(versionsDir, f)).mtimeMs }))
     .sort((a, b) => b.mtime - a.mtime); // newest first
 }

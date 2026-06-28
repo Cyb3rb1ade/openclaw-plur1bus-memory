@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   buildCodeIndexForWorkspace,
@@ -23,7 +24,7 @@ function optionValue(argv, flag) {
   return value && !value.startsWith("--") ? value : "";
 }
 
-async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(usage());
     return 0;
@@ -44,9 +45,11 @@ async function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-main().then((code) => {
-  process.exitCode = code;
-}).catch((err) => {
-  console.error(`[plur1bus-code-index] ${err.message}`);
-  process.exitCode = 1;
-});
+if (import.meta.url === pathToFileURL(process.argv[1] || "").href) {
+  main().then((code) => {
+    process.exitCode = code;
+  }).catch((err) => {
+    console.error(`[plur1bus-code-index] ${err.message}`);
+    process.exitCode = 1;
+  });
+}
