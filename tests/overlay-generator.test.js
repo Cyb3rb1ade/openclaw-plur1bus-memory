@@ -199,6 +199,19 @@ describe("OverlayGenerator", () => {
     assert.strictEqual(result, null);
   });
 
+  it("returns null when LLM returns non-object JSON", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => "null",
+    });
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We decided to use Postgres." },
+      conversationContext: "Since then, the meaning has shifted.",
+      relevanceScore: 0.9,
+    });
+    assert.strictEqual(result, null);
+  });
+
   it("returns null when LLM returns confidence out of range", async () => {
     const generator = new OverlayGenerator({
       enabled: true,

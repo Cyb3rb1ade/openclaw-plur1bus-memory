@@ -196,6 +196,10 @@ describe("classifyOperationalRisk", () => {
     assert.strictEqual(classifyOperationalRisk("Journalctl shows a warning").operationalRisk, "low");
   });
 
+  it("does not match destructive keywords inside longer words", () => {
+    assert.strictEqual(classifyOperationalRisk("Gateway movement status is unchanged").operationalRisk, "medium");
+  });
+
   it("returns none for non-operational text", () => {
     assert.strictEqual(classifyOperationalRisk("User prefers German").operationalRisk, "none");
   });

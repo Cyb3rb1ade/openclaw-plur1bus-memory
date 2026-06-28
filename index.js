@@ -1913,6 +1913,8 @@ const plugin = {
     const replyOutcomeMaxMemoryIds = replyOutcomeCfg.maxMemoryIds;
     const replyOutcomeMaxReplyChars = replyOutcomeCfg.maxReplyChars;
     const replyOutcomeMaxAssistantChars = replyOutcomeCfg.maxAssistantChars;
+    const replyOutcomeMaxOutcomeLogEntries = replyOutcomeCfg.maxOutcomeLogEntries;
+    const replyOutcomeMaxFeedbackLogEntries = replyOutcomeCfg.maxFeedbackLogEntries;
 
     // Temporal continuity context config
     const temporalContextCfg = cfg.temporalContext || {};
@@ -4818,6 +4820,8 @@ const plugin = {
             maxMemoryIds: replyOutcomeMaxMemoryIds,
             maxReplyChars: replyOutcomeMaxReplyChars,
             maxAssistantChars: replyOutcomeMaxAssistantChars,
+            maxOutcomeLogEntries: replyOutcomeMaxOutcomeLogEntries,
+            maxFeedbackLogEntries: replyOutcomeMaxFeedbackLogEntries,
           });
         } catch (err) {
           api.logger?.warn?.(`reply-outcome-tracking: completing pending outcomes failed: ${String(err)}`);
