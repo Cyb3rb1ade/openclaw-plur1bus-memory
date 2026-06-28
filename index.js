@@ -1913,6 +1913,8 @@ const plugin = {
     const replyOutcomeMaxMemoryIds = replyOutcomeCfg.maxMemoryIds;
     const replyOutcomeMaxReplyChars = replyOutcomeCfg.maxReplyChars;
     const replyOutcomeMaxAssistantChars = replyOutcomeCfg.maxAssistantChars;
+    const replyOutcomeMaxOutcomeLogEntries = replyOutcomeCfg.maxOutcomeLogEntries;
+    const replyOutcomeMaxFeedbackLogEntries = replyOutcomeCfg.maxFeedbackLogEntries;
 
     // Temporal continuity context config
     const temporalContextCfg = cfg.temporalContext || {};
@@ -4352,6 +4354,15 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
+              // Keep the agent-facing store path aligned with storeMemoryFromToolParams:
+              // reject invalid text before embedding or writing it.
+              const textValidation = validateMemoryText(params.text);
+              if (!textValidation.ok) {
+                return {
+                  content: [{ type: "text", text: `Memory store rejected: ${textValidation.error}` }],
+                  details: { action: "rejected", reason: "invalid_text" },
+                };
+              }
               const trace = createRecallDecisionTrace({
                 query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
                 mode: "store",
@@ -4809,6 +4820,8 @@ const plugin = {
             maxMemoryIds: replyOutcomeMaxMemoryIds,
             maxReplyChars: replyOutcomeMaxReplyChars,
             maxAssistantChars: replyOutcomeMaxAssistantChars,
+            maxOutcomeLogEntries: replyOutcomeMaxOutcomeLogEntries,
+            maxFeedbackLogEntries: replyOutcomeMaxFeedbackLogEntries,
           });
         } catch (err) {
           api.logger?.warn?.(`reply-outcome-tracking: completing pending outcomes failed: ${String(err)}`);

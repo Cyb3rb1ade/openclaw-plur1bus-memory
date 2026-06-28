@@ -11,11 +11,53 @@ describe("reminder-store", () => {
       let _filter = null;
       let _limit = null;
 
+      function splitTopLevel(expr, operator) {
+        const parts = [];
+        let depth = 0;
+        let start = 0;
+        const token = ` ${operator} `;
+        const upper = expr.toUpperCase();
+        for (let i = 0; i < expr.length; i++) {
+          if (expr[i] === "(") depth++;
+          if (expr[i] === ")") depth--;
+          if (depth === 0 && upper.slice(i, i + token.length) === token) {
+            parts.push(expr.slice(start, i));
+            start = i + token.length;
+            i += token.length - 1;
+          }
+        }
+        parts.push(expr.slice(start));
+        return parts;
+      }
+
+      function stripParens(expr) {
+        let out = expr.trim();
+        while (out.startsWith("(") && out.endsWith(")")) {
+          let depth = 0;
+          let wraps = true;
+          for (let i = 0; i < out.length; i++) {
+            if (out[i] === "(") depth++;
+            if (out[i] === ")") depth--;
+            if (depth === 0 && i < out.length - 1) {
+              wraps = false;
+              break;
+            }
+          }
+          if (!wraps) break;
+          out = out.slice(1, -1).trim();
+        }
+        return out;
+      }
+
       function parseExpr(expr) {
         return (row) => {
-          const parts = expr.split(/\s+AND\s+/i);
-          return parts.every(part => {
-            part = part.trim();
+          function evalPart(part) {
+            part = stripParens(part);
+            const orParts = splitTopLevel(part, "OR");
+            if (orParts.length > 1) return orParts.some(evalPart);
+            const andParts = splitTopLevel(part, "AND");
+            if (andParts.length > 1) return andParts.every(evalPart);
+
             // IN clause
             const inMatch = part.match(/(\w+)\s+IN\s+\(([^)]+)\)/i);
             if (inMatch) {
@@ -46,7 +88,8 @@ describe("reminder-store", () => {
               return String(row[col]) === val;
             }
             return true;
-          });
+          }
+          return evalPart(expr);
         };
       }
 
@@ -120,6 +163,37 @@ describe("reminder-store", () => {
     const due = await listDueReminders(db, "agent-1", "ws-1", now);
     assert.strictEqual(due.length, 1);
     assert.strictEqual(due[0].id, "11111111-1111-1111-1111-111111111111");
+  });
+
+  it("lists failed reminders once their retry attempt is due", async () => {
+    const now = Date.now();
+    const db = mockDb([
+      { id: "11111111-1111-1111-1111-111111111111", memoryKind: "reminder", storedBy: "agent-1", workspaceKey: "ws-1", remindAt: now - 60_000, reminderStatus: "failed", nextDispatchAttemptAt: now - 1000 },
+      { id: "22222222-2222-2222-2222-222222222222", memoryKind: "reminder", storedBy: "agent-1", workspaceKey: "ws-1", remindAt: now - 60_000, reminderStatus: "failed", nextDispatchAttemptAt: now + 60_000 },
+      { id: "33333333-3333-3333-3333-333333333333", memoryKind: "reminder", storedBy: "agent-1", workspaceKey: "ws-1", remindAt: now - 60_000, reminderStatus: "failed", nextDispatchAttemptAt: 0 },
+    ]);
+
+    const due = await listDueReminders(db, "agent-1", "ws-1", now);
+
+    assert.deepStrictEqual(due.map((r) => r.id), ["11111111-1111-1111-1111-111111111111"]);
+  });
+
+  it("returns an existing active reminder instead of storing duplicate reminderKey rows", async () => {
+    const db = mockDb();
+    const remindAt = Date.now() + 60_000;
+    const opts = {
+      text: "Check PR",
+      remindAt,
+      agentId: "agent-1",
+      workspaceKey: "ws-1",
+    };
+
+    const first = await saveReminder(db, opts);
+    const second = await saveReminder(db, opts);
+    const rows = await db.table.query().toArray();
+
+    assert.strictEqual(second.id, first.id);
+    assert.strictEqual(rows.length, 1);
   });
 
   it("acknowledge sets status and timestamp", async () => {

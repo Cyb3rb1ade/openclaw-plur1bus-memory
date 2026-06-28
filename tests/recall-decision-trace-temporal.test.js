@@ -74,6 +74,24 @@ describe("RecallDecisionTrace temporal enrichment", () => {
     assert.ok(guard.reason.includes("live verification"));
   });
 
+  it("initializes missing guard containers on partial trace objects", () => {
+    const trace = {
+      candidates: [],
+      decisions: [{ memoryId: "m1", action: "inclusion", stage: "vector" }],
+    };
+    const memories = [{
+      id: "m1",
+      display: "Cronjob may produce duplicates",
+      createdAt: "2026-06-16T12:00:00.000Z",
+    }];
+
+    enrichTraceWithTemporalProvenance(trace, memories, { now: NOW_MS });
+
+    assert.ok(Array.isArray(trace.guards));
+    assert.strictEqual(trace.guards.length, 1);
+    assert.strictEqual(trace.summary.guardFail, 1);
+  });
+
   it("does not add guard for fresh operational memories", () => {
     const trace = createRecallDecisionTrace({ query: "cron duplicates" });
     addTraceCandidate(trace, { id: "m1", text: "Cronjob may produce duplicates", source: "vector", score: 0.9 });
