@@ -38,6 +38,27 @@ describe("ContradictionDetector", () => {
     assert.deepStrictEqual(result, []);
   });
 
+  it("limits meaning-overlay pairwise LLM checks to maxPairs", async () => {
+    let calls = 0;
+    const detector = new ContradictionDetector({
+      llm: async () => {
+        calls++;
+        return "yes";
+      },
+    });
+    const overlays = Array.from({ length: 5 }, (_, index) => ({
+      id: `ov-${index}`,
+      targetMemoryId: "m1",
+      shiftType: "meaning",
+      shiftDescription: `Meaning ${index}`,
+    }));
+
+    const result = await detector.findContradictions(overlays, { maxPairs: 3 });
+
+    assert.strictEqual(calls, 3);
+    assert.strictEqual(result.length, 3);
+  });
+
   it("ignores non-meaning overlays", async () => {
     const detector = new ContradictionDetector({ llm: async () => "yes" });
     const a = { id: "ov-a", targetMemoryId: "m1", shiftType: "confidence", shiftDescription: "High confidence." };
