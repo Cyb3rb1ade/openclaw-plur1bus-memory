@@ -1031,6 +1031,9 @@ class MemoryDB {
       createdAt: r.createdAt || "",
       scope: r.scope || "agent-private",
       status: r.status || "active",
+      // Carry protection flags so GC can honor the neverForget/core contract.
+      neverForget: r.neverForget,
+      memoryClass: r.memoryClass,
     };
   }
 
@@ -1038,7 +1041,7 @@ class MemoryDB {
     let query = this.table.query()
       .where("status IS NULL OR (status != 'deleted' AND status != 'archived')");
     if (typeof query.select === "function") {
-      query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "status"]);
+      query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "status", "neverForget", "memoryClass"]);
     }
     return query;
   }
