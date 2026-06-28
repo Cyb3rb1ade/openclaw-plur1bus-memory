@@ -147,4 +147,15 @@ describe("forget/correct confirmation completion", () => {
     assert.strictEqual(allowed.ok, true);
     assert.strictEqual(dbPool.stored.length, 1);
   });
+
+  it("shareCard blocks core memories even when category looks ordinary", async () => {
+    const id = "55555555-5555-5555-5555-555555555555";
+    const db = mockDb([{ id, text: "Core behavioral rule", title: "core", category: "note", memoryClass: "core" }]);
+    const dbPool = mockDbPool();
+
+    const denied = await shareCard(db, dbPool, "default", id);
+    assert.strictEqual(denied.ok, false);
+    assert.match(denied.error, /explicit approval|sensitive shared memory/i);
+    assert.strictEqual(dbPool.stored.length, 0);
+  });
 });
