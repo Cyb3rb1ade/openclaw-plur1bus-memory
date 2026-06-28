@@ -5,6 +5,17 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.11] — 2026-06-28 — Cohere-Reranker-Timeout konfigurierbar
+
+### Fixed
+
+- **Cohere-Reranker ignorierte `timeoutMs`** (`reranker-cohere.js`): Der Abort-Timeout
+  war auf 30s hartkodiert; der konfigurierte `timeoutMs` (default 5000 aus
+  `normalizeRerankerConfig`, frei überschreibbar) wurde nie gelesen. Ein
+  hängender Rerank-Call konnte so bis zu 30s blockieren — kritisch für die
+  Timeout-/Cooldown-Empfindlichkeit des Stacks. Der Provider honoriert jetzt
+  `cfg.timeoutMs` (Default 5s).
+
 ## [6.8.10] — 2026-06-28 — Datenverlust-, Korruptions- & Integritäts-Fixes (Review-Audit)
 
 Ergebnis eines vollständigen Bug-/Security-Reviews (Semgrep + manuelle Layer +
