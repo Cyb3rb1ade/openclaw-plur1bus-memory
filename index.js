@@ -4624,7 +4624,7 @@ const plugin = {
                   } else {
                     const rows = await db.table.query().where(`id IN (${inList})`).toArray();
                     const keyById = new Map(agentPending.map(p => [p.memoryId, p.key]));
-                    pendingTexts = rows.map(r => ({ id: r.id, text: r.text, category: r.category || "fact", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
+                    pendingTexts = rows.map(r => ({ id: r.id, text: r.text, category: r.category || "fact", scope: r.scope || "agent-private", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
                   }
                 } catch (fetchErr) {
                   api.logger.warn(`memory-lancedb-namespaced: knowledge_update DB fetch failed: ${String(fetchErr)}`);
@@ -4633,7 +4633,7 @@ const plugin = {
 
               // Dedupe: filter already promoted memories (by memoryId + contentHash)
               const workspaceKey = ctx.workspaceKey || ctx.workspaceDir || "default";
-              pendingTexts = pendingTexts.filter(m => !isKnowledgePromoted(ctx.workspaceDir, workspaceKey, agentId, m.id, computeContentHash(m.text)));
+              pendingTexts = pendingTexts.filter(m => !isKnowledgePromoted(ctx.workspaceDir, workspaceKey, agentId, m.id, computeContentHash(m)));
               if (pendingTexts.length === 0 && !params?.note) {
                 return { content: [{ type: "text", text: "No pending memories to integrate into KNOWLEDGE.md." }] };
               }
@@ -4722,7 +4722,7 @@ const plugin = {
 
               // Track promoted memories for dedupe (memoryId + contentHash)
               for (const m of pendingTexts) {
-                recordKnowledgePromotion(ctx.workspaceDir, workspaceKey, agentId, m.id, computeContentHash(m.text));
+                recordKnowledgePromotion(ctx.workspaceDir, workspaceKey, agentId, m.id, computeContentHash(m));
               }
 
               const lineCount = finalContent.split("\n").length;
