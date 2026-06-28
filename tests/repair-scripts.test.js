@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 
 import { validateDeployment, DEPLOY_FILES } from "../scripts/lib/deploy-integrity.mjs";
+import { run as runWorkspaceWriter } from "../scripts/verify-workspace-writer.mjs";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,18 @@ function runScript(scriptPath, args = [], env = {}) {
     timeout: 30000,
   });
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+}
+
+async function captureConsoleLog(fn) {
+  const originalLog = console.log;
+  const lines = [];
+  console.log = (...args) => { lines.push(args.join(" ")); };
+  try {
+    const result = await fn();
+    return { result, stdout: lines.join("\n") };
+  } finally {
+    console.log = originalLog;
+  }
 }
 
 const REPO_ROOT = new URL("../", import.meta.url).pathname;
@@ -308,6 +321,23 @@ describe("maintain-lancedb — --apply creates backup", () => {
   beforeEach(() => { dir = makeTmpDir(); });
   afterEach(() => cleanup(dir));
 
+  it("prunes LanceDB .manifest version files", () => {
+    const versionsDir = join(dir, ".openclaw", "memory", "lancedb-namespaced", "main", "memories.lance", "_versions");
+    mkdirSync(versionsDir, { recursive: true });
+    for (let i = 0; i < 60; i++) {
+      writeFileSync(join(versionsDir, `${String(i).padStart(5, "0")}.manifest`), `{"v":${i}}`);
+    }
+
+    const r = runScript(MAINTAIN_SCRIPT, ["--apply", "--keep", "50"], { HOME: dir });
+    assert.strictEqual(r.status, 0, `unexpected exit ${r.status}\n${r.stderr}`);
+
+    const remaining = readdirSync(versionsDir).filter((f) => f.endsWith(".manifest"));
+    assert.strictEqual(remaining.length, 50, "should keep exactly 50 .manifest versions");
+
+    const backupsRoot = join(dir, ".openclaw-backups");
+    assert.ok(existsSync(backupsRoot), "backup root should exist after pruning .manifest files");
+  });
+
   it("creates backup dir and _prune-manifest.json before deleting manifests", () => {
     const versionsDir = join(dir, ".openclaw", "memory", "lancedb-namespaced", "main", "memories", "_versions");
     mkdirSync(versionsDir, { recursive: true });
@@ -367,28 +397,34 @@ describe("verify-workspace-writer", () => {
   beforeEach(() => { dir = makeTmpDir(); });
   afterEach(() => cleanup(dir));
 
-  it("exits 0 when all workspace memory dirs exist and are writable", () => {
+  it("exits 0 when all workspace memory dirs exist and are writable", async () => {
     // Create workspace memory dirs for default agents
     for (const ag of ["main", "bernhardine", "heisenberg"]) {
       const ws = ag === "main" ? "workspace" : `workspace-${ag}`;
       mkdirSync(join(dir, ws, "memory"), { recursive: true });
     }
 
-    const r = runScript(WORKSPACE_SCRIPT, ["--openclaw-home", dir]);
-    assert.strictEqual(r.status, 0, `expected 0, got ${r.status}\n${r.stderr}`);
+    const { result: r } = await captureConsoleLog(() => runWorkspaceWriter({
+      env: { ...process.env, OPENCLAW_HOME: dir, HOME: dir },
+    }));
+    assert.strictEqual(r.exitCode, 0, `expected 0, got ${r.exitCode}`);
   });
 
-  it("warns and exits 1 when no workspace memory dirs exist", () => {
+  it("warns and exits 1 when no workspace memory dirs exist", async () => {
     // No workspace dirs — script returns 1 with a warning (documented exit code)
-    const r = runScript(WORKSPACE_SCRIPT, ["--openclaw-home", dir]);
-    assert.strictEqual(r.status, 1, `expected 1, got ${r.status}\n${r.stderr}`);
-    assert.ok(r.stdout.includes("no workspace memory paths found"), "expected missing-workspaces warning");
+    const { result: r, stdout } = await captureConsoleLog(() => runWorkspaceWriter({
+      env: { ...process.env, OPENCLAW_HOME: dir, HOME: dir },
+    }));
+    assert.strictEqual(r.exitCode, 1, `expected 1, got ${r.exitCode}`);
+    assert.ok(stdout.includes("no workspace memory paths found"), "expected missing-workspaces warning");
   });
 
-  it("writes healthcheck to memory/.healthcheck/, not directly to memory dir", () => {
+  it("writes healthcheck to memory/.healthcheck/, not directly to memory dir", async () => {
     mkdirSync(join(dir, "workspace", "memory"), { recursive: true });
 
-    runScript(WORKSPACE_SCRIPT, ["--openclaw-home", dir]);
+    await captureConsoleLog(() => runWorkspaceWriter({
+      env: { ...process.env, OPENCLAW_HOME: dir, HOME: dir },
+    }));
 
     // .healthcheck/ sub-dir may be created; no probe files should remain
     const hcDir = join(dir, "workspace", "memory", ".healthcheck");
@@ -400,7 +436,7 @@ describe("verify-workspace-writer", () => {
     }
   });
 
-  it("exits 1 when memory/.healthcheck/ directory is not writable", { skip: process.getuid?.() === 0 }, () => {
+  it("exits 1 when memory/.healthcheck/ directory is not writable", { skip: process.getuid?.() === 0 }, async () => {
     // Root can always write everywhere, so skip if running as root.
     mkdirSync(join(dir, "workspace", "memory"), { recursive: true });
     const hcDir = join(dir, "workspace", "memory", ".healthcheck");
@@ -409,8 +445,10 @@ describe("verify-workspace-writer", () => {
 
     let r;
     try {
-      r = runScript(WORKSPACE_SCRIPT, ["--openclaw-home", dir]);
-      assert.strictEqual(r.status, 1, `expected 1 (unwritable .healthcheck), got ${r.status}`);
+      ({ result: r } = await captureConsoleLog(() => runWorkspaceWriter({
+        env: { ...process.env, OPENCLAW_HOME: dir, HOME: dir },
+      })));
+      assert.strictEqual(r.exitCode, 1, `expected 1 (unwritable .healthcheck), got ${r.exitCode}`);
     } finally {
       chmodSync(hcDir, 0o755);
     }

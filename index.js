@@ -4879,8 +4879,39 @@ const plugin = {
           await db.init();
           // Init additional read namespaces (skip write-db instance — already inited above)
           for (const { db: rdb } of readDbs) { if (rdb !== db) await rdb.init(); }
-          // v5.3.0 — Stimmung aus aktueller Konversation ableiten
-          emotionalPool.get(agentId).updateFromMessages(event.messages || []);
+          // v5.5.0 — Fast-Bernd IPC: merge pending voice turns + export state
+          let voiceMessages = event.messages || [];
+          if (ctx?.workspaceDir) {
+            const pendingTurnsPath = join(ctx.workspaceDir, ".fast-bernd-pending-turns.jsonl");
+            if (existsSync(pendingTurnsPath)) {
+              try {
+                const processingPath = join(ctx.workspaceDir, ".fast-bernd-pending-turns.processing.jsonl");
+                renameSync(pendingTurnsPath, processingPath);
+                const extraMessages = [];
+                for (const line of readFileSync(processingPath, "utf8").trim().split("\n").filter(Boolean)) {
+                  try {
+                    const turn = JSON.parse(line);
+                    if (turn.user) extraMessages.push({ role: "user", content: turn.user });
+                    if (turn.assistant) extraMessages.push({ role: "assistant", content: turn.assistant });
+                  } catch (e) {
+                    dbg(e);
+                  }
+                }
+                unlinkSync(processingPath);
+                if (extraMessages.length) voiceMessages = [...voiceMessages, ...extraMessages];
+              } catch (e) {
+                dbg(e);
+              }
+            }
+          }
+          emotionalPool.get(agentId).updateFromMessages(voiceMessages);
+          if (ctx?.workspaceDir) {
+            try {
+              writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...emotionalPool.describe(agentId), agentId, ts: Date.now() }));
+            } catch (e) {
+              dbg(e);
+            }
+          }
           // v5.4.0 — Graph-Edges für assoziativen Spread laden
           let graphEdges = [];
           try {

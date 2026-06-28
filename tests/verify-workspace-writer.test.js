@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { run as runWorkspaceWriter } from "../scripts/verify-workspace-writer.mjs";
 
 const execFileAsync = promisify(execFile);
 const scriptPath = fileURLToPath(
@@ -27,15 +28,14 @@ const scriptPath = fileURLToPath(
  * @returns {Promise<{ stdout: string, stderr: string, code: number }>}
  */
 async function runScript(env) {
+  const originalLog = console.log;
+  const lines = [];
+  console.log = (...args) => { lines.push(args.join(" ")); };
   try {
-    const result = await execFileAsync("node", [scriptPath], { env });
-    return { stdout: result.stdout, stderr: result.stderr, code: 0 };
-  } catch (err) {
-    return {
-      stdout: err.stdout || "",
-      stderr: err.stderr || "",
-      code: typeof err.code === "number" ? err.code : 1,
-    };
+    const result = await runWorkspaceWriter({ env });
+    return { stdout: lines.join("\n"), stderr: "", code: result.exitCode };
+  } finally {
+    console.log = originalLog;
   }
 }
 
