@@ -178,6 +178,7 @@ import { createBackgroundMemoryScheduler, isBackgroundTurn, shouldSkipAutoRecall
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
+import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
   inferEmotionalValence,
   inferEmotionalValenceAsync,
@@ -1523,25 +1524,7 @@ function appendConflictLog(workspaceDir, entry) {
 // ============================================================================
 
 async function callLlm(messages, llmCfg) {
-  const OpenAI = await getOpenAI();
-  const clientOpts = { apiKey: llmCfg.apiKey, baseURL: llmCfg.baseUrl };
-  if (llmCfg.headers) clientOpts.defaultHeaders = llmCfg.headers;
-  const client = new OpenAI(clientOpts);
-  const body = {
-    model: llmCfg.model,
-    max_tokens: llmCfg.maxTokens || 300,
-    ...(llmCfg.jsonMode ? { response_format: { type: "json_object" } } : {}),
-    messages,
-  };
-  // kimi-for-coding: omitting thinking defaults to ON → answer in reasoning_content, content empty
-  if (llmCfg.disableThinking) body.thinking = { type: "disabled" };
-  const response = await client.chat.completions.create(body);
-  const msg = response.choices[0]?.message;
-  const content = msg?.content?.trim();
-  if (content) return content;
-  // Fallback: kimi-for-coding may return answer in reasoning_content when content is empty
-  const reasoning = msg?.reasoning_content;
-  return (typeof reasoning === "string" && reasoning.trim()) ? reasoning.trim() : null;
+  return callOpenAiLlm(messages, llmCfg, { loadOpenAI: getOpenAI });
 }
 
 async function callMergeCheck(existingText, newText, llmCfg) {
