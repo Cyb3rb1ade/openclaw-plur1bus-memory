@@ -1526,7 +1526,6 @@ async function callLlm(messages, llmCfg) {
   const client = new OpenAI(clientOpts);
   const body = {
     model: llmCfg.model,
-    temperature: 0,
     max_tokens: llmCfg.maxTokens || 300,
     ...(llmCfg.jsonMode ? { response_format: { type: "json_object" } } : {}),
     messages,
