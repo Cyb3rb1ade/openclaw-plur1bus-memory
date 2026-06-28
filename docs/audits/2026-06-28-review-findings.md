@@ -164,11 +164,46 @@ CLEAN verifiziert (Welle 3): security.js (auth fail-closed), filter-parser SQL
 speaker-mapping-store (parameterisiertes SQL, per-Agent-PK), speaker-segment ReDoS,
 semantic-lens JSON.parse, memory-doctor (nur Diagnose, nicht destruktiv).
 
-## Nicht geprüft
-- **Welle-3-Agent #5 (jobs/obsidian-sub-writer/code-index/install) wurde gestoppt** —
-  dieser Bereich bleibt offen: `lib/jobs/*` Rest (proactive-check, reminder-dispatch,
-  reflection-job, schicht15-tracker, feedback-analyzer, skill-miner/*),
-  `lib/obsidian/*` Sub-Writer (memory-note-writer, **safe-paths.js**, frontmatter,
-  record-*, knowledge-hub-graph, maintenance-deep, …), `lib/code-index/*`,
-  `lib/install/soul-patcher.js`, `lib/reminder-store.js`.
-- i18n-dictionary (statische Wörterbuch-Daten), kleinere Utility-Module.
+---
+
+## WELLE 4 (gestoppter Scope nachgeholt, 2026-06-28)
+
+Gefixt (committet dc2423d0c):
+- **[HIGH] memory-note-writer Vault-Escape** — `${record.id}.md` mit roher id umging
+  safe-paths-Guard → Schreiben außerhalb des Vaults (Cross-Agent). + Frontmatter-
+  Injection via roher id. Fix: `safeSlug` (Dateiname) + `sanitizeYaml` (Frontmatter).
+  Reachability gated (memory_store erzwingt UUID; shared-memory/import-Pfade nicht).
+  + Test.
+
+Offen (CONFIRMED, nicht gefixt):
+- **[MED] reminder-dispatch (Z. 99-119) failed-never-retried** — bei Delivery-Fehler
+  `reminderStatus:"failed"` + `nextDispatchAttemptAt`, das **nie gelesen** wird;
+  `listDueReminders` nimmt nur scheduled/due → Reminder feuert nie wieder. Retry-
+  Scaffolding ist toter Code.
+- **[MED] reminder-store reminderKey-Dedup nicht erzwungen** — `reminderKey` (Content-
+  Hash) wird berechnet/gespeichert, aber nie für Lookup genutzt → identische Reminder
+  doppelt dispatchbar.
+- **[MED] skill-miner non-numeric confidence umgeht min-confidence-Gate** —
+  `typeof === "number"`-Guard übersprungen bei String/undefined → `undefined < 0.6`
+  false → Proposal mit Bogus-Confidence (human-gated, nicht auto-minted).
+- **[MED] skill-miner mintet aus untrusted DM-Memories** — `loadMemories` filtert nicht
+  auf trustLevel/origin; LLM-Prompt interpoliert rohen Text → Prompt-Injection-into-
+  skill. Nur Schutz: menschliche Approval (kein Auto-Approver). trustLevel im Review-UI
+  unsichtbar.
+- **[MED] critical-classifier Doppel-Push** — bei `updateCardType`-Fehler/unwired kein
+  `continue` → Karte bleibt unclassified, pusht aber weiter; nächster Lauf erneut
+  (cap maxPerDay/Tag).
+- **[LOW] proactive-check writeJsonAtomic nicht atomar** (tmp + writeFileSync statt
+  rename → Korruptionsfenster); proactive-check/schicht15 unbounded jsonl/state-Wachstum;
+  feedback-analyzer `Math.min(...timestamps)`-Spread kann Stack sprengen (großer Log).
+- **[LOW] weekly-synthesis index überschreibt nur aktuelle Woche; computeContentHash
+  ignoriert category/scope/importance; soul-patcher Backups nie geprunt.**
+
+CLEAN verifiziert (Welle 4): **safe-paths.js** (NUL/abs/`..`/UNC/prefix-escape alle
+abgewehrt; nur kein realpath/symlink-resolve — LOW), **soul-patcher** (Backup+atomic+
+hash-guard+idempotent), reminder SQL (sqlString/safeTimestamp, korrektes due-Fenster),
+code-index Path-Traversal (realpathSync+startsWith; Symlinks übersprungen),
+code-index JSON.parse guarded, kein ReDoS in tokenizer/AST.
+
+## Status: kompletter lib/-Baum reviewt
+Einzige Ausnahme: `i18n-dictionary.js` (statische Wörterbuch-Daten, keine Logik).
