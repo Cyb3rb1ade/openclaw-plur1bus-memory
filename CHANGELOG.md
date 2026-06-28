@@ -5,6 +5,18 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.9] — 2026-06-28 — Feature-Opt-out-Fix (Reranker-Invarianten)
+
+### Fixed
+
+- **Off-Switch für Emotion-Tier-2/-3 und Meta-Cognition wurde ignoriert** (`lib/setup/feature-profiles.js`): `enforceRerankerInvariants()` setzte `emotion.t2.enabled`, `emotion.t3.enabled` und `metaCognition.enabled` mit `overwrite: true` (Default), sobald der Reranker aktiv war (Recommended-Default). Dadurch wurde ein explizites `enabled: false` des Nutzers still überschrieben — diese LLM-treibenden Features ließen sich bei aktivem Reranker nicht abschalten. Inkonsistent zu den unmittelbar benachbarten Zeilen (`fallbackOnError`, `onlyWhenProviderAvailable`, `llmReport`, `llmReportMode`), die bereits `overwrite: false` nutzten. Fix: Die drei `enabled`-Zeilen verwenden jetzt ebenfalls `overwrite: false`. Default-on-Verhalten bleibt unverändert (greift über den `mergeMissing`-Pfad, wenn der Nutzer nichts angibt); ein expliziter Opt-out wird jetzt respektiert.
+
+- **Kryptische Fehlermeldung bei kaputter OpenClaw-Config** (`lib/obsidian-bridge.js`): `writeDiscoveredObsidianWorkspaces()` warf bei ungültigem JSON einen rohen `SyntaxError` („Unexpected token …"), der dem Operator keinen Hinweis auf die betroffene Datei gab. Der `JSON.parse` ist jetzt gekapselt und wirft eine klare Meldung inklusive Config-Pfad.
+
+### Tests
+
+- Stabilisierung von `memory-store-merge-safety` und `memory-store-decision-trace`: Beide zählten globale LLM-Calls und schlugen seit v6.8.8 fehl, weil Emotion-Tier-3 (jetzt Default-an) pro `memory_store` einen zusätzlichen Klassifizierungs-Call auslöst. Tests isolieren das Verhalten jetzt explizit gegen das Emotion-Feature. Neue Regressionstests für die Reranker-Invarianten-Opt-outs und den Config-Parse-Fehlerpfad.
+
 ## [6.8.8] — 2026-06-28 — Emotion Tier 3 vollständig aktiviert
 
 ### Fixed
