@@ -177,4 +177,42 @@ describe("reply-outcome-tracking", () => {
     assert.strictEqual(second.length, 1);
     assert.strictEqual(second[0].feedback, "neutral");
   });
+
+  it("caps reply outcome and feedback logs to bounded tail windows", async () => {
+    for (let i = 0; i < 4; i++) {
+      recordPendingReplyOutcome(dir, {
+        agentId: "bernd",
+        sessionKey: `s${i}`,
+        userPrompt: `Should I ship change ${i}?`,
+        memoryIds: [`m${i}a`, `m${i}b`],
+        now: 1000 + i,
+      });
+
+      await completePendingReplyOutcomes(dir, {
+        agentId: "bernd",
+        sessionKey: `s${i}`,
+        replyText: "Genau, weiter.",
+        now: 2000 + i,
+        maxOutcomeLogEntries: 2,
+        maxFeedbackLogEntries: 3,
+      });
+    }
+
+    const outcomeLog = readReplyOutcomeLog(dir);
+    assert.strictEqual(outcomeLog.length, 2);
+    assert.deepStrictEqual(
+      outcomeLog.map((e) => e.sessionKey).sort(),
+      ["s2", "s3"],
+    );
+
+    const feedbackLines = readFileSync(join(dir, ".adaptive-learning", "feedback-log.jsonl"), "utf8")
+      .trim()
+      .split(/\n/)
+      .map((l) => JSON.parse(l));
+    assert.strictEqual(feedbackLines.length, 3);
+    assert.deepStrictEqual(
+      feedbackLines.map((e) => e.memoryId),
+      ["m2b", "m3a", "m3b"],
+    );
+  });
 });
