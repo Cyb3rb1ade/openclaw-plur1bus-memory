@@ -29,6 +29,10 @@ function makeMockApi(baseDbPath, overrides = {}) {
       autoRecall: false,
       neo: { enabled: false },
       gc: { enabled: false },
+      // Isolate store-decision tracing from the emotion Tier-3 feature (on by
+      // default since v6.8.8), which otherwise adds a store-time LLM call that the
+      // llmCalls counters in these tests would catch.
+      emotion: { t3: { enabled: false } },
       recall: {
         decisionTrace: { enabled: true, includeInPrompt: true, persist: false },
       },

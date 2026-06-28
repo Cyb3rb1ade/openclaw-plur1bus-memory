@@ -173,6 +173,38 @@ describe("feature-profiles", () => {
     assert.strictEqual(cfg.featuresConfirmedAt, undefined);
   });
 
+  it("applyFullExperiencePolicy respects an explicit emotion.t3 opt-out even with reranker enabled", () => {
+    // enforceRerankerInvariants() must not clobber an explicit user choice:
+    // disabling emotion Tier-3 has to survive even while the reranker stays on.
+    const cfg = applyFullExperiencePolicy({
+      emotion: { t3: { enabled: false } },
+    });
+    assert.strictEqual(cfg.reranker.enabled, true, "reranker stays at its default");
+    assert.strictEqual(cfg.emotion.t3.enabled, false, "explicit emotion.t3 opt-out must be preserved");
+    // The fail-soft defaults should still be filled in around the opt-out.
+    assert.strictEqual(cfg.emotion.t3.fallbackOnError, true);
+    assert.strictEqual(cfg.emotion.t3.onlyWhenProviderAvailable, true);
+  });
+
+  it("applyFullExperiencePolicy respects an explicit emotion.t2 opt-out even with reranker enabled", () => {
+    const cfg = applyFullExperiencePolicy({
+      emotion: { t2: { enabled: false } },
+    });
+    assert.strictEqual(cfg.reranker.enabled, true);
+    assert.strictEqual(cfg.emotion.t2.enabled, false, "explicit emotion.t2 opt-out must be preserved");
+  });
+
+  it("applyFullExperiencePolicy respects an explicit metaCognition opt-out even with reranker enabled", () => {
+    const cfg = applyFullExperiencePolicy({
+      metaCognition: { enabled: false },
+    });
+    assert.strictEqual(cfg.reranker.enabled, true, "reranker stays at its default");
+    assert.strictEqual(cfg.metaCognition.enabled, false, "explicit metaCognition opt-out must be preserved");
+    // fail-soft defaults still fill in around the opt-out.
+    assert.strictEqual(cfg.metaCognition.llmReportMode, "budgeted");
+    assert.strictEqual(cfg.metaCognition.fallbackOnError, true);
+  });
+
   it("applyFullExperiencePolicy can force full experience and apply opt-outs", () => {
     const cfg = applyFullExperiencePolicy(
       {
