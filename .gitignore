@@ -5,6 +5,7 @@ node_modules/
 !.env.example
 *.bak
 *.bak.*
+*.tgz
 .DS_Store
 *.log
 .embed-promotions-state/
