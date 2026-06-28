@@ -130,5 +130,45 @@ safe-update kein optimistic-lock; memory-fact-quality ReDoS-Verdacht.
   MITIGATED, Backlog BOUNDED, undefined-Links GUARDED, managed-block content-eating
   GUARDED.
 
+---
+
+## WELLE 3 (Breiten-Abschluss, 2026-06-28) — bisher ungeprüfte Module
+
+Gefixt (committet 1d0cba33d):
+- **semantic-lens-index** Status-Filter-Parität (selectLensMemories/tryPick surfacte
+  superseded/archived Memories — gleiche Klasse wie H1/CRR). + Test.
+- **pattern-detector.getTimestamp** NaN bei unparsebarem createdAt → umging Lookback
+  + vergiftete Score-Sort. Fall-through auf Date.now(). + Test.
+
+Offen (CONFIRMED, nicht gefixt — Entscheidung nötig):
+- **[MED] memory-merge-safety.isSafeDuplicate (Z. 204-225)** — ordnungs-insensitiv:
+  rollen-vertauschte Fakten („Erik überweist Eva 50€" vs „Eva überweist Erik 50€")
+  kollabieren zu Duplikat → neue Memory wird verworfen (im Curation-Log
+  wiederherstellbar). Wired/reachable (index.js:2288). Fix riskanter, da Dedup-Verhalten.
+- **[MED] reply-outcomes.jsonl + feedback-log.jsonl** unbounded Wachstum + O(n²)
+  Full-File-Rewrites (feedback bis 12× pro Reply). Kein Cap/Pruning. Perf-Drift.
+- **[MED] speaker-mapping-store.getMergeResultByMediaOutputId (Z. 270-287)** fragt
+  Tabelle `merge_results` ab, die das Modul nie erstellt; `prepare` ungewrappt →
+  kann `no such table` werfen (hängt von externem OpenClaw-Schema ab).
+- **[LOW] shared-memory/shareCard** Promotion zu `workspace_shared` ohne
+  kritische-Typen-/Approval-Guard — aber UNWIRED (keine Caller) + per-Agent-Isolation
+  greift; latente Lücke vor etwaiger Verdrahtung schließen. Scope-Vokabular-Mismatch
+  (`workspace_shared` vs acl `workspace` → fail-closed).
+- **[LOW]** tier2-transformer/emotion-blends werfen bei non-string text;
+  overlay-generator deref bei non-object-LLM-JSON; temporal-provenance substring-
+  keyword over-flagging (`move`⊂`remove`) + trace-shape-Annahme; filter-parser
+  dupliziert escapeSqlString; pattern-surface kein Upper-Clamp bei Zukunftsdatum.
+
+CLEAN verifiziert (Welle 3): security.js (auth fail-closed), filter-parser SQL
+(escaped/whitelisted), wiki-command (safeUuid), text-utils (kein ReDoS),
+speaker-mapping-store (parameterisiertes SQL, per-Agent-PK), speaker-segment ReDoS,
+semantic-lens JSON.parse, memory-doctor (nur Diagnose, nicht destruktiv).
+
 ## Nicht geprüft
-i18n-dictionary, kleinere Utility-Module.
+- **Welle-3-Agent #5 (jobs/obsidian-sub-writer/code-index/install) wurde gestoppt** —
+  dieser Bereich bleibt offen: `lib/jobs/*` Rest (proactive-check, reminder-dispatch,
+  reflection-job, schicht15-tracker, feedback-analyzer, skill-miner/*),
+  `lib/obsidian/*` Sub-Writer (memory-note-writer, **safe-paths.js**, frontmatter,
+  record-*, knowledge-hub-graph, maintenance-deep, …), `lib/code-index/*`,
+  `lib/install/soul-patcher.js`, `lib/reminder-store.js`.
+- i18n-dictionary (statische Wörterbuch-Daten), kleinere Utility-Module.
