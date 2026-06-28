@@ -5,6 +5,20 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.8] — 2026-06-28 — Emotion Tier 3 vollständig aktiviert
+
+### Fixed
+
+- **EmotionEngine._t3Enabled ignorierte callLlm** (`lib/emotion-engine.js`): Die Budget-Gate-Prüfung berücksichtigte nur `apiKey` und `openaiClient`, nicht aber `callLlm`. Dadurch lief Tier-3-Routing in der Engine nie tatsächlich ab — sie fiel still auf T1/T2 zurück, obwohl das Gateway-Log „tier-3 enabled via callLlm" anzeigte. Einzeiler-Fix: `callLlm` ist jetzt Kriterium für `_t3Enabled`.
+
+- **Tier-3 fälschlicherweise an Cohere gekoppelt** (`index.js`): `emotionT3Enabled` prüfte, ob der Cohere-Reranker konfiguriert ist — kein Cohere → kein Tier 3, auch bei aktivem `merging`-LLM. Da `feature-profiles.js` `emotion.t3.enabled: true` im Recommended-Profil setzt, wäre Tier 3 bei allen Neuinstallationen ohne Cohere still deaktiviert geblieben. Neues Gate: Tier 3 aktiviert sich, wenn `mergingLlmCfg` **oder** `emotion.t3.apiKey` vorhanden ist. `onlyWhenProviderAvailable: true` (Default) sorgt für sauberes Soft-Skip ohne Fehler, wenn kein Provider konfiguriert ist.
+
+- **`apply-media-patch.sh` aktualisiert `installs.json` manifestHash**: Nach dem Sync von `openclaw.plugin.json` wird der SHA-256-Hash in `installs.json` atomar nachgezogen, damit Gateway-Konfigurationsvalidierung stets gegen das aktuelle Schema prüft — verhindert `Unrecognized key`-Fehler bei Schema-Erweiterungen nach Patch-Deployments.
+
+### Added
+
+- **`emotion-engine-engine.js` erkennt `callLlm` als Provider**: Tier-3-Klassifizierung läuft jetzt vollständig über den plugin-internen `callLlm`-Pfad (konfigurierter Merging-LLM-Provider), ohne hardcodierten OpenAI-Client. Funktioniert mit jedem kompatiblen Endpunkt.
+
 ## [6.8.7] — 2026-06-27 — Cron Plugin Command Dispatch Fix
 
 ### Fixed
