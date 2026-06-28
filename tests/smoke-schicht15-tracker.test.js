@@ -82,6 +82,23 @@ describe("schicht15-tracker", () => {
     assert.strictEqual(h1, h3, "trailing newline must not change hash");
   });
 
+  it("computeContentHash includes promotion-relevant metadata when present", () => {
+    const fact = computeContentHash({
+      text: "Use Postgres for the auth store.",
+      category: "fact",
+      scope: "agent-private",
+      importance: 0.5,
+    });
+    const decision = computeContentHash({
+      text: "Use Postgres for the auth store.",
+      category: "decision",
+      scope: "workspace",
+      importance: 0.9,
+    });
+
+    assert.notStrictEqual(fact, decision, "same text with different promotion metadata must not collide");
+  });
+
   it("computeContentHash returns null for empty/invalid input", () => {
     assert.strictEqual(computeContentHash(""), null);
     assert.strictEqual(computeContentHash(null), null);
