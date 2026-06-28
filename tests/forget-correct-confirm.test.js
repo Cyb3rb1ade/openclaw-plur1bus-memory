@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createConfirmation, validateConfirmation, resolveIdentity, isAuthorized, resolveChatKind } from "../lib/security.js";
-import { forgetCard, correctCard } from "../lib/telegram-commands/memory-edit.js";
+import { forgetCard, correctCard, shareCard } from "../lib/telegram-commands/memory-edit.js";
 
 const archiveDir = mkdtempSync(join(tmpdir(), "p1b-confirm-"));
 
@@ -27,6 +27,20 @@ function mockDb(initial = []) {
     async getCard(_agent, id) { return cards.get(id) || null; },
     async deleteCard(_agent, id) { cards.delete(id); return { ok: true }; },
     async updateCard(_agent, id, newContent) { const c = cards.get(id); if (c) c.text = newContent; return { ok: true }; },
+  };
+}
+
+function mockDbPool() {
+  const stored = [];
+  return {
+    stored,
+    getDb() {
+      return {
+        async store(entry) {
+          stored.push(entry);
+        },
+      };
+    },
   };
 }
 
@@ -117,5 +131,20 @@ describe("forget/correct confirmation completion", () => {
     // unknown chat type → denied (fail-safe)
     const unk = isAuthorized({ chatId: "c1" }, {}, { destructive: true });
     assert.strictEqual(unk.authorized, false);
+  });
+
+  it("shareCard blocks sensitive workspace promotion without explicit approval", async () => {
+    const id = "44444444-4444-4444-4444-444444444444";
+    const db = mockDb([{ id, text: "User API password is abc", title: "secret", category: "access/password" }]);
+    const dbPool = mockDbPool();
+
+    const denied = await shareCard(db, dbPool, "default", id);
+    assert.strictEqual(denied.ok, false);
+    assert.match(denied.error, /explicit approval/i);
+    assert.strictEqual(dbPool.stored.length, 0);
+
+    const allowed = await shareCard(db, dbPool, "default", id, { allowSensitiveShare: true });
+    assert.strictEqual(allowed.ok, true);
+    assert.strictEqual(dbPool.stored.length, 1);
   });
 });
