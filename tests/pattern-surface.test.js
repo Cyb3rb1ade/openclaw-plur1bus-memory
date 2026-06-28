@@ -41,6 +41,13 @@ describe("computePatternScore", () => {
     const old = computePatternScore(pattern, ["a", "b"], 24);
     assert.ok(old < recent, "older pattern should score lower");
   });
+
+  it("does not boost future-dated patterns above the recent score", () => {
+    const pattern = { memberIds: ["a", "b"], confidence: 1.0 };
+    const recent = computePatternScore(pattern, ["a", "b"], 0);
+    const future = computePatternScore(pattern, ["a", "b"], -12);
+    assert.ok(future <= recent, `future pattern score must not exceed recent score: ${future} > ${recent}`);
+  });
 });
 
 describe("findBestPattern — options object", () => {
