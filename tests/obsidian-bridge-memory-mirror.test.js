@@ -29,6 +29,38 @@ function memoryFile(vault, id) {
 }
 
 describe("obsidian bridge LanceDB memory mirror", () => {
+  it("rebuildDashboards coalesces overlapping rebuilds", async () => {
+    const vault = makeVault("obs-mirror-reentrant-");
+    let active = 0;
+    let maxActive = 0;
+    let calls = 0;
+    const service = createObsidianBridgeService({
+      enabled: true,
+      dryRun: false,
+      reviewRoot: "plur1bus",
+      workspaces: [{ workspace_id: "main", agent_id: "main", path: vault }],
+    }, {
+      loadLanceDbRecords: async () => {
+        calls++;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        active--;
+        return [memoryRecord("aaaaaaaa-1111-4111-8111-aaaaaaaaaaa9")];
+      },
+      logger: { info() {}, warn() {} },
+    });
+
+    await Promise.all([
+      service.rebuildDashboards(),
+      service.rebuildDashboards(),
+      service.rebuildDashboards(),
+    ]);
+
+    assert.strictEqual(maxActive, 1, "only one dashboard rebuild should be active at a time");
+    assert.strictEqual(calls, 2, "overlapping rebuilds should collapse into one pending follow-up");
+  });
+
   it("rebuildDashboards loads LanceDB records per workspace and writes memory notes", async () => {
     const vault = makeVault("obs-mirror-main-");
     const id = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1";
