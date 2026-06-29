@@ -158,4 +158,75 @@ describe("forget/correct confirmation completion", () => {
     assert.match(denied.error, /explicit approval|sensitive shared memory/i);
     assert.strictEqual(dbPool.stored.length, 0);
   });
+
+  it("forgetCard does not expose raw DB error details to the user", async () => {
+    const db = {
+      async getCard() {
+        throw new Error("driver leaked token=super-secret");
+      },
+    };
+    const warnings = [];
+
+    const result = await forgetCard(db, "default", "bad-id", {
+      archiveDir,
+      logger: { warn: (...args) => warnings.push(args) },
+    });
+
+    assert.strictEqual(result.ok, false);
+    assert.doesNotMatch(result.error, /super-secret|token=/);
+    assert.match(result.error, /internal error/i);
+    assert.strictEqual(warnings.length, 1);
+  });
+
+  it("correctCard does not expose raw update error details to the user", async () => {
+    const id = "66666666-6666-6666-6666-666666666666";
+    const db = mockDb([{ id, text: "old", title: "note" }]);
+
+    const result = await correctCard(db, "default", id, "new", {
+      archiveDir,
+      updateMemory: async () => {
+        throw new Error("backend path /private/user/vault");
+      },
+    });
+
+    assert.strictEqual(result.ok, false);
+    assert.doesNotMatch(result.error, /private\/user\/vault/);
+    assert.match(result.error, /internal error/i);
+    assert.ok(result.archivePath, "archive is preserved after failed update");
+  });
+
+  it("shareCard does not expose raw store error details to the user", async () => {
+    const id = "77777777-7777-7777-7777-777777777777";
+    const db = mockDb([{ id, text: "ordinary note", title: "note", category: "note" }]);
+    const dbPool = {
+      getDb() {
+        return {
+          async store() {
+            throw new Error("sqlite file /private/cache/shared.db");
+          },
+        };
+      },
+    };
+
+    const result = await shareCard(db, dbPool, "default", id);
+
+    assert.strictEqual(result.ok, false);
+    assert.doesNotMatch(result.error, /private\/cache/);
+    assert.match(result.error, /internal error/i);
+  });
+
+  it("forgetCard denies ACL mismatch before archive or delete", async () => {
+    const id = "88888888-8888-8888-8888-888888888888";
+    const db = mockDb([{ id, text: "foreign private note", scope: "agent-private", agentId: "owner-agent" }]);
+
+    const result = await forgetCard(db, "default", id, {
+      archiveDir,
+      ctx: { agentId: "other-agent", workspaceDir: archiveDir },
+    });
+
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /access denied|acl\.agent_private\.mismatch/i);
+    assert.strictEqual(db.cards.has(id), true, "ACL-denied card must not be deleted");
+    assert.strictEqual(result.archivePath, undefined, "ACL denial must happen before archive");
+  });
 });

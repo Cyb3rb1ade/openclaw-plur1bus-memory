@@ -3392,7 +3392,19 @@ const plugin = {
             if (token) {
               const { pending, error } = completePending(commandCtx, "forget", token);
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
-              const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, { lang, tone, workspaceDir: commandCtx.workspaceDir });
+              const { userId } = resolveIdentity(commandCtx);
+              const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, {
+                lang,
+                tone,
+                workspaceDir: commandCtx.workspaceDir,
+                logger: api.logger,
+                ctx: {
+                  agentId,
+                  workspaceId: commandCtx.workspaceId,
+                  userId,
+                  workspaceDir: commandCtx.workspaceDir,
+                },
+              });
               if (!result.ok) return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: result.error } }) };
               return { text: t("plur1bus.forget_done", { lang, tone, vars: { id: pending.targetId } }) };
             }
@@ -3439,8 +3451,18 @@ const plugin = {
               if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
               const validated = validateCorrectionText(newText);
               if (!validated.ok) return { text: `❌ ${validated.error}` };
+              const { userId } = resolveIdentity(commandCtx);
               const result = await correctCard(memoryDbAdapter, agentId, pending.targetId, newText, {
-                lang, tone, workspaceDir: commandCtx.workspaceDir,
+                lang,
+                tone,
+                workspaceDir: commandCtx.workspaceDir,
+                logger: api.logger,
+                ctx: {
+                  agentId,
+                  workspaceId: commandCtx.workspaceId,
+                  userId,
+                  workspaceDir: commandCtx.workspaceDir,
+                },
                 updateMemory: async ({ id, newContent }) => {
                   const rawDb = pool.getDb(agentId);
                   await rawDb.init();
