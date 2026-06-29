@@ -77,6 +77,20 @@ test('resolveCandidates gibt none bei leerer Ergebnisliste', async () => {
   assert.strictEqual(result.none, true);
 });
 
+test('resolveCandidates reicht ACL-Kontext an searchByTopic weiter', async () => {
+  const calls = [];
+  const fakeDb = {
+    searchByTopic: async (_agent, _query, opts) => {
+      calls.push(opts);
+      return [{ id: 'card-1', title: 'Eva Geburtstag 3. Juni', score: 0.95 }];
+    },
+  };
+  const ctx = { agentId: 'agent', workspaceId: 'ws-1', userId: 'u1' };
+  const result = await resolveCandidates(fakeDb, 'agent', 'Eva Geburtstag', { ctx });
+  assert.strictEqual(result.unique, true);
+  assert.deepStrictEqual(calls, [{ limit: 5, ctx }]);
+});
+
 // ─── forgetCard — Archive-First-Garantie ─────────────────────────────────
 
 test('forgetCard archiviert ZUERST, dann löscht', async () => {

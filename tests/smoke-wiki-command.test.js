@@ -106,10 +106,11 @@ describe("wiki-command smoke", () => {
   it("wikiAdd stores entry with memoryKind: 'wiki'", async () => {
     const stored = [];
     const db = makeDb({ storeSpy: async (entry) => { stored.push(entry); } });
-    const result = await runWikiCommand(makeCtx("add Kimi API: Der Key endet auf wKxqM"), makeDeps(db, { archiveDir }));
+    const result = await runWikiCommand(makeCtx("add Kimi API: Der Key endet auf wKxqM", { workspaceKey: "workspace-1" }), makeDeps(db, { archiveDir }));
     assert.ok(!result.text.includes("Fehler") && !result.text.includes("error"), `unexpected error: ${result.text}`);
     assert.strictEqual(stored.length, 1, "store should have been called once");
     assert.strictEqual(stored[0].memoryKind, "wiki", "memoryKind must be 'wiki'");
+    assert.strictEqual(stored[0].workspaceKey, "workspace-1", "workspaceKey must be persisted for wiki entries");
   });
 
   it("wikiDelete removes a wiki entry by query", async () => {
@@ -195,6 +196,19 @@ describe("wiki-command smoke", () => {
     assert.ok(
       result.text.includes("No curated wiki entry") || result.text.includes("kuratierter"),
       `expected wiki.result_fallback label, got: ${result.text}`,
+    );
+  });
+
+  it("wikiSearch filters fallback memories by ACL", async () => {
+    const memoryRows = [
+      { id: "abababab-abab-abab-abab-abababababab", memoryKind: "memory", _distance: 0.25,
+        status: "active", text: "foreign memory entry", summary: "foreign", scope: "agent-private", storedBy: "other-agent" },
+    ];
+    const db = makeDb({ memoryRows });
+    const result = await runWikiCommand(makeCtx("Kimi"), makeDeps(db, { archiveDir }));
+    assert.ok(
+      result.text.includes("No entry found") || result.text.includes("Kein Eintrag"),
+      `expected ACL-filtered not-found result, got: ${result.text}`,
     );
   });
 

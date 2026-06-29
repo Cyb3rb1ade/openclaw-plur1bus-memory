@@ -255,6 +255,8 @@ All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` an
 
 **`security.allowChatConfigCommands`** (default `true`) — the config-mutating chat commands (`/enable`, `/disable`, `/plur1bus setup`) write `openclaw.json`. The plugin SDK does not expose the message sender's identity to command handlers, so per-user authorization isn't possible. On a **shared channel**, set this to `false` to refuse all chat-driven config changes; edit `openclaw.json` directly instead. Writes are guarded by a file lock so concurrent toggles/setups cannot clobber each other.
 
+**`security.allowModelDestructiveMemoryOps`** (default `false`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state, but tool calls do not carry a user-bound authorization context. They therefore stay disabled unless this flag is explicitly set to `true`.
+
 ### Feature profile confirmation
 
 On first start v6 warns about unconfirmed features. Core memory (capture, recall, search) works immediately. To enable advanced features (Obsidian apply mode, morning/evening reviews, merging), run:
