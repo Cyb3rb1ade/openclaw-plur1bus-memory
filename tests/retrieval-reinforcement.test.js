@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import {
   applyRetrievalReinforcement,
+  computeDecayedStrength,
   computePromotionCandidate,
 } from "../lib/memory-dynamics.js";
 
@@ -62,6 +63,21 @@ describe("applyRetrievalReinforcement", () => {
 
     const result = applyRetrievalReinforcement(row, now);
     assert.strictEqual(result.memoryStrength, 1.0);
+  });
+});
+
+describe("computeDecayedStrength", () => {
+  it("falls back to 30 day half-life when halfLifeDays is non-numeric", () => {
+    const now = Date.now();
+    const row = {
+      memoryStrength: 1.0,
+      halfLifeDays: "not-a-number",
+      lastDynamicsAt: now - 30 * 86400000,
+      createdAt: now - 30 * 86400000,
+    };
+    const fallbackRow = { ...row, halfLifeDays: 30 };
+
+    assert.strictEqual(computeDecayedStrength(row, now), computeDecayedStrength(fallbackRow, now));
   });
 });
 

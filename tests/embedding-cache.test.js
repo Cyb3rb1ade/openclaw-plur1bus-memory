@@ -6,7 +6,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createEmbeddingCache } from "../lib/embedding-cache.js";
@@ -564,5 +564,36 @@ describeSqlite("embedding-cache v2 size limits", () => {
     });
     assert.deepStrictEqual(await reload.getMany(["alpha"], { agentId: "agent-a" }), [[1, 1]]);
     assert.deepStrictEqual(await reload.getMany(["beta"], { agentId: "agent-b" }), [[2, 2]]);
+  });
+
+  it("counts WAL sidecar bytes when enforcing the hard byte limit", async () => {
+    const basePath = makeTempBase();
+    const seedCache = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      ttlMs: 60_000,
+      maxBytes: 1_000_000,
+    });
+
+    await seedCache.getMany(["seed"], { agentId: "a1" }, () => [Array.from({ length: 512 }, (_, i) => i)]);
+
+    const dbPath = join(basePath, "embedding-cache-v2", "a1.db");
+    const walPath = `${dbPath}-wal`;
+    assert.ok(existsSync(walPath), "WAL sidecar should be present while the cache DB is open");
+    const dbBytes = statSync(dbPath).size;
+    const walBytes = statSync(walPath).size;
+    assert.ok(walBytes > 0, "WAL sidecar should contribute non-zero bytes");
+
+    const limitedCache = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      ttlMs: 60_000,
+      maxBytes: dbBytes + Math.floor(walBytes / 2),
+    });
+    await limitedCache.getMany(["over-limit"], { agentId: "a1" }, () => [[9, 9, 9]]);
+
+    const metrics = limitedCache.getMetrics();
+    assert.strictEqual(metrics.persistWrites, 0, "persist write must stop when db+wal exceeds maxBytes");
+    assert.strictEqual(metrics.persistWriteSkipped, 1);
   });
 });
