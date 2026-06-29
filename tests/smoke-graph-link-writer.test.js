@@ -70,6 +70,19 @@ describe("graph-link-writer: helpers", () => {
       "- [[plur1bus/records/decisions/dec-abc|Meine Decision]] _(memoryId)_"
     );
   });
+
+  it("buildLinkLine sanitizes wikilink display delimiters", () => {
+    const line = buildLinkLine(
+      { path: "records/decisions/dec-unsafe.md" },
+      "plur1bus",
+      "Alpha | Beta ]] <!-- plur1bus:managed:end -->\nNext",
+      "memoryId"
+    );
+    assert.strictEqual(
+      line,
+      "- [[plur1bus/records/decisions/dec-unsafe|Alpha / Beta ] ] Next]] _(memoryId)_"
+    );
+  });
 });
 
 describe("graph-link-writer: config", () => {
@@ -273,6 +286,45 @@ describe("graph-link-writer: writeGraphLinks", () => {
     assert.strictEqual(result.updated, 0);
     const content = readFileSync(join(vault, "plur1bus/records/decisions/dec-003.md"), "utf8");
     assert.match(content, /manually edited/);
+  });
+
+  it("skips unreadable note paths without aborting the batch", async () => {
+    const vault = makeVault();
+    mkdirSync(join(vault, "plur1bus", "records", "decisions", "bad.md"), { recursive: true });
+    const badRecord = {
+      plur1bus_id: "bad",
+      plur1bus_type: "decision",
+      path: "records/decisions/bad.md",
+      title: "Bad",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const srcRecord = {
+      plur1bus_id: "src-good",
+      plur1bus_type: "source",
+      path: "records/sources/src-good.md",
+      title: "Source Good",
+      memoryIds: [],
+      sourceRefs: [],
+    };
+    const goodRecord = {
+      plur1bus_id: "dec-good",
+      plur1bus_type: "decision",
+      path: "records/decisions/dec-good.md",
+      title: "Good",
+      memoryIds: [],
+      sourceRefs: ["src-good"],
+    };
+    writeNote(vault, "plur1bus/records/sources/src-good.md", "# Source Good\n");
+    writeNote(vault, "plur1bus/records/decisions/dec-good.md", "# Good\n");
+
+    const rawConfig = { vaultPath: vault, reviewRoot: "plur1bus" };
+    const result = await writeGraphLinks(rawConfig, [badRecord, srcRecord, goodRecord], {});
+
+    assert.strictEqual(result.skipped, 1);
+    assert.strictEqual(result.updated, 1);
+    const content = readFileSync(join(vault, "plur1bus/records/decisions/dec-good.md"), "utf8");
+    assert.match(content, /Source Good/);
   });
 });
 
