@@ -212,6 +212,38 @@ describe("wiki-command smoke", () => {
     );
   });
 
+  it("wikiSearch filters user-scoped fallback memories when the caller is not the owner", async () => {
+    const memoryRows = [
+      { id: "cdcdcdcd-abab-abab-abab-abababababab", memoryKind: "memory", _distance: 0.25,
+        status: "active", text: "user scoped memory", summary: "user scoped", scope: "user", ownerUserId: "owner-user" },
+    ];
+    const db = makeDb({ memoryRows });
+    const result = await runWikiCommand(
+      makeCtx("Kimi", { userId: "other-user" }),
+      makeDeps(db, { archiveDir }),
+    );
+    assert.ok(
+      result.text.includes("No entry found") || result.text.includes("Kein Eintrag"),
+      `expected ACL-filtered not-found result, got: ${result.text}`,
+    );
+  });
+
+  it("wikiSearch still returns a user-scoped fallback memory for the owning user", async () => {
+    const memoryRows = [
+      { id: "dededede-abab-abab-abab-abababababab", memoryKind: "memory", _distance: 0.25,
+        status: "active", text: "user scoped memory", summary: "user scoped", scope: "user", ownerUserId: "owner-user" },
+    ];
+    const db = makeDb({ memoryRows });
+    const result = await runWikiCommand(
+      makeCtx("Kimi", { userId: "owner-user" }),
+      makeDeps(db, { archiveDir }),
+    );
+    assert.ok(
+      result.text.includes("No curated wiki entry") || result.text.includes("kuratierter"),
+      `expected fallback memory result for owner, got: ${result.text}`,
+    );
+  });
+
   it("wikiDelete filters out higher-ranking normal memory — only deletes wiki entry", async () => {
     const deleted = [];
     // Normal memory ranks higher (lower _distance = higher score)

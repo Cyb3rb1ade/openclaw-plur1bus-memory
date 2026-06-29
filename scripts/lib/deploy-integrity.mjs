@@ -115,6 +115,7 @@ export const DEPLOY_FILES = [
   "lib/reminder-pending.js",
   "lib/reminder-store.js",
   // ── security / ACL / i18n ─────────────────────────────────────────────────
+  "lib/acl-middleware.js",
   "lib/security.js",
   // ── Telegram commands ─────────────────────────────────────────────────────
   "lib/telegram-commands/feature-toggle.js",

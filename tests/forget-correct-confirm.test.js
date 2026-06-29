@@ -252,4 +252,31 @@ describe("forget/correct confirmation completion", () => {
     assert.strictEqual(workspaceResult.ok, false);
     assert.match(workspaceResult.error, /access denied|acl\.workspace\.mismatch/i);
   });
+
+  it("forgetCard denies user-scope access when the caller is not the owning user", async () => {
+    const id = "bbbbbbbb-1111-1111-1111-111111111111";
+    const db = mockDb([{ id, text: "user-scoped note", scope: "user", ownerUserId: "owner-user" }]);
+
+    const result = await forgetCard(db, "default", id, {
+      archiveDir,
+      ctx: { agentId: "default", userId: "other-user", workspaceDir: archiveDir },
+    });
+
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /access denied|acl\.user\.mismatch/i);
+    assert.strictEqual(db.cards.has(id), true, "foreign user must not delete the card");
+  });
+
+  it("forgetCard still allows the owning user to delete a user-scoped memory", async () => {
+    const id = "bbbbbbbb-2222-2222-2222-222222222222";
+    const db = mockDb([{ id, text: "user-scoped note", scope: "user", ownerUserId: "owner-user" }]);
+
+    const result = await forgetCard(db, "default", id, {
+      archiveDir,
+      ctx: { agentId: "default", userId: "owner-user", workspaceDir: archiveDir },
+    });
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(db.cards.has(id), false, "owner should still be able to delete the card");
+  });
 });

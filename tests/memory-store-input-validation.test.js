@@ -85,4 +85,100 @@ describe("memory_store input validation", () => {
     const rows = await checkDb.table.query().toArray();
     assert.strictEqual(rows.filter((r) => r.id !== "__schema__").length, 0, "no oversized memory may be persisted");
   });
+
+  it('rejects scope="user" when no user identity is available', async () => {
+    const api = makeMockApi(basePath);
+    plugin.register(api);
+    const tools = api._toolFactory({ agentId: AGENT_ID, workspaceDir });
+    const storeTool = tools.find((t) => t.name === "memory_store");
+
+    const result = await storeTool.execute("call-user-scope-missing-owner", {
+      text: "remember this for my agents",
+      category: "fact",
+      scope: "user",
+    });
+
+    assert.notStrictEqual(result?.details?.action, "stored");
+    assert.match(result.content[0].text, /user scope requires an authenticated user/i);
+  });
+
+  it('persists an owner binding for scope="user" when user identity is available', async () => {
+    const api = makeMockApi(basePath);
+    plugin.register(api);
+    const tools = api._toolFactory({ agentId: AGENT_ID, workspaceDir, userId: "owner-user", workspaceKey: "ws-1" });
+    const storeTool = tools.find((t) => t.name === "memory_store");
+
+    const result = await storeTool.execute("call-user-scope-owner", {
+      text: "remember this for my agents",
+      category: "fact",
+      scope: "user",
+    });
+
+    assert.strictEqual(result?.details?.action, "stored");
+
+    const checkDb = new MemoryDB(join(basePath, AGENT_ID), VECTOR_DIM);
+    await checkDb.init();
+    const rows = await checkDb.table.query().toArray();
+    const stored = rows.find((row) => row.id === result.details.id);
+    assert.ok(stored, "stored user-scoped memory must exist");
+    assert.strictEqual(stored.scope, "user");
+    assert.strictEqual(stored.ownerUserId, "owner-user");
+  });
+
+  it('does not dedupe user-scoped memories across different users', async () => {
+    const api = makeMockApi(basePath);
+    plugin.register(api);
+
+    const ownerTools = api._toolFactory({ agentId: "testagent-validation-dedupe", workspaceDir, userId: "owner-user", workspaceKey: "ws-1" });
+    const ownerStoreTool = ownerTools.find((t) => t.name === "memory_store");
+    const ownerResult = await ownerStoreTool.execute("call-user-scope-dedupe-owner", {
+      text: "same scoped text",
+      category: "fact",
+      scope: "user",
+    });
+    assert.strictEqual(ownerResult?.details?.action, "stored");
+
+    const otherTools = api._toolFactory({ agentId: "testagent-validation-dedupe", workspaceDir, userId: "other-user", workspaceKey: "ws-1" });
+    const otherStoreTool = otherTools.find((t) => t.name === "memory_store");
+    const otherResult = await otherStoreTool.execute("call-user-scope-dedupe-other", {
+      text: "same scoped text",
+      category: "fact",
+      scope: "user",
+    });
+    assert.strictEqual(otherResult?.details?.action, "stored");
+
+    const checkDb = new MemoryDB(join(basePath, "testagent-validation-dedupe"), VECTOR_DIM);
+    await checkDb.init();
+    const rows = await checkDb.table.query().toArray();
+    const userScopedRows = rows.filter((row) => row.scope === "user" && row.text === "same scoped text");
+    assert.strictEqual(userScopedRows.length, 2, "same user-scoped text from different users must persist twice");
+    assert.deepStrictEqual(
+      userScopedRows.map((row) => row.ownerUserId).sort(),
+      ["other-user", "owner-user"],
+    );
+  });
+
+  it("does not expose a foreign user-scoped memory as a duplicate for another scope", async () => {
+    const api = makeMockApi(basePath);
+    plugin.register(api);
+
+    const ownerTools = api._toolFactory({ agentId: "testagent-validation-scope-boundary", workspaceDir, userId: "owner-user", workspaceKey: "ws-1" });
+    const ownerStoreTool = ownerTools.find((t) => t.name === "memory_store");
+    const ownerResult = await ownerStoreTool.execute("call-scope-boundary-owner", {
+      text: "cross-scope duplicate probe",
+      category: "fact",
+      scope: "user",
+    });
+    assert.strictEqual(ownerResult?.details?.action, "stored");
+
+    const otherTools = api._toolFactory({ agentId: "testagent-validation-scope-boundary", workspaceDir, userId: "other-user", workspaceKey: "ws-1" });
+    const otherStoreTool = otherTools.find((t) => t.name === "memory_store");
+    const otherResult = await otherStoreTool.execute("call-scope-boundary-other", {
+      text: "cross-scope duplicate probe",
+      category: "fact",
+      scope: "agent-private",
+    });
+    assert.strictEqual(otherResult?.details?.action, "stored");
+    assert.doesNotMatch(otherResult.content[0].text, /Similar memory already exists/i);
+  });
 });
