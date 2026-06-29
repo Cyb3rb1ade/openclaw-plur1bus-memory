@@ -1079,7 +1079,8 @@ class MemoryDB {
   async purgeExpired() {
     await this.init();
     const now = safeTimestamp(Date.now());
-    await this._write(this.table.delete(`expiresAt > 0 AND expiresAt < ${now}`), "MemoryDB.purgeExpired");
+    const protectedWhere = "(neverForget IS NULL OR neverForget = 0 OR neverForget = false) AND (memoryClass IS NULL OR memoryClass != 'core')";
+    await this._write(this.table.delete(`expiresAt > 0 AND expiresAt < ${now} AND ${protectedWhere}`), "MemoryDB.purgeExpired");
   }
 
   /**

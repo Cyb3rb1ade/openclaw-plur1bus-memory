@@ -84,3 +84,53 @@ test("sync error resets syncRunning so the next tick can run", async () => {
   assert.ok(second, "second sync should run after error reset");
   assert.strictEqual(calls, 2, "two sync calls should have executed");
 });
+
+test("pending sync does not swallow the active sync error", async () => {
+  let calls = 0;
+  const { service } = makeService({
+    onSync: async () => {
+      calls++;
+      if (calls === 1) {
+        await new Promise((r) => setTimeout(r, 10));
+        throw new Error("boom");
+      }
+    },
+  });
+
+  const first = service.syncOnce();
+  const pending = service.syncOnce();
+
+  await pending;
+  await assert.rejects(first, /boom/, "first sync must reject even when a pending sync runs afterward");
+  assert.strictEqual(calls, 2, "failed active sync plus one pending follow-up should run");
+});
+
+test("manual successful sync resumes watch loop after failure suspension", async () => {
+  let calls = 0;
+  let fail = true;
+  const { service } = makeService({
+    onSync: async () => {
+      calls++;
+      if (fail) throw new Error("boom");
+    },
+  });
+
+  await service.start();
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 5600));
+    const suspendedAt = calls;
+    assert.ok(suspendedAt >= 5, `expected watch to hit failure suspension, got ${suspendedAt} calls`);
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assert.strictEqual(calls, suspendedAt, "watch should be suspended after repeated failures");
+
+    fail = false;
+    await service.syncOnce();
+    const afterManual = calls;
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+
+    assert.ok(calls > afterManual, "manual successful sync should resume future watch ticks");
+  } finally {
+    await service.stop();
+  }
+});
