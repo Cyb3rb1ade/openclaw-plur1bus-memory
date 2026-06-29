@@ -229,4 +229,27 @@ describe("forget/correct confirmation completion", () => {
     assert.strictEqual(db.cards.has(id), true, "ACL-denied card must not be deleted");
     assert.strictEqual(result.archivePath, undefined, "ACL denial must happen before archive");
   });
+
+  it("forgetCard denies ACL mismatch when ownership is only storedBy/workspaceKey", async () => {
+    const privateId = "99999999-9999-9999-9999-999999999999";
+    const workspaceId = "aaaaaaaa-1111-1111-1111-111111111111";
+    const db = mockDb([
+      { id: privateId, text: "foreign private note", scope: "agent-private", storedBy: "owner-agent" },
+      { id: workspaceId, text: "foreign workspace note", scope: "workspace", workspaceKey: "workspace-a" },
+    ]);
+
+    const privateResult = await forgetCard(db, "default", privateId, {
+      archiveDir,
+      ctx: { agentId: "other-agent", workspaceDir: archiveDir },
+    });
+    assert.strictEqual(privateResult.ok, false);
+    assert.match(privateResult.error, /access denied|acl\.agent_private\.mismatch/i);
+
+    const workspaceResult = await forgetCard(db, "default", workspaceId, {
+      archiveDir,
+      ctx: { agentId: "default", workspaceId: "workspace-b", workspaceDir: archiveDir },
+    });
+    assert.strictEqual(workspaceResult.ok, false);
+    assert.match(workspaceResult.error, /access denied|acl\.workspace\.mismatch/i);
+  });
 });

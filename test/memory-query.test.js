@@ -11,6 +11,7 @@ import {
   parseQuery,
   formatResults,
   queryMemory,
+  parseMemoryFeedback,
 } from '../lib/telegram-commands/memory-query.js';
 
 // ─── parseQuery: Zeit-Modus ──────────────────────────────────────────────
@@ -93,8 +94,8 @@ test('formatResults bei mode=help → Hilfe-Text', () => {
 test('queryMemory ruft queryByTimeRange bei mode=time', async () => {
   const calls = [];
   const fakeDb = {
-    queryByTimeRange: async (agent, range) => {
-      calls.push({ agent, range });
+    queryByTimeRange: async (agent, range, opts) => {
+      calls.push({ agent, range, opts });
       return [{ title: 'T', source: 'notiz', date: '2026-05-27' }];
     },
     searchByTopic: async () => {
@@ -105,6 +106,7 @@ test('queryMemory ruft queryByTimeRange bei mode=time', async () => {
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(calls[0].agent, 'bernd');
   assert.strictEqual(calls[0].range, 'this_week');
+  assert.deepStrictEqual(calls[0].opts, { ctx: null });
   assert.strictEqual(result.length, 1);
 });
 
@@ -114,14 +116,16 @@ test('queryMemory ruft searchByTopic bei mode=topic', async () => {
     queryByTimeRange: async () => {
       throw new Error('should not be called');
     },
-    searchByTopic: async (agent, topic) => {
-      calls.push({ agent, topic });
+    searchByTopic: async (agent, topic, opts) => {
+      calls.push({ agent, topic, opts });
       return [];
     },
   };
-  await queryMemory(fakeDb, 'bernd', { mode: 'topic', topic: 'Eva' });
+  const ctx = { agentId: 'bernd', workspaceId: 'ws-1', userId: 'u1' };
+  await queryMemory(fakeDb, 'bernd', { mode: 'topic', topic: 'Eva' }, ctx);
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(calls[0].topic, 'Eva');
+  assert.deepStrictEqual(calls[0].opts, { filters: undefined, ctx });
 });
 
 test('queryMemory gibt [] bei mode=help', async () => {
@@ -131,4 +135,24 @@ test('queryMemory gibt [] bei mode=help', async () => {
   };
   const result = await queryMemory(fakeDb, 'bernd', { mode: 'help' });
   assert.deepStrictEqual(result, []);
+});
+
+test('queryMemory filtert Zeitresultate per ACL-Kontext', async () => {
+  const fakeDb = {
+    queryByTimeRange: async () => [
+      { id: 'a', title: 'own', source: 'notiz', date: '2026-05-27', scope: 'agent-private', storedBy: 'bernd' },
+      { id: 'b', title: 'foreign', source: 'notiz', date: '2026-05-27', scope: 'agent-private', storedBy: 'other-agent' },
+    ],
+    searchByTopic: async () => [],
+  };
+  const result = await queryMemory(fakeDb, 'bernd', { mode: 'time', range: 'today' }, { agentId: 'bernd' });
+  assert.deepStrictEqual(result.map((item) => item.id), ['a']);
+});
+
+test('parseMemoryFeedback akzeptiert nur UUIDs', () => {
+  assert.strictEqual(parseMemoryFeedback('not-a-uuid +'), null);
+  assert.deepStrictEqual(
+    parseMemoryFeedback('11111111-1111-1111-1111-111111111111 +'),
+    { memoryId: '11111111-1111-1111-1111-111111111111', feedback: 'positive' },
+  );
 });

@@ -900,6 +900,10 @@ class MemoryDB {
         sourceUrl: r.sourceUrl || "",
         evidenceQuote: r.evidenceQuote || "",
         scope: r.scope || "agent-private",
+        storedBy: r.storedBy || "",
+        workspaceKey: r.workspaceKey || "",
+        agentId: r.agentId || r.storedBy || "",
+        workspaceId: r.workspaceId || r.workspaceKey || "",
         emotionalValence: deserializeEmotionalValence(r.emotionalValence),
         emotionalIntensity: r.emotionalIntensity ?? 0,
         emotionalDominant: r.emotionalDominant || "neutral",
@@ -961,7 +965,7 @@ class MemoryDB {
     if (count === 0) return null;
     const results = await this.vectorSearchActive(vector, 5);
     const candidates = results
-      .map(r => ({ entry: { id: r.id, text: r.text, importance: r.importance ?? 0.5, storedBy: r.storedBy || "" }, score: distanceToScore(r._distance) }))
+      .map(r => ({ entry: { id: r.id, text: r.text, importance: r.importance ?? 0.5, storedBy: r.storedBy || "", workspaceKey: r.workspaceKey || "" }, score: distanceToScore(r._distance) }))
       .filter(r => r.score >= mergeThreshold && r.score < duplicateThreshold)
       .sort((a, b) => b.score - a.score);
     return candidates[0] || null;
@@ -2231,6 +2235,9 @@ const plugin = {
     async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
       const storeAgentId = storeCtx.agentId || "default";
       const storeDb = pool.getWriteDb(storeAgentId);
+      const storeWorkspaceKey = storeCtx.workspaceKey || workspaceKeyFromContext(storeCtx, {
+        workspaceDir: storeCtx.workspaceDir,
+      });
       // v6.2.1 — Input-Validierung für Memory-Text (P0-Fix)
       const textValidation = validateMemoryText(params.text);
       if (!textValidation.ok) {
@@ -2314,7 +2321,7 @@ const plugin = {
                 // DATA-003: prepare the merged entry and archive the original BEFORE
                 // deleting it. If embedding or archiving fails, the original remains intact.
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
-                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
                 let archivePath;
                 try {
                   archivePath = archiveCard(mergeCandidate.entry, storeAgentId);
@@ -2350,7 +2357,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -3363,7 +3370,13 @@ const plugin = {
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const parsed = parseMemoryQuery(normalized.canonicalText);
             const agentId = commandCtx.agentId || "default";
-            const items = await queryMemory(memoryDbAdapter, agentId, parsed);
+            const { userId } = resolveIdentity(commandCtx);
+            const items = await queryMemory(memoryDbAdapter, agentId, parsed, {
+              agentId,
+              workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
+              userId,
+              workspaceDir: commandCtx.workspaceDir,
+            });
             if (parsed.explain) {
               const explanations = explainResults(items.map((r) => ({ entry: r, score: r.score ?? 0 })), parsed.topic);
               items.forEach((item, i) => {
@@ -3400,7 +3413,7 @@ const plugin = {
                 logger: api.logger,
                 ctx: {
                   agentId,
-                  workspaceId: commandCtx.workspaceId,
+                  workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
                   userId,
                   workspaceDir: commandCtx.workspaceDir,
                 },
@@ -3413,7 +3426,15 @@ const plugin = {
             if (!args) return { text: t("plur1bus.forget_usage", { lang, tone }) };
             const normalized = await normalizeCommandInput({ kind: "forget-intent", text: args, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
-            const candidates = await resolveCandidates(memoryDbAdapter, agentId, normalized.canonicalText);
+            const { userId: requestUserId } = resolveIdentity(commandCtx);
+            const candidates = await resolveCandidates(memoryDbAdapter, agentId, normalized.canonicalText, {
+              ctx: {
+                agentId,
+                workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
+                userId: requestUserId,
+                workspaceDir: commandCtx.workspaceDir,
+              },
+            });
             if (candidates.none) {
               return { text: t("plur1bus.forget_not_found", { lang, tone, vars: { query: normalized.canonicalText } }) };
             }
@@ -3459,7 +3480,7 @@ const plugin = {
                 logger: api.logger,
                 ctx: {
                   agentId,
-                  workspaceId: commandCtx.workspaceId,
+                  workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
                   userId,
                   workspaceDir: commandCtx.workspaceDir,
                 },
@@ -3508,7 +3529,15 @@ const plugin = {
             ]);
             if (oldNorm.error) return { text: `❌ ${oldNorm.error}` };
             if (newNorm.error) return { text: `❌ ${newNorm.error}` };
-            const candidates = await resolveCandidates(memoryDbAdapter, agentId, oldNorm.canonicalText);
+            const { userId: requestUserId } = resolveIdentity(commandCtx);
+            const candidates = await resolveCandidates(memoryDbAdapter, agentId, oldNorm.canonicalText, {
+              ctx: {
+                agentId,
+                workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
+                userId: requestUserId,
+                workspaceDir: commandCtx.workspaceDir,
+              },
+            });
             if (candidates.none) {
               return { text: t("plur1bus.correct_not_found", { lang, tone, vars: { query: oldNorm.canonicalText } }) };
             }
@@ -3533,6 +3562,8 @@ const plugin = {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
+            const denied = checkAuth(commandCtx, { destructive: true });
+            if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const parsed = parseMemoryFeedback(args);
             if (!parsed) {
@@ -4205,6 +4236,13 @@ const plugin = {
       const agentId = ctx.agentId;
       const db = pool.getWriteDb(agentId);        // write-db — used by memory_store/forget
       const readDbs = pool.getReadDbs(agentId);   // read namespaces — used by memory_recall
+      const modelDestructiveToolsAllowed = () => (cfg.security?.allowModelDestructiveMemoryOps === true);
+      const blockModelDestructiveTool = (toolName) => ({
+        content: [{
+          type: "text",
+          text: `${toolName} is disabled unless security.allowModelDestructiveMemoryOps=true because model-facing tool calls do not carry a user-bound authorization context.`,
+        }],
+      });
 
       const recallTool = {
           name: "memory_recall",
@@ -4376,6 +4414,9 @@ const plugin = {
                 maxCandidates: traceCfg.maxCandidates ?? 50,
               });
               const vector = await embeddings.embed(params.text, { agentId });
+              const workspaceKey = ctx.workspaceKey || workspaceKeyFromContext(ctx, {
+                workspaceDir: ctx.workspaceDir,
+              });
               const categoryResult = params.category
                 ? { category: params.category, reason: "caller-provided" }
                 : categorizeMemoryWithReason(params.text);
@@ -4452,7 +4493,7 @@ const plugin = {
                       const mergedEntry = applyDynamicsDefaults({
                         id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
                         importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
-                        expiresAt, storedBy: agentId, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                        expiresAt, storedBy: agentId, workspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
                         emotionalValence: serializeEmotionalValence(mergedEmotion),
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
@@ -4498,7 +4539,7 @@ const plugin = {
               const moodContext = emotionalPool.snapshot(agentId);
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
-                createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId,
+                createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId, workspaceKey,
                 sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
                 emotionalValence: serializeEmotionalValence(emotion),
                 emotionalIntensity: emotion.emotionalIntensity,
@@ -4530,6 +4571,9 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
+              if (!modelDestructiveToolsAllowed()) {
+                return blockModelDestructiveTool("memory_forget");
+              }
               if (params.memoryId) {
                 // Archive-First: vor dem Löschen ein JSON-Backup schreiben.
                 // Schlägt das Archiv fehl, NICHT löschen (wie bei /forget).
@@ -4585,6 +4629,9 @@ const plugin = {
             },
           },
           async execute(_toolCallId, params) {
+            if (!modelDestructiveToolsAllowed()) {
+              return blockModelDestructiveTool("knowledge_update");
+            }
             if (!schicht15Enabled || !schicht15LlmCfg) {
               return { content: [{ type: "text", text: "Schicht 1.5 is not enabled. Enable it in plugin config." }] };
             }
