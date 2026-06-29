@@ -115,6 +115,7 @@ import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-clas
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import { runWikiCommand } from "./lib/wiki-command.js";
+import { checkAccess } from "./lib/acl-middleware.js";
 import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
@@ -605,6 +606,7 @@ class MemoryDB {
     if (normalized.sourceUrl == null) normalized.sourceUrl = "";
     if (normalized.evidenceQuote == null) normalized.evidenceQuote = "";
     if (normalized.scope == null) normalized.scope = "agent-private";
+    if (normalized.ownerUserId == null) normalized.ownerUserId = "";
     if (normalized.emotionalValence == null) normalized.emotionalValence = "";
     if (normalized.emotionalIntensity == null) normalized.emotionalIntensity = 0.0;
     if (normalized.emotionalDominant == null) normalized.emotionalDominant = "neutral";
@@ -682,6 +684,7 @@ class MemoryDB {
             { name: 'sourceUrl', valueSql: "''" },
             { name: 'evidenceQuote', valueSql: "''" },
             { name: 'scope', valueSql: "'agent-private'" },
+            { name: 'ownerUserId', valueSql: "''" },
             { name: 'type', valueSql: "'memory'" },
             { name: 'confirmed', valueSql: 'false' },
             { name: 'emotionalValence', valueSql: "''" },
@@ -756,6 +759,7 @@ class MemoryDB {
             sourceUrl: "",
             evidenceQuote: "",
             scope: "agent-private",
+            ownerUserId: "",
             emotionalValence: "",
             emotionalIntensity: 0,
             emotionalDominant: "neutral",
@@ -900,6 +904,7 @@ class MemoryDB {
         sourceUrl: r.sourceUrl || "",
         evidenceQuote: r.evidenceQuote || "",
         scope: r.scope || "agent-private",
+        ownerUserId: r.ownerUserId || "",
         storedBy: r.storedBy || "",
         workspaceKey: r.workspaceKey || "",
         agentId: r.agentId || r.storedBy || "",
@@ -965,7 +970,18 @@ class MemoryDB {
     if (count === 0) return null;
     const results = await this.vectorSearchActive(vector, 5);
     const candidates = results
-      .map(r => ({ entry: { id: r.id, text: r.text, importance: r.importance ?? 0.5, storedBy: r.storedBy || "", workspaceKey: r.workspaceKey || "" }, score: distanceToScore(r._distance) }))
+      .map(r => ({
+        entry: {
+          id: r.id,
+          text: r.text,
+          importance: r.importance ?? 0.5,
+          storedBy: r.storedBy || "",
+          workspaceKey: r.workspaceKey || "",
+          scope: r.scope || "agent-private",
+          ownerUserId: r.ownerUserId || "",
+        },
+        score: distanceToScore(r._distance),
+      }))
       .filter(r => r.score >= mergeThreshold && r.score < duplicateThreshold)
       .sort((a, b) => b.score - a.score);
     return candidates[0] || null;
@@ -1035,6 +1051,7 @@ class MemoryDB {
       importance: r.importance ?? 0.5,
       createdAt: r.createdAt || "",
       scope: r.scope || "agent-private",
+      ownerUserId: r.ownerUserId || "",
       status: r.status || "active",
       // Carry protection flags so GC can honor the neverForget/core contract.
       neverForget: r.neverForget,
@@ -1046,7 +1063,7 @@ class MemoryDB {
     let query = this.table.query()
       .where("status IS NULL OR (status != 'deleted' AND status != 'archived')");
     if (typeof query.select === "function") {
-      query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "status", "neverForget", "memoryClass"]);
+      query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "ownerUserId", "status", "neverForget", "memoryClass"]);
     }
     return query;
   }
@@ -2232,6 +2249,26 @@ const plugin = {
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
 
+    function normalizeOwnerUserId(userId) {
+      return String(userId || "").trim();
+    }
+
+    function resolveStoreScopeAccess(ctxLike = {}, rawScope) {
+      const scope = MEMORY_SCOPES.includes(rawScope) ? rawScope : "agent-private";
+      const { userId } = resolveIdentity(ctxLike);
+      const requestUserId = normalizeOwnerUserId(userId);
+      const ownerUserId = scope === "user" ? requestUserId : "";
+      if (scope === "user" && !ownerUserId) {
+        return { ok: false, error: "user scope requires an authenticated user" };
+      }
+      return { ok: true, scope, ownerUserId, requestUserId };
+    }
+
+    function candidateVisibleForStore(candidate, accessCtx) {
+      if (!candidate) return false;
+      return checkAccess(accessCtx, candidate.entry).allowed;
+    }
+
     async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
       const storeAgentId = storeCtx.agentId || "default";
       const storeDb = pool.getWriteDb(storeAgentId);
@@ -2271,12 +2308,18 @@ const plugin = {
           reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
         });
         const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
-        const scope = MEMORY_SCOPES.includes(params.scope) ? params.scope : "agent-private";
+        const scopeAccess = resolveStoreScopeAccess(storeCtx, params.scope);
+        if (!scopeAccess.ok) {
+          return { error: scopeAccess.error };
+        }
+        const { scope, ownerUserId, requestUserId } = scopeAccess;
+        const storeAccessCtx = { agentId: storeAgentId, workspaceId: storeWorkspaceKey, userId: requestUserId };
         const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
         const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
 
         // 1. Duplicate check
-        const existing = await storeDb.findSimilar(vector, params.text, duplicateThreshold);
+        const existing = (await storeDb.findSimilar(vector, params.text, duplicateThreshold))
+          .filter((candidate) => candidateVisibleForStore(candidate, storeAccessCtx));
         if (existing.length > 0) {
           const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
           if (!safeDuplicate) {
@@ -2291,7 +2334,8 @@ const plugin = {
 
         // 2. Merge check (+ conflict detection for decision category)
         if (mergingEnabled && mergingLlmCfg && mergingAutoApply) {
-          const mergeCandidate = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+          const mergeCandidateRaw = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+          const mergeCandidate = candidateVisibleForStore(mergeCandidateRaw, storeAccessCtx) ? mergeCandidateRaw : null;
           if (mergeCandidate) {
             addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
             let mergeResult = null;
@@ -2321,7 +2365,7 @@ const plugin = {
                 // DATA-003: prepare the merged entry and archive the original BEFORE
                 // deleting it. If embedding or archiving fails, the original remains intact.
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
-                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
                 let archivePath;
                 try {
                   archivePath = archiveCard(mergeCandidate.entry, storeAgentId);
@@ -2348,7 +2392,8 @@ const plugin = {
           }
         } else if (category === "decision" && storeCtx.workspaceDir) {
           try {
-            const conflictCandidate = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+            const conflictCandidateRaw = await storeDb.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+            const conflictCandidate = candidateVisibleForStore(conflictCandidateRaw, storeAccessCtx) ? conflictCandidateRaw : null;
             if (conflictCandidate && conflictCandidate.entry.storedBy && conflictCandidate.entry.storedBy !== storeAgentId) {
               appendConflictLog(storeCtx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: storeAgentId, newText: params.text.slice(0, 200), existingMemoryId: conflictCandidate.entry.id, existingAgentId: conflictCandidate.entry.storedBy, existingText: conflictCandidate.entry.text.slice(0, 200), score: conflictCandidate.score, category, mergeDecision: "no_merge_llm_call" });
             }
@@ -2357,7 +2402,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -2549,10 +2594,14 @@ const plugin = {
                   ...commandStore.readBehaviorCards(200).map((record) => ({ ...record, type: "source", id: record.id, summary: record.statement || record.summary || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
                 ],
                 findRecord: (recordId) => findNeoRecord(commandStore, recordId),
-                memoryStore: async ({ payload }) => storeMemoryFromToolParams({
-                  agentId: commandCtx.agentId || "command",
-                  workspaceDir: commandCtx.workspaceDir,
-                }, payload),
+                memoryStore: async ({ payload }) => {
+                  const { userId } = resolveIdentity(commandCtx);
+                  return storeMemoryFromToolParams({
+                    agentId: commandCtx.agentId || "command",
+                    workspaceDir: commandCtx.workspaceDir,
+                    userId,
+                  }, payload);
+                },
               });
             }
             // ── Phase 5+6: silent cron-internal jobs ──────────────────────
@@ -4437,12 +4486,21 @@ const plugin = {
                 reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
               });
               const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
-              const scope = MEMORY_SCOPES.includes(params.scope) ? params.scope : "agent-private";
+              const scopeAccess = resolveStoreScopeAccess(ctx, params.scope);
+              if (!scopeAccess.ok) {
+                return {
+                  content: [{ type: "text", text: `Memory store rejected: ${scopeAccess.error}` }],
+                  details: { action: "rejected", reason: "missing_user_scope_owner" },
+                };
+              }
+              const { scope, ownerUserId, requestUserId } = scopeAccess;
+              const storeAccessCtx = { agentId, workspaceId: workspaceKey, userId: requestUserId };
               const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
               const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
 
               // 1. Duplicate check
-              const existing = await db.findSimilar(vector, params.text, duplicateThreshold);
+              const existing = (await db.findSimilar(vector, params.text, duplicateThreshold))
+                .filter((candidate) => candidateVisibleForStore(candidate, storeAccessCtx));
               if (existing.length > 0) {
                 const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
                 if (!safeDuplicate) {
@@ -4457,7 +4515,8 @@ const plugin = {
 
               // 2. Merge check (+ conflict detection for decision category)
               if (mergingEnabled && mergingLlmCfg && mergingAutoApply) {
-                const mergeCandidate = await db.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+                const mergeCandidateRaw = await db.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+                const mergeCandidate = candidateVisibleForStore(mergeCandidateRaw, storeAccessCtx) ? mergeCandidateRaw : null;
                 if (mergeCandidate) {
                   addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
                   let mergeResult = null;
@@ -4493,7 +4552,7 @@ const plugin = {
                       const mergedEntry = applyDynamicsDefaults({
                         id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
                         importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
-                        expiresAt, storedBy: agentId, workspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                        expiresAt, storedBy: agentId, workspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId,
                         emotionalValence: serializeEmotionalValence(mergedEmotion),
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
@@ -4526,7 +4585,8 @@ const plugin = {
               } else if (category === "decision" && ctx.workspaceDir) {
                 // Merging disabled: read-only conflict check for decision memories
                 try {
-                  const conflictCandidate = await db.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+                  const conflictCandidateRaw = await db.findMergeCandidate(vector, mergingThreshold, duplicateThreshold);
+                  const conflictCandidate = candidateVisibleForStore(conflictCandidateRaw, storeAccessCtx) ? conflictCandidateRaw : null;
                   if (conflictCandidate && conflictCandidate.entry.storedBy && conflictCandidate.entry.storedBy !== agentId) {
                     appendConflictLog(ctx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: agentId, newText: params.text.slice(0, 200), existingMemoryId: conflictCandidate.entry.id, existingAgentId: conflictCandidate.entry.storedBy, existingText: conflictCandidate.entry.text.slice(0, 200), score: conflictCandidate.score, category, mergeDecision: "no_merge_llm_call" });
                   }
@@ -4540,7 +4600,7 @@ const plugin = {
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
                 createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId, workspaceKey,
-                sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId,
                 emotionalValence: serializeEmotionalValence(emotion),
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,

@@ -54,6 +54,7 @@ const TABLE_NAME = "memories";
       "sourceUrl",
       "evidenceQuote",
       "scope",
+      "ownerUserId",
       "type",
       "confirmed",
       "emotionalValence",
@@ -109,6 +110,7 @@ const TABLE_NAME = "memories";
     assert.ok(oldRow.replayCount == 0, "default replayCount = 0");
     assert.ok(oldRow.lastReplayed == 0, "default lastReplayed = 0");
     assert.strictEqual(oldRow.status, "active", "default status = active");
+    assert.strictEqual(oldRow.ownerUserId, "", "default ownerUserId = empty");
     assert.ok(oldRow.versionNumber == 1, "default versionNumber = 1");
     assert.strictEqual(oldRow.memoryStrength, 1.0, "default memoryStrength = 1.0");
   });
