@@ -169,7 +169,7 @@ test('correctCard archiviert + ruft updateCard', async () => {
   }
 });
 
-test('correctCard fängt updateCard-Error ab und gibt freundliche Nachricht', async () => {
+test('correctCard fängt updateCard-Error ab und gibt generische Nachricht', async () => {
   const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-correct-'));
   try {
     const fakeDb = {
@@ -178,7 +178,8 @@ test('correctCard fängt updateCard-Error ab und gibt freundliche Nachricht', as
     };
     const result = await correctCard(fakeDb, 'agent', 'card-1', 'neu', { archiveDir: tmpRoot });
     assert.strictEqual(result.ok, false);
-    assert.match(result.error, /Phase 4b|gesperrt|nicht unterstützt|nicht möglich/i);
+    assert.match(result.error, /internal error/i);
+    assert.doesNotMatch(result.error, /Phase 4b|gesperrt/i);
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }

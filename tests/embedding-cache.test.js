@@ -462,6 +462,26 @@ describeSqlite("embedding-cache v2 persistence", () => {
     const reloaded = await cache2.getMany(["short-lived"], { agentId: "a1" });
     assert.strictEqual(reloaded[0], undefined);
   });
+
+  it("closes persistent SQLite handles and can reopen them", async () => {
+    const basePath = makeTempBase();
+    const cache = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      ttlMs: 60_000,
+    });
+
+    await cache.setMany([{ text: "close me", vector: [1, 2, 3] }], { agentId: "a1" });
+
+    assert.strictEqual(typeof cache.close, "function");
+    cache.close();
+    cache.close();
+
+    const reloaded = await cache.getMany(["close me"], { agentId: "a1" });
+    assert.deepStrictEqual(reloaded[0], [1, 2, 3]);
+
+    cache.close();
+  });
 });
 
 describeSqlite("embedding-cache v2 size limits", () => {
