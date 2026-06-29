@@ -229,4 +229,54 @@ describe("forget/correct confirmation completion", () => {
     assert.strictEqual(db.cards.has(id), true, "ACL-denied card must not be deleted");
     assert.strictEqual(result.archivePath, undefined, "ACL denial must happen before archive");
   });
+
+  it("forgetCard denies ACL mismatch when ownership is only storedBy/workspaceKey", async () => {
+    const privateId = "99999999-9999-9999-9999-999999999999";
+    const workspaceId = "aaaaaaaa-1111-1111-1111-111111111111";
+    const db = mockDb([
+      { id: privateId, text: "foreign private note", scope: "agent-private", storedBy: "owner-agent" },
+      { id: workspaceId, text: "foreign workspace note", scope: "workspace", workspaceKey: "workspace-a" },
+    ]);
+
+    const privateResult = await forgetCard(db, "default", privateId, {
+      archiveDir,
+      ctx: { agentId: "other-agent", workspaceDir: archiveDir },
+    });
+    assert.strictEqual(privateResult.ok, false);
+    assert.match(privateResult.error, /access denied|acl\.agent_private\.mismatch/i);
+
+    const workspaceResult = await forgetCard(db, "default", workspaceId, {
+      archiveDir,
+      ctx: { agentId: "default", workspaceId: "workspace-b", workspaceDir: archiveDir },
+    });
+    assert.strictEqual(workspaceResult.ok, false);
+    assert.match(workspaceResult.error, /access denied|acl\.workspace\.mismatch/i);
+  });
+
+  it("forgetCard denies user-scope access when the caller is not the owning user", async () => {
+    const id = "bbbbbbbb-1111-1111-1111-111111111111";
+    const db = mockDb([{ id, text: "user-scoped note", scope: "user", ownerUserId: "owner-user" }]);
+
+    const result = await forgetCard(db, "default", id, {
+      archiveDir,
+      ctx: { agentId: "default", userId: "other-user", workspaceDir: archiveDir },
+    });
+
+    assert.strictEqual(result.ok, false);
+    assert.match(result.error, /access denied|acl\.user\.mismatch/i);
+    assert.strictEqual(db.cards.has(id), true, "foreign user must not delete the card");
+  });
+
+  it("forgetCard still allows the owning user to delete a user-scoped memory", async () => {
+    const id = "bbbbbbbb-2222-2222-2222-222222222222";
+    const db = mockDb([{ id, text: "user-scoped note", scope: "user", ownerUserId: "owner-user" }]);
+
+    const result = await forgetCard(db, "default", id, {
+      archiveDir,
+      ctx: { agentId: "default", userId: "owner-user", workspaceDir: archiveDir },
+    });
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(db.cards.has(id), false, "owner should still be able to delete the card");
+  });
 });
