@@ -47,4 +47,23 @@ describe("GC neverForget/core protection", () => {
     assert.ok(!ids.includes("keep-nf"), "neverForget must survive minMemoryStrength sweep");
     assert.ok(ids.includes("evict-1"), "unprotected weak memory is still eligible");
   });
+
+  it("purgeExpired hard-delete excludes neverForget and core memories", async () => {
+    const db = new MemoryDB("/tmp/gc-purge-neverforget-test", 3);
+    let deleteSql = "";
+    db.init = async () => {};
+    db._write = async (promise) => promise;
+    db.table = {
+      delete: async (sql) => {
+        deleteSql = sql;
+      },
+    };
+
+    await db.purgeExpired();
+
+    assert.match(deleteSql, /expiresAt > 0/);
+    assert.match(deleteSql, /neverForget/);
+    assert.match(deleteSql, /memoryClass/);
+    assert.match(deleteSql, /core/);
+  });
 });
