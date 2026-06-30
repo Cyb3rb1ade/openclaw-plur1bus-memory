@@ -1,7 +1,7 @@
-# Known Issues — v6.8.11
+# Known Issues — v6.8.12
 
-> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-06-30 (v6.8.11)
-> Release: v6.8.11 Current Baseline
+> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-06-30 (v6.8.12)
+> Release: v6.8.12 Current Baseline
 
 ---
 
@@ -9,7 +9,7 @@
 
 **Beschreibung (original):** Die Embedding-Cache-Implementierung war vollständig vorhanden, aber noch nicht in den Recall-Hot-Path eingebunden.
 
-**Auflösung (v6.2.1):** `OpenAIEmbeddingProvider` verdrahtet den Cache direkt (`lib/providers/embedding-openai.js`). Seit v6.8.11 ist `runtime.embeddingCacheEnabled` im Full Experience Default auf `true` gesetzt. Der Cache läuft pro Plugin-Instanz im Speicher (LRU, configurable TTL/maxEntries).
+**Auflösung (v6.2.1):** `OpenAIEmbeddingProvider` verdrahtet den Cache direkt (`lib/providers/embedding-openai.js`). Seit v6.8.12 ist `runtime.embeddingCacheEnabled` im Full Experience Default auf `true` gesetzt. Der Cache läuft pro Plugin-Instanz im Speicher (LRU, configurable TTL/maxEntries).
 
 ---
 
