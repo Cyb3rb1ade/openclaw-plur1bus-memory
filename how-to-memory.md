@@ -1,8 +1,8 @@
-# How-To: Memory-System — PLUR1BUS 6.8.11 (Stand 2026-06-30)
+# How-To: Memory-System — PLUR1BUS 6.8.12 (Stand 2026-06-30)
 
 > **Single Source of Truth** für die tägliche Nutzung. Architektur-Details (Schicht 1/2/3, Dreaming, Adaptive Learning, Meta-Cognition) stehen in `how-to-memory-perfect.md`.
 
-**Plugin-Version:** `memory-lancedb-namespaced` 6.8.11. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
+**Plugin-Version:** `memory-lancedb-namespaced` 6.8.12. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
 
 ---
 
@@ -348,5 +348,5 @@ Distribution: Source-Repo. Live deployed nach `~/.openclaw/extensions/memory-lan
 
 ---
 
-*Letzter Refresh: 2026-06-30 (PLUR1BUS 6.8.11).
+*Letzter Refresh: 2026-06-30 (PLUR1BUS 6.8.12).
 Vorgängerstände: siehe Git-History und `CHANGELOG.md`.*

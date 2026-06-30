@@ -5,6 +5,20 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.8.12] — 2026-06-30 — Release-Metadaten & ClawHub-Republication
+
+### Changed
+
+- Release-Dokumentation, How-tos und bekannte Issues auf den aktuellen 6.8.x-Sicherheitsstand gebracht.
+- `package-lock.json`, `package.json` und `openclaw.plugin.json` auf dieselbe Version synchronisiert.
+- Publiziert den geprüften Security-Hardening-Stand mit ClawHub-Source-Metadaten, da `6.8.11` auf ClawHub bereits immutable vergeben war.
+
+### Verification
+
+- `npm test`: 224 Tests, 224 passing, 0 failing.
+- `npm pack`: 280 Dateien im Release-Artefakt.
+- ClawHub `package publish --dry-run`: erfolgreich für `code-plugin`.
+
 ## [6.8.11] — 2026-06-28 — Cohere-Reranker-Timeout konfigurierbar
 
 ### Fixed

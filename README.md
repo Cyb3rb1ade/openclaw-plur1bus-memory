@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 6.8.11** — Cohere-Re-Ranker-Timeout, user-scope ACL-Bindung (`user`-Scope) und weitere Security-Härtungen sind aktiv. See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 6.8.12** — Publishes the verified 6.8.11 security-hardening line with refreshed docs, lockfile/manifest alignment, and ClawHub source metadata. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 

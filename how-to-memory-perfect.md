@@ -1,9 +1,9 @@
 # Perfektes Gedächtnis für OpenClaw-Agenten
 ## Ein vollständiges How-To für alle Deployments
 
-> **Status (2026-06-30):** Dieses Dokument beschreibt die **Architektur** der drei Memory-Schichten (Flat-File, Workspace-Indexer, LanceDB) plus Dreaming und Adaptive Learning. Diese Konzepte bleiben mit **plur1bus 6.8.11** unverändert gültig.
+> **Status (2026-06-30):** Dieses Dokument beschreibt die **Architektur** der drei Memory-Schichten (Flat-File, Workspace-Indexer, LanceDB) plus Dreaming und Adaptive Learning. Diese Konzepte bleiben mit **plur1bus 6.8.12** unverändert gültig.
 >
-> **Neu in v6.8.11:** ACL-Prüfpfade werden für `scope: "user"` owner-bound (`userId`-Match) durchgesetzt; die Sicherheits-Härtung für Destruktiv-Operationen ist aktiviert und dokumentiert.
+> **Neu bis v6.8.12:** ACL-Prüfpfade werden für `scope: "user"` owner-bound (`userId`-Match) durchgesetzt; die Sicherheits-Härtung für Destruktiv-Operationen ist aktiviert und dokumentiert. v6.8.12 publiziert diesen Stand mit konsistenten Release-Metadaten.
 >
 > **Für die tägliche Nutzung** (Commands `/zustand`, `/memory`, `/vergiss`, `/korrigier`, `/einschalten`, `/ausschalten`; Kritisch-Push-Mechanismus; Vault-Layout `/memory/cards/YYYY/MM/`) ist **`how-to-memory.md`** die Single Source of Truth.
 >
