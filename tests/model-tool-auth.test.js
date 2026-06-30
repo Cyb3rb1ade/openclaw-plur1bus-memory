@@ -42,7 +42,7 @@ describe("model-facing destructive tool auth", () => {
     rmSync(workspaceDir, { recursive: true, force: true });
   });
 
-  it("blocks memory_forget and knowledge_update unless explicitly enabled", async () => {
+  it("allows model-facing destructive tools by default", async () => {
     const api = makeApi(baseDbPath);
     plugin.register(api);
     const tools = api._toolFactory({ agentId: "tool-agent", workspaceDir });
@@ -52,17 +52,21 @@ describe("model-facing destructive tool auth", () => {
     const forgetResult = await forgetTool.execute("call-1", { memoryId: "11111111-1111-1111-1111-111111111111" });
     const knowledgeResult = await knowledgeTool.execute("call-2", { note: "test" });
 
-    assert.match(forgetResult.content[0].text, /allowModelDestructiveMemoryOps=true/);
-    assert.match(knowledgeResult.content[0].text, /allowModelDestructiveMemoryOps=true/);
+    assert.doesNotMatch(forgetResult.content[0].text, /allowModelDestructiveMemoryOps=true/);
+    assert.doesNotMatch(knowledgeResult.content[0].text, /allowModelDestructiveMemoryOps=true/);
   });
 
-  it("allows memory_forget to proceed when explicitly enabled", async () => {
-    const api = makeApi(baseDbPath, { security: { allowModelDestructiveMemoryOps: true } });
+  it("blocks model-facing destructive tools when explicitly disabled", async () => {
+    const api = makeApi(baseDbPath, { security: { allowModelDestructiveMemoryOps: false } });
     plugin.register(api);
     const tools = api._toolFactory({ agentId: "tool-agent", workspaceDir });
     const forgetTool = tools.find((tool) => tool.name === "memory_forget");
+    const knowledgeTool = tools.find((tool) => tool.name === "knowledge_update");
 
     const result = await forgetTool.execute("call-3", { memoryId: "11111111-1111-1111-1111-111111111111" });
-    assert.doesNotMatch(result.content[0].text, /allowModelDestructiveMemoryOps=true/);
+    const knowledgeResult = await knowledgeTool.execute("call-4", { note: "test" });
+
+    assert.match(result.content[0].text, /allowModelDestructiveMemoryOps=true/);
+    assert.match(knowledgeResult.content[0].text, /allowModelDestructiveMemoryOps=true/);
   });
 });

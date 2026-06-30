@@ -29,6 +29,7 @@ describe("install-memory-system non-interactive guard", () => {
     assert.match(script, /plur1bus-install-log\.jsonl/);
     assert.match(script, /Feature-Update-Modus/);
     assert.match(script, /enable-all/);
+    assert.match(script, /prompt_choice FEATURE_UPDATE_MODE [^\n]*"enable-all" "keep" "enable-all"/);
     assert.match(script, /prompt_secret OPENAI_KEY/);
     assert.match(script, /prompt_secret COHERE_KEY/);
     assert.match(script, /ActiveMemory installieren\? yes=ja, no=nein" "yes"/);

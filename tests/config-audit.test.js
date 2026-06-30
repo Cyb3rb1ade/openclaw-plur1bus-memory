@@ -384,6 +384,34 @@ describe("Schema-Default-Typen (Core Features)", () => {
     assertBooleanDefault("obsidianBridge.soulPatch.force", false));
   it("obsidianBridge.soulPatch.migrateLegacy bleibt default false", () =>
     assertBooleanDefault("obsidianBridge.soulPatch.migrateLegacy", false));
+  it("security.allowModelDestructiveMemoryOps ist default true", () =>
+    assertBooleanDefault("security.allowModelDestructiveMemoryOps", true));
+  it("temporalContext.enabled ist default true", () =>
+    assertBooleanDefault("temporalContext.enabled", true));
+  it("metaCognition.enabled ist default true", () =>
+    assertBooleanDefault("metaCognition.enabled", true));
+  it("metaCognition.llmReport ist default true", () =>
+    assertBooleanDefault("metaCognition.llmReport", true));
+  it("merging.autoApplyRisk ist low-only", () =>
+    assert.strictEqual(getDefault("merging.autoApplyRisk"), "low-only"));
+  it("merging.backupBeforeApply ist default true", () =>
+    assertBooleanDefault("merging.backupBeforeApply", true));
+  it("merging.auditLog ist default true", () =>
+    assertBooleanDefault("merging.auditLog", true));
+  it("merging.maxAutoApplyPerRun ist 5", () =>
+    assertNumberDefault("merging.maxAutoApplyPerRun", 5));
+  it("emotion.t3.fallbackOnError ist default true", () =>
+    assertBooleanDefault("emotion.t3.fallbackOnError", true));
+  it("emotion.t3.onlyWhenProviderAvailable ist default true", () =>
+    assertBooleanDefault("emotion.t3.onlyWhenProviderAvailable", true));
+  it("obsidianBridge.adversarialDeep.fallbackOnError ist default true", () =>
+    assertBooleanDefault("obsidianBridge.adversarialDeep.fallbackOnError", true));
+  it("obsidianBridge.adversarialDeep.onlyWhenProviderAvailable ist default true", () =>
+    assertBooleanDefault("obsidianBridge.adversarialDeep.onlyWhenProviderAvailable", true));
+  it("obsidianBridge.semanticGraph.writeDerivedEdges ist default true", () =>
+    assertBooleanDefault("obsidianBridge.semanticGraph.writeDerivedEdges", true));
+  it("obsidianBridge.soulPatch.promptForLegacyMigration ist default true", () =>
+    assertBooleanDefault("obsidianBridge.soulPatch.promptForLegacyMigration", true));
   it("morningReview.enabled ist default false", () =>
     assertBooleanDefault("morningReview.enabled", false));
   it("eveningReview.enabled ist default false", () =>

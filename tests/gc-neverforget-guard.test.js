@@ -65,5 +65,6 @@ describe("GC neverForget/core protection", () => {
     assert.match(deleteSql, /neverForget/);
     assert.match(deleteSql, /memoryClass/);
     assert.match(deleteSql, /core/);
+    assert.doesNotMatch(deleteSql, /neverForget\s*=\s*false/);
   });
 });

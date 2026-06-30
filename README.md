@@ -242,7 +242,7 @@ Minimal config block in `openclaw.json`:
           },
           "security": {
             "allowChatConfigCommands": true,
-            "allowModelDestructiveMemoryOps": false,
+            "allowModelDestructiveMemoryOps": true,
             "allowedUserIds": [],
             "allowedChatIds": []
           },
@@ -270,7 +270,7 @@ All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` an
 
 **`security.allowChatConfigCommands`** (default `true`) — disables operator-level config mutating commands (`/enable`, `/disable`, `/plur1bus setup`) when set to `false`. Use this in shared channels if you want a hard stop on chat-driven writes. Writes are still guarded by a file lock.
 
-**`security.allowModelDestructiveMemoryOps`** (default `false`) — keeps model-facing tools `memory_forget` and `knowledge_update` disabled unless explicitly allowed for stricter tool-call risk control.
+**`security.allowModelDestructiveMemoryOps`** (default `true`) — keeps model-facing tools `memory_forget` and `knowledge_update` available unless you explicitly disable them.
 
 ### Scope-sichere Speicherung
 
@@ -279,7 +279,7 @@ All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` an
 - `workspace` shares by workspace.
 - `user` is owner-bound: der aufrufende `userId` wird gespeichert und bei Sichtbarkeit/Mutation geprüft.
 
-**`security.allowModelDestructiveMemoryOps`** (default `false`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state, but tool calls do not carry a user-bound authorization context. They therefore stay disabled unless this flag is explicitly set to `true`.
+**`security.allowModelDestructiveMemoryOps`** (default `true`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state. Set this flag to `false` if you want a hard opt-out for model-driven destructive memory writes.
 
 ### Feature profile confirmation
 
