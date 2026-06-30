@@ -1,8 +1,8 @@
-# How-To: Memory-System — PLUR1BUS 6.7.0 (Stand 2026-06-19)
+# How-To: Memory-System — PLUR1BUS 6.8.11 (Stand 2026-06-30)
 
 > **Single Source of Truth** für die tägliche Nutzung. Architektur-Details (Schicht 1/2/3, Dreaming, Adaptive Learning, Meta-Cognition) stehen in `how-to-memory-perfect.md`.
 
-**Plugin-Version:** `memory-lancedb-namespaced` 6.7.0. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
+**Plugin-Version:** `memory-lancedb-namespaced` 6.8.11. Mindestversion OpenClaw `2026.5.12-beta.6`. Plugin-Quelle: `https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory`. Live unter `~/.openclaw/extensions/memory-lancedb-namespaced/`.
 
 ---
 
@@ -81,6 +81,8 @@ Feedback auf ein Memory-Ergebnis geben. Persistiert pro Workspace für Recall-Qu
 ### `/teile <ID>`
 Memory-Karte in den Workspace-Shared-Pool kopieren. ACL-geschützt.
 
+`scope` ist standardmäßig `agent-private`; explizit gesetzte `scope: "user"`-Einträge sind owner-bound und nur vom gleichen `userId` lesbar.
+
 ```
 /teile abc123
 → Shared "Plan Pferdekauf Q3" to workspace pool (id: xyz789).
@@ -143,7 +145,7 @@ Statt alles in eine Review-Queue zu schieben, klassifiziert ein 30min-Cron neue 
 
 ---
 
-## Die 3 neuen Cron-Jobs
+## Die 7 Cron-Jobs
 
 Alle Jobs laufen pro Agent (`-main`, `-bernhardine`, `-heisenberg`). State in `/root/.openclaw/cron/jobs.json`.
 
@@ -279,7 +281,7 @@ Check:
 ```bash
 node --input-type=module << 'EOF'
 import { join } from 'path'; import { homedir } from 'os';
-const lancedb = await import(join(homedir(), '.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js'));
+const lancedb = await import(join(homedir(), '.openclaw/extensions/memory-lancedb-namespaced/node_modules/@lancedb/lancedb/dist/index.js'));
 for (const agent of ['bernhardine','main','heisenberg']) {
   const db = await lancedb.connect(join(homedir(), '.openclaw/memory/lancedb-namespaced', agent));
   const t = await db.openTable('memories');
@@ -291,7 +293,7 @@ Fix: Index erstellen (oder den auto-reindex warten — alle 500 Writes automatis
 ```bash
 node --input-type=module << 'EOF'
 import { join } from 'path'; import { homedir } from 'os';
-const lancedb = await import(join(homedir(), '.openclaw/extensions/memory-lancedb-stock/node_modules/@lancedb/lancedb/dist/index.js'));
+const lancedb = await import(join(homedir(), '.openclaw/extensions/memory-lancedb-namespaced/node_modules/@lancedb/lancedb/dist/index.js'));
 const db = await lancedb.connect(join(homedir(), '.openclaw/memory/lancedb-namespaced/bernhardine'));
 const t = await db.openTable('memories');
 await t.createIndex('vector', { config: lancedb.Index.hnswPq({ m: 16, efConstruction: 100, numSubVectors: 96 }), replace: true });
@@ -341,9 +343,10 @@ Cron-Jobs `morning-review` / `evening-review` wurden via `update-openclaw.sh` en
 
 ## Tests & Distribution
 
-Plugin: **1841/1841 Tests passing** (`npm test`).
+Plugin: **1931/1931 Tests passing** (`npm test`).
 Distribution: Source-Repo. Live deployed nach `~/.openclaw/extensions/memory-lancedb-namespaced/` (per `git pull` + Gateway-Restart).
 
 ---
 
-*Letzter Refresh: 2026-06-19 (PLUR1BUS 6.7.0 Full Experience Defaults). Vorgängerstände: siehe Git-History und `CHANGELOG.md`.*
+*Letzter Refresh: 2026-06-30 (PLUR1BUS 6.8.11).
+Vorgängerstände: siehe Git-History und `CHANGELOG.md`.*
