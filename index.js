@@ -591,6 +591,19 @@ class MemoryDB {
 
   normalizeEntryForTable(entry) {
     const normalized = { ...entry, id: entry.id || randomUUID() };
+    if (
+      normalized.vector &&
+      !Array.isArray(normalized.vector) &&
+      typeof normalized.vector === "object"
+    ) {
+      if (ArrayBuffer.isView(normalized.vector)) {
+        normalized.vector = Array.from(normalized.vector);
+      } else if (Array.isArray(normalized.vector.values)) {
+        normalized.vector = normalized.vector.values.slice();
+      } else if (ArrayBuffer.isView(normalized.vector.values)) {
+        normalized.vector = Array.from(normalized.vector.values);
+      }
+    }
     if (!normalized.type) normalized.type = "memory";
     if (typeof normalized.confirmed !== "boolean") normalized.confirmed = false;
     // All schema column defaults — LanceDB requires every field present on insert.
@@ -1100,7 +1113,7 @@ class MemoryDB {
   async purgeExpired() {
     await this.init();
     const now = safeTimestamp(Date.now());
-    const protectedWhere = "(neverForget IS NULL OR neverForget = 0 OR neverForget = false) AND (memoryClass IS NULL OR memoryClass != 'core')";
+    const protectedWhere = "(neverForget IS NULL OR neverForget = 0) AND (memoryClass IS NULL OR memoryClass != 'core')";
     await this._write(this.table.delete(`expiresAt > 0 AND expiresAt < ${now} AND ${protectedWhere}`), "MemoryDB.purgeExpired");
   }
 
@@ -4285,7 +4298,7 @@ const plugin = {
       const agentId = ctx.agentId;
       const db = pool.getWriteDb(agentId);        // write-db — used by memory_store/forget
       const readDbs = pool.getReadDbs(agentId);   // read namespaces — used by memory_recall
-      const modelDestructiveToolsAllowed = () => (cfg.security?.allowModelDestructiveMemoryOps === true);
+      const modelDestructiveToolsAllowed = () => (cfg.security?.allowModelDestructiveMemoryOps !== false);
       const blockModelDestructiveTool = (toolName) => ({
         content: [{
           type: "text",

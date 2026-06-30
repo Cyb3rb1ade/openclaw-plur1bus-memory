@@ -5,19 +5,24 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
-## [6.8.12] — 2026-06-30 — Release-Metadaten & ClawHub-Republication
+## [6.8.13] — 2026-06-30 — Defaults, Runtime-Fixes & Release-Hardening
+
+### Fixed
+
+- `purgeExpired` filtert `neverForget` nicht mehr mit einem LanceDB-inkompatiblen `= false`-Vergleich, der GC-Läufe abbrechen konnte.
+- Feedback-/Dynamics-Tabellen normalisieren Vektoren jetzt robust aus LanceDB-Wrappern und TypedArrays, statt an `vector.isValid`-Schemafehlern zu scheitern.
+- Das installierte Workspace-`AGENTS.md` wird bei Setup/Update auf reale Tool-Aufrufe gepatcht, damit keine pseudo-formatierten `memory_store:0{...}`-Beispiele mehr in Agent-Instruktionen landen.
+- Die Config-Schema-Defaults decken jetzt den vollständigen `enable-all`/Full-Experience-Pfad ab; fehlende Keys wie `temporalContext`, `metaCognition` und mehrere Nested Defaults blockieren den Gateway-Start nicht mehr.
+- `security.allowModelDestructiveMemoryOps` ist standardmäßig aktiv und wird nur noch durch ein explizites `false` deaktiviert.
 
 ### Changed
 
-- Release-Dokumentation, How-tos und bekannte Issues auf den aktuellen 6.8.x-Sicherheitsstand gebracht.
-- `package-lock.json`, `package.json` und `openclaw.plugin.json` auf dieselbe Version synchronisiert.
-- Publiziert den geprüften Security-Hardening-Stand mit ClawHub-Source-Metadaten, da `6.8.11` auf ClawHub bereits immutable vergeben war.
+- Installer-Updatefluss verwendet für Feature-Updates jetzt standardmäßig `enable-all` statt `keep`, damit die empfohlenen PLUR1BUS-Defaults ohne manuelle Nachpflege aktiviert werden.
+- README, Release-Dokumentation und Install-/Update-Hinweise wurden auf das tatsächliche Default-Verhalten und den aktuellen Sicherheitsstand synchronisiert.
 
 ### Verification
 
-- `npm test`: 224 Tests, 224 passing, 0 failing.
-- `npm pack`: 280 Dateien im Release-Artefakt.
-- ClawHub `package publish --dry-run`: erfolgreich für `code-plugin`.
+- `npm test`: 227 Tests, 227 passing, 0 failing.
 
 ## [6.8.11] — 2026-06-28 — Cohere-Reranker-Timeout konfigurierbar
 

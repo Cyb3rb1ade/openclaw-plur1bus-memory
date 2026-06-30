@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "6.8.12",
+  "version": "6.8.13",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -346,6 +346,16 @@
           }
         }
       },
+      "temporalContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
       "recallMinScore": {
         "type": "number",
         "default": 0.15
@@ -457,6 +467,25 @@
           "autoApply": {
             "type": "boolean",
             "default": false
+          },
+          "autoApplyRisk": {
+            "type": "string",
+            "enum": [
+              "low-only"
+            ],
+            "default": "low-only"
+          },
+          "backupBeforeApply": {
+            "type": "boolean",
+            "default": true
+          },
+          "auditLog": {
+            "type": "boolean",
+            "default": true
+          },
+          "maxAutoApplyPerRun": {
+            "type": "number",
+            "default": 5
           },
           "mode": {
             "type": "string",
@@ -1329,6 +1358,14 @@
               "llmClassifier": {
                 "type": "boolean",
                 "default": false
+              },
+              "fallbackOnError": {
+                "type": "boolean",
+                "default": true
+              },
+              "onlyWhenProviderAvailable": {
+                "type": "boolean",
+                "default": true
               }
             }
           },
@@ -1341,6 +1378,10 @@
                 "default": true
               },
               "proposalOnly": {
+                "type": "boolean",
+                "default": true
+              },
+              "writeDerivedEdges": {
                 "type": "boolean",
                 "default": true
               },
@@ -1474,6 +1515,10 @@
               "backup": {
                 "type": "boolean",
                 "default": true
+              },
+              "promptForLegacyMigration": {
+                "type": "boolean",
+                "default": true
               }
             }
           }
@@ -1525,6 +1570,11 @@
           "allowChatConfigCommands": {
             "type": "boolean",
             "default": true
+          },
+          "allowModelDestructiveMemoryOps": {
+            "type": "boolean",
+            "default": true,
+            "description": "Allow model-facing memory_forget and knowledge_update tool calls unless explicitly disabled."
           },
           "allowedUserIds": {
             "type": "array",
@@ -1603,6 +1653,28 @@
           }
         }
       },
+      "metaCognition": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "llmReport": {
+            "type": "boolean",
+            "default": true
+          },
+          "llmReportMode": {
+            "type": "string",
+            "default": "budgeted"
+          },
+          "fallbackOnError": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
       "emotion": {
         "type": "object",
         "additionalProperties": false,
@@ -1644,6 +1716,14 @@
               },
               "baseUrl": {
                 "type": "string"
+              },
+              "fallbackOnError": {
+                "type": "boolean",
+                "default": true
+              },
+              "onlyWhenProviderAvailable": {
+                "type": "boolean",
+                "default": true
               }
             }
           }

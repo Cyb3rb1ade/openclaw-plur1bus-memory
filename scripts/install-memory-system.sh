@@ -44,6 +44,7 @@ DOC_FILES=("README.md" "CHANGELOG.md" "how-to-memory.md" "how-to-memory-perfect.
 GC_SCRIPT="$SOURCE_DIR/scripts/memory-gc.mjs"
 MIN_OPENCLAW_VERSION="2026.5.10-beta.5"
 INSTALLER_CONFIG_HELPER="$SOURCE_DIR/scripts/lib/installer-config.mjs"
+AGENTS_PATCHER_HELPER="$SOURCE_DIR/scripts/lib/patch-agents-memory-instructions.mjs"
 INSTALL_LOG_FILE="plur1bus-install-log.jsonl"
 
 RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; RESET='\033[0m'
@@ -71,7 +72,7 @@ Optionen:
   --dry-run              Vorschau ohne Änderungen
   --update-plugin-only   Nur Plugin-Dateien und Registry aktualisieren; Memory-Daten, Embeddings und Provider-Config bleiben erhalten
   --rollback             Letzten Snapshot wiederherstellen
-  --accept-defaults      Keine Prompts; sichere Defaults verwenden
+  --accept-defaults      Keine Prompts; Recommended/Full-Experience-Defaults verwenden
   --non-interactive      Alias für --accept-defaults
   --legacy-host-cron     Legacy-User-Crontab-Jobs für GC/KNOWLEDGE explizit einrichten
   -h, --help             Diese Hilfe anzeigen
@@ -672,7 +673,7 @@ if [[ "$FEATURE_UPDATE_IS_UPDATE" == "true" ]]; then
     warn "Explizit deaktivierte Features bleiben im sicheren Update-Modus deaktiviert:"
     printf '%s\n' "$FEATURE_UPDATE_PLAN" | jq -r '.preservedDisabled[]? | "  - " + .label'
   fi
-  prompt_choice FEATURE_UPDATE_MODE "Feature-Update-Modus: keep=User-Entscheidungen bewahren + fehlende Defaults ergänzen, enable-all=alle Core-Features aktivieren" "keep" "keep" "enable-all"
+  prompt_choice FEATURE_UPDATE_MODE "Feature-Update-Modus: enable-all=Recommended Full Experience, keep=User-Entscheidungen bewahren + fehlende Defaults ergänzen" "enable-all" "keep" "enable-all"
 else
   info "Keine bestehende PLUR1BUS-Installation in Config/Install-Log erkannt — Fresh-Install nutzt Full Experience Defaults."
   FEATURE_UPDATE_MODE="fresh"
@@ -1526,6 +1527,33 @@ for agent in "${AGENT_LIST[@]}"; do
   fi
 done
 
+# ─── Schritt 8b: AGENTS.md Memory-Tool-Instruktionen ──────────────────────────
+
+step "Schritt 8b: AGENTS.md Memory-Tool-Instruktionen"
+
+for agent in "${AGENT_LIST[@]}"; do
+  ws="${WORKSPACE_MAP[$agent]}"
+  agents_path="$ws/AGENTS.md"
+  agents_exists=$(run_target "test -f '$agents_path' && echo yes || echo no" 2>/dev/null)
+
+  if [[ "$agents_exists" == "yes" ]]; then
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dryrun "Würde AGENTS.md von '$agent' auf echte Memory-Tool-Nutzung patchen"
+      continue
+    fi
+    before_agents=$(read_target_file "$agents_path")
+    after_agents=$(printf '%s' "$before_agents" | node "$AGENTS_PATCHER_HELPER" --stdin)
+    if [[ "$after_agents" == "$before_agents" ]]; then
+      info "AGENTS.md von '$agent': Memory-Tool-Instruktionen bereits aktuell — übersprungen"
+    else
+      write_target_file "$agents_path" "$after_agents"
+      ok "AGENTS.md von '$agent': Legacy-Pseudo-Tool-Beispiel ersetzt"
+    fi
+  else
+    warn "AGENTS.md für Agent '$agent' nicht gefunden ($agents_path) — übersprungen"
+  fi
+done
+
 # ─── Schritt 9: OpenClaw-Patches anwenden ─────────────────────────────────────
 
 step "Schritt 9: OpenClaw-Patches anwenden"
@@ -1734,10 +1762,10 @@ echo "     node $TARGET_GC_SCRIPT"
 echo
 echo "  3b. KNOWLEDGE.md-Status prüfen:"
 echo "     node $TARGET_MAINTAIN_SCRIPT --check"
-echo
-echo "  4. Erster Memory-Store und Recall testen (via Agent-Chat):"
-echo "     memory_store: {text: 'Testfakt', category: 'fact', importance: 0.5}"
-echo "     memory_recall: {query: 'Testfakt'}"
+  echo
+  echo "  4. Erster Memory-Store und Recall testen (via Agent-Chat):"
+  echo "     Nutze das echte Tool memory_store mit: {\"text\":\"Testfakt\",\"category\":\"fact\",\"importance\":0.5}"
+  echo "     Nutze das echte Tool memory_recall mit: {\"query\":\"Testfakt\"}"
 echo
 if [[ "$FINAL_MERGING_ENABLED" != "true" ]]; then
   echo -e "${YELLOW}  Hinweis: LLM-Merging wurde nicht aktiviert. Für bessere Memory-Qualität${RESET}"
