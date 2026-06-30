@@ -22,12 +22,12 @@ User Query / Kontext
 └─────────┬─────────┘
           ▼
 ┌───────────────────┐
-│  Vector Search    │◄──────── candidateTopK (default 50)
+│  Vector Search    │◄──────── candidateTopK (default 40)
 │   (LanceDB ANN)   │
 └─────────┬─────────┘
           ▼
 ┌───────────────────┐
-│ Importance Boost  │◄──────── importanceBoost (default true)
+│ Importance Boost  │◄──────── importanceBoost (default 0.3)
 │  + Time Decay     │
 └─────────┬─────────┘
           ▼
@@ -46,7 +46,7 @@ User Query / Kontext
 └─────────┬─────────┘
           ▼
 ┌───────────────────┐
-│   Canonical Pick  │◄──────── canonicalFirst, canonicalMinScore 0.65
+│   Canonical Pick  │◄──────── canonicalFirst, canonicalMinScore 0.30
 │   (max 5 items)   │
 └─────────┬─────────┘
           ▼
@@ -80,14 +80,14 @@ User Query / Kontext
 
 ### 2. Vector Search
 
-- ANN-Suche in LanceDB mit `candidateTopK` (default 50).
+- ANN-Suche in LanceDB mit `candidateTopK` (default 40).
 - Rückgabe: Ungefilterte Kandidaten mit Cosine-Similarity-Score.
 
 ### 3. Importance Boost + Time Decay
 
 - Jeder Kandidat erhält einen kombinierten Score:
   - Basis: Vector-Search-Score
-  - `+` Importance-Boost (höhere `importance` → höherer Score)
+- `+` Importance-Boost (default 0.3; höhere `importance` → höherer Score)
   - `*` Time-Decay nach typbasierter Half-Life (`halfLifeDaysMap`)
 
 ### 4. Re-Ranking
@@ -110,7 +110,7 @@ User Query / Kontext
 ### 7. Kanonische Auswahl
 
 - `canonicalFirst: true` hebt kanonische Repräsentanten auf die erste Ebene.
-- Ein Memory ist kanonisch, wenn sein Score ≥ `canonicalMinScore` (0.65) ist.
+- Ein Memory ist kanonisch, wenn sein Score ≥ `canonicalMinScore` (0.30) ist.
 - Pro Cluster werden maximal `canonicalMaxItems` (5) kanonische Items weitergegeben.
 
 ### 8. Adaptive Budget-Allokation (Tiers)

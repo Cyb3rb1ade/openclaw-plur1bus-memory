@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 6.8.7** — Fixes cron plugin command dispatch regression introduced by OpenClaw 2026.6.11 (gateway patch #16). See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 6.8.11** — Cohere-Re-Ranker-Timeout, user-scope ACL-Bindung (`user`-Scope) und weitere Security-Härtungen sind aktiv. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
@@ -18,6 +18,7 @@ Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a 
 - **Auto-capture robustness** — `statSync` race condition fixed (file deleted between `readdirSync` and `statSync`); `addQueryVector` null-return guard added.
 - **ts-source-indexer** — O(n) `symbols.find()` in AST visitor replaced with a `Map` for O(1) lookup.
 - **Manifest sync** — `openclaw.plugin.json` version aligned with `package.json`.
+- **Security hardening** — `scope: "user"` writes now require an authenticated user identity (`user` scope is owner-bound) and are filtered in recall/visibility checks.
 
 ### New in v6.8.0 — Release readiness, code context, and runtime packaging
 
@@ -240,7 +241,16 @@ Minimal config block in `openclaw.json`:
             "fallbackOnError": true
           },
           "security": {
-            "allowChatConfigCommands": true
+            "allowChatConfigCommands": true,
+            "allowModelDestructiveMemoryOps": false,
+            "allowedUserIds": [],
+            "allowedChatIds": []
+          },
+          "runtime": {
+            "embeddingCacheEnabled": true,
+            "embeddingCacheMaxEntries": 128,
+            "embeddingCacheTtlMs": 300000,
+            "embeddingCacheScope": "agent"
           }
         }
       }
@@ -253,9 +263,21 @@ All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` an
 
 **`emotion.t3`** — the tier-3 emotion classifier needs an OpenAI-compatible chat model. Without any chat model configured the classifier falls back to Tier-2 heuristics: it does **not** label cards, so it never poisons results by marking everything `fakt`.
 
-**`security.allowChatConfigCommands`** (default `true`) — the config-mutating chat commands (`/enable`, `/disable`, `/plur1bus setup`) write `openclaw.json`. The plugin SDK does not expose the message sender's identity to command handlers, so per-user authorization isn't possible. On a **shared channel**, set this to `false` to refuse all chat-driven config changes; edit `openclaw.json` directly instead. Writes are guarded by a file lock so concurrent toggles/setups cannot clobber each other.
+**`security.allowedUserIds` / `security.allowedChatIds`** — identity-aware authorization for commands and destructive flows.
+- If both lists are empty, non-destructive commands can run in private 1:1 contexts; destructive commands are denied in groups/unknown channels.
+- If either list is configured, destructive commands require `userId` membership in `allowedUserIds` (chatId alone is never sufficient), plus `allowedChatIds` when that list exists.
+- Whitelists remain stable with `/enable`, `/disable`, `/plur1bus setup`, `/forget`, `/correct` and confirmation flows.
 
-**`security.allowModelDestructiveMemoryOps`** (default `false`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state, but tool calls do not carry a user-bound authorization context. They therefore stay disabled unless this flag is explicitly set to `true`.
+**`security.allowChatConfigCommands`** (default `true`) — disables operator-level config mutating commands (`/enable`, `/disable`, `/plur1bus setup`) when set to `false`. Use this in shared channels if you want a hard stop on chat-driven writes. Writes are still guarded by a file lock.
+
+**`security.allowModelDestructiveMemoryOps`** (default `false`) — keeps model-facing tools `memory_forget` and `knowledge_update` disabled unless explicitly allowed for stricter tool-call risk control.
+
+### Scope-sichere Speicherung
+
+`scope` values now support `agent-private` (default), `workspace` and `user`.
+- `agent-private` remains per-agent.
+- `workspace` shares by workspace.
+- `user` is owner-bound: der aufrufende `userId` wird gespeichert und bei Sichtbarkeit/Mutation geprüft.
 
 ### Feature profile confirmation
 
