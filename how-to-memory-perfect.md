@@ -1,9 +1,9 @@
 # Perfektes Gedächtnis für OpenClaw-Agenten
 ## Ein vollständiges How-To für alle Deployments
 
-> **Status (2026-06-19):** Dieses Dokument beschreibt die **Architektur** der drei Memory-Schichten (Flat-File, Workspace-Indexer, LanceDB) plus Dreaming und Adaptive Learning. Diese Konzepte bleiben mit **plur1bus 6.7.0** unverändert gültig.
+> **Status (2026-06-30):** Dieses Dokument beschreibt die **Architektur** der drei Memory-Schichten (Flat-File, Workspace-Indexer, LanceDB) plus Dreaming und Adaptive Learning. Diese Konzepte bleiben mit **plur1bus 6.8.11** unverändert gültig.
 >
-> **Neu in v6.7.0:** PLUR1BUS Full Experience Policy (28 Core-Features standardmäßig aktiv), Temporal Continuity Context (Zeitempfinden über `<temporal-context>`), Start-Befehl `/plur1bus start` und Non-Interactive/Start Notice Support.
+> **Neu in v6.8.11:** ACL-Prüfpfade werden für `scope: "user"` owner-bound (`userId`-Match) durchgesetzt; die Sicherheits-Härtung für Destruktiv-Operationen ist aktiviert und dokumentiert.
 >
 > **Für die tägliche Nutzung** (Commands `/zustand`, `/memory`, `/vergiss`, `/korrigier`, `/einschalten`, `/ausschalten`; Kritisch-Push-Mechanismus; Vault-Layout `/memory/cards/YYYY/MM/`) ist **`how-to-memory.md`** die Single Source of Truth.
 >
@@ -2093,7 +2093,7 @@ Sechs neue LanceDB-Spalten (alle auto-migriert beim ersten DB-Zugriff):
 
 Auto-Capture befüllt sie automatisch aus der Turn-Struktur — `sourceMessageRole` aus `msg.role`, `sourceTimestamp` aus `Date.now()`, `sourceUrl` per Regex aus User-Nachrichten, `evidenceQuote` aus den ersten 200 Zeichen des Original-Textes (vor LLM-Summary).
 
-`scope` bereitet einen späteren Cross-Agent-Sharing-Modus vor — heute noch funktional `agent-private` für alle (= bestehendes Verhalten).
+`scope` bleibt per Standard `agent-private`; `workspace` erlaubt workspace-gebundenes Teilen, und `user` ist owner-bound: Zugriff ist nur für denselben `userId` erlaubt.
 
 #### B2 — Canonical-First Recall
 
