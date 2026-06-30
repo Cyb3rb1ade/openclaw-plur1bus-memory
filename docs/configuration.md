@@ -1,8 +1,9 @@
-# Configuration — Recall & Memory Settings
+# Configuration — Recall, Runtime & Memory Settings
 
-Diese Datei dokumentiert alle Konfigurationsoptionen im Bereich **Recall**, **Deduplizierung** und **Embedding-Cache**.
+Diese Datei dokumentiert die wichtigsten Konfigurationsfelder rund um **Recall**, **Embedding-Cache**, **Emotion** und **Obsidian-Graph-Links**.
 
-Alle Werte werden in `openclaw.json` unter dem Key `recall` (oder den jeweiligen Plugin-Defaults) gesetzt.
+Die Recall-/Dedupe-Optionen liegen in `openclaw.json` unter `config.recall`.
+Runtime-Optionen (Cache, Re-Ranker etc.) liegen in `config.runtime`.
 
 ---
 
@@ -12,7 +13,7 @@ Alle Werte werden in `openclaw.json` unter dem Key `recall` (oder den jeweiligen
 |-----|-----|---------|--------------|
 | `maxPromptMemories` | `number` | `12` | Maximale Anzahl Memories, die in den Prompt-Kontext aufgenommen werden |
 | `candidateTopK` | `number` | `40` | Anzahl Kandidaten aus der initialen Vector-Search |
-| `importanceBoost` | `number` | `0.3` | Faktor des Importance-Boost vor dem Re-Ranking (0.0–1.0) |
+| `importanceBoost` | `number` | `0.3` | Faktor des Importance-Boost vor dem Re-Rankings (0.0–1.0) |
 | `canonicalFirst` | `boolean` | `true` | Kanonische Repräsentanten vor nicht-kanonischen bevorzugen |
 | `canonicalMinScore` | `number` | `0.30` | Mindest-Score für ein Memory, um als kanonisch gelten zu können |
 | `canonicalMaxItems` | `number` | `5` | Maximal `N` kanonische Items pro Cluster im finalen Prompt |
@@ -59,16 +60,23 @@ Alle Werte werden in `openclaw.json` unter dem Key `recall` (oder den jeweiligen
 
 | Key | Typ | Default | Beschreibung |
 |-----|-----|---------|--------------|
-| `embeddingCacheEnabled` | `boolean` | `true` | LRU-Cache für Embedding-Vektoren aktivieren (seit v6.2.1 aktiv verdrahtet) |
-| `embeddingCacheTtlMs` | `number` | `300000` | TTL eines Cache-Eintrags in Millisekunden (5 Minuten) |
-| `embeddingCacheMaxEntries` | `number` | `128` | Maximale Anzahl gecachter Vektoren |
+| `runtime.embeddingCacheEnabled` | `boolean` | `true` | LRU-Cache für Embedding-Vektoren aktivieren (seit v6.2.1 aktiv verdrahtet). |
+| `runtime.embeddingCacheMaxEntries` | `number` | `128` | Maximale Anzahl im Memory-Cache; Legacy-Alias ist `embeddingCacheMaxEntries`. |
+| `runtime.embeddingCacheTtlMs` | `number` | `300000` | TTL eines Cache-Eintrags in Millisekunden (5 Minuten). |
+| `runtime.embeddingCachePersist` | `boolean` | `false` | SQLite-Persistenz nach `embeddingCacheScope` (`agent`/`shared`) aktivieren. |
+| `runtime.embeddingCachePersistDebug` | `boolean` | `false` | Persistenz-Debugs im Logger aktivieren. |
+| `runtime.embeddingCacheCoalesce` | `boolean` | `true` | Identische Anfragen deduplizieren (ein Call statt N Calls). |
+| `runtime.embeddingCacheMetrics` | `boolean` | `false` | Metriken für Hits, Misses, Persist-Hits und Coalescing emitten. |
+| `runtime.embeddingCacheScope` | `"agent" \| "shared"` | `"agent"` | Scope-Kennung für den Cache-Key. `shared` teilt Cache-Scope pro Plugin. |
+| `runtime.embeddingCacheMaxBytes` | `number` | `1073741824` (`agent`) / `5368709120` (`shared`) | Maximale persistente Speichergröße (Soft-Limit bei 90 %). |
 
 ### Verhalten
 
-- Der Cache speichert Embedding-Vektoren **pro Text-Hash** (SHA-256 der normalisierten Eingabe).
-- Treffer vermeiden wiederholte API-/Modell-Aufrufe und beschleunigen den Recall-Hot-Path um bis zu 40 %.
-- Bei Cache-Miss wird der Embedding-Provider wie gewohnt aufgerufen; das Ergebnis wird synchron in den LRU geschrieben.
-- Der Cache wird bei Plugin-Restart invalidiert (reiner In-Memory-Cache).
+- Der Cache-Key ist `provider + model + dimensions + scopeId + cacheVersion + sha256(normalizedText)`.
+- Treffer vermeiden wiederholte Embedding-Anfragen und beschleunigen den Recall-Hot-Path typischerweise deutlich.
+- Bei Cache-Miss wird der Embedding-Provider wie gewohnt aufgerufen; Ergebnis wird per Request-Coalescing in den LRU-Cache geschrieben.
+- Mit aktivierter Persistenz wird der Cache zusätzlich nach `embeddingCacheScope` in SQLite (`embedding-cache-v2/*.db`) gespeichert; bei hartem Byte-Limit wird auf Soft-Limit-Backoff umgeschaltet.
+- Bei Plugin-Neustart bleibt der persistente Teil erhalten; der Memory-Teil wird neu aufgebaut.
 
 ---
 
@@ -76,24 +84,30 @@ Alle Werte werden in `openclaw.json` unter dem Key `recall` (oder den jeweiligen
 
 ```json
 {
-  "recall": {
-    "maxPromptMemories": 12,
-    "candidateTopK": 40,
-    "importanceBoost": 0.3,
-    "dedup": true,
-    "dedupJaccard": 0.78,
-    "canonicalFirst": true,
-    "canonicalMinScore": 0.30,
-    "canonicalMaxItems": 5,
-    "halfLifeDaysMap": {
-      "transient": 60,
-      "episodic": 180,
-      "longContext": 600,
-      "project": 600
-    },
+  "maxPromptMemories": 12,
+  "candidateTopK": 40,
+  "importanceBoost": 0.3,
+  "dedup": true,
+  "dedupJaccard": 0.78,
+  "canonicalFirst": true,
+  "canonicalMinScore": 0.30,
+  "canonicalMaxItems": 5,
+  "halfLifeDaysMap": {
+    "transient": 60,
+    "episodic": 180,
+    "longContext": 600,
+    "project": 600
+  },
+  "runtime": {
     "embeddingCacheEnabled": true,
+    "embeddingCacheMaxEntries": 128,
     "embeddingCacheTtlMs": 300000,
-    "embeddingCacheMaxEntries": 128
+    "embeddingCachePersist": false,
+    "embeddingCachePersistDebug": false,
+    "embeddingCacheCoalesce": true,
+    "embeddingCacheMetrics": false,
+    "embeddingCacheScope": "agent",
+    "embeddingCacheMaxBytes": 1073741824
   }
 }
 ```
