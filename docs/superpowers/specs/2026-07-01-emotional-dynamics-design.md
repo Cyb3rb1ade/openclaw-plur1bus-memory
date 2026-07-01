@@ -80,6 +80,17 @@ Config `emotion.temperaments.<agentId>`, ausgelieferte Defaults, überschreibbar
 - `decay` skaliert alle Halbwertszeiten (>1 = Gefühle halten länger).
 - `baseline` überschreibt einzelne Dimensionen der `BASELINE_MOOD`.
 
+**Temperament-Wahl per Chat-Command (User-Nachtrag 2026-07-01):**
+Neuer Command `/plur1bus temperament [<preset>]`:
+
+- Ohne Argument: zeigt aktuelles Temperament des aufrufenden Agenten und die
+  verfügbaren Presets (`ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`).
+- Mit Preset: schreibt `emotion.temperaments.<agentId>` in die openclaw.json
+  (via `withConfigLock`, atomarer tmp+rename-Write, wie `/plur1bus setup`).
+  Gated durch `checkAuth({ destructive: true })` und
+  `security.allowChatConfigCommands`. Hinweis auf nötigen Gateway-Restart.
+- `/plur1bus start` zeigt das aktuelle Temperament mit Änderungs-Hinweis an.
+
 ### 3. Memory-Kopplung (Emotion ↔ Vergessen)
 
 - **Kontinuierliche HalfLife-Modulation beim Speichern:**
