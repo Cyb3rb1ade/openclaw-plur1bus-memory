@@ -5,6 +5,16 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.2] — 2026-07-02 — Config-Schema für Emotionale-Dynamik-Keys
+
+### Fixed
+
+- **Gateway-Start brach mit den neuen Emotion-Keys ab:** Das strikte Config-Schema (`additionalProperties: false`) kannte `emotion.t3.escalationConfidence`, `emotion.t3.timeoutMs`, `emotion.moodInfluence`, `emotion.intensityHalfLifeFactor` und `emotion.temperaments` nicht — jede Config mit diesen (in 6.9.0 dokumentierten) Keys wurde mit „must not have additional properties" abgelehnt. Schema um alle fünf Keys inkl. Temperament-Profil-Struktur erweitert; Config-Audit-Tests decken sie jetzt ab.
+
+### Verification
+
+- `npm test`: 2142 Tests passing, 0 failing, 1 skipped.
+
 ## [6.9.1] — 2026-07-01 — Generische Temperament-Defaults
 
 ### Changed

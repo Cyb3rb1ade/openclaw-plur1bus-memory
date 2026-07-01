@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "6.9.1",
+  "version": "6.9.2",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -1724,6 +1724,72 @@
               "onlyWhenProviderAvailable": {
                 "type": "boolean",
                 "default": true
+              },
+              "escalationConfidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+                "default": 0.85
+              },
+              "timeoutMs": {
+                "type": "number",
+                "minimum": 0,
+                "default": 4000
+              }
+            }
+          },
+          "moodInfluence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0.3
+          },
+          "intensityHalfLifeFactor": {
+            "type": "number",
+            "minimum": 0,
+            "default": 1
+          },
+          "temperaments": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "preset": {
+                  "type": "string"
+                },
+                "sensitivity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "decayMultiplier": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "blendFactor": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "moodInfluence": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "baseline": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "joy": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "trust": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "anticipation": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "sadness": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "disgust": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "anger": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "fear": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "surprise": { "type": "number", "minimum": 0, "maximum": 1 }
+                  }
+                }
               }
             }
           }
