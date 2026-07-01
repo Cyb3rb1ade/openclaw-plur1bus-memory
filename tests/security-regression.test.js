@@ -10,7 +10,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -169,6 +169,14 @@ describe("Path handling", () => {
     assert.ok(path.includes("etcpasswd"));
     assert.ok(!path.includes(".."));
     assert.ok(!path.includes("/etc/passwd"));
+    rmSync(path);
+  });
+
+  it("archives cards with BigInt fields returned from LanceDB", () => {
+    const card = { id: "bigint-card", text: "test", createdAt: BigInt(123) };
+    const path = archiveCard(card, "testagent", tmpDir);
+    const archived = JSON.parse(readFileSync(path, "utf8"));
+    assert.strictEqual(archived.createdAt, "123");
     rmSync(path);
   });
 

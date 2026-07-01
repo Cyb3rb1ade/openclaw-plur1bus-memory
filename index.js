@@ -175,7 +175,12 @@ import { registerOpenClawMemoryEmbeddingProviders } from "./lib/providers/opencl
 import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
 import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
-import { createBackgroundMemoryScheduler, isBackgroundTurn, shouldSkipAutoRecallForInternalTurn } from "./lib/runtime-scheduler.js";
+import {
+  createBackgroundMemoryScheduler,
+  isBackgroundTurn,
+  shouldSkipAutoCaptureForInternalTurn,
+  shouldSkipAutoRecallForInternalTurn,
+} from "./lib/runtime-scheduler.js";
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
@@ -3775,6 +3780,11 @@ const plugin = {
             } catch (neoErr) {
               api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
             }
+          }
+
+          if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
+            api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
+            return;
           }
 
           if (!event.success || !event.messages || event.messages.length === 0) {
