@@ -61,13 +61,14 @@ describe("OverlayGenerator auto-contradiction handling", () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-gen-contra-multi-"));
     try {
       const store = new InterpretationOverlayStore(dir);
+      const now = Date.now();
       const oldOverlay = {
         id: "11111111-1111-1111-1111-111111111111",
         targetMemoryId: "m1",
         shiftType: "meaning",
         shiftDescription: "Old.",
         triggerContext: "a",
-        createdAt: "2026-01-01T00:00:00.000Z",
+        createdAt: new Date(now - 90 * 86400000).toISOString(),
         dedupeKey: "old",
       };
       const recentOverlay = {
@@ -76,7 +77,7 @@ describe("OverlayGenerator auto-contradiction handling", () => {
         shiftType: "meaning",
         shiftDescription: "Recent.",
         triggerContext: "b",
-        createdAt: "2026-06-01T00:00:00.000Z",
+        createdAt: new Date(now - 45 * 86400000).toISOString(),
         dedupeKey: "recent",
       };
       await store.append(oldOverlay);
