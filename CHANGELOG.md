@@ -5,6 +5,16 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.1] — 2026-07-01 — Generische Temperament-Defaults
+
+### Changed
+
+- `DEFAULT_TEMPERAMENTS` enthält keine agentenspezifischen Personalisierungen mehr (`bernhardine`/`heisenberg` entfernt) — ausgeliefert werden nur noch `main` (OpenClaw-Standard-Agent, sensitivity 1.2) und `default` (ausgewogen). Individuelle Temperamente gehören in die Nutzer-Config: `/plur1bus temperament <preset>` oder `emotion.temperaments.<agentId>`.
+
+### Verification
+
+- `npm test`: 2137 Tests, 2136 passing, 0 failing, 1 skipped.
+
 ## [6.9.0] — 2026-07-01 — Emotionale Dynamik & Temperamente
 
 ### Added
