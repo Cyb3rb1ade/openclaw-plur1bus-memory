@@ -5,7 +5,18 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { EmotionalState } from "../lib/emotional-state.js";
+import {
+  createEmotionalStatePool,
+  TEMPERAMENT_PRESETS,
+  DEFAULT_TEMPERAMENTS,
+  formatMoodLine,
+  formatMoodFile,
+  extractMessageText,
+} from "../lib/emotional-state.js";
 
 describe("applyEmotionScore", () => {
   it("bewegt die Stimmung deutlich bei starkem Signal", () => {
@@ -108,5 +119,119 @@ describe("computeRecallBoost mit moodInfluence", () => {
     const lesson = { anger: 0.8, trust: 0.5, emotionalIntensity: 0.9 };
     const boost = state.computeRecallBoost(lesson, 0.9);
     assert.ok(boost >= 1.0, `Lektionen-Boost sollte >= 1.0 sein, ist ${boost}`);
+  });
+});
+
+describe("Persistenz (serializeState / hydrateOnce)", () => {
+  it("hydratisiert den Zustand aus der Datei und decayed ab lastUpdateAt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "emo-"));
+    const file = join(dir, ".emotional-state.json");
+    const state1 = new EmotionalState();
+    state1.applyEmotionScore({ anger: 0.9, emotionalIntensity: 0.9, emotionalDominant: "anger", nuances: [] });
+    writeFileSync(file, JSON.stringify({ agentId: "t", state: state1.serializeState() }));
+
+    const state2 = new EmotionalState();
+    assert.strictEqual(state2.hydrateOnce(file), true);
+    assert.ok(state2.current.anger > 0.3, `anger nach Rehydrierung: ${state2.current.anger}`);
+  });
+
+  it("hydratisiert nur einmal", () => {
+    const dir = mkdtempSync(join(tmpdir(), "emo-"));
+    const file = join(dir, ".emotional-state.json");
+    const donor = new EmotionalState();
+    donor.applyEmotionScore({ joy: 0.9, emotionalIntensity: 0.9, emotionalDominant: "joy", nuances: [] });
+    writeFileSync(file, JSON.stringify({ state: donor.serializeState() }));
+    const state = new EmotionalState();
+    assert.strictEqual(state.hydrateOnce(file), true);
+    assert.strictEqual(state.hydrateOnce(file), false, "Zweiter Aufruf darf nichts tun");
+  });
+
+  it("kaputte Datei → Baseline-Fallback ohne Crash", () => {
+    const dir = mkdtempSync(join(tmpdir(), "emo-"));
+    const file = join(dir, "broken.json");
+    writeFileSync(file, "{not json");
+    const state = new EmotionalState();
+    assert.strictEqual(state.hydrateOnce(file), false);
+    assert.strictEqual(state.current.trust, state.baseline.trust);
+  });
+
+  it("fehlende Datei → false ohne Crash", () => {
+    const state = new EmotionalState();
+    assert.strictEqual(state.hydrateOnce("/nonexistent/nowhere.json"), false);
+  });
+});
+
+describe("Pool-Temperamente", () => {
+  it("wendet Default-Temperamente pro Agent an", () => {
+    const pool = createEmotionalStatePool();
+    const bern = pool.get("bernhardine");
+    assert.ok(Math.abs(bern.baseline.joy - 0.35) < 1e-9, `bernhardine joy-Baseline: ${bern.baseline.joy}`);
+    assert.ok(Math.abs(bern.sensitivity - 1.5) < 1e-9);
+    const heisen = pool.get("heisenberg");
+    assert.ok(Math.abs(heisen.decayMultiplier - 0.7) < 1e-9);
+    const main = pool.get("main");
+    assert.ok(Math.abs(main.sensitivity - 1.2) < 1e-9);
+  });
+
+  it("User-Config überschreibt Defaults", () => {
+    const pool = createEmotionalStatePool({ temperaments: { heisenberg: { sensitivity: 2.0 } } });
+    assert.ok(Math.abs(pool.get("heisenberg").sensitivity - 2.0) < 1e-9);
+  });
+
+  it("moodInfluence wird an alle States durchgereicht", () => {
+    const pool = createEmotionalStatePool({ moodInfluence: 0.4 });
+    assert.ok(Math.abs(pool.get("irgendwer").moodInfluence - 0.4) < 1e-9);
+  });
+
+  it("Presets existieren vollständig", () => {
+    for (const name of ["ausgewogen", "warm", "kühl", "feurig", "stoisch"]) {
+      assert.ok(TEMPERAMENT_PRESETS[name], `Preset ${name} fehlt`);
+      assert.ok(Number.isFinite(TEMPERAMENT_PRESETS[name].sensitivity));
+      assert.ok(Number.isFinite(TEMPERAMENT_PRESETS[name].decayMultiplier));
+    }
+    assert.ok(DEFAULT_TEMPERAMENTS.main && DEFAULT_TEMPERAMENTS.bernhardine && DEFAULT_TEMPERAMENTS.heisenberg && DEFAULT_TEMPERAMENTS.default);
+  });
+});
+
+describe("Integration: Nachricht → Stimmung → Abklingen", () => {
+  it("stark negative Nachricht kippt das Label und klingt per Decay wieder ab", async () => {
+    const { inferEmotionalValence } = await import("../lib/emotion.js");
+    const state = new EmotionalState(); // Default-Temperament
+    const emo = inferEmotionalValence("Ich bin so wütend, alles ist kaputt und ich ärgere mich furchtbar!");
+    state.applyEmotionScore(emo);
+    const desc = state.describeMood();
+    assert.notStrictEqual(desc.label, "ausgeglichen", `Label nach Wut-Nachricht: ${desc.label}`);
+    // 24 Stunden später (anger-Halbwertszeit 2h, Nuancen max. 12h): zurück zur Baseline
+    state.lastUpdateAt = Date.now() - 24 * 60 * 60 * 1000;
+    const later = state.describeMood();
+    assert.strictEqual(later.label, "ausgeglichen", `Label nach 24h: ${later.label}`);
+  });
+});
+
+describe("Format-Helpers", () => {
+  it("formatMoodLine rendert Label, Intensität und Trend", () => {
+    const line = formatMoodLine({ label: "angespannt", intensity: "mittel", trend: "steigend", emoji: "😤" });
+    assert.strictEqual(line, "😤 Aktuelle Stimmung: angespannt (mittel, steigend)");
+  });
+
+  it("formatMoodLine lässt stabilen Trend weg", () => {
+    const line = formatMoodLine({ label: "ausgeglichen", intensity: "niedrig", trend: "stabil", emoji: "🧘" });
+    assert.strictEqual(line, "🧘 Aktuelle Stimmung: ausgeglichen (niedrig)");
+  });
+
+  it("formatMoodFile enthält Label, Dominanz, Top-Dimensionen und Zeitstempel", () => {
+    const state = new EmotionalState();
+    const mood = state.describeMood();
+    const txt = formatMoodFile(mood, "main");
+    assert.ok(txt.includes("ausgeglichen"));
+    assert.ok(txt.includes("Dominant:"));
+    assert.ok(txt.includes("Top:"));
+    assert.ok(txt.includes("agent: main"));
+  });
+
+  it("extractMessageText kann String- und Block-Content", () => {
+    assert.strictEqual(extractMessageText({ content: "hallo" }), "hallo");
+    assert.strictEqual(extractMessageText({ content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] }), "a b");
+    assert.strictEqual(extractMessageText(null), "");
   });
 });
