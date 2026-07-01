@@ -224,7 +224,14 @@ Minimal config block in `openclaw.json`:
             "t3": {
               "enabled": true,
               "model": "gpt-4o-mini",
-              "apiKey": "${OPENAI_API_KEY}"
+              "apiKey": "${OPENAI_API_KEY}",
+              "escalationConfidence": 0.85,
+              "timeoutMs": 4000
+            },
+            "moodInfluence": 0.3,
+            "intensityHalfLifeFactor": 1.0,
+            "temperaments": {
+              "bernhardine": { "preset": "warm", "baseline": { "joy": 0.35, "trust": 0.5 }, "sensitivity": 1.5, "decayMultiplier": 1.3 }
             }
           },
           "dailyConsolidation": {
@@ -262,6 +269,8 @@ Minimal config block in `openclaw.json`:
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
 
 **`emotion.t3`** — the tier-3 emotion classifier needs an OpenAI-compatible chat model. Without any chat model configured the classifier falls back to Tier-2 heuristics: it does **not** label cards, so it never poisons results by marking everything `fakt`.
+
+**`emotion.temperaments`** — per-agent emotional temperament. Ships with defaults for `main` (balanced-direct), `bernhardine` (warm/expressive), `heisenberg` (cool/analytical). Pick a preset via `/plur1bus temperament <preset>` (`ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`) — requires a gateway restart. Mood always derives from conversation content; the temperament only shapes how strongly and how long it swings. The current mood is written to `.emotional-state.json` (machine-readable, survives restarts) and `.current-mood.txt` (human-readable) in the agent workspace, injected as a mood line into the recall context, stamped on every memory card (`moodContextAtCapture`), and emotionally intense memories decay slower (`intensityHalfLifeFactor`).
 
 **`security.allowedUserIds` / `security.allowedChatIds`** — identity-aware authorization for commands and destructive flows.
 - If both lists are empty, non-destructive commands can run in private 1:1 contexts; destructive commands are denied in groups/unknown channels.
@@ -324,7 +333,7 @@ Version 6.x is a major upgrade. If you ran 5.x:
 - **Merging is proposal-only** — `merging.autoApply` defaults to `false`. Merge candidates are written to `merge-proposals.jsonl` instead of being applied automatically. Set `autoApply: true` to restore 5.x behavior.
 - **Obsidian bridge apply mode** — New `mode: "apply"` with safety gates (backups, audit log, vault path confirmation). Default is `mode: "augment"` (read-only). Confirm vault path explicitly before first write.
 - **Command input handling** — Hard length limits removed. Very long inputs are semantically compressed; beyond 100k chars use a file or vault source.
-- **Config keys added** — `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.mode`, `obsidianBridge.backupBeforeApply`, `obsidianBridge.auditLog`, `obsidianBridge.requireVaultPathConfirmation`, `morningReview.status`, `eveningReview.status`, `emotion.tier`, `emotion.t2.enabled`, `emotion.t3.enabled`, `emotion.t3.model`, `emotion.t3.apiKey`.
+- **Config keys added** — `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.mode`, `obsidianBridge.backupBeforeApply`, `obsidianBridge.auditLog`, `obsidianBridge.requireVaultPathConfirmation`, `morningReview.status`, `eveningReview.status`, `emotion.tier`, `emotion.t2.enabled`, `emotion.t3.enabled`, `emotion.t3.model`, `emotion.t3.apiKey`, `emotion.t3.escalationConfidence`, `emotion.t3.timeoutMs`, `emotion.moodInfluence`, `emotion.intensityHalfLifeFactor`, `emotion.temperaments.<agentId>`.
 
 See `v5_TO_v6_MIGRATION.md` for the full migration guide.
 
