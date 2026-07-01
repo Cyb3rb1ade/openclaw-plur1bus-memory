@@ -80,6 +80,7 @@ export const DEPLOY_FILES = [
   // ── emotion / meta-cognition ──────────────────────────────────────────────
   "lib/emotion.js",
   "lib/emotional-state.js",
+  "lib/temperament-command.js",
   "lib/i18n.js",
   "lib/meta-cognition.js",
   // ── obsidian / workspace ──────────────────────────────────────────────────

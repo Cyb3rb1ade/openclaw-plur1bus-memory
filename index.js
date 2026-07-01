@@ -193,7 +193,8 @@ import {
   emotionEmoji,
   setEmotionConfig,
 } from "./lib/emotion.js";
-import { createEmotionalStatePool } from "./lib/emotional-state.js";
+import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessageText, DEFAULT_TEMPERAMENTS } from "./lib/emotional-state.js";
+import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
 import { parseReminderIntent } from "./lib/reminder-parser.js";
@@ -2041,10 +2042,17 @@ const plugin = {
     } else if (emotionT3WantsEnabled && !emotionT3HasProvider) {
       api.logger.info("memory-lancedb-namespaced: emotion tier-3 deferred — no LLM provider configured (onlyWhenProviderAvailable)");
     }
+    // Emotionale Dynamik (Spec 2026-07-01): aggressive T3-Eskalation,
+    // Timeout-Schutz, Recall-Gewicht und Decay-Kopplung.
+    const emotionT3EscalationConfidence = emotionCfg.t3?.escalationConfidence ?? 0.85;
+    const emotionT3TimeoutMs = emotionCfg.t3?.timeoutMs ?? 4000;
+    const emotionMoodInfluence = emotionCfg.moodInfluence ?? 0.3;
+    const emotionIntensityHalfLifeFactor = emotionCfg.intensityHalfLifeFactor ?? 1.0;
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
-      t3: { enabled: emotionT3Enabled, model: emotionT3Model, callLlm: emotionT3CallLlm, apiKey: emotionCfg.t3?.apiKey || null, baseUrl: emotionCfg.t3?.baseUrl || undefined },
+      t3: { enabled: emotionT3Enabled, model: emotionT3Model, callLlm: emotionT3CallLlm, apiKey: emotionCfg.t3?.apiKey || null, baseUrl: emotionCfg.t3?.baseUrl || undefined, timeoutMs: emotionT3TimeoutMs },
+      escalationConfidence: emotionT3EscalationConfidence,
     });
     if (emotionTier !== "auto") {
       api.logger.info(`memory-lancedb-namespaced: emotion tier locked to ${emotionTier}`);
@@ -2217,7 +2225,10 @@ const plugin = {
       };
     }
     const pool = new MultiNamespacePool(_memoryBaseDir, _effectiveNsCfg, vectorDim, AgentDbPool, api.logger);
-    const emotionalPool = createEmotionalStatePool();
+    const emotionalPool = createEmotionalStatePool({
+      temperaments: emotionCfg.temperaments || {},
+      moodInfluence: emotionMoodInfluence,
+    });
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? new LocalTransformersEmbeddingProvider({
           ...normalizedEmbeddingCfg.local,
@@ -2868,12 +2879,54 @@ const plugin = {
               const lines = [];
               if (notice) lines.push(notice, "");
               lines.push(statusText);
+              const startAgentId = commandCtx?.agentId || "default";
+              const startTemperament = cfg.emotion?.temperaments?.[startAgentId];
+              const startTemperamentLabel = startTemperament?.preset || (startTemperament ? "custom" : (DEFAULT_TEMPERAMENTS[startAgentId] ? "default-Profil" : "ausgewogen"));
+              lines.push("", `🎭 Temperament (${startAgentId}): ${startTemperamentLabel} — ändern mit /plur1bus temperament <preset>`);
               if (rawMissing.length > 0) {
                 lines.push("", "New core features defaulted on for this update:");
                 for (const feature of rawMissing) lines.push(`- ${feature.label}`);
               }
               lines.push("", "To intentionally reapply the full core selection, run: /plur1bus setup recommended --full");
               return { text: lines.join("\n") };
+            }
+            if (actionKey === "temperament") {
+              const { lang, tone } = resolveCommandLocale(commandCtx);
+              const de = lang === "de";
+              const temperamentAgentId = commandCtx?.agentId || "default";
+              const presetName = (sub || "").toLowerCase();
+              if (!presetName) {
+                return { text: renderTemperamentOverview({ agentId: temperamentAgentId, temperamentsCfg: cfg.emotion?.temperaments || {}, lang }) };
+              }
+              const denied = checkAuth(commandCtx, { destructive: true });
+              if (denied) return denied;
+              if (cfg.security?.allowChatConfigCommands === false) {
+                return { text: t("plur1bus.setup_blocked", { lang, tone }) };
+              }
+              const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
+              const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
+              const writeResult = withConfigLock(openclawConfigPath, () => {
+                let rawTemperamentCfg;
+                try {
+                  rawTemperamentCfg = JSON.parse(readFileSync(openclawConfigPath, "utf8"));
+                } catch (err) {
+                  return { error: `openclaw.json not readable: ${err.message}` };
+                }
+                const applied = applyTemperamentToRawConfig(rawTemperamentCfg, PLUGIN_KEY, temperamentAgentId, presetName);
+                if (applied.error) return { error: applied.error };
+                try {
+                  const tmp = `${openclawConfigPath}.tmp-${process.pid}-${Date.now()}`;
+                  writeFileSync(tmp, JSON.stringify(applied.merged, null, 2));
+                  renameSync(tmp, openclawConfigPath);
+                } catch (err) {
+                  return { error: `Saving config failed: ${err.message}` };
+                }
+                return { ok: true };
+              });
+              if (writeResult?.error) return { text: `❌ ${writeResult.error}` };
+              return { text: de
+                ? `🎭 Temperament für ${temperamentAgentId} auf "${presetName}" gesetzt. ${t("plur1bus.setup_restart", { lang, tone })}`
+                : `🎭 Temperament for ${temperamentAgentId} set to "${presetName}". ${t("plur1bus.setup_restart", { lang, tone })}` };
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
@@ -3219,6 +3272,7 @@ const plugin = {
         const plur1busCommands = [
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
           { name: "plur1bus_start", description: "Complete PLUR1BUS installation and show Full Experience status.", acceptsArgs: false, prefixTokens: ["start"] },
+          { name: "plur1bus_temperament", description: "Show or set the agent's emotional temperament.", acceptsArgs: true, prefixTokens: ["temperament"] },
           { name: "plur1bus_status", description: "Show PLUR1BUS memory status.", acceptsArgs: true, prefixTokens: ["status"] },
           { name: "plur1bus_doctor", description: "Run PLUR1BUS diagnostics.", acceptsArgs: true, prefixTokens: ["doctor"] },
           { name: "plur1bus_state", description: "Show PLUR1BUS system state.", acceptsArgs: false, prefixTokens: ["state"] },
@@ -4012,7 +4066,7 @@ const plugin = {
                   entities: graphSignals.entities,
                   people: graphSignals.people,
                   projects: graphSignals.projects,
-                }, captureTimestamp, halfLifeOverrides);
+                }, captureTimestamp, halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
                 await db.store(row);
                 storedMemoryRows.push(row);
                 stored++;
@@ -4580,7 +4634,7 @@ const plugin = {
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
-                      }, Date.now(), halfLifeOverrides);
+                      }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
                       let archivePath;
                       try {
                         archivePath = archiveCard(mergeCandidate.entry, agentId);
@@ -4628,7 +4682,7 @@ const plugin = {
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
-              }, Date.now(), halfLifeOverrides);
+              }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
               if (ctx.workspaceDir && shouldPromoteMemory(category, importance, importanceResult.factQuality, schicht15MinImportance)) {
@@ -5057,10 +5111,33 @@ const plugin = {
               }
             }
           }
-          emotionalPool.get(agentId).updateFromMessages(voiceMessages);
+          const emoState = emotionalPool.get(agentId);
+          // Restart-Persistenz: Zustand einmalig aus der Datei zurücklesen,
+          // Decay rechnet ab persistiertem lastUpdateAt weiter.
+          if (ctx?.workspaceDir) {
+            try { emoState.hydrateOnce(join(ctx.workspaceDir, ".emotional-state.json")); } catch (e) { dbg(e); }
+          }
+          // Stimmung aus dem aktuellen Turn via EmotionEngine (T1→T2→T3)
+          // statt der alten Regex-Heuristik ableiten.
+          try {
+            const promptText = typeof event.prompt === "string" ? event.prompt.trim() : "";
+            const lastUserText = promptText
+              || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
+            if (lastUserText.length >= 3) {
+              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user");
+              emoState.applyEmotionScore(turnEmotion);
+            } else {
+              emoState.updateFromMessages(voiceMessages);
+            }
+          } catch (e) {
+            dbg(e);
+            emoState.updateFromMessages(voiceMessages);
+          }
           if (ctx?.workspaceDir) {
             try {
-              writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...emotionalPool.describe(agentId), agentId, ts: Date.now() }));
+              const moodNow = emoState.describeMood();
+              writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
+              writeFileSync(join(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
             } catch (e) {
               dbg(e);
             }
@@ -5514,9 +5591,8 @@ const plugin = {
             },
             now: nowMs,
           });
-          const fullMemoriesContext = reactivationContext
-            ? memoriesContext + "\n\n" + reactivationContext
-            : memoriesContext;
+          const moodLine = formatMoodLine(emotionalPool.describe(agentId));
+          const fullMemoriesContext = [moodLine, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
