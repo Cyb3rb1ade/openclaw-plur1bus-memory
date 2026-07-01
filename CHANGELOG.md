@@ -5,6 +5,32 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.0] — 2026-07-01 — Emotionale Dynamik & Temperamente
+
+### Added
+
+- **Engine-getriebene Stimmung:** Der Auto-Recall-Pfad leitet die Agenten-Stimmung jetzt über die 3-Tier-EmotionEngine (T1 Lexikon → T2 Keywords → T3 LLM) aus dem aktuellen Gesprächsturn ab, statt über die alte Regex-Heuristik. Neue `EmotionalState.applyEmotionScore()`-Methode.
+- **Per-Agent-Temperamente:** `emotion.temperaments.<agentId>` mit `baseline`, `sensitivity` und `decayMultiplier`; ausgelieferte Defaults für `main` (ausgewogen-direkt), `bernhardine` (warm/expressiv) und `heisenberg` (kühl/analytisch). Presets: `ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`.
+- **`/plur1bus temperament [<preset>]`:** zeigt bzw. setzt das Temperament des aufrufenden Agenten (config-mutierend, mit Auth-Gate und `withConfigLock`); `/plur1bus start` zeigt das aktive Temperament an.
+- **Restart-Persistenz:** `.emotional-state.json` enthält jetzt den vollständigen Zustand und wird beim ersten Zugriff nach einem Gateway-Restart rehydriert — der Decay rechnet ab dem persistierten Zeitpunkt weiter.
+- **`.current-mood.txt`:** menschenlesbare Stimmungsdatei im Agent-Workspace (schließt die Lücke zur AGENTS.md-Referenz), plus Stimmungszeile im injizierten Recall-Kontext.
+- **Emotion ↔ Vergessen:** `halfLifeDays = Basis × (1 + emotionalIntensity × emotion.intensityHalfLifeFactor)` — emotional intensive Memories vergessen langsamer.
+- Neue Config-Keys: `emotion.t3.escalationConfidence` (0.85), `emotion.t3.timeoutMs` (4000), `emotion.moodInfluence` (0.3), `emotion.intensityHalfLifeFactor` (1.0), `emotion.temperaments.<agentId>`.
+
+### Changed
+
+- **T3-Eskalation „beim kleinsten Zweifel":** Lokale Ergebnisse unterhalb von `escalationConfidence` und jeder T1/T2-Widerspruch eskalieren zu Tier 3 (mit Timeout-Guard und lokalem Fallback — die Analyse blockiert den Recall nie).
+- **Diff-Dominanz:** `describeMood()` bestimmt die dominante Emotion nach Abweichung von der Baseline statt nach Absolutwert; „ausgeglichen"-Schwelle von 0.1 auf 0.05 gesenkt, neues `trend`-Feld (steigend/fallend/stabil).
+- Stimmungskongruenter Recall-Boost von ±0.15 auf ±0.30 verdoppelt (`emotion.moodInfluence`).
+
+### Fixed
+
+- **Flashbulb-Encoding verkürzt keine Halbwertszeiten mehr:** bisher wurden z.B. Projekt-Memories (600d) auf fixe 90d gestutzt; jetzt gilt `max(modulierte Basis, 90)`.
+
+### Verification
+
+- `npm test`: 2137 Tests, 2136 passing, 0 failing, 1 skipped.
+
 ## [6.8.13] — 2026-06-30 — Defaults, Runtime-Fixes & Release-Hardening
 
 ### Fixed
