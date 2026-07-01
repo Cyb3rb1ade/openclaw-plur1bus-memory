@@ -426,6 +426,27 @@ describe("Schema-Default-Typen (Emotion)", () => {
     assertBooleanDefault("emotion.t2.enabled", true));
   it("emotion.t3.enabled ist false", () =>
     assertBooleanDefault("emotion.t3.enabled", false));
+  // v6.9.2: Emotionale-Dynamik-Keys müssen im Schema stehen, sonst lehnt der
+  // Gateway-Start jede Config mit diesen Keys ab (additionalProperties: false).
+  it("emotion.t3.escalationConfidence ist default 0.85", () =>
+    assertNumberDefault("emotion.t3.escalationConfidence", 0.85));
+  it("emotion.t3.timeoutMs ist default 4000", () =>
+    assertNumberDefault("emotion.t3.timeoutMs", 4000));
+  it("emotion.moodInfluence ist default 0.3", () =>
+    assertNumberDefault("emotion.moodInfluence", 0.3));
+  it("emotion.intensityHalfLifeFactor ist default 1.0", () =>
+    assertNumberDefault("emotion.intensityHalfLifeFactor", 1.0));
+  it("emotion.temperaments erlaubt per-Agent-Objekte", () => {
+    const node = getSchemaNode("emotion.temperaments");
+    assert.ok(node, "emotion.temperaments fehlt im Schema");
+    assert.strictEqual(node.type, "object");
+    assert.ok(node.additionalProperties && node.additionalProperties.type === "object",
+      "temperaments braucht additionalProperties vom Typ object (beliebige Agent-IDs)");
+    const profile = node.additionalProperties.properties || {};
+    for (const key of ["preset", "baseline", "sensitivity", "decayMultiplier"]) {
+      assert.ok(profile[key], `temperaments-Profil braucht Property ${key}`);
+    }
+  });
   it("emotion.t3.model ist 'gpt-4o-mini'", () => {
     assert.strictEqual(getDefault("emotion.t3.model"), "gpt-4o-mini");
   });
