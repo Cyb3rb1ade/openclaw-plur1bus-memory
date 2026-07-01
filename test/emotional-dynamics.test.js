@@ -56,3 +56,57 @@ describe("Temperament: decayMultiplier", () => {
       `slow(${slow.current.anger}) sollte > fast(${fast.current.anger}) sein`);
   });
 });
+
+describe("describeMood Diff-Dominanz", () => {
+  it("erkennt gestiegenen Ärger trotz Trust-Sockel", () => {
+    const state = new EmotionalState();
+    state.current.anger = 0.35; // Baseline 0.02, Diff 0.33 — Trust bleibt bei 0.45
+    const desc = state.describeMood();
+    assert.strictEqual(desc.dominant, "anger");
+    assert.strictEqual(desc.label, "angespannt");
+    assert.strictEqual(desc.intensity, "mittel");
+  });
+
+  it("frische Baseline ist ausgeglichen mit Emoji und Trend", () => {
+    const state = new EmotionalState();
+    const desc = state.describeMood();
+    assert.strictEqual(desc.label, "ausgeglichen");
+    assert.strictEqual(desc.trend, "stabil");
+    assert.ok(desc.emoji, "Auch ausgeglichen braucht ein Emoji");
+  });
+
+  it("Abweichung über 0.05 ist nicht mehr ausgeglichen", () => {
+    const state = new EmotionalState();
+    state.current.joy = state.baseline.joy + 0.08;
+    const desc = state.describeMood();
+    assert.notStrictEqual(desc.label, "ausgeglichen");
+    assert.strictEqual(desc.dominant, "joy");
+  });
+
+  it("hohe Abweichung ergibt hohe Intensität", () => {
+    const state = new EmotionalState();
+    state.current.fear = state.baseline.fear + 0.5;
+    const desc = state.describeMood();
+    assert.strictEqual(desc.intensity, "hoch");
+  });
+});
+
+describe("computeRecallBoost mit moodInfluence", () => {
+  it("skaliert den Stimmungs-Boost mit moodInfluence", () => {
+    const weak = new EmotionalState({ moodInfluence: 0.15 });
+    const strong = new EmotionalState({ moodInfluence: 0.3 });
+    // Valenz identisch zur aktuellen Stimmung → Kompatibilität 1.0
+    const valence = { ...weak.current, emotionalIntensity: 0 };
+    const bWeak = weak.computeRecallBoost(valence, 0.5);
+    const bStrong = strong.computeRecallBoost(valence, 0.5);
+    assert.ok(Math.abs(bWeak - 1.15) < 0.02, `~1.15 erwartet, ist ${bWeak}`);
+    assert.ok(Math.abs(bStrong - 1.3) < 0.02, `~1.3 erwartet, ist ${bStrong}`);
+  });
+
+  it("wichtige Lektionen werden weiterhin nie unterdrückt", () => {
+    const state = new EmotionalState({ moodInfluence: 0.3 });
+    const lesson = { anger: 0.8, trust: 0.5, emotionalIntensity: 0.9 };
+    const boost = state.computeRecallBoost(lesson, 0.9);
+    assert.ok(boost >= 1.0, `Lektionen-Boost sollte >= 1.0 sein, ist ${boost}`);
+  });
+});
