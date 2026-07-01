@@ -164,14 +164,16 @@ describe("Persistenz (serializeState / hydrateOnce)", () => {
 describe("Pool-Temperamente", () => {
   it("wendet Default-Temperamente pro Agent an", () => {
     const pool = createEmotionalStatePool();
+    // v6.9.1: Keine agentenspezifischen Personalisierungen mehr in den
+    // Shipped-Defaults — nur main (OpenClaw-Standard-Agent) und default.
     const bern = pool.get("bernhardine");
-    assert.ok(Math.abs(bern.baseline.joy - 0.35) < 1e-9, `bernhardine joy-Baseline: ${bern.baseline.joy}`);
-    assert.ok(Math.abs(bern.sensitivity - 1.5) < 1e-9);
+    assert.ok(Math.abs(bern.sensitivity - 1.0) < 1e-9, `fremde Agent-IDs bekommen das default-Profil: ${bern.sensitivity}`);
+    assert.ok(Math.abs(bern.baseline.joy - 0.25) < 1e-9, `Baseline bleibt unverändert: ${bern.baseline.joy}`);
     const heisen = pool.get("heisenberg");
-    assert.ok(Math.abs(heisen.decayMultiplier - 0.7) < 1e-9);
+    assert.ok(Math.abs(heisen.decayMultiplier - 1.0) < 1e-9);
     const main = pool.get("main");
     assert.ok(Math.abs(main.sensitivity - 1.2) < 1e-9);
-  });
+  })
 
   it("User-Config überschreibt Defaults", () => {
     const pool = createEmotionalStatePool({ temperaments: { heisenberg: { sensitivity: 2.0 } } });
@@ -189,7 +191,9 @@ describe("Pool-Temperamente", () => {
       assert.ok(Number.isFinite(TEMPERAMENT_PRESETS[name].sensitivity));
       assert.ok(Number.isFinite(TEMPERAMENT_PRESETS[name].decayMultiplier));
     }
-    assert.ok(DEFAULT_TEMPERAMENTS.main && DEFAULT_TEMPERAMENTS.bernhardine && DEFAULT_TEMPERAMENTS.heisenberg && DEFAULT_TEMPERAMENTS.default);
+    assert.ok(DEFAULT_TEMPERAMENTS.main && DEFAULT_TEMPERAMENTS.default);
+    assert.strictEqual(DEFAULT_TEMPERAMENTS.bernhardine, undefined, "Keine Personalisierung in Shipped-Defaults");
+    assert.strictEqual(DEFAULT_TEMPERAMENTS.heisenberg, undefined, "Keine Personalisierung in Shipped-Defaults");
   });
 });
 

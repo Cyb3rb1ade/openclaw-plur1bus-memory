@@ -11,7 +11,7 @@ describe("renderTemperamentOverview", () => {
   it("zeigt Default-Temperament wenn nichts konfiguriert ist", () => {
     const txt = renderTemperamentOverview({ agentId: "bernhardine", temperamentsCfg: {}, lang: "de" });
     assert.ok(txt.includes("bernhardine"));
-    assert.ok(txt.includes("warm"), "Default für bernhardine ist das warm-Preset");
+    assert.ok(txt.includes("ausgewogen (Default)"), `unbekannte Agent-IDs zeigen das generische Default-Profil: ${txt.split("\n")[0]}`);
     assert.ok(txt.includes("/plur1bus temperament"));
     for (const preset of ["ausgewogen", "warm", "kühl", "feurig", "stoisch"]) {
       assert.ok(txt.includes(preset), `Preset ${preset} sollte gelistet sein`);
