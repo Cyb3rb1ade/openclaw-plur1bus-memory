@@ -66,8 +66,10 @@ test("valid state → prependContext with tags and label", async () => {
       label: "fröhlich", dominant: "joy", intensity: "mittel", nuances: [], details: {}
     }));
     const result = await handler()({}, { workspaceDir: dir });
-    assert.ok(result?.prependContext?.includes("[Stimmungs-Update]"), "opening tag missing");
-    assert.ok(result?.prependContext?.includes("[/Stimmungs-Update]"), "closing tag missing");
+    assert.ok(result?.prependContext?.includes("[Hintergrund: emotionaler Zustand]"), "opening tag missing");
+    assert.ok(result?.prependContext?.includes("[/Hintergrund]"), "closing tag missing");
+    assert.ok(result?.prependContext?.includes("kein Event"), "ambient disclaimer missing");
+    assert.ok(!result?.prependContext?.includes("[Stimmungs-Update]"), "old event framing must be gone");
     assert.ok(result?.prependContext?.includes("fröhlich"), "label missing");
     assert.ok(result?.prependContext?.includes("Füge am Beginn"), "display instruction missing");
   } finally { cleanup(dir); }
@@ -223,5 +225,47 @@ test("trend block: prev state with lower valence → ↗", async () => {
     }));
     const result = await handler()({}, { workspaceDir: dir });
     assert.ok(result?.prependContext?.includes("↗"), `expected ↗, got: ${result?.prependContext}`);
+  } finally { cleanup(dir); }
+});
+
+// ── v6.9: trend-Feld aus PLUR1BUS .emotional-state.json ───────────────────────
+
+test("state.trend=steigend wird direkt uebernommen (kein prev-File noetig)", async () => {
+  const { api, handler } = makeApi();
+  register(api);
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
+      label: "fröhlich", dominant: "joy", intensity: "mittel", nuances: [], details: {}, trend: "steigend"
+    }));
+    const result = await handler()({}, { workspaceDir: dir });
+    assert.ok(result?.prependContext?.includes("↗ (steigend)"), `trend steigend fehlt: ${result?.prependContext}`);
+  } finally { cleanup(dir); }
+});
+
+test("state.trend=stabil wird direkt uebernommen", async () => {
+  const { api, handler } = makeApi();
+  register(api);
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
+      label: "ausgeglichen", intensity: "niedrig", nuances: [], details: {}, trend: "stabil"
+    }));
+    const result = await handler()({}, { workspaceDir: dir });
+    assert.ok(result?.prependContext?.includes("→ (stabil)"), "trend stabil fehlt");
+  } finally { cleanup(dir); }
+});
+
+test("ohne state.trend greift der alte valence-Vergleich", async () => {
+  const { api, handler } = makeApi();
+  register(api);
+  const dir = tmp();
+  try {
+    writeFileSync(join(dir, ".emotional-state.json"), JSON.stringify({
+      label: "fröhlich", dominant: "joy", intensity: "mittel", nuances: [], details: { joy: 0.9 }
+    }));
+    writeFileSync(join(dir, ".emotional-state-prev.json"), JSON.stringify({ details: { joy: 0.2 } }));
+    const result = await handler()({}, { workspaceDir: dir });
+    assert.ok(result?.prependContext?.includes("↗ (steigend)"), "valence-Fallback fehlt");
   } finally { cleanup(dir); }
 });
