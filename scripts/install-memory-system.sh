@@ -1690,6 +1690,61 @@ INSERT OR IGNORE INTO cron_jobs (
   fi
 fi
 
+# ─── Schritt 9e: REM-Dream Cron-Job (OpenClaw-managed) ──────────────────────
+# rem-dream schreibt Trend-Reports nach memory/dream-diary/rem/. Ohne diesen
+# Job wird der Handler nie aufgerufen — er existiert nur als /plur1bus
+# internal Subcommand, ohne Scheduler bleibt dream-diary/rem/ für immer leer.
+
+step "Schritt 9e: REM-Dream Cron-Job"
+
+REM_STORE_KEY="$TARGET_DIR/cron/jobs.json"
+REM_JOB_ID="b2c3d4e5-f6a7-4901-bcde-f23456789012"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  dryrun "Würde OpenClaw-Cron-Job 'plur1bus-rem-dream-daily' (01:15 CET) in $SQLITE_DB eintragen"
+elif [[ ! -f "$SQLITE_DB" ]]; then
+  warn "openclaw.sqlite nicht gefunden — nach erstem Gateway-Start erneut ausführen"
+else
+  EXISTING_REM=$(run_target "sqlite3 '$SQLITE_DB' \"SELECT COUNT(*) FROM cron_jobs WHERE job_id='$REM_JOB_ID';\" 2>/dev/null || echo 0")
+  if [[ "${EXISTING_REM:-0}" -gt 0 ]]; then
+    ok "REM-Dream Cron-Job bereits vorhanden"
+  else
+    NOW_MS=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null || node -e "console.log(Date.now())")
+    NOW_S=$(date +%s)
+    NEXT_RUN_REM=$(python3 -c "
+from datetime import datetime, timezone, timedelta
+now = datetime.now(timezone.utc)
+target = now.replace(hour=0, minute=0, second=0, microsecond=0)
+if target <= now: target += timedelta(days=1)
+print(int(target.timestamp() * 1000))
+" 2>/dev/null || echo "$NOW_MS")
+    if run_target "sqlite3 '$SQLITE_DB' \"
+INSERT OR IGNORE INTO cron_jobs (
+  store_key, job_id, name, enabled, created_at_ms,
+  schedule_kind, schedule_expr, schedule_tz,
+  agent_id, session_target, wake_mode,
+  payload_kind, payload_message, payload_model, payload_thinking, payload_timeout_seconds,
+  delivery_mode, failure_alert_disabled,
+  next_run_at_ms, consecutive_errors, consecutive_skipped,
+  job_json, state_json, updated_at, sort_order
+) VALUES (
+  '$REM_STORE_KEY', '$REM_JOB_ID', 'plur1bus-rem-dream-daily', 1, $NOW_MS,
+  'cron', '15 1 * * *', 'Europe/Berlin',
+  'main', 'isolated', 'now',
+  'agentTurn', '/plur1bus internal rem-dream',
+  NULL, NULL, 600,
+  'none', 0,
+  $NEXT_RUN_REM, 0, 0,
+  '{\\\"name\\\":\\\"plur1bus-rem-dream-daily\\\",\\\"agentId\\\":\\\"main\\\"}',
+  '{}', $NOW_S, 101
+);\"" 2>/dev/null; then
+      ok "REM-Dream Cron-Job eingerichtet (täglich 01:15 CET, kein Modell-Override)"
+    else
+      warn "Cron-Job konnte nicht angelegt werden — Gateway neu starten und Installer wiederholen"
+    fi
+  fi
+fi
+
 # ─── Schritt 10: OpenClaw Plugin-Registry aktualisieren ──────────────────────
 
 step "Schritt 10: OpenClaw Plugin-Registry aktualisieren"
