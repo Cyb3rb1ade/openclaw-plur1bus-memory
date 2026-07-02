@@ -5,6 +5,17 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.5] — 2026-07-02 — REM-Dream Cron-Provisionierung
+
+### Fixed
+
+- **`rem-dream` (`/plur1bus internal rem-dream`) hatte seit Einführung nie einen Cron-Job:** Der Handler existierte, aber ohne Scheduler-Bindung wurde er nie aufgerufen — `memory/dream-diary/rem/` blieb dauerhaft leer. `scripts/install-memory-system.sh` provisioniert jetzt bei jeder Installation (Schritt 9e) einen täglichen Cron-Job (01:15 CET), analog zum bestehenden Semantic-Discovery-Job.
+
+### Verification
+
+- `npm test`: 2143 Tests, 2142 passing, 0 failing, 1 skipped.
+- Live verifiziert: rem-dream Cron-Jobs für main/bernhardine/heisenberg direkt in ein laufendes System eingetragen, per `openclaw cron list` als aktiv erkannt (kein Neustart nötig, liest direkt aus der Cron-SQLite).
+
 ## [6.9.4] — 2026-07-02 — job-lock fd-Härtung
 
 ### Fixed
