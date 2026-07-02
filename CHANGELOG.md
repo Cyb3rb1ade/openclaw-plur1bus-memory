@@ -5,6 +5,14 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.4] — 2026-07-02 — job-lock fd-Härtung
+
+### Fixed
+
+- **`acquireJobLock` konnte den Lock-File-Descriptor lecken:** fd geöffnet, geschrieben, `closeSync` — wenn `writeFileSync` warf (z.B. Disk voll), leakte der Descriptor für die Prozesslaufzeit. Write jetzt in `try/finally`, `closeSync` läuft immer.
+
+(Begleitend, aber außerhalb des Plugin-Pakets: `emotional-state-injector` auf Ambient-Framing umgestellt — behebt den NO_REPLY-Fehldeutungs-Incident 2026-07-02 — und nutzt das neue v6.9-`trend`-Feld. Siehe Repo-Commit `bdc1d31a2`.)
+
 ## [6.9.3] — 2026-07-02 — /state-Command-Fix
 
 ### Fixed
