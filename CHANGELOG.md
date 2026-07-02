@@ -5,6 +5,16 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.3] — 2026-07-02 — /state-Command-Fix
+
+### Fixed
+
+- **`/state` (Top-Level-Statuscommand) scheiterte immer mit „ctx is not defined":** Der Handler griff auf ein Hook-`ctx` zu, das im Command-Scope nicht existiert — jetzt `commandCtx.workspaceDir`. Regressionstest registriert das Plugin über die Mock-API und ruft den echten Handler auf.
+
+### Verification
+
+- `npm test`: 2143 Tests passing, 0 failing, 1 skipped.
+
 ## [6.9.2] — 2026-07-02 — Config-Schema für Emotionale-Dynamik-Keys
 
 ### Fixed

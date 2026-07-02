@@ -3315,7 +3315,9 @@ const plugin = {
             const data = collectStatusData({
               memoryStats: { cardCount, lastUpdateMinutes: null },
               emotional: mood ? { emoji: emotionEmoji(mood.dominant), label: t(`emotion.${mood.dominant}`, { lang, tone }), intensity: mood.intensity } : null,
-              workspaceDir: ctx?.workspaceDir,
+              // Command-Handler kennen nur commandCtx — ein Hook-`ctx` existiert
+              // in diesem Scope nicht (ReferenceError "ctx is not defined").
+              workspaceDir: commandCtx?.workspaceDir,
             });
             return { text: renderStatus(data, { lang, tone }) };
           } catch (err) {
