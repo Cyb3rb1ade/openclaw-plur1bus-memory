@@ -12,8 +12,10 @@ import {
   normalizeNeoScope,
   normalizeNeoStatus,
   escapeMemoryText,
+  formatNeoRecallContext,
   createNeoStore,
   captureNeoFromAgentEnd,
+  routeNeoRecall,
 } from "../lib/neo-arch.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "plur1bus-neo-smoke-"));
@@ -71,6 +73,28 @@ describe("neo-arch constants & helpers", () => {
     assert.ok(escaped.includes("&amp;"), "& should be escaped to &amp;");
     assert.ok(escaped.includes("&lt;"), "< should be escaped to &lt;");
     assert.ok(escaped.includes("&gt;"), "> should be escaped to &gt;");
+  });
+
+  it("renders each neo recall record id at most once across lanes", () => {
+    const duplicate = {
+      id: "mem_c1831bfc268bcb3ae451",
+      category: "project_fact",
+      status: "active",
+      statement: "Wiki-Ingest Task for Winston NotebookLM architecture technical constraints workspace facts recent turns",
+      origin: { trustLevel: "tool_observed" },
+      salience: 0.9,
+      recency: 0.9,
+    };
+
+    const lanes = routeNeoRecall([duplicate, duplicate], "Winston NotebookLM Wiki-Ingest Task", {
+      lanes: ["recent_turns", "workspace_facts", "architecture_decisions", "technical_constraints"],
+      maxPerLane: 2,
+      minScore: 0.08,
+    });
+    const out = formatNeoRecallContext(lanes, { idempotencyKey: "regression" });
+
+    assert.strictEqual((out.match(/mem_c1831bfc268bcb3ae451/g) || []).length, 1);
+    assert.match(out, /lane="workspace_facts"/);
   });
 });
 

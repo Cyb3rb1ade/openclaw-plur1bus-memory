@@ -5,6 +5,19 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.8] — 2026-07-03 — Neo-Recall-Dedupe-Fix
+
+### Fixed
+
+- **Neo-Recall rendert dieselbe Record-ID nur noch einmal pro Recall-Block.** `routeNeoRecall()` dedupliziert identische Input-IDs und weist jede Record-ID global der bestbewerteten Lane zu, statt denselben Memory-Eintrag in mehreren Lanes erneut auszugeben. Das behebt Live-Recall-Blöcke, in denen dieselbe `mem_*`-ID bei doppeltem Input z.B. `8x` erschien.
+
+### Verification
+
+- `node tests/smoke-neo.test.js`: 14 passing, 0 failing.
+- `node --test tests/smoke-neo.test.js tests/relevant-memory-context-trace.test.js tests/recall-e2e.test.js`: 3 passing, 0 failing.
+- `node --test tests/*.test.js`: 221 passing, 0 failing.
+- Live-Extension-Repro: `mem_c1831bfc268bcb3ae451` wird `1x` statt `8x` gerendert.
+
 ## [6.9.7] — 2026-07-03 — Interne Dev-Docs nicht mehr im Paket
 
 ### Changed
