@@ -5,6 +5,20 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.9] — 2026-07-03 — Neo-Recall-Formatter-Dedupe
+
+### Fixed
+
+- **Neo-Recall dedupliziert Record-IDs jetzt auch direkt im Formatter.** `v6.9.8` deduplizierte bereits im Router, aber bereits vorgeroutete oder anders zusammengesetzte Lane-Daten konnten dieselbe `mem_*`-ID weiterhin mehrfach rendern. `formatNeoRecallContext()` überspringt jetzt global bereits gerenderte Record-IDs. Der Regressionstest reproduziert den gemeldeten Fall `mem_2060048051c578719304` mit 7 Vorkommen über 4 Lanes und erwartet genau 1 gerenderten Eintrag.
+
+### Verification
+
+- RED vor Fix: `node tests/smoke-neo.test.js` schlug mit `7 !== 1` fehl.
+- GREEN nach Fix: `node tests/smoke-neo.test.js`: 15 passing, 0 failing.
+- `node --test tests/smoke-neo.test.js tests/relevant-memory-context-trace.test.js tests/recall-e2e.test.js`: 3 passing, 0 failing.
+- `npm run lint`: passing.
+- `npm test`: 234 passing, 0 failing.
+
 ## [6.9.8] — 2026-07-03 — Neo-Recall-Dedupe-Fix
 
 ### Fixed
