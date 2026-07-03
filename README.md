@@ -2,11 +2,23 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 6.8.12** — Publishes the verified 6.8.11 security-hardening line with refreshed docs, lockfile/manifest alignment, and ClawHub source metadata. See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 6.9.7** — Publishes the current 6.9.x line through the GitHub tag `v6.9.7`; the package metadata and manifest are aligned to `6.9.7`. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v6.9.7 — Published package cleanup
+
+- **Package payload cleanup** — The `v6.9.7` release tightens the published package so docs/superpowers content is excluded from the release artifact while the runtime plugin files remain intact.
+
+### New in v6.9.x — Runtime fixes, cron provisioning, and emotional dynamics
+
+- **REM-Dream cron provisioning** — New installs now provision the `rem-dream` cron job correctly instead of shipping the handler without a scheduler binding.
+- **`/state` command fix** — The top-level status command no longer crashes on an out-of-scope `ctx` reference.
+- **Emotion config-schema sync** — The strict schema now accepts the documented emotional-dynamics keys used by 6.9.x configs.
+- **Generic temperament defaults** — Shipped defaults no longer bake in agent-specific personalities; per-agent temperament belongs in user config.
+- **Emotional dynamics** — Mood persistence, temperament presets, decay modulation, and stronger mood-congruent recall boosts landed in the 6.9.0 line.
 
 ### New in v6.8.x — Code-review hardening
 
