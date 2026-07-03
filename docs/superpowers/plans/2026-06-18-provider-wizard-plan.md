@@ -383,8 +383,8 @@ describe("config-normalize apiKeyEnv", () => {
   });
 
   it("normalizeEmbeddingConfig behält apiKey wenn gesetzt", () => {
-    const cfg = normalizeEmbeddingConfig({ provider: "openai", apiKey: "sk-test", dimensions: 1536 });
-    assert.strictEqual(cfg.apiKey, "sk-test");
+    const cfg = normalizeEmbeddingConfig({ provider: "openai", apiKey: "<YOUR_KEY>", dimensions: 1536 });
+    assert.strictEqual(cfg.apiKey, "<YOUR_KEY>");
   });
 
   it("normalizeRerankerConfig übergibt apiKeyEnv unverändert für cohere", () => {
@@ -490,7 +490,7 @@ import { resolveApiKey } from "../lib/providers/env.js";
 
 describe("resolveApiKey", () => {
   before(() => {
-    process.env._TEST_OPENAI_KEY = "sk-openai-test";
+    process.env._TEST_OPENAI_KEY = "<YOUR_KEY>";
     process.env._TEST_COHERE_KEY = "co-test-key";
   });
   after(() => {
@@ -500,7 +500,7 @@ describe("resolveApiKey", () => {
 
   it("löst apiKeyEnv aus process.env auf (höchste Priorität)", () => {
     const key = resolveApiKey({ apiKeyEnv: "_TEST_OPENAI_KEY" });
-    assert.strictEqual(key, "sk-openai-test");
+    assert.strictEqual(key, "<YOUR_KEY>");
   });
 
   it("wirft wenn apiKeyEnv gesetzt aber Env-Var fehlt", () => {
@@ -518,24 +518,24 @@ describe("resolveApiKey", () => {
   });
 
   it("löst apiKey als Literal auf wenn apiKeyEnv nicht gesetzt", () => {
-    const key = resolveApiKey({ apiKey: "sk-literal-key" });
-    assert.strictEqual(key, "sk-literal-key");
+    const key = resolveApiKey({ apiKey: "<YOUR_KEY>" });
+    assert.strictEqual(key, "<YOUR_KEY>");
   });
 
   it("apiKeyEnv hat Vorrang vor apiKey", () => {
-    const key = resolveApiKey({ apiKeyEnv: "_TEST_OPENAI_KEY", apiKey: "sk-should-not-be-used" });
-    assert.strictEqual(key, "sk-openai-test");
+    const key = resolveApiKey({ apiKeyEnv: "_TEST_OPENAI_KEY", apiKey: "<IGNORED_KEY>" });
+    assert.strictEqual(key, "<YOUR_KEY>");
   });
 
   it("defaultEnv wird genutzt wenn apiKeyEnv + apiKey beide fehlen", () => {
     const key = resolveApiKey({}, { defaultEnv: "_TEST_OPENAI_KEY" });
-    assert.strictEqual(key, "sk-openai-test");
+    assert.strictEqual(key, "<YOUR_KEY>");
   });
 
   it("defaultEnv='_TEST_COHERE_KEY' → Cohere-Key, NICHT OpenAI-Key", () => {
     const key = resolveApiKey({}, { defaultEnv: "_TEST_COHERE_KEY" });
     assert.strictEqual(key, "co-test-key");
-    assert.notStrictEqual(key, "sk-openai-test");
+    assert.notStrictEqual(key, "<YOUR_KEY>");
   });
 
   it("KEIN globaler OPENAI-Fallback ohne defaultEnv — wirft statt OPENAI_API_KEY zu raten", () => {
@@ -660,7 +660,7 @@ import { DEFAULT_LOCAL_RERANKER_MODEL } from "../lib/providers/dimensions.js";
 
 describe("provider-factory", () => {
   before(() => {
-    process.env._FACTORY_TEST_KEY = "sk-test-factory-key";
+    process.env._FACTORY_TEST_KEY = "<YOUR_KEY>";
   });
   after(() => {
     delete process.env._FACTORY_TEST_KEY;
