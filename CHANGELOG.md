@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.6] — 2026-07-02 — Doc-Platzhalter für Beispiel-Keys
+
+### Changed
+
+- **Beispiel-API-Keys in `docs/superpowers/`-Snippets** (`sk-…`) durch Platzhalter (`<YOUR_KEY>` / `<IGNORED_KEY>`) ersetzt, damit ClawScan sie nicht mehr als `exposed_secret_literal` markiert. Rein kosmetisch — es waren nie echte Secrets (Test-Dummies bzw. Config-Referenzen); der Scanner mustert nur das `sk-`-Muster.
+
 ## [6.9.5] — 2026-07-02 — REM-Dream Cron-Provisionierung
 
 ### Fixed
