@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.7] — 2026-07-03 — Interne Dev-Docs nicht mehr im Paket
+
+### Changed
+
+- **`docs/superpowers/` (Brainstorming/Pläne/Specs) wird nicht mehr ins npm-/ClawHub-Paket gepackt.** Das `files`-Feld listet jetzt nur die user-/ops-relevanten Docs (configuration, recall-architecture, migration-v6, release-checklist, known-issues, runbooks, audits). Interne Dev-Artefakte gehören nicht in die Installation — kleineres Paket, und die ClawScan-`exposed_secret_literal`-Treffer (Beispiel-Keys in Plan-Snippets) entfallen an der Wurzel. Die Pläne bleiben auf GitHub.
+
 ## [6.9.6] — 2026-07-02 — Doc-Platzhalter für Beispiel-Keys
 
 ### Changed
