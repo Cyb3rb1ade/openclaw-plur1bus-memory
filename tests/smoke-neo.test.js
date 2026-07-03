@@ -96,6 +96,37 @@ describe("neo-arch constants & helpers", () => {
     assert.strictEqual((out.match(/mem_c1831bfc268bcb3ae451/g) || []).length, 1);
     assert.match(out, /lane="workspace_facts"/);
   });
+
+  it("dedupes neo recall record ids during formatting", () => {
+    const memory = {
+      id: "mem_2060048051c578719304",
+      category: "release",
+      statement: "PLUR1BUS v6.9.7 release announcement",
+      origin: { trustLevel: "tool_observed" },
+    };
+    const lanes = {
+      recent_turns: [
+        { item: memory, score: 0.91 },
+        { item: memory, score: 0.89 },
+      ],
+      architecture_decisions: [
+        { item: { ...memory }, score: 0.88 },
+        { item: { ...memory }, score: 0.87 },
+      ],
+      technical_constraints: [
+        { item: { ...memory }, score: 0.86 },
+        { item: { ...memory }, score: 0.85 },
+      ],
+      tooling_constraints: [
+        { item: { ...memory }, score: 0.84 },
+      ],
+    };
+
+    const out = formatNeoRecallContext(lanes, { idempotencyKey: "formatter-regression" });
+
+    assert.strictEqual((out.match(/mem_2060048051c578719304/g) || []).length, 1);
+    assert.match(out, /lane="recent_turns"/);
+  });
 });
 
 describe("neo-arch file I/O", () => {
