@@ -19,4 +19,22 @@ describe("MemoryDB update row normalization", () => {
 
     assert.deepStrictEqual(normalized.vector, [0.1, 0.2, 0.3]);
   });
+
+  it("normalizes Arrow vector wrappers that expose toArray", () => {
+    const db = new MemoryDB("/tmp/vector-normalization-test", 3);
+    db.schemaFieldNames = new Set(["id", "text", "vector", "status", "memoryStrength", "lastDynamicsAt"]);
+
+    const normalized = db.normalizeEntryForTable({
+      id: "11111111-1111-4111-8111-111111111111",
+      text: "hello",
+      vector: {
+        isValid: () => true,
+        length: 3,
+        toArray: () => Float32Array.from([0.125, 0.25, 0.5]),
+      },
+      status: "active",
+    });
+
+    assert.deepStrictEqual(normalized.vector, [0.125, 0.25, 0.5]);
+  });
 });

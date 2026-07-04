@@ -546,6 +546,23 @@ const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fi
 const LANCEDB_READ_TIMEOUT_MS = 10_000;
 const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
 
+function normalizeVectorValue(vector) {
+  if (!vector || Array.isArray(vector) || typeof vector !== "object") return vector;
+  if (ArrayBuffer.isView(vector)) return Array.from(vector);
+  if (Array.isArray(vector.values)) return vector.values.slice();
+  if (ArrayBuffer.isView(vector.values)) return Array.from(vector.values);
+  if (typeof vector.toArray === "function") {
+    const arr = vector.toArray();
+    if (Array.isArray(arr)) return arr.slice();
+    if (ArrayBuffer.isView(arr)) return Array.from(arr);
+    if (arr && typeof arr[Symbol.iterator] === "function") return Array.from(arr);
+  }
+  if (Number.isInteger(vector.length) && vector.length >= 0 && typeof vector.get === "function") {
+    return Array.from({ length: vector.length }, (_, index) => vector.get(index));
+  }
+  return vector;
+}
+
 class MemoryDB {
   constructor(dbPath, vectorDim, logger = null) {
     this.dbPath = dbPath;
@@ -602,13 +619,7 @@ class MemoryDB {
       !Array.isArray(normalized.vector) &&
       typeof normalized.vector === "object"
     ) {
-      if (ArrayBuffer.isView(normalized.vector)) {
-        normalized.vector = Array.from(normalized.vector);
-      } else if (Array.isArray(normalized.vector.values)) {
-        normalized.vector = normalized.vector.values.slice();
-      } else if (ArrayBuffer.isView(normalized.vector.values)) {
-        normalized.vector = Array.from(normalized.vector.values);
-      }
+      normalized.vector = normalizeVectorValue(normalized.vector);
     }
     if (!normalized.type) normalized.type = "memory";
     if (typeof normalized.confirmed !== "boolean") normalized.confirmed = false;

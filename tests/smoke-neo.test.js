@@ -16,6 +16,7 @@ import {
   createNeoStore,
   captureNeoFromAgentEnd,
   routeNeoRecall,
+  transitionRecordStatus,
 } from "../lib/neo-arch.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "plur1bus-neo-smoke-"));
@@ -268,7 +269,61 @@ describe("neo-arch file I/O", () => {
     assert.deepStrictEqual(readJsonl(store.paths.embeddings), queueAfterDrain);
   });
 
-  it("uses ctx session identity for stable ids when event has no session id", () => {
+  it("dedupes memory candidates by normalized statement across different ids", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-candidate-content-dedupe-"));
+    const workspaceKey = "workspace-candidate-content-dedupe";
+    const store = createNeoStore(root, workspaceKey);
+    const first = {
+      id: "mem_2060048051c578719304",
+      workspaceKey,
+      statement: "PLUR1BUS v6.9.7 release announcement",
+      normalizedStatement: "PLUR1BUS v6.9.7 release announcement",
+      category: "tooling_constraint",
+      sourceTurnIds: ["turn-a"],
+      status: "active",
+      embeddingStatus: "pending",
+    };
+    const duplicateContent = {
+      ...first,
+      id: "mem_1703fd7c37a27ea872c2",
+      sourceTurnIds: ["turn-b"],
+    };
+
+    const appended = store.appendCandidates([first, duplicateContent]);
+
+    assert.deepStrictEqual(appended.map((candidate) => candidate.id), [first.id]);
+    assert.deepStrictEqual(store.readCandidates(10).map((candidate) => candidate.id), [first.id]);
+  });
+
+  it("preserves candidate status transitions with duplicate statement text", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-candidate-status-transition-"));
+    const workspaceKey = "workspace-candidate-status-transition";
+    const store = createNeoStore(root, workspaceKey);
+    const candidate = {
+      id: "mem_status_transition_001",
+      workspaceKey,
+      statement: "Promote this exact candidate without losing the update.",
+      normalizedStatement: "Promote this exact candidate without losing the update.",
+      category: "workspace_fact",
+      status: "candidate",
+      embeddingStatus: "pending",
+    };
+    const promoted = transitionRecordStatus(candidate, "promoted", {
+      now: "2026-07-04T12:00:00.000Z",
+    });
+
+    store.appendCandidates([candidate]);
+    const appended = store.appendCandidates([promoted]);
+    store.pruneAll();
+    const records = store.readCandidates(10);
+
+    assert.deepStrictEqual(appended.map((record) => record.id), [candidate.id]);
+    assert.equal(records.length, 2);
+    assert.equal(records.at(-1).status, "promoted");
+    assert.equal(records.at(-1).updatedAt, "2026-07-04T12:00:00.000Z");
+  });
+
+  it("uses ctx session identity for turn ids while deduping repeated candidate content", () => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-ctx-session-"));
     const workspaceKey = "workspace-ctx-session";
     const store = createNeoStore(root, workspaceKey);
@@ -287,7 +342,7 @@ describe("neo-arch file I/O", () => {
 
     assert.notStrictEqual(first.turns[0].id, second.turns[0].id);
     assert.equal(store.readTurns(10).length, 2);
-    assert.equal(store.readCandidates(10).length, 2);
+    assert.equal(store.readCandidates(10).length, 1);
   });
 
   it("keeps replay idempotent after the original id falls outside the JSONL tail window", () => {
