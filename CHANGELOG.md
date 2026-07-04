@@ -5,6 +5,21 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [6.9.10] — 2026-07-04 — Maintenance-Progress und Content-Dedupe-Härtung
+
+### Fixed
+
+- **Neo-Candidate-Statusänderungen gehen nicht mehr durch Content-Dedupe verloren.** `appendCandidates()` nutzt für Status-Transitions einen separaten Key aus `id/status/updatedAt`; normale Capture-Duplikate bleiben weiter statement-basiert dedupliziert. `pruneAll()` respektiert diese Status-Transition-Records ebenfalls.
+- **Retrieval-Ledger-Caps verlieren keine Selected-IDs mehr.** Wenn `maxUpdates` mitten in einem Ledger-Eintrag greift, wird der Watermark nicht vorgezogen; stattdessen wird `pendingRetrievalLedgerEntry` im Run-State gespeichert und beim nächsten Lauf fortgesetzt.
+- **Daily-Decay-Caps haben jetzt Fortschritt über alle aktiven UUID-Memories.** Der Default-Cap rotiert über einen persistierten UUID-Cursor, statt bei jedem Lauf wieder bei Offset 0 zu starten.
+- **LanceDB/Arrow-Vektorwrapper werden vor Update-Writes normalisiert.** Das verhindert Schemafehler wie `vector.isValid` während Feedback-/Dynamics-/Consolidation-Writes.
+
+### Verification
+
+- `node --test tests/smoke-neo.test.js tests/memory-dynamics-maintenance.test.js`: passing.
+- `node --test tests/smoke-neo.test.js tests/memory-dynamics-maintenance.test.js tests/daily-consolidation-statepath.test.js tests/feedback-dynamics-vector-normalization.test.js`: passing.
+- `node --test tests/*.test.js`: 221 passing, 0 failing.
+
 ## [6.9.9] — 2026-07-03 — Neo-Recall-Formatter-Dedupe
 
 ### Fixed
