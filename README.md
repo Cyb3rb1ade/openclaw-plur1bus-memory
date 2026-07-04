@@ -2,15 +2,17 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 6.9.7** — Publishes the current 6.9.x line through the GitHub tag `v6.9.7`; the package metadata and manifest are aligned to `6.9.7`. See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 6.9.10** — Publishes the current 6.9.x line through the GitHub tag `v6.9.10`; the package metadata and manifest are aligned to `6.9.10`. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
-### New in v6.9.7 — Published package cleanup
+### New in v6.9.10 — Maintenance progress and dedupe hardening
 
-- **Package payload cleanup** — The `v6.9.7` release tightens the published package so docs/superpowers content is excluded from the release artifact while the runtime plugin files remain intact.
+- **Candidate status updates survive content dedupe** — promote/demote/prune/tombstone updates are append-preserved while ordinary candidate captures remain content-deduped.
+- **Capped memory dynamics are resumable** — retrieval-ledger caps store partial entry progress, and daily decay rotates with a persisted cursor instead of repeatedly touching the first rows.
+- **LanceDB vector wrappers normalize safely** — Arrow-style vector wrappers are converted before update writes to avoid schema failures during consolidation.
 
 ### New in v6.9.x — Runtime fixes, cron provisioning, and emotional dynamics
 
