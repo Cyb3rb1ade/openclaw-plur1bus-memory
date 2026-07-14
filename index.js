@@ -234,6 +234,7 @@ import {
 } from "./lib/speaker-mapping-store.js";
 import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.js";
 import { collectOpenThreads, formatOpenThreadsContext } from "./lib/open-threads.js";
+import { readJsonl } from "./lib/jsonl-utils.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -5659,16 +5660,13 @@ const plugin = {
               if (cooldownOk) {
                 let rawEntries = [];
                 try {
-                  const content = readFileSync(outcomesPath, "utf8");
-                  rawEntries = content.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-                // reply-outcomes.jsonl has no "topic" field — derive one from userPrompt
-                rawEntries = rawEntries.map((e) => e.topic ? e : { ...e, topic: typeof e.userPrompt === "string" ? e.userPrompt.slice(0, 80).trim() : null });
+                  rawEntries = readJsonl(outcomesPath);
+                  // reply-outcomes.jsonl has no "topic" field — derive one from userPrompt
+                  rawEntries = rawEntries.map((e) => e.topic ? e : { ...e, topic: typeof e.userPrompt === "string" ? e.userPrompt.slice(0, 80).trim() : null });
                 } catch { /* file missing → empty */ }
+                try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc }), "utf8"); } catch { /* non-blocking */ }
                 const threads = collectOpenThreads(rawEntries, { now: nowMs });
                 openThreadsContext = formatOpenThreadsContext(threads);
-                if (openThreadsContext) {
-                  try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc }), "utf8"); } catch { /* non-blocking */ }
-                }
               }
             } catch { /* fail-open */ }
           }

@@ -94,6 +94,7 @@ export const DEPLOY_FILES = [
   "lib/overlay-generator.js",
   "lib/pattern-surface.js",
   // ── humanization features ──────────────────────────────────────────────────
+  "lib/jsonl-utils.js",
   "lib/mood-style-directive.js",
   "lib/review-narrative-lead.js",
   "lib/open-threads.js",
