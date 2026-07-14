@@ -80,3 +80,50 @@ describe("buildMoodStyleDirective", () => {
     assert.ok(directive);
   });
 });
+
+describe("buildMoodStyleDirective — Erweiterungen (F4)", () => {
+  const mood = { dominant: "joy", intensity: "mittel", trend: "stabil" };
+
+  it("Tageszeit morgens: knapper", () => {
+    const d = buildMoodStyleDirective(mood, { hour: 7 });
+    assert.match(d, /knapp/i);
+  });
+
+  it("Tageszeit abends: gesprächiger", () => {
+    const d = buildMoodStyleDirective(mood, { hour: 21 });
+    assert.match(d, /gesprächiger/i);
+  });
+
+  it("Tageszeit mittags: kein Tageszeit-Zusatz", () => {
+    const d = buildMoodStyleDirective(mood, { hour: 13 });
+    assert.doesNotMatch(d, /Morgen|Abend/);
+  });
+
+  it("Meinung und Nachfragen als Zusätze", () => {
+    const d = buildMoodStyleDirective(mood, { opinion: true, askBack: true });
+    assert.match(d, /widersprechen/);
+    assert.match(d, /Rückfrage/);
+  });
+
+  it("weiches Temperament → sanftere Meinungs-Formulierung", () => {
+    const soft = buildMoodStyleDirective(mood, { opinion: true, temperamentName: "warm" });
+    const hard = buildMoodStyleDirective(mood, { opinion: true, temperamentName: "ausgewogen" });
+    assert.notStrictEqual(soft, hard);
+    assert.match(soft, /sanft/);
+  });
+
+  it("liefert Direktive auch ohne gültige Mood, wenn opts aktiv", () => {
+    const d = buildMoodStyleDirective(null, { opinion: true });
+    assert.ok(typeof d === "string" && d.length > 0);
+    assert.doesNotMatch(d, /Stimmung/); // NO_LABEL nur bei Mood-Teil
+  });
+
+  it("null wenn weder Mood noch opts etwas beitragen", () => {
+    assert.strictEqual(buildMoodStyleDirective(null, {}), null);
+  });
+
+  it("Längen-Kappung: ganze hintere Teile fallen weg, nie über 400", () => {
+    const d = buildMoodStyleDirective({ dominant: "sadness", intensity: "hoch", trend: "steigend" }, { hour: 21, opinion: true, askBack: true });
+    assert.ok(d.length <= 400);
+  });
+});

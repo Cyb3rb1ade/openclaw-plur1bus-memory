@@ -5652,7 +5652,13 @@ const plugin = {
             },
             now: nowMs,
           });
-          const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId));
+          const styleCfg = cfg.styleDirective || {};
+          const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId), {
+            hour: styleCfg.timeOfDay !== false ? new Date(nowMs).getHours() : null,
+            temperamentName: cfg.emotion?.temperaments?.[agentId]?.preset ?? null,
+            opinion: styleCfg.opinion !== false,
+            askBack: styleCfg.askBack !== false,
+          });
 
           // Open-threads injection: load reply-outcome log fail-open, derive context once per day.
           let openThreadsContext = null;
