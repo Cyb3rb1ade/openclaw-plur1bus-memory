@@ -5631,7 +5631,16 @@ const plugin = {
               api.logger?.warn?.(`temporal-provenance: trace enrichment failed: ${String(e)}`);
             }
           }
-          const memoriesContext = formatRelevantMemoriesContext(associativeItems, {
+
+          let framedItems = associativeItems;
+          try {
+            if ((cfg.recallHedging?.enabled ?? true) !== false) {
+              const { frameRecallConfidence } = await import("./lib/recall-confidence-framing.js");
+              framedItems = frameRecallConfidence(associativeItems, cfg.recallHedging || {}).items;
+            }
+          } catch (_) { framedItems = associativeItems; }
+
+          const memoriesContext = formatRelevantMemoriesContext(framedItems, {
             fadedThreshold: resolveFadedThreshold(recallCfg),
             overlays,
             matchedPattern,

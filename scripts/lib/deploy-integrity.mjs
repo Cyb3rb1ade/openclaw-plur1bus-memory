@@ -99,6 +99,7 @@ export const DEPLOY_FILES = [
   "lib/review-narrative-lead.js",
   "lib/open-threads.js",
   "lib/contradiction-disclosure.js",
+  "lib/recall-confidence-framing.js",
   // ── background jobs ────────────────────────────────────────────────────────
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",
