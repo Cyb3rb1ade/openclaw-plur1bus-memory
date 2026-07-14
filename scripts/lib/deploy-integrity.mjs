@@ -93,6 +93,11 @@ export const DEPLOY_FILES = [
   "lib/overlay-commands.js",
   "lib/overlay-generator.js",
   "lib/pattern-surface.js",
+  // ── humanization features ──────────────────────────────────────────────────
+  "lib/mood-style-directive.js",
+  "lib/review-narrative-lead.js",
+  "lib/open-threads.js",
+  "lib/contradiction-disclosure.js",
   // ── background jobs ────────────────────────────────────────────────────────
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",
