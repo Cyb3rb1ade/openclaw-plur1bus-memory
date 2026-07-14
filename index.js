@@ -2801,6 +2801,21 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "skill-miner", ...result });
               }
+              if (subKey === "persona-evolve") {
+                if ((cfg.personaVoice?.enabled ?? true) === false || !skillMinerLlmCfg) {
+                  return formatJsonCommandResult({ job: "persona-evolve", skipped: true, reason: "not_configured" });
+                }
+                const { proposePersonaEvolution } = await import("./lib/persona-voice.js");
+                const outcomes = readReplyOutcomeLog(commandCtx.workspaceDir, 200);
+                const result = await proposePersonaEvolution({
+                  workspaceDir: commandCtx.workspaceDir,
+                  outcomes,
+                  llmCfg: skillMinerLlmCfg,
+                  callLlm,
+                });
+                api.logger?.info?.(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(result)}`);
+                return formatJsonCommandResult({ job: "persona-evolve", ...result });
+              }
               if (subKey === "reminder-dispatch") {
                 const rawDb = pool.getDb(internalAgent);
                 await rawDb.init();
@@ -2898,7 +2913,7 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "meta-reflect", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check", "meta-reflect"] });
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check", "meta-reflect"] });
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
@@ -2966,7 +2981,7 @@ const plugin = {
               const de = lang === "de";
               const personaAgentId = commandCtx?.agentId || "default";
               const personaSub = (sub || "").toLowerCase();
-              const { hasPersonaVoice, generatePersonaSeed, writePersonaVoice, readPersonaFile } = await import("./lib/persona-voice.js");
+              const { hasPersonaVoice, generatePersonaSeed, writePersonaVoice, readPersonaFile, acceptPersonaProposal } = await import("./lib/persona-voice.js");
               if (!commandCtx.workspaceDir) {
                 return { text: de ? "❌ Kein Workspace verfügbar." : "❌ No workspace available." };
               }
@@ -3005,9 +3020,22 @@ const plugin = {
                   ? `🎤 Persona-Profil erzeugt:\n${seed}`
                   : `🎤 Persona profile generated:\n${seed}` };
               }
+              if (personaSub === "accept") {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
+                const result = acceptPersonaProposal(commandCtx.workspaceDir);
+                if (!result.accepted) {
+                  return { text: de
+                    ? "❌ Kein Vorschlag zum Übernehmen verfügbar."
+                    : "❌ No proposal to accept available." };
+                }
+                return { text: de
+                  ? `✅ Persona-Entwicklung übernommen: ${result.marker}`
+                  : `✅ Persona evolution accepted: ${result.marker}` };
+              }
               return { text: de
-                ? `❌ Unbekannter Persona-Befehl: "${personaSub}". Nutze \`/plur1bus persona\` oder \`/plur1bus persona regenerate\`.`
-                : `❌ Unknown persona command: "${personaSub}". Use \`/plur1bus persona\` or \`/plur1bus persona regenerate\`.` };
+                ? `❌ Unbekannter Persona-Befehl: "${personaSub}". Nutze \`/plur1bus persona\`, \`/plur1bus persona regenerate\` oder \`/plur1bus persona accept\`.`
+                : `❌ Unknown persona command: "${personaSub}". Use \`/plur1bus persona\`, \`/plur1bus persona regenerate\`, or \`/plur1bus persona accept\`.` };
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
