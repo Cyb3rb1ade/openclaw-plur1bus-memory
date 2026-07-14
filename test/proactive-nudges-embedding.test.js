@@ -146,7 +146,7 @@ describe("generateProactiveNudge mit Clustern", () => {
 
 describe("shouldShowNudge Cooldown", () => {
   it("erlaubt ersten Nudge", () => {
-    assert.strictEqual(shouldShowNudge({ keyword: "api" }, null, Date.now()), true);
+    assert.strictEqual(shouldShowNudge({ keyword: "api" }, null, Date.now(), { jitter: false, quietHours: false }), true);
   });
 
   it("blockiert Nudge innerhalb von 24h", () => {
@@ -156,7 +156,7 @@ describe("shouldShowNudge Cooldown", () => {
 
   it("erlaubt Nudge nach 24h", () => {
     const now = Date.now();
-    assert.strictEqual(shouldShowNudge({ keyword: "api" }, now - 25 * 3600_000, now), true);
+    assert.strictEqual(shouldShowNudge({ keyword: "api" }, now - 25 * 3600_000, now, { jitter: false, quietHours: false }), true);
   });
 });
 
