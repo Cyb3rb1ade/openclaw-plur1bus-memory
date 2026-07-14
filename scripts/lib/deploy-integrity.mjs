@@ -101,6 +101,7 @@ export const DEPLOY_FILES = [
   "lib/contradiction-disclosure.js",
   "lib/recall-confidence-framing.js",
   "lib/proactive-governor.js",
+  "lib/dream-echo.js",
   // ── background jobs ────────────────────────────────────────────────────────
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",
