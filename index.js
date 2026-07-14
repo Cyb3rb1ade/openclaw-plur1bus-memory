@@ -233,6 +233,7 @@ import {
   resetSpeakerMappingDbForTests,
 } from "./lib/speaker-mapping-store.js";
 import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.js";
+import { collectOpenThreads, formatOpenThreadsContext } from "./lib/open-threads.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
 // als Legacy-Fallback für lokale Repo-Setups erhalten.
@@ -5633,7 +5634,35 @@ const plugin = {
             now: nowMs,
           });
           const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId));
-          const fullMemoriesContext = [moodStyleDirective, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
+
+          // Open-threads injection: load reply-outcome log fail-open, derive context once per day.
+          let openThreadsContext = null;
+          if (ctx?.workspaceDir) {
+            try {
+              const outcomesPath = join(ctx.workspaceDir, ".adaptive-learning", "reply-outcomes.jsonl");
+              const cooldownPath = join(ctx.workspaceDir, ".open-threads-shown.json");
+              const todayUtc = new Date(nowMs).toISOString().slice(0, 10);
+              let cooldownOk = true;
+              try {
+                const cd = JSON.parse(readFileSync(cooldownPath, "utf8"));
+                if (cd?.date === todayUtc) cooldownOk = false;
+              } catch { /* file missing or unreadable → treat as fresh */ }
+              if (cooldownOk) {
+                let rawEntries = [];
+                try {
+                  const content = readFileSync(outcomesPath, "utf8");
+                  rawEntries = content.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+                } catch { /* file missing → empty */ }
+                const threads = collectOpenThreads(rawEntries, { now: nowMs });
+                openThreadsContext = formatOpenThreadsContext(threads);
+                if (openThreadsContext) {
+                  try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc }), "utf8"); } catch { /* non-blocking */ }
+                }
+              }
+            } catch { /* fail-open */ }
+          }
+
+          const fullMemoriesContext = [moodStyleDirective, openThreadsContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
