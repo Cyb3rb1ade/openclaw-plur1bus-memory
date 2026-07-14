@@ -111,4 +111,35 @@ describe("persona evolution", () => {
     const dir = seededDir();
     assert.strictEqual(acceptPersonaProposal(dir).accepted, false);
   });
+
+  it("User-Notiz unterhalb einer bestehenden Vorschlagssektion übersteht erneutes proposePersonaEvolution", async () => {
+    const dir = seededDir();
+    const outcomes = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "confirmed_or_continued"));
+    await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Erste Marotte.", now: T1 });
+    const path = join(dir, "persona-voice.md");
+    writeFileSync(path, readFileSync(path, "utf8") + "\n\n## Meine eigene Notiz\n\nDas darf nie verschwinden.\n", "utf8");
+
+    const res = await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Zweite Marotte.", now: T1 });
+    assert.strictEqual(res.proposed, true);
+    const content = readFileSync(path, "utf8");
+    assert.ok(content.includes("## Meine eigene Notiz"));
+    assert.ok(content.includes("Das darf nie verschwinden."));
+    assert.ok(content.includes("Zweite Marotte"));
+  });
+
+  it("User-Notiz unterhalb einer bestehenden Vorschlagssektion übersteht acceptPersonaProposal", async () => {
+    const dir = seededDir();
+    const outcomes = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "confirmed_or_continued"));
+    await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Marotte: zählt gern auf.", now: T1 });
+    const path = join(dir, "persona-voice.md");
+    writeFileSync(path, readFileSync(path, "utf8") + "\n\n## Meine eigene Notiz\n\nDas darf nie verschwinden.\n", "utf8");
+
+    const res = acceptPersonaProposal(dir);
+    assert.strictEqual(res.accepted, true);
+    const content = readFileSync(path, "utf8");
+    assert.ok(content.includes("## Meine eigene Notiz"));
+    assert.ok(content.includes("Das darf nie verschwinden."));
+    assert.ok(!content.includes("## Vorschlag (nicht aktiv)"));
+    assert.ok(loadPersonaDirective(dir).includes("zählt gern auf"));
+  });
 });
