@@ -1990,6 +1990,20 @@ const plugin = {
     }
     if (mergingEnabled) api.logger.info(`memory-lancedb-namespaced: merging enabled (threshold: ${mergingThreshold}, model: ${mergingLlmCfg.model})`);
 
+    // Dreaming-Narrative config: menschenähnliche, stimmungsgefärbte Träume
+    // als additive Schicht über Light/REM Dream. Default an, aber effektiv
+    // nur aktiv wenn mergingLlmCfg existiert (gleiche Vorbedingung wie die
+    // Traum-Engines selbst).
+    const dreamNarrativeRawCfg = cfg.dreaming?.narrative || {};
+    const dreamNarrativeCfg = {
+      enabled: dreamNarrativeRawCfg.enabled !== false,
+      temperature: dreamNarrativeRawCfg.temperature ?? 0.9,
+      storeAsMemory: dreamNarrativeRawCfg.storeAsMemory !== false,
+      importanceMax: dreamNarrativeRawCfg.importanceMax ?? 0.45,
+    };
+    const resolveTemperamentName = (forAgentId) =>
+      cfg.emotion?.temperaments?.[forAgentId]?.preset || null;
+
     // Schicht 1.5 config
     const schicht15Cfg = cfg.schicht15 || {};
     const schicht15Requested = schicht15Cfg.enabled === true;
@@ -2735,6 +2749,10 @@ const plugin = {
                   logger: api.logger,
                   maxMemories: isLocalProvider ? 1000 : 5000,
                   topK: isLocalProvider ? 10 : 20,
+                  narrativeCfg: dreamNarrativeCfg,
+                  embeddings,
+                  workspaceDir: commandCtx?.workspaceDir || null,
+                  temperamentName: resolveTemperamentName(internalAgent),
                 });
                 if (result.report && commandCtx.workspaceDir) {
                   writeRemDreamToVault(result.report, result.trends, commandCtx.workspaceDir);
@@ -4204,6 +4222,9 @@ const plugin = {
                     llmCfg: mergingLlmCfg,
                     callLlm,
                     logger: api.logger,
+                    narrativeCfg: dreamNarrativeCfg,
+                    workspaceDir: ctx?.workspaceDir || null,
+                    temperamentName: resolveTemperamentName(agentId),
                   }).then((dreamResult) => {
                     if (ctx?.workspaceDir) {
                       writeLightDreamToVault(dreamResult, ctx.workspaceDir, normalizedTurns);
@@ -4491,9 +4512,13 @@ const plugin = {
                 lines.push(`[canonical|knowledge] ${head} — ${body} (score: ${c.score.toFixed(2)})`);
               }
               for (const r of ordered) {
-                const display = fullText
+                let display = fullText
                   ? r.entry.text
                   : (r.entry.summary || libGenerateSummary(r.entry.text, summaryMaxWords));
+                if (r.entry.memoryClass === "dream") {
+                  const dreamDate = r.entry.createdAt ? new Date(Number(r.entry.createdAt)).toISOString().slice(0, 10) : "";
+                  display = `🌙 [Traum${dreamDate ? ` vom ${dreamDate}` : ""}] ${display} (geträumt, nicht geschehen)`;
+                }
                 const orig = DISPLAY_SOURCES.has(r.entry.origin) ? `|${r.entry.origin}` : "";
                 lines.push(`[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id})`);
               }
@@ -5302,6 +5327,7 @@ const plugin = {
               createdAt: r.entry.createdAt ?? 0,
               updatedAt: r.entry.updatedAt ?? undefined,
               lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
+              memoryClass: r.entry.memoryClass || "standard",
             };
             if (traceEnabled) {
               attachTraceToMemory(item, {
@@ -5324,6 +5350,7 @@ const plugin = {
             category: r.entry.category,
             source: "semantic-lens",
             display: r.entry.summary || libGenerateSummary(r.entry.text || "", summaryMaxWords),
+            memoryClass: r.entry.memoryClass || "standard",
             memoryStrength: r.entry.memoryStrength ?? 1.0,
             relevanceScore: r.score,
             versionNumber: r.entry.versionNumber ?? 1,
