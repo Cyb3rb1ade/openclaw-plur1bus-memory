@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   hasPersonaVoice, generatePersonaSeed, writePersonaVoice,
   loadPersonaDirective, readPersonaFile, appendMarkerToManagedBlock,
+  proposePersonaEvolution, acceptPersonaProposal,
 } from "../lib/persona-voice.js";
 
 const SEED = "- Kurze, direkte Sätze.\n- Lieblingswendung: „passt schon“.\n- Emojis sparsam: 🙂 gelegentlich.";
@@ -63,5 +64,51 @@ describe("persona-voice", () => {
     const { managedBlock, content } = readPersonaFile(dir);
     assert.ok(managedBlock.includes("Neue Marotte"));
     assert.ok(content.includes("User-Notiz"));
+  });
+});
+
+const T1 = 1750000000000;
+function outcome(ts, kind) { return { timestamp: ts, outcome: kind }; }
+
+describe("persona evolution", () => {
+  function seededDir() {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, SEED);
+    return dir;
+  }
+
+  it("schlägt bei positivem Trend genau EINEN Marker vor", async () => {
+    const dir = seededDir();
+    const outcomes = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "confirmed_or_continued"));
+    const callLlm = async () => "- Neue Wendung: „alles klar soweit\".";
+    const res = await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm, now: T1 });
+    assert.strictEqual(res.proposed, true);
+    const content = readFileSync(join(dir, "persona-voice.md"), "utf8");
+    assert.ok(content.includes("## Vorschlag (nicht aktiv)"));
+    assert.ok(content.includes("alles klar soweit"));
+  });
+
+  it("kein Vorschlag bei zu wenigen oder negativen Outcomes", async () => {
+    const dir = seededDir();
+    const few = [outcome(T1, "confirmed_or_continued")];
+    assert.strictEqual((await proposePersonaEvolution({ workspaceDir: dir, outcomes: few, llmCfg: { model: "x" }, callLlm: async () => "- x", now: T1 })).proposed, false);
+    const negative = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "ignored_or_topic_shifted"));
+    assert.strictEqual((await proposePersonaEvolution({ workspaceDir: dir, outcomes: negative, llmCfg: { model: "x" }, callLlm: async () => "- x", now: T1 })).proposed, false);
+  });
+
+  it("Vorschlag landet NICHT in der Direktive, accept übernimmt ihn", async () => {
+    const dir = seededDir();
+    const outcomes = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "confirmed_or_continued"));
+    await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Marotte: zählt gern auf.", now: T1 });
+    assert.ok(!loadPersonaDirective(dir).includes("zählt gern auf"));
+    const res = acceptPersonaProposal(dir);
+    assert.strictEqual(res.accepted, true);
+    assert.ok(loadPersonaDirective(dir).includes("zählt gern auf"));
+    assert.ok(!readFileSync(join(dir, "persona-voice.md"), "utf8").includes("## Vorschlag (nicht aktiv)"));
+  });
+
+  it("accept ohne Vorschlag → accepted false", () => {
+    const dir = seededDir();
+    assert.strictEqual(acceptPersonaProposal(dir).accepted, false);
   });
 });
