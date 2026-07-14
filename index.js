@@ -30,7 +30,7 @@
 import { randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 
@@ -5649,8 +5649,10 @@ const plugin = {
           let openThreadsContext = null;
           if (ctx?.workspaceDir) {
             try {
-              const outcomesPath = join(ctx.workspaceDir, ".adaptive-learning", "reply-outcomes.jsonl");
-              const cooldownPath = join(ctx.workspaceDir, ".open-threads-shown.json");
+              const resolvedWorkspaceDir = resolve(ctx.workspaceDir);
+              const outcomesPath = join(resolvedWorkspaceDir, ".adaptive-learning", "reply-outcomes.jsonl");
+              const cooldownPath = join(resolvedWorkspaceDir, ".open-threads-shown.json");
+              if (!outcomesPath.startsWith(resolvedWorkspaceDir + "/") || !cooldownPath.startsWith(resolvedWorkspaceDir + "/")) throw new Error("open-threads: path escapes workspaceDir");
               const todayUtc = new Date(nowMs).toISOString().slice(0, 10);
               let cooldownOk = true;
               try {
@@ -5662,7 +5664,7 @@ const plugin = {
                 try {
                   rawEntries = readJsonl(outcomesPath);
                   // reply-outcomes.jsonl has no "topic" field — derive one from userPrompt
-                  rawEntries = rawEntries.map((e) => e.topic ? e : { ...e, topic: typeof e.userPrompt === "string" ? e.userPrompt.slice(0, 80).trim() : null });
+                  rawEntries = rawEntries.map((e) => e.topic ? e : { ...e, topic: typeof e.userPrompt === "string" ? e.userPrompt.slice(0, 80).replace(/[\r\n]+/g, " ").trim() : null });
                 } catch { /* file missing → empty */ }
                 try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc }), "utf8"); } catch { /* non-blocking */ }
                 const threads = collectOpenThreads(rawEntries, { now: nowMs });
