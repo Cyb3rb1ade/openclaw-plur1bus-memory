@@ -220,6 +220,7 @@ import {
   lastMessageText,
   recordAgentReplyForOutcome,
   recordPendingReplyOutcome,
+  readReplyOutcomeLog,
   sessionKeyFrom,
 } from "./lib/reply-outcome-tracking.js";
 import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
@@ -5688,7 +5689,35 @@ const plugin = {
             } catch { /* fail-open */ }
           }
 
-          const fullMemoriesContext = [moodStyleDirective, openThreadsContext, contradictionDisclosureContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
+          // Dream-Echo injection (Humanization F1): 1x/Tag, Governor-gebremst.
+          let dreamEchoContext = null;
+          if (ctx?.workspaceDir && (cfg.dreamEcho?.enabled ?? true) !== false) {
+            try {
+              const echoCooldownPath = join(resolve(ctx.workspaceDir), ".dream-echo-shown.json");
+              let echoCooldownOk = true;
+              try {
+                const cd = JSON.parse(readFileSync(echoCooldownPath, "utf8"));
+                if (cd?.date === new Date(nowMs).toISOString().slice(0, 10)) echoCooldownOk = false;
+              } catch { /* fresh */ }
+              if (echoCooldownOk) {
+                const { loadFreshDreamEcho, formatDreamEchoContext } = await import("./lib/dream-echo.js");
+                const { loadGovernorState, saveGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend } = await import("./lib/proactive-governor.js");
+                const echo = loadFreshDreamEcho(ctx.workspaceDir, { now: nowMs });
+                if (echo) {
+                  let gov = loadGovernorState(ctx.workspaceDir);
+                  gov = applyOutcomeAdjustments(gov, readReplyOutcomeLog(ctx.workspaceDir, 100), { now: nowMs });
+                  if (evaluateGovernor(gov, nowMs).allowed) {
+                    dreamEchoContext = formatDreamEchoContext(echo);
+                    if (dreamEchoContext) gov = recordProactiveSend(gov, "dream-echo", nowMs);
+                  }
+                  saveGovernorState(ctx.workspaceDir, gov);
+                  try { writeFileSync(echoCooldownPath, JSON.stringify({ date: new Date(nowMs).toISOString().slice(0, 10) }), "utf8"); } catch { }
+                }
+              }
+            } catch (_) { /* fail-open */ }
+          }
+
+          const fullMemoriesContext = [moodStyleDirective, dreamEchoContext, openThreadsContext, contradictionDisclosureContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
