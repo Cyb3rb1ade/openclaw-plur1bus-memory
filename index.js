@@ -2801,6 +2801,21 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "skill-miner", ...result });
               }
+              if (subKey === "afterthought") {
+                if ((cfg.afterthought?.enabled ?? true) === false) {
+                  return formatJsonCommandResult({ job: "afterthought", skipped: true, reason: "disabled" });
+                }
+                const { runAfterthoughtJob } = await import("./lib/afterthought.js");
+                const result = await runAfterthoughtJob({
+                  workspaceDir: commandCtx.workspaceDir,
+                  agentId: internalAgent,
+                  llmCfg: skillMinerLlmCfg || mergingLlmCfg || null,
+                  callLlm,
+                  logger: api.logger,
+                });
+                api.logger?.info?.(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
+                return formatJsonCommandResult({ job: "afterthought", ...result });
+              }
               if (subKey === "persona-evolve") {
                 if ((cfg.personaVoice?.enabled ?? true) === false || !skillMinerLlmCfg) {
                   return formatJsonCommandResult({ job: "persona-evolve", skipped: true, reason: "not_configured" });
@@ -2913,7 +2928,7 @@ const plugin = {
                 api.logger?.info?.(`plur1bus internal meta-reflect[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "meta-reflect", ...result });
               }
-              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check", "meta-reflect"] });
+              return formatJsonCommandResult({ error: `unknown internal job: ${subKey || "(none)"}`, valid: ["consolidate-daily", "classify-recent", "auto-accept-stale", "rem-dream", "skill-miner", "afterthought", "persona-evolve", "reminder-dispatch", "discover-semantic-links", "gc-run", "feedback-report", "proactive-check", "meta-reflect"] });
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
@@ -5779,9 +5794,9 @@ const plugin = {
                   // reply-outcomes.jsonl has no "topic" field — derive one from userPrompt
                   rawEntries = rawEntries.map((e) => e.topic ? e : { ...e, topic: typeof e.userPrompt === "string" ? e.userPrompt.slice(0, 80).replace(/[\r\n]+/g, " ").trim() : null });
                 } catch { /* file missing → empty */ }
-                try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc }), "utf8"); } catch { /* non-blocking */ }
                 const threads = collectOpenThreads(rawEntries, { now: nowMs });
                 openThreadsContext = formatOpenThreadsContext(threads);
+                try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc, topics: (threads || []).map((t) => t.topic).filter(Boolean) }), "utf8"); } catch { /* non-blocking */ }
               }
             } catch { /* fail-open */ }
           }
