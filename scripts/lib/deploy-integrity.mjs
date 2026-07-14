@@ -104,6 +104,7 @@ export const DEPLOY_FILES = [
   "lib/dream-echo.js",
   "lib/afterthought.js",
   "lib/persona-voice.js",
+  "lib/reaction-directive.js",
   // ── background jobs ────────────────────────────────────────────────────────
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",

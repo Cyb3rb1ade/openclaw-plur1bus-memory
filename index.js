@@ -1862,6 +1862,23 @@ function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null) {
 // Plugin Definition
 // ============================================================================
 
+// Reaction-nudge capability detection (Humanization F6): computed at most once
+// per process, cached across handler invocations.
+let _reactionsCapability = null;
+function makeReactionsCapabilityChecker(api) {
+  return async function detectReactionsCapabilityCached() {
+    if (_reactionsCapability !== null) return _reactionsCapability;
+    try {
+      const { detectReactionsCapability } = await import("./lib/reaction-directive.js");
+      const runtimeConfig = typeof api.runtime?.config?.current === "function"
+        ? api.runtime.config.current()
+        : (api.runtime?.config && typeof api.runtime.config === "object" ? api.runtime.config : null);
+      _reactionsCapability = detectReactionsCapability(runtimeConfig);
+    } catch (_) { _reactionsCapability = false; }
+    return _reactionsCapability;
+  };
+}
+
 const plugin = {
   id: "memory-lancedb-namespaced",
   name: "Memory (LanceDB, per-Agent)",
@@ -1872,6 +1889,7 @@ const plugin = {
     const rawCfg = api.pluginConfig || {};
     let cfg = applyFullExperiencePolicy(rawCfg);
     pluginLogger = api.logger;
+    const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const providerMigration = applyLegacyProviderDefaults(cfg, { baseDbPath });
     cfg = providerMigration.config;
@@ -5829,7 +5847,19 @@ const plugin = {
             } catch (_) { /* fail-open */ }
           }
 
-          const fullMemoriesContext = [personaDirective, moodStyleDirective, dreamEchoContext, openThreadsContext, contradictionDisclosureContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
+          // Reaction-nudge directive (Humanization F6): only when the gateway
+          // exposes react-capability (auto-detected, cached) or is force-enabled.
+          let reactionDirective = null;
+          try {
+            const rnCfg = cfg.reactionNudge || {};
+            const mode = rnCfg.enabled ?? "auto";
+            if (mode === true || (mode === "auto" && await detectReactionsCapabilityCached())) {
+              const { buildReactionDirective } = await import("./lib/reaction-directive.js");
+              reactionDirective = buildReactionDirective({ palette: rnCfg.palette || null });
+            }
+          } catch (_) { /* fail-open */ }
+
+          const fullMemoriesContext = [personaDirective, moodStyleDirective, reactionDirective, dreamEchoContext, openThreadsContext, contradictionDisclosureContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
