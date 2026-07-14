@@ -1,0 +1,39 @@
+import { describe, it } from "node:test";
+import assert from "node:assert";
+import { detectReactionsCapability, buildReactionDirective } from "../lib/reaction-directive.js";
+
+describe("detectReactionsCapability", () => {
+  it("erkennt reactions in channel actions", () => {
+    assert.strictEqual(detectReactionsCapability({ channels: { telegram: { actions: ["send", "reactions"] } } }), true);
+    assert.strictEqual(detectReactionsCapability({ agents: { a: { actionGroups: ["react"] } } }), true);
+  });
+
+  it("false ohne reactions, bei null und bei zu tiefer Verschachtelung", () => {
+    assert.strictEqual(detectReactionsCapability({ channels: { telegram: { actions: ["send"] } } }), false);
+    assert.strictEqual(detectReactionsCapability(null), false);
+    let deep = { actions: ["reactions"] };
+    for (let i = 0; i < 12; i++) deep = { nested: deep };
+    assert.strictEqual(detectReactionsCapability(deep), false);
+  });
+
+  it("verkraftet zyklische Objekte", () => {
+    const a = { channels: {} };
+    a.channels.self = a;
+    assert.strictEqual(detectReactionsCapability(a), false);
+  });
+});
+
+describe("buildReactionDirective", () => {
+  it("liefert Direktive ≤400 mit Default-Palette", () => {
+    const d = buildReactionDirective();
+    assert.match(d, /Emoji-Reaktion/);
+    assert.match(d, /👍/);
+    assert.ok(d.length <= 400);
+  });
+
+  it("nutzt übergebene Palette", () => {
+    const d = buildReactionDirective({ palette: "🐢 🌊" });
+    assert.match(d, /🐢/);
+    assert.doesNotMatch(d, /👍/);
+  });
+});
