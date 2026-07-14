@@ -105,4 +105,24 @@ describe("runAfterthoughtJob", () => {
     const featureIds = finalGov.sends.map((s) => s.featureId).sort();
     assert.deepStrictEqual(featureIds, ["afterthought", "dream-echo"]);
   });
+
+  it("verliert auch im no_llm_text-Pfad keinen konkurrierenden Governor-Send", async () => {
+    const dir = seedDir([o(45, "asked_details")]);
+    const concurrent = {
+      llmCfg: { model: "x" },
+      callLlm: async () => {
+        let gov = loadGovernorState(dir);
+        gov = recordProactiveSend(gov, "dream-echo", T0 + 1000);
+        saveGovernorState(dir, gov);
+        return ""; // LLM liefert nichts → no_llm_text-Pfad
+      },
+    };
+    const res = await runAfterthoughtJob({ workspaceDir: dir, agentId: "a", ...concurrent, now: T0, hour: 12 });
+    assert.strictEqual(res.skipped, true);
+    assert.strictEqual(res.reason, "no_llm_text");
+
+    const finalGov = loadGovernorState(dir);
+    const featureIds = finalGov.sends.map((s) => s.featureId);
+    assert.deepStrictEqual(featureIds, ["dream-echo"]);
+  });
 });
