@@ -5661,6 +5661,8 @@ const plugin = {
                 try {
                   const content = readFileSync(outcomesPath, "utf8");
                   rawEntries = content.split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+                // reply-outcomes.jsonl has no "topic" field — derive one from userPrompt
+                rawEntries = rawEntries.map((e) => e.topic ? e : { ...e, topic: typeof e.userPrompt === "string" ? e.userPrompt.slice(0, 80).trim() : null });
                 } catch { /* file missing → empty */ }
                 const threads = collectOpenThreads(rawEntries, { now: nowMs });
                 openThreadsContext = formatOpenThreadsContext(threads);
