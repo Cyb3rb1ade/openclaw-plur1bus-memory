@@ -5500,6 +5500,7 @@ const plugin = {
               api.logger?.warn?.(`continuity-engine: memory-text contradiction detection failed: ${String(e)}`);
             }
           }
+          const contradictionPairs = [];
           if (memoryTextContradictions.length > 0) {
             const { resolveContradictionWinner } = await import("./lib/memory-text-contradiction.js");
             const byId = new Map(associativeItems.map((m) => [m.id, m]));
@@ -5509,6 +5510,7 @@ const plugin = {
               if (!a || !b) continue;
               const winner = resolveContradictionWinner(a, b);
               const loser = winner.id === a.id ? b : a;
+              contradictionPairs.push({ winner, loser });
               if (traceEnabled && trace) {
                 addTraceStoreDecision(trace, {
                   action: "superseded",
@@ -5545,6 +5547,13 @@ const plugin = {
               api.logger?.warn?.(`continuity-engine: failed to persist memory-text contradictions: ${String(e)}`);
             }
           }
+
+          let contradictionDisclosureContext = null;
+          try {
+            const { formatContradictionDisclosure } = await import("./lib/contradiction-disclosure.js");
+            const cdEnabled = cfg.contradictionDisclosure?.enabled !== false;
+            contradictionDisclosureContext = formatContradictionDisclosure(contradictionPairs, { enabled: cdEnabled });
+          } catch (_) { /* fail-open */ }
 
           let reactivationContext = "";
           let reactivationAdditions = [];
@@ -5662,7 +5671,7 @@ const plugin = {
             } catch { /* fail-open */ }
           }
 
-          const fullMemoriesContext = [moodStyleDirective, openThreadsContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
+          const fullMemoriesContext = [moodStyleDirective, openThreadsContext, contradictionDisclosureContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
