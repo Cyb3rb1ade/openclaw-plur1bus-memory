@@ -2961,6 +2961,54 @@ const plugin = {
                 ? `🎭 Temperament für ${temperamentAgentId} auf "${presetName}" gesetzt. ${t("plur1bus.setup_restart", { lang, tone })}`
                 : `🎭 Temperament for ${temperamentAgentId} set to "${presetName}". ${t("plur1bus.setup_restart", { lang, tone })}` };
             }
+            if (actionKey === "persona") {
+              const { lang, tone } = resolveCommandLocale(commandCtx);
+              const de = lang === "de";
+              const personaAgentId = commandCtx?.agentId || "default";
+              const personaSub = (sub || "").toLowerCase();
+              const { hasPersonaVoice, generatePersonaSeed, writePersonaVoice, readPersonaFile } = await import("./lib/persona-voice.js");
+              if (!commandCtx.workspaceDir) {
+                return { text: de ? "❌ Kein Workspace verfügbar." : "❌ No workspace available." };
+              }
+              if (!personaSub) {
+                if (!hasPersonaVoice(commandCtx.workspaceDir)) {
+                  return { text: de
+                    ? "🎤 Noch kein Persona-Profil — `/plur1bus persona regenerate`."
+                    : "🎤 No persona profile yet — `/plur1bus persona regenerate`." };
+                }
+                const parsed = readPersonaFile(commandCtx.workspaceDir);
+                return { text: de
+                  ? `🎤 Persona-Voice (${personaAgentId}):\n${parsed?.managedBlock || "(leer)"}`
+                  : `🎤 Persona voice (${personaAgentId}):\n${parsed?.managedBlock || "(empty)"}` };
+              }
+              if (personaSub === "regenerate") {
+                const denied = checkAuth(commandCtx, { destructive: true });
+                if (denied) return denied;
+                if (hasPersonaVoice(commandCtx.workspaceDir)) {
+                  return { text: de
+                    ? "⚠️ Persona-Profil existiert bereits — erst `persona-voice.md` manuell löschen, um neu zu erzeugen."
+                    : "⚠️ Persona profile already exists — delete `persona-voice.md` manually first to regenerate." };
+                }
+                const personaLlmCfg = skillMinerLlmCfg || mergingLlmCfg;
+                if (!personaLlmCfg) {
+                  return { text: de ? "❌ Kein LLM konfiguriert." : "❌ No LLM configured." };
+                }
+                const seed = await generatePersonaSeed({ agentId: personaAgentId, lang, llmCfg: personaLlmCfg, callLlm });
+                if (!seed) {
+                  return { text: de ? "❌ Persona-Seed-Generierung fehlgeschlagen." : "❌ Persona seed generation failed." };
+                }
+                const ok = writePersonaVoice(commandCtx.workspaceDir, seed);
+                if (!ok) {
+                  return { text: de ? "❌ Schreiben fehlgeschlagen." : "❌ Write failed." };
+                }
+                return { text: de
+                  ? `🎤 Persona-Profil erzeugt:\n${seed}`
+                  : `🎤 Persona profile generated:\n${seed}` };
+              }
+              return { text: de
+                ? `❌ Unbekannter Persona-Befehl: "${personaSub}". Nutze \`/plur1bus persona\` oder \`/plur1bus persona regenerate\`.`
+                : `❌ Unknown persona command: "${personaSub}". Use \`/plur1bus persona\` or \`/plur1bus persona regenerate\`.` };
+            }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
               const denied = checkAuth(commandCtx, { destructive: true });
@@ -3306,6 +3354,7 @@ const plugin = {
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
           { name: "plur1bus_start", description: "Complete PLUR1BUS installation and show Full Experience status.", acceptsArgs: false, prefixTokens: ["start"] },
           { name: "plur1bus_temperament", description: "Show or set the agent's emotional temperament.", acceptsArgs: true, prefixTokens: ["temperament"] },
+          { name: "plur1bus_persona", description: "Show or (re)generate the agent's persona voice profile.", acceptsArgs: true, prefixTokens: ["persona"] },
           { name: "plur1bus_status", description: "Show PLUR1BUS memory status.", acceptsArgs: true, prefixTokens: ["status"] },
           { name: "plur1bus_doctor", description: "Run PLUR1BUS diagnostics.", acceptsArgs: true, prefixTokens: ["doctor"] },
           { name: "plur1bus_state", description: "Show PLUR1BUS system state.", acceptsArgs: false, prefixTokens: ["state"] },
@@ -4218,6 +4267,15 @@ const plugin = {
                   api.logger.info(`memory-lancedb-namespaced: skipping light dream - too many turns (${normalizedTurns.length})`);
                 } else {
                   // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
+                  let personaIdentityText = "";
+                  if (ctx?.workspaceDir) {
+                    for (const identityFile of ["SOUL.md", "IDENTITY.md", "AGENT.md"]) {
+                      try {
+                        personaIdentityText = readFileSync(join(ctx.workspaceDir, identityFile), "utf8").slice(0, 2000);
+                        break;
+                      } catch (_) { /* try next */ }
+                    }
+                  }
                   lightDream({
                     turns: normalizedTurns,
                     neoStore,
@@ -4229,6 +4287,9 @@ const plugin = {
                     narrativeCfg: dreamNarrativeCfg,
                     workspaceDir: ctx?.workspaceDir || null,
                     temperamentName: resolveTemperamentName(agentId),
+                    personaSeedCfg: (cfg.personaVoice?.enabled ?? true) !== false
+                      ? { agentId, lang: cfg.language || "de", identityText: personaIdentityText }
+                      : null,
                   }).then((dreamResult) => {
                     if (ctx?.workspaceDir) {
                       writeLightDreamToVault(dreamResult, ctx.workspaceDir, normalizedTurns);
@@ -5653,6 +5714,14 @@ const plugin = {
             },
             now: nowMs,
           });
+          let personaDirective = null;
+          if (ctx?.workspaceDir && (cfg.personaVoice?.enabled ?? true) !== false) {
+            try {
+              const { loadPersonaDirective } = await import("./lib/persona-voice.js");
+              personaDirective = loadPersonaDirective(ctx.workspaceDir);
+            } catch (_) { /* fail-open */ }
+          }
+
           const styleCfg = cfg.styleDirective || {};
           const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId), {
             hour: styleCfg.timeOfDay !== false ? new Date(nowMs).getHours() : null,
@@ -5717,7 +5786,7 @@ const plugin = {
             } catch (_) { /* fail-open */ }
           }
 
-          const fullMemoriesContext = [moodStyleDirective, dreamEchoContext, openThreadsContext, contradictionDisclosureContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
+          const fullMemoriesContext = [personaDirective, moodStyleDirective, dreamEchoContext, openThreadsContext, contradictionDisclosureContext, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.

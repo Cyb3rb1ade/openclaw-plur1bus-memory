@@ -102,6 +102,7 @@ export const DEPLOY_FILES = [
   "lib/recall-confidence-framing.js",
   "lib/proactive-governor.js",
   "lib/dream-echo.js",
+  "lib/persona-voice.js",
   // ── background jobs ────────────────────────────────────────────────────────
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",
