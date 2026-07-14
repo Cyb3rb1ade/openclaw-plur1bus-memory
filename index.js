@@ -194,6 +194,7 @@ import {
   setEmotionConfig,
 } from "./lib/emotion.js";
 import { createEmotionalStatePool, formatMoodLine, formatMoodFile, extractMessageText, DEFAULT_TEMPERAMENTS } from "./lib/emotional-state.js";
+import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
 import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
@@ -5631,8 +5632,8 @@ const plugin = {
             },
             now: nowMs,
           });
-          const moodLine = formatMoodLine(emotionalPool.describe(agentId));
-          const fullMemoriesContext = [moodLine, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
+          const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId));
+          const fullMemoriesContext = [moodStyleDirective, memoriesContext, reactivationContext].filter(Boolean).join("\n\n");
 
           // Knowledge-update + conflict-review nudges (shared, localized helper;
           // conflict-log is read only once). #9 dedup + #11 i18n.
