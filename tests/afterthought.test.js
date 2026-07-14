@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findAfterthoughtCandidate, composeAfterthought, runAfterthoughtJob } from "../lib/afterthought.js";
+import { loadGovernorState, recordProactiveSend, saveGovernorState } from "../lib/proactive-governor.js";
 
 const M = 60000;
 const T0 = 1750000000000;
@@ -82,5 +83,26 @@ describe("runAfterthoughtJob", () => {
     const dir = seedDir([]);
     const res = await runAfterthoughtJob({ workspaceDir: dir, agentId: "a", ...llm, now: T0, hour: 12 });
     assert.strictEqual(res.skipped, true);
+  });
+
+  it("verliert keinen konkurrierenden Governor-Send während des LLM-Awaits (lost-update race)", async () => {
+    const dir = seedDir([o(45, "asked_details")]);
+    const concurrent = {
+      llmCfg: { model: "x" },
+      callLlm: async () => {
+        // Simuliert eine gleichzeitige dream-echo-Injektion, die während des
+        // LLM-Awaits von runAfterthoughtJob den Governor-State speichert.
+        let gov = loadGovernorState(dir);
+        gov = recordProactiveSend(gov, "dream-echo", T0 + 1000);
+        saveGovernorState(dir, gov);
+        return "Mir ist zum Backup noch was eingefallen: probier rsync.";
+      },
+    };
+    const res = await runAfterthoughtJob({ workspaceDir: dir, agentId: "a", ...concurrent, now: T0, hour: 12 });
+    assert.ok(res.text);
+
+    const finalGov = loadGovernorState(dir);
+    const featureIds = finalGov.sends.map((s) => s.featureId).sort();
+    assert.deepStrictEqual(featureIds, ["afterthought", "dream-echo"]);
   });
 });
