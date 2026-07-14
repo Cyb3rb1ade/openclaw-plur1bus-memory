@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "test",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["test"],
+      "port": 0
+    },
+    {
+      "name": "test:coverage",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "test:coverage"],
+      "port": 0
+    },
+    {
+      "name": "maintain-lancedb",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "maintain-lancedb"],
+      "port": 0
+    },
+    {
+      "name": "repair",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "repair"],
+      "port": 0
+    }
+  ]
+}
