@@ -1,6 +1,6 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -214,5 +214,37 @@ describe("reply-outcome-tracking", () => {
       feedbackLines.map((e) => e.memoryId),
       ["m2b", "m3a", "m3b"],
     );
+  });
+
+  it("supports object-form options for bounded outcome log reads", () => {
+    recordPendingReplyOutcome(dir, {
+      agentId: "bernd",
+      sessionKey: "s1",
+      userPrompt: "Should I ship it?",
+      memoryIds: ["m1"],
+      now: 1000,
+    });
+
+    return completePendingReplyOutcomes(dir, {
+      agentId: "bernd",
+      sessionKey: "s1",
+      replyText: "Genau, mach weiter.",
+      now: 2000,
+    }).then(() => {
+      const outcomeLog = readReplyOutcomeLog(dir, { limit: 1, maxBytes: 1024 });
+      assert.strictEqual(outcomeLog.length, 1);
+      assert.strictEqual(outcomeLog[0].sessionKey, "s1");
+    });
+  });
+
+  it("returns [] when maxBytes is exceeded", () => {
+    const adaptiveDir = join(dir, ".adaptive-learning");
+    mkdirSync(adaptiveDir, { recursive: true });
+    writeFileSync(
+      join(adaptiveDir, "reply-outcomes.jsonl"),
+      `${JSON.stringify({ id: "x", sessionKey: "s1", payload: "x".repeat(512) })}\n`,
+      "utf8",
+    );
+    assert.deepStrictEqual(readReplyOutcomeLog(dir, 0, { maxBytes: 64 }), []);
   });
 });
