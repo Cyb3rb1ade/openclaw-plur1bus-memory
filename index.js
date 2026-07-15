@@ -1515,40 +1515,7 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
     api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap spawn failed: ${err?.message || err}`);
   }
 
-  // Best-effort parse of the script's --json output. In --json mode it
-  // prints exactly one pretty-printed JSON object on stdout (see
-  // scripts/setup-feature-crons.mjs main()) — never multiple lines to
-  // concatenate, so parse the whole buffer, not a single line.
-  //
-  // lastPlanCreateCount must mean "still pending after this run" (the
-  // condition the doctor/status hint keys off — see
-  // featureCronsHintFromMarker), NOT "how many were planned": a plan with
-  // create.length === 2 that both succeeded must record 0, or a fully
-  // successful fresh install would keep hinting for up to 20h. When
-  // `results` is present (crons were actually created), count the ones
-  // that failed; when it's absent (dry-run/nothing-to-do branch), there
-  // was nothing pending to create in the first place → 0. Fall back to
-  // leaving the field unset (treated as "nothing pending") if parsing
-  // fails — never block the marker write on stdout-parsing fragility.
-  let lastPlanCreateCount;
-  try {
-    const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : null;
-    if (parsed && typeof parsed === "object") {
-      const failedCreates = Array.isArray(parsed.results)
-        ? parsed.results.filter((r) => !r?.ok).length
-        : 0;
-      // Delivery-pflichtige Jobs, die mangels ableitbarem Ziel nur disabled
-      // angelegt wurden, gelten weiterhin als "pending": der doctor/status-
-      // Hinweis soll sichtbar bleiben, bis der Operator sie aktiviert hat
-      // (README verspricht genau das).
-      const disabledDeliveryCreates = Array.isArray(parsed.plan?.create)
-        ? parsed.plan.create.filter((c) => c?.needsDelivery && c?.enabled === false).length
-        : 0;
-      lastPlanCreateCount = failedCreates + disabledDeliveryCreates;
-    }
-  } catch (_e) {
-    lastPlanCreateCount = undefined;
-  }
+  const lastPlanCreateCount = parseFeatureCronBootstrapLastPlanCreateCount(stdout);
 
   try {
     writeJsonAtomic(
@@ -1571,6 +1538,47 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
   api.logger?.info?.(
     `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
   );
+}
+
+/**
+ * Parse the deferred feature-cron setup script's `--json` stdout into the
+ * marker-facing pending count.
+ *
+ * Rules:
+ * - Explicit numeric `lastPlanCreateCount` from the script wins.
+ * - Otherwise preserve the legacy normal-path calculation:
+ *   failed creates + disabled delivery-needing creates.
+ * - If stdout is empty, unparseable, or parses to a non-object, return `1`
+ *   so the marker keeps the doctor/status hint visible instead of looking
+ *   like a success marker.
+ *
+ * @param {string} stdout
+ * @returns {number}
+ */
+function parseFeatureCronBootstrapLastPlanCreateCount(stdout) {
+  try {
+    const parsed = typeof stdout === "string" && stdout.trim() ? JSON.parse(stdout.trim()) : null;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return 1;
+    }
+    if (Number.isFinite(parsed.lastPlanCreateCount)) {
+      return parsed.lastPlanCreateCount;
+    }
+
+    const failedCreates = Array.isArray(parsed.results)
+      ? parsed.results.filter((r) => !r?.ok).length
+      : 0;
+    // Delivery-pflichtige Jobs, die mangels ableitbarem Ziel nur disabled
+    // angelegt wurden, gelten weiterhin als "pending": der doctor/status-
+    // Hinweis soll sichtbar bleiben, bis der Operator sie aktiviert hat
+    // (README verspricht genau das).
+    const disabledDeliveryCreates = Array.isArray(parsed.plan?.create)
+      ? parsed.plan.create.filter((c) => c?.needsDelivery && c?.enabled === false).length
+      : 0;
+    return failedCreates + disabledDeliveryCreates;
+  } catch (_e) {
+    return 1;
+  }
 }
 
 function findNeoRecord(store, id) {
@@ -6293,5 +6301,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount };
 export default plugin;

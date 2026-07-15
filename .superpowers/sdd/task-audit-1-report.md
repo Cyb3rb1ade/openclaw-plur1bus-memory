@@ -111,3 +111,60 @@ GREEN pass output:
 
 - Task brief step 10 explicitly references `runDeferredFeatureCronBootstrap`, which currently lives in `index.js`. Per the task ownership constraint, `index.js` was out of scope and was not edited.
 - As a result, the deferred bootstrap writer still does not parse/use the new script-level `lastPlanCreateCount` field, and it still treats unparseable setup output as missing `lastPlanCreateCount` rather than forcing a positive fallback there. I implemented the owned pieces around this (`scripts/setup-feature-crons.mjs` output and `featureCronsHintFromMarker` hint behavior), but the `index.js` portion remains for whichever task is allowed to touch that file.
+
+## Follow-up fix for step 10
+
+- Added `parseFeatureCronBootstrapLastPlanCreateCount(stdout)` in `index.js` and routed `runDeferredFeatureCronBootstrap()` through it.
+- The helper now:
+  - prefers explicit numeric `lastPlanCreateCount` from the script JSON,
+  - preserves the existing `failedCreates + disabledDeliveryCreates` calculation for normal JSON without the explicit field,
+  - returns `1` when stdout is empty, unparseable, or parses to a non-object JSON value.
+- This keeps the written marker positive on skipped/unparseable setup output instead of silently writing a success-looking marker.
+
+### Follow-up tests
+
+RED command:
+
+```bash
+node --test tests/feature-cron-bootstrap.test.js
+```
+
+RED failure:
+
+```text
+Expected values to be strictly equal:
++ actual - expected
+
++ 'undefined'
+- 'function'
+```
+
+GREEN commands:
+
+```bash
+node --test tests/feature-cron-bootstrap.test.js
+node --check index.js
+```
+
+GREEN results:
+
+```text
+✔ tests/feature-cron-bootstrap.test.js
+ℹ pass 1
+ℹ fail 0
+```
+
+```text
+node --check index.js
+exit 0
+```
+
+### Follow-up files changed
+
+- `index.js`
+- `tests/feature-cron-bootstrap.test.js`
+- `.superpowers/sdd/task-audit-1-report.md`
+
+### Updated concerns
+
+- The original out-of-scope concern for step 10 is now resolved.
