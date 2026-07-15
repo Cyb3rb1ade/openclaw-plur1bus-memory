@@ -237,14 +237,37 @@ describe("reply-outcome-tracking", () => {
     });
   });
 
-  it("returns [] when maxBytes is exceeded", () => {
+  it("liest bei überschrittenem maxBytes den Tail statt gar nichts (bounded read)", () => {
     const adaptiveDir = join(dir, ".adaptive-learning");
     mkdirSync(adaptiveDir, { recursive: true });
+    // Alter Riesen-Eintrag am Anfang, zwei frische kleine am Ende.
+    const oldEntry = { id: "old", sessionKey: "s0", payload: "x".repeat(4096) };
+    const fresh1 = { id: "f1", sessionKey: "s1" };
+    const fresh2 = { id: "f2", sessionKey: "s2" };
     writeFileSync(
       join(adaptiveDir, "reply-outcomes.jsonl"),
-      `${JSON.stringify({ id: "x", sessionKey: "s1", payload: "x".repeat(512) })}\n`,
+      [oldEntry, fresh1, fresh2].map((e) => JSON.stringify(e)).join("\n") + "\n",
       "utf8",
     );
-    assert.deepStrictEqual(readReplyOutcomeLog(dir, 0, { maxBytes: 64 }), []);
+    let skipMsg = null;
+    const entries = readReplyOutcomeLog(dir, 0, { maxBytes: 128, onSkip: (m) => { skipMsg = m; } });
+    // Newest-first, nur die Einträge aus dem Tail-Fenster.
+    assert.deepStrictEqual(entries.map((e) => e.id), ["f2", "f1"]);
+    assert.ok(skipMsg, "onSkip sollte als Info-Hook beim Truncaten aufgerufen werden");
+  });
+
+  it("respektiert limit auch beim Tail-Read über maxBytes", () => {
+    const adaptiveDir = join(dir, ".adaptive-learning");
+    mkdirSync(adaptiveDir, { recursive: true });
+    const oldEntry = { id: "old", payload: "x".repeat(4096) };
+    const fresh1 = { id: "f1" };
+    const fresh2 = { id: "f2" };
+    writeFileSync(
+      join(adaptiveDir, "reply-outcomes.jsonl"),
+      [oldEntry, fresh1, fresh2].map((e) => JSON.stringify(e)).join("\n") + "\n",
+      "utf8",
+    );
+    const entries = readReplyOutcomeLog(dir, { limit: 1, maxBytes: 128 });
+    assert.deepStrictEqual(entries.map((e) => e.id), ["f2"]);
   });
 });
