@@ -47,7 +47,9 @@ function buildAddArgs(job) {
   // Explicit delivery wiring is only present on jobs that already carry a
   // live delivery target. Automatic multi-agent setup keeps delivery-needing
   // jobs disabled until an operator enables them explicitly, so those jobs
-  // intentionally reach the fallback branch without --announce details.
+  // must not emit guessed announce/channel/to flags in the fallback branch.
+  // The only remaining fallback announce path is the legacy explicit
+  // operator-managed `--agent` flow, and even there only for enabled jobs.
   if (job.delivery) {
     args.push("--announce");
     if (job.delivery.channel) args.push("--channel", job.delivery.channel);
@@ -55,7 +57,7 @@ function buildAddArgs(job) {
     if (job.delivery.accountId) args.push("--account", job.delivery.accountId);
   } else {
     if (job.account) args.push("--account", job.account);
-    if (job.needsDelivery && job.agent) args.push("--announce");
+    if (job.needsDelivery && job.agent && job.enabled) args.push("--announce");
   }
   if (!job.enabled) args.push("--disabled");
   args.push("--json");
