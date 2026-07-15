@@ -47,4 +47,16 @@ describe("buildReactionDirective", () => {
     assert.match(d, /🐢/);
     assert.doesNotMatch(d, /👍/);
   });
+
+  it("bevorzugt explizite Palette vor Persona-Palette", () => {
+    const d = buildReactionDirective({ palette: "🐢 🌊", personaPalette: "🌊 🧭 ✨" });
+    assert.match(d, /🐢 🌊/);
+    assert.doesNotMatch(d, /🌊 🧭 ✨/);
+  });
+
+  it("nutzt Persona-Palette wenn keine explizite Palette gesetzt ist", () => {
+    const d = buildReactionDirective({ personaPalette: "🌊 🧭 ✨" });
+    assert.match(d, /🌊 🧭 ✨/);
+    assert.doesNotMatch(d, /👍 ❤️ 😂 🎉 🤔/);
+  });
 });

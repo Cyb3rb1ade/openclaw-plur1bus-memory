@@ -6003,10 +6003,19 @@ const plugin = {
             now: nowMs,
           });
           let personaDirective = null;
+          let personaEmojiPalette = null;
           if (ctx?.workspaceDir && (cfg.personaVoice?.enabled ?? true) !== false) {
             try {
-              const { loadPersonaDirective } = await import("./lib/persona-voice.js");
+              const { ensurePersonaVoiceSeed, loadPersonaDirective, loadPersonaEmojiPalette } = await import("./lib/persona-voice.js");
+              await ensurePersonaVoiceSeed({
+                workspaceDir: ctx.workspaceDir,
+                agentId,
+                lang: cfg.language || "de",
+                llmCfg: skillMinerLlmCfg || mergingLlmCfg || null,
+                callLlm,
+              });
               personaDirective = loadPersonaDirective(ctx.workspaceDir);
+              personaEmojiPalette = loadPersonaEmojiPalette(ctx.workspaceDir);
             } catch (_) { /* fail-open */ }
           }
 
@@ -6107,7 +6116,10 @@ const plugin = {
             const mode = rnCfg.enabled ?? "auto";
             if (mode === true || (mode === "auto" && await detectReactionsCapabilityCached())) {
               const { buildReactionDirective } = await import("./lib/reaction-directive.js");
-              reactionDirective = buildReactionDirective({ palette: rnCfg.palette || null });
+              reactionDirective = buildReactionDirective({
+                palette: rnCfg.palette || null,
+                personaPalette: personaEmojiPalette,
+              });
             }
           } catch (_) { /* fail-open */ }
 
