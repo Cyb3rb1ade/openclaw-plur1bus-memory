@@ -3042,9 +3042,9 @@ const plugin = {
                 if ((cfg.personaVoice?.enabled ?? true) === false || !skillMinerLlmCfg) {
                   return formatJsonCommandResult({ job: "persona-evolve", skipped: true, reason: "not_configured" });
                 }
-                const { proposePersonaEvolution } = await import("./lib/persona-voice.js");
+                const { evolvePersonaVoice } = await import("./lib/persona-voice.js");
                 const outcomes = readReplyOutcomeLog(commandCtx.workspaceDir, 200);
-                const result = await proposePersonaEvolution({
+                const result = await evolvePersonaVoice({
                   workspaceDir: commandCtx.workspaceDir,
                   outcomes,
                   llmCfg: skillMinerLlmCfg,
@@ -3258,21 +3258,25 @@ const plugin = {
                   : `🎤 Persona profile generated:\n${seed}` };
               }
               if (personaSub === "accept") {
+                // Legacy-Pfad: übernimmt eine ggf. noch vorhandene alte
+                // Proposal-Sektion aus einer Version vor Auto-Apply. Neue
+                // wöchentliche Evolutionen werden inzwischen direkt im
+                // Managed Block angewendet und brauchen kein accept mehr.
                 const denied = checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 const result = acceptPersonaProposal(commandCtx.workspaceDir);
                 if (!result.accepted) {
                   return { text: de
-                    ? "❌ Kein Vorschlag zum Übernehmen verfügbar."
-                    : "❌ No proposal to accept available." };
+                    ? "❌ Kein Alt-Vorschlag zum Übernehmen verfügbar (neue Evolutionen wenden sich automatisch an)."
+                    : "❌ No legacy proposal to accept available (new evolutions apply automatically)." };
                 }
                 return { text: de
-                  ? `✅ Persona-Entwicklung übernommen: ${result.marker}`
-                  : `✅ Persona evolution accepted: ${result.marker}` };
+                  ? `✅ Alt-Vorschlag übernommen: ${result.marker}`
+                  : `✅ Legacy proposal accepted: ${result.marker}` };
               }
               return { text: de
-                ? `❌ Unbekannter Persona-Befehl: "${personaSub}". Nutze \`/plur1bus persona\`, \`/plur1bus persona regenerate\` oder \`/plur1bus persona accept\`.`
-                : `❌ Unknown persona command: "${personaSub}". Use \`/plur1bus persona\`, \`/plur1bus persona regenerate\`, or \`/plur1bus persona accept\`.` };
+                ? `❌ Unbekannter Persona-Befehl: "${personaSub}". Nutze \`/plur1bus persona\`, \`/plur1bus persona regenerate\` oder \`/plur1bus persona accept\` (für Alt-Vorschläge).`
+                : `❌ Unknown persona command: "${personaSub}". Use \`/plur1bus persona\`, \`/plur1bus persona regenerate\`, or \`/plur1bus persona accept\` (for legacy proposals).` };
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);

@@ -6,9 +6,9 @@ import { join } from "node:path";
 import {
   hasPersonaVoice, generatePersonaSeed, writePersonaVoice,
   loadPersonaDirective, readPersonaFile, appendMarkerToManagedBlock,
-  proposePersonaEvolution, acceptPersonaProposal,
+  evolvePersonaVoice, proposePersonaEvolution, acceptPersonaProposal,
   loadPersonaEmojiPalette, ensurePersonaVoiceSeed,
-  scheduleEnsurePersonaVoiceSeed,
+  scheduleEnsurePersonaVoiceSeed, PROPOSAL_HEADER,
 } from "../lib/persona-voice.js";
 
 const SEED = "- Kurze, direkte Sätze.\n- Lieblingswendung: „passt schon“.\n- Emojis sparsam: 🙂 gelegentlich.";
@@ -221,34 +221,59 @@ describe("persona evolution", () => {
     assert.strictEqual(readFileSync(join(dir, "persona-voice.md"), "utf8"), before);
   });
 
-  it("schlägt bei positivem Trend genau EINEN Marker vor", async () => {
+  it("wendet bei positivem Trend den Marker DIREKT an — keine Proposal-Sektion", async () => {
     const dir = seededDir();
     const outcomes = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "confirmed_or_continued"));
     const callLlm = async () => "- Neue Wendung: „alles klar soweit\".";
-    const res = await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm, now: T1 });
-    assert.strictEqual(res.proposed, true);
+    const res = await evolvePersonaVoice({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm, now: T1 });
+    assert.strictEqual(res.evolved, true);
+    assert.ok(res.marker.includes("alles klar soweit"));
     const content = readFileSync(join(dir, "persona-voice.md"), "utf8");
-    assert.ok(content.includes("## Vorschlag (nicht aktiv)"));
+    assert.ok(!content.includes(PROPOSAL_HEADER));
     assert.ok(content.includes("alles klar soweit"));
+    // Marker steht im Managed Block, nicht nur irgendwo in der Datei.
+    assert.ok(readPersonaFile(dir).managedBlock.includes("alles klar soweit"));
+    // Direktive greift den neuen Marker sofort, ohne accept.
+    assert.ok(loadPersonaDirective(dir).includes("alles klar soweit"));
   });
 
-  it("kein Vorschlag bei zu wenigen oder negativen Outcomes", async () => {
+  it("kein evolve bei zu wenigen oder negativen Outcomes", async () => {
     const dir = seededDir();
     const few = [outcome(T1, "confirmed_or_continued")];
-    assert.strictEqual((await proposePersonaEvolution({ workspaceDir: dir, outcomes: few, llmCfg: { model: "x" }, callLlm: async () => "- x", now: T1 })).proposed, false);
+    assert.strictEqual((await evolvePersonaVoice({ workspaceDir: dir, outcomes: few, llmCfg: { model: "x" }, callLlm: async () => "- x", now: T1 })).evolved, false);
     const negative = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "ignored_or_topic_shifted"));
-    assert.strictEqual((await proposePersonaEvolution({ workspaceDir: dir, outcomes: negative, llmCfg: { model: "x" }, callLlm: async () => "- x", now: T1 })).proposed, false);
+    assert.strictEqual((await evolvePersonaVoice({ workspaceDir: dir, outcomes: negative, llmCfg: { model: "x" }, callLlm: async () => "- x", now: T1 })).evolved, false);
   });
 
-  it("Vorschlag landet NICHT in der Direktive, accept übernimmt ihn", async () => {
+  it("proposePersonaEvolution bleibt als Alias erhalten (Rückwärtskompatibilität)", () => {
+    assert.strictEqual(proposePersonaEvolution, evolvePersonaVoice);
+  });
+
+  it("Auto-Apply lässt eine bestehende alte Proposal-Sektion unangetastet stehen", async () => {
     const dir = seededDir();
     const outcomes = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "confirmed_or_continued"));
-    await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Marotte: zählt gern auf.", now: T1 });
+    // Simuliert eine Alt-Installation mit noch offener Proposal-Sektion.
+    const path = join(dir, "persona-voice.md");
+    writeFileSync(path, readFileSync(path, "utf8") + `\n\n${PROPOSAL_HEADER}\n\nÜbernehmen mit /plur1bus persona accept — oder diese Sektion einfach löschen.\n\n- Alte Marotte.\n`, "utf8");
+
+    const res = await evolvePersonaVoice({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Neue Marotte.", now: T1 });
+    assert.strictEqual(res.evolved, true);
+    const content = readFileSync(path, "utf8");
+    assert.ok(content.includes(PROPOSAL_HEADER));
+    assert.ok(content.includes("Alte Marotte"));
+    assert.ok(readPersonaFile(dir).managedBlock.includes("Neue Marotte"));
+  });
+
+  it("accept übernimmt weiterhin eine bestehende Alt-Proposal-Sektion", async () => {
+    const dir = seededDir();
+    const path = join(dir, "persona-voice.md");
+    writeFileSync(path, readFileSync(path, "utf8") + `\n\n${PROPOSAL_HEADER}\n\nÜbernehmen mit /plur1bus persona accept — oder diese Sektion einfach löschen.\n\n- Marotte: zählt gern auf.\n`, "utf8");
+
     assert.ok(!loadPersonaDirective(dir).includes("zählt gern auf"));
     const res = acceptPersonaProposal(dir);
     assert.strictEqual(res.accepted, true);
     assert.ok(loadPersonaDirective(dir).includes("zählt gern auf"));
-    assert.ok(!readFileSync(join(dir, "persona-voice.md"), "utf8").includes("## Vorschlag (nicht aktiv)"));
+    assert.ok(!readFileSync(path, "utf8").includes(PROPOSAL_HEADER));
   });
 
   it("accept ohne Vorschlag → accepted false", () => {
@@ -256,34 +281,78 @@ describe("persona evolution", () => {
     assert.strictEqual(acceptPersonaProposal(dir).accepted, false);
   });
 
-  it("User-Notiz unterhalb einer bestehenden Vorschlagssektion übersteht erneutes proposePersonaEvolution", async () => {
-    const dir = seededDir();
-    const outcomes = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "confirmed_or_continued"));
-    await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Erste Marotte.", now: T1 });
-    const path = join(dir, "persona-voice.md");
-    writeFileSync(path, readFileSync(path, "utf8") + "\n\n## Meine eigene Notiz\n\nDas darf nie verschwinden.\n", "utf8");
-
-    const res = await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Zweite Marotte.", now: T1 });
-    assert.strictEqual(res.proposed, true);
-    const content = readFileSync(path, "utf8");
-    assert.ok(content.includes("## Meine eigene Notiz"));
-    assert.ok(content.includes("Das darf nie verschwinden."));
-    assert.ok(content.includes("Zweite Marotte"));
-  });
-
   it("User-Notiz unterhalb einer bestehenden Vorschlagssektion übersteht acceptPersonaProposal", async () => {
     const dir = seededDir();
-    const outcomes = Array.from({ length: 12 }, (_, i) => outcome(T1 - i * 1000, "confirmed_or_continued"));
-    await proposePersonaEvolution({ workspaceDir: dir, outcomes, llmCfg: { model: "x" }, callLlm: async () => "- Marotte: zählt gern auf.", now: T1 });
     const path = join(dir, "persona-voice.md");
-    writeFileSync(path, readFileSync(path, "utf8") + "\n\n## Meine eigene Notiz\n\nDas darf nie verschwinden.\n", "utf8");
+    writeFileSync(path, readFileSync(path, "utf8") + `\n\n${PROPOSAL_HEADER}\n\nÜbernehmen mit /plur1bus persona accept — oder diese Sektion einfach löschen.\n\n- Marotte: zählt gern auf.\n\n## Meine eigene Notiz\n\nDas darf nie verschwinden.\n`, "utf8");
 
     const res = acceptPersonaProposal(dir);
     assert.strictEqual(res.accepted, true);
     const content = readFileSync(path, "utf8");
     assert.ok(content.includes("## Meine eigene Notiz"));
     assert.ok(content.includes("Das darf nie verschwinden."));
-    assert.ok(!content.includes("## Vorschlag (nicht aktiv)"));
+    assert.ok(!content.includes(PROPOSAL_HEADER));
     assert.ok(loadPersonaDirective(dir).includes("zählt gern auf"));
+  });
+});
+
+describe("appendMarkerToManagedBlock: 12er-Kappung", () => {
+  function seededDir() {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, SEED); // 3 Seed-Bullets
+    return dir;
+  }
+
+  it("(a) unter der Kappe wird nur angehängt", () => {
+    const dir = seededDir();
+    for (let i = 1; i <= 5; i++) {
+      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+    }
+    const { managedBlock } = readPersonaFile(dir);
+    const bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
+    assert.strictEqual(bullets.length, 8); // 3 Seed + 5 gelernt
+    for (let i = 1; i <= 5; i++) assert.ok(managedBlock.includes(`Gelernt ${i}.`));
+  });
+
+  it("(b) an der Kappe verschwindet Bullet-Zeile 4 (älteste gelernte), Seed 1-3 und neueste bleiben", () => {
+    const dir = seededDir();
+    // 3 Seed-Bullets + 9 gelernte = 12 (an der Kappe)
+    for (let i = 1; i <= 9; i++) {
+      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+    }
+    let bullets = readPersonaFile(dir).managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
+    assert.strictEqual(bullets.length, 12);
+    assert.ok(bullets[3].includes("Gelernt 1."));
+
+    // 13. Bullet (10. gelernte) überschreitet die Kappe → Gelernt 1 (Bullet-Zeile 4) fliegt raus.
+    assert.strictEqual(appendMarkerToManagedBlock(dir, "- Gelernt 10."), true);
+    const { managedBlock } = readPersonaFile(dir);
+    bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
+    assert.strictEqual(bullets.length, 12);
+    // Seed-Zeilen 1-3 bleiben erhalten.
+    assert.ok(bullets[0].includes("Kurze, direkte Sätze."));
+    assert.ok(bullets[1].includes("passt schon"));
+    assert.ok(bullets[2].includes("Emojis sparsam"));
+    // Älteste gelernte Zeile (Gelernt 1.) ist weg.
+    assert.ok(!managedBlock.includes("Gelernt 1."));
+    // Gelernt 2..10 bleiben, inkl. der neuesten.
+    for (let i = 2; i <= 10; i++) assert.ok(managedBlock.includes(`Gelernt ${i}.`));
+  });
+
+  it("(c) Nicht-Bullet-Inhalt im Managed Block bleibt unangetastet", () => {
+    const dir = seededDir();
+    const path = join(dir, "persona-voice.md");
+    // Nicht-Bullet-Zeile innerhalb des Managed Blocks einfügen (z.B. Kommentarzeile).
+    const content = readFileSync(path, "utf8");
+    const withNote = content.replace(SEED, `${SEED}\nHinweis: Diese Zeile ist kein Bullet.`);
+    writeFileSync(path, withNote, "utf8");
+
+    for (let i = 1; i <= 10; i++) {
+      appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`);
+    }
+    const { managedBlock } = readPersonaFile(dir);
+    assert.ok(managedBlock.includes("Hinweis: Diese Zeile ist kein Bullet."));
+    const bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
+    assert.strictEqual(bullets.length, 12);
   });
 });
