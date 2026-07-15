@@ -1563,6 +1563,18 @@
           }
         }
       },
+      "featureCronSetup": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Controls the gateway_start deferred bootstrap that runs scripts/setup-feature-crons.mjs (persona-evolve, afterthought) — covers install channels that never run npm (rsync/git-clone installs, ClawHub).",
+        "properties": {
+          "auto": {
+            "type": "boolean",
+            "default": true,
+            "description": "Set false to disable the deferred gateway_start feature-cron bootstrap. Manual `/plur1bus setup crons` and npm postinstall are unaffected."
+          }
+        }
+      },
       "security": {
         "type": "object",
         "additionalProperties": false,

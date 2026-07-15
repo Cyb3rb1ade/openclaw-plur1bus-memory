@@ -46,6 +46,8 @@ import {
   validateMergedTextPreservesFacts,
 } from "./lib/memory-merge-safety.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
+import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
+import { shouldRunCronBootstrap } from "./lib/setup/feature-cron-bootstrap.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
@@ -1436,6 +1438,16 @@ function formatJsonCommandResult(value) {
   return { text: JSON.stringify(value, null, 2) };
 }
 
+/**
+ * Path to the feature-cron setup marker file under baseDbPath (user-scoped,
+ * same base the plugin already uses for everything else — never a
+ * hardcoded system path), so this works identically for root and non-root
+ * installs.
+ */
+function featureCronsMarkerPath(baseDbPath) {
+  return join(baseDbPath, ".feature-crons-setup.json");
+}
+
 // Cache for getFeatureCronsSetupHint — computed at most once per gateway
 // process (see _featureCronsNoticeChecked at module scope).
 let _featureCronsHintCache = null;
@@ -1454,7 +1466,7 @@ function getFeatureCronsSetupHint(baseDbPath) {
   if (_featureCronsNoticeChecked) return _featureCronsHintCache;
   _featureCronsNoticeChecked = true;
   try {
-    const markerPath = join(baseDbPath, ".feature-crons-setup.json");
+    const markerPath = featureCronsMarkerPath(baseDbPath);
     let marker = null;
     if (existsSync(markerPath)) {
       try { marker = JSON.parse(readFileSync(markerPath, "utf8")); } catch (_e) { marker = null; }
@@ -1472,6 +1484,101 @@ function getFeatureCronsSetupHint(baseDbPath) {
     _featureCronsHintCache = null;
   }
   return _featureCronsHintCache;
+}
+
+/**
+ * Deferred, best-effort feature-cron bootstrap for the gateway_start
+ * handler registered above. Fail-open end to end: any failure here is
+ * logged at debug/warn level and swallowed — it must never affect the
+ * gateway or the message flow.
+ *
+ * Throttled via the same marker file the doctor/status hint reads
+ * (see shouldRunCronBootstrap): skipped when a run for the current plugin
+ * version already happened in the last 20h, so a gateway that restarts
+ * often doesn't re-spawn the setup script on every restart.
+ */
+async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
+  const markerPath = featureCronsMarkerPath(baseDbPath);
+  let marker = null;
+  try {
+    marker = readJsonSafe(markerPath, null);
+  } catch (_e) {
+    marker = null;
+  }
+
+  if (!shouldRunCronBootstrap(marker, { pluginVersion: PLUGIN_VERSION })) {
+    api.logger?.debug?.("plur1bus-feature-crons: deferred bootstrap skipped (recent run recorded)");
+    return;
+  }
+
+  const scriptPath = join(__pluginDir, "scripts", "setup-feature-crons.mjs");
+  let stdout = "";
+  let ok = false;
+  try {
+    const { spawn } = await import("node:child_process");
+    const child = spawn(process.execPath, [scriptPath, "--json"], {
+      cwd: __pluginDir,
+      detached: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    ok = await new Promise((resolvePromise) => {
+      child.stdout?.on("data", (chunk) => { stdout += chunk; });
+      child.on("error", () => resolvePromise(false));
+      child.on("close", (code) => resolvePromise(code === 0));
+    });
+  } catch (err) {
+    api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap spawn failed: ${err?.message || err}`);
+  }
+
+  // Best-effort parse of the script's --json output. In --json mode it
+  // prints exactly one pretty-printed JSON object on stdout (see
+  // scripts/setup-feature-crons.mjs main()) — never multiple lines to
+  // concatenate, so parse the whole buffer, not a single line.
+  //
+  // lastPlanCreateCount must mean "still pending after this run" (the
+  // condition the doctor/status hint keys off — see
+  // featureCronsHintFromMarker), NOT "how many were planned": a plan with
+  // create.length === 2 that both succeeded must record 0, or a fully
+  // successful fresh install would keep hinting for up to 20h. When
+  // `results` is present (crons were actually created), count the ones
+  // that failed; when it's absent (dry-run/nothing-to-do branch), there
+  // was nothing pending to create in the first place → 0. Fall back to
+  // leaving the field unset (treated as "nothing pending") if parsing
+  // fails — never block the marker write on stdout-parsing fragility.
+  let lastPlanCreateCount;
+  try {
+    const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : null;
+    if (Array.isArray(parsed?.results)) {
+      lastPlanCreateCount = parsed.results.filter((r) => !r?.ok).length;
+    } else if (parsed && typeof parsed === "object") {
+      lastPlanCreateCount = 0;
+    }
+  } catch (_e) {
+    lastPlanCreateCount = undefined;
+  }
+
+  try {
+    writeJsonAtomic(
+      markerPath,
+      {
+        pluginVersion: PLUGIN_VERSION,
+        lastRunAt: new Date().toISOString(),
+        ...(lastPlanCreateCount !== undefined ? { lastPlanCreateCount } : {}),
+      },
+      { pretty: true },
+    );
+  } catch (err) {
+    api.logger?.debug?.(`plur1bus-feature-crons: marker write failed: ${err?.message || err}`);
+  }
+
+  // Cache is process-lifetime; invalidate it so the next doctor/status call
+  // re-reads the marker we just wrote instead of an earlier (or absent) hint.
+  _featureCronsNoticeChecked = false;
+  _featureCronsHintCache = null;
+
+  api.logger?.info?.(
+    `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
+  );
 }
 
 function findNeoRecord(store, id) {
@@ -2574,6 +2681,33 @@ const plugin = {
       } else {
         api.logger.info(`plur1bus-obsidian-bridge: configured (watch=false, dryRun=${obsidianBridgeCfg.dryRun !== false})`);
       }
+    }
+
+    // Feature-cron bootstrap, deferred (installer/ClawHub channel): the
+    // documented install path rsyncs the plugin and never runs npm, so the
+    // postinstall hook (`npm install` → scripts/setup-feature-crons.mjs)
+    // never fires there. This handler covers that gap for every install
+    // channel — npm install, rsync/git-clone install, and ClawHub — without
+    // depending on any of them running npm at all. See getFeatureCronsSetupHint
+    // above and shouldRunCronBootstrap/featureCronsHintFromMarker in
+    // lib/setup/feature-cron-bootstrap.js for the pure throttle/hint logic.
+    if (typeof api.on === "function" && cfg.featureCronSetup?.auto !== false) {
+      api.on(
+        "gateway_start",
+        () => {
+          // Never block gateway startup on this: schedule far enough out
+          // that the gateway is fully up (and the `openclaw` CLI can talk
+          // to it) before we spawn anything, and unref the timer so it can
+          // never keep the process alive on its own.
+          const timer = setTimeout(() => {
+            runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }).catch((err) => {
+              api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap failed: ${err?.message || err}`);
+            });
+          }, 90_000);
+          timer?.unref?.();
+        },
+        { timeoutMs: 5_000 },
+      );
     }
 
     if (!neoEnabled && typeof api.registerMemoryPromptSupplement === "function") {
