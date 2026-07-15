@@ -38,12 +38,32 @@ describe("findDeployDir", () => {
     assert.ok(!result.startsWith("/root"), "must not default to /root");
   });
 
-  it("picks an existing openclaw-plur1bus-memory checkout over the extensions candidate", () => {
+  it("picks the extensions/<pluginId> candidate over an openclaw-plur1bus-memory checkout when both exist, warning on stderr", () => {
     const openclawHome = join(dir, "openclaw-home");
     const repoCheckout = join(openclawHome, "openclaw-plur1bus-memory");
+    const extDir = join(openclawHome, "extensions", "memory-lancedb-namespaced");
     mkdirSync(repoCheckout, { recursive: true });
+    mkdirSync(extDir, { recursive: true });
     process.env.OPENCLAW_HOME = openclawHome;
-    assert.strictEqual(findDeployDir(dir), repoCheckout);
+    const errors = [];
+    const originalError = console.error;
+    console.error = (...args) => errors.push(args.join(" "));
+    try {
+      assert.strictEqual(findDeployDir(dir), extDir);
+    } finally {
+      console.error = originalError;
+    }
+    assert.strictEqual(errors.length, 1);
+    assert.match(errors[0], new RegExp(extDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(errors[0], new RegExp(repoCheckout.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+
+  it("picks the extensions candidate alone when only it exists (checkout absent)", () => {
+    const openclawHome = join(dir, "openclaw-home");
+    const extDir = join(openclawHome, "extensions", "memory-lancedb-namespaced");
+    mkdirSync(extDir, { recursive: true });
+    process.env.OPENCLAW_HOME = openclawHome;
+    assert.strictEqual(findDeployDir(dir), extDir);
   });
 
   it("falls back to extensions/<pluginId> read from openclaw.plugin.json when no checkout exists", () => {
@@ -57,10 +77,10 @@ describe("findDeployDir", () => {
     assert.strictEqual(findDeployDir(repoDir), extDir);
   });
 
-  it("returns the first candidate (checkout path) even when neither exists yet", () => {
+  it("returns the first candidate (extensions/<pluginId> path) even when neither exists yet", () => {
     const openclawHome = join(dir, "openclaw-home");
     process.env.OPENCLAW_HOME = openclawHome;
     const result = findDeployDir(dir);
-    assert.strictEqual(result, join(openclawHome, "openclaw-plur1bus-memory"));
+    assert.strictEqual(result, join(openclawHome, "extensions", "memory-lancedb-namespaced"));
   });
 });

@@ -27,9 +27,20 @@ export function findDeployDir(repoDir) {
   } catch { /* default */ }
 
   const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
-  const candidates = [
-    join(openclawHome, "openclaw-plur1bus-memory"),
-    join(openclawHome, "extensions", pluginId),
-  ];
-  return candidates.find((p) => existsSync(p)) ?? candidates[0];
+  // extensions/<pluginId> is the real deployed-plugin location on every
+  // production install; the bare openclaw-plur1bus-memory checkout path is
+  // only ever a repo clone dropped straight into $OPENCLAW_HOME (dev/manual
+  // setups). Check the real deploy location first so a stray checkout dir
+  // never masks the actual installed extension.
+  const extensionsCandidate = join(openclawHome, "extensions", pluginId);
+  const checkoutCandidate = join(openclawHome, "openclaw-plur1bus-memory");
+  const candidates = [extensionsCandidate, checkoutCandidate];
+  const existing = candidates.filter((p) => existsSync(p));
+  if (existing.length > 1) {
+    console.error(
+      `[find-deploy-dir] both a deployed extension (${extensionsCandidate}) and a checkout ` +
+        `(${checkoutCandidate}) exist — using the deployed extension.`,
+    );
+  }
+  return existing[0] ?? candidates[0];
 }
