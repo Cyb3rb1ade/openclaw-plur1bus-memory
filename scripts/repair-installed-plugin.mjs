@@ -31,6 +31,7 @@ import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { validateDeployment, smokeTestExports, DEPLOY_FILES } from "./lib/deploy-integrity.mjs";
+import { findDeployDir } from "./lib/find-deploy-dir.mjs";
 
 const SMOKE_EXPECTATIONS = [
   { file: "lib/neo-arch.js",                exports: ["buildNeoWorkspaceAliases", "isInjectedContextText"] },
@@ -52,20 +53,6 @@ function parseArgs(argv) {
     else if (a === "--help")         opts.help = true;
   }
   return opts;
-}
-
-function findDeployDir(repoDir) {
-  if (process.env.PLUR1BUS_DEPLOY) return process.env.PLUR1BUS_DEPLOY;
-  let pluginId = "memory-lancedb-namespaced";
-  try {
-    pluginId = JSON.parse(readFileSync(join(repoDir, "openclaw.plugin.json"), "utf8")).id ?? pluginId;
-  } catch { /* default */ }
-  const candidates = [
-    join(homedir(), ".openclaw", "openclaw-plur1bus-memory"),
-    join(homedir(), ".openclaw", "extensions", pluginId),
-    "/root/.openclaw/extensions/memory-lancedb-namespaced",
-  ];
-  return candidates.find((p) => existsSync(p)) ?? candidates[0];
 }
 
 function backupDeployDir(deployDir, files) {

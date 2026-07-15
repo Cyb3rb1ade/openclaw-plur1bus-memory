@@ -17,6 +17,7 @@
 
 import { resolve } from "node:path";
 import { validateDeployment, smokeTestExports, DEPLOY_FILES } from "./lib/deploy-integrity.mjs";
+import { findDeployDir } from "./lib/find-deploy-dir.mjs";
 
 // Named exports confirmed to exist in the real files (no guessing).
 const EXPORT_EXPECTATIONS = [
@@ -37,7 +38,7 @@ function parseArgs(argv) {
     else if (arg === "--deploy-dir") opts.deployDir = argv[++i];
   }
   if (!opts.deployDir) {
-    opts.deployDir = "/root/.openclaw/extensions/memory-lancedb-namespaced";
+    opts.deployDir = findDeployDir(opts.repoDir);
   }
   return opts;
 }
