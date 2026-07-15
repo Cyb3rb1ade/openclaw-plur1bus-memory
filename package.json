@@ -44,7 +44,9 @@
     "code-index": "node scripts/build-code-index.mjs",
     "maintain-lancedb": "node scripts/maintain-lancedb.mjs",
     "maintain-lancedb:apply": "node scripts/maintain-lancedb.mjs --apply",
-    "repair-dreaming-cron": "node scripts/repair-dreaming-cron.mjs"
+    "repair-dreaming-cron": "node scripts/repair-dreaming-cron.mjs",
+    "setup-feature-crons": "node scripts/setup-feature-crons.mjs",
+    "postinstall": "node scripts/setup-feature-crons.mjs || true"
   },
   "engines": {
     "node": ">=20"
