@@ -98,7 +98,7 @@ Updated `composeAfterthought` so that:
 
 - the sanitized stored prompt is included only inside the `system` prompt
 - the historical block remains explicitly labeled as untrusted historical context
-- the live `user` message is now a neutral generation instruction with no stored log text
+- the live `user` message was reduced to a neutral generation instruction, but that pass still interpolated stored-derived topic text and needed one more fix
 - the bounded `reply-outcomes.jsonl` read cap remains unchanged
 
 ### Regression update
@@ -124,6 +124,48 @@ Tightened `tests/afterthought.test.js` so it now asserts that:
 ℹ skipped 0
 ℹ todo 0
 ℹ duration_ms 363.279218
+```
+
+`node --check lib/afterthought.js`
+
+```text
+```
+
+## Final Follow-up Fix
+
+Re-review found one remaining trust-boundary leak: `candidate.topic` is derived from stored outcome-log text and was still interpolated into the live `role: "user"` message.
+
+### Final change
+
+Updated `composeAfterthought` so that:
+
+- the live `user` message is fully generic and contains no stored-log-derived substrings
+- the stored-derived topic is kept only in non-user prompt content as labeled historical context
+- the stored prompt remains sanitized in the `system` prompt
+- the bounded `reply-outcomes.jsonl` read cap remains unchanged
+
+### Regression update
+
+Tightened `tests/afterthought.test.js` so it now:
+
+- derives the candidate from `findAfterthoughtCandidate(...)` using a malicious stored prompt
+- verifies no `role: "user"` message contains raw or derived stored-text substrings such as `Backup`, `ignore`, `system`, or the malicious topic body
+- verifies the non-user prompt content still contains sanitized historical context
+
+### Exact test output
+
+`node --test tests/afterthought.test.js`
+
+```text
+✔ tests/afterthought.test.js (259.898261ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 274.291547
 ```
 
 `node --check lib/afterthought.js`
