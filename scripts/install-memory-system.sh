@@ -996,6 +996,28 @@ else
   ok "Plugins kopiert nach $EXTENSIONS_DIR"
 fi
 
+# ─── Schritt 3b: Feature-Cron-Plan (Vorschau) ─────────────────────────────────
+# Nur advisory: der Gateway läuft an dieser Stelle noch mit der alten Config
+# (Neustart folgt erst in Schritt 10), daher hier ausschließlich --dry-run.
+# setup-feature-crons.mjs selbst ist best-effort (exit 0 immer) — schlägt
+# also nie den Installer fehl, egal ob openclaw/Gateway erreichbar sind.
+
+step "Schritt 3b: Feature-Cron-Plan (Vorschau)"
+
+FEATURE_CRON_SCRIPT="$EXTENSIONS_DIR/memory-lancedb-namespaced/scripts/setup-feature-crons.mjs"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  dryrun "Würde Feature-Cron-Plan anzeigen: node '$FEATURE_CRON_SCRIPT' --dry-run"
+else
+  if run_target "test -f '$FEATURE_CRON_SCRIPT'"; then
+    run_target "node '$FEATURE_CRON_SCRIPT' --dry-run" || true
+    info "Hinweis: Nach dem Gateway-Neustart aktivieren mit:"
+    info "  node '$FEATURE_CRON_SCRIPT'  (oder: /plur1bus setup crons)"
+  else
+    info "setup-feature-crons.mjs nicht im kopierten Plugin gefunden — übersprungen (nicht kritisch)."
+  fi
+fi
+
 # ─── Schritt 4: openclaw.json patchen ─────────────────────────────────────────
 
 step "Schritt 4: openclaw.json patchen"
