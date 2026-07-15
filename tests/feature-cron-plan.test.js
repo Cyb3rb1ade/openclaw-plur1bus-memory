@@ -226,6 +226,28 @@ describe("deriveAgentDelivery", () => {
     ];
     assert.strictEqual(deriveAgentDelivery("main", jobs), null);
   });
+
+  it("ignores a disabled plur1bus job's stale delivery target, falling back to an enabled candidate", () => {
+    const jobs = [
+      { agentId: "main", name: "plur1bus-decommissioned-main", enabled: false, delivery: { mode: "announce", channel: "telegram", to: "99999999" } },
+      { agentId: "main", name: "disk-space-monitor", enabled: true, delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
+    ];
+    const result = deriveAgentDelivery("main", jobs);
+    assert.deepStrictEqual(result, { channel: "telegram", to: "55736530" });
+  });
+
+  it("returns null when the only candidates are disabled jobs (afterthought falls back to created-but-disabled)", () => {
+    const jobs = [
+      { agentId: "main", name: "plur1bus-decommissioned-main", enabled: false, delivery: { mode: "announce", channel: "telegram", to: "99999999" } },
+    ];
+    assert.strictEqual(deriveAgentDelivery("main", jobs), null);
+  });
+
+  it("treats a missing 'enabled' field as enabled (older cron-list shapes without the field)", () => {
+    const jobs = [{ agentId: "main", name: "plur1bus-a", delivery: { mode: "announce", channel: "telegram", to: "55736530" } }];
+    const result = deriveAgentDelivery("main", jobs);
+    assert.deepStrictEqual(result, { channel: "telegram", to: "55736530" });
+  });
 });
 
 describe("selectAgentsForCronSetup", () => {
