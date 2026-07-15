@@ -3178,7 +3178,7 @@ const plugin = {
                 : `🎭 Temperament for ${temperamentAgentId} set to "${presetName}". ${t("plur1bus.setup_restart", { lang, tone })}` };
             }
             if (actionKey === "persona") {
-              const { lang, tone } = resolveCommandLocale(commandCtx);
+              const { lang } = resolveCommandLocale(commandCtx);
               const de = lang === "de";
               const personaAgentId = commandCtx?.agentId || "default";
               const personaSub = (sub || "").toLowerCase();

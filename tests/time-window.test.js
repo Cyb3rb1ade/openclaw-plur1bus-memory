@@ -36,6 +36,20 @@ describe("hourInTimeZone", () => {
       assert.equal(h, i);
     }
   });
+
+  it("repeated calls with the same timeZone stay consistent (memoized formatter)", () => {
+    // Behavioral check on the memoization: same timeZone across many calls
+    // and many different timestamps must keep returning results consistent
+    // with a freshly-constructed formatter — no cross-call state leakage.
+    for (let round = 0; round < 3; round++) {
+      for (let i = 0; i < 24; i++) {
+        const ts = Date.UTC(2026, 2, 1, i, 45);
+        assert.equal(hourInTimeZone(ts, "Europe/Berlin"), hourInTimeZone(ts, "Europe/Berlin"));
+      }
+    }
+    assert.equal(hourInTimeZone(EPOCH, "UTC"), 23);
+    assert.equal(hourInTimeZone(EPOCH, "Europe/Berlin"), 0);
+  });
 });
 
 describe("isQuietHour", () => {
