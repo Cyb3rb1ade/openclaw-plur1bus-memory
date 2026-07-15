@@ -1480,7 +1480,7 @@ function getFeatureCronsSetupHint(baseDbPath) {
  * version already happened in the last 20h, so a gateway that restarts
  * often doesn't re-spawn the setup script on every restart.
  */
-async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
+async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath, spawnImpl } = {}) {
   const markerPath = featureCronsMarkerPath(baseDbPath);
   let marker = null;
   try {
@@ -1498,12 +1498,21 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
   let stdout = "";
   let ok = false;
   try {
-    const { spawn } = await import("node:child_process");
-    const child = spawn(process.execPath, [scriptPath, "--json"], {
-      cwd: __pluginDir,
-      detached: false,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child;
+    if (spawnImpl) {
+      child = spawnImpl(process.execPath, [scriptPath, "--json"], {
+        cwd: __pluginDir,
+        detached: false,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } else {
+      const { spawn } = await import("node:child_process");
+      child = spawn(process.execPath, [scriptPath, "--json"], {
+        cwd: __pluginDir,
+        detached: false,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    }
     ok = await new Promise((resolvePromise) => {
       child.stdout?.on("data", (chunk) => { stdout += chunk; });
       // stderr wird nicht ausgewertet, muss aber gedraint werden — ein
@@ -1516,29 +1525,36 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
     api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap spawn failed: ${err?.message || err}`);
   }
 
-  const lastPlanCreateCount = parseFeatureCronBootstrapLastPlanCreateCount(stdout);
+  // Marker is written ONLY on a successful run (spawn exited 0). On failure
+  // we leave any existing marker untouched (log only) so shouldRunCronBootstrap
+  // retries at the next gateway start instead of throttling for 20h while the
+  // doctor/status hint keeps nagging about a run that never actually happened.
+  if (ok) {
+    const lastPlanCreateCount = parseFeatureCronBootstrapLastPlanCreateCount(stdout);
+    try {
+      writeJsonAtomic(
+        markerPath,
+        {
+          pluginVersion: PLUGIN_VERSION,
+          lastRunAt: new Date().toISOString(),
+          ...(lastPlanCreateCount !== undefined ? { lastPlanCreateCount } : {}),
+        },
+        { pretty: true },
+      );
+    } catch (err) {
+      api.logger?.debug?.(`plur1bus-feature-crons: marker write failed: ${err?.message || err}`);
+    }
 
-  try {
-    writeJsonAtomic(
-      markerPath,
-      {
-        pluginVersion: PLUGIN_VERSION,
-        lastRunAt: new Date().toISOString(),
-        ...(lastPlanCreateCount !== undefined ? { lastPlanCreateCount } : {}),
-      },
-      { pretty: true },
+    // Cache is process-lifetime; invalidate it so the next doctor/status call
+    // re-reads the marker we just wrote instead of an earlier (or absent) hint.
+    _featureCronsHintCache = undefined;
+
+    api.logger?.info?.(
+      `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
     );
-  } catch (err) {
-    api.logger?.debug?.(`plur1bus-feature-crons: marker write failed: ${err?.message || err}`);
+  } else {
+    api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap failed — leaving marker untouched so it retries next start");
   }
-
-  // Cache is process-lifetime; invalidate it so the next doctor/status call
-  // re-reads the marker we just wrote instead of an earlier (or absent) hint.
-  _featureCronsHintCache = undefined;
-
-  api.logger?.info?.(
-    `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
-  );
 }
 
 /**
@@ -6321,5 +6337,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
 export default plugin;

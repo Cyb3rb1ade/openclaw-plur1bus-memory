@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { Writable } from "node:stream";
+import { EventEmitter } from "node:events";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import * as pluginModule from "../index.js";
 import {
   shouldRunCronBootstrap,
@@ -10,7 +14,34 @@ import { runSetupFeatureCrons } from "../scripts/setup-feature-crons.mjs";
 
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
-const { parseFeatureCronBootstrapLastPlanCreateCount } = pluginModule;
+const { parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap } = pluginModule;
+
+function fakeChild({ stdout = "", closeCode = 0, emitError = false }) {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.stderr.resume = () => {};
+  // Defer emission so listeners registered by runDeferredFeatureCronBootstrap
+  // are attached first (mirrors real async child_process timing).
+  setImmediate(() => {
+    if (stdout) child.stdout.emit("data", Buffer.from(stdout));
+    if (emitError) child.emit("error", new Error("spawn failed"));
+    else child.emit("close", closeCode);
+  });
+  return child;
+}
+
+function makeApi() {
+  const logs = [];
+  return {
+    logger: {
+      debug: (msg) => logs.push(["debug", msg]),
+      info: (msg) => logs.push(["info", msg]),
+      warn: (msg) => logs.push(["warn", msg]),
+    },
+    logs,
+  };
+}
 
 describe("shouldRunCronBootstrap", () => {
   it("runs when marker is missing", () => {
@@ -197,6 +228,51 @@ describe("runSetupFeatureCrons --json", () => {
     assert.ok(!afterthoughtAdd.includes("--to"), "automatic disabled afterthought must not wire --to");
   });
 
+  it("emits --announce/--channel/--to/--account (no --disabled) for automatic afterthought when delivery is derivable", async () => {
+    const cronAdds = [];
+    const result = await runJsonSetupWith((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            jobs: [
+              {
+                agentId: "main",
+                name: "plur1bus-morning-review-main",
+                delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "telegram-main" },
+              },
+            ],
+          }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "agents" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({ agents: [{ id: "main", bindings: 2, isDefault: true, workspace: "/ws/main" }] }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && args[1] === "add") {
+        cronAdds.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    const afterthoughtAdd = cronAdds.find((args) => args.includes("--name") && args.includes("plur1bus afterthought main"));
+    assert.ok(afterthoughtAdd, "automatic afterthought cron add call for main must be present");
+    assert.ok(afterthoughtAdd.includes("--announce"), "derivable delivery should announce");
+    assert.deepStrictEqual(afterthoughtAdd.slice(afterthoughtAdd.indexOf("--channel"), afterthoughtAdd.indexOf("--channel") + 2), ["--channel", "telegram"]);
+    assert.deepStrictEqual(afterthoughtAdd.slice(afterthoughtAdd.indexOf("--to"), afterthoughtAdd.indexOf("--to") + 2), ["--to", "55736530"]);
+    assert.deepStrictEqual(afterthoughtAdd.slice(afterthoughtAdd.indexOf("--account"), afterthoughtAdd.indexOf("--account") + 2), ["--account", "telegram-main"]);
+    assert.ok(!afterthoughtAdd.includes("--disabled"), "derivable delivery must not be created disabled");
+  });
+
   it("preserves legacy explicit --agent setup by emitting --announce for enabled afterthought jobs", async () => {
     const cronAdds = [];
     const result = await runJsonSetupWith((args) => {
@@ -254,5 +330,58 @@ describe("parseFeatureCronBootstrapLastPlanCreateCount", () => {
   it("returns 1 when stdout is unparseable", () => {
     assert.strictEqual(parseFeatureCronBootstrapLastPlanCreateCount("{not-json"), 1);
     assert.strictEqual(parseFeatureCronBootstrapLastPlanCreateCount(""), 1);
+  });
+});
+
+describe("runDeferredFeatureCronBootstrap marker gating", () => {
+  it("is exported", () => {
+    assert.strictEqual(typeof runDeferredFeatureCronBootstrap, "function");
+  });
+
+  it("writes the marker on a successful run (close code 0)", async () => {
+    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-ok-"));
+    const markerPath = path.join(baseDbPath, ".feature-crons-setup.json");
+    const api = makeApi();
+
+    await runDeferredFeatureCronBootstrap(api, {
+      cfg: {},
+      baseDbPath,
+      spawnImpl: () => fakeChild({ stdout: JSON.stringify({ lastPlanCreateCount: 0 }), closeCode: 0 }),
+    });
+
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    assert.strictEqual(marker.lastPlanCreateCount, 0);
+    assert.ok(marker.lastRunAt, "marker should carry a fresh lastRunAt");
+  });
+
+  it("does not overwrite a previous marker when the spawned run fails (close code != 0)", async () => {
+    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-fail-"));
+    const markerPath = path.join(baseDbPath, ".feature-crons-setup.json");
+    const previousMarker = { pluginVersion: PV, lastRunAt: new Date(NOW - 25 * 60 * 60 * 1000).toISOString(), lastPlanCreateCount: 0 };
+    writeFileSync(markerPath, JSON.stringify(previousMarker, null, 2));
+    const api = makeApi();
+
+    await runDeferredFeatureCronBootstrap(api, {
+      cfg: {},
+      baseDbPath,
+      spawnImpl: () => fakeChild({ stdout: "", closeCode: 1 }),
+    });
+
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    assert.deepStrictEqual(marker, previousMarker, "marker must be untouched after a failed run");
+  });
+
+  it("does not write a marker at all when the spawned run fails and no marker existed before", async () => {
+    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-fail-nomarker-"));
+    const markerPath = path.join(baseDbPath, ".feature-crons-setup.json");
+    const api = makeApi();
+
+    await runDeferredFeatureCronBootstrap(api, {
+      cfg: {},
+      baseDbPath,
+      spawnImpl: () => fakeChild({ stdout: "", emitError: true }),
+    });
+
+    assert.throws(() => readFileSync(markerPath, "utf8"), /ENOENT/);
   });
 });
