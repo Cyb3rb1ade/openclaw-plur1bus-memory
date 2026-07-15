@@ -46,4 +46,22 @@ describe("frameRecallConfidence", () => {
     assert.deepStrictEqual(frameRecallConfidence(null).hedgedIds, []);
     assert.deepStrictEqual(frameRecallConfidence("nope").hedgedIds, []);
   });
+
+  it("hedgt nicht bei geringem Spread unterhalb minSpread (Default 0.1)", () => {
+    const items = [mem("a", 0.95), mem("b", 0.93), mem("c", 0.90)];
+    const { hedgedIds } = frameRecallConfidence(items);
+    assert.deepStrictEqual(hedgedIds, []);
+  });
+
+  it("hedgt weiterhin bei ausreichendem Spread (Default minSpread)", () => {
+    const items = [mem("a", 0.9), mem("b", 0.8), mem("c", 0.7), mem("d", 0.3), mem("e", 0.2), mem("f", 0.1)];
+    const { hedgedIds } = frameRecallConfidence(items);
+    assert.deepStrictEqual([...hedgedIds].sort(), ["e", "f"]);
+  });
+
+  it("minSpread: 0 stellt das rein relative Verhalten wieder her", () => {
+    const items = [mem("a", 0.95), mem("b", 0.93), mem("c", 0.90)];
+    const { hedgedIds } = frameRecallConfidence(items, { minSpread: 0 });
+    assert.deepStrictEqual(hedgedIds, ["c"]);
+  });
 });
