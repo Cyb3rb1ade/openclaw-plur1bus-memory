@@ -17,7 +17,7 @@
  *   2  openclaw CLI not available
  */
 
-import { spawnSync } from "node:child_process";
+import { openclaw } from "./lib/openclaw-cli.mjs";
 
 function parseArgs(argv) {
   const opts = { run: false, show: false };
@@ -26,11 +26,6 @@ function parseArgs(argv) {
     if (a === "--show") opts.show = true;
   }
   return opts;
-}
-
-function openclaw(args, timeout = 15000) {
-  const r = spawnSync("openclaw", args, { encoding: "utf8", timeout });
-  return { ok: r.status === 0 && !r.error, stdout: r.stdout ?? "", stderr: r.stderr ?? "", status: r.status };
 }
 
 async function main() {

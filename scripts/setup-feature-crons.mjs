@@ -18,8 +18,8 @@
  *   node scripts/setup-feature-crons.mjs [--dry-run] [--agent <id>] [--account <acct>] [--json]
  */
 
-import { spawnSync } from "node:child_process";
 import { planFeatureCrons, REQUIRED_FEATURE_CRONS, selectAgentsForCronSetup } from "../lib/setup/feature-cron-plan.js";
+import { openclaw } from "./lib/openclaw-cli.mjs";
 
 function parseArgs(argv) {
   const opts = { dryRun: false, agent: null, account: null, json: false };
@@ -31,11 +31,6 @@ function parseArgs(argv) {
     else if (a === "--json") opts.json = true;
   }
   return opts;
-}
-
-function openclaw(args, timeout = 15000) {
-  const r = spawnSync("openclaw", args, { encoding: "utf8", timeout });
-  return { ok: r.status === 0 && !r.error, stdout: r.stdout ?? "", stderr: r.stderr ?? "", status: r.status, error: r.error };
 }
 
 function scheduleArgs(schedule) {
