@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { Writable } from "node:stream";
+import * as pluginModule from "../index.js";
 import {
   shouldRunCronBootstrap,
   featureCronsHintFromMarker,
@@ -9,6 +10,7 @@ import { runSetupFeatureCrons } from "../scripts/setup-feature-crons.mjs";
 
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
+const { parseFeatureCronBootstrapLastPlanCreateCount } = pluginModule;
 
 describe("shouldRunCronBootstrap", () => {
   it("runs when marker is missing", () => {
@@ -161,5 +163,46 @@ describe("runSetupFeatureCrons --json", () => {
     assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
     assert.strictEqual(result.parsed.reason, "unexpected-error");
     assert.match(result.parsed.message, /boom/);
+  });
+});
+
+describe("parseFeatureCronBootstrapLastPlanCreateCount", () => {
+  it("is exported", () => {
+    assert.strictEqual(typeof parseFeatureCronBootstrapLastPlanCreateCount, "function");
+  });
+
+  it("prefers explicit lastPlanCreateCount from script JSON", () => {
+    assert.strictEqual(
+      parseFeatureCronBootstrapLastPlanCreateCount(JSON.stringify({ lastPlanCreateCount: 7, plan: { create: [] }, results: [] })),
+      7,
+    );
+  });
+
+  it("preserves failedCreates + disabledDeliveryCreates when explicit count is absent", () => {
+    const stdout = JSON.stringify({
+      plan: {
+        create: [
+          { needsDelivery: true, enabled: false },
+          { needsDelivery: false, enabled: true },
+          { needsDelivery: true, enabled: false },
+        ],
+      },
+      results: [
+        { ok: true },
+        { ok: false },
+      ],
+    });
+    assert.strictEqual(parseFeatureCronBootstrapLastPlanCreateCount(stdout), 3);
+  });
+
+  it("returns 1 when stdout parses but is not a JSON object", () => {
+    assert.strictEqual(parseFeatureCronBootstrapLastPlanCreateCount("[]"), 1);
+    assert.strictEqual(parseFeatureCronBootstrapLastPlanCreateCount('"hello"'), 1);
+    assert.strictEqual(parseFeatureCronBootstrapLastPlanCreateCount("null"), 1);
+  });
+
+  it("returns 1 when stdout is unparseable", () => {
+    assert.strictEqual(parseFeatureCronBootstrapLastPlanCreateCount("{not-json"), 1);
+    assert.strictEqual(parseFeatureCronBootstrapLastPlanCreateCount(""), 1);
   });
 });
