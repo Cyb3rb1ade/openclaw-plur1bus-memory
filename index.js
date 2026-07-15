@@ -5756,6 +5756,10 @@ const plugin = {
             }
           }
 
+          // cfg.recallHedging is passed through as opts to frameRecallConfidence:
+          // minItems, bottomFraction, maxHedged, and minSpread (default 0.1 —
+          // minimum top/cut score gap required before anything is hedged, to
+          // avoid phantom-hedging tightly-clustered strong scores).
           let framedItems = associativeItems;
           try {
             if ((cfg.recallHedging?.enabled ?? true) !== false) {
