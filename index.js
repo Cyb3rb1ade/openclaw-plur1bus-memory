@@ -251,6 +251,7 @@ const OPENAI_PLUGIN_PATH  = join(__pluginDir, "node_modules/openai/index.js");
 
 const DEFAULT_BASE_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
 const DEFAULT_MODEL = LEGACY_DEFAULT_MODEL;
+const MAX_PROMPT_REPLY_OUTCOME_READ_BYTES = 2 * 1024 * 1024;
 
 // PLUGIN_VERSION: read once from openclaw.plugin.json (Single Source of
 // Truth, see file header). Used only for the fail-open feature-cron notice
@@ -6036,7 +6037,9 @@ const plugin = {
               if (cooldownOk) {
                 let rawEntries = [];
                 try {
-                  rawEntries = readJsonl(outcomesPath);
+                  rawEntries = readReplyOutcomeLog(resolvedWorkspaceDir, {
+                    maxBytes: MAX_PROMPT_REPLY_OUTCOME_READ_BYTES,
+                  });
                   // reply-outcomes.jsonl has no "topic" field — derive one from userPrompt
                   // Collapse whitespace BEFORE slicing so the stored dedup topics
                   // normalize identically to the afterthought reader (which slices
