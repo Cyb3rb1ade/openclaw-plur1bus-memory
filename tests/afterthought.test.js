@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findAfterthoughtCandidate, composeAfterthought, runAfterthoughtJob } from "../lib/afterthought.js";
+import { normalizeTopic, OPEN_THREADS_SHOWN_FILE } from "../lib/open-threads.js";
 import { loadGovernorState, recordProactiveSend, saveGovernorState } from "../lib/proactive-governor.js";
 
 const M = 60000;
@@ -74,6 +75,20 @@ describe("runAfterthoughtJob", () => {
   it("überspringt Thema, das heute schon als offener Faden lief", async () => {
     const dir = seedDir([o(45, "asked_details")]);
     writeFileSync(join(dir, ".open-threads-shown.json"), JSON.stringify({ date: new Date(T0).toISOString().slice(0, 10), topics: ["wie richte ich das Backup ein?"] }), "utf8");
+    const res = await runAfterthoughtJob({ workspaceDir: dir, agentId: "a", ...llm, now: T0, hour: 12 });
+    assert.strictEqual(res.skipped, true);
+    assert.strictEqual(res.reason, "open_thread_overlap");
+  });
+
+  it("dedupt auch Break-Case-Prompts mit Whitespace-Läufen nahe der 80er-Grenze (geteiltes normalizeTopic)", async () => {
+    // Prompt, bei dem slice-vor-Collapse (alter Writer) und Collapse-vor-Slice
+    // (Reader) unterschiedlich normalisierten → Dedup lief ins Leere.
+    const breakPrompt = "A".repeat(10) + "\n\n\n" + "B".repeat(70);
+    const dir = seedDir([o(45, "asked_details", breakPrompt)]);
+    // Genau das, was der index.js-Writer seit dem Fix speichert:
+    // normalizeTopic auf dem collapse-zuerst abgeleiteten Topic.
+    const storedTopic = normalizeTopic(breakPrompt.replace(/\s+/g, " ").trim().slice(0, 80));
+    writeFileSync(join(dir, OPEN_THREADS_SHOWN_FILE), JSON.stringify({ date: new Date(T0).toISOString().slice(0, 10), topics: [storedTopic] }), "utf8");
     const res = await runAfterthoughtJob({ workspaceDir: dir, agentId: "a", ...llm, now: T0, hour: 12 });
     assert.strictEqual(res.skipped, true);
     assert.strictEqual(res.reason, "open_thread_overlap");

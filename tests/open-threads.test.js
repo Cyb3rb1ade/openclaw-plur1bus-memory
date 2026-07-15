@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { collectOpenThreads, formatOpenThreadsContext } from "../lib/open-threads.js";
+import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THREADS_SHOWN_FILE } from "../lib/open-threads.js";
 
 const NOW = 1000 * 86400000; // arbitrary reference point in ms
 
@@ -121,5 +121,39 @@ describe("formatOpenThreadsContext", () => {
     const result = formatOpenThreadsContext(threads);
     assert.ok(result.includes("Alpha"));
     assert.ok(result.includes("Beta"));
+  });
+});
+
+describe("normalizeTopic", () => {
+  it("exports the shared cooldown filename constant", () => {
+    assert.strictEqual(OPEN_THREADS_SHOWN_FILE, ".open-threads-shown.json");
+  });
+
+  it("writer and reader derivation orders normalize identically (asymmetry break case)", () => {
+    // Old bug: the index.js writer sliced userPrompt at 80 BEFORE collapsing
+    // whitespace, while the afterthought reader collapsed first and sliced at
+    // 120. For prompts with whitespace runs near the boundary the two sides
+    // normalized to different strings and the dedup gate missed.
+    const raw = "A".repeat(10) + "\n\n\n" + "B".repeat(70);
+
+    // New writer-side derivation (index.js): collapse whitespace, trim, THEN slice(0, 80)
+    const writerTopic = raw.replace(/\s+/g, " ").trim().slice(0, 80);
+    // Reader-side candidate derivation (findAfterthoughtCandidate): collapse newlines, trim, slice(0, 120)
+    const readerTopic = raw.replace(/[\r\n]+/g, " ").trim().slice(0, 120);
+
+    assert.strictEqual(normalizeTopic(writerTopic), normalizeTopic(readerTopic));
+    // and the old writer order demonstrably differed:
+    const oldWriterTopic = raw.slice(0, 80).replace(/[\r\n]+/g, " ").trim();
+    assert.notStrictEqual(normalizeTopic(oldWriterTopic), normalizeTopic(readerTopic));
+  });
+
+  it("lowercases, collapses all whitespace, trims, then slices to 80", () => {
+    assert.strictEqual(normalizeTopic("  Hello\n\nWorld  "), "hello world");
+    assert.strictEqual(normalizeTopic("X".repeat(100)), "x".repeat(80));
+  });
+
+  it("fail-open on non-string input", () => {
+    assert.strictEqual(normalizeTopic(null), "");
+    assert.strictEqual(normalizeTopic(undefined), "");
   });
 });
