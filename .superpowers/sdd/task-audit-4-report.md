@@ -88,3 +88,51 @@ GREEN pass output:
 ## Issues/concerns
 
 - No blocking issues found in the scoped Task 4 surface.
+
+## Review fix follow-up
+
+- Tightened managed-block emoji extraction to accept only explicit palette-style labels: `Emoji-Palette:`, `Emoji Palette:`, or `Palette:` followed by an emoji list.
+- Added a regression test proving `- Emojis sparsam: 🙂 gelegentlich.` returns `null` and does not count as a palette.
+- Switched persona workspace-relative file resolution to `resolveInside()` for `persona-voice.md` and identity-file reads so the first-start seed path now fails open on unsafe paths.
+
+Review-fix RED command:
+
+```bash
+node --test tests/persona-voice.test.js tests/reaction-directive.test.js
+```
+
+Review-fix RED result:
+
+```text
+✖ tests/persona-voice.test.js (294.403641ms)
+✔ tests/reaction-directive.test.js (169.353082ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 1
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 314.112941
+```
+
+Review-fix GREEN command:
+
+```bash
+node --test tests/persona-voice.test.js tests/reaction-directive.test.js
+```
+
+Review-fix GREEN result:
+
+```text
+✔ tests/persona-voice.test.js (263.075494ms)
+✔ tests/reaction-directive.test.js (171.892223ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 285.68235
+```

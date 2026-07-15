@@ -64,6 +64,12 @@ describe("persona-voice", () => {
     assert.strictEqual(loadPersonaEmojiPalette(dir), "🌊 🧭 ✨");
   });
 
+  it("loadPersonaEmojiPalette behandelt Frequenz-Notizen nicht als Palette", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, "- Emojis sparsam: 🙂 gelegentlich.\n- Lieblingswendung: „passt schon“.");
+    assert.strictEqual(loadPersonaEmojiPalette(dir), null);
+  });
+
   it("loadPersonaEmojiPalette: null ohne offensichtliche Emoji-Palette", () => {
     const dir = mkdtempSync(join(tmpdir(), "pv-"));
     writePersonaVoice(dir, "- Lieblingswendung: „passt schon“.\n- Satzlängen-Neigung: kurz.");
