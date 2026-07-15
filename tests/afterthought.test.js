@@ -148,4 +148,17 @@ describe("runAfterthoughtJob", () => {
     const featureIds = finalGov.sends.map((s) => s.featureId);
     assert.deepStrictEqual(featureIds, ["dream-echo"]);
   });
+
+  it("governor_locked: aktiver, frischer Lock blockt den Job (skip-on-contention)", async () => {
+    const dir = seedDir([o(45, "asked_details")]);
+    writeFileSync(join(dir, ".proactive-governor.lock"), String(T0), "utf8");
+    const res = await runAfterthoughtJob({ workspaceDir: dir, agentId: "a", ...llm, now: T0, hour: 12 });
+    assert.strictEqual(res.skipped, true);
+    assert.strictEqual(res.reason, "governor_locked");
+
+    // Tages-Cap-State darf nicht gestempelt worden sein.
+    const { readJsonSafe } = await import("../lib/atomic-file.js");
+    const state = readJsonSafe(join(dir, ".afterthought-state.json"), null);
+    assert.strictEqual(state, null);
+  });
 });

@@ -1,7 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend,
+  acquireGovernorLock, releaseGovernorLock,
 } from "../lib/proactive-governor.js";
 
 const H = 3600000, D = 86400000;
@@ -86,5 +90,51 @@ describe("proactive-governor", () => {
     assert.strictEqual(evaluateGovernor(null, T0).allowed, true);
     const s = applyOutcomeAdjustments(createGovernorState(T0), null, { now: T0 });
     assert.strictEqual(s.budgetPerWeek, 2);
+  });
+});
+
+describe("governor lock (Fix 6 — cross-process advisory lock)", () => {
+  function tmpDir() {
+    return mkdtempSync(join(tmpdir(), "gov-lock-"));
+  }
+
+  it("acquire/release roundtrip", () => {
+    const dir = tmpDir();
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 }), true);
+    assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), true);
+    releaseGovernorLock(dir);
+    assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), false);
+  });
+
+  it("zweiter Acquire schlägt fehl, während der erste hält", () => {
+    const dir = tmpDir();
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 }), true);
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 + 1000 }), false);
+    releaseGovernorLock(dir);
+  });
+
+  it("stale Lock (älter als staleMs) wird reklamiert", () => {
+    const dir = tmpDir();
+    writeFileSync(join(dir, ".proactive-governor.lock"), String(T0), "utf8");
+    const acquired = acquireGovernorLock(dir, { now: T0 + 31000, staleMs: 30000 });
+    assert.strictEqual(acquired, true);
+  });
+
+  it("kaputtes Lock-File (unlesbarer Timestamp) wird reklamiert", () => {
+    const dir = tmpDir();
+    writeFileSync(join(dir, ".proactive-governor.lock"), "not-a-timestamp", "utf8");
+    const acquired = acquireGovernorLock(dir, { now: T0, staleMs: 30000 });
+    assert.strictEqual(acquired, true);
+  });
+
+  it("frisches Lock wird NICHT reklamiert", () => {
+    const dir = tmpDir();
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 }), true);
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 + 5000, staleMs: 30000 }), false);
+  });
+
+  it("releaseGovernorLock ist best-effort ohne Lock-Datei", () => {
+    const dir = tmpDir();
+    assert.doesNotThrow(() => releaseGovernorLock(dir));
   });
 });
