@@ -6043,7 +6043,7 @@ const plugin = {
               } catch { /* fresh */ }
               if (echoCooldownOk) {
                 const { loadFreshDreamEcho, formatDreamEchoContext } = await import("./lib/dream-echo.js");
-                const { loadGovernorState, saveGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend, acquireGovernorLock, releaseGovernorLock } = await import("./lib/proactive-governor.js");
+                const { loadGovernorState, saveGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend, withGovernorLock } = await import("./lib/proactive-governor.js");
                 const echo = loadFreshDreamEcho(ctx.workspaceDir, { now: nowMs });
                 if (echo) {
                   // Advisory cross-process lock (closes the lost-update window
@@ -6052,25 +6052,21 @@ const plugin = {
                   // is synchronous between load and save, so contention is only
                   // cross-process — on failure just leave dreamEchoContext null
                   // and don't stamp the cooldown, budget stays untouched.
-                  if (acquireGovernorLock(ctx.workspaceDir, { now: nowMs })) {
-                    try {
-                      let gov = loadGovernorState(ctx.workspaceDir);
-                      gov = applyOutcomeAdjustments(gov, readReplyOutcomeLog(ctx.workspaceDir, 100), { now: nowMs });
-                      if (evaluateGovernor(gov, nowMs).allowed) {
-                        dreamEchoContext = formatDreamEchoContext(echo);
-                        if (dreamEchoContext) gov = recordProactiveSend(gov, "dream-echo", nowMs);
-                      }
-                      saveGovernorState(ctx.workspaceDir, gov);
-                      // Only burn the daily stamp when injection actually happened —
-                      // if the governor blocked it, budget may free up later today,
-                      // so the day must not be marked as "shown" already.
-                      if (dreamEchoContext) {
-                        try { writeFileSync(echoCooldownPath, JSON.stringify({ date: new Date(nowMs).toISOString().slice(0, 10) }), "utf8"); } catch { }
-                      }
-                    } finally {
-                      releaseGovernorLock(ctx.workspaceDir);
+                  await withGovernorLock(ctx.workspaceDir, async () => {
+                    let gov = loadGovernorState(ctx.workspaceDir);
+                    gov = applyOutcomeAdjustments(gov, readReplyOutcomeLog(ctx.workspaceDir, 100), { now: nowMs });
+                    if (evaluateGovernor(gov, nowMs).allowed) {
+                      dreamEchoContext = formatDreamEchoContext(echo);
+                      if (dreamEchoContext) gov = recordProactiveSend(gov, "dream-echo", nowMs);
                     }
-                  }
+                    saveGovernorState(ctx.workspaceDir, gov);
+                    // Only burn the daily stamp when injection actually happened —
+                    // if the governor blocked it, budget may free up later today,
+                    // so the day must not be marked as "shown" already.
+                    if (dreamEchoContext) {
+                      try { writeFileSync(echoCooldownPath, JSON.stringify({ date: new Date(nowMs).toISOString().slice(0, 10) }), "utf8"); } catch { }
+                    }
+                  }, { now: nowMs });
                 }
               }
             } catch (_) { /* fail-open */ }
