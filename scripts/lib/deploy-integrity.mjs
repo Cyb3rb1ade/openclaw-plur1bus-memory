@@ -60,6 +60,7 @@ export const DEPLOY_FILES = [
   // ── Full Experience + temporal (v6.7.0) ────────────────────────────────────
   "lib/session-time.js",
   "lib/setup/feature-profiles.js",
+  "lib/setup/feature-cron-bootstrap.js",
   "lib/temporal-context.js",
   "lib/temporal-provenance.js",
   // ── multi-namespace + provider system (v6.7.0) ────────────────────────────
