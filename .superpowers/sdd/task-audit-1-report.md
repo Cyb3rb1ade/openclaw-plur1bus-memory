@@ -168,3 +168,49 @@ exit 0
 ### Updated concerns
 
 - The original out-of-scope concern for step 10 is now resolved.
+
+## Reviewer follow-up fix: automatic afterthought delivery wiring
+
+- Fixed `scripts/setup-feature-crons.mjs` so automatic multi-agent afterthought jobs that are planned as `enabled: false` and have no `delivery` object no longer emit `--announce`.
+- Preserved explicit delivery when `job.delivery` exists.
+- Preserved the legacy explicit operator `--agent` path for enabled afterthought jobs, and added focused coverage for both behaviors.
+
+### Reviewer follow-up TDD
+
+RED command:
+
+```bash
+node --test tests/feature-cron-bootstrap.test.js
+```
+
+RED failure:
+
+```text
+AssertionError [ERR_ASSERTION]: automatic disabled afterthought must not wire --announce
+```
+
+GREEN commands:
+
+```bash
+node --test tests/feature-cron-bootstrap.test.js
+node --check scripts/setup-feature-crons.mjs
+```
+
+GREEN results:
+
+```text
+✔ tests/feature-cron-bootstrap.test.js
+ℹ pass 1
+ℹ fail 0
+```
+
+```text
+node --check scripts/setup-feature-crons.mjs
+exit 0
+```
+
+### Reviewer follow-up files changed
+
+- `scripts/setup-feature-crons.mjs`
+- `tests/feature-cron-bootstrap.test.js`
+- `.superpowers/sdd/task-audit-1-report.md`

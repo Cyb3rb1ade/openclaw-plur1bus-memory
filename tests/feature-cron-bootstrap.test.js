@@ -164,6 +164,56 @@ describe("runSetupFeatureCrons --json", () => {
     assert.strictEqual(result.parsed.reason, "unexpected-error");
     assert.match(result.parsed.message, /boom/);
   });
+
+  it("does not emit announce args for automatic disabled afterthought jobs without delivery", async () => {
+    const cronAdds = [];
+    const result = await runJsonSetupWith((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") return { ok: true, stdout: JSON.stringify({ jobs: [] }), stderr: "", status: 0 };
+      if (args[0] === "agents" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            agents: [
+              { id: "main", bindings: 2, isDefault: true, workspace: "/ws/main" },
+            ],
+          }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && args[1] === "add") {
+        cronAdds.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    const afterthoughtAdd = cronAdds.find((args) => args.includes("--name") && args.includes("plur1bus afterthought main"));
+    assert.ok(afterthoughtAdd, "afterthought cron add call must be present");
+    assert.ok(!afterthoughtAdd.includes("--announce"), "automatic disabled afterthought must not wire --announce");
+    assert.ok(!afterthoughtAdd.includes("--channel"), "automatic disabled afterthought must not wire --channel");
+    assert.ok(!afterthoughtAdd.includes("--to"), "automatic disabled afterthought must not wire --to");
+  });
+
+  it("preserves legacy explicit --agent setup by emitting --announce for enabled afterthought jobs", async () => {
+    const cronAdds = [];
+    const result = await runJsonSetupWith((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") return { ok: true, stdout: JSON.stringify({ jobs: [] }), stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "add") {
+        cronAdds.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    }, ["--json", "--agent", "main"]);
+
+    assert.strictEqual(result.exitCode, 0);
+    const afterthoughtAdd = cronAdds.find((args) => args.includes("--name") && args.includes("plur1bus afterthought"));
+    assert.ok(afterthoughtAdd, "legacy explicit-agent afterthought cron add call must be present");
+    assert.ok(afterthoughtAdd.includes("--announce"), "legacy explicit-agent afterthought should still announce");
+  });
 });
 
 describe("parseFeatureCronBootstrapLastPlanCreateCount", () => {
