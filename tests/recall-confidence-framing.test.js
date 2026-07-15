@@ -64,4 +64,36 @@ describe("frameRecallConfidence", () => {
     const { hedgedIds } = frameRecallConfidence(items, { minSpread: 0 });
     assert.deepStrictEqual(hedgedIds, ["c"]);
   });
+
+  it("absoluteFloor: uniform starkes, enges Band hedgt weiterhin nicht (0.95..0.92)", () => {
+    const items = [mem("a", 0.95), mem("b", 0.94), mem("c", 0.93), mem("d", 0.92)];
+    const { hedgedIds } = frameRecallConfidence(items);
+    assert.deepStrictEqual(hedgedIds, []);
+  });
+
+  it("absoluteFloor: schwaches enges Band hedgt trotz Spread < minSpread (Graph-Recall-Fall)", () => {
+    const items = [mem("a", 0.38), mem("b", 0.36), mem("c", 0.35), mem("d", 0.34)];
+    const { hedgedIds } = frameRecallConfidence(items);
+    // scores sorted: [0.34,0.35,0.36,0.38]; bottom-third cut = scores[ceil(4/3)-1] = scores[1] = 0.35
+    // bottomThird = {c:0.35, d:0.34}; spread top(0.38)-cut(0.35)=0.03 < 0.1 → escape hatch applies,
+    // both are < absoluteFloor(0.4) → both eligible, maxHedged=2 keeps both.
+    assert.deepStrictEqual([...hedgedIds].sort(), ["c", "d"]);
+  });
+
+  it("absoluteFloor: gemischtes Set — nur absolut schwache Items im unteren Drittel sind eligible, wenn Spread zu klein ist", () => {
+    // Spread top-cut = 0.60 - 0.55 = 0.05 < minSpread 0.1 → nur < absoluteFloor eligible.
+    const items = [mem("a", 0.60), mem("b", 0.58), mem("c", 0.56), mem("d", 0.55), mem("e", 0.35)];
+    const { hedgedIds } = frameRecallConfidence(items);
+    // bottomFraction 1/3 of 5 items -> cut index = ceil(5/3)-1 = 1 -> cut = scores[1] = 0.35?
+    // scores sorted asc: [0.35,0.55,0.56,0.58,0.60]; cut = scores[ceil(5*1/3)-1] = scores[1] = 0.55
+    // bottomThird = items with score <= 0.55 => d(0.55), e(0.35)
+    // top=0.60, spread = 0.60-0.55=0.05 < 0.1 -> escape hatch: only score<0.4 -> e(0.35)
+    assert.deepStrictEqual(hedgedIds, ["e"]);
+  });
+
+  it("absoluteFloor: 0 deaktiviert den Escape-Hatch", () => {
+    const items = [mem("a", 0.38), mem("b", 0.36), mem("c", 0.35)];
+    const { hedgedIds } = frameRecallConfidence(items, { absoluteFloor: 0 });
+    assert.deepStrictEqual(hedgedIds, []);
+  });
 });
