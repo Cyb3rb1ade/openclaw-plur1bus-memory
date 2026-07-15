@@ -237,6 +237,17 @@ describe("DEPLOY_FILES coverage", () => {
     assert.deepStrictEqual(missing, [], `v6.7.0 critical files missing from DEPLOY_FILES: ${missing.join(", ")}`);
   });
 
+  it("contains the feature-cron bootstrap runtime files", () => {
+    const featureCronRuntime = [
+      "lib/setup/feature-cron-plan.js",
+      "scripts/setup-feature-crons.mjs",
+      "scripts/lib/openclaw-cli.mjs",
+      "scripts/lib/find-deploy-dir.mjs",
+    ];
+    const missing = featureCronRuntime.filter((f) => !DEPLOY_FILES.includes(f));
+    assert.deepStrictEqual(missing, [], `feature-cron runtime files missing from DEPLOY_FILES: ${missing.join(", ")}`);
+  });
+
   it("every file in DEPLOY_FILES exists on disk in the repo", () => {
     const missing = DEPLOY_FILES.filter((f) => !existsSync(join(REPO_ROOT, f)));
     assert.deepStrictEqual(missing, [], `DEPLOY_FILES lists files that do not exist on disk: ${missing.join(", ")}`);

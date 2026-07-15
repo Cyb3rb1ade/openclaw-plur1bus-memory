@@ -65,6 +65,21 @@ function assertBooleanDefault(path, expected) {
   );
 }
 
+function assertStrictObjectNode(path) {
+  const node = getSchemaNode(path);
+  assert.ok(node, `${path} fehlt im Schema`);
+  assert.strictEqual(node.type, "object", `${path} muss ein object sein`);
+  assert.strictEqual(node.additionalProperties, false, `${path} muss additionalProperties: false setzen`);
+  return node;
+}
+
+function assertEnumDefault(path, expected, expectedEnum) {
+  const node = getSchemaNode(path);
+  assert.ok(node, `${path} fehlt im Schema`);
+  assert.deepStrictEqual(node.enum, expectedEnum, `${path} enum stimmt nicht`);
+  assert.strictEqual(node.default, expected, `${path} default stimmt nicht`);
+}
+
 describe("Schema-Default-Typen (Recall)", () => {
   it("recall.importanceBoost ist eine Zahl", () =>
     assertNumberDefault("recall.importanceBoost", 0.3));
@@ -449,5 +464,51 @@ describe("Schema-Default-Typen (Emotion)", () => {
   });
   it("emotion.t3.model ist 'gpt-4o-mini'", () => {
     assert.strictEqual(getDefault("emotion.t3.model"), "gpt-4o-mini");
+  });
+});
+
+describe("Schema-Default-Typen (Humanization strict schema coverage)", () => {
+  it("recallHedging ist ein striktes Objekt mit den erwarteten Defaults", () => {
+    assertStrictObjectNode("recallHedging");
+    assertBooleanDefault("recallHedging.enabled", true);
+    assert.strictEqual(getSchemaNode("recallHedging.minItems")?.type, "number");
+    assert.strictEqual(getSchemaNode("recallHedging.bottomFraction")?.type, "number");
+    assert.strictEqual(getSchemaNode("recallHedging.maxHedged")?.type, "number");
+    assertNumberDefault("recallHedging.minSpread", 0.1);
+  });
+
+  it("styleDirective ist ein striktes Objekt mit den erwarteten Defaults", () => {
+    assertStrictObjectNode("styleDirective");
+    assertBooleanDefault("styleDirective.timeOfDay", true);
+    assert.strictEqual(getSchemaNode("styleDirective.timezone")?.type, "string");
+    assertBooleanDefault("styleDirective.opinion", true);
+    assertBooleanDefault("styleDirective.askBack", true);
+  });
+
+  it("dreamEcho ist ein striktes Objekt mit enabled default true", () => {
+    assertStrictObjectNode("dreamEcho");
+    assertBooleanDefault("dreamEcho.enabled", true);
+  });
+
+  it("personaVoice ist ein striktes Objekt mit enabled default true", () => {
+    assertStrictObjectNode("personaVoice");
+    assertBooleanDefault("personaVoice.enabled", true);
+  });
+
+  it("afterthought ist ein striktes Objekt mit enabled default true", () => {
+    assertStrictObjectNode("afterthought");
+    assertBooleanDefault("afterthought.enabled", true);
+    assert.strictEqual(getSchemaNode("afterthought.timezone")?.type, "string");
+  });
+
+  it("reactionNudge ist ein striktes Objekt with enum-backed enabled default", () => {
+    assertStrictObjectNode("reactionNudge");
+    assertEnumDefault("reactionNudge.enabled", "auto", [true, false, "auto"]);
+    assert.strictEqual(getSchemaNode("reactionNudge.palette")?.type, "string");
+  });
+
+  it("contradictionDisclosure ist ein striktes Objekt mit enabled default true", () => {
+    assertStrictObjectNode("contradictionDisclosure");
+    assertBooleanDefault("contradictionDisclosure.enabled", true);
   });
 });

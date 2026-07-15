@@ -60,6 +60,7 @@ export const DEPLOY_FILES = [
   // ── Full Experience + temporal (v6.7.0) ────────────────────────────────────
   "lib/session-time.js",
   "lib/setup/feature-profiles.js",
+  "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",
   "lib/temporal-context.js",
   "lib/temporal-provenance.js",
@@ -142,6 +143,9 @@ export const DEPLOY_FILES = [
   "lib/telegram-commands/status-data.js",
   "lib/telegram-commands/status.js",
   "lib/wiki-command.js",
+  "scripts/setup-feature-crons.mjs",
+  "scripts/lib/openclaw-cli.mjs",
+  "scripts/lib/find-deploy-dir.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",
