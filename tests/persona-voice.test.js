@@ -339,6 +339,72 @@ describe("appendMarkerToManagedBlock: 12er-Kappung", () => {
     for (let i = 2; i <= 10; i++) assert.ok(managedBlock.includes(`Gelernt ${i}.`));
   });
 
+  it("(d) 6-Bullet-Seed via writePersonaVoice: ALLE 6 Seed-Zeilen überleben die Kappung", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const seed6 = [
+      "- Seed A.", "- Seed B.", "- Seed C.", "- Seed D.", "- Seed E.", "- Seed F.",
+    ].join("\n");
+    writePersonaVoice(dir, seed6);
+    // 6 Seed + 7 gelernte = 13 → über der Kappe: Gelernt 1 fliegt, Seed bleibt komplett.
+    for (let i = 1; i <= 7; i++) {
+      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+    }
+    const { managedBlock } = readPersonaFile(dir);
+    const bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
+    assert.strictEqual(bullets.length, 12);
+    for (const s of ["Seed A.", "Seed B.", "Seed C.", "Seed D.", "Seed E.", "Seed F."]) {
+      assert.ok(managedBlock.includes(s), `Seed-Zeile fehlt: ${s}`);
+    }
+    assert.ok(!managedBlock.includes("Gelernt 1."));
+    for (let i = 2; i <= 7; i++) assert.ok(managedBlock.includes(`Gelernt ${i}.`));
+  });
+
+  it("(e) Legacy-Block OHNE seed-end-Boundary: Fallback schützt die ersten 3 Bullets", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    // Legacy-Datei manuell ohne Boundary schreiben (wie vor dieser Änderung).
+    const legacy = [
+      "# Persona-Voice", "",
+      "<!-- persona:begin -->",
+      SEED, // 3 Seed-Bullets, keine Boundary
+      "<!-- persona:end -->", "",
+    ].join("\n");
+    writeFileSync(join(dir, "persona-voice.md"), legacy, "utf8");
+    for (let i = 1; i <= 10; i++) {
+      assert.strictEqual(appendMarkerToManagedBlock(dir, `- Gelernt ${i}.`), true);
+    }
+    const { managedBlock } = readPersonaFile(dir);
+    const bullets = managedBlock.split("\n").filter((l) => l.trim().startsWith("- "));
+    assert.strictEqual(bullets.length, 12);
+    assert.ok(bullets[0].includes("Kurze, direkte Sätze."));
+    assert.ok(bullets[1].includes("passt schon"));
+    assert.ok(bullets[2].includes("Emojis sparsam"));
+    assert.ok(!managedBlock.includes("Gelernt 1."));
+    assert.ok(managedBlock.includes("Gelernt 10."));
+  });
+
+  it("(f) seed-end-Boundary leakt weder in Direktive noch Palette", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, "- Emoji-Palette: 🌊 🧭 ✨, selten\n- Lieblingswendung: „passt schon“.\n- Satzlängen-Neigung: kurz.");
+    const raw = readFileSync(join(dir, "persona-voice.md"), "utf8");
+    assert.ok(raw.includes("persona:seed-end"), "writePersonaVoice muss die Boundary schreiben");
+    const directive = loadPersonaDirective(dir);
+    assert.ok(directive.includes("passt schon"));
+    assert.ok(!directive.includes("seed-end"));
+    assert.ok(!directive.includes("<!--"));
+    assert.strictEqual(loadPersonaEmojiPalette(dir), "🌊 🧭 ✨");
+  });
+
+  it("(g) Dedup: identische Bullet-Zeile wird nicht doppelt angehängt, Rückgabe true", () => {
+    const dir = seededDir();
+    assert.strictEqual(appendMarkerToManagedBlock(dir, "- Neue Marotte."), true);
+    assert.strictEqual(appendMarkerToManagedBlock(dir, "- Neue Marotte."), true);
+    // Auch getrimmt identisch (Whitespace-Variante) wird dedupliziert.
+    assert.strictEqual(appendMarkerToManagedBlock(dir, "  - Neue Marotte.  "), true);
+    const { managedBlock } = readPersonaFile(dir);
+    const hits = managedBlock.split("\n").filter((l) => l.trim() === "- Neue Marotte.");
+    assert.strictEqual(hits.length, 1);
+  });
+
   it("(c) Nicht-Bullet-Inhalt im Managed Block bleibt unangetastet", () => {
     const dir = seededDir();
     const path = join(dir, "persona-voice.md");
