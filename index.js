@@ -3335,7 +3335,12 @@ const plugin = {
               }
               return { text: t("reminder.unknown", { lang, tone, vars: { sub: subKey } }) };
             }
-            if (action === "status") return formatJsonCommandResult(summarizeNeoStore(commandStore));
+            if (action === "status") {
+              const statusReport = summarizeNeoStore(commandStore);
+              const statusCronsHint = getFeatureCronsSetupHint(baseDbPath);
+              if (statusCronsHint) statusReport.featureCronsHint = statusCronsHint;
+              return formatJsonCommandResult(statusReport);
+            }
             if (action === "doctor") {
               const report = buildNeoDoctorReport({
                 hooks: commandStore.readHooks(),

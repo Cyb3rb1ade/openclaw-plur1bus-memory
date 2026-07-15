@@ -64,7 +64,10 @@ async function main() {
     process.exit(0);
   }
 
-  const list = openclaw(["cron", "list", "--json"], 15000);
+  // --all ist Pflicht: ohne das Flag blendet die CLI disabled Jobs aus —
+  // genau der delivery-sichere disabled-Default würde sonst bei jedem
+  // Lauf erneut angelegt und stapelt Duplikate.
+  const list = openclaw(["cron", "list", "--json", "--all"], 15000);
   if (!list.ok) {
     console.log("[setup-feature-crons] `openclaw cron list --json` failed — skipping (best-effort, safe to ignore during install).");
     if (list.stderr) console.log(`  ${list.stderr.trim()}`);
