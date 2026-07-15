@@ -148,22 +148,24 @@ describe("runAfterthoughtJob", () => {
     assert.strictEqual(res.skipped, true);
   });
 
-  it("liest reply-outcomes.jsonl im Cron-Pfad nur innerhalb des Size-Caps", async () => {
+  it("liest bei übergroßem reply-outcomes.jsonl den Tail und findet frischen Kandidaten", async () => {
     const dir = seedDir([]);
+    // Alter Riesen-Eintrag (>2MB) am Dateianfang, frischer offener Kandidat am Ende.
     const oversizedPrompt = "x".repeat(2 * 1024 * 1024 + 1024);
-    const entry = {
-      timestamp: T0 - 45 * M,
+    const oldEntry = {
+      timestamp: T0 - 300 * M,
       outcome: "asked_details",
       userPrompt: oversizedPrompt,
     };
+    const freshEntry = o(45, "asked_details");
     writeFileSync(
       join(dir, ".adaptive-learning", "reply-outcomes.jsonl"),
-      `${JSON.stringify(entry)}\n`,
+      `${JSON.stringify(oldEntry)}\n${JSON.stringify(freshEntry)}\n`,
       "utf8",
     );
 
     const res = await runAfterthoughtJob({ workspaceDir: dir, agentId: "a", ...llm, now: T0, hour: 12 });
-    assert.deepStrictEqual(res, { skipped: true, reason: "no_candidate" });
+    assert.ok(res.text, `erwartete Afterthought-Text, bekam: ${JSON.stringify(res)}`);
   });
 
   it("verliert keinen konkurrierenden Governor-Send während des LLM-Awaits (lost-update race)", async () => {
