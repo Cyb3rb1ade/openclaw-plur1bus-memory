@@ -8,6 +8,7 @@ import {
   loadPersonaDirective, readPersonaFile, appendMarkerToManagedBlock,
   proposePersonaEvolution, acceptPersonaProposal,
   loadPersonaEmojiPalette, ensurePersonaVoiceSeed,
+  scheduleEnsurePersonaVoiceSeed,
 } from "../lib/persona-voice.js";
 
 const SEED = "- Kurze, direkte Sätze.\n- Lieblingswendung: „passt schon“.\n- Emojis sparsam: 🙂 gelegentlich.";
@@ -85,6 +86,85 @@ describe("persona-voice", () => {
     const { managedBlock, content } = readPersonaFile(dir);
     assert.ok(managedBlock.includes("Neue Marotte"));
     assert.ok(content.includes("User-Notiz"));
+  });
+
+  it("loadPersonaEmojiPalette: ZWJ-Komposit-Emoji zählt als EIN Match, kein Split", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, "- Emoji-Palette: 🏳️‍🌈 🌊, ab und zu\n- Lieblingswendung: „passt schon“.");
+    const palette = loadPersonaEmojiPalette(dir);
+    assert.strictEqual(palette, "🏳️‍🌈 🌊");
+  });
+
+  it("loadPersonaEmojiPalette: ein einzelnes ZWJ-Familien-Emoji besteht die ≥2-Heuristik nicht", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, "- Emoji-Palette: 👨‍👩‍👧, selten\n- Lieblingswendung: „passt schon“.");
+    assert.strictEqual(loadPersonaEmojiPalette(dir), null);
+  });
+});
+
+describe("scheduleEnsurePersonaVoiceSeed (hot-path throttle)", () => {
+  it("blockiert den Aufrufer nie, auch wenn callLlm hängt", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    const callLlm = () => new Promise(() => {}); // hängt für immer
+    let returned = false;
+    scheduleEnsurePersonaVoiceSeed(
+      { workspaceDir: dir, agentId: "anna", llmCfg: { model: "x" }, callLlm },
+      { attempts: new Map(), inFlight: new Set() },
+    );
+    returned = true;
+    assert.strictEqual(returned, true);
+  });
+
+  it("in-flight guard: gleichzeitige Aufrufe feuern callLlm nur einmal", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    let calls = 0;
+    let resolveLlm;
+    const callLlm = () => new Promise((resolve) => { calls += 1; resolveLlm = resolve; });
+    const attempts = new Map();
+    const inFlight = new Set();
+    const p1 = scheduleEnsurePersonaVoiceSeed(
+      { workspaceDir: dir, agentId: "anna", llmCfg: { model: "x" }, callLlm },
+      { attempts, inFlight },
+    );
+    const p2 = scheduleEnsurePersonaVoiceSeed(
+      { workspaceDir: dir, agentId: "anna", llmCfg: { model: "x" }, callLlm },
+      { attempts, inFlight },
+    );
+    assert.strictEqual(calls, 1);
+    resolveLlm(SEED);
+    await p1;
+    await p2;
+  });
+
+  it("6h Backoff nach fehlgeschlagenem Versuch: kein erneuter callLlm-Aufruf im Fenster", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    let calls = 0;
+    const callLlm = async () => { calls += 1; return null; }; // generatePersonaSeed liefert null → Fehlschlag
+    const attempts = new Map();
+    const inFlight = new Set();
+    let now = 1_000_000;
+    await scheduleEnsurePersonaVoiceSeed(
+      { workspaceDir: dir, agentId: "anna", llmCfg: { model: "x" }, callLlm },
+      { attempts, inFlight, now },
+    );
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(hasPersonaVoice(dir), false);
+
+    // Innerhalb des 6h-Fensters: kein erneuter Aufruf
+    now += 60 * 60 * 1000; // +1h
+    await scheduleEnsurePersonaVoiceSeed(
+      { workspaceDir: dir, agentId: "anna", llmCfg: { model: "x" }, callLlm },
+      { attempts, inFlight, now },
+    );
+    assert.strictEqual(calls, 1);
+
+    // Nach 6h: erneuter Versuch erlaubt
+    now += 6 * 60 * 60 * 1000 + 1;
+    await scheduleEnsurePersonaVoiceSeed(
+      { workspaceDir: dir, agentId: "anna", llmCfg: { model: "x" }, callLlm },
+      { attempts, inFlight, now },
+    );
+    assert.strictEqual(calls, 2);
   });
 });
 

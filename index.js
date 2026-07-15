@@ -6022,14 +6022,18 @@ const plugin = {
           let personaEmojiPalette = null;
           if (ctx?.workspaceDir && (cfg.personaVoice?.enabled ?? true) !== false) {
             try {
-              const { ensurePersonaVoiceSeed, loadPersonaDirective, loadPersonaEmojiPalette } = await import("./lib/persona-voice.js");
-              await ensurePersonaVoiceSeed({
+              const { scheduleEnsurePersonaVoiceSeed, loadPersonaDirective, loadPersonaEmojiPalette } = await import("./lib/persona-voice.js");
+              // Fire-and-forget: seed generation calls an LLM (default 30s
+              // timeout) and must never block prompt assembly, which runs
+              // under the much shorter recallTimeoutMs. Throttled internally
+              // (in-flight guard + 6h backoff after a failed attempt).
+              scheduleEnsurePersonaVoiceSeed({
                 workspaceDir: ctx.workspaceDir,
                 agentId,
                 lang: cfg.language || "de",
                 llmCfg: skillMinerLlmCfg || mergingLlmCfg || null,
                 callLlm,
-              });
+              })?.catch(() => {});
               personaDirective = loadPersonaDirective(ctx.workspaceDir);
               personaEmojiPalette = loadPersonaEmojiPalette(ctx.workspaceDir);
             } catch (_) { /* fail-open */ }
