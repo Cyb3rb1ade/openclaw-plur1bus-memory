@@ -235,6 +235,7 @@ import {
 } from "./lib/speaker-mapping-store.js";
 import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.js";
 import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THREADS_SHOWN_FILE } from "./lib/open-threads.js";
+import { hourInTimeZone } from "./lib/time-window.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
@@ -2830,6 +2831,7 @@ const plugin = {
                   agentId: internalAgent,
                   llmCfg: skillMinerLlmCfg || mergingLlmCfg || null,
                   callLlm,
+                  timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
                   logger: api.logger,
                 });
                 api.logger?.info?.(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
@@ -5790,7 +5792,7 @@ const plugin = {
 
           const styleCfg = cfg.styleDirective || {};
           const moodStyleDirective = buildMoodStyleDirective(emotionalPool.describe(agentId), {
-            hour: styleCfg.timeOfDay !== false ? new Date(nowMs).getHours() : null,
+            hour: styleCfg.timeOfDay !== false ? hourInTimeZone(nowMs, styleCfg.timezone ?? cfg.timezone ?? null) : null,
             temperamentName: cfg.emotion?.temperaments?.[agentId]?.preset ?? null,
             opinion: styleCfg.opinion !== false,
             askBack: styleCfg.askBack !== false,
