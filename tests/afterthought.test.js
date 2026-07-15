@@ -72,6 +72,14 @@ describe("runAfterthoughtJob", () => {
     assert.strictEqual(earlyMorning.reason, "quiet_hours");
   });
 
+  it("timeZone bestimmt die Ruhezeiten-Stunde, wenn keine explizite hour übergeben wird", async () => {
+    // Epoche mit UTC-Stunde 23 → in UTC-Ruhezeit (22-8), egal was die Server-Lokalzeit sagt.
+    const utc23 = Date.UTC(2026, 0, 15, 23, 30);
+    const res = await runAfterthoughtJob({ workspaceDir: seedDir([]), agentId: "a", ...llm, now: utc23, timeZone: "UTC" });
+    assert.strictEqual(res.skipped, true);
+    assert.strictEqual(res.reason, "quiet_hours");
+  });
+
   it("überspringt Thema, das heute schon als offener Faden lief", async () => {
     const dir = seedDir([o(45, "asked_details")]);
     writeFileSync(join(dir, ".open-threads-shown.json"), JSON.stringify({ date: new Date(T0).toISOString().slice(0, 10), topics: ["wie richte ich das Backup ein?"] }), "utf8");
