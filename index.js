@@ -1505,6 +1505,9 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
     });
     ok = await new Promise((resolvePromise) => {
       child.stdout?.on("data", (chunk) => { stdout += chunk; });
+      // stderr wird nicht ausgewertet, muss aber gedraint werden — ein
+      // voller Pipe-Buffer würde das Kind blockieren und 'close' nie feuern.
+      child.stderr?.resume();
       child.on("error", () => resolvePromise(false));
       child.on("close", (code) => resolvePromise(code === 0));
     });
@@ -1530,10 +1533,18 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
   let lastPlanCreateCount;
   try {
     const parsed = stdout.trim() ? JSON.parse(stdout.trim()) : null;
-    if (Array.isArray(parsed?.results)) {
-      lastPlanCreateCount = parsed.results.filter((r) => !r?.ok).length;
-    } else if (parsed && typeof parsed === "object") {
-      lastPlanCreateCount = 0;
+    if (parsed && typeof parsed === "object") {
+      const failedCreates = Array.isArray(parsed.results)
+        ? parsed.results.filter((r) => !r?.ok).length
+        : 0;
+      // Delivery-pflichtige Jobs, die mangels ableitbarem Ziel nur disabled
+      // angelegt wurden, gelten weiterhin als "pending": der doctor/status-
+      // Hinweis soll sichtbar bleiben, bis der Operator sie aktiviert hat
+      // (README verspricht genau das).
+      const disabledDeliveryCreates = Array.isArray(parsed.plan?.create)
+        ? parsed.plan.create.filter((c) => c?.needsDelivery && c?.enabled === false).length
+        : 0;
+      lastPlanCreateCount = failedCreates + disabledDeliveryCreates;
     }
   } catch (_e) {
     lastPlanCreateCount = undefined;
