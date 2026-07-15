@@ -88,6 +88,17 @@ describe("shouldShowNudge — Jitter", () => {
 });
 
 describe("shouldShowNudge — Ruhezeiten", () => {
+  it("Ruhezeit blockt auch den ersten Nudge bei Stunde 23", () => {
+    let now;
+    try {
+      now = nowAtHour(23);
+    } catch {
+      return;
+    }
+    const result = shouldShowNudge({ keyword: "test" }, null, now, { jitter: false });
+    assert.equal(result, false, "Ruhezeit 23:00 → erster Nudge ebenfalls geblockt");
+  });
+
   it("Ruhezeit blockt bei Stunde 23", () => {
     let now;
     try {
