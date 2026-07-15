@@ -21,6 +21,17 @@ describe("detectReactionsCapability", () => {
     a.channels.self = a;
     assert.strictEqual(detectReactionsCapability(a), false);
   });
+
+  it("erkennt das reale Gateway-Schema tools.message.actions.allow", () => {
+    assert.strictEqual(
+      detectReactionsCapability({ tools: { message: { actions: { allow: ["react"] } } } }),
+      true
+    );
+    assert.strictEqual(
+      detectReactionsCapability({ actions: { allow: ["send"] } }),
+      false
+    );
+  });
 });
 
 describe("buildReactionDirective", () => {

@@ -1875,6 +1875,7 @@ function makeReactionsCapabilityChecker(api) {
         : (api.runtime?.config && typeof api.runtime.config === "object" ? api.runtime.config : null);
       _reactionsCapability = detectReactionsCapability(runtimeConfig);
     } catch (_) { _reactionsCapability = false; }
+    try { api.logger?.info?.(`plur1bus: reaction capability auto-detect → ${_reactionsCapability}`); } catch (_) { /* non-blocking */ }
     return _reactionsCapability;
   };
 }
