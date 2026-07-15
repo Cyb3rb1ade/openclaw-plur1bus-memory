@@ -234,7 +234,7 @@ import {
   resetSpeakerMappingDbForTests,
 } from "./lib/speaker-mapping-store.js";
 import { proposeSpeakerNames, storeNewProposals } from "./lib/speaker-proposer.js";
-import { collectOpenThreads, formatOpenThreadsContext } from "./lib/open-threads.js";
+import { collectOpenThreads, formatOpenThreadsContext, normalizeTopic, OPEN_THREADS_SHOWN_FILE } from "./lib/open-threads.js";
 import { readJsonl } from "./lib/jsonl-utils.js";
 
 // Pfade relativ zum Plugin-Verzeichnis auflösen — der Stock-Pfad bleibt nur
@@ -5802,7 +5802,7 @@ const plugin = {
             try {
               const resolvedWorkspaceDir = resolve(ctx.workspaceDir);
               const outcomesPath = join(resolvedWorkspaceDir, ".adaptive-learning", "reply-outcomes.jsonl");
-              const cooldownPath = join(resolvedWorkspaceDir, ".open-threads-shown.json");
+              const cooldownPath = join(resolvedWorkspaceDir, OPEN_THREADS_SHOWN_FILE);
               if (!outcomesPath.startsWith(resolvedWorkspaceDir + "/") || !cooldownPath.startsWith(resolvedWorkspaceDir + "/")) throw new Error("open-threads: path escapes workspaceDir");
               const todayUtc = new Date(nowMs).toISOString().slice(0, 10);
               let cooldownOk = true;
@@ -5815,11 +5815,14 @@ const plugin = {
                 try {
                   rawEntries = readJsonl(outcomesPath);
                   // reply-outcomes.jsonl has no "topic" field — derive one from userPrompt
-                  rawEntries = rawEntries.map((e) => e.topic ? e : { ...e, topic: typeof e.userPrompt === "string" ? e.userPrompt.slice(0, 80).replace(/[\r\n]+/g, " ").trim() : null });
+                  // Collapse whitespace BEFORE slicing so the stored dedup topics
+                  // normalize identically to the afterthought reader (which slices
+                  // AFTER collapsing) — see normalizeTopic in lib/open-threads.js.
+                  rawEntries = rawEntries.map((e) => e.topic ? e : { ...e, topic: typeof e.userPrompt === "string" ? e.userPrompt.replace(/\s+/g, " ").trim().slice(0, 80) : null });
                 } catch { /* file missing → empty */ }
                 const threads = collectOpenThreads(rawEntries, { now: nowMs });
                 openThreadsContext = formatOpenThreadsContext(threads);
-                try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc, topics: (threads || []).map((t) => t.topic).filter(Boolean) }), "utf8"); } catch { /* non-blocking */ }
+                try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc, topics: (threads || []).map((t) => normalizeTopic(t.topic)).filter(Boolean) }), "utf8"); } catch { /* non-blocking */ }
               }
             } catch { /* fail-open */ }
           }
