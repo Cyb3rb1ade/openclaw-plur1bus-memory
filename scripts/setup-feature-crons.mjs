@@ -140,8 +140,14 @@ async function main() {
     }
   }
 
+  // Im --json-Modus darf stdout genau EIN JSON-Objekt enthalten: bei
+  // dry-run/nichts-zu-tun dieses hier, sonst erst das Ergebnis-Objekt nach
+  // den cron-add-Aufrufen (vorher wären es zwei konkatenierte Objekte, die
+  // der /plur1bus-setup-crons-Parser nicht lesen kann).
   if (opts.json) {
-    console.log(JSON.stringify({ dryRun: opts.dryRun, plan }, null, 2));
+    if (opts.dryRun || plan.create.length === 0) {
+      console.log(JSON.stringify({ dryRun: opts.dryRun, plan }, null, 2));
+    }
   } else {
     console.log("[setup-feature-crons] plan:");
     for (const s of plan.skip) {
