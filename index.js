@@ -250,6 +250,18 @@ const OPENAI_PLUGIN_PATH  = join(__pluginDir, "node_modules/openai/index.js");
 const DEFAULT_BASE_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
 const DEFAULT_MODEL = LEGACY_DEFAULT_MODEL;
 
+// PLUGIN_VERSION: read once from openclaw.plugin.json (Single Source of
+// Truth, see file header). Used only for the fail-open feature-cron notice
+// below — never for anything version-gating behavior.
+let PLUGIN_VERSION = "0.0.0";
+try {
+  PLUGIN_VERSION = JSON.parse(readFileSync(join(__pluginDir, "openclaw.plugin.json"), "utf8")).version || PLUGIN_VERSION;
+} catch (_err) { /* best-effort; stays "0.0.0" */ }
+
+// Feature-cron setup notice: checked at most once per gateway process
+// (module-level flag), fail-open, never throws.
+let _featureCronsNoticeChecked = false;
+
 const TABLE_NAME = "memories";
 
 // Modulweiter Debug-Logger: wird in register() auf api.logger gesetzt. So
@@ -1422,6 +1434,44 @@ function resolveNeoHooksConfig(api, commandConfig) {
 
 function formatJsonCommandResult(value) {
   return { text: JSON.stringify(value, null, 2) };
+}
+
+// Cache for getFeatureCronsSetupHint — computed at most once per gateway
+// process (see _featureCronsNoticeChecked at module scope).
+let _featureCronsHintCache = null;
+
+/**
+ * Fail-open, at-most-once-per-process check: has this installation ever run
+ * the feature-cron setup for the current plugin version? If not (fresh
+ * install/update, or marker missing/stale), return a short hint string to
+ * append to doctor/status output — never an unsolicited message on its own.
+ *
+ * The marker lives under the plugin's own baseDbPath (user-scoped, same
+ * base the plugin already uses for everything else — never a hardcoded
+ * system path), so this works identically for root and non-root installs.
+ */
+function getFeatureCronsSetupHint(baseDbPath) {
+  if (_featureCronsNoticeChecked) return _featureCronsHintCache;
+  _featureCronsNoticeChecked = true;
+  try {
+    const markerPath = join(baseDbPath, ".feature-crons-setup.json");
+    let marker = null;
+    if (existsSync(markerPath)) {
+      try { marker = JSON.parse(readFileSync(markerPath, "utf8")); } catch (_e) { marker = null; }
+    }
+    if (!marker || marker.pluginVersion !== PLUGIN_VERSION) {
+      _featureCronsHintCache = "Feature-Crons prüfen: node scripts/setup-feature-crons.mjs oder /plur1bus setup crons";
+    }
+    try {
+      mkdirSync(baseDbPath, { recursive: true });
+      const tmp = `${markerPath}.tmp-${process.pid}-${Date.now()}`;
+      writeFileSync(tmp, JSON.stringify({ pluginVersion: PLUGIN_VERSION, checkedAt: new Date().toISOString() }, null, 2));
+      renameSync(tmp, markerPath);
+    } catch (_e) { /* fail-open: don't block doctor output on a write failure */ }
+  } catch (_e) {
+    _featureCronsHintCache = null;
+  }
+  return _featureCronsHintCache;
 }
 
 function findNeoRecord(store, id) {
@@ -3083,6 +3133,27 @@ const plugin = {
               const profileName = sub?.toLowerCase() || "";
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
               const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
+              if (profileName === "crons") {
+                const cronsAgent = commandOption(tokens, "--agent", "") || null;
+                const cronsAccount = commandOption(tokens, "--account", "") || null;
+                const args = ["scripts/setup-feature-crons.mjs", "--json"];
+                if (cronsAgent) args.push("--agent", cronsAgent);
+                if (cronsAccount) args.push("--account", cronsAccount);
+                const { spawnSync } = await import("node:child_process");
+                const r = spawnSync("node", args, { cwd: __pluginDir, encoding: "utf8", timeout: 30000 });
+                if (r.error || r.status !== 0) {
+                  return { text: lang === "de"
+                    ? `❌ Feature-Cron-Setup fehlgeschlagen: ${r.error?.message || r.stderr?.trim() || "unbekannter Fehler"}`
+                    : `❌ Feature-cron setup failed: ${r.error?.message || r.stderr?.trim() || "unknown error"}` };
+                }
+                let summary;
+                try {
+                  summary = JSON.parse(r.stdout);
+                } catch (_e) {
+                  summary = r.stdout;
+                }
+                return formatJsonCommandResult(summary);
+              }
               if (!profileName) {
                 return { text: t("plur1bus.setup_profiles", { lang, tone }) };
               }
@@ -3271,6 +3342,8 @@ const plugin = {
                 config: { ...neoCfg, hooks: resolveNeoHooksConfig(api, commandCtx.config) },
               });
               report.runtimeScheduler = runtimeScheduler.status();
+              const featureCronsHint = getFeatureCronsSetupHint(baseDbPath);
+              if (featureCronsHint) report.featureCronsHint = featureCronsHint;
               return formatJsonCommandResult(report);
             }
             if (action === "neo" && sub === "workspaces" && tokens[2] === "migrate") {
