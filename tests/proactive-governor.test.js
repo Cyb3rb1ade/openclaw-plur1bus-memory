@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend,
-  acquireGovernorLock, releaseGovernorLock,
+  acquireGovernorLock, releaseGovernorLock, withGovernorLock,
 } from "../lib/proactive-governor.js";
 
 const H = 3600000, D = 86400000;
@@ -100,41 +100,127 @@ describe("governor lock (Fix 6 — cross-process advisory lock)", () => {
 
   it("acquire/release roundtrip", () => {
     const dir = tmpDir();
-    assert.strictEqual(acquireGovernorLock(dir, { now: T0 }), true);
+    const token = acquireGovernorLock(dir, { now: T0 });
+    assert.strictEqual(typeof token, "string");
+    assert.ok(token.length > 0);
     assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), true);
-    releaseGovernorLock(dir);
+    releaseGovernorLock(dir, token);
     assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), false);
   });
 
   it("zweiter Acquire schlägt fehl, während der erste hält", () => {
     const dir = tmpDir();
-    assert.strictEqual(acquireGovernorLock(dir, { now: T0 }), true);
-    assert.strictEqual(acquireGovernorLock(dir, { now: T0 + 1000 }), false);
-    releaseGovernorLock(dir);
+    const token = acquireGovernorLock(dir, { now: T0 });
+    assert.ok(token);
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 + 1000 }), null);
+    releaseGovernorLock(dir, token);
   });
 
   it("stale Lock (älter als staleMs) wird reklamiert", () => {
     const dir = tmpDir();
     writeFileSync(join(dir, ".proactive-governor.lock"), String(T0), "utf8");
     const acquired = acquireGovernorLock(dir, { now: T0 + 31000, staleMs: 30000 });
-    assert.strictEqual(acquired, true);
+    assert.strictEqual(typeof acquired, "string");
+  });
+
+  it("stale Lock nach 120s (Default staleMs) wird reklamiert", () => {
+    const dir = tmpDir();
+    const firstToken = acquireGovernorLock(dir, { now: T0 });
+    assert.ok(firstToken);
+    // Default staleMs (120000) not yet elapsed — still held.
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 + 119000 }), null);
+    const reclaimed = acquireGovernorLock(dir, { now: T0 + 120001 });
+    assert.strictEqual(typeof reclaimed, "string");
+    assert.notStrictEqual(reclaimed, firstToken);
   });
 
   it("kaputtes Lock-File (unlesbarer Timestamp) wird reklamiert", () => {
     const dir = tmpDir();
     writeFileSync(join(dir, ".proactive-governor.lock"), "not-a-timestamp", "utf8");
     const acquired = acquireGovernorLock(dir, { now: T0, staleMs: 30000 });
-    assert.strictEqual(acquired, true);
+    assert.strictEqual(typeof acquired, "string");
   });
 
   it("frisches Lock wird NICHT reklamiert", () => {
     const dir = tmpDir();
-    assert.strictEqual(acquireGovernorLock(dir, { now: T0 }), true);
-    assert.strictEqual(acquireGovernorLock(dir, { now: T0 + 5000, staleMs: 30000 }), false);
+    const token = acquireGovernorLock(dir, { now: T0 });
+    assert.ok(token);
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 + 5000, staleMs: 30000 }), null);
   });
 
   it("releaseGovernorLock ist best-effort ohne Lock-Datei", () => {
     const dir = tmpDir();
-    assert.doesNotThrow(() => releaseGovernorLock(dir));
+    assert.doesNotThrow(() => releaseGovernorLock(dir, "whatever"));
+  });
+
+  it("Release mit falschem Token ist ein No-Op (Datei bleibt bestehen)", () => {
+    const dir = tmpDir();
+    const token = acquireGovernorLock(dir, { now: T0 });
+    assert.ok(token);
+    releaseGovernorLock(dir, "wrong-token");
+    assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), true);
+    releaseGovernorLock(dir, token);
+    assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), false);
+  });
+
+  it("Release mit richtigem Token entfernt die Lock-Datei", () => {
+    const dir = tmpDir();
+    const token = acquireGovernorLock(dir, { now: T0 });
+    releaseGovernorLock(dir, token);
+    assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), false);
+  });
+
+  it("Legacy numerisches Lock-File ist von jedem Token releasbar", () => {
+    const dir = tmpDir();
+    writeFileSync(join(dir, ".proactive-governor.lock"), String(T0), "utf8");
+    releaseGovernorLock(dir, "any-token-at-all");
+    assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), false);
+  });
+
+  it("Legacy numerisches Lock-File bleibt stale-checkbar per Timestamp", () => {
+    const dir = tmpDir();
+    writeFileSync(join(dir, ".proactive-governor.lock"), String(T0), "utf8");
+    assert.strictEqual(acquireGovernorLock(dir, { now: T0 + 1000, staleMs: 120000 }), null);
+    const reclaimed = acquireGovernorLock(dir, { now: T0 + 120001, staleMs: 120000 });
+    assert.strictEqual(typeof reclaimed, "string");
+  });
+});
+
+describe("withGovernorLock", () => {
+  function tmpDir() {
+    return mkdtempSync(join(tmpdir(), "gov-lock-with-"));
+  }
+
+  it("führt fn aus und released danach", async () => {
+    const dir = tmpDir();
+    let ran = false;
+    const outcome = await withGovernorLock(dir, async () => {
+      ran = true;
+      assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), true);
+      return "ok";
+    }, { now: T0 });
+    assert.strictEqual(ran, true);
+    assert.strictEqual(outcome.locked, true);
+    assert.strictEqual(outcome.result, "ok");
+    assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), false);
+  });
+
+  it("released auch wenn fn wirft", async () => {
+    const dir = tmpDir();
+    await assert.rejects(() => withGovernorLock(dir, async () => {
+      throw new Error("boom");
+    }, { now: T0 }));
+    assert.strictEqual(existsSync(join(dir, ".proactive-governor.lock")), false);
+  });
+
+  it("gibt locked:false zurück und ruft fn nicht auf, wenn der Lock nicht frei ist", async () => {
+    const dir = tmpDir();
+    const token = acquireGovernorLock(dir, { now: T0 });
+    assert.ok(token);
+    let called = false;
+    const outcome = await withGovernorLock(dir, async () => { called = true; }, { now: T0 + 1000 });
+    assert.strictEqual(outcome.locked, false);
+    assert.strictEqual(called, false);
+    releaseGovernorLock(dir, token);
   });
 });
