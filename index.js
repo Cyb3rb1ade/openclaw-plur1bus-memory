@@ -6076,7 +6076,11 @@ const plugin = {
                   // and don't stamp the cooldown, budget stays untouched.
                   await withGovernorLock(ctx.workspaceDir, async () => {
                     let gov = loadGovernorState(ctx.workspaceDir);
-                    gov = applyOutcomeAdjustments(gov, readReplyOutcomeLog(ctx.workspaceDir, 100), { now: nowMs });
+                    gov = applyOutcomeAdjustments(
+                      gov,
+                      readReplyOutcomeLog(ctx.workspaceDir, 100, { maxBytes: MAX_PROMPT_REPLY_OUTCOME_READ_BYTES }),
+                      { now: nowMs },
+                    );
                     if (evaluateGovernor(gov, nowMs).allowed) {
                       dreamEchoContext = formatDreamEchoContext(echo);
                       if (dreamEchoContext) gov = recordProactiveSend(gov, "dream-echo", nowMs);
