@@ -95,6 +95,7 @@ export const DEPLOY_FILES = [
   "lib/pattern-surface.js",
   // ── humanization features ──────────────────────────────────────────────────
   "lib/jsonl-utils.js",
+  "lib/atomic-file.js",
   "lib/mood-style-directive.js",
   "lib/review-narrative-lead.js",
   "lib/open-threads.js",
