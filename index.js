@@ -5846,7 +5846,12 @@ const plugin = {
                     if (dreamEchoContext) gov = recordProactiveSend(gov, "dream-echo", nowMs);
                   }
                   saveGovernorState(ctx.workspaceDir, gov);
-                  try { writeFileSync(echoCooldownPath, JSON.stringify({ date: new Date(nowMs).toISOString().slice(0, 10) }), "utf8"); } catch { }
+                  // Only burn the daily stamp when injection actually happened —
+                  // if the governor blocked it, budget may free up later today,
+                  // so the day must not be marked as "shown" already.
+                  if (dreamEchoContext) {
+                    try { writeFileSync(echoCooldownPath, JSON.stringify({ date: new Date(nowMs).toISOString().slice(0, 10) }), "utf8"); } catch { }
+                  }
                 }
               }
             } catch (_) { /* fail-open */ }
