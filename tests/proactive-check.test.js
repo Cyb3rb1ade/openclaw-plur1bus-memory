@@ -38,6 +38,15 @@ function readNudges(workspaceDir) {
 }
 
 describe("runProactiveCheck", () => {
+  // TZ-safety note: `now` below is a fixed UTC instant that is NOT itself
+  // guaranteed to land outside quiet hours (22:00-08:00 local) in every
+  // timezone — e.g. it's 05:00 in America/Los_Angeles. That's fine here
+  // because every pattern in makeTurns() has no prior cooldown entry, so
+  // shouldShowNudge's lastShown==null bypass short-circuits before the
+  // quiet-hours check runs at all (see lib/proactive-nudge.js). If a future
+  // test adds a pre-seeded cooldown for one of these keywords, pick a `now`
+  // that's outside quiet hours in all timezones or pass quietHours:false
+  // explicitly — do not rely on this comment alone.
   it("generates at most two nudges when three patterns are eligible on the same day", async () => {
     const now = Date.parse("2026-07-15T12:00:00Z");
     const result = await runProactiveCheck(
