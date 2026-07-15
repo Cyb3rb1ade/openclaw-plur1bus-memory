@@ -357,20 +357,30 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
     assert.strictEqual(mainPersona.delivery, null);
   });
 
-  it("plans afterthought disabled without a live delivery object even when the agent's other crons agree", () => {
+  it("plans afterthought enabled with derived delivery when the agent's other crons agree", () => {
     const existing = [
-      { agentId: "main", name: "plur1bus-morning-review-main", delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
+      {
+        agentId: "main",
+        name: "plur1bus-morning-review-main",
+        delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "telegram-main" },
+      },
     ];
     const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents: twoAgents });
     const mainAfterthought = plan.create.find((j) => j.name === "plur1bus afterthought main");
-    assert.strictEqual(mainAfterthought.enabled, false);
-    assert.strictEqual(mainAfterthought.delivery, null);
-    assert.ok(typeof mainAfterthought.hint === "string" && mainAfterthought.hint.length > 0);
-    assert.match(mainAfterthought.hint, /cron edit/);
+    assert.strictEqual(mainAfterthought.enabled, true);
+    assert.deepStrictEqual(mainAfterthought.delivery, {
+      channel: "telegram",
+      to: "55736530",
+      accountId: "telegram-main",
+    });
+    assert.strictEqual(mainAfterthought.account, "telegram-main");
+    assert.strictEqual(mainAfterthought.hint, undefined);
 
     const bernhardineAfterthought = plan.create.find((j) => j.name === "plur1bus afterthought bernhardine");
     assert.strictEqual(bernhardineAfterthought.enabled, false);
+    assert.strictEqual(bernhardineAfterthought.delivery, null);
     assert.ok(typeof bernhardineAfterthought.hint === "string" && bernhardineAfterthought.hint.length > 0);
+    assert.match(bernhardineAfterthought.hint, /--account/);
   });
 
   it("legacy exact-name job satisfies only the default agent's spec", () => {

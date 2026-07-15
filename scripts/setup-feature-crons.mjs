@@ -21,6 +21,7 @@
 import { planFeatureCrons, REQUIRED_FEATURE_CRONS, selectAgentsForCronSetup } from "../lib/setup/feature-cron-plan.js";
 import { openclaw } from "./lib/openclaw-cli.mjs";
 import { fileURLToPath } from "node:url";
+import { realpathSync } from "node:fs";
 
 function parseArgs(argv) {
   const opts = { dryRun: false, agent: null, account: null, json: false };
@@ -44,12 +45,12 @@ function buildAddArgs(job) {
   const args = ["cron", "add", "--name", job.name, "--message", job.message, ...scheduleArgs(job.schedule)];
   args.push("--session", "isolated");
   if (job.agent) args.push("--agent", job.agent);
-  // Explicit delivery wiring is only present on jobs that already carry a
-  // live delivery target. Automatic multi-agent setup keeps delivery-needing
-  // jobs disabled until an operator enables them explicitly, so those jobs
-  // must not emit guessed announce/channel/to flags in the fallback branch.
-  // The only remaining fallback announce path is the legacy explicit
-  // operator-managed `--agent` flow, and even there only for enabled jobs.
+  // job.delivery is set whenever a live delivery target was derived (either
+  // automatically from the agent's other crons — see deriveAgentDelivery —
+  // or explicitly passed in). When present it's the authoritative source
+  // for announce/channel/to/account; only the legacy explicit-operator
+  // `--agent`/`--account` flow (no derivable delivery object) falls back to
+  // the guessed --announce, and even there only for enabled jobs.
   if (job.delivery) {
     args.push("--announce");
     if (job.delivery.channel) args.push("--channel", job.delivery.channel);
@@ -297,7 +298,18 @@ export async function runSetupFeatureCrons(options = {}) {
   }
 }
 
-const IS_MAIN = process.argv[1] === fileURLToPath(import.meta.url);
+// process.argv[1] === fileURLToPath(import.meta.url) is false through
+// symlinked dirs AND symlinked files (pnpm, npm link, symlinked extensions
+// dir) — comparing realpaths survives those. Without this, postinstall,
+// bootstrap, and `/plur1bus setup crons` all become silent no-ops when the
+// package is reached through a symlink.
+const IS_MAIN = (() => {
+  try {
+    return process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+})();
 
 if (IS_MAIN) {
   runSetupFeatureCrons().then((code) => {
