@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { shouldRunCronBootstrap } from "../lib/setup/feature-cron-bootstrap.js";
+import {
+  shouldRunCronBootstrap,
+  featureCronsHintFromMarker,
+} from "../lib/setup/feature-cron-bootstrap.js";
 
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
@@ -48,6 +51,41 @@ describe("shouldRunCronBootstrap", () => {
     assert.strictEqual(
       shouldRunCronBootstrap({ pluginVersion: "1.2.2", lastRunAt }, { now: NOW, pluginVersion: PV }),
       true,
+    );
+  });
+});
+
+describe("featureCronsHintFromMarker", () => {
+  it("hints when marker is missing", () => {
+    assert.match(featureCronsHintFromMarker(null, PV), /setup-feature-crons/);
+    assert.match(featureCronsHintFromMarker(undefined, PV), /setup-feature-crons/);
+  });
+
+  it("hints when marker is from an older plugin version", () => {
+    assert.match(
+      featureCronsHintFromMarker({ pluginVersion: "1.2.2", lastPlanCreateCount: 0 }, PV),
+      /setup-feature-crons/,
+    );
+  });
+
+  it("hints when the last run still had crons left to create", () => {
+    assert.match(
+      featureCronsHintFromMarker({ pluginVersion: PV, lastPlanCreateCount: 3 }, PV),
+      /setup-feature-crons/,
+    );
+  });
+
+  it("is silent when the last run is current-version and created everything", () => {
+    assert.strictEqual(
+      featureCronsHintFromMarker({ pluginVersion: PV, lastPlanCreateCount: 0 }, PV),
+      null,
+    );
+  });
+
+  it("is silent when lastPlanCreateCount is absent but version matches (treat as nothing pending)", () => {
+    assert.strictEqual(
+      featureCronsHintFromMarker({ pluginVersion: PV }, PV),
+      null,
     );
   });
 });

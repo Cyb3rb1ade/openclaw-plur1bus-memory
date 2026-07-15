@@ -47,7 +47,7 @@ import {
 } from "./lib/memory-merge-safety.js";
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
-import { shouldRunCronBootstrap } from "./lib/setup/feature-cron-bootstrap.js";
+import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
@@ -260,9 +260,10 @@ try {
   PLUGIN_VERSION = JSON.parse(readFileSync(join(__pluginDir, "openclaw.plugin.json"), "utf8")).version || PLUGIN_VERSION;
 } catch (_err) { /* best-effort; stays "0.0.0" */ }
 
-// Feature-cron setup notice: checked at most once per gateway process
-// (module-level flag), fail-open, never throws.
-let _featureCronsNoticeChecked = false;
+// Feature-cron setup hint cache: computed at most once per gateway process
+// (see getFeatureCronsSetupHint below), fail-open, never throws.
+// undefined = not yet computed; null = computed, no hint; string = hint text.
+let _featureCronsHintCache;
 
 const TABLE_NAME = "memories";
 
@@ -1448,38 +1449,19 @@ function featureCronsMarkerPath(baseDbPath) {
   return join(baseDbPath, ".feature-crons-setup.json");
 }
 
-// Cache for getFeatureCronsSetupHint — computed at most once per gateway
-// process (see _featureCronsNoticeChecked at module scope).
-let _featureCronsHintCache = null;
-
 /**
- * Fail-open, at-most-once-per-process check: has this installation ever run
- * the feature-cron setup for the current plugin version? If not (fresh
- * install/update, or marker missing/stale), return a short hint string to
- * append to doctor/status output — never an unsolicited message on its own.
- *
- * The marker lives under the plugin's own baseDbPath (user-scoped, same
- * base the plugin already uses for everything else — never a hardcoded
- * system path), so this works identically for root and non-root installs.
+ * Fail-open, at-most-once-per-process, condition-derived doctor/status
+ * hint: does the feature-cron setup marker show anything still worth
+ * running? The marker is written by the gateway_start deferred bootstrap
+ * (and/or a successful `/plur1bus setup crons`) — this function only
+ * *reads* it, it never writes ("checked" and "resolved" must stay
+ * distinct signals; see featureCronsHintFromMarker).
  */
 function getFeatureCronsSetupHint(baseDbPath) {
-  if (_featureCronsNoticeChecked) return _featureCronsHintCache;
-  _featureCronsNoticeChecked = true;
+  if (_featureCronsHintCache !== undefined) return _featureCronsHintCache;
   try {
-    const markerPath = featureCronsMarkerPath(baseDbPath);
-    let marker = null;
-    if (existsSync(markerPath)) {
-      try { marker = JSON.parse(readFileSync(markerPath, "utf8")); } catch (_e) { marker = null; }
-    }
-    if (!marker || marker.pluginVersion !== PLUGIN_VERSION) {
-      _featureCronsHintCache = "Feature-Crons prüfen: node scripts/setup-feature-crons.mjs oder /plur1bus setup crons";
-    }
-    try {
-      mkdirSync(baseDbPath, { recursive: true });
-      const tmp = `${markerPath}.tmp-${process.pid}-${Date.now()}`;
-      writeFileSync(tmp, JSON.stringify({ pluginVersion: PLUGIN_VERSION, checkedAt: new Date().toISOString() }, null, 2));
-      renameSync(tmp, markerPath);
-    } catch (_e) { /* fail-open: don't block doctor output on a write failure */ }
+    const marker = readJsonSafe(featureCronsMarkerPath(baseDbPath), null);
+    _featureCronsHintCache = featureCronsHintFromMarker(marker, PLUGIN_VERSION);
   } catch (_e) {
     _featureCronsHintCache = null;
   }
@@ -1573,8 +1555,7 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }) {
 
   // Cache is process-lifetime; invalidate it so the next doctor/status call
   // re-reads the marker we just wrote instead of an earlier (or absent) hint.
-  _featureCronsNoticeChecked = false;
-  _featureCronsHintCache = null;
+  _featureCronsHintCache = undefined;
 
   api.logger?.info?.(
     `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
