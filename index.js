@@ -5639,10 +5639,6 @@ const plugin = {
             ordered = dedupResults(nsResults.flatMap(r => r.memories || []), dedupJaccard);
           }
           trace = pipelineTrace || trace;
-          if (ordered.length === 0 && canonicalHits.length === 0) {
-            const noMemoryContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
-            return noMemoryContext ? { prependContext: noMemoryContext } : undefined;
-          }
 
           api.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
 
@@ -5691,11 +5687,13 @@ const plugin = {
             items.push(item);
           }
 
-          const semanticLensResult = await applySemanticLensToRecall(ordered, {
-            semanticLens: semanticLensCfg,
-            workspaceDir: ctx?.workspaceDir,
-            getMemoryById: async (memoryId) => db.getById(memoryId),
-          });
+          const semanticLensResult = (ordered.length === 0 && canonicalHits.length === 0)
+            ? { lensMemories: [] }
+            : await applySemanticLensToRecall(ordered, {
+              semanticLens: semanticLensCfg,
+              workspaceDir: ctx?.workspaceDir,
+              getMemoryById: async (memoryId) => db.getById(memoryId),
+            });
           const semanticLensItems = semanticLensResult.lensMemories.map((r) => ({
             id: r.entry.id,
             category: r.entry.category,
@@ -6048,7 +6046,10 @@ const plugin = {
                 } catch { /* file missing → empty */ }
                 const threads = collectOpenThreads(rawEntries, { now: nowMs });
                 openThreadsContext = formatOpenThreadsContext(threads);
-                try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc, topics: (threads || []).map((t) => normalizeTopic(t.topic)).filter(Boolean) }), "utf8"); } catch { /* non-blocking */ }
+                const normalizedTopics = (threads || []).map((t) => normalizeTopic(t.topic)).filter(Boolean);
+                if (openThreadsContext && normalizedTopics.length > 0) {
+                  try { writeFileSync(cooldownPath, JSON.stringify({ date: todayUtc, topics: normalizedTopics }), "utf8"); } catch { /* non-blocking */ }
+                }
               }
             } catch { /* fail-open */ }
           }
