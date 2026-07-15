@@ -97,10 +97,11 @@ describe("planFeatureCrons", () => {
     assert.strictEqual(plan.create[0].hint, undefined);
   });
 
-  it("plans a needsDelivery spec as enabled when account is given (agent optional)", () => {
+  it("plans a needsDelivery spec as disabled with a hint when only account is given (no agent) — --account alone never yields a concrete --to, so --announce would resolve to the runtime 'last'-chat fallback and could silently mis-deliver", () => {
     const plan = planFeatureCrons([], [afterthoughtSpec], { account: "telegram-main" });
-    assert.strictEqual(plan.create[0].enabled, true);
+    assert.strictEqual(plan.create[0].enabled, false);
     assert.strictEqual(plan.create[0].account, "telegram-main");
+    assert.ok(typeof plan.create[0].hint === "string" && plan.create[0].hint.length > 0);
   });
 
   it("passes agent/account through onto every created job", () => {
