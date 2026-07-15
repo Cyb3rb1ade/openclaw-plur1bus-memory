@@ -197,6 +197,19 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 
 When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run `/plur1bus internal afterthought` and deliver the result — if the JSON has a `text` field, send exactly that text as the message; if `skipped` is `true`, output NOTHING.
 
+Setting this cron up (plus the weekly `persona-evolve` cron) is automatic on multi-agent installations — see below.
+
+#### Multi-agent feature-cron automation
+
+`node scripts/setup-feature-crons.mjs` (also runs on `npm install`/`npm postinstall`, and manually via `/plur1bus setup crons`) discovers every **bound** agent on the installation via `openclaw agents list --json` and plans a `persona-evolve` + `afterthought` cron pair for each one — zero manual follow-up needed after adding a new agent, even with dozens of subagents configured.
+
+- **Bound-agent rule**: only agents with `bindings > 0` (i.e. an actual chat channel routes to them) get feature crons. Subagents (`bindings === 0` — researchers, deep-divers, and other internal-use-only agents) are deliberately excluded; they have no chat to receive a persona-evolution proposal or an afterthought delivery, and running these jobs against them would be pure compute waste.
+- **One agent per workspace**: PLUR1BUS state for these jobs (persona voice, proactive-governor budget, afterthought dedup state, …) is keyed by workspace directory, not agent id. If two bound agents share a workspace, only one gets the crons (tiebreak: `isDefault` first, then most bindings, then alphabetically-first id) to avoid two crons double-firing against the same state files.
+- **Per-agent job names**: `plur1bus persona-evolve <agentId>` and `plur1bus afterthought <agentId>`, each running with `--agent <agentId>`. `persona-evolve` schedules are staggered 5 minutes apart per agent (starting Sunday 04:15) so N agents' weekly evolution jobs don't all fire at the same instant.
+- **Delivery derivation for `afterthought`**: the setup script looks at each agent's *other* existing crons for a delivery target (`delivery.mode !== "none"` with a `to`), preferring jobs already named `plur1bus …`. If every candidate target agrees on channel + destination, the new `afterthought` cron is created **enabled**, delivering to that same target. If targets conflict, or the agent has no delivery-capable crons yet, it's created **disabled** with a hint showing the exact `openclaw cron edit`/`enable` commands to wire delivery manually — it never guesses or delivers to nobody.
+- **Legacy installs**: a pre-multi-agent, non-suffixed `plur1bus persona-evolve` / `plur1bus afterthought` job (from an earlier version of this plugin) is treated as already satisfying the default agent's spec — it's left alone, not duplicated, when you upgrade.
+- **Fallback**: if `openclaw agents list --json` fails, is unparseable, or yields no bound agents, the script falls back to the previous single-default-agent behavior (prints a note) — the exit-0, never-fail-an-install contract holds either way. Passing `--agent <id>`/`--account <acct>` explicitly always forces single-agent mode, same semantics as before.
+
 ## Installation
 
 Drop into an OpenClaw extensions folder and restart the gateway:

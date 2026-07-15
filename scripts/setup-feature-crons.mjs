@@ -19,7 +19,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { planFeatureCrons, REQUIRED_FEATURE_CRONS } from "../lib/setup/feature-cron-plan.js";
+import { planFeatureCrons, REQUIRED_FEATURE_CRONS, selectAgentsForCronSetup } from "../lib/setup/feature-cron-plan.js";
 
 function parseArgs(argv) {
   const opts = { dryRun: false, agent: null, account: null, json: false };
@@ -48,11 +48,47 @@ function buildAddArgs(job) {
   const args = ["cron", "add", "--name", job.name, "--message", job.message, ...scheduleArgs(job.schedule)];
   args.push("--session", "isolated");
   if (job.agent) args.push("--agent", job.agent);
-  if (job.account) args.push("--account", job.account);
-  if (job.needsDelivery && job.agent) args.push("--announce");
+  // Multi-agent mode: a derived delivery target (job.delivery, from
+  // deriveAgentDelivery) always wins — it's the specific channel/to/account
+  // this agent's other crons already deliver to. Legacy single-agent mode
+  // has no job.delivery and falls back to the old --account + bare
+  // --announce (gateway default channel/to for that account).
+  if (job.delivery) {
+    args.push("--announce");
+    if (job.delivery.channel) args.push("--channel", job.delivery.channel);
+    if (job.delivery.to) args.push("--to", job.delivery.to);
+    if (job.delivery.accountId) args.push("--account", job.delivery.accountId);
+  } else {
+    if (job.account) args.push("--account", job.account);
+    if (job.needsDelivery && job.agent) args.push("--announce");
+  }
   if (!job.enabled) args.push("--disabled");
   args.push("--json");
   return args;
+}
+
+/**
+ * Discover bound agents via `openclaw agents list --json` and reduce them
+ * to the set that gets feature crons (see selectAgentsForCronSetup). On any
+ * failure (CLI missing, non-zero exit, unparseable JSON, empty result) this
+ * returns null — the caller falls back to the pre-multi-agent single
+ * default-agent behavior, per the never-fail-an-install contract.
+ *
+ * @returns {Array<{id: string, isDefault: boolean}> | null}
+ */
+function discoverAgents() {
+  const r = openclaw(["agents", "list", "--json"], 15000);
+  if (!r.ok) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(r.stdout);
+  } catch {
+    return null;
+  }
+  const agents = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.agents) ? parsed.agents : null;
+  if (!agents) return null;
+  const selected = selectAgentsForCronSetup(agents);
+  return selected.length > 0 ? selected : null;
 }
 
 async function main() {
@@ -83,7 +119,26 @@ async function main() {
     process.exit(0);
   }
 
-  const plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agent: opts.agent, account: opts.account });
+  // Explicit --agent/--account always wins: single-agent mode, current
+  // (pre-multi-agent) semantics — an operator who names an agent knows
+  // exactly what they want, discovery would only get in the way.
+  let plan;
+  if (opts.agent || opts.account) {
+    plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agent: opts.agent, account: opts.account });
+  } else {
+    const agents = discoverAgents();
+    if (agents) {
+      plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agents });
+    } else {
+      if (!opts.json) {
+        console.log(
+          "[setup-feature-crons] agent discovery unavailable (`openclaw agents list --json` failed, unparseable, or no bound agents) — " +
+            "falling back to single-agent mode (no --agent/--account, delivery-gated crons created disabled).",
+        );
+      }
+      plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agent: opts.agent, account: opts.account });
+    }
+  }
 
   if (opts.json) {
     console.log(JSON.stringify({ dryRun: opts.dryRun, plan }, null, 2));
