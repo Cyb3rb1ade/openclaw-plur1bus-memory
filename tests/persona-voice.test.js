@@ -7,6 +7,7 @@ import {
   hasPersonaVoice, generatePersonaSeed, writePersonaVoice,
   loadPersonaDirective, readPersonaFile, appendMarkerToManagedBlock,
   proposePersonaEvolution, acceptPersonaProposal,
+  loadPersonaEmojiPalette, ensurePersonaVoiceSeed,
 } from "../lib/persona-voice.js";
 
 const SEED = "- Kurze, direkte Sätze.\n- Lieblingswendung: „passt schon“.\n- Emojis sparsam: 🙂 gelegentlich.";
@@ -55,6 +56,20 @@ describe("persona-voice", () => {
     assert.strictEqual(loadPersonaDirective(dir), null);
   });
 
+  it("loadPersonaEmojiPalette liest nur den Managed-Block", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, "- Emoji-Palette: 🌊 🧭 ✨, selten\n- Lieblingswendung: „passt schon“.");
+    const path = join(dir, "persona-voice.md");
+    writeFileSync(path, readFileSync(path, "utf8") + "\nUser-Notiz: 😀 😈", "utf8");
+    assert.strictEqual(loadPersonaEmojiPalette(dir), "🌊 🧭 ✨");
+  });
+
+  it("loadPersonaEmojiPalette: null ohne offensichtliche Emoji-Palette", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writePersonaVoice(dir, "- Lieblingswendung: „passt schon“.\n- Satzlängen-Neigung: kurz.");
+    assert.strictEqual(loadPersonaEmojiPalette(dir), null);
+  });
+
   it("appendMarkerToManagedBlock hängt im Block an, User-Text bleibt", () => {
     const dir = mkdtempSync(join(tmpdir(), "pv-"));
     writePersonaVoice(dir, SEED);
@@ -76,6 +91,49 @@ describe("persona evolution", () => {
     writePersonaVoice(dir, SEED);
     return dir;
   }
+
+  it("ensurePersonaVoiceSeed erzeugt beim Erststart ein Persona-Profil", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writeFileSync(join(dir, "IDENTITY.md"), "identity fallback", "utf8");
+    writeFileSync(join(dir, "SOUL.md"), "soul first", "utf8");
+    let seenMessages = null;
+    const callLlm = async (messages) => {
+      seenMessages = messages;
+      return "- Emoji-Palette: 🌊 🧭 ✨, selten\n- Lieblingswendung: „passt schon“.\n- Satzlängen-Neigung: kurz.";
+    };
+
+    assert.strictEqual(await ensurePersonaVoiceSeed({
+      workspaceDir: dir,
+      agentId: "anna",
+      lang: "de",
+      llmCfg: { model: "x" },
+      callLlm,
+    }), true);
+    assert.ok(hasPersonaVoice(dir));
+    assert.match(seenMessages[1].content, /soul first/);
+    assert.doesNotMatch(seenMessages[1].content, /identity fallback/);
+  });
+
+  it("ensurePersonaVoiceSeed bleibt ohne LLM inert", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pv-"));
+    writeFileSync(join(dir, "SOUL.md"), "soul first", "utf8");
+    assert.strictEqual(await ensurePersonaVoiceSeed({ workspaceDir: dir, agentId: "anna" }), false);
+    assert.strictEqual(hasPersonaVoice(dir), false);
+  });
+
+  it("ensurePersonaVoiceSeed überschreibt kein bestehendes Persona-Profil", async () => {
+    const dir = seededDir();
+    const before = readFileSync(join(dir, "persona-voice.md"), "utf8");
+    const callLlm = async () => "- Emoji-Palette: 🐢";
+
+    assert.strictEqual(await ensurePersonaVoiceSeed({
+      workspaceDir: dir,
+      agentId: "anna",
+      llmCfg: { model: "x" },
+      callLlm,
+    }), false);
+    assert.strictEqual(readFileSync(join(dir, "persona-voice.md"), "utf8"), before);
+  });
 
   it("schlägt bei positivem Trend genau EINEN Marker vor", async () => {
     const dir = seededDir();
