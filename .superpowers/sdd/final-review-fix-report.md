@@ -87,3 +87,46 @@ Both passed after the fix.
 ## Concerns
 
 None from this change set. The prompt wrapper now mixes German system instructions with a short English trust marker (`Untrusted historical context`) because the regression explicitly checks for that label. That does not affect the response contract, but it is worth normalizing later if the project wants one language for all internal prompt scaffolding.
+
+## Follow-up Fix
+
+Re-review found that the first hardening pass still sent the stored `candidate.userPrompt` to the model as a live `role: "user"` message. That left the trust boundary incomplete even though the text was sanitized and labeled.
+
+### Additional change
+
+Updated `composeAfterthought` so that:
+
+- the sanitized stored prompt is included only inside the `system` prompt
+- the historical block remains explicitly labeled as untrusted historical context
+- the live `user` message is now a neutral generation instruction with no stored log text
+- the bounded `reply-outcomes.jsonl` read cap remains unchanged
+
+### Regression update
+
+Tightened `tests/afterthought.test.js` so it now asserts that:
+
+- there is still exactly one `user` role message
+- no `user` role message contains the stored historical text or its injection payload
+- the sanitized historical text is present only in non-user prompt content
+- raw `<system>` and raw injected closing tags are absent from that non-user content
+
+### Exact test output
+
+`node --test tests/afterthought.test.js`
+
+```text
+✔ tests/afterthought.test.js (342.228423ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 363.279218
+```
+
+`node --check lib/afterthought.js`
+
+```text
+```
