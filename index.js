@@ -3140,11 +3140,20 @@ const plugin = {
                 if (cronsAgent) args.push("--agent", cronsAgent);
                 if (cronsAccount) args.push("--account", cronsAccount);
                 const { spawnSync } = await import("node:child_process");
-                const r = spawnSync("node", args, { cwd: __pluginDir, encoding: "utf8", timeout: 30000 });
+                // 180s: setup-feature-crons.mjs can spawn several sequential
+                // `openclaw` CLI calls (agent discovery, cron list, one
+                // `cron add` per planned job), each with its own up-to-15s
+                // timeout — worst case observed ~125s on a multi-agent
+                // install. 30s cut that off mid-run. Any partial creation
+                // is safe either way: the planner is idempotent and
+                // self-heals on the next run/retry.
+                const r = spawnSync("node", args, { cwd: __pluginDir, encoding: "utf8", timeout: 180000 });
                 if (r.error || r.status !== 0) {
+                  const detail = r.error?.message || r.stderr?.trim() || "unbekannter Fehler";
+                  const detailEn = r.error?.message || r.stderr?.trim() || "unknown error";
                   return { text: lang === "de"
-                    ? `❌ Feature-Cron-Setup fehlgeschlagen: ${r.error?.message || r.stderr?.trim() || "unbekannter Fehler"}`
-                    : `❌ Feature-cron setup failed: ${r.error?.message || r.stderr?.trim() || "unknown error"}` };
+                    ? `❌ Feature-Cron-Setup fehlgeschlagen: ${detail}\n  Hinweis: bereits erstellte Crons bleiben erhalten — ein erneuter Lauf holt den Rest idempotent nach.`
+                    : `❌ Feature-cron setup failed: ${detailEn}\n  Note: any crons already created are kept — re-running self-heals the rest idempotently.` };
                 }
                 let summary;
                 try {
