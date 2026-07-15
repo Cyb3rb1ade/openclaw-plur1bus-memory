@@ -133,3 +133,80 @@ Passing output:
 ## Issues/concerns
 
 - None at implementation time.
+
+## Reviewer follow-up fixes
+
+Reviewer findings addressed:
+
+- Removed current-behavior imperatives from the bodies of all three untrusted prompt blocks while keeping:
+  - the required block labels
+  - the safety language
+  - sanitized stored text
+- Reworked block bodies into descriptive historical context only:
+  - open threads now list topic, age, and stored outcome signal
+  - dream echo now records the nightly echo sentence as historical context only
+  - contradiction disclosure now records older vs. newer conflicting snippets without current-behavior guidance
+- Bounded the dream-echo governor path outcome-log read in `index.js` with the same `2 * 1024 * 1024` cap already used on the open-threads path.
+
+Files updated in this follow-up:
+
+- `index.js`
+- `lib/open-threads.js`
+- `lib/dream-echo.js`
+- `lib/contradiction-disclosure.js`
+- `tests/open-threads.test.js`
+- `tests/dream-echo.test.js`
+- `tests/contradiction-disclosure.test.js`
+
+### Reviewer-fix RED
+
+Command:
+
+```bash
+node --test tests/open-threads.test.js tests/dream-echo.test.js tests/contradiction-disclosure.test.js tests/reply-outcome-tracking.test.js
+```
+
+Failure summary before the follow-up fix:
+
+```text
+✖ tests/contradiction-disclosure.test.js (182.897028ms)
+✖ tests/dream-echo.test.js (211.153446ms)
+✖ tests/open-threads.test.js (200.270745ms)
+✔ tests/reply-outcome-tracking.test.js (232.83096ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 1
+ℹ fail 3
+```
+
+Representative failure:
+
+```text
+AssertionError [ERR_ASSERTION]: The input was expected to not match the regular expression
+/nur ansprechen|maximal einen|erwähne|lass es weg|du folgst/i
+```
+
+### Reviewer-fix GREEN
+
+Command:
+
+```bash
+node --test tests/open-threads.test.js tests/dream-echo.test.js tests/contradiction-disclosure.test.js tests/reply-outcome-tracking.test.js
+```
+
+Exact passing output:
+
+```text
+✔ tests/contradiction-disclosure.test.js (172.42243ms)
+✔ tests/dream-echo.test.js (301.718144ms)
+✔ tests/open-threads.test.js (181.312578ms)
+✔ tests/reply-outcome-tracking.test.js (289.230496ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 337.594947
+```
