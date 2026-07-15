@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "6.9.10",
+  "version": "6.9.11",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -679,6 +679,29 @@
               "type": "boolean",
               "default": false
             }
+          }
+        }
+      },
+      "recallHedging": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "minItems": {
+            "type": "number"
+          },
+          "bottomFraction": {
+            "type": "number"
+          },
+          "maxHedged": {
+            "type": "number"
+          },
+          "minSpread": {
+            "type": "number",
+            "default": 0.1
           }
         }
       },
@@ -1560,6 +1583,87 @@
           "enabled": {
             "type": "boolean",
             "default": false
+          }
+        }
+      },
+      "styleDirective": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "timeOfDay": {
+            "type": "boolean",
+            "default": true
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "opinion": {
+            "type": "boolean",
+            "default": true
+          },
+          "askBack": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "dreamEcho": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "personaVoice": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "afterthought": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "timezone": {
+            "type": "string"
+          }
+        }
+      },
+      "reactionNudge": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "enum": [
+              true,
+              false,
+              "auto"
+            ],
+            "default": "auto"
+          },
+          "palette": {
+            "type": "string"
+          }
+        }
+      },
+      "contradictionDisclosure": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
           }
         }
       },

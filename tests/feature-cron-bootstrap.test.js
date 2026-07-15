@@ -1,9 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { Writable } from "node:stream";
 import {
   shouldRunCronBootstrap,
   featureCronsHintFromMarker,
 } from "../lib/setup/feature-cron-bootstrap.js";
+import { runSetupFeatureCrons } from "../scripts/setup-feature-crons.mjs";
 
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
@@ -82,10 +84,82 @@ describe("featureCronsHintFromMarker", () => {
     );
   });
 
-  it("is silent when lastPlanCreateCount is absent but version matches (treat as nothing pending)", () => {
-    assert.strictEqual(
+  it("hints when lastPlanCreateCount is absent but version matches", () => {
+    assert.match(
       featureCronsHintFromMarker({ pluginVersion: PV }, PV),
-      null,
+      /setup-feature-crons/,
     );
+  });
+});
+
+function createWritableBuffer() {
+  let data = "";
+  return {
+    stream: new Writable({
+      write(chunk, _encoding, callback) {
+        data += chunk.toString();
+        callback();
+      },
+    }),
+    read() {
+      return data;
+    },
+  };
+}
+
+async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
+  const stdout = createWritableBuffer();
+  const stderr = createWritableBuffer();
+  const exitCode = await runSetupFeatureCrons({ argv, openclawImpl, stdout: stdout.stream, stderr: stderr.stream });
+  const text = stdout.read().trim();
+  return {
+    exitCode,
+    stdout: text,
+    stderr: stderr.read(),
+    parsed: JSON.parse(text),
+  };
+}
+
+describe("runSetupFeatureCrons --json", () => {
+  it("prints one JSON object and exit 0 when the CLI is unavailable", async () => {
+    const result = await runJsonSetupWith(() => ({ ok: false, stdout: "", stderr: "missing", status: 1 }));
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
+    assert.strictEqual(result.parsed.reason, "cli-unavailable");
+  });
+
+  it("prints one JSON object and exit 0 when cron list fails", async () => {
+    const calls = [];
+    const result = await runJsonSetupWith((args) => {
+      calls.push(args);
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") return { ok: false, stdout: "", stderr: "list failed", status: 1 };
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
+    assert.strictEqual(result.parsed.reason, "cron-list-failed");
+    assert.strictEqual(calls.length, 2);
+  });
+
+  it("prints one JSON object and exit 0 when cron list JSON is unparseable", async () => {
+    const result = await runJsonSetupWith((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") return { ok: true, stdout: "{not-json", stderr: "", status: 0 };
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
+    assert.strictEqual(result.parsed.reason, "cron-list-parse-failed");
+  });
+
+  it("prints one JSON object and exit 0 on unexpected top-level errors", async () => {
+    const result = await runJsonSetupWith(() => {
+      throw new Error("boom");
+    });
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
+    assert.strictEqual(result.parsed.reason, "unexpected-error");
+    assert.match(result.parsed.message, /boom/);
   });
 });
