@@ -88,15 +88,17 @@ describe("shouldShowNudge — Jitter", () => {
 });
 
 describe("shouldShowNudge — Ruhezeiten", () => {
-  it("Ruhezeit blockt auch den ersten Nudge bei Stunde 23", () => {
+  it("Ruhezeit blockt NICHT den ersten Nudge bei Stunde 23 (Erster-Nudge-Bypass hat Vorrang)", () => {
     let now;
     try {
       now = nowAtHour(23);
     } catch {
       return;
     }
+    // lastShown === null → Erster-Nudge-Bypass greift vor der Ruhezeiten-Prüfung.
+    // Andernfalls würde ein Cron-Job, der nur nachts läuft, nie einen Nudge erzeugen.
     const result = shouldShowNudge({ keyword: "test" }, null, now, { jitter: false });
-    assert.equal(result, false, "Ruhezeit 23:00 → erster Nudge ebenfalls geblockt");
+    assert.equal(result, true, "Ruhezeit 23:00 → erster Nudge trotzdem erlaubt");
   });
 
   it("Ruhezeit blockt bei Stunde 23", () => {
