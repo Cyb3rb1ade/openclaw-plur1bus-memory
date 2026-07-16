@@ -462,8 +462,11 @@ describe("Schema-Default-Typen (Emotion)", () => {
       assert.ok(profile[key], `temperaments-Profil braucht Property ${key}`);
     }
   });
-  it("emotion.t3.model ist 'gpt-4o-mini'", () => {
-    assert.strictEqual(getDefault("emotion.t3.model"), "gpt-4o-mini");
+  it("emotion.t3.model hat KEINEN Schema-Default (gateway injiziert Schema-Defaults in die Plugin-Config — ein Default hier würde den mergingModel-Fallback in index.js überschreiben und T3 auf ein fremdes Modell festnageln)", () => {
+    const node = getSchemaNode("emotion.t3.model");
+    assert.ok(node, "emotion.t3.model fehlt im Schema");
+    assert.strictEqual(node.type, "string");
+    assert.strictEqual(getDefault("emotion.t3.model"), undefined);
   });
 });
 

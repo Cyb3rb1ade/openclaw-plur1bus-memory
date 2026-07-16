@@ -1824,8 +1824,7 @@
                 "default": false
               },
               "model": {
-                "type": "string",
-                "default": "gpt-4o-mini"
+                "type": "string"
               },
               "apiKey": {
                 "type": "string"
