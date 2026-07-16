@@ -426,3 +426,60 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
     assert.strictEqual(plan.create.length, 6);
   });
 });
+
+describe("Message-Contract-Migration bestehender Jobs", () => {
+  const OLD_CONTRACT =
+    "/plur1bus internal afterthought\n\n" +
+    "Delivery contract: the job returns JSON. If it has a `text` field, " +
+    "send exactly that text as the message, verbatim, with no additional " +
+    "commentary. If `skipped` is true, output NOTHING at all.";
+  const agents = [{ id: "main", isDefault: true }];
+
+  it("plant ein Message-Update für einen existierenden Job mit altem 'output NOTHING'-Contract", () => {
+    const existing = [
+      { id: "job-1", name: "plur1bus afterthought main", agentId: "main", payload: { message: OLD_CONTRACT } },
+    ];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    assert.ok(Array.isArray(plan.update), "plan.update existiert");
+    assert.strictEqual(plan.update.length, 1);
+    assert.strictEqual(plan.update[0].id, "job-1");
+    assert.match(plan.update[0].message, /reply with exactly NO_REPLY/);
+    assert.doesNotMatch(plan.update[0].message, /output NOTHING at all/);
+    // Der Job bleibt trotzdem geskippt (kein Duplikat-Create).
+    assert.ok(plan.skip.some((s) => s.existingJob?.id === "job-1"));
+  });
+
+  it("erhält Nutzer-Anpassungen rund um den alten Contract-Satz", () => {
+    const custom = `MEIN PREFIX\n${OLD_CONTRACT}\nMEIN SUFFIX`;
+    const existing = [
+      { id: "job-2", name: "plur1bus afterthought main", agentId: "main", payload: { message: custom } },
+    ];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    assert.strictEqual(plan.update.length, 1);
+    assert.match(plan.update[0].message, /^MEIN PREFIX\n/);
+    assert.match(plan.update[0].message, /\nMEIN SUFFIX$/);
+    assert.match(plan.update[0].message, /reply with exactly NO_REPLY/);
+  });
+
+  it("plant KEIN Update für Jobs ohne alten Contract-Satz (custom oder bereits migriert)", () => {
+    const existing = [
+      { id: "job-3", name: "plur1bus afterthought main", agentId: "main", payload: { message: "mein eigener prompt ohne contract" } },
+      { id: "job-4", name: "plur1bus persona-evolve main", agentId: "main", payload: { message: "/plur1bus internal persona-evolve" } },
+    ];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    assert.strictEqual(plan.update.length, 0);
+  });
+
+  it("migriert auch im Legacy-Single-Agent-Modus", () => {
+    const existing = [{ id: "job-5", name: "plur1bus afterthought", payload: { message: OLD_CONTRACT } }];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, {});
+    assert.strictEqual(plan.update.length, 1);
+    assert.strictEqual(plan.update[0].id, "job-5");
+  });
+
+  it("Jobs ohne id werden nicht zum Update geplant (cron edit braucht die id)", () => {
+    const existing = [{ name: "plur1bus afterthought main", agentId: "main", payload: { message: OLD_CONTRACT } }];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    assert.strictEqual(plan.update.length, 0);
+  });
+});

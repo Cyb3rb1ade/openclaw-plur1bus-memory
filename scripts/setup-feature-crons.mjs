@@ -231,8 +231,11 @@ export async function runSetupFeatureCrons(options = {}) {
     // dry-run/nichts-zu-tun dieses hier, sonst erst das Ergebnis-Objekt nach
     // den cron-add-Aufrufen (vorher wären es zwei konkatenierte Objekte, die
     // der /plur1bus-setup-crons-Parser nicht lesen kann).
+    const updates = Array.isArray(plan.update) ? plan.update : [];
+    const nothingToDo = plan.create.length === 0 && updates.length === 0;
+
     if (opts.json) {
-      if (opts.dryRun || plan.create.length === 0) {
+      if (opts.dryRun || nothingToDo) {
         writeOutput(stdout, JSON.stringify({ dryRun: opts.dryRun, plan, lastPlanCreateCount: countPendingCreates(plan) }, null, 2));
       }
     } else {
@@ -244,12 +247,15 @@ export async function runSetupFeatureCrons(options = {}) {
         writeOutput(stdout, `  ${opts.dryRun ? "WOULD-ADD" : "ADD"}  ${c.name}  enabled=${c.enabled}`);
         if (c.hint) writeOutput(stdout, `         hint: ${c.hint}`);
       }
-      if (plan.create.length === 0) {
+      for (const u of updates) {
+        writeOutput(stdout, `  ${opts.dryRun ? "WOULD-UPDATE" : "UPDATE"}  ${u.name}  (message contract migration)`);
+      }
+      if (nothingToDo) {
         writeOutput(stdout, "  Nothing to do — all feature crons already present.");
       }
     }
 
-    if (opts.dryRun || plan.create.length === 0) {
+    if (opts.dryRun || nothingToDo) {
       return 0;
     }
 
@@ -263,6 +269,24 @@ export async function runSetupFeatureCrons(options = {}) {
           writeOutput(stdout, `  ✓ created: ${job.name}`);
         } else {
           writeOutput(stdout, `  ⚠ failed to create: ${job.name} — ${r.stderr?.trim() || "unknown error"}`);
+          writeOutput(stdout, "    (will retry automatically next run — safe to ignore)");
+        }
+      }
+    }
+
+    // Message-Contract-Migrationen (siehe MESSAGE_CONTRACT_MIGRATIONS):
+    // bestehende Jobs mit bekanntem Alt-Contract bekommen die korrigierte
+    // Message per `cron edit`. Fehlschläge zählen wie failed creates in
+    // lastPlanCreateCount, damit der nächste Bootstrap-Lauf sie erneut
+    // versucht.
+    for (const u of updates) {
+      const r = openclawImpl(["cron", "edit", u.id, "--message", u.message], 15000);
+      results.push({ job: u.name, action: "update", ok: r.ok, stderr: r.ok ? undefined : r.stderr?.trim() });
+      if (!opts.json) {
+        if (r.ok) {
+          writeOutput(stdout, `  ✓ updated: ${u.name} (message contract migration)`);
+        } else {
+          writeOutput(stdout, `  ⚠ failed to update: ${u.name} — ${r.stderr?.trim() || "unknown error"}`);
           writeOutput(stdout, "    (will retry automatically next run — safe to ignore)");
         }
       }
