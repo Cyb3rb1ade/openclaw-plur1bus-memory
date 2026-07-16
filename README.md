@@ -1,4 +1,4 @@
-# PLUR1BUS — Memory plugin for OpenClaw v6 Engram
+# PLUR1BUS — Memory plugin for OpenClaw
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
