@@ -139,6 +139,30 @@ describe("memory dynamics maintenance", () => {
     ]);
   });
 
+  it("keeps capped daily decay ordered when scanned rows arrive unsorted", async () => {
+    const rows = [4, 0, 3, 2, 1].map((index) => ({
+      id: `11111111-1111-4111-8111-11111111111${index}`,
+      status: "active",
+      memoryStrength: 1,
+      halfLifeDays: 30,
+      createdAt: Date.now() - 86400000,
+    }));
+    const db = makePagedDb(rows);
+
+    const result = await applyDailyDecayToAll(db, {
+      batchSize: 1,
+      maxRows: 2,
+      cursorId: "11111111-1111-4111-8111-111111111111",
+    });
+
+    assert.strictEqual(result.decayed, 2);
+    assert.strictEqual(result.truncated, true);
+    assert.deepStrictEqual(db.updates.map((update) => update.id), [
+      "11111111-1111-4111-8111-111111111112",
+      "11111111-1111-4111-8111-111111111113",
+    ]);
+  });
+
   it("advances ledger watermark through successful entries before a later failure", async () => {
     const okId = "11111111-1111-4111-8111-111111111111";
     const badId = "22222222-2222-4222-8222-222222222222";
