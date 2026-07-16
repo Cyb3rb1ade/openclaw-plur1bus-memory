@@ -385,3 +385,72 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
     assert.throws(() => readFileSync(markerPath, "utf8"), /ENOENT/);
   });
 });
+
+describe("runSetupFeatureCrons Message-Contract-Migration", () => {
+  const OLD_CONTRACT =
+    "/plur1bus internal afterthought\n\n" +
+    "Delivery contract: the job returns JSON. If it has a `text` field, " +
+    "send exactly that text as the message, verbatim, with no additional " +
+    "commentary. If `skipped` is true, output NOTHING at all.";
+
+  function implWithExistingOldContract({ editResult } = {}) {
+    const cronEdits = [];
+    const impl = (args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            jobs: [
+              { id: "at-main", agentId: "main", name: "plur1bus afterthought main", payload: { message: OLD_CONTRACT } },
+              { id: "pe-main", agentId: "main", name: "plur1bus persona-evolve main", payload: { message: "/plur1bus internal persona-evolve" } },
+            ],
+          }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "agents" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({ agents: [{ id: "main", bindings: 2, isDefault: true, workspace: "/ws/main" }] }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && args[1] === "edit") {
+        cronEdits.push(args);
+        return editResult ?? { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    };
+    return { impl, cronEdits };
+  }
+
+  it("führt cron edit für Jobs mit altem 'output NOTHING'-Contract aus (keine Creates nötig)", async () => {
+    const { impl, cronEdits } = implWithExistingOldContract();
+    const result = await runJsonSetupWith(impl);
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(cronEdits.length, 1, "genau ein cron edit für den Alt-Contract-Job");
+    assert.strictEqual(cronEdits[0][2], "at-main");
+    const msgIdx = cronEdits[0].indexOf("--message");
+    assert.ok(msgIdx > 0);
+    assert.match(cronEdits[0][msgIdx + 1], /reply with exactly NO_REPLY/);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 0);
+  });
+
+  it("dry-run plant das Update, ruft aber kein cron edit auf", async () => {
+    const { impl, cronEdits } = implWithExistingOldContract();
+    const result = await runJsonSetupWith(impl, ["--json", "--dry-run"]);
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(cronEdits.length, 0);
+    assert.strictEqual(result.parsed.plan.update.length, 1);
+  });
+
+  it("fehlgeschlagenes Update erhöht lastPlanCreateCount (Retry beim nächsten Lauf)", async () => {
+    const { impl } = implWithExistingOldContract({ editResult: { ok: false, stdout: "", stderr: "edit failed", status: 1 } });
+    const result = await runJsonSetupWith(impl);
+    assert.strictEqual(result.exitCode, 0);
+    assert.ok(result.parsed.lastPlanCreateCount >= 1, "failed update zählt als pending");
+  });
+});
