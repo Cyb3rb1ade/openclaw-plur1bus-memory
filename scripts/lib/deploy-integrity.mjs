@@ -81,6 +81,12 @@ export const DEPLOY_FILES = [
   "lib/providers/reranker-local-transformers.js",
   // ── emotion / meta-cognition ──────────────────────────────────────────────
   "lib/emotion.js",
+  "lib/emotion-engine.js",
+  "lib/emotion-score.js",
+  "lib/emotion-blends.js",
+  "lib/tier1-lexicon.js",
+  "lib/tier2-transformer.js",
+  "lib/tier3-llm.js",
   "lib/emotional-state.js",
   "lib/temperament-command.js",
   "lib/i18n.js",
