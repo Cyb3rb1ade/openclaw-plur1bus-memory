@@ -195,7 +195,7 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 
 ### Afterthoughts (delayed follow-ups)
 
-When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run `/plur1bus internal afterthought` and deliver the result — if the JSON has a `text` field, send exactly that text as the message; if `skipped` is `true`, output NOTHING.
+When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run `/plur1bus internal afterthought` and deliver the result — if the JSON has a `text` field, send exactly that text as the message; if `skipped` is `true`, reply with exactly `NO_REPLY` (OpenClaw's silent-reply token — the gateway suppresses delivery of token-only replies, which is far more reliable than asking the model to output nothing).
 
 Setting this cron up (plus the weekly `persona-evolve` cron) is automatic on multi-agent installations — see below.
 
