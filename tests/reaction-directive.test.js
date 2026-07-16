@@ -22,6 +22,70 @@ describe("detectReactionsCapability", () => {
     assert.strictEqual(detectReactionsCapability(a), false);
   });
 
+  it("erkennt Default-on-Kanäle (OpenClaw 2026.7: reactionLevel-Default minimal)", () => {
+    // Live-Schema: enabled-Channel mit Accounts ohne actions/reactionLevel →
+    // Gateway-Gate defaultet auf true, Reaktionen sind verfügbar.
+    assert.strictEqual(
+      detectReactionsCapability({
+        channels: { telegram: { enabled: true, accounts: { default: { enabled: true } } } },
+      }),
+      true
+    );
+    // Channel ohne Accounts, aber explizit enabled → ebenfalls default-on.
+    assert.strictEqual(
+      detectReactionsCapability({ channels: { googlechat: { enabled: true } } }),
+      true
+    );
+  });
+
+  it("respektiert explizite Deaktivierung trotz Default-on", () => {
+    // reactionLevel off/ack schaltet Agent-Reaktionen ab.
+    assert.strictEqual(
+      detectReactionsCapability({
+        channels: { telegram: { enabled: true, accounts: { default: { enabled: true, reactionLevel: "off" } } } },
+      }),
+      false
+    );
+    assert.strictEqual(
+      detectReactionsCapability({
+        channels: { telegram: { enabled: true, reactionLevel: "ack", accounts: { default: { enabled: true } } } },
+      }),
+      false
+    );
+    // Action-Gate-Objekt: reactions === false.
+    assert.strictEqual(
+      detectReactionsCapability({
+        channels: { telegram: { enabled: true, accounts: { default: { enabled: true, actions: { reactions: false } } } } },
+      }),
+      false
+    );
+    // Array-Allowlist ohne reactions.
+    assert.strictEqual(
+      detectReactionsCapability({
+        channels: { telegram: { enabled: true, actions: ["send"] } },
+      }),
+      false
+    );
+    // Deaktivierter Account/Channel zählt nicht.
+    assert.strictEqual(
+      detectReactionsCapability({
+        channels: { telegram: { enabled: true, accounts: { default: { enabled: false } } } },
+      }),
+      false
+    );
+    assert.strictEqual(
+      detectReactionsCapability({ channels: { telegram: { enabled: false } } }),
+      false
+    );
+    // Ein Account off, ein anderer default → Capability vorhanden.
+    assert.strictEqual(
+      detectReactionsCapability({
+        channels: { telegram: { enabled: true, accounts: { a: { enabled: true, reactionLevel: "off" }, b: { enabled: true } } } },
+      }),
+      true
+    );
+  });
+
   it("erkennt das reale Gateway-Schema tools.message.actions.allow", () => {
     assert.strictEqual(
       detectReactionsCapability({ tools: { message: { actions: { allow: ["react"] } } } }),
