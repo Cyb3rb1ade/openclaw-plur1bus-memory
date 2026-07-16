@@ -5,6 +5,40 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.0.0] — 2026-07-16 — Humanization: Persona, Afterthoughts, Dream Echoes
+
+### Breaking / Changed
+
+- **Persona-Evolution wendet Vorschläge jetzt automatisch an** statt des bisherigen Propose/Accept-Flows. Sicherheit über Bounds statt Gates: 12-Bullet-Cap im Managed Block, struktursichere Seed-End-Boundary, Append-Dedup. Wer den alten Accept-Flow erwartet, muss nichts migrieren — der wöchentliche `persona-evolve`-Cron schreibt Änderungen direkt.
+- **Afterthought-Skip-Contract nutzt `NO_REPLY`** (OpenClaws Silent-Reply-Token) statt "antworte mit nichts". Bestehende Afterthought-Crons werden beim Setup-Lauf automatisch auf den neuen Contract migriert.
+
+### Added
+
+- **Persona Voice** — pro Agent geseedeter Idiolekt als Managed Block im Workspace, initial aus dem Prompt-Kontext abgeleitet; `/plur1bus persona` zur Inspektion. Emoji-Palette ZWJ-sicher geparst, Seed-Läufe vom Recall-Hot-Path entkoppelt.
+- **Afterthoughts** — verzögerter Follow-up-Job (30–120 min nach offenem Gesprächsende) mit gemeinsamem Proactive-Governor-Budget und Tageskappe; Topic-Dedup gegen Open Threads.
+- **Dream Echoes** — nächtliches Dreaming taucht beim ersten Tageskontakt als beiläufige Erinnerung auf (Daily-Stamp erst nach tatsächlicher Injection, dryRun-sicher).
+- **Adaptive Proactive Governor** — gemeinsames Budget für alle Life-Sign-Features (Nudges, Afterthoughts, Echoes) mit Advisory-Lock, Ownership-Token und geschlossenem Cross-Process-Lost-Update-Fenster.
+- **Recall Confidence Hedging** — unsicherer Recall wird als unsicher formuliert (Mindest-Score-Spread + absoluter Floor gegen eng gebänderte schwache Scores).
+- **Style-Direktiven erweitert** — Meinung, Rückfragen, Tageszeit (timezone-bewusst via `lib/time-window.js`), Mood-Stil-Direktive statt sichtbarem Stimmungs-Label; Mood fließt in Evening Deep Review und Morning Review Bundle.
+- **Open Threads & Contradiction Disclosure** — offene Gesprächsfäden werden in den Memory-Prompt injiziert; erkannte Widersprüche werden offengelegt.
+- **Reaction Nudge** — Gateway-React-Capability wird automatisch erkannt (echtes Schema `tools.message.actions.allow`, Default-on-Verhalten berücksichtigt) und als Direktive angeboten.
+- **Multi-Agent Feature-Cron-Automation** — `scripts/setup-feature-crons.mjs` entdeckt alle gebundenen Agents und legt idempotent `persona-evolve`/`afterthought`-Cron-Paare an; Kanäle: npm postinstall, `/plur1bus setup crons`, Doctor-Hinweis und deferred `gateway_start`-Bootstrap (installationsmethoden-agnostisch, ~20h-Throttle). Delivery wird aus bestehenden Crons abgeleitet — nie geraten, bei Konflikt disabled mit Hinweis.
+- **Telegram-Reaction-Regeln im agents-patcher** — Installationen mit Reaction-Guidance in AGENTS.md erhalten einen managed Block (`<!-- plur1bus:telegram-reaction-rules -->`): fixes Telegram-Reaction-Set (73 Emojis, 😂→REACTION_INVALID, 🤣 erlaubt), Ziel immer die aktuelle `message_id` aus dem "Conversation info"-Block, IDs nie raten/hochzählen.
+
+### Fixed
+
+- **Emotion-Tier-3 folgt dem Default-LLM der Installation** statt hartkodiertem `gpt-4o-mini`.
+- **Daily-Decay-Cap wählt bounded statt vollsortiert** — Cursor-Reihenfolge bleibt auch bei unsortiert gescannten Rows erhalten, ohne alle eligible Rows im Speicher zu sortieren.
+- **`dream-narrative.js` fehlte in `DEPLOY_FILES`** und brach den Plugin-Load nach Deploy.
+- **First-Nudge-Quiet-Hours-Bypass-Reihenfolge** wiederhergestellt; Entity-sichere Truncation.
+- **Oversized `reply-outcomes.jsonl`** wird tail-gelesen statt komplett übersprungen.
+- **Feature-Cron-Härtung** — Delivery-Derivation ignoriert disabled Jobs, `--json` liefert genau ein JSON-Objekt, Spawn-Timeout deckt Worst-Case ab, Deploy-Dir-Autodetection ohne `/root`-Defaults, Bootstrap drained Child-stderr.
+- **Sicherheit** — `workspaceDir`-Pfadvalidierung, Newline-Stripping im Afterthought-Topic, Afterthought-History raus aus der User-Rolle.
+
+### Verification
+
+- `npm test`: 2466 passing, 0 failing (1 skipped), 492 Suites.
+
 ## [6.9.10] — 2026-07-04 — Maintenance-Progress und Content-Dedupe-Härtung
 
 ### Fixed

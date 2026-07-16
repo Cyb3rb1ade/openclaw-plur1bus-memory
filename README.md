@@ -2,11 +2,20 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 6.9.10** — Publishes the current 6.9.x line through the GitHub tag `v6.9.10`; the package metadata and manifest are aligned to `6.9.10`. See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 7.0.0** — Publishes the humanization line through the GitHub tag `v7.0.0`; the package metadata and manifest are aligned to `7.0.0`. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
 Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.0.0 — Humanization: persona voice, afterthoughts, dream echoes
+
+- **Persona voice with auto-applied evolution** — each agent gets a seeded idiolect as a managed workspace block; the weekly `persona-evolve` job now applies refinements directly (bounded: 12-bullet cap, seed-end boundary) instead of the old propose/accept flow.
+- **Afterthoughts & dream echoes** — delayed follow-ups after open-ended conversations and nightly-dream surfacing on first daily contact, both budgeted by a shared adaptive proactive governor.
+- **Recall confidence hedging & style directives** — uncertain recall is phrased as uncertain; mood, opinion, ask-back, and timezone-aware time-of-day directives shape replies.
+- **Multi-agent feature-cron automation** — bound agents automatically get `persona-evolve`/`afterthought` cron pairs via postinstall, `/plur1bus setup crons`, doctor hint, or deferred gateway-start bootstrap.
+- **Telegram reaction rules (managed block)** — AGENTS.md files with reaction guidance get the fixed Telegram reaction set plus current-`message_id` targeting rules patched in automatically.
+- **Afterthought `NO_REPLY` contract** — skip runs reply with OpenClaw's silent token; existing crons are migrated automatically.
 
 ### New in v6.9.10 — Maintenance progress and dedupe hardening
 
