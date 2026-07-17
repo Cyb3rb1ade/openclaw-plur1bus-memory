@@ -2333,7 +2333,13 @@ const plugin = {
     const emotionT3Model = emotionCfg.t3?.model || mergingModel || "kimi-for-coding";
     // Prefer plugin-internal callLlm (routes through configured model); falls back to apiKey path in Tier3LLMClassifier
     const emotionT3CallLlm = (emotionT3Enabled && mergingLlmCfg)
-      ? (messages, context = {}) => {
+      ? /**
+         * Call the emotion provider with optional agent-scoped cache context.
+         * @param {Array<object>} messages
+         * @param {{agentId?: string}} [context]
+         * @returns {Promise<string|null>}
+         */
+        (messages, context = {}) => {
           const emotionLlmCfg = {
             ...mergingLlmCfg,
             model: emotionT3Model,
@@ -2343,7 +2349,7 @@ const plugin = {
           };
           return context.agentId
             ? callLlm(messages, withLlmResultCacheContext(
-                emotionLlmCfg,
+                { ...emotionLlmCfg, temperature: 0 },
                 context.agentId,
                 LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
               ))
