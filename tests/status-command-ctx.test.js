@@ -1,83 +1,57 @@
-/**
- * tests/status-command-ctx.test.js — Regression: /status darf nicht mit
- * "ctx is not defined" scheitern (Command-Handler kennen nur commandCtx,
- * kein Hook-ctx; Incident Bernd 2026-07-01).
- */
-
-import { describe, it, before, after } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import plugin from "../index.js";
+import { readFileSync } from "node:fs";
 
-const AGENT_ID = "status-test-agent";
-const VECTOR_DIM = 8;
+import { collectStatusData } from "../lib/telegram-commands/status-data.js";
+import { renderStatus } from "../lib/telegram-commands/status.js";
 
-function makeMockApi(baseDbPath) {
-  const noop = () => {};
-  const commands = new Map();
-  return {
-    pluginConfig: {
-      baseDbPath,
-      embedding: { provider: "local-transformers", local: { dimensions: VECTOR_DIM } },
-      emotion: { t3: { enabled: false } },
-      obsidianBridge: { enabled: false },
-      autoCapture: false,
-      autoRecall: false,
-      neo: { enabled: false },
-      gc: { enabled: false },
+const openclawConfig = {
+  plugins: {
+    entries: {
+      "memory-lancedb-namespaced": {
+        config: { obsidianBridge: { enabled: true } },
+      },
     },
-    logger: { info: noop, warn: noop, error: noop, debug: noop },
-    resolvePath: (p) => p,
-    registerCommand(command) {
-      commands.set(command.name, command);
-    },
-    _commands: commands,
-    registerTool: noop,
-    on: noop,
-    registerService: noop,
-  };
-}
+  },
+};
 
-describe("/status Command", () => {
-  let basePath;
-  let workspaceDir;
-  let openclawHome;
-  let originalOpenClawHome;
+describe("/state command", () => {
+  it("uses commandCtx.agentId for distinctive per-agent cache metrics", () => {
+    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const handlerStart = source.indexOf("const runStatusCommand = async (commandCtx) => {");
+    const handlerEnd = source.indexOf("const parseFeatureArg", handlerStart);
+    const handlerSource = source.slice(handlerStart, handlerEnd);
+    assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, "status handler source must be found");
+    assert.match(handlerSource, /const agentId = commandCtx\?\.agentId \|\| "default";/);
+    assert.match(handlerSource, /llmResultCache: llmResultCache\.getMetrics\(agentId\)/);
+    assert.doesNotMatch(handlerSource, /getMetrics\(ctx/);
 
-  before(() => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-status-cmd-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-status-ws-"));
-    originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-status-test-"));
-    process.env.OPENCLAW_HOME = openclawHome;
-    mkdirSync(join(openclawHome, ".openclaw", "memory", "_archive"), { recursive: true });
-  });
+    const requestedScopes = [];
+    const metrics = {
+      getMetrics(scopeId) {
+        requestedScopes.push(scopeId);
+        return {
+          requests: 7,
+          hits: 3,
+          hitRate: 3 / 7,
+          memoryHits: 2,
+          persistHits: 1,
+          avoidedInputTokens: 1234,
+          avoidedOutputTokens: 56,
+          persistConfigured: true,
+          persistActive: true,
+        };
+      },
+    };
+    const statusText = renderStatus(collectStatusData({
+      openclawConfig,
+      llmResultCache: metrics.getMetrics("agent-ctx-test"),
+    }), { lang: "en" });
 
-  after(() => {
-    try { rmSync(basePath, { recursive: true, force: true }); } catch {}
-    try { rmSync(workspaceDir, { recursive: true, force: true }); } catch {}
-    try { rmSync(openclawHome, { recursive: true, force: true }); } catch {}
-    if (originalOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
-    else process.env.OPENCLAW_HOME = originalOpenClawHome;
-  });
-
-  it("liefert Status statt 'ctx is not defined'", async () => {
-    const api = makeMockApi(basePath);
-    plugin.register(api);
-    const statusCommand = api._commands.get("state");
-    assert.ok(statusCommand, "state-Command sollte registriert sein");
-    const result = await statusCommand.handler({
-      agentId: AGENT_ID,
-      workspaceDir,
-      channel: "telegram",
-      args: "",
-    });
-    assert.ok(result?.text, "Sollte Text liefern");
-    assert.ok(!result.text.includes("is not defined"), `ReferenceError im Output: ${result.text}`);
-    assert.ok(!result.text.toLowerCase().includes("failed"), `Status failed: ${result.text}`);
-    assert.match(result.text, /LLM Result Cache/);
-    assert.match(result.text, /Hit rate: 0\.0% \(0\/0\)/);
+    assert.deepStrictEqual(requestedScopes, ["agent-ctx-test"]);
+    assert.match(statusText, /LLM Result Cache/);
+    assert.match(statusText, /Hit rate: 42\.9% \(3\/7\)/);
+    assert.match(statusText, /Hits: memory=2, persistent=1/);
+    assert.match(statusText, /Avoided tokens: input=1,234, output=56/);
   });
 });

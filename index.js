@@ -83,6 +83,7 @@ import {
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
+import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
@@ -3960,14 +3961,12 @@ const plugin = {
           logger: api.logger,
         });
 
-        if (typeof api.on === "function") {
-          api.on("gateway_stop", async () => {
-            try { await memoryDbAdapter.shutdown(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: adapter shutdown failed: ${err?.message}`); }
-            try { await pool.shutdown(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: pool shutdown failed: ${err?.message}`); }
-            try { await flushMetrics(); } catch (err) { api.logger.warn?.(`metrics flush failed: ${err?.message}`); }
-            try { await llmResultCache.close(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: LLM result cache shutdown failed: ${err?.message}`); }
-          }, { timeoutMs: 30_000 });
-        }
+        registerGatewayShutdown(api, {
+          memoryDbAdapter,
+          pool,
+          flushMetrics,
+          llmResultCache,
+        });
 
         const runMemoryCommand = async (commandCtx) => {
           try {
