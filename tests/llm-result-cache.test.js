@@ -341,6 +341,68 @@ test("persistent cache survives instances without storing prompt or API key", as
   assert.equal(statSync(dbPath).mode & 0o777, 0o600);
 });
 
+test("persistent cache initializes an absent configured base and isolates agents", async (t) => {
+  if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
+  const trustedParent = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-parent-"));
+  const baseDbPath = join(trustedParent, "absent-cache-base");
+  const warnings = [];
+  let first;
+  let reopened;
+  t.after(async () => {
+    await first?.close();
+    await reopened?.close();
+    rmSync(trustedParent, { recursive: true, force: true });
+  });
+
+  assert.equal(existsSync(baseDbPath), false);
+  let agentACalls = 0;
+  first = createLlmResultCache({
+    persist: true,
+    baseDbPath,
+    logger: { warn: (...args) => warnings.push(args) },
+  });
+  const agentARequest = request({
+    scopeId: "agent-a",
+    messages: [{ role: "user", content: "fresh-base-isolation" }],
+  });
+  assert.equal((await first.getOrCompute(
+    agentARequest,
+    async () => result(`agent-a-${++agentACalls}`),
+  )).text, "agent-a-1");
+  const firstMetrics = first.getMetrics("agent-a");
+  assert.equal(
+    firstMetrics.persistWrites,
+    1,
+    `fresh-base persistence failed: ${JSON.stringify({ firstMetrics, warnings })}`,
+  );
+  assert.equal(firstMetrics.persistActive, true);
+  const agentADbPath = join(baseDbPath, "llm-result-cache-v1", "agent-a.db");
+  assert.equal(existsSync(agentADbPath), true);
+  assert.equal(statSync(agentADbPath).mode & 0o777, 0o600);
+  await first.close();
+
+  reopened = createLlmResultCache({ persist: true, baseDbPath });
+  assert.equal((await reopened.getOrCompute(
+    agentARequest,
+    async () => result(`agent-a-${++agentACalls}`),
+  )).text, "agent-a-1");
+  assert.equal(agentACalls, 1);
+  assert.equal(reopened.getMetrics("agent-a").persistHits, 1);
+
+  let agentBCalls = 0;
+  const agentBRequest = { ...agentARequest, scopeId: "agent-b" };
+  assert.equal((await reopened.getOrCompute(
+    agentBRequest,
+    async () => result(`agent-b-${++agentBCalls}`),
+  )).text, "agent-b-1");
+  assert.equal(agentBCalls, 1);
+  assert.equal(reopened.getMetrics("agent-b").persistHits, 0);
+  assert.equal(reopened.getMetrics("agent-b").persistWrites, 1);
+  const agentBDbPath = join(baseDbPath, "llm-result-cache-v1", "agent-b.db");
+  assert.equal(existsSync(agentBDbPath), true);
+  assert.equal(statSync(agentBDbPath).mode & 0o777, 0o600);
+});
+
 test("persistent TTL is absolute across instances", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
