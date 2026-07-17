@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -39,6 +39,11 @@ async function hasNodeSqlite() {
     if (error?.code === "ERR_UNKNOWN_BUILTIN_MODULE") return false;
     throw error;
   }
+}
+
+function sqliteFootprint(dbPath) {
+  return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
+    .reduce((total, path) => total + (existsSync(path) ? statSync(path).size : 0), 0);
 }
 
 test("TTL defaults and clamps to a finite 60s..7d range", () => {
@@ -121,6 +126,49 @@ test("missing and unknown purposes bypass the cache", async () => {
   assert.equal(calls, 3);
 });
 
+test("invalid fulfilled results are returned but not cached in memory", async (t) => {
+  const cases = [
+    { name: "null text", value: result(null) },
+    { name: "empty text", value: result("") },
+    { name: "whitespace-only text", value: result(" \n\t") },
+    {
+      name: "malformed JSON-mode text",
+      value: result('{"broken":'),
+      requestOverrides: { jsonMode: true },
+    },
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      let calls = 0;
+      const cache = createLlmResultCache();
+      const cacheRequest = request(testCase.requestOverrides);
+      const compute = async () => {
+        calls += 1;
+        return testCase.value;
+      };
+
+      assert.deepEqual(await cache.getOrCompute(cacheRequest, compute), testCase.value);
+      assert.deepEqual(await cache.getOrCompute(cacheRequest, compute), testCase.value);
+      assert.equal(calls, 2);
+    });
+  }
+});
+
+test("non-empty valid JSON-mode results remain cacheable", async () => {
+  let calls = 0;
+  const cache = createLlmResultCache();
+  const jsonResult = result('{"ok":true}');
+  const compute = async () => {
+    calls += 1;
+    return jsonResult;
+  };
+
+  assert.deepEqual(await cache.getOrCompute(request({ jsonMode: true }), compute), jsonResult);
+  assert.deepEqual(await cache.getOrCompute(request({ jsonMode: true }), compute), jsonResult);
+  assert.equal(calls, 1);
+});
+
 test("identical concurrent requests coalesce and rejected calls are not cached", async () => {
   let release;
   let calls = 0;
@@ -138,6 +186,95 @@ test("identical concurrent requests coalesce and rejected calls are not cached",
   await assert.rejects(() => failing.getOrCompute(request(), async () => { failures += 1; throw new Error("boom"); }));
   await assert.rejects(() => failing.getOrCompute(request(), async () => { failures += 1; throw new Error("boom"); }));
   assert.equal(failures, 2);
+});
+
+test("successful coalesced waiters each record avoided token usage", async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const cache = createLlmResultCache({ metrics: true });
+  const sharedResult = result("shared", 11, 7);
+  const compute = async () => {
+    await gate;
+    return sharedResult;
+  };
+
+  const upstream = cache.getOrCompute(request(), compute);
+  const waiterOne = cache.getOrCompute(request(), compute);
+  const waiterTwo = cache.getOrCompute(request(), compute);
+  release();
+  assert.deepEqual(await Promise.all([upstream, waiterOne, waiterTwo]), [
+    sharedResult,
+    sharedResult,
+    sharedResult,
+  ]);
+
+  const cacheMetrics = cache.getMetrics("agent-a");
+  assert.equal(cacheMetrics.coalesced, 2);
+  assert.equal(cacheMetrics.hits, 0);
+  assert.equal(cacheMetrics.avoidedInputTokens, 22);
+  assert.equal(cacheMetrics.avoidedOutputTokens, 14);
+  assert.equal(cacheMetrics.hitsMissingUsage, 0);
+});
+
+test("coalesced waiters preserve partial usage and count missing usage per waiter", async (t) => {
+  const cases = [
+    {
+      name: "partial usage",
+      value: { text: "partial", usage: { inputTokens: 6 } },
+      expectedInput: 12,
+      expectedOutput: 0,
+    },
+    {
+      name: "missing usage",
+      value: { text: "missing" },
+      expectedInput: 0,
+      expectedOutput: 0,
+    },
+  ];
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      const cache = createLlmResultCache({ metrics: true });
+      const compute = async () => {
+        await gate;
+        return testCase.value;
+      };
+
+      const upstream = cache.getOrCompute(request(), compute);
+      const waiterOne = cache.getOrCompute(request(), compute);
+      const waiterTwo = cache.getOrCompute(request(), compute);
+      release();
+      await Promise.all([upstream, waiterOne, waiterTwo]);
+
+      const cacheMetrics = cache.getMetrics("agent-a");
+      assert.equal(cacheMetrics.coalesced, 2);
+      assert.equal(cacheMetrics.avoidedInputTokens, testCase.expectedInput);
+      assert.equal(cacheMetrics.avoidedOutputTokens, testCase.expectedOutput);
+      assert.equal(cacheMetrics.hitsMissingUsage, 2);
+    });
+  }
+});
+
+test("rejected coalesced calls record no avoided usage", async () => {
+  let rejectUpstream;
+  const gate = new Promise((resolve, reject) => { rejectUpstream = reject; });
+  const cache = createLlmResultCache({ metrics: true });
+  const compute = async () => gate;
+
+  const upstream = cache.getOrCompute(request(), compute);
+  const waiterOne = cache.getOrCompute(request(), compute);
+  const waiterTwo = cache.getOrCompute(request(), compute);
+  rejectUpstream(new Error("boom"));
+  const settled = await Promise.allSettled([upstream, waiterOne, waiterTwo]);
+  assert.equal(settled.every((entry) => entry.status === "rejected"), true);
+
+  const cacheMetrics = cache.getMetrics("agent-a");
+  assert.equal(cacheMetrics.coalesced, 2);
+  assert.equal(cacheMetrics.avoidedInputTokens, 0);
+  assert.equal(cacheMetrics.avoidedOutputTokens, 0);
+  assert.equal(cacheMetrics.hitsMissingUsage, 0);
 });
 
 test("LRU capacity evicts the least recently used entry", async () => {
@@ -232,6 +369,55 @@ test("persistent TTL is absolute across instances", async (t) => {
   await second.close();
 });
 
+test("invalid fulfilled results are absent after reopening persistent cache", async (t) => {
+  if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
+  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cases = [
+    { name: "null", value: result(null) },
+    { name: "empty", value: result("") },
+    { name: "whitespace", value: result(" \n\t") },
+    { name: "malformed-json", value: result('{"broken":'), jsonMode: true },
+  ];
+  let calls = 0;
+  const first = createLlmResultCache({ persist: true, baseDbPath: dir });
+
+  for (const testCase of cases) {
+    const cacheRequest = request({
+      jsonMode: testCase.jsonMode === true,
+      messages: [{ role: "user", content: testCase.name }],
+    });
+    assert.deepEqual(await first.getOrCompute(cacheRequest, async () => {
+      calls += 1;
+      return testCase.value;
+    }), testCase.value);
+  }
+  await first.close();
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const dbPath = join(dir, "llm-result-cache-v1", "agent-a.db");
+  const database = new DatabaseSync(dbPath);
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM llm_results").get().count, 0);
+  database.close();
+
+  const second = createLlmResultCache({ persist: true, baseDbPath: dir });
+  for (const testCase of cases) {
+    const cacheRequest = request({
+      jsonMode: testCase.jsonMode === true,
+      messages: [{ role: "user", content: testCase.name }],
+    });
+    const freshValue = testCase.jsonMode
+      ? result('{"fresh":true}')
+      : result(`fresh-${testCase.name}`);
+    assert.deepEqual(await second.getOrCompute(cacheRequest, async () => {
+      calls += 1;
+      return freshValue;
+    }), freshValue);
+  }
+  assert.equal(calls, cases.length * 2);
+  await second.close();
+});
+
 test("invalid agent paths fail open without creating persistence", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -259,20 +445,175 @@ test("permission hardening failure disables persistence for the scope", async (t
   await cache.close();
 });
 
-test("hard byte limit skips persistent writes and close is idempotent", async (t) => {
+test("hard byte limit skips persistence without breaking the memory cache", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
+  let calls = 0;
   const cache = createLlmResultCache({
     persist: true,
     baseDbPath: dir,
     maxBytes: 1,
     metrics: true,
   });
-  await cache.getOrCompute(request(), async () => result("answer"));
+  const compute = async () => result(`answer-${++calls}`);
+  assert.equal((await cache.getOrCompute(request(), compute)).text, "answer-1");
+  assert.equal((await cache.getOrCompute(request(), compute)).text, "answer-1");
+  assert.equal(calls, 1);
   assert.equal(cache.getMetrics("agent-a").persistWriteSkipped, 1);
   await cache.close();
   await cache.close();
+
+  const reopened = createLlmResultCache({
+    persist: true,
+    baseDbPath: dir,
+    maxBytes: 1,
+    metrics: true,
+  });
+  assert.equal((await reopened.getOrCompute(request(), compute)).text, "answer-2");
+  assert.equal(calls, 2);
+  await reopened.close();
+});
+
+test("SQLite cleanup caps expired-row deletion work per persistent write", async (t) => {
+  if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
+  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dbPath = join(dir, "llm-result-cache-v1", "agent-a.db");
+  let now = 1_000;
+  const cache = createLlmResultCache({
+    persist: true,
+    baseDbPath: dir,
+    maxBytes: 10_000_000,
+    ttlMs: 60_000,
+    now: () => now,
+  });
+  for (let index = 0; index < 300; index += 1) {
+    const label = `expired-${index}`;
+    await cache.getOrCompute(
+      request({ messages: [{ role: "user", content: label }] }),
+      async () => result(`${label}:${"e".repeat(100)}`),
+    );
+  }
+
+  now += 60_001;
+  await cache.getOrCompute(
+    request({ messages: [{ role: "user", content: "cleanup-trigger" }] }),
+    async () => result("fresh"),
+  );
+  await cache.close();
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const database = new DatabaseSync(dbPath);
+  const rowCount = database.prepare("SELECT COUNT(*) AS count FROM llm_results").get().count;
+  database.close();
+  assert.equal(rowCount, 45, "one write should delete at most 256 of 300 expired rows");
+});
+
+test("soft-limit cleanup evicts multiple oldest SQLite rows but keeps the newest", async (t) => {
+  if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
+  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dbPath = join(dir, "llm-result-cache-v1", "agent-a.db");
+  let now = 1_000;
+  const seed = createLlmResultCache({
+    persist: true,
+    baseDbPath: dir,
+    maxBytes: 10_000_000,
+    now: () => now,
+  });
+  for (let index = 0; index < 20; index += 1) {
+    now += 1;
+    const label = `old-${String(index).padStart(2, "0")}`;
+    await seed.getOrCompute(
+      request({ messages: [{ role: "user", content: label }] }),
+      async () => result(`${label}:${"x".repeat(20_000)}`),
+    );
+  }
+  await seed.close();
+
+  const hardLimit = statSync(dbPath).size + 50_000;
+  now += 1;
+  const limited = createLlmResultCache({
+    persist: true,
+    baseDbPath: dir,
+    maxBytes: hardLimit,
+    now: () => now,
+  });
+  await limited.getOrCompute(
+    request({ messages: [{ role: "user", content: "newest" }] }),
+    async () => result(`newest:${"y".repeat(20_000)}`),
+  );
+  await limited.close();
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const database = new DatabaseSync(dbPath);
+  const rows = database.prepare(
+    "SELECT response_text FROM llm_results ORDER BY created_at ASC",
+  ).all();
+  database.close();
+  assert.ok(rows.length > 0, "cleanup must not erase every cache row");
+  assert.ok(rows.length <= 18, "cleanup should evict multiple rows toward the soft target");
+  assert.equal(rows.some((row) => row.response_text.startsWith("old-00:")), false);
+  assert.equal(rows.some((row) => row.response_text.startsWith("newest:")), true);
+});
+
+test("WAL-heavy hard-limit cleanup reclaims space and persists the new result", async (t) => {
+  if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
+  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const dbPath = join(dir, "llm-result-cache-v1", "agent-a.db");
+  let now = 10_000;
+  const seed = createLlmResultCache({
+    persist: true,
+    baseDbPath: dir,
+    maxBytes: 10_000_000,
+    now: () => now,
+  });
+  for (let index = 0; index < 12; index += 1) {
+    now += 1;
+    const label = `wal-seed-${index}`;
+    await seed.getOrCompute(
+      request({ messages: [{ role: "user", content: label }] }),
+      async () => result(`${label}:${"w".repeat(30_000)}`),
+    );
+  }
+
+  const walPath = `${dbPath}-wal`;
+  const walBytesBefore = statSync(walPath).size;
+  const footprintBefore = sqliteFootprint(dbPath);
+  assert.ok(walBytesBefore > statSync(dbPath).size, "test setup must be WAL-heavy");
+  const hardLimit = Math.floor(footprintBefore * 0.75);
+  assert.ok(footprintBefore >= hardLimit, "test setup must begin at the hard limit");
+
+  now += 1;
+  const limited = createLlmResultCache({
+    persist: true,
+    baseDbPath: dir,
+    maxBytes: hardLimit,
+    metrics: true,
+    now: () => now,
+  });
+  await limited.getOrCompute(
+    request({ messages: [{ role: "user", content: "hard-limit-recovery" }] }),
+    async () => result(`recovered:${"z".repeat(10_000)}`),
+  );
+
+  const limitedMetrics = limited.getMetrics("agent-a");
+  assert.equal(limitedMetrics.persistWriteSkipped, 0);
+  assert.equal(limitedMetrics.persistWrites, 1);
+  assert.ok(statSync(walPath).size < walBytesBefore, "cleanup should truncate the heavy WAL");
+  assert.ok(sqliteFootprint(dbPath) < footprintBefore, "cleanup should reclaim physical space");
+  await limited.close();
+  await seed.close();
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const database = new DatabaseSync(dbPath);
+  const recovered = database.prepare(
+    "SELECT COUNT(*) AS count FROM llm_results WHERE response_text LIKE 'recovered:%'",
+  ).get();
+  database.close();
+  assert.equal(recovered.count, 1);
 });
 
 test("close waits for pending opens and permanently disables persistence", async (t) => {
