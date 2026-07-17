@@ -42,10 +42,120 @@ function countMatches(source, pattern) {
   return (source.match(pattern) || []).length;
 }
 
-function deterministicCallPattern(purpose, scopePattern = "agentId") {
-  return new RegExp(
-    String.raw`callLlm\([\s\S]*?withLlmResultCacheContext\(\s*\{[\s\S]*?temperature:\s*0[\s\S]*?\},\s*${scopePattern},\s*LLM_RESULT_CACHE_PURPOSES\.${purpose}`,
-    "g",
+function skipQuoted(source, start, quote) {
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+    } else if (source[index] === quote) {
+      return index + 1;
+    }
+  }
+  throw new Error(`unterminated ${quote} string`);
+}
+
+function findClosingDelimiter(source, start, open, close) {
+  let depth = 1;
+  for (let index = start + 1; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "\"" || char === "'") {
+      index = skipQuoted(source, index, char) - 1;
+    } else if (char === "`") {
+      index = skipTemplate(source, index) - 1;
+    } else if (char === "/" && source[index + 1] === "/") {
+      const newline = source.indexOf("\n", index + 2);
+      index = newline === -1 ? source.length : newline;
+    } else if (char === "/" && source[index + 1] === "*") {
+      const commentEnd = source.indexOf("*/", index + 2);
+      if (commentEnd === -1) throw new Error("unterminated block comment");
+      index = commentEnd + 1;
+    } else if (char === open) {
+      depth += 1;
+    } else if (char === close) {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  throw new Error(`unterminated ${open}${close} expression`);
+}
+
+function skipTemplate(source, start) {
+  for (let index = start + 1; index < source.length; index += 1) {
+    if (source[index] === "\\") {
+      index += 1;
+    } else if (source[index] === "`") {
+      return index + 1;
+    } else if (source[index] === "$" && source[index + 1] === "{") {
+      index = findClosingDelimiter(source, index + 1, "{", "}");
+    }
+  }
+  throw new Error("unterminated template string");
+}
+
+function extractCallExpressions(source, callee) {
+  const expressions = [];
+  const pattern = new RegExp(String.raw`\b${callee}\s*\(`, "g");
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    const open = source.indexOf("(", match.index + callee.length);
+    const close = findClosingDelimiter(source, open, "(", ")");
+    expressions.push(source.slice(match.index, close + 1));
+    pattern.lastIndex = close + 1;
+  }
+  return expressions;
+}
+
+function callArguments(expression) {
+  const open = expression.indexOf("(");
+  const close = findClosingDelimiter(expression, open, "(", ")");
+  const args = [];
+  let argumentStart = open + 1;
+  for (let index = argumentStart; index < close; index += 1) {
+    const char = expression[index];
+    if (char === "\"" || char === "'") {
+      index = skipQuoted(expression, index, char) - 1;
+    } else if (char === "`") {
+      index = skipTemplate(expression, index) - 1;
+    } else if (char === "/" && expression[index + 1] === "/") {
+      const newline = expression.indexOf("\n", index + 2);
+      index = newline === -1 ? close : newline;
+    } else if (char === "/" && expression[index + 1] === "*") {
+      const commentEnd = expression.indexOf("*/", index + 2);
+      if (commentEnd === -1) throw new Error("unterminated block comment");
+      index = commentEnd + 1;
+    } else if (char === "(" || char === "[" || char === "{") {
+      const closing = char === "(" ? ")" : char === "[" ? "]" : "}";
+      index = findClosingDelimiter(expression, index, char, closing);
+    } else if (char === ",") {
+      args.push(expression.slice(argumentStart, index).trim());
+      argumentStart = index + 1;
+    }
+  }
+  const finalArg = expression.slice(argumentStart, close).trim();
+  if (finalArg) args.push(finalArg);
+  return args;
+}
+
+function countDeterministicCalls(source, purpose, scope = "agentId") {
+  return extractCallExpressions(source, "callLlm").filter((expression) => {
+    const args = callArguments(expression);
+    if (args.length !== 2) return false;
+    const wrappers = extractCallExpressions(args[1], "withLlmResultCacheContext");
+    if (wrappers.length !== 1 || wrappers[0].trim() !== args[1].trim()) return false;
+    const wrapperArgs = callArguments(wrappers[0]);
+    return wrapperArgs.length === 3
+      && /\btemperature\s*:\s*0\b/.test(wrapperArgs[0])
+      && wrapperArgs[1] === scope
+      && wrapperArgs[2] === `LLM_RESULT_CACHE_PURPOSES.${purpose}`;
+  }).length;
+}
+
+function assertEveryCallIsDeterministic(source, purpose, expectedCount, scope = "agentId") {
+  const callCount = extractCallExpressions(source, "callLlm").length;
+  assert.equal(callCount, expectedCount, `unexpected callLlm count for ${purpose}`);
+  assert.equal(
+    countDeterministicCalls(source, purpose, scope),
+    expectedCount,
+    `every ${purpose} callLlm must use its own deterministic cache wrapper`,
   );
 }
 
@@ -102,6 +212,22 @@ function writeEligibleConflict(workspaceDir) {
 }
 
 describe("deterministic LLM result-cache allowlist", () => {
+  it("rejects a detached cache wrapper after a context-free LLM call", () => {
+    const detachedWrapper = `
+      callLlm(messages, llmCfg);
+      withLlmResultCacheContext(
+        { ...llmCfg, temperature: 0 },
+        agentId,
+        LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
+      );
+    `;
+
+    assert.throws(
+      () => assertEveryCallIsDeterministic(detachedWrapper, "CAPTURE_SUMMARY", 1),
+      /must use its own deterministic cache wrapper/,
+    );
+  });
+
   it("attaches merge-decision context to memory compaction", async () => {
     let captureCfg;
     await runMemoryCompaction(makeCompactionDb(), {
@@ -349,24 +475,30 @@ describe("deterministic LLM result-cache allowlist", () => {
 
     assert.match(source, /createLlmResultCache\(\{[\s\S]*?baseDbPath,[\s\S]*?logger: api\.logger,[\s\S]*?\}\)/);
     assert.match(source, /callOpenAiLlm\(messages, llmCfg, \{[\s\S]*?resultCache: llmCfg\?\.resultCache[\s\S]*?\}\)/);
-    assert.equal(countMatches(captureSection, deterministicCallPattern("CAPTURE_SUMMARY")), 1);
-    assert.equal(countMatches(recallSection, deterministicCallPattern("RECALL_QUERY_SUMMARY")), 1);
-    assert.equal(countMatches(mergeSection, deterministicCallPattern("MERGE_DECISION")), 1);
-    assert.equal(countMatches(knowledgeSection, deterministicCallPattern("KNOWLEDGE_UPDATE")), 2);
-    assert.equal(countMatches(knowledgeToolSection, deterministicCallPattern("KNOWLEDGE_UPDATE")), 2);
+    assertEveryCallIsDeterministic(captureSection, "CAPTURE_SUMMARY", 1);
+    assertEveryCallIsDeterministic(recallSection, "RECALL_QUERY_SUMMARY", 1);
+    assertEveryCallIsDeterministic(mergeSection, "MERGE_DECISION", 1);
+    assertEveryCallIsDeterministic(knowledgeSection, "KNOWLEDGE_UPDATE", 2);
+    assertEveryCallIsDeterministic(knowledgeToolSection, "KNOWLEDGE_UPDATE", 2);
 
     assert.equal(countMatches(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg, api\.logger, agentId\)/g), 1);
     assert.equal(countMatches(source, /makeQuerySummarizer\(mergingLlmCfg, api\.logger, agentId\)/g), 3);
     assert.equal(countMatches(source, /callMergeCheck\(mergeCandidate\.entry\.text, params\.text, mergingLlmCfg, agentId\)/g), 2);
 
-    assert.match(emotionSection, /temperature:\s*0/);
-    assert.match(
-      emotionSection,
-      /return context\.agentId[\s\S]*?withLlmResultCacheContext\([\s\S]*?context\.agentId,[\s\S]*?LLM_RESULT_CACHE_PURPOSES\.EMOTION_CLASSIFICATION/,
+    const emotionCallCount = extractCallExpressions(emotionSection, "callLlm").length;
+    const scopedEmotionCallCount = countDeterministicCalls(emotionSection, "EMOTION_CLASSIFICATION", "context.agentId");
+    assert.equal(scopedEmotionCallCount, 1);
+    const emotionCfgInitializer = sourceSection(emotionSection, "const emotionLlmCfg = {", "return context.agentId");
+    assert.doesNotMatch(
+      emotionCfgInitializer,
+      /resultCacheContext|withLlmResultCacheContext|LLM_RESULT_CACHE_PURPOSES\.EMOTION_CLASSIFICATION|["'](?:default|shared)["']/,
     );
-    assert.match(emotionSection, /:\s*callLlm\(messages, emotionLlmCfg\);/);
-    const missingAgentBranch = emotionSection.slice(emotionSection.lastIndexOf(": callLlm(messages, emotionLlmCfg);"));
-    assert.doesNotMatch(missingAgentBranch, /withLlmResultCacheContext|resultCacheContext|"default"|'default'/);
+    const missingAgentCalls = extractCallExpressions(emotionSection, "callLlm").filter((expression) => {
+      const args = callArguments(expression);
+      return args.length === 2 && args[0] === "messages" && args[1] === "emotionLlmCfg";
+    });
+    assert.equal(missingAgentCalls.length, 1);
+    assert.equal(scopedEmotionCallCount + missingAgentCalls.length, emotionCallCount);
   });
 
   it("documents every new agent-scope and context carrier", () => {
@@ -375,6 +507,7 @@ describe("deterministic LLM result-cache allowlist", () => {
       ["index.js", "function makeQuerySummarizer", ["@param {string} agentId", "@returns {Function|null}"]],
       ["index.js", "async function callMergeCheck", ["@param {string} agentId", "@returns {Promise<object|null>}"]],
       ["index.js", "async function updateKnowledgeMd", ["@param {string} agentId", "@returns {Promise<void>}"]],
+      ["index.js", "(messages, context = {}) =>", ["@param {Array<object>} messages", "@param {{agentId?: string}} [context]", "@returns {Promise<string|null>}"]],
       ["lib/jobs/conflict-resolver.js", "async function resolveConflictPair", ["@param {string} agentId", "@returns {Promise<object>}"]],
       ["lib/jobs/conflict-resolver.js", "export async function runConflictResolver", ["@param {string} [opts.agentId]", "@returns {Promise<object>}"]],
       ["lib/jobs/memory-compaction.js", "async function callMergeCheck", ["@param {string} agentId", "@returns {Promise<object|null>}"]],
