@@ -169,6 +169,16 @@ test("per-agent metrics count hits and avoided input/output tokens", async () =>
   assert.equal(cacheMetrics.upstreamProviderCachedInputTokens, 2);
 });
 
+test("partial hit usage counts each available token field and marks missing usage", async () => {
+  const cache = createLlmResultCache({ metrics: true });
+  await cache.getOrCompute(request(), async () => result("answer", 12, null));
+  await cache.getOrCompute(request(), async () => result("unused"));
+  const cacheMetrics = cache.getMetrics("agent-a");
+  assert.equal(cacheMetrics.avoidedInputTokens, 12);
+  assert.equal(cacheMetrics.avoidedOutputTokens, 0);
+  assert.equal(cacheMetrics.hitsMissingUsage, 1);
+});
+
 test("persistent cache survives instances without storing prompt or API key", async (t) => {
   if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
   const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
@@ -263,4 +273,93 @@ test("hard byte limit skips persistent writes and close is idempotent", async (t
   assert.equal(cache.getMetrics("agent-a").persistWriteSkipped, 1);
   await cache.close();
   await cache.close();
+});
+
+test("close waits for pending opens and permanently disables persistence", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  let releaseLoader;
+  let signalLoaderStarted;
+  let loaderCalls = 0;
+  let openedHandles = 0;
+  let closedHandles = 0;
+  let upstreamCalls = 0;
+  const loaderStarted = new Promise((resolve) => { signalLoaderStarted = () => resolve(true); });
+  const loaderGate = new Promise((resolve) => { releaseLoader = resolve; });
+  const sqliteModule = {
+    DatabaseSync: class {
+      constructor() {
+        openedHandles += 1;
+      }
+
+      exec() {}
+
+      prepare() {
+        return {
+          get: () => undefined,
+          run: () => undefined,
+        };
+      }
+
+      close() {
+        closedHandles += 1;
+      }
+    },
+  };
+  const loadSqlite = async () => {
+    loaderCalls += 1;
+    signalLoaderStarted();
+    await loaderGate;
+    return sqliteModule;
+  };
+  const cache = createLlmResultCache({
+    persist: true,
+    baseDbPath: dir,
+    loadSqlite,
+    chmodFile: () => {},
+  });
+
+  const initial = cache.getOrCompute(
+    request({ messages: [{ role: "user", content: "shutdown-race" }] }),
+    async () => result(`answer-${++upstreamCalls}`),
+  );
+  let loaderStartTimer;
+  const loaderStartTimeout = new Promise((resolve) => {
+    loaderStartTimer = setTimeout(() => resolve(false), 100);
+  });
+  const loaderWasUsed = await Promise.race([loaderStarted, loaderStartTimeout]);
+  clearTimeout(loaderStartTimer);
+  if (!loaderWasUsed) {
+    releaseLoader();
+    await initial;
+    await cache.close();
+    assert.equal(loaderWasUsed, true, "expected createLlmResultCache to use the injected SQLite loader");
+    return;
+  }
+
+  let closeResolved = false;
+  const observeClose = async () => {
+    await cache.close();
+    closeResolved = true;
+  };
+  const closing = observeClose();
+  await Promise.resolve();
+  const resolvedBeforeRelease = closeResolved;
+  releaseLoader();
+  await Promise.all([initial, closing]);
+
+  assert.equal(resolvedBeforeRelease, false);
+  assert.equal(cache.getMetrics("agent-a").persistActive, false);
+  assert.equal(openedHandles, closedHandles);
+  assert.equal(loaderCalls, 1);
+
+  assert.equal((await cache.getOrCompute(
+    request({ messages: [{ role: "user", content: "after-close" }] }),
+    async () => result(`answer-${++upstreamCalls}`),
+  )).text, "answer-2");
+  assert.equal(upstreamCalls, 2);
+  assert.equal(loaderCalls, 1);
+  await cache.close();
+  assert.equal(openedHandles, closedHandles);
 });
