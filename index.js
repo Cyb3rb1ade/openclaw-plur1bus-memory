@@ -3801,6 +3801,7 @@ const plugin = {
             const data = collectStatusData({
               memoryStats: { cardCount, lastUpdateMinutes: null },
               emotional: mood ? { emoji: emotionEmoji(mood.dominant), label: t(`emotion.${mood.dominant}`, { lang, tone }), intensity: mood.intensity } : null,
+              llmResultCache: llmResultCache.getMetrics(agentId),
               // Command-Handler kennen nur commandCtx — ein Hook-`ctx` existiert
               // in diesem Scope nicht (ReferenceError "ctx is not defined").
               workspaceDir: commandCtx?.workspaceDir,
@@ -3964,6 +3965,7 @@ const plugin = {
             try { await memoryDbAdapter.shutdown(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: adapter shutdown failed: ${err?.message}`); }
             try { await pool.shutdown(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: pool shutdown failed: ${err?.message}`); }
             try { await flushMetrics(); } catch (err) { api.logger.warn?.(`metrics flush failed: ${err?.message}`); }
+            try { await llmResultCache.close(); } catch (err) { api.logger.warn?.(`memory-lancedb-namespaced: LLM result cache shutdown failed: ${err?.message}`); }
           }, { timeoutMs: 30_000 });
         }
 

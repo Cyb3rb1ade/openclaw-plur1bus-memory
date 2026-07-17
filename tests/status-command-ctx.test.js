@@ -77,5 +77,7 @@ describe("/status Command", () => {
     assert.ok(result?.text, "Sollte Text liefern");
     assert.ok(!result.text.includes("is not defined"), `ReferenceError im Output: ${result.text}`);
     assert.ok(!result.text.toLowerCase().includes("failed"), `Status failed: ${result.text}`);
+    assert.match(result.text, /LLM Result Cache/);
+    assert.match(result.text, /Hit rate: 0\.0% \(0\/0\)/);
   });
 });

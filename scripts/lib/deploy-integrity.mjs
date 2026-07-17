@@ -26,6 +26,7 @@ export const DEPLOY_FILES = [
   "lib/recall-budget.js",
   "lib/with-timeout.js",
   "lib/llm-call.js",
+  "lib/llm-result-cache.js",
   "lib/runtime-pressure-gate.js",
   // ── memory capture / recall ────────────────────────────────────────────────
   "lib/bounded-cache.js",

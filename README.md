@@ -304,7 +304,13 @@ Minimal config block in `openclaw.json`:
             "embeddingCacheEnabled": true,
             "embeddingCacheMaxEntries": 128,
             "embeddingCacheTtlMs": 300000,
-            "embeddingCacheScope": "agent"
+            "embeddingCacheScope": "agent",
+            "llmResultCacheEnabled": true,
+            "llmResultCacheTtlMs": 86400000,
+            "llmResultCacheMaxEntries": 256,
+            "llmResultCachePersist": false,
+            "llmResultCacheMaxBytes": 67108864,
+            "llmResultCacheMetrics": true
           }
         }
       }
@@ -314,6 +320,21 @@ Minimal config block in `openclaw.json`:
 ```
 
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
+
+### LLM result cache
+
+PLUR1BUS caches only exact, agent-scoped results from an explicit allowlist of deterministic internal LLM transformations. The default in-memory cache uses a 24-hour absolute TTL (`llmResultCacheTtlMs: 86400000`) and holds 256 entries per plugin registration (`llmResultCacheMaxEntries`). Optional prompt-free SQLite persistence is off by default; when enabled with `llmResultCachePersist`, it stores hashed keys, results, usage metadata, and timestamps under the memory database path without storing plaintext prompts, credentials, or headers. `llmResultCacheMaxBytes` defaults to 67,108,864 bytes.
+
+The six runtime settings are `llmResultCacheEnabled` (default `true`), `llmResultCacheTtlMs` (default `86400000`), `llmResultCacheMaxEntries` (default `256`), `llmResultCachePersist` (default `false`), `llmResultCacheMaxBytes` (default `67108864`), and `llmResultCacheMetrics` (default `true`). Full Experience enables the cache when the setting is missing and preserves an explicit `false` opt-out.
+
+Non-goals and bypasses:
+
+- Ordinary main-chat/model responses and calls with a missing or unknown cache purpose always remain live. That includes weather requests such as `wie wird das Wetter morgen?`.
+- Live or creative wiki, critical classifier/push, dream narrative, dream echo, afterthought, persona voice, and overlay paths are not cached.
+- Direct Tier-3 API-client calls and emotion calls without a real agent scope are not cached.
+- The cache does not perform semantic matching, share results across agents, cache rejected upstream calls, or replace provider-side prompt caching.
+
+The `/state` status section reports cache hit rate, memory/persistent hits, persistence state, and avoided input/output tokens. It intentionally reports token counts, not money.
 
 **`emotion.t3`** — the tier-3 emotion classifier needs an OpenAI-compatible chat model. Without any chat model configured the classifier falls back to Tier-2 heuristics: it does **not** label cards, so it never poisons results by marking everything `fakt`.
 
