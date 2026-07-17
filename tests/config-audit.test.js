@@ -131,6 +131,21 @@ describe("Schema-Default-Typen (Runtime / Cache)", () => {
     assertNumberDefault("runtime.embeddingCacheTtlMs", 300000));
   it("runtime.embeddingCacheMaxEntries ist eine Zahl", () =>
     assertNumberDefault("runtime.embeddingCacheMaxEntries", 128));
+  it("declares the exact LLM result cache runtime settings", () => {
+    const runtimeProperties = getSchemaNode("runtime").properties;
+    const expected = {
+      llmResultCacheEnabled: { type: "boolean", default: true },
+      llmResultCacheTtlMs: { type: "number", default: 86_400_000 },
+      llmResultCacheMaxEntries: { type: "number", default: 256 },
+      llmResultCachePersist: { type: "boolean", default: false },
+      llmResultCacheMaxBytes: { type: "number", default: 67_108_864 },
+      llmResultCacheMetrics: { type: "boolean", default: true },
+    };
+    const actual = Object.fromEntries(
+      Object.keys(expected).map((key) => [key, runtimeProperties[key]])
+    );
+    assert.deepStrictEqual(actual, expected);
+  });
   it("runtime.metricsDebounceMs ist eine Zahl", () =>
     assertNumberDefault("runtime.metricsDebounceMs", 5000));
 });
