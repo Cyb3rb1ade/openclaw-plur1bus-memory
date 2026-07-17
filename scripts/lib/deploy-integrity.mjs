@@ -23,6 +23,7 @@ export const DEPLOY_FILES = [
   "lib/contradiction-detector.js",
   "lib/recall-pipeline.js",
   "lib/runtime-scheduler.js",
+  "lib/runtime-shutdown.js",
   "lib/recall-budget.js",
   "lib/with-timeout.js",
   "lib/llm-call.js",
