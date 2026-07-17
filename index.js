@@ -188,6 +188,11 @@ import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
+  LLM_RESULT_CACHE_PURPOSES,
+  createLlmResultCache,
+  withLlmResultCacheContext,
+} from "./lib/llm-result-cache.js";
+import {
   inferEmotionalValence,
   inferEmotionalValenceAsync,
   serializeEmotionalValence,
@@ -522,14 +527,18 @@ function readFileHeadSync(path, maxBytes = 8192) {
 // LLM-based summarization for long messages (auto-capture)
 // ============================================================================
 
-async function summarizeForCapture(text, maxChars, llmCfg, logger) {
+async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId) {
   try {
     const result = await callLlm([
       {
         role: "user",
         content: `Summarize this text into the most important facts, decisions, preferences, and actionable information. Keep all specific names, numbers, URLs, dates, technical details, and configuration values. Output ONLY the summary, no preamble. Target length: ${Math.round(maxChars / 4)} characters.\n\n${text.slice(0, 60000)}`,
       },
-    ], { ...llmCfg, maxTokens: Math.round(maxChars / 3) });
+    ], withLlmResultCacheContext(
+      { ...llmCfg, maxTokens: Math.round(maxChars / 3), temperature: 0 },
+      agentId,
+      LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
+    ));
     if (result && result.length > 20) return result;
   } catch (e) {
     if (logger) logger.warn(`memory-lancedb-namespaced: summarize failed (${e.message}), falling back to truncation`);
@@ -541,7 +550,7 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger) {
 // Baut eine querySummarizer-Funktion für runRecallPipeline.
 // Fasst einen langen Prompt auf die semantisch wichtigsten Themen/Schlüsselwörter
 // zusammen, statt ihn hart zu kürzen — so gehen keine Suchinformationen verloren.
-function makeQuerySummarizer(llmCfg, logger) {
+function makeQuerySummarizer(llmCfg, logger, agentId) {
   if (!llmCfg) return null;
   return async (query) => {
     const result = await callLlm([
@@ -549,7 +558,11 @@ function makeQuerySummarizer(llmCfg, logger) {
         role: "user",
         content: `Extract the key topics, names, events, decisions, and facts from the following text that are relevant for a semantic memory search. Output ONLY a compact summary (2-4 sentences, max 800 chars) capturing the most searchable information. Do not add commentary.\n\n${query.slice(0, 60000)}`,
       },
-    ], { ...llmCfg, maxTokens: 300 });
+    ], withLlmResultCacheContext(
+      { ...llmCfg, maxTokens: 300, temperature: 0 },
+      agentId,
+      LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
+    ));
     if (result && result.length > 20) return result;
     throw new Error("empty summarizer response");
   };
@@ -1755,10 +1768,13 @@ function appendConflictLog(workspaceDir, entry) {
 // ============================================================================
 
 async function callLlm(messages, llmCfg) {
-  return callOpenAiLlm(messages, llmCfg, { loadOpenAI: getOpenAI });
+  return callOpenAiLlm(messages, llmCfg, {
+    loadOpenAI: getOpenAI,
+    resultCache: llmCfg?.resultCache,
+  });
 }
 
-async function callMergeCheck(existingText, newText, llmCfg) {
+async function callMergeCheck(existingText, newText, llmCfg, agentId) {
   const A = String(existingText || "").slice(0, 2000);
   const B = String(newText || "").slice(0, 2000);
   const content = await callLlm([
@@ -1766,7 +1782,11 @@ async function callMergeCheck(existingText, newText, llmCfg) {
       role: "user",
       content: `Two memory fragments — should they be merged into one?\n\nFragment A: ${A}\nFragment B: ${B}\n\nRespond with JSON only: {"merge": boolean, "reason": "brief explanation", "mergedText": "merged version (only if merge=true)"}\nRules:\n- merge=true only if both fragments describe the same subject/fact from different angles\n- mergedText must contain ALL information from both fragments\n- mergedText must be longer than the shorter of the two fragments`,
     },
-  ], { ...llmCfg, jsonMode: true, maxTokens: 300 });
+  ], withLlmResultCacheContext(
+    { ...llmCfg, jsonMode: true, maxTokens: 300, temperature: 0 },
+    agentId,
+    LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+  ));
   if (!content) return null;
   let parsed;
   try {
@@ -1976,7 +1996,11 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
       role: "user",
       content: `Here is the current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memory (category=${category}, importance=${importance.toFixed(1)}, date=${today}):\n${text}\n\nIntegrate this information into the KNOWLEDGE.md body.\n- Add a new entry under the appropriate section with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.`,
     },
-  ], { ...llmCfg, maxTokens: 3000 });
+  ], withLlmResultCacheContext(
+    { ...llmCfg, maxTokens: 3000, temperature: 0 },
+    agentId,
+    LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+  ));
 
   if (!updated) return;
 
@@ -1988,7 +2012,11 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
         role: "user",
         content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
       },
-    ], { ...llmCfg, maxTokens: 4000 });
+    ], withLlmResultCacheContext(
+      { ...llmCfg, maxTokens: 4000, temperature: 0 },
+      agentId,
+      LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+    ));
 
     const compactedLines = compacted?.split("\n").length ?? Infinity;
     if (compacted && compactedLines <= 150) {
@@ -2069,6 +2097,16 @@ const plugin = {
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const providerMigration = applyLegacyProviderDefaults(cfg, { baseDbPath });
     cfg = providerMigration.config;
+    const llmResultCache = createLlmResultCache({
+      enabled: cfg.runtime?.llmResultCacheEnabled !== false,
+      ttlMs: cfg.runtime?.llmResultCacheTtlMs,
+      maxEntries: cfg.runtime?.llmResultCacheMaxEntries ?? 256,
+      persist: cfg.runtime?.llmResultCachePersist === true,
+      maxBytes: cfg.runtime?.llmResultCacheMaxBytes ?? 67_108_864,
+      metrics: cfg.runtime?.llmResultCacheMetrics !== false,
+      baseDbPath,
+      logger: api.logger,
+    });
     if (providerMigration.changed) {
       api.logger.info(
         `memory-lancedb-namespaced: applied local provider defaults for empty legacy install (${providerMigration.migrations.join(", ")})`
@@ -2182,6 +2220,7 @@ const plugin = {
       apiKey: mergingCfg.apiKey ? resolveEnvVars(mergingCfg.apiKey) : apiKey,
       disableThinking: mergingCfg.disableThinking ?? false,
       headers: mergingCfg.headers || undefined,
+      resultCache: llmResultCache,
     } : null;
     if (mergingRequested && !mergingEnabled) {
       api.logger.warn("memory-lancedb-namespaced: merging.enabled=true but merging.model is empty; disabling LLM merging. Set config.merging.model for any OpenAI-compatible chat provider.");
@@ -2217,6 +2256,7 @@ const plugin = {
       apiKey: schicht15Cfg.apiKey ? resolveEnvVars(schicht15Cfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
       disableThinking: schicht15Cfg.disableThinking ?? mergingCfg.disableThinking ?? false,
       headers: schicht15Cfg.headers || mergingCfg.headers || undefined,
+      resultCache: llmResultCache,
     } : null;
     if (schicht15Requested && !schicht15Enabled) {
       api.logger.warn("memory-lancedb-namespaced: schicht15.enabled=true but no schicht15.model or merging.model is configured; disabling KNOWLEDGE.md LLM tooling.");
@@ -2236,6 +2276,7 @@ const plugin = {
           apiKey: skillMinerCfg.apiKey ? resolveEnvVars(skillMinerCfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
           disableThinking: skillMinerCfg.disableThinking ?? mergingCfg.disableThinking ?? false,
           headers: skillMinerCfg.headers || mergingCfg.headers || undefined,
+          resultCache: llmResultCache,
         }
       : null;
     if (skillMinerEnabled && !skillMinerLlmCfg) {
@@ -2256,7 +2297,22 @@ const plugin = {
     const emotionT3Model = emotionCfg.t3?.model || mergingModel || "kimi-for-coding";
     // Prefer plugin-internal callLlm (routes through configured model); falls back to apiKey path in Tier3LLMClassifier
     const emotionT3CallLlm = (emotionT3Enabled && mergingLlmCfg)
-      ? (messages) => callLlm(messages, { ...mergingLlmCfg, model: emotionT3Model, maxTokens: 300, disableThinking: true })
+      ? (messages, context = {}) => {
+          const emotionLlmCfg = {
+            ...mergingLlmCfg,
+            model: emotionT3Model,
+            maxTokens: 300,
+            temperature: 0,
+            disableThinking: true,
+          };
+          return context.agentId
+            ? callLlm(messages, withLlmResultCacheContext(
+                emotionLlmCfg,
+                context.agentId,
+                LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+              ))
+            : callLlm(messages, emotionLlmCfg);
+        }
       : null;
     if (emotionT3Enabled && mergingLlmCfg) {
       api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled via callLlm (model: ${emotionT3Model})`);
@@ -2597,7 +2653,7 @@ const plugin = {
             } else {
               try {
                 mergeResult = await Promise.race([
-                  callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg),
+                  callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg, agentId),
                   new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
                 ]);
               } catch (mergeErr) {
@@ -3869,18 +3925,17 @@ const plugin = {
           }, { timeoutMs: 30_000 });
         }
 
-        const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger);
-
         const runMemoryCommand = async (commandCtx) => {
           try {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const input = (commandCtx.args || "").trim();
+            const agentId = commandCtx.agentId || "default";
+            const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger, agentId);
             const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const parsed = parseMemoryQuery(normalized.canonicalText);
-            const agentId = commandCtx.agentId || "default";
             const { userId } = resolveIdentity(commandCtx);
             const items = await queryMemory(memoryDbAdapter, agentId, parsed, {
               agentId,
@@ -4347,7 +4402,7 @@ const plugin = {
                 if (text.length > maxChars) {
                   if (mergingLlmCfg) {
                     api.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
-                    text = await summarizeForCapture(text, maxChars, mergingLlmCfg, api.logger);
+                    text = await summarizeForCapture(text, maxChars, mergingLlmCfg, api.logger, agentId);
                   } else {
                     text = text.slice(0, maxChars);
                   }
@@ -4425,7 +4480,7 @@ const plugin = {
                 });
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user");
+                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user", null, { agentId });
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
                 const memoryId = randomUUID();
@@ -4833,7 +4888,7 @@ const plugin = {
                 rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
                 rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
                 summaryMaxWords,
-                querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
+                querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger, agentId),
                 logger: api.logger,
                 emotionalState: emotionalPool.get(agentId),
                 graphEdges,
@@ -5012,7 +5067,7 @@ const plugin = {
                   } else {
                     try {
                       mergeResult = await Promise.race([
-                        callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg),
+                        callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg, agentId),
                         new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
                       ]);
                     } catch (mergeErr) {
@@ -5033,7 +5088,7 @@ const plugin = {
                       // DATA-003: prepare the merged entry and archive the original BEFORE
                       // deleting it. If embedding/archiving fails, the original remains intact.
                       const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
-                      const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user");
+                      const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user", null, { agentId });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedEntry = applyDynamicsDefaults({
                         id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
@@ -5081,7 +5136,7 @@ const plugin = {
 
               // 3. Normal store
               const summary = generateSummary(params.text, summaryMaxWords);
-              const emotion = await inferEmotionalValenceAsync(params.text, "user");
+              const emotion = await inferEmotionalValenceAsync(params.text, "user", null, { agentId });
               const moodContext = emotionalPool.snapshot(agentId);
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
@@ -5297,7 +5352,11 @@ const plugin = {
                   role: "user",
                   content: `Current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memories to integrate (date=${today}):\n${newEntriesBlock}${params?.note ? `\n\nCurator note: ${params.note}` : ""}\n\nIntegrate these into the KNOWLEDGE.md body.\n- Do not rewrite the document from scratch.\n- Preserve existing wording unless merging an exact duplicate or lightly compacting closely related points.\n- Only add or merge knowledge that is directly supported by the new memories.\n- Add entries under appropriate sections with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Return ONLY the Markdown body, NO YAML frontmatter, NO explanation, NO code block wrapper.`,
                 },
-              ], { ...schicht15LlmCfg, maxTokens: 3000 });
+              ], withLlmResultCacheContext(
+                { ...schicht15LlmCfg, maxTokens: 3000, temperature: 0 },
+                agentId,
+                LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+              ));
 
               if (!updated) {
                 return { content: [{ type: "text", text: "knowledge_update: LLM returned empty result." }] };
@@ -5312,7 +5371,11 @@ const plugin = {
                     role: "user",
                     content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
                   },
-                ], { ...schicht15LlmCfg, maxTokens: 4000 });
+                ], withLlmResultCacheContext(
+                  { ...schicht15LlmCfg, maxTokens: 4000, temperature: 0 },
+                  agentId,
+                  LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+                ));
 
                 const compactedLines = compacted?.split("\n").length ?? Infinity;
                 if (compacted && compactedLines <= 150) {
@@ -5533,7 +5596,7 @@ const plugin = {
             const lastUserText = promptText
               || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
             if (lastUserText.length >= 3) {
-              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user");
+              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId });
               emoState.applyEmotionScore(turnEmotion);
             } else {
               emoState.updateFromMessages(voiceMessages);
@@ -5616,7 +5679,7 @@ const plugin = {
             rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
             rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
             summaryMaxWords,
-            querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger),
+            querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger, agentId),
             logger: api.logger,
             emotionalState: emotionalPool.get(agentId),
             graphEdges,
