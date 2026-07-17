@@ -527,6 +527,15 @@ function readFileHeadSync(path, maxBytes = 8192) {
 // LLM-based summarization for long messages (auto-capture)
 // ============================================================================
 
+/**
+ * Summarize oversized captured text with deterministic agent-scoped LLM settings.
+ * @param {string} text
+ * @param {number} maxChars
+ * @param {object} llmCfg
+ * @param {object} logger
+ * @param {string} agentId
+ * @returns {Promise<string>}
+ */
 async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId) {
   try {
     const result = await callLlm([
@@ -550,6 +559,13 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId) {
 // Baut eine querySummarizer-Funktion für runRecallPipeline.
 // Fasst einen langen Prompt auf die semantisch wichtigsten Themen/Schlüsselwörter
 // zusammen, statt ihn hart zu kürzen — so gehen keine Suchinformationen verloren.
+/**
+ * Build an agent-scoped deterministic recall query summarizer.
+ * @param {object|null} llmCfg
+ * @param {object} logger
+ * @param {string} agentId
+ * @returns {Function|null}
+ */
 function makeQuerySummarizer(llmCfg, logger, agentId) {
   if (!llmCfg) return null;
   return async (query) => {
@@ -1774,6 +1790,14 @@ async function callLlm(messages, llmCfg) {
   });
 }
 
+/**
+ * Ask the LLM for one deterministic agent-scoped merge decision.
+ * @param {string} existingText
+ * @param {string} newText
+ * @param {object} llmCfg
+ * @param {string} agentId
+ * @returns {Promise<object|null>}
+ */
 async function callMergeCheck(existingText, newText, llmCfg, agentId) {
   const A = String(existingText || "").slice(0, 2000);
   const B = String(newText || "").slice(0, 2000);
@@ -1968,6 +1992,18 @@ function removeKnowledgePending(workspaceDir, removeKeys, removeLegacyIds = []) 
 // Schicht 1.5 — KNOWLEDGE.md
 // ============================================================================
 
+/**
+ * Integrate one memory into KNOWLEDGE.md with deterministic agent-scoped LLM calls.
+ * @param {string} workspaceDir
+ * @param {string} text
+ * @param {string} category
+ * @param {number} importance
+ * @param {object} llmCfg
+ * @param {object} logger
+ * @param {string} agentId
+ * @param {Array<string>} sourceMemoryIds
+ * @returns {Promise<void>}
+ */
 async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCfg, logger, agentId, sourceMemoryIds) {
   if (!workspaceDir || !llmCfg) return;
   const memDir = join(workspaceDir, "memory");
