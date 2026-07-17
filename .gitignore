@@ -51,3 +51,4 @@ BREAKING_CHANGE_AUDIT.md
 .openclaw/extensions/*
 !.openclaw/extensions/emotional-state-injector/
 !.openclaw/extensions/emotional-state-injector/**
+.worktrees/
