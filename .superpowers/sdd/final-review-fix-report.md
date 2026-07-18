@@ -1,174 +1,79 @@
-# Final Review Fix Report
+# Final Review Fix Report (feat/llm-result-cache)
+
+> Hinweis: Die frühere Version dieser Datei beschrieb fälschlich Fixes an
+> `lib/afterthought.js` aus einem anderen Repository-Zyklus und dokumentierte
+> die Fixes dieses Branches nicht. Sie wurde am 2026-07-18 durch diesen
+> korrekten Report ersetzt.
 
 ## Scope
 
-Fixed the two final whole-branch review findings in `lib/afterthought.js` and added focused regressions in `tests/afterthought.test.js`.
+Behebt die vier Important-Findings aus `final-review-findings.md` auf Basis
+`7084476` (main). Geänderte Dateien:
 
-Allowed-file scope was respected:
+- `lib/llm-result-cache.js`
+- `tests/llm-result-cache.test.js`
 
-- `lib/afterthought.js`
-- `tests/afterthought.test.js`
-- `.superpowers/sdd/final-review-fix-report.md`
+## Fixes
 
-Pre-existing dirty files were left untouched:
+### Finding 1 — invalide Ergebnisse wurden gecacht (Commit `d2e380c`)
 
-- `lib/jobs/memory-dynamics-maintenance.js`
-- `tests/memory-dynamics-maintenance.test.js`
+`getOrCompute` cached jetzt nur noch Ergebnisse mit nicht-leerem `text`;
+bei `jsonMode: true` muss der Text zusätzlich `JSON.parse` bestehen.
+`null`, leere/Whitespace-Strings und malformed JSON werden unverändert an den
+Caller zurückgegeben, landen aber weder im Memory-Cache noch in SQLite.
+Regressionen decken Memory- und Persistenz-Pfad je Kategorie ab, inklusive
+Reopen-Verifikation und dem Positivfall (valides JSON bleibt cachebar).
 
-## Changes
+### Finding 2 — Coalesced Waiter zählten vermiedene Tokens nicht (Commit `d2e380c`)
 
-### 1. Stored prompt injection hardening in `composeAfterthought`
+Der `inFlight`-Zweig ruft für jeden erfolgreichen Waiter einmal
+`recordHitUsage` auf; abgelehnte geteilte Computes zählen nichts.
+`coalesced` bleibt eine eigene Request-Kategorie, `hits` wurde nicht
+verbreitert. Tests: mehrere konkurrente Waiter addieren die vermiedenen
+Input-/Output-Tokens je einmal; partielle Usage inkrementiert
+`hitsMissingUsage` pro Waiter; Rejections zählen keine Usage.
 
-Updated the afterthought LLM prompt composition so persisted `candidate.userPrompt` is no longer sent as live user content without framing.
+### Finding 3 — SQLite-Size-Cleanup konnte Platz nicht zuverlässig freigeben (Commit `d2e380c`)
 
-What changed:
+`trimToSize` checkpointet/truncatet die WAL vor der Neuvermessung
+(`compactAndMeasure`), evictet gebunden die ältesten Zeilen Richtung
+90%-Soft-Target und versucht am Hard-Limit erst Cleanup, bevor ein Write
+übersprungen wird. Passt der physische Overhead trotzdem nicht, wird nur der
+Persist-Write geskippt; der Memory-Cache bleibt intakt. Tests mit echtem
+`node:sqlite`: Multi-Row-Soft-Limit-Eviction, WAL-lastiges Cleanup, Recovery
+nach Hard-Limit.
 
-- Imported and used `sanitizeMemoryTextForPrompt` from `lib/memory-context-sanitize.js`.
-- Added `MAX_HISTORICAL_PROMPT_CHARS = 1000` and sanitized the historical prompt before including it in the LLM request.
-- Reframed the prompt as explicit untrusted historical context.
-- Added system-level instructions that the earlier user text is not a live instruction and that embedded role/system/tool/markup instructions must be ignored.
-- Wrapped the sanitized payload inside a dedicated historical-context block.
+### Finding 4 — frische Persistenz-Basis konnte nicht initialisieren (Commit `c6cdf30`)
 
-Security effect:
+`openDb` legt die konfigurierte Basis jetzt mit
+`mkdirSync(baseDbPath, { recursive: true, mode: 0o700 })` an, **bevor**
+`resolveInside(baseDbPath)` realpatht. `safeAgentId()` und `resolveInside()`
+bleiben für die per-Agent-Subpfade erhalten (Traversal-/Symlink-Schutz
+unverändert). Tests: absente Cache-Basis unter existierendem Parent →
+Persist-Write gelingt, DB-Mode `0600`, Close/Reopen-Persistent-Hit,
+Isolation zwischen Agent-Scopes.
 
-- Raw `<system>` and injected closing tags from persisted log content no longer appear verbatim in the LLM input.
-- The automatic afterthought path now treats replayed conversation text as hostile-by-default background context.
+## Nacharbeit Audit 2026-07-18 (uncommitted zum Report-Zeitpunkt)
 
-### 2. Bounded cron-path reads for `reply-outcomes.jsonl`
+- Clamps für `llmResultCacheMaxEntries` (≤ 10.000) und
+  `llmResultCacheMaxBytes` (≤ 1 GiB) mit Warn-Log; Doku nachgezogen.
+- Expired-Row-Sweep bei Open und Close (max. 16×256 Zeilen, bounded);
+  `close()` drained zusätzlich in-flight Computes.
+- Die zwischenzeitlich ergänzten `"maximum"`-Constraints im
+  `openclaw.plugin.json`-Schema wurden wieder entfernt: Der OpenClaw-Loader
+  validiert das Schema hart (TypeBox) und überspringt das Plugin bei
+  Verstoß komplett (`invalid config` → `continue`), was der
+  Clamp+Warn-Semantik und der Fail-open-Philosophie widerspricht.
 
-Updated `runAfterthoughtJob` to bound `readReplyOutcomeLog` reads with:
+## Verifikation
 
-- `MAX_REPLY_OUTCOME_LOG_READ_BYTES = 2 * 1024 * 1024`
-
-What changed:
-
-- Replaced `readReplyOutcomeLog(workspaceDir, 50)` with object-form options:
-  - `limit: 50`
-  - `maxBytes: 2 * 1024 * 1024`
-
-Behavioral effect:
-
-- Oversized `reply-outcomes.jsonl` files are skipped by the shared JSONL reader instead of being fully read on the cron path.
-- When skipped, afterthought falls back to the existing `no_candidate` path.
-
-## Tests Added
-
-### Prompt-injection regression
-
-Added a regression that uses a malicious stored `userPrompt` containing:
-
-- closing-tag content
-- `<system>` content
-
-Assertions verify:
-
-- the LLM input labels the text as `Untrusted historical context`
-- the LLM input does not contain raw `<system>`
-- the LLM input does not contain raw injected closing tags
-- sanitized escaped text is still present as historical content
-
-### Oversized-log regression
-
-Added a regression that writes an oversized `reply-outcomes.jsonl` entry greater than `2 * 1024 * 1024` bytes and verifies:
-
-- `runAfterthoughtJob(...)` returns `{ skipped: true, reason: "no_candidate" }`
-
-## Verification
-
-Executed the required checks:
-
-```bash
-node --test tests/afterthought.test.js
-node --check lib/afterthought.js
-```
-
-Both passed after the fix.
-
-## Concerns
-
-None from this change set. The prompt wrapper now mixes German system instructions with a short English trust marker (`Untrusted historical context`) because the regression explicitly checks for that label. That does not affect the response contract, but it is worth normalizing later if the project wants one language for all internal prompt scaffolding.
-
-## Follow-up Fix
-
-Re-review found that the first hardening pass still sent the stored `candidate.userPrompt` to the model as a live `role: "user"` message. That left the trust boundary incomplete even though the text was sanitized and labeled.
-
-### Additional change
-
-Updated `composeAfterthought` so that:
-
-- the sanitized stored prompt is included only inside the `system` prompt
-- the historical block remains explicitly labeled as untrusted historical context
-- the live `user` message was reduced to a neutral generation instruction, but that pass still interpolated stored-derived topic text and needed one more fix
-- the bounded `reply-outcomes.jsonl` read cap remains unchanged
-
-### Regression update
-
-Tightened `tests/afterthought.test.js` so it now asserts that:
-
-- there is still exactly one `user` role message
-- no `user` role message contains the stored historical text or its injection payload
-- the sanitized historical text is present only in non-user prompt content
-- raw `<system>` and raw injected closing tags are absent from that non-user content
-
-### Exact test output
-
-`node --test tests/afterthought.test.js`
+`node --test tests/llm-result-cache.test.js tests/config-audit.test.js`
 
 ```text
-✔ tests/afterthought.test.js (342.228423ms)
-ℹ tests 1
-ℹ suites 0
-ℹ pass 1
+ℹ tests 163
+ℹ pass 163
 ℹ fail 0
-ℹ cancelled 0
-ℹ skipped 0
-ℹ todo 0
-ℹ duration_ms 363.279218
 ```
 
-`node --check lib/afterthought.js`
-
-```text
-```
-
-## Final Follow-up Fix
-
-Re-review found one remaining trust-boundary leak: `candidate.topic` is derived from stored outcome-log text and was still interpolated into the live `role: "user"` message.
-
-### Final change
-
-Updated `composeAfterthought` so that:
-
-- the live `user` message is fully generic and contains no stored-log-derived substrings
-- the stored-derived topic is kept only in non-user prompt content as labeled historical context
-- the stored prompt remains sanitized in the `system` prompt
-- the bounded `reply-outcomes.jsonl` read cap remains unchanged
-
-### Regression update
-
-Tightened `tests/afterthought.test.js` so it now:
-
-- derives the candidate from `findAfterthoughtCandidate(...)` using a malicious stored prompt
-- verifies no `role: "user"` message contains raw or derived stored-text substrings such as `Backup`, `ignore`, `system`, or the malicious topic body
-- verifies the non-user prompt content still contains sanitized historical context
-
-### Exact test output
-
-`node --test tests/afterthought.test.js`
-
-```text
-✔ tests/afterthought.test.js (259.898261ms)
-ℹ tests 1
-ℹ suites 0
-ℹ pass 1
-ℹ fail 0
-ℹ cancelled 0
-ℹ skipped 0
-ℹ todo 0
-ℹ duration_ms 274.291547
-```
-
-`node --check lib/afterthought.js`
-
-```text
-```
+(Node v24.15.0, echtes `node:sqlite`; Lauf vom 2026-07-18 inkl. der
+Audit-Nacharbeit.)
