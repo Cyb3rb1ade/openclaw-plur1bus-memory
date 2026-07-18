@@ -4,6 +4,7 @@ import {
   REQUIRED_FEATURE_CRONS,
   planFeatureCrons,
   deriveAgentDelivery,
+  deriveDeliveryFromChannelConfig,
   selectAgentsForCronSetup,
   staggerPersonaEvolveSchedule,
 } from "../lib/setup/feature-cron-plan.js";
@@ -481,6 +482,83 @@ describe("Message-Contract-Migration bestehender Jobs", () => {
     const existing = [{ name: "plur1bus afterthought main", agentId: "main", payload: { message: OLD_CONTRACT } }];
     const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
     assert.strictEqual(plan.update.length, 0);
+  });
+});
+
+describe("deriveDeliveryFromChannelConfig", () => {
+  const config = {
+    bindings: [
+      { agentId: "main", match: { channel: "discord", accountId: "default" } },
+      { agentId: "main", match: { channel: "telegram", accountId: "default" } },
+      { agentId: "bernhardine", match: { channel: "telegram", accountId: "bernhardine" } },
+    ],
+    channels: {
+      telegram: {
+        accounts: {
+          default: { enabled: true, allowFrom: [55736530] },
+          bernhardine: { enabled: true, allowFrom: ["1211667028"] },
+          ambiguous: { enabled: true, allowFrom: [1, 2] },
+        },
+      },
+    },
+  };
+
+  it("leitet das Ziel aus Binding + allowFrom ab (Zahl wird zu String)", () => {
+    assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", config), {
+      channel: "telegram",
+      to: "55736530",
+      accountId: "default",
+    });
+    assert.deepStrictEqual(deriveDeliveryFromChannelConfig("bernhardine", config), {
+      channel: "telegram",
+      to: "1211667028",
+      accountId: "bernhardine",
+    });
+  });
+
+  it("gibt null zurück bei mehrdeutigem allowFrom, fehlendem Binding oder fehlender Config", () => {
+    const cfg = {
+      bindings: [{ agentId: "x", match: { channel: "telegram", accountId: "ambiguous" } }],
+      channels: config.channels,
+    };
+    assert.strictEqual(deriveDeliveryFromChannelConfig("x", cfg), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("unbekannt", config), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", null), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", {}), null);
+  });
+
+  it("gibt null zurück, wenn der Agent an mehrere Telegram-Accounts gebunden ist", () => {
+    const cfg = {
+      bindings: [
+        { agentId: "m", match: { channel: "telegram", accountId: "default" } },
+        { agentId: "m", match: { channel: "telegram", accountId: "bernhardine" } },
+      ],
+      channels: config.channels,
+    };
+    assert.strictEqual(deriveDeliveryFromChannelConfig("m", cfg), null);
+  });
+
+  it("planFeatureCrons nutzt die Config als Fallback, wenn keine Cron-Ableitung möglich ist", () => {
+    const agents = [{ id: "main", isDefault: true }];
+    const plan = planFeatureCrons([], REQUIRED_FEATURE_CRONS, { agents, channelConfig: config });
+    const afterthought = plan.create.find((c) => c.name === "plur1bus afterthought main");
+    assert.ok(afterthought);
+    assert.strictEqual(afterthought.enabled, true);
+    assert.deepStrictEqual(afterthought.delivery, { channel: "telegram", to: "55736530", accountId: "default" });
+  });
+
+  it("Cron-Ableitung hat Vorrang vor der Config", () => {
+    const agents = [{ id: "main", isDefault: true }];
+    const existing = [
+      {
+        agentId: "main",
+        name: "plur1bus-morning-review-main",
+        delivery: { mode: "announce", channel: "telegram", to: "99999", accountId: "acct" },
+      },
+    ];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents, channelConfig: config });
+    const afterthought = plan.create.find((c) => c.name === "plur1bus afterthought main");
+    assert.strictEqual(afterthought.delivery.to, "99999");
   });
 });
 
