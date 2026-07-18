@@ -24,6 +24,19 @@ PLUR1BUS is an OpenClaw v6 plugin that provides per-agent long-term memory using
 - **Metrics** — counters for hits, misses, persist hits/writes/skips, coalesced requests; enabled with `embeddingCacheMetrics: true`.
 - **No plaintext by default** — `debug_text` is only stored when `embeddingCachePersistDebug: true`.
 
+## LLM-Result-Cache
+
+`lib/llm-result-cache.js` provides an exact, agent-scoped cache for deterministic internal LLM transformations:
+
+- **Purpose allowlist** — only the purposes in `LLM_RESULT_CACHE_PURPOSES` are cached; unknown or missing purposes always bypass the cache (fail-open to live calls). Main chat, critical classification, dream narratives, and other non-deterministic paths are never cached.
+- **Cache key** — SHA-256 over `cacheVersion + purpose + scopeId + endpoint + credentialHash + model + messages + maxTokens + temperature + jsonMode + disableThinking + headersHash`. Prompts, credentials, and headers enter the key only as hashes; model/credential rotation invalidates automatically.
+- **In-memory layer** — LRU with absolute TTL (`llmResultCacheTtlMs`, clamped to 60 s–7 d, default 24 h), bounded by `llmResultCacheMaxEntries` (clamped to 0–10,000, default 256; clamping logs a warning).
+- **Persistent SQLite layer** — optional (`llmResultCachePersist: true`), uses Node.js built-in `node:sqlite` (requires Node ≥ 22.5; older Node falls back to memory-only). WAL mode, `busy_timeout`, atomic UPSERT, `auto_vacuum=INCREMENTAL`. Stores hashed keys, response text, and usage metadata — never prompts, credentials, or headers. Files at `llm-result-cache-v1/{agentId}.db` (dir `0o700`, file `0o600`); note that response text is stored as plaintext (opt-in).
+- **Size limits** — `llmResultCacheMaxBytes` (clamped to 0–1 GiB, default 64 MiB) with soft target at 90% and hard skip on persist writes when the limit is reached.
+- **Request coalescing** — identical cache keys share one in-flight compute promise; errors and invalid results (empty text, malformed JSON-mode output) are never cached.
+- **Lifecycle** — expired rows are swept on open and close; `close()` drains in-flight writes before closing handles and is registered via `registerGatewayShutdown`. Cache defects must never block capture, recall, or the message flow — all failure paths degrade to live calls.
+- **Metrics** — per-scope counters for hits, misses, persist hits/writes/skips, coalesced requests, and avoided tokens; enabled with `llmResultCacheMetrics: true` (default), surfaced via `/state`.
+
 ## Recall boosters (additive only)
 
 These features sit **after** normal recall and only append results. They must never replace primary recall or write memory data.

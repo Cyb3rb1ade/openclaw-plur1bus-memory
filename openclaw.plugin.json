@@ -336,6 +336,30 @@
           "embeddingCacheMaxBytes": {
             "type": "number"
           },
+          "llmResultCacheEnabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "llmResultCacheTtlMs": {
+            "type": "number",
+            "default": 86400000
+          },
+          "llmResultCacheMaxEntries": {
+            "type": "number",
+            "default": 256
+          },
+          "llmResultCachePersist": {
+            "type": "boolean",
+            "default": false
+          },
+          "llmResultCacheMaxBytes": {
+            "type": "number",
+            "default": 67108864
+          },
+          "llmResultCacheMetrics": {
+            "type": "boolean",
+            "default": true
+          },
           "metricsDebounceMs": {
             "type": "number",
             "default": 5000

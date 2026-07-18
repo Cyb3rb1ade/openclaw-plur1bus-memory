@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  CORE_FEATURES,
   recommendedProfile,
   safeProfile,
   customProfileFromSelection,
@@ -38,6 +39,7 @@ describe("feature-profiles", () => {
     assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, false);
     assert.strictEqual(p.temporalContext.enabled, true);
     assert.strictEqual(p.runtime.embeddingCacheEnabled, true);
+    assert.strictEqual(p.runtime.llmResultCacheEnabled, true);
     assert.strictEqual(p.emotion.t3.enabled, true);
     assert.strictEqual(p.metaCognition.enabled, true);
     assert.strictEqual(p.obsidianBridge.semanticGraph.mutateMemory, false);
@@ -148,6 +150,7 @@ describe("feature-profiles", () => {
     const cfg = fullExperienceDefaults();
     assert.strictEqual(cfg.temporalContext.enabled, true);
     assert.strictEqual(cfg.runtime.embeddingCacheEnabled, true);
+    assert.strictEqual(cfg.runtime.llmResultCacheEnabled, true);
     assert.strictEqual(cfg.reranker.enabled, true);
     assert.strictEqual(cfg.emotion.t2.enabled, true);
     assert.strictEqual(cfg.emotion.t3.enabled, true);
@@ -160,13 +163,14 @@ describe("feature-profiles", () => {
   it("applyFullExperiencePolicy preserves existing disabled features during update", () => {
     const cfg = applyFullExperiencePolicy({
       reranker: { enabled: false },
-      runtime: { embeddingCacheEnabled: false },
+      runtime: { embeddingCacheEnabled: false, llmResultCacheEnabled: false },
       temporalContext: { enabled: false },
       featurePolicy: { fullExperiencePromptedAt: "never-write" },
       featuresConfirmedAt: "2026-06-03",
     });
     assert.strictEqual(cfg.reranker.enabled, false);
     assert.strictEqual(cfg.runtime.embeddingCacheEnabled, false);
+    assert.strictEqual(cfg.runtime.llmResultCacheEnabled, false);
     assert.strictEqual(cfg.temporalContext.enabled, false);
     assert.strictEqual(cfg.merging.enabled, true);
     assert.strictEqual(cfg.featurePolicy, undefined);
@@ -250,6 +254,19 @@ describe("feature-profiles", () => {
     const missing = detectMissingCoreFeatures({ reranker: { enabled: false } });
     assert.ok(missing.some((feature) => feature.key === "temporalContext"));
     assert.ok(missing.some((feature) => feature.key === "embeddingCache"));
+    assert.ok(missing.some((feature) => feature.key === "llmResultCache"));
+  });
+
+  it("registers the LLM result cache as a default-on core feature", () => {
+    assert.deepStrictEqual(
+      CORE_FEATURES.find((feature) => feature.key === "llmResultCache"),
+      {
+        key: "llmResultCache",
+        label: "LLM Result Cache",
+        path: ["runtime", "llmResultCacheEnabled"],
+        defaultValue: true,
+      }
+    );
   });
 
   it("start notice is operational state and consume-after-display", () => {

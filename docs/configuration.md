@@ -80,6 +80,27 @@ Runtime-Optionen (Cache, Re-Ranker etc.) liegen in `config.runtime`.
 
 ---
 
+## LLM-Result-Cache
+
+| Key | Typ | Default | Beschreibung |
+|-----|-----|---------|--------------|
+| `runtime.llmResultCacheEnabled` | `boolean` | `true` | Exakten Ergebnis-Cache für deterministische interne LLM-Transformationen aktivieren. |
+| `runtime.llmResultCacheTtlMs` | `number` | `86400000` | Absolute TTL eines Eintrags in Millisekunden (24 h); wird auf 60 s–7 d geclampet. |
+| `runtime.llmResultCacheMaxEntries` | `number` | `256` | Maximale Anzahl Einträge im Memory-Cache; Obergrenze 10.000 (Clamp mit Warnung). |
+| `runtime.llmResultCachePersist` | `boolean` | `false` | SQLite-Persistenz aktivieren (benötigt Node ≥ 22.5 für `node:sqlite`; sonst Memory-only). |
+| `runtime.llmResultCacheMaxBytes` | `number` | `67108864` | Maximale persistente Speichergröße (Soft-Limit bei 90 %); Obergrenze 1 GiB (Clamp mit Warnung). |
+| `runtime.llmResultCacheMetrics` | `boolean` | `true` | Metriken für Hits, Misses, Persist-Hits und vermiedene Tokens emittieren (sichtbar in `/state`). |
+
+### Verhalten
+
+- Es werden ausschließlich exakte, agent-scoped Ergebnisse einer Allowlist deterministischer interner Transformationen gecacht (Capture-/Recall-Zusammenfassungen, Merge- und Konflikt-Entscheidungen, Emotions-, Episoden-, Skill- und REM-Analysen, KNOWLEDGE-Updates). Hauptchat, Critical-Classifier, Dream-Narrative und andere nicht-deterministische Pfade bleiben immer live.
+- Der Cache-Key ist ein SHA-256 über Version, Purpose, Scope, Endpoint, Credential-Hash, Modell, Messages und Generierungsoptionen; Prompts, Credentials und Header fließen nur gehasht ein und werden nie persistiert.
+- Die Persistenz speichert Antworttexte im Klartext unter `llm-result-cache-v1/{agentId}.db` (Verzeichnis `0o700`, Datei `0o600`) — daher Opt-in.
+- Fehler, leere Antworten und invalide JSON-Mode-Ergebnisse werden nie gecacht; Cache-Defekte fallen immer auf Live-Calls zurück (Fail-open).
+- Die integrierten Call-Sites senden `temperature: 0`; seit diesem Feature reicht `lib/llm-call.js` `temperature` auch tatsächlich an den Provider durch (vorher wurde der Wert ignoriert).
+
+---
+
 ## Beispiel-Konfiguration (Minimal)
 
 ```json
@@ -107,7 +128,13 @@ Runtime-Optionen (Cache, Re-Ranker etc.) liegen in `config.runtime`.
     "embeddingCacheCoalesce": true,
     "embeddingCacheMetrics": false,
     "embeddingCacheScope": "agent",
-    "embeddingCacheMaxBytes": 1073741824
+    "embeddingCacheMaxBytes": 1073741824,
+    "llmResultCacheEnabled": true,
+    "llmResultCacheTtlMs": 86400000,
+    "llmResultCacheMaxEntries": 256,
+    "llmResultCachePersist": false,
+    "llmResultCacheMaxBytes": 67108864,
+    "llmResultCacheMetrics": true
   }
 }
 ```
