@@ -194,18 +194,18 @@ Filter candidate memories and graph neighbors by full ACL context before pattern
 
 ## Batch Sequencing
 
-Roughly half the batches touch `index.js`, a single monolithic file; land those serially, in the order below, so each diff applies against the previous batch's exact lines rather than against the stale audited baseline. Batches with no `index.js` touch have no forced order among themselves and may run in isolated worktrees in parallel with the serial spine.
+Nine of the fifteen batches touch `index.js`, a single monolithic file; land those serially, in the order below, so each diff applies against the previous batch's exact lines rather than against the stale audited baseline. Batches with no `index.js` touch have no forced order among themselves and may run in isolated worktrees in parallel with the serial spine.
 
 ### Serial spine (touches `index.js`)
 
 1. **B1** — `runForgetCommand`/`runCorrectCommand` initiation (`index.js:3978-4137`). No dependencies; land first.
 2. **B2** — durable-merge primitive (`index.js:2623-2734`, `5131-5158`). Establishes the store-before-supersede pattern other durability fixes should follow.
-3. **B7** — LanceDB lifecycle and DB lease (`index.js:1101-1229`). Ordered before B3/B4 because both assume a stable `getDb()`/lease contract that B7 fixes.
+3. **B7** — LanceDB lifecycle and DB lease (`index.js:624`, `736-876`, `1101-1229`; the first two ranges are BUG-08's MemoryDB portion). Ordered before B3/B4 because both assume a stable `getDb()`/lease contract that B7 fixes.
 4. **B3** — timeout/admission/recall cache (`index.js:653-657`, `5541-5543`, plus `lib/runtime-scheduler.js`). Depends on B7's lease fix to avoid re-introducing the same slot-release-before-settle bug at a different layer.
 5. **B11** — configuration contract (`index.js:2129-2277`, `2385-2549`). Land before B12: both edit the same config-reading block, and B12's namespace validation needs B11's corrected manifest/effective-config agreement.
 6. **B12** — recall and namespaces (`index.js:4955-4970`, `5750-5765`, plus FE-ADD-05).
 7. **B5** — cron delivery/provisioning (`index.js:2985-3252`). No line overlap with the batches immediately before or after; ordered here because it shares B11's "provision only explicitly enabled features" concern.
-8. **B13** — ACL/Wiki/Share (`index.js:3738-3781`, `4193-4227`). `4193-4227` sits inside `runCorrectCommand`, the same handler B1 touches at `4136-4137` — land after B1 so this batch's diff doesn't have to route around B1's not-yet-committed fix.
+8. **B13** — ACL/Wiki/Share (`index.js:3738-3781`, `4193-4227`). These are the command dispatch switch and the registration block for the same handlers B1 fixes (`runForgetCommand`/`runCorrectCommand` are registered at `4212`/`4219`); B13 adds `/share` dispatch and registration into these exact blocks, and its confirmation-flow fixtures exercise `/correct`, which only initiates at all once B1 has landed.
 9. **B14** — Obsidian/Semantic Discovery (`index.js:387-405`, `3085-3222`). Land after B13: both establish/consume the same authorize-before-dispatch ACL context.
 
 ### Parallel, isolated-worktree batches (no `index.js` touch)
