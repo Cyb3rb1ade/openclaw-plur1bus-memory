@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,6 +7,8 @@ import {
   DEFAULT_LLM_RESULT_CACHE_TTL_MS,
   LLM_RESULT_CACHE_PURPOSES,
   createLlmResultCache,
+  normalizeLlmResultCacheMaxBytes,
+  normalizeLlmResultCacheMaxEntries,
   normalizeLlmResultCacheTtlMs,
   withLlmResultCacheContext,
 } from "../lib/llm-result-cache.js";
@@ -51,6 +53,36 @@ test("TTL defaults and clamps to a finite 60s..7d range", () => {
   assert.equal(normalizeLlmResultCacheTtlMs(Number.POSITIVE_INFINITY), DEFAULT_LLM_RESULT_CACHE_TTL_MS);
   assert.equal(normalizeLlmResultCacheTtlMs(1), 60_000);
   assert.equal(normalizeLlmResultCacheTtlMs(99 * 86_400_000), 7 * 86_400_000);
+});
+
+test("maxEntries and maxBytes normalize to finite 0..upper-bound ranges", () => {
+  assert.equal(normalizeLlmResultCacheMaxEntries(undefined), 256);
+  assert.equal(normalizeLlmResultCacheMaxEntries("nope"), 256);
+  assert.equal(normalizeLlmResultCacheMaxEntries(-3), 0);
+  assert.equal(normalizeLlmResultCacheMaxEntries(512), 512);
+  assert.equal(normalizeLlmResultCacheMaxEntries(256_000_000), 10_000);
+  assert.equal(normalizeLlmResultCacheMaxBytes(undefined), 67_108_864);
+  assert.equal(normalizeLlmResultCacheMaxBytes("nope"), 67_108_864);
+  assert.equal(normalizeLlmResultCacheMaxBytes(-3), 0);
+  assert.equal(normalizeLlmResultCacheMaxBytes(1024), 1024);
+  assert.equal(normalizeLlmResultCacheMaxBytes(256 * 1024 ** 3), 1_073_741_824);
+});
+
+test("clamped maxEntries/maxBytes log a warning, in-range values stay silent", () => {
+  const warnings = [];
+  const logger = { warn: (...args) => warnings.push(args) };
+  createLlmResultCache({ maxEntries: 256_000_000, maxBytes: 256 * 1024 ** 3, logger });
+  assert.equal(warnings.length, 2);
+  assert.match(String(warnings[0][0]), /llmResultCacheMaxEntries/);
+  assert.match(String(warnings[1][0]), /llmResultCacheMaxBytes/);
+
+  const quiet = [];
+  createLlmResultCache({
+    maxEntries: 512,
+    maxBytes: 1024,
+    logger: { warn: (...args) => quiet.push(args) },
+  });
+  assert.equal(quiet.length, 0);
 });
 
 test("cache context preserves config and annotates scope and purpose", () => {
@@ -563,13 +595,65 @@ test("SQLite cleanup caps expired-row deletion work per persistent write", async
     request({ messages: [{ role: "user", content: "cleanup-trigger" }] }),
     async () => result("fresh"),
   );
-  await cache.close();
 
   const { DatabaseSync } = await import("node:sqlite");
+  const duringRun = new DatabaseSync(dbPath);
+  const countBeforeClose = duringRun
+    .prepare("SELECT COUNT(*) AS count FROM llm_results").get().count;
+  duringRun.close();
+  assert.equal(countBeforeClose, 45, "one write should delete at most 256 of 300 expired rows");
+
+  await cache.close();
   const database = new DatabaseSync(dbPath);
   const rowCount = database.prepare("SELECT COUNT(*) AS count FROM llm_results").get().count;
   database.close();
-  assert.equal(rowCount, 45, "one write should delete at most 256 of 300 expired rows");
+  assert.equal(rowCount, 1, "close should sweep the remaining expired rows");
+});
+
+test("opening persistence sweeps expired rows beyond the per-write cap", async (t) => {
+  if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
+  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const versionDir = join(dir, "llm-result-cache-v1");
+  mkdirSync(versionDir, { recursive: true });
+  const dbPath = join(versionDir, "agent-a.db");
+
+  const { DatabaseSync } = await import("node:sqlite");
+  const seed = new DatabaseSync(dbPath);
+  seed.exec(`
+    CREATE TABLE llm_results (
+      key_hash TEXT PRIMARY KEY,
+      purpose TEXT NOT NULL,
+      model TEXT NOT NULL,
+      response_text TEXT,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      provider_cached_input_tokens INTEGER,
+      created_at INTEGER NOT NULL,
+      accessed_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      byte_size INTEGER NOT NULL
+    );
+  `);
+  const insert = seed.prepare(`
+    INSERT INTO llm_results
+      (key_hash, purpose, model, response_text, input_tokens, output_tokens,
+       provider_cached_input_tokens, created_at, accessed_at, expires_at, byte_size)
+    VALUES (?, ?, ?, ?, NULL, NULL, NULL, 1, 1, 1, 100)
+  `);
+  for (let index = 0; index < 300; index += 1) {
+    insert.run(`expired-${index}`, "capture-summary", "model-a", "stale");
+  }
+  seed.close();
+
+  const cache = createLlmResultCache({ persist: true, baseDbPath: dir });
+  await cache.getOrCompute(request(), async () => result("fresh"));
+  await cache.close();
+
+  const verify = new DatabaseSync(dbPath);
+  const rowCount = verify.prepare("SELECT COUNT(*) AS count FROM llm_results").get().count;
+  verify.close();
+  assert.equal(rowCount, 1, "open should sweep all 300 expired rows, leaving only the fresh entry");
 });
 
 test("soft-limit cleanup evicts multiple oldest SQLite rows but keeps the newest", async (t) => {
@@ -676,6 +760,88 @@ test("WAL-heavy hard-limit cleanup reclaims space and persists the new result", 
   ).get();
   database.close();
   assert.equal(recovered.count, 1);
+});
+
+test("persistent cache directory is created with owner-only permissions", async (t) => {
+  if (!(await hasNodeSqlite())) return t.skip("node:sqlite unavailable");
+  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cache = createLlmResultCache({ persist: true, baseDbPath: dir });
+  await cache.getOrCompute(request(), async () => result("answer"));
+  await cache.close();
+  assert.equal(statSync(join(dir, "llm-result-cache-v1")).mode & 0o777, 0o700);
+});
+
+test("close drains in-flight persist writes before closing handles", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "plur1bus-llm-cache-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+  let releaseLoader;
+  let signalLoaderStarted;
+  const loaderStarted = new Promise((resolve) => { signalLoaderStarted = () => resolve(true); });
+  const loaderGate = new Promise((resolve) => { releaseLoader = resolve; });
+  const runStatements = [];
+  let openedHandles = 0;
+  let closedHandles = 0;
+  const sqliteModule = {
+    DatabaseSync: class {
+      constructor() {
+        openedHandles += 1;
+      }
+
+      exec() {}
+
+      prepare(sql) {
+        return {
+          get: () => (sql.includes("sqlite_schema") ? { count: 1 } : undefined),
+          run: () => {
+            runStatements.push(sql);
+            return { changes: 0 };
+          },
+        };
+      }
+
+      close() {
+        closedHandles += 1;
+      }
+    },
+  };
+  const loadSqlite = async () => {
+    signalLoaderStarted();
+    await loaderGate;
+    return sqliteModule;
+  };
+  const cache = createLlmResultCache({
+    persist: true,
+    baseDbPath: dir,
+    loadSqlite,
+    chmodFile: () => {},
+    metrics: true,
+  });
+
+  const order = [];
+  const initial = cache.getOrCompute(request(), async () => result("answer"))
+    .then((value) => {
+      order.push("compute");
+      return value;
+    });
+  await loaderStarted;
+
+  const closing = cache.close().then(() => {
+    order.push("close");
+  });
+  releaseLoader();
+  const [value] = await Promise.all([initial, closing]);
+
+  assert.equal(value.text, "answer");
+  assert.deepEqual(order, ["compute", "close"], "close must wait for the in-flight write");
+  assert.equal(cache.getMetrics("agent-a").persistWrites, 1);
+  assert.equal(
+    runStatements.some((sql) => sql.includes("INSERT INTO llm_results")),
+    true,
+  );
+  assert.equal(openedHandles, 1);
+  assert.equal(closedHandles, 1);
 });
 
 test("close waits for pending opens and permanently disables persistence", async (t) => {

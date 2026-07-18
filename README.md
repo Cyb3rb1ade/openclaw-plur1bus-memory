@@ -323,9 +323,15 @@ All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` an
 
 ### LLM result cache
 
-PLUR1BUS caches only exact, agent-scoped results from an explicit allowlist of deterministic internal LLM transformations. The default in-memory cache uses a 24-hour absolute TTL (`llmResultCacheTtlMs: 86400000`) and holds 256 entries per plugin registration (`llmResultCacheMaxEntries`). Optional prompt-free SQLite persistence is off by default; when enabled with `llmResultCachePersist`, it stores hashed keys, results, usage metadata, and timestamps under the memory database path without storing plaintext prompts, credentials, or headers. `llmResultCacheMaxBytes` defaults to 67,108,864 bytes.
+PLUR1BUS caches only exact, agent-scoped results from an explicit allowlist of deterministic internal LLM transformations. The default in-memory cache uses a 24-hour absolute TTL (`llmResultCacheTtlMs: 86400000`, clamped to 60 s–7 d) and holds 256 entries per plugin registration (`llmResultCacheMaxEntries`, clamped to at most 10,000). Optional prompt-free SQLite persistence is off by default; when enabled with `llmResultCachePersist`, it stores hashed keys, results, usage metadata, and timestamps under the memory database path without storing plaintext prompts, credentials, or headers. `llmResultCacheMaxBytes` defaults to 67,108,864 bytes and is clamped to at most 1 GiB; clamped values log a warning.
 
 The six runtime settings are `llmResultCacheEnabled` (default `true`), `llmResultCacheTtlMs` (default `86400000`), `llmResultCacheMaxEntries` (default `256`), `llmResultCachePersist` (default `false`), `llmResultCacheMaxBytes` (default `67108864`), and `llmResultCacheMetrics` (default `true`). Full Experience enables the cache when the setting is missing and preserves an explicit `false` opt-out.
+
+Operational notes:
+
+- Persistence requires Node ≥ 22.5 for the built-in `node:sqlite` module; on older Node versions the cache transparently falls back to memory-only.
+- Persistence stores LLM response text as plaintext (directory `0o700`, file `0o600` under the memory database path). Responses may contain condensed memory content — enable persistence only where that is acceptable.
+- Integrated call sites send `temperature: 0` for determinism, and `llm-call.js` now actually forwards `temperature` to the provider (previously the setting was silently ignored). Existing configs that set `temperature` therefore change their effective provider behavior.
 
 Non-goals and bypasses:
 
