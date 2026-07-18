@@ -222,6 +222,10 @@ describe("validateDeployment", () => {
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "../..");
 
 describe("DEPLOY_FILES coverage", () => {
+  it("contains the LLM result cache runtime module", () => {
+    assert.ok(DEPLOY_FILES.includes("lib/llm-result-cache.js"));
+  });
+
   it("contains all v6.7.0 critical new runtime modules", () => {
     const v670Critical = [
       "lib/temporal-context.js",
