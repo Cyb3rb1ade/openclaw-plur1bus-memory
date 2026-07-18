@@ -134,11 +134,15 @@ Findings: BUG-06, embedding portion of BUG-08, BUG-10, SEC-10.
 
 Account for incoming serialized bytes before persistent writes, reclaim SQLite/WAL space in bounded batches without deleting the newest entry, preserve explicit zero values, retain absolute persistent expiry when promoting to memory, and retry transient persistence initialization with bounded backoff. Move the optional Local Inference chain to `adm-zip >= 0.6.0` through a compatibility-proven upstream chain or, only if necessary, a tested override. Local embedding and reranking remain functional.
 
+BUG-08 splits across this batch and B7. Treat its finding receipt as closed only once both portions' fix reports are filed together; neither batch alone proves the finding closed.
+
 ### B7 — LanceDB Lifecycle and Atomic Updates
 
 Findings: MemoryDB portion of BUG-08, BUG-11, BUG-12.
 
 Clear rejected initialization promises after cleanup, prefer supported in-place updates, surface combined primary and rollback failures, and hold an operation lease until DB use completes so LRU eviction cannot close an active handle.
+
+This batch closes BUG-08 jointly with B6 — see the note there. Do not file a standalone BUG-08 receipt from either batch alone; the receipt is only complete once both fix reports are filed together.
 
 ### B8 — Neo Ownership, Embeddings, and Backpressure
 
@@ -188,6 +192,33 @@ Findings: SEC-15.
 
 Filter candidate memories and graph neighbors by full ACL context before pattern or narrative LLM input. Preserve workspace/user bindings through pattern, dream, echo, memory, and vault output. User-scoped REM processing requires an explicit owner-partitioned run context.
 
+## Batch Sequencing
+
+Roughly half the batches touch `index.js`, a single monolithic file; land those serially, in the order below, so each diff applies against the previous batch's exact lines rather than against the stale audited baseline. Batches with no `index.js` touch have no forced order among themselves and may run in isolated worktrees in parallel with the serial spine.
+
+### Serial spine (touches `index.js`)
+
+1. **B1** — `runForgetCommand`/`runCorrectCommand` initiation (`index.js:3978-4137`). No dependencies; land first.
+2. **B2** — durable-merge primitive (`index.js:2623-2734`, `5131-5158`). Establishes the store-before-supersede pattern other durability fixes should follow.
+3. **B7** — LanceDB lifecycle and DB lease (`index.js:1101-1229`). Ordered before B3/B4 because both assume a stable `getDb()`/lease contract that B7 fixes.
+4. **B3** — timeout/admission/recall cache (`index.js:653-657`, `5541-5543`, plus `lib/runtime-scheduler.js`). Depends on B7's lease fix to avoid re-introducing the same slot-release-before-settle bug at a different layer.
+5. **B11** — configuration contract (`index.js:2129-2277`, `2385-2549`). Land before B12: both edit the same config-reading block, and B12's namespace validation needs B11's corrected manifest/effective-config agreement.
+6. **B12** — recall and namespaces (`index.js:4955-4970`, `5750-5765`, plus FE-ADD-05).
+7. **B5** — cron delivery/provisioning (`index.js:2985-3252`). No line overlap with the batches immediately before or after; ordered here because it shares B11's "provision only explicitly enabled features" concern.
+8. **B13** — ACL/Wiki/Share (`index.js:3738-3781`, `4193-4227`). `4193-4227` sits inside `runCorrectCommand`, the same handler B1 touches at `4136-4137` — land after B1 so this batch's diff doesn't have to route around B1's not-yet-committed fix.
+9. **B14** — Obsidian/Semantic Discovery (`index.js:387-405`, `3085-3222`). Land after B13: both establish/consume the same authorize-before-dispatch ACL context.
+
+### Parallel, isolated-worktree batches (no `index.js` touch)
+
+- **B4** (`scripts/auto-capture-lancedb.mjs`) — should adopt the durable-checkpoint pattern B2/B7 establish, but has no file overlap with them; safe to run in parallel with the spine.
+- **B6** (`lib/embedding-cache.js`, `lib/providers/*`, dependency bump) — no ordering constraint.
+- **B9** (`scripts/maintain-lancedb.mjs`, `scripts/migrate-missing-columns.mjs`, `scripts/repair-installed-plugin.mjs`, `scripts/protect-plur1bus-deploy.sh`) — no ordering constraint.
+- **B10** (`scripts/provider-wizard.mjs`, `lib/time-window.js`) — no ordering constraint.
+- **B8** (`lib/neo-arch.js`, `lib/neo-worker-runtime.js`) — merge only after B13 lands; it consumes the ACL context B13 fixes.
+- **B15** (`lib/dreaming/rem-dream.js`) — merge only after B13 lands, same reason as B8.
+
+Line numbers are the audit's `Fundstellen` references at the 2026-07-18 snapshot commit; re-verify them before starting a batch whose predecessors in the spine have already landed and shifted surrounding lines.
+
 ## Error Semantics
 
 - Unsafe or invalid state is rejected explicitly; it is not truncated, guessed, or silently downgraded.
@@ -218,7 +249,7 @@ Repository-wide completion requires:
 - `npm audit` has no unresolved high/critical finding in the shipped dependency graph.
 - Optional Local Inference installs and performs a real small embedding and rerank operation on supported Node versions available to CI.
 - Worktree diff contains no unrelated changes or standalone low-remediation work.
-- Every in-scope finding has a fix report with changed files, red/green commands, closure proof, positive-path proof, bypass review, and remaining uncertainty.
+- Every in-scope finding has a fix report with changed files, red/green commands, closure proof, positive-path proof, bypass review, and remaining uncertainty. BUG-08 is split across B6 (embedding portion) and B7 (MemoryDB portion); its receipt is complete only when both batches' reports are filed and together prove full closure.
 - Original `main` remains unchanged until integration is explicitly chosen.
 
 ## Baseline Evidence
