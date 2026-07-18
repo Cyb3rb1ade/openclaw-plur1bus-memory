@@ -28,12 +28,21 @@
 # Default now points at the real source (repo root) and a stub-guard below
 # refuses to ever propagate a broken re-export again, regardless of SRC.
 # See docs/superpowers/plans/2026-06-16-installer-deploy-integrity-followup.md
+#
+# 2026-07-18: default SRC is now the pinned release checkout
+# <openclaw-home>/plur1bus-release — a git worktree fixed at the tag of the
+# INSTALLED version (maintained by the deploy step). A moving dev branch or a
+# stale secondary checkout (the old /root default had decayed to 6.9.11 while
+# 7.0.0 was installed) must never be the restore source. All path defaults
+# derive from OPENCLAW_HOME (default: $HOME/.openclaw) so the guard also works
+# on installs that don't live under /root.
 set -euo pipefail
 
-SRC="${PLUR1BUS_SRC:-/root}"
-DEPLOY="${PLUR1BUS_DEPLOY:-/root/.openclaw/extensions/memory-lancedb-namespaced}"
+OPENCLAW_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
+SRC="${PLUR1BUS_SRC:-$OPENCLAW_HOME/plur1bus-release}"
+DEPLOY="${PLUR1BUS_DEPLOY:-$OPENCLAW_HOME/extensions/memory-lancedb-namespaced}"
 GW="${PLUR1BUS_GW:-openclaw-gateway.service}"
-LOG="${PLUR1BUS_LOG:-/root/.openclaw/logs/protect-deploy.log}"
+LOG="${PLUR1BUS_LOG:-$OPENCLAW_HOME/logs/protect-deploy.log}"
 
 # Runtime files that carry the fixes and must always match source.
 # NOTE: scripts/cleanup-stores.mjs is intentionally NOT listed here; the file

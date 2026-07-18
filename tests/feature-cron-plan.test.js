@@ -483,3 +483,78 @@ describe("Message-Contract-Migration bestehender Jobs", () => {
     assert.strictEqual(plan.update.length, 0);
   });
 });
+
+describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () => {
+  const agents = [{ id: "main", isDefault: true }];
+
+  it("plant --no-deliver für einen persona-evolve-Job mit announce->last ohne to", () => {
+    // Alt-Bug: cron add ohne Delivery-Flag defaultet auf announce -> "last";
+    // isolierte Cron-Sessions haben kein "last active chat" → fail-closed.
+    const existing = [
+      {
+        id: "job-p1",
+        name: "plur1bus persona-evolve main",
+        agentId: "main",
+        payload: { message: "/plur1bus internal persona-evolve" },
+        delivery: { mode: "announce", channel: "last" },
+      },
+    ];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    const mig = plan.update.find((u) => u.id === "job-p1");
+    assert.ok(mig, "delivery migration must be planned");
+    assert.strictEqual(mig.noDeliver, true);
+    // Kein Duplikat-Create.
+    assert.ok(plan.skip.some((s) => s.existingJob?.id === "job-p1"));
+  });
+
+  it("fasst Jobs mit korrektem explizitem Delivery-Ziel NICHT an", () => {
+    const existing = [
+      {
+        id: "job-p2",
+        name: "plur1bus persona-evolve main",
+        agentId: "main",
+        payload: { message: "/plur1bus internal persona-evolve" },
+        delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+      },
+      {
+        id: "job-a1",
+        name: "plur1bus afterthought main",
+        agentId: "main",
+        payload: { message: "/plur1bus internal afterthought" },
+        delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+      },
+    ];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    assert.strictEqual(plan.update.length, 0);
+  });
+
+  it("fasst Jobs mit delivery mode none nicht an (bereits korrekt)", () => {
+    const existing = [
+      {
+        id: "job-p3",
+        name: "plur1bus persona-evolve main",
+        agentId: "main",
+        payload: { message: "/plur1bus internal persona-evolve" },
+        delivery: { mode: "none" },
+      },
+    ];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    assert.strictEqual(plan.update.length, 0);
+  });
+
+  it("migriert einen delivery-bedürftigen Job (afterthought) mit announce->last NICHT auf --no-deliver", () => {
+    // afterthought braucht Delivery — das falsche "last" abschalten würde den
+    // Job stumm schalten; hier soll deriveAgentDelivery/Operator-Edit greifen.
+    const existing = [
+      {
+        id: "job-a2",
+        name: "plur1bus afterthought main",
+        agentId: "main",
+        payload: { message: "/plur1bus internal afterthought" },
+        delivery: { mode: "announce", channel: "last" },
+      },
+    ];
+    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    assert.ok(!plan.update.some((u) => u.noDeliver), "needsDelivery jobs must not be silenced");
+  });
+});
