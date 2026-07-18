@@ -4008,6 +4008,7 @@ const plugin = {
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const agentId = commandCtx.agentId || "default";
+            const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger, agentId);
 
             // Completion: /forget confirm <token>
             const token = parseConfirmArg(args);
@@ -4071,6 +4072,7 @@ const plugin = {
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const agentId = commandCtx.agentId || "default";
+            const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger, agentId);
 
             // Completion: /correct confirm <token>
             const token = parseConfirmArg(args);
