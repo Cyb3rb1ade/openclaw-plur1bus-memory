@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 7.0.1** — Patch on the humanization line (feature-cron delivery fix), GitHub tag `v7.0.1`; the package metadata and manifest are aligned to `7.0.1`. See [CHANGELOG](CHANGELOG.md) for full history.
+**Current version: 7.0.0** — Publishes the humanization line through the GitHub tag `v7.0.0`; the package metadata and manifest are aligned to `7.0.0`. See [CHANGELOG](CHANGELOG.md) for full history.
 
 ## What it does
 
