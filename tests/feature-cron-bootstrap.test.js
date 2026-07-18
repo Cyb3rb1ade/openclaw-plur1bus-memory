@@ -143,7 +143,8 @@ function createWritableBuffer() {
 async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
   const stdout = createWritableBuffer();
   const stderr = createWritableBuffer();
-  const exitCode = await runSetupFeatureCrons({ argv, openclawImpl, stdout: stdout.stream, stderr: stderr.stream });
+  // Hermetic: never read the host's real openclaw.json in tests.
+  const exitCode = await runSetupFeatureCrons({ argv, openclawImpl, stdout: stdout.stream, stderr: stderr.stream, loadChannelConfigImpl: () => null });
   const text = stdout.read().trim();
   return {
     exitCode,

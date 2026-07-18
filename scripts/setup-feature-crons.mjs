@@ -21,7 +21,9 @@
 import { planFeatureCrons, REQUIRED_FEATURE_CRONS, selectAgentsForCronSetup } from "../lib/setup/feature-cron-plan.js";
 import { openclaw } from "./lib/openclaw-cli.mjs";
 import { fileURLToPath } from "node:url";
-import { realpathSync } from "node:fs";
+import { realpathSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 function parseArgs(argv) {
   const opts = { dryRun: false, agent: null, account: null, json: false };
@@ -107,6 +109,21 @@ function buildJsonResult({ reason, message, dryRun = false, plan = null, results
  *
  * @returns {Array<{id: string, isDefault: boolean}> | null}
  */
+/**
+ * Best-effort read of the OpenClaw config (openclaw.json) for the channel-
+ * config delivery fallback (see deriveDeliveryFromChannelConfig). Never
+ * throws; returns null when unreadable — the planner then simply has no
+ * config fallback.
+ */
+function loadChannelConfig() {
+  try {
+    const home = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
+    return JSON.parse(readFileSync(join(home, "openclaw.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 function discoverAgents(openclawImpl = openclaw) {
   const r = openclawImpl(["agents", "list", "--json"], 15000);
   if (!r.ok) return null;
@@ -138,6 +155,7 @@ export async function runSetupFeatureCrons(options = {}) {
     argv = process.argv.slice(2),
     openclawImpl = openclaw,
     stdout = process.stdout,
+    loadChannelConfigImpl = loadChannelConfig,
   } = options;
   const opts = parseArgs(argv);
   const pendingByDefault = REQUIRED_FEATURE_CRONS.length;
@@ -221,7 +239,7 @@ export async function runSetupFeatureCrons(options = {}) {
     } else {
       const agents = discoverAgents(openclawImpl);
       if (agents) {
-        plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agents });
+        plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agents, channelConfig: loadChannelConfigImpl() });
       } else {
         if (!opts.json) {
           writeOutput(
