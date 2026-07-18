@@ -482,7 +482,7 @@ describe("deterministic LLM result-cache allowlist", () => {
     assertEveryCallIsDeterministic(knowledgeToolSection, "KNOWLEDGE_UPDATE", 2);
 
     assert.equal(countMatches(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg, api\.logger, agentId\)/g), 1);
-    assert.equal(countMatches(source, /makeQuerySummarizer\(mergingLlmCfg, api\.logger, agentId\)/g), 3);
+    assert.equal(countMatches(source, /makeQuerySummarizer\(mergingLlmCfg, api\.logger, agentId\)/g), 5);
     assert.equal(countMatches(source, /callMergeCheck\(mergeCandidate\.entry\.text, params\.text, mergingLlmCfg, agentId\)/g), 2);
 
     const emotionCallCount = extractCallExpressions(emotionSection, "callLlm").length;
