@@ -58,7 +58,14 @@ function buildAddArgs(job) {
     if (job.delivery.accountId) args.push("--account", job.delivery.accountId);
   } else {
     if (job.account) args.push("--account", job.account);
-    if (job.needsDelivery && job.agent && job.enabled) args.push("--announce");
+    if (job.needsDelivery && job.agent && job.enabled) {
+      args.push("--announce");
+    } else {
+      // No delivery target planned: pin delivery off. Without a flag,
+      // `openclaw cron add` defaults to announce -> channel "last", which
+      // fail-closes for isolated cron sessions (no "last active chat").
+      args.push("--no-deliver");
+    }
   }
   if (!job.enabled) args.push("--disabled");
   args.push("--json");
@@ -248,7 +255,7 @@ export async function runSetupFeatureCrons(options = {}) {
         if (c.hint) writeOutput(stdout, `         hint: ${c.hint}`);
       }
       for (const u of updates) {
-        writeOutput(stdout, `  ${opts.dryRun ? "WOULD-UPDATE" : "UPDATE"}  ${u.name}  (message contract migration)`);
+        writeOutput(stdout, `  ${opts.dryRun ? "WOULD-UPDATE" : "UPDATE"}  ${u.name}  (contract migration)`);
       }
       if (nothingToDo) {
         writeOutput(stdout, "  Nothing to do — all feature crons already present.");
@@ -280,11 +287,14 @@ export async function runSetupFeatureCrons(options = {}) {
     // lastPlanCreateCount, damit der nächste Bootstrap-Lauf sie erneut
     // versucht.
     for (const u of updates) {
-      const r = openclawImpl(["cron", "edit", u.id, "--message", u.message], 15000);
+      const editArgs = ["cron", "edit", u.id];
+      if (typeof u.message === "string") editArgs.push("--message", u.message);
+      if (u.noDeliver) editArgs.push("--no-deliver");
+      const r = openclawImpl(editArgs, 15000);
       results.push({ job: u.name, action: "update", ok: r.ok, stderr: r.ok ? undefined : r.stderr?.trim() });
       if (!opts.json) {
         if (r.ok) {
-          writeOutput(stdout, `  ✓ updated: ${u.name} (message contract migration)`);
+          writeOutput(stdout, `  ✓ updated: ${u.name} (contract migration)`);
         } else {
           writeOutput(stdout, `  ⚠ failed to update: ${u.name} — ${r.stderr?.trim() || "unknown error"}`);
           writeOutput(stdout, "    (will retry automatically next run — safe to ignore)");

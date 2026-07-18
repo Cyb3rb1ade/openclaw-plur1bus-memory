@@ -273,6 +273,133 @@ describe("runSetupFeatureCrons --json", () => {
     assert.ok(!afterthoughtAdd.includes("--disabled"), "derivable delivery must not be created disabled");
   });
 
+  it("emits --no-deliver for jobs planned without a delivery target (persona-evolve, disabled afterthought)", async () => {
+    // Without an explicit delivery flag, `openclaw cron add` defaults the job
+    // to announce -> channel "last". Isolated cron sessions have no "last
+    // active chat", so that delivery fail-closes at runtime (observed on the
+    // 2026-07-16 install: all three persona-evolve jobs were created with
+    // "announce -> last (no route, will fail-closed)").
+    const cronAdds = [];
+    const result = await runJsonSetupWith((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") return { ok: true, stdout: JSON.stringify({ jobs: [] }), stderr: "", status: 0 };
+      if (args[0] === "agents" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({ agents: [{ id: "main", bindings: 2, isDefault: true, workspace: "/ws/main" }] }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && args[1] === "add") {
+        cronAdds.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    const personaAdd = cronAdds.find((args) => args.includes("plur1bus persona-evolve main"));
+    assert.ok(personaAdd, "persona-evolve cron add call must be present");
+    assert.ok(personaAdd.includes("--no-deliver"), "persona-evolve (needsDelivery: false) must pin delivery off");
+    assert.ok(!personaAdd.includes("--announce"), "persona-evolve must not announce");
+    const afterthoughtAdd = cronAdds.find((args) => args.includes("plur1bus afterthought main"));
+    assert.ok(afterthoughtAdd, "afterthought cron add call must be present");
+    assert.ok(afterthoughtAdd.includes("--no-deliver"), "disabled afterthought without target must pin delivery off");
+  });
+
+  it("does not emit --no-deliver when a delivery target is present", async () => {
+    const cronAdds = [];
+    await runJsonSetupWith((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            jobs: [
+              {
+                agentId: "main",
+                name: "plur1bus-morning-review-main",
+                delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "telegram-main" },
+              },
+            ],
+          }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "agents" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({ agents: [{ id: "main", bindings: 2, isDefault: true, workspace: "/ws/main" }] }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && args[1] === "add") {
+        cronAdds.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    const afterthoughtAdd = cronAdds.find((args) => args.includes("plur1bus afterthought main"));
+    assert.ok(afterthoughtAdd.includes("--announce"), "derivable delivery should announce");
+    assert.ok(!afterthoughtAdd.includes("--no-deliver"), "announce jobs must not also pass --no-deliver");
+  });
+
+  it("repairs existing persona-evolve jobs with announce->last via cron edit --no-deliver", async () => {
+    const cronEdits = [];
+    const result = await runJsonSetupWith((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            jobs: [
+              {
+                id: "job-p1",
+                name: "plur1bus persona-evolve main",
+                agentId: "main",
+                payload: { message: "/plur1bus internal persona-evolve" },
+                delivery: { mode: "announce", channel: "last" },
+              },
+              {
+                id: "job-a1",
+                name: "plur1bus afterthought main",
+                agentId: "main",
+                payload: { message: "/plur1bus internal afterthought" },
+                delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+              },
+            ],
+          }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "agents" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({ agents: [{ id: "main", bindings: 2, isDefault: true, workspace: "/ws/main" }] }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && args[1] === "edit") {
+        cronEdits.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      if (args[0] === "cron" && args[1] === "add") return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    const noDeliverEdit = cronEdits.find((args) => args.includes("job-p1"));
+    assert.ok(noDeliverEdit, "cron edit for the broken persona-evolve job must be issued");
+    assert.ok(noDeliverEdit.includes("--no-deliver"), "edit must pin delivery off");
+    assert.ok(!noDeliverEdit.includes("--message"), "delivery-only migration must not touch the message");
+  });
+
   it("preserves legacy explicit --agent setup by emitting --announce for enabled afterthought jobs", async () => {
     const cronAdds = [];
     const result = await runJsonSetupWith((args) => {

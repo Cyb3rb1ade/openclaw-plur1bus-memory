@@ -5,6 +5,12 @@ Alle wichtigen Änderungen an diesem Projekt werden in dieser Datei dokumentiert
 Das Format basiert auf [Keep a Changelog](https://keepachangelog.com/de/1.1.0/),
 und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
+## [7.0.1] — 2026-07-18
+
+### Fixed
+
+- **Feature-Cron-Setup: Jobs ohne Delivery-Bedarf werden jetzt mit `--no-deliver` angelegt.** Ohne explizites Delivery-Flag defaultet `openclaw cron add` auf `announce -> channel "last"` — isolierte Cron-Sessions haben aber keinen "last active chat", die Zustellung schlägt zur Laufzeit fail-closed fehl. Betroffen waren die drei `persona-evolve`-Crons (und disabled Afterthoughts ohne ableitbares Ziel). Updates/Neuinstallationen legen die Jobs jetzt automatisch korrekt an; bestehende fehlerhafte Jobs per `openclaw cron edit --name "plur1bus persona-evolve <agent>" --no-deliver` korrigieren.
+
 ## [7.0.0] — 2026-07-16 — Humanization: Persona, Afterthoughts, Dream Echoes
 
 ### Breaking / Changed
