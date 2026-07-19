@@ -30,6 +30,7 @@ import { existsSync, readFileSync, mkdirSync, copyFileSync, readdirSync } from "
 import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { validateDeployment, smokeTestExports, DEPLOY_FILES } from "./lib/deploy-integrity.mjs";
 import { findDeployDir } from "./lib/find-deploy-dir.mjs";
 
@@ -134,6 +135,25 @@ function diagnoseDreamingCron(runCron) {
   return false;
 }
 
+/**
+ * Rejects every failed spawnSync outcome from maintain-lancedb.
+ * @param {{status: number|null, signal?: string|null, error?: Error}} result
+ * @returns {void}
+ */
+export function assertSuccessfulMaintenanceResult(result) {
+  if (result?.error) {
+    const code = result.error.code ? ` ${result.error.code}` : "";
+    throw new Error(`maintain-lancedb maintenance child failed${code}: ${result.error.message}`);
+  }
+  if (result?.signal) {
+    throw new Error(`maintain-lancedb maintenance child terminated by signal ${result.signal}`);
+  }
+  if (result?.status !== 0) {
+    const status = result?.status === null || result?.status === undefined ? "unknown" : result.status;
+    throw new Error(`maintain-lancedb maintenance child exited with status ${status}`);
+  }
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help) { console.log("Usage: node scripts/repair-installed-plugin.mjs [--dry-run] [--maintain-lancedb] [--run-cron] [--deploy-dir DIR]"); process.exit(0); }
@@ -194,9 +214,19 @@ async function main() {
 
   // 2. LanceDB
   section("2/3  LanceDB manifest versions");
-  const lancedbOk = diagnoseLancedb();
+  let lancedbOk = diagnoseLancedb();
   if (opts.maintainLancedb && !lancedbOk) {
-    spawnSync("node", ["scripts/maintain-lancedb.mjs", "--apply"], { stdio: "inherit", timeout: 120000 });
+    if (opts.dryRun) {
+      console.log("  dry-run: would run maintain-lancedb --apply; no maintenance started");
+    } else {
+      const maintenance = spawnSync("node", ["scripts/maintain-lancedb.mjs", "--apply"], {
+        stdio: "inherit",
+        timeout: 120000,
+      });
+      assertSuccessfulMaintenanceResult(maintenance);
+      console.log("\n  Verifying LanceDB state after maintenance:");
+      lancedbOk = diagnoseLancedb();
+    }
   }
 
   // 3. Dreaming cron
@@ -222,4 +252,10 @@ async function main() {
   process.exit(0);
 }
 
-main().catch((err) => { console.error("repair-installed-plugin:", err); process.exit(2); });
+const isDirectExecution = process.argv[1]
+  ? resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
+  : false;
+
+if (isDirectExecution) {
+  main().catch((err) => { console.error("repair-installed-plugin:", err); process.exit(2); });
+}
