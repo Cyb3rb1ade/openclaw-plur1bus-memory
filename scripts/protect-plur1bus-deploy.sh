@@ -81,6 +81,106 @@ log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG"; }
 SRC="$(cd -- "$SRC" && pwd -P)"
 DEPLOY="$(cd -- "$DEPLOY" && pwd -P)"
 
+SOURCE_MISSING=10
+SOURCE_UNSAFE=11
+SRC_ROOT_ID="$(stat -c '%d:%i' -- "$SRC" 2>/dev/null)" || {
+  log "ERROR: source root cannot be identified: $SRC"
+  exit 1
+}
+
+SOURCE_CANDIDATE_REAL=""
+SOURCE_CANDIDATE_ID=""
+SOURCE_CANDIDATE_HASH=""
+SOURCE_CANDIDATE_ERROR=""
+
+inspect_source_candidate() {
+  local rel="$1"
+  local remainder="$1"
+  local component
+  local current="$SRC"
+  local current_root_id
+
+  SOURCE_CANDIDATE_REAL=""
+  SOURCE_CANDIDATE_ID=""
+  SOURCE_CANDIDATE_HASH=""
+  SOURCE_CANDIDATE_ERROR=""
+
+  if [ -L "$SRC" ] || [ ! -d "$SRC" ]; then
+    SOURCE_CANDIDATE_ERROR="source root is no longer a real directory"
+    return "$SOURCE_UNSAFE"
+  fi
+  current_root_id="$(stat -c '%d:%i' -- "$SRC" 2>/dev/null)" || {
+    SOURCE_CANDIDATE_ERROR="source root cannot be identified"
+    return "$SOURCE_UNSAFE"
+  }
+  if [ "$current_root_id" != "$SRC_ROOT_ID" ]; then
+    SOURCE_CANDIDATE_ERROR="source root changed after canonicalization"
+    return "$SOURCE_UNSAFE"
+  fi
+
+  case "$rel" in
+    ""|/*)
+      SOURCE_CANDIDATE_ERROR="invalid relative allowlist path"
+      return "$SOURCE_UNSAFE"
+      ;;
+  esac
+
+  while :; do
+    component="${remainder%%/*}"
+    case "$component" in
+      ""|.|..)
+        SOURCE_CANDIDATE_ERROR="invalid allowlist path component: $component"
+        return "$SOURCE_UNSAFE"
+        ;;
+    esac
+    current="$current/$component"
+    if [ -L "$current" ]; then
+      SOURCE_CANDIDATE_ERROR="symlink component: $current"
+      return "$SOURCE_UNSAFE"
+    fi
+    if [ ! -e "$current" ]; then
+      return "$SOURCE_MISSING"
+    fi
+    if [ "$remainder" = "$component" ]; then
+      break
+    fi
+    if [ ! -d "$current" ]; then
+      SOURCE_CANDIDATE_ERROR="non-directory parent component: $current"
+      return "$SOURCE_UNSAFE"
+    fi
+    remainder="${remainder#*/}"
+  done
+
+  if [ ! -f "$current" ]; then
+    SOURCE_CANDIDATE_ERROR="final candidate is not a regular file: $current"
+    return "$SOURCE_UNSAFE"
+  fi
+  SOURCE_CANDIDATE_REAL="$(realpath -e -- "$current" 2>/dev/null)" || {
+    SOURCE_CANDIDATE_ERROR="candidate cannot be canonicalized: $current"
+    return "$SOURCE_UNSAFE"
+  }
+  case "$SOURCE_CANDIDATE_REAL" in
+    "$SRC"/*) ;;
+    *)
+      SOURCE_CANDIDATE_ERROR="candidate escapes canonical source root: $SOURCE_CANDIDATE_REAL"
+      return "$SOURCE_UNSAFE"
+      ;;
+  esac
+  SOURCE_CANDIDATE_ID="$(stat -c '%d:%i' -- "$SOURCE_CANDIDATE_REAL" 2>/dev/null)" || {
+    SOURCE_CANDIDATE_ERROR="candidate cannot be identified: $SOURCE_CANDIDATE_REAL"
+    return "$SOURCE_UNSAFE"
+  }
+  SOURCE_CANDIDATE_HASH="$(md5sum -- "$SOURCE_CANDIDATE_REAL" 2>/dev/null | cut -d' ' -f1)" || {
+    SOURCE_CANDIDATE_ERROR="candidate cannot be hashed: $SOURCE_CANDIDATE_REAL"
+    return "$SOURCE_UNSAFE"
+  }
+  if [ -z "$SOURCE_CANDIDATE_HASH" ]; then
+    SOURCE_CANDIDATE_ERROR="candidate produced an empty hash: $SOURCE_CANDIDATE_REAL"
+    return "$SOURCE_UNSAFE"
+  fi
+  return 0
+}
+
 drift=0
 reasons=()
 
@@ -92,20 +192,24 @@ fi
 # 2) safety and md5 check — each restorable source must be a regular file,
 # and every source file must have a matching deployed file and hash.
 for f in "${RESTORE_FILES[@]}"; do
-  if [ ! -e "$SRC/$f" ] && [ ! -L "$SRC/$f" ]; then
+  if inspect_source_candidate "$f"; then
+    source_status=0
+  else
+    source_status=$?
+  fi
+  if [ "$source_status" -eq "$SOURCE_MISSING" ]; then
     continue
   fi
-  if [ -L "$SRC/$f" ] || [ ! -f "$SRC/$f" ]; then
-    drift=1; reasons+=("unsafe-source:$f")
-    continue
+  if [ "$source_status" -eq "$SOURCE_UNSAFE" ]; then
+    log "ERROR: refusing unsafe source candidate: $SRC/$f ($SOURCE_CANDIDATE_ERROR)"
+    exit 1
   fi
   if [ ! -f "$DEPLOY/$f" ]; then
     drift=1; reasons+=("missing:$f")
     continue
   fi
-  s=$(md5sum "$SRC/$f" 2>/dev/null | cut -d' ' -f1)
-  d=$(md5sum "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
-  if [ "$s" != "$d" ]; then drift=1; reasons+=("mismatch:$f"); fi
+  deploy_hash=$(md5sum -- "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
+  if [ "$SOURCE_CANDIDATE_HASH" != "$deploy_hash" ]; then drift=1; reasons+=("mismatch:$f"); fi
 done
 
 if [ "$drift" -eq 0 ]; then
@@ -165,30 +269,67 @@ source_file_is_broken_stub() {
   ' "$STUB_CHECKER_REAL" "$1"
 }
 
-# Validate every source candidate before creating a backup or changing deploy.
+# Capture every source candidate before creating a backup or changing deploy.
+declare -A PREFLIGHT_STATE=()
+declare -A PREFLIGHT_REAL=()
+declare -A PREFLIGHT_ID=()
+declare -A PREFLIGHT_HASH=()
+declare -A PREFLIGHT_STUB=()
 for f in "${RESTORE_FILES[@]}"; do
-  if [ ! -e "$SRC/$f" ] && [ ! -L "$SRC/$f" ]; then
+  if inspect_source_candidate "$f"; then
+    source_status=0
+  else
+    source_status=$?
+  fi
+  if [ "$source_status" -eq "$SOURCE_MISSING" ]; then
+    PREFLIGHT_STATE["$f"]="absent"
+    PREFLIGHT_STUB["$f"]="not-applicable"
     continue
   fi
-  if [ -L "$SRC/$f" ] || [ ! -f "$SRC/$f" ]; then
-    log "ERROR: refusing unsafe source candidate: $SRC/$f"
+  if [ "$source_status" -eq "$SOURCE_UNSAFE" ]; then
+    log "ERROR: refusing unsafe source candidate: $SRC/$f ($SOURCE_CANDIDATE_ERROR)"
     exit 1
   fi
+  PREFLIGHT_STATE["$f"]="present"
+  PREFLIGHT_REAL["$f"]="$SOURCE_CANDIDATE_REAL"
+  PREFLIGHT_ID["$f"]="$SOURCE_CANDIDATE_ID"
+  PREFLIGHT_HASH["$f"]="$SOURCE_CANDIDATE_HASH"
+  PREFLIGHT_STUB["$f"]="not-applicable"
   case "$f" in
     *.js|*.mjs)
-      if source_file_is_broken_stub "$SRC/$f" >/dev/null 2>&1; then
-        log "ERROR: refusing to propagate broken re-export stub from $SRC/$f"
+      if source_file_is_broken_stub "$SOURCE_CANDIDATE_REAL" >/dev/null 2>&1; then
+        log "ERROR: refusing to propagate broken re-export stub from $SOURCE_CANDIDATE_REAL"
         exit 1
       else
         checker_status=$?
         if [ "$checker_status" -ne 1 ]; then
-          log "ERROR: deploy-integrity checker failed for $SRC/$f (status=$checker_status)"
+          log "ERROR: deploy-integrity checker failed for $SOURCE_CANDIDATE_REAL (status=$checker_status)"
           exit 1
         fi
       fi
+      PREFLIGHT_STUB["$f"]="safe"
       ;;
   esac
 done
+
+source_candidate_matches_preflight() {
+  local rel="$1"
+  local source_status
+
+  if inspect_source_candidate "$rel"; then
+    source_status=0
+  else
+    source_status=$?
+  fi
+  if [ "${PREFLIGHT_STATE[$rel]}" = "absent" ]; then
+    [ "$source_status" -eq "$SOURCE_MISSING" ]
+    return
+  fi
+  [ "$source_status" -eq 0 ] || return 1
+  [ "$SOURCE_CANDIDATE_REAL" = "${PREFLIGHT_REAL[$rel]}" ] || return 1
+  [ "$SOURCE_CANDIDATE_ID" = "${PREFLIGHT_ID[$rel]}" ] || return 1
+  [ "$SOURCE_CANDIDATE_HASH" = "${PREFLIGHT_HASH[$rel]}" ] || return 1
+}
 
 # Drift-Backup bewusst ausserhalb des Extension-Scan-Roots ablegen: ein Backup-
 # Verzeichnis neben der Extension wuerde dieselbe Plugin-ID erneut deklarieren.
@@ -203,11 +344,23 @@ for f in "${RESTORE_FILES[@]}"; do
 done
 log "backed up drifted deploy -> $BK"
 
+# Revalidate the complete source snapshot after backup and before any restore.
+for f in "${RESTORE_FILES[@]}"; do
+  if ! source_candidate_matches_preflight "$f"; then
+    log "ERROR: source candidate changed after preflight: $f${SOURCE_CANDIDATE_ERROR:+ ($SOURCE_CANDIDATE_ERROR)}"
+    exit 1
+  fi
+done
+
 # Restore canonical source over the deploy (code only; never touch node_modules/state).
 for f in "${RESTORE_FILES[@]}"; do
-  [ -f "$SRC/$f" ] || continue
+  [ "${PREFLIGHT_STATE[$f]}" = "present" ] || continue
   mkdir -p "$DEPLOY/$(dirname "$f")"
-  cp -a "$SRC/$f" "$DEPLOY/$f"
+  if ! source_candidate_matches_preflight "$f"; then
+    log "ERROR: source candidate changed after preflight: $f${SOURCE_CANDIDATE_ERROR:+ ($SOURCE_CANDIDATE_ERROR)}"
+    exit 1
+  fi
+  cp -a -- "${PREFLIGHT_REAL[$f]}" "$DEPLOY/$f"
 done
 log "restored canonical source from $SRC"
 
@@ -217,10 +370,9 @@ if ! grep -q "$MARKER" "$DEPLOY/$MARKER_FILE" 2>/dev/null; then
   exit 1
 fi
 for f in "${RESTORE_FILES[@]}"; do
-  [ -f "$SRC/$f" ] || continue
-  source_hash=$(md5sum "$SRC/$f" | cut -d' ' -f1)
-  deploy_hash=$(md5sum "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
-  if [ "$source_hash" != "$deploy_hash" ]; then
+  [ "${PREFLIGHT_STATE[$f]}" = "present" ] || continue
+  deploy_hash=$(md5sum -- "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
+  if [ "${PREFLIGHT_HASH[$f]}" != "$deploy_hash" ]; then
     log "ERROR: restore hash verification failed for $f"
     exit 1
   fi

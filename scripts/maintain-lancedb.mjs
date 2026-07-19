@@ -14,6 +14,7 @@
  *   node scripts/maintain-lancedb.mjs              # dry-run (default)
  *   node scripts/maintain-lancedb.mjs --apply      # actually prune
  *   node scripts/maintain-lancedb.mjs --keep 100   # keep more versions
+ *   node scripts/maintain-lancedb.mjs --keep=100   # equals form is also supported
  *   node scripts/maintain-lancedb.mjs --db-path /custom/path
  *
  * Exit codes:
@@ -55,12 +56,18 @@ function parseArgs(argv) {
   const opts = { apply: false, keep: DEFAULT_KEEP, dbPath: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--apply")     opts.apply = true;
-    else if (a === "--keep") opts.keep = parseKeep(argv[++i]);
-    else if (a === "--db-path") {
+    if (a === "--apply") {
+      opts.apply = true;
+    } else if (a === "--keep") {
+      opts.keep = parseKeep(argv[++i]);
+    } else if (a.startsWith("--keep=")) {
+      opts.keep = parseKeep(a.slice("--keep=".length));
+    } else if (a === "--db-path") {
       const dbPath = argv[++i];
       if (!dbPath || dbPath.startsWith("--")) throw new Error("--db-path requires a path value");
       opts.dbPath = dbPath;
+    } else {
+      throw new Error(`Unknown argument: ${a}`);
     }
   }
   return opts;
