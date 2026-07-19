@@ -2620,6 +2620,113 @@ const plugin = {
       return checkAccess(accessCtx, candidate.entry).allowed;
     }
 
+    const durableMergeQueues = new Map();
+
+    function runDurableMergeQueued(queueKey, operation) {
+      const predecessor = durableMergeQueues.get(queueKey) || Promise.resolve();
+      const next = predecessor
+        .catch((predecessorErr) => {
+          // The predecessor already delivered its own failure. Keep the key
+          // usable for the next independent attempt and make the continuation
+          // visible without propagating the old rejection into the new work.
+          api.logger?.debug?.(`memory-lancedb-namespaced: durable merge predecessor failed for ${queueKey}: ${String(predecessorErr)}`);
+        })
+        .then(operation);
+      durableMergeQueues.set(queueKey, next);
+      next.then(
+        () => {
+          if (durableMergeQueues.get(queueKey) === next) durableMergeQueues.delete(queueKey);
+        },
+        () => {
+          if (durableMergeQueues.get(queueKey) === next) durableMergeQueues.delete(queueKey);
+        },
+      );
+      return next;
+    }
+
+    async function withDurableMerge({
+      db,
+      agentId,
+      selectedCandidate,
+      accessCtx,
+      workspaceDir,
+      prepareReplacement,
+    }) {
+      const candidateId = safeUuid(selectedCandidate?.entry?.id);
+      const selectedText = selectedCandidate?.entry?.text;
+      const queueKey = JSON.stringify([agentId, candidateId]);
+      return runDurableMergeQueued(queueKey, async () => {
+        const authoritativeCandidate = await db.getById(candidateId);
+        const candidateIsActive = authoritativeCandidate
+          && (!authoritativeCandidate.status || authoritativeCandidate.status === "active");
+        const candidateMatchesSelection = authoritativeCandidate?.id === candidateId
+          && authoritativeCandidate?.text === selectedText;
+        const candidateStillVisible = authoritativeCandidate
+          && candidateVisibleForStore({ entry: authoritativeCandidate }, accessCtx);
+        if (!candidateIsActive || !candidateMatchesSelection || !candidateStillVisible) {
+          const staleErr = new Error("merge candidate is stale, no longer active, or no longer authorized");
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${staleErr.message}`);
+          throw staleErr;
+        }
+
+        const prepared = await prepareReplacement(authoritativeCandidate);
+        if (!prepared) return null;
+
+        const { mergedEntry } = prepared;
+        const replacementId = safeUuid(mergedEntry?.id);
+        let archivePath = "";
+        try {
+          archivePath = archiveCard(authoritativeCandidate, agentId);
+        } catch (archiveErr) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge archive failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath || "unwritten"}: ${String(archiveErr)}`);
+          throw archiveErr;
+        }
+
+        try {
+          await db.store(mergedEntry);
+        } catch (storeErr) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(storeErr)}`);
+          throw storeErr;
+        }
+
+        let verifiedReplacement;
+        try {
+          verifiedReplacement = await db.getById(replacementId);
+        } catch (verificationErr) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
+          throw verificationErr;
+        }
+        const replacementIsActive = verifiedReplacement
+          && (!verifiedReplacement.status || verifiedReplacement.status === "active");
+        if (
+          verifiedReplacement?.id !== replacementId
+          || verifiedReplacement?.text !== mergedEntry.text
+          || !replacementIsActive
+        ) {
+          const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
+          throw verificationErr;
+        }
+
+        try {
+          await db.delete(candidateId);
+        } catch (deleteErr) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(deleteErr)}`);
+          throw deleteErr;
+        }
+        appendDestructiveOpLog(workspaceDir, {
+          event: "memory.deleted",
+          source: "memory_store_merge",
+          agentId,
+          memoryId: candidateId,
+          via: "merge",
+          archivePath,
+          timestamp: new Date().toISOString(),
+        });
+        return { ...prepared, authoritativeCandidate, archivePath };
+      });
+    }
+
     async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
       const storeAgentId = storeCtx.agentId || "default";
       const storeDb = pool.getWriteDb(storeAgentId);
@@ -2689,56 +2796,54 @@ const plugin = {
           const mergeCandidate = candidateVisibleForStore(mergeCandidateRaw, storeAccessCtx) ? mergeCandidateRaw : null;
           if (mergeCandidate) {
             addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
-            let mergeResult = null;
-            if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
-              api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
-              addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "meaningful difference" });
-            } else {
-              try {
-                mergeResult = await Promise.race([
-                  callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg, agentId),
-                  new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
-                ]);
-              } catch (mergeErr) {
-                api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
-              }
-            }
-            if (category === "decision" && storeCtx.workspaceDir && mergeCandidate.entry.storedBy && mergeCandidate.entry.storedBy !== storeAgentId) {
-              const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
-              appendConflictLog(storeCtx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: storeAgentId, newText: params.text.slice(0, 200), existingMemoryId: mergeCandidate.entry.id, existingAgentId: mergeCandidate.entry.storedBy, existingText: mergeCandidate.entry.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
-            }
-            const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
-            if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
-              if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
-                api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
-                addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "LLM mergedText loses facts" });
-              } else {
-                // DATA-003: prepare the merged entry and archive the original BEFORE
-                // deleting it. If embedding or archiving fails, the original remains intact.
+            const durableMerge = await withDurableMerge({
+              db: storeDb,
+              agentId: storeAgentId,
+              selectedCandidate: mergeCandidate,
+              accessCtx: storeAccessCtx,
+              workspaceDir: storeCtx?.workspaceDir,
+              prepareReplacement: async (authoritativeCandidate) => {
+                let mergeResult = null;
+                if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
+                  api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                  addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
+                } else {
+                  try {
+                    mergeResult = await Promise.race([
+                      callMergeCheck(authoritativeCandidate.text, params.text, mergingLlmCfg, storeAgentId),
+                      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
+                    ]);
+                  } catch (mergeErr) {
+                    api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+                  }
+                }
+                if (category === "decision" && storeCtx.workspaceDir && authoritativeCandidate.storedBy && authoritativeCandidate.storedBy !== storeAgentId) {
+                  const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
+                  appendConflictLog(storeCtx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: storeAgentId, newText: params.text.slice(0, 200), existingMemoryId: authoritativeCandidate.id, existingAgentId: authoritativeCandidate.storedBy, existingText: authoritativeCandidate.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
+                }
+                const minLen = Math.min(authoritativeCandidate.text.length, params.text.length);
+                if (!(mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen)) {
+                  return null;
+                }
+                if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
+                  api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                  addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
+                  return null;
+                }
+                const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
-                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
-                let archivePath;
-                try {
-                  archivePath = archiveCard(mergeCandidate.entry, storeAgentId);
-                } catch (archiveErr) {
-                  api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
-                  throw archiveErr;
-                }
-                await storeDb.delete(mergeCandidate.entry.id);
-                appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
-                try {
-                  await storeDb.store(mergedEntry);
-                } catch (storeErr) {
-                  api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
-                  throw storeErr;
-                }
-                if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
-                if (storeCtx.workspaceDir && shouldPromoteMemory(category, Math.max(importance, mergeCandidate.entry.importance), importanceResult.factQuality, schicht15MinImportance)) {
-                  trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
-                }
-                addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
-                return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
+                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
+                return { mergedEntry, mergeResult, mergedImportance };
+              },
+            });
+            if (durableMerge) {
+              const { mergedEntry, mergeResult, mergedImportance, authoritativeCandidate } = durableMerge;
+              if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${authoritativeCandidate.id} (${mergeResult.reason || ""})`, relatedId: authoritativeCandidate.id });
+              if (storeCtx.workspaceDir && shouldPromoteMemory(category, mergedImportance, importanceResult.factQuality, schicht15MinImportance)) {
+                trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: mergedImportance });
               }
+              addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${authoritativeCandidate.id} (${mergeResult.reason || ""})` });
+              return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
             }
           }
         } else if (category === "decision" && storeCtx.workspaceDir) {
@@ -2974,11 +3079,15 @@ const plugin = {
                 findRecord: (recordId) => findNeoRecord(commandStore, recordId),
                 memoryStore: async ({ payload }) => {
                   const { userId } = resolveIdentity(commandCtx);
-                  return storeMemoryFromToolParams({
+                  const result = await storeMemoryFromToolParams({
                     agentId: commandCtx.agentId || "command",
                     workspaceDir: commandCtx.workspaceDir,
                     userId,
                   }, payload);
+                  const text = result?.content?.[0]?.text || "";
+                  if (result?.error) throw new Error(`Memory store failed: ${result.error}`);
+                  if (text.startsWith("Memory store failed")) throw new Error(text);
+                  return result;
                 },
               });
             }
@@ -5105,67 +5214,65 @@ const plugin = {
                 const mergeCandidate = candidateVisibleForStore(mergeCandidateRaw, storeAccessCtx) ? mergeCandidateRaw : null;
                 if (mergeCandidate) {
                   addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
-                  let mergeResult = null;
-                  if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
-                    api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
-                    addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "meaningful difference" });
-                  } else {
-                    try {
-                      mergeResult = await Promise.race([
-                        callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg, agentId),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
-                      ]);
-                    } catch (mergeErr) {
-                      api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
-                    }
-                  }
-                  // Conflict detection: log if decision from different agent
-                  if (category === "decision" && ctx.workspaceDir && mergeCandidate.entry.storedBy && mergeCandidate.entry.storedBy !== agentId) {
-                    const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
-                    appendConflictLog(ctx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: agentId, newText: params.text.slice(0, 200), existingMemoryId: mergeCandidate.entry.id, existingAgentId: mergeCandidate.entry.storedBy, existingText: mergeCandidate.entry.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
-                  }
-                  const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
-                  if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
-                    if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
-                      api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
-                      addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "LLM mergedText loses facts" });
-                    } else {
-                      // DATA-003: prepare the merged entry and archive the original BEFORE
-                      // deleting it. If embedding/archiving fails, the original remains intact.
+                  const durableMerge = await withDurableMerge({
+                    db,
+                    agentId,
+                    selectedCandidate: mergeCandidate,
+                    accessCtx: storeAccessCtx,
+                    workspaceDir: ctx?.workspaceDir,
+                    prepareReplacement: async (authoritativeCandidate) => {
+                      let mergeResult = null;
+                      if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
+                        api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                        addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
+                      } else {
+                        try {
+                          mergeResult = await Promise.race([
+                            callMergeCheck(authoritativeCandidate.text, params.text, mergingLlmCfg, agentId),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
+                          ]);
+                        } catch (mergeErr) {
+                          api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+                        }
+                      }
+                      // Conflict detection: log if decision from different agent
+                      if (category === "decision" && ctx.workspaceDir && authoritativeCandidate.storedBy && authoritativeCandidate.storedBy !== agentId) {
+                        const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
+                        appendConflictLog(ctx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: agentId, newText: params.text.slice(0, 200), existingMemoryId: authoritativeCandidate.id, existingAgentId: authoritativeCandidate.storedBy, existingText: authoritativeCandidate.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
+                      }
+                      const minLen = Math.min(authoritativeCandidate.text.length, params.text.length);
+                      if (!(mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen)) {
+                        return null;
+                      }
+                      if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
+                        api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                        addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
+                        return null;
+                      }
+                      const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                       const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
                       const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user", null, { agentId });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedEntry = applyDynamicsDefaults({
                         id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
-                        importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
+                        importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]),
                         expiresAt, storedBy: agentId, workspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId,
                         emotionalValence: serializeEmotionalValence(mergedEmotion),
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
                       }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
-                      let archivePath;
-                      try {
-                        archivePath = archiveCard(mergeCandidate.entry, agentId);
-                      } catch (archiveErr) {
-                        api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
-                        throw archiveErr;
-                      }
-                      await db.delete(mergeCandidate.entry.id);
-                      appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
-                      try {
-                        await db.store(mergedEntry);
-                      } catch (storeErr) {
-                        api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
-                        throw storeErr;
-                      }
-                      if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
-                      if (ctx.workspaceDir && shouldPromoteMemory(category, Math.max(importance, mergeCandidate.entry.importance), importanceResult.factQuality, schicht15MinImportance)) {
-                        trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
-                      }
-                      addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
-                      return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
+                      return { mergedEntry, mergeResult, mergedImportance };
+                    },
+                  });
+                  if (durableMerge) {
+                    const { mergedEntry, mergeResult, mergedImportance, authoritativeCandidate } = durableMerge;
+                    if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${authoritativeCandidate.id} (${mergeResult.reason || ""})`, relatedId: authoritativeCandidate.id });
+                    if (ctx.workspaceDir && shouldPromoteMemory(category, mergedImportance, importanceResult.factQuality, schicht15MinImportance)) {
+                      trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: mergedImportance });
                     }
+                    addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${authoritativeCandidate.id} (${mergeResult.reason || ""})` });
+                    return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
                   }
                 }
               } else if (category === "decision" && ctx.workspaceDir) {

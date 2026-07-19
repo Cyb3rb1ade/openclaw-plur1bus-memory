@@ -469,6 +469,8 @@ describe("deterministic LLM result-cache allowlist", () => {
     const captureSection = sourceSection(source, "async function summarizeForCapture", "// Baut eine querySummarizer-Funktion");
     const recallSection = sourceSection(source, "function makeQuerySummarizer", "const REINDEX_WRITE_THRESHOLD");
     const mergeSection = sourceSection(source, "async function callMergeCheck", "// Schicht 1.5 — Pending-Tracking");
+    const bridgeStoreSection = sourceSection(source, "async function storeMemoryFromToolParams", "if (obsidianBridgeEnabled)");
+    const modelStoreSection = sourceSection(source, "name: \"memory_store\"", "name: \"memory_forget\"");
     const knowledgeSection = sourceSection(source, "async function updateKnowledgeMd", "// applyImportanceBoost");
     const knowledgeToolSection = sourceSection(source, "name: \"knowledge_update\"", "names: [\"memory_recall\"");
     const emotionSection = sourceSection(source, "const emotionT3CallLlm", "if (emotionT3Enabled && mergingLlmCfg)");
@@ -483,7 +485,10 @@ describe("deterministic LLM result-cache allowlist", () => {
 
     assert.equal(countMatches(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg, api\.logger, agentId\)/g), 1);
     assert.equal(countMatches(source, /makeQuerySummarizer\(mergingLlmCfg, api\.logger, agentId\)/g), 5);
-    assert.equal(countMatches(source, /callMergeCheck\(mergeCandidate\.entry\.text, params\.text, mergingLlmCfg, agentId\)/g), 2);
+    assert.equal(countMatches(bridgeStoreSection, /callMergeCheck\(authoritativeCandidate\.text, params\.text, mergingLlmCfg, storeAgentId\)/g), 1);
+    assert.equal(countMatches(modelStoreSection, /callMergeCheck\(authoritativeCandidate\.text, params\.text, mergingLlmCfg, agentId\)/g), 1);
+    assert.equal(countMatches(bridgeStoreSection, /withDurableMerge\(\{\s*db: storeDb,\s*agentId: storeAgentId,/g), 1);
+    assert.equal(countMatches(modelStoreSection, /withDurableMerge\(\{\s*db,\s*agentId,/g), 1);
 
     const emotionCallCount = extractCallExpressions(emotionSection, "callLlm").length;
     const scopedEmotionCallCount = countDeterministicCalls(emotionSection, "EMOTION_CLASSIFICATION", "context.agentId");
