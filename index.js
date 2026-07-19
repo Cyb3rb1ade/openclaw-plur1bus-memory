@@ -2860,9 +2860,63 @@ const plugin = {
       };
     }
 
-    function isExpectedMergeReplacement(entry, replacementId, candidateId, text) {
-      if (!entry || entry.id !== replacementId || entry.text !== text) return false;
+    function destructiveDeleteIdempotencyKey(source, agentId, memoryId, via) {
+      const digest = createHash("sha256")
+        .update(JSON.stringify(["memory.deleted", source, agentId, memoryId, via]))
+        .digest("hex");
+      return `sha256:${digest}`;
+    }
+
+    async function deleteWithAuditContinuation({
+      db,
+      memoryId,
+      workspaceDir,
+      logEntry,
+      onLateFailure,
+    }) {
+      const idempotencyKey = logEntry.idempotencyKey
+        || destructiveDeleteIdempotencyKey(logEntry.source, logEntry.agentId, memoryId, logEntry.via);
+      let deletionLogged = false;
+      const appendDeletionLog = () => {
+        if (deletionLogged) return;
+        appendDestructiveOpLog(workspaceDir, { ...logEntry, memoryId, idempotencyKey });
+        deletionLogged = true;
+      };
+
+      try {
+        await db.delete(memoryId);
+      } catch (deleteErr) {
+        if (deleteErr instanceof TimeoutError && deleteErr.settlement) {
+          const rawDeleteSettlement = deleteErr.settlement;
+          deleteErr.settlement = rawDeleteSettlement.then(
+            (value) => {
+              appendDeletionLog();
+              return value;
+            },
+            (lateDeleteError) => {
+              onLateFailure?.(lateDeleteError);
+              throw lateDeleteError;
+            },
+          );
+        }
+        throw deleteErr;
+      }
+
+      appendDeletionLog();
+    }
+
+    function isExpectedMergeReplacement(entry, replacementId, candidateId, expectedEntry) {
+      if (!entry || entry.id !== replacementId || entry.text !== expectedEntry.text) return false;
       if (entry.status && entry.status !== "active") return false;
+      const stableFields = [
+        "storedBy",
+        "workspaceKey",
+        "scope",
+        "ownerUserId",
+        "sourceUrl",
+        "evidenceQuote",
+      ];
+      if (stableFields.some((field) => entry[field] !== expectedEntry[field])) return false;
       try {
         return JSON.parse(entry.mergedFrom || "[]").includes(candidateId);
       } catch (error) {
@@ -2946,22 +3000,6 @@ const plugin = {
           throw archiveErr;
         }
 
-        let deletionLogged = false;
-        const appendDeletionLog = () => {
-          if (deletionLogged) return;
-          appendDestructiveOpLog(workspaceDir, {
-            event: "memory.deleted",
-            source: "memory_store_merge",
-            agentId,
-            memoryId: candidateId,
-            via: "merge",
-            archivePath,
-            idempotencyKey,
-            timestamp: new Date().toISOString(),
-          });
-          deletionLogged = true;
-        };
-
         const finishDurableMerge = async () => {
           let verifiedReplacement;
           try {
@@ -2970,29 +3008,34 @@ const plugin = {
             api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
             throw verificationErr;
           }
-          if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry.text)) {
+          if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry)) {
             const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
             api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
             throw verificationErr;
           }
 
           try {
-            await db.delete(candidateId);
+            await deleteWithAuditContinuation({
+              db,
+              memoryId: candidateId,
+              workspaceDir,
+              logEntry: {
+                event: "memory.deleted",
+                source: "memory_store_merge",
+                agentId,
+                via: "merge",
+                archivePath,
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+              },
+              onLateFailure: (lateDeleteError) => {
+                api.logger?.warn?.(`memory-lancedb-namespaced: durable merge late delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateDeleteError)}`);
+              },
+            });
           } catch (deleteErr) {
-            if (deleteErr instanceof TimeoutError && deleteErr.settlement) {
-              const rawDeleteSettlement = deleteErr.settlement;
-              deleteErr.settlement = rawDeleteSettlement.then(
-                () => appendDeletionLog(),
-                (lateDeleteError) => {
-                  api.logger?.warn?.(`memory-lancedb-namespaced: durable merge late delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateDeleteError)}`);
-                  throw lateDeleteError;
-                },
-              );
-            }
             api.logger?.warn?.(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(deleteErr)}`);
             throw deleteErr;
           }
-          appendDeletionLog();
           return { ...prepared, authoritativeCandidate, archivePath, idempotencyKey };
         };
 
@@ -3004,7 +3047,7 @@ const plugin = {
           throw idempotencyReadError;
         }
         if (existingReplacement) {
-          if (!isExpectedMergeReplacement(existingReplacement, replacementId, candidateId, mergedEntry.text)) {
+          if (!isExpectedMergeReplacement(existingReplacement, replacementId, candidateId, mergedEntry)) {
             throw new Error(`durable merge idempotency collision for ${replacementId}`);
           }
           return finishDurableMerge();
@@ -5012,6 +5055,10 @@ const plugin = {
                 stored++;
                 api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
               } catch (err) {
+                const settlement = await waitForTimeoutSettlement(err);
+                if (settlement.status === "rejected") {
+                  api.logger.warn(`memory-lancedb-namespaced: late capture store settlement failed: ${String(settlement.error)}`);
+                }
                 api.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
               }
             }
@@ -5088,6 +5135,10 @@ const plugin = {
                   }
                 }
               } catch (reminderStoreErr) {
+                const settlement = await waitForTimeoutSettlement(reminderStoreErr);
+                if (settlement.status === "rejected") {
+                  api.logger.warn(`plur1bus-reminder: late store settlement failed: ${String(settlement.error)}`);
+                }
                 api.logger.warn(`plur1bus-reminder: store failed: ${String(reminderStoreErr)}`);
               }
             }
@@ -5701,8 +5752,22 @@ const plugin = {
                 } catch (archiveErr) {
                   return { content: [{ type: "text", text: `Archive failed — NOT deleted: ${String(archiveErr)}` }] };
                 }
-                await db.delete(params.memoryId);
-                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: params.memoryId, via: "id", archivePath, timestamp: new Date().toISOString() });
+                await deleteWithAuditContinuation({
+                  db,
+                  memoryId: params.memoryId,
+                  workspaceDir: ctx?.workspaceDir,
+                  logEntry: {
+                    event: "memory.deleted",
+                    source: "memory_forget",
+                    agentId,
+                    via: "id",
+                    archivePath,
+                    timestamp: new Date().toISOString(),
+                  },
+                  onLateFailure: (lateDeleteError) => {
+                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget late ID delete failed for agent=${agentId} memory=${params.memoryId} archive=${archivePath}: ${String(lateDeleteError)}`);
+                  },
+                });
                 return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (archived).` }] };
               }
               if (params.query) {
@@ -5724,8 +5789,23 @@ const plugin = {
                 } catch (archiveErr) {
                   return { content: [{ type: "text", text: `Archive failed — NOT deleted: ${String(archiveErr)}` }] };
                 }
-                await db.delete(targetId);
-                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: targetId, via: "query", query: params.query.slice(0, 200), archivePath, timestamp: new Date().toISOString() });
+                await deleteWithAuditContinuation({
+                  db,
+                  memoryId: targetId,
+                  workspaceDir: ctx?.workspaceDir,
+                  logEntry: {
+                    event: "memory.deleted",
+                    source: "memory_forget",
+                    agentId,
+                    via: "query",
+                    query: params.query.slice(0, 200),
+                    archivePath,
+                    timestamp: new Date().toISOString(),
+                  },
+                  onLateFailure: (lateDeleteError) => {
+                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget late query delete failed for agent=${agentId} memory=${targetId} archive=${archivePath}: ${String(lateDeleteError)}`);
+                  },
+                });
                 return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (archived).` }] };
               }
               return { content: [{ type: "text", text: "Provide query or memoryId." }] };
