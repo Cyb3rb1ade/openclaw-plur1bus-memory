@@ -96,9 +96,52 @@ $ node --test tests/auto-capture-import.test.js tests/auto-capture-batch.test.js
 tests 29; pass 29; fail 0; duration_ms 3389.791547
 ```
 
-The 14 realistic checkpoint cases prove normal counters, total/partial embedding failure, wrong dimensions, duplicate-query failure, total/partial insert failure, deterministic post-store crash retry, missing-vector and hidden-readback rejection, smaller replacement rotation, in-place truncation, unchanged restart, and normal append.
+The original 14 realistic checkpoint cases prove normal counters, total/partial embedding failure, wrong dimensions, duplicate-query failure, total/partial insert failure, deterministic post-store crash retry, missing-vector and hidden-readback rejection, smaller replacement rotation, in-place truncation, unchanged restart, and normal append.
 
 The two existing owning files preserve stream/import helpers, provider batch behavior and fallback, semantic and in-batch deduplication, and exported source contracts.
+
+### Independent-review fix wave: live stat/open rotation
+
+Independent review found that the initial pathname `statSync()` and later pathname `createReadStream()` were not bound to the same open file. An atomic replacement after identity capture but before stream open therefore let replacement bytes inherit the predecessor identity. The later checkpoint invalidation reset the replacement to offset zero but did not abort those already-collected writes, so retry derived a second deterministic ID from the replacement's real identity.
+
+The regression preloads the production CLI child only for this case and performs a real atomic rename immediately after the target session's `stat`/`fstat` identity capture. It supports both the reviewed implementation and the descriptor-bound fix, so the same scheduling trigger remains causal across RED and GREEN.
+
+Before the production fix:
+
+```text
+$ node tests/auto-capture-checkpoint.test.js
+tests 15; pass 14; fail 1
+binds live-rotation bytes to their opened file identity:
+actual first-run row:   User: Live replacement memory must be captured exactly once.
+expected first-run row: User: Opened predecessor memory must retain its own source identity.
+```
+
+The production fix opens each session once, derives device/inode and the prior-prefix fingerprint with `fstat`/positioned reads on that descriptor, and passes the same caller-owned descriptor to the stream with `autoClose: false`. The capture boundary closes it in `finally`. Checkpoint snapshots likewise open once and derive identity plus fingerprint from that one descriptor. If the pathname rotates after the capture descriptor is opened, the run reads and tags only predecessor bytes; the path recheck invalidates to the replacement's identity at offset zero, and the next run captures the replacement exactly once.
+
+Fresh focused/owning GREEN after the fix:
+
+```text
+$ node tests/auto-capture-checkpoint.test.js
+tests 15; pass 15; fail 0; duration_ms 3249.684126
+
+$ node --test tests/auto-capture-import.test.js tests/auto-capture-batch.test.js
+tests 15; suites 2; pass 15; fail 0; duration_ms 2078.182767
+
+$ node --check scripts/auto-capture-lancedb.mjs
+$ node --check tests/auto-capture-checkpoint.test.js
+$ node -e 'import("./scripts/auto-capture-lancedb.mjs").then(() => console.log("import ok"))'
+$ npm run lint
+$ git diff --check
+all exit 0
+```
+
+After the coordinator granted and B6 released the exclusive serial lane, the exact post-review authoritative command passed and the lane was released immediately:
+
+```text
+$ node --test --test-concurrency=1 tests/*.test.js test/*.test.js
+tests 2597; suites 503; pass 2596; fail 0; cancelled 0; skipped 1; todo 0
+duration_ms 397051.231501
+```
 
 ## Original trigger and restart proof
 
@@ -129,7 +172,7 @@ tests 2596; suites 503; pass 2595; fail 0; cancelled 0; skipped 1; todo 0
 duration_ms 374072.779819
 ```
 
-The authoritative suite ran once outside the nested-spawn sandbox restriction, in the coordinated exclusive serial lane.
+The original authoritative suite ran outside the nested-spawn sandbox restriction in its coordinated exclusive serial lane. The independent-review fix wave reran the same exact serial command in a newly granted exclusive lane; its fresh 2,597-test result is recorded above.
 
 Final static and scope gates:
 

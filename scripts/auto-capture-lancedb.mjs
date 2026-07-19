@@ -13,13 +13,13 @@ import {
   closeSync,
   createReadStream,
   existsSync,
+  fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readSync,
   readdirSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -458,24 +458,18 @@ function readFingerprintChunk(fd, start, length) {
   return buffer.subarray(0, read);
 }
 
-function createCheckpointFingerprint(filePath, offset) {
-  const stats = statSync(filePath);
-  const safeOffset = Math.min(stats.size, Math.max(0, Number(offset) || 0));
+function createCheckpointFingerprintFromDescriptor(descriptor, fileSize, offset) {
+  const safeOffset = Math.min(fileSize, Math.max(0, Number(offset) || 0));
   const hash = createHash("sha256").update(`plur1bus-auto-capture-v2:${safeOffset}:`);
   if (safeOffset === 0) return hash.digest("hex");
 
   const firstLength = Math.min(CHECKPOINT_FINGERPRINT_WINDOW, safeOffset);
   const tailStart = Math.max(firstLength, safeOffset - CHECKPOINT_FINGERPRINT_WINDOW);
   const tailLength = safeOffset - tailStart;
-  const fd = openSync(filePath, "r");
-  try {
-    hash.update(readFingerprintChunk(fd, 0, firstLength));
-    if (tailLength > 0) {
-      hash.update(`:${tailStart}:`);
-      hash.update(readFingerprintChunk(fd, tailStart, tailLength));
-    }
-  } finally {
-    closeSync(fd);
+  hash.update(readFingerprintChunk(descriptor, 0, firstLength));
+  if (tailLength > 0) {
+    hash.update(`:${tailStart}:`);
+    hash.update(readFingerprintChunk(descriptor, tailStart, tailLength));
   }
   return hash.digest("hex");
 }
@@ -505,9 +499,10 @@ function isSessionFile(name) {
  * Read complete non-empty JSONL lines from a byte offset without loading the full file.
  * @param {string} filePath Session JSONL file path.
  * @param {number} offset Byte offset to start reading from.
+ * @param {{ descriptor?: number }} options Optional caller-owned descriptor that binds reads to one open file.
  * @returns {Promise<{ lines: string[], records: Array<{line: string, endOffset: number}>, nextOffset: number }>} Complete lines, record boundaries, and the next safe byte offset.
  */
-export async function readSessionLinesSinceOffset(filePath, offset = 0) {
+export async function readSessionLinesSinceOffset(filePath, offset = 0, options = {}) {
   const start = Math.max(0, Number(offset) || 0);
   const lines = [];
   const records = [];
@@ -515,7 +510,12 @@ export async function readSessionLinesSinceOffset(filePath, offset = 0) {
   let pending = "";
 
   await new Promise((resolve, reject) => {
-    const stream = createReadStream(filePath, { start, encoding: "utf8" });
+    const descriptor = Number.isInteger(options.descriptor) ? options.descriptor : null;
+    const stream = createReadStream(filePath, {
+      start,
+      encoding: "utf8",
+      ...(descriptor == null ? {} : { fd: descriptor, autoClose: false }),
+    });
     stream.on("data", (chunk) => {
       pending += chunk;
       const parts = pending.split("\n");
@@ -667,7 +667,11 @@ function resolveCheckpointStart(agentId, file, checkpoint) {
     return 0;
   }
   if (checkpoint.fingerprint && checkpoint.offset > 0) {
-    const currentFingerprint = createCheckpointFingerprint(file.path, checkpoint.offset);
+    const currentFingerprint = createCheckpointFingerprintFromDescriptor(
+      file.descriptor,
+      file.size,
+      checkpoint.offset,
+    );
     if (currentFingerprint !== checkpoint.fingerprint) {
       console.warn(`[${agentId}] session fingerprint changed for ${file.name}; restarting from byte zero`);
       return 0;
@@ -697,23 +701,28 @@ function persistAcknowledgedCheckpoints(agentId, stateFiles, fileRuns) {
   for (const fileRun of fileRuns) {
     if (fileRun.invalidated) continue;
     const offset = acknowledgedOffset(fileRun);
-    const latestStats = statSync(fileRun.path);
-    const latestIdentity = getFileIdentity(latestStats);
     let nextEntry;
-    if (latestIdentity !== fileRun.identity || latestStats.size < offset) {
-      console.warn(`[${agentId}] ${fileRun.name} changed during capture; deferring the new file to the next run`);
-      fileRun.invalidated = true;
-      nextEntry = {
-        offset: 0,
-        identity: latestIdentity,
-        fingerprint: createCheckpointFingerprint(fileRun.path, 0),
-      };
-    } else {
-      nextEntry = {
-        offset,
-        identity: fileRun.identity,
-        fingerprint: createCheckpointFingerprint(fileRun.path, offset),
-      };
+    const descriptor = openSync(fileRun.path, "r");
+    try {
+      const latestStats = fstatSync(descriptor);
+      const latestIdentity = getFileIdentity(latestStats);
+      if (latestIdentity !== fileRun.identity || latestStats.size < offset) {
+        console.warn(`[${agentId}] ${fileRun.name} changed during capture; deferring the new file to the next run`);
+        fileRun.invalidated = true;
+        nextEntry = {
+          offset: 0,
+          identity: latestIdentity,
+          fingerprint: createCheckpointFingerprintFromDescriptor(descriptor, latestStats.size, 0),
+        };
+      } else {
+        nextEntry = {
+          offset,
+          identity: fileRun.identity,
+          fingerprint: createCheckpointFingerprintFromDescriptor(descriptor, latestStats.size, offset),
+        };
+      }
+    } finally {
+      closeSync(descriptor);
     }
     if (!checkpointEntriesEqual(stateFiles[fileRun.name], nextEntry)) {
       stateFiles[fileRun.name] = nextEntry;
@@ -817,39 +826,60 @@ function buildCaptureRow(agentId, entry, captureTimestamp) {
   };
 }
 
+async function readSessionFileRunInput(agentId, sessionsDir, name, stateFiles) {
+  const path = resolveInside(sessionsDir, name);
+  let descriptor;
+  let stats;
+  try {
+    descriptor = openSync(path, "r");
+    stats = fstatSync(descriptor);
+  } catch (err) {
+    if (Number.isInteger(descriptor)) closeSync(descriptor);
+    console.warn(`[${agentId}] session open failed for ${name}: ${err.message}`);
+    return null;
+  }
+  if (stats.size <= 0) {
+    closeSync(descriptor);
+    return null;
+  }
+
+  const openFile = { name, path, size: stats.size, identity: getFileIdentity(stats), descriptor };
+  try {
+    const checkpoint = normalizeFileCheckpoint(stateFiles[name]);
+    const lastOffset = resolveCheckpointStart(agentId, openFile, checkpoint);
+    const slice = openFile.size > lastOffset
+      ? await readSessionLinesSinceOffset(path, lastOffset, { descriptor })
+      : { records: [], nextOffset: lastOffset };
+    return {
+      file: { name, path, size: openFile.size, identity: openFile.identity },
+      lastOffset,
+      slice,
+    };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
 async function captureAgent(agentId, embeddings) {
   const safeAgent = safeAgentId(agentId);
   if (!existsSync(AGENTS_DIR)) return { stored: 0, candidates: 0 };
   const sessionsDir = resolveInside(AGENTS_DIR, safeAgent, "sessions");
   if (!existsSync(sessionsDir)) return { stored: 0, candidates: 0 };
 
-  const files = readdirSync(sessionsDir)
-    .filter(isSessionFile)
-    .map((f) => {
-      const path = resolveInside(sessionsDir, f);
-      try {
-        const stats = statSync(path);
-        return { name: f, path, size: stats.size, identity: getFileIdentity(stats) };
-      } catch (err) {
-        console.warn(`[${safeAgent}] session stat failed for ${f}: ${err.message}`);
-        return null;
-      }
-    })
-    .filter((f) => f != null && f.size > 0);
-
-  if (files.length === 0) return { stored: 0, candidates: 0 };
+  const fileNames = readdirSync(sessionsDir).filter(isSessionFile);
+  if (fileNames.length === 0) return { stored: 0, candidates: 0 };
 
   const state = loadState(safeAgent);
   const stateFiles = state.files || {};
 
+  const files = [];
   const fileRuns = [];
   const allItems = [];
-  for (const file of files) {
-    const checkpoint = normalizeFileCheckpoint(stateFiles[file.name]);
-    const lastOffset = resolveCheckpointStart(safeAgent, file, checkpoint);
-    const slice = file.size > lastOffset
-      ? await readSessionLinesSinceOffset(file.path, lastOffset)
-      : { records: [], nextOffset: lastOffset };
+  for (const name of fileNames) {
+    const runInput = await readSessionFileRunInput(safeAgent, sessionsDir, name, stateFiles);
+    if (!runInput) continue;
+    const { file, lastOffset, slice } = runInput;
+    files.push(file);
     const records = slice.records.map((record) => ({ ...record, acknowledged: true }));
 
     const messages = [];
@@ -892,6 +922,8 @@ async function captureAgent(agentId, embeddings) {
       invalidated: false,
     });
   }
+
+  if (files.length === 0) return { stored: 0, candidates: 0 };
 
   const userUrlItems = allItems.filter(it => it.sourceUrl);
   const seen = new Set();
