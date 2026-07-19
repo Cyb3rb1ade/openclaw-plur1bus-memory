@@ -93,7 +93,7 @@ describe("installer feature config policy", () => {
 
     assert.equal(entry.config.baseDbPath, "/custom/memory");
     assert.equal(entry.config.reranker.enabled, false);
-    assert.equal(entry.config.reranker.timeoutMs, 9999);
+    assert.equal(entry.config.reranker.timeoutMs, 5000);
     assert.equal(entry.config.temporalContext.enabled, false);
     assert.equal(entry.config.dailyConsolidation.enabled, true);
     assert.equal(entry.config.obsidianBridge.enabled, true);
@@ -108,7 +108,8 @@ describe("installer feature config policy", () => {
       { enabled: true, config: { hooks: legacyHooks } },
       { mode: "safe", confirmedAt: "2026-07-19T12:00:00.000Z" },
     );
-    assert.deepEqual(migrated.hooks, legacyHooks);
+    assert.equal(migrated.hooks.allowConversationAccess, false);
+    assert.equal(migrated.hooks.timeouts.agent_end, 1234);
     assert.equal(Object.hasOwn(migrated.config, "hooks"), false);
 
     const explicitHooks = { allowConversationAccess: true };
@@ -116,8 +117,52 @@ describe("installer feature config policy", () => {
       { enabled: true, hooks: explicitHooks, config: { hooks: legacyHooks } },
       { mode: "recommended", confirmedAt: "2026-07-19T12:00:00.000Z" },
     );
-    assert.deepEqual(retained.hooks, explicitHooks);
+    assert.equal(retained.hooks.allowConversationAccess, true);
     assert.equal(Object.hasOwn(retained.config, "hooks"), false);
+  });
+
+  it("fills installer hook defaults only where explicit-profile values are absent", () => {
+    for (const mode of ["safe", "recommended"]) {
+      const fresh = applyInstallerFeaturePolicy({}, { mode });
+      assert.deepEqual(fresh.hooks, {
+        allowConversationAccess: true,
+        allowPromptInjection: true,
+        timeouts: { before_prompt_build: 90000, agent_end: 60000 },
+      });
+    }
+
+    const explicit = applyInstallerFeaturePolicy(
+      {
+        hooks: {
+          allowConversationAccess: false,
+          allowPromptInjection: false,
+          timeouts: { before_prompt_build: 123, agent_end: 456, custom: 789 },
+        },
+      },
+      { mode: "safe" },
+    );
+    assert.deepEqual(explicit.hooks, {
+      allowConversationAccess: false,
+      allowPromptInjection: false,
+      timeouts: { before_prompt_build: 123, agent_end: 456, custom: 789 },
+    });
+
+    const legacy = applyInstallerFeaturePolicy(
+      {
+        config: {
+          hooks: {
+            allowConversationAccess: false,
+            timeouts: { agent_end: 1234 },
+          },
+        },
+      },
+      { mode: "recommended" },
+    );
+    assert.deepEqual(legacy.hooks, {
+      allowConversationAccess: false,
+      allowPromptInjection: true,
+      timeouts: { before_prompt_build: 90000, agent_end: 1234 },
+    });
   });
 
   it("plans around legacy config.hooks in preserve mode without rewriting it", () => {

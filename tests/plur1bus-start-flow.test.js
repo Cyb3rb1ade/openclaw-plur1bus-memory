@@ -156,7 +156,7 @@ describe("/plur1bus start", () => {
         assert.equal(entry.enabled, true);
         assert.equal(entry.config.setupProfile, profile);
         assert.equal(entry.config.reranker.enabled, false);
-        assert.equal(entry.config.reranker.timeoutMs, 9999);
+        assert.equal(entry.config.reranker.timeoutMs, profile === "recommended" ? 5000 : 9999);
         assert.equal(entry.config.baseDbPath, "/custom/memory");
         assert.deepEqual(entry.rollback, original.plugins.entries["memory-lancedb-namespaced"].rollback);
         assert.deepEqual(written.untouched, original.untouched);

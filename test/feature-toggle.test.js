@@ -9,6 +9,7 @@ import {
   renderToggleResult,
   listFeatures,
 } from '../lib/telegram-commands/feature-toggle.js';
+import { validatePluginConfig } from '../lib/setup/config-contract.js';
 
 function makeTmpConfig(initial = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'plur1bus-toggle-'));
@@ -100,6 +101,54 @@ test('review toggles write the canonical nested paths without creating legacy al
     assert.strictEqual(config.obsidianBridge.eveningReview.enabled, true);
     assert.strictEqual(Object.hasOwn(config, 'morningReview'), false);
     assert.strictEqual(Object.hasOwn(config, 'eveningReview'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('review toggles migrate legacy-only aliases before writing canonical values', () => {
+  for (const review of ['morningReview', 'eveningReview']) {
+    const { path, dir } = makeTmpConfig({
+      plugins: {
+        entries: {
+          'memory-lancedb-namespaced': { config: { [review]: { enabled: false } } },
+        },
+      },
+    });
+    try {
+      const result = toggleFeature(review, true, { configPath: path });
+      const config = JSON.parse(readFileSync(path, 'utf8'))
+        .plugins.entries['memory-lancedb-namespaced'].config;
+
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(config.obsidianBridge[review].enabled, true);
+      assert.strictEqual(Object.hasOwn(config, review), false);
+      assert.doesNotThrow(() => validatePluginConfig(config));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('review toggle rejects conflicting aliases without changing the file', () => {
+  const { path, dir } = makeTmpConfig({
+    plugins: {
+      entries: {
+        'memory-lancedb-namespaced': {
+          config: {
+            morningReview: { enabled: false },
+            obsidianBridge: { morningReview: { enabled: true } },
+          },
+        },
+      },
+    },
+  });
+  try {
+    const before = readFileSync(path, 'utf8');
+    const result = toggleFeature('morningReview', false, { configPath: path });
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(readFileSync(path, 'utf8'), before);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -179,12 +179,12 @@ describe("feature-profiles", () => {
     assert.ok(result.pending.some((p) => p.feature === "obsidianBridge"));
   });
 
-  it("applyFeatureProfile does NOT overwrite existing plugin config keys", () => {
+  it("explicit Recommended forces reranker timeout while preserving the feature opt-out", () => {
     const existing = { plugins: { entries: { "memory-lancedb-namespaced": { enabled: true, config: { reranker: { enabled: false, timeoutMs: 9999 } } } } } };
     const merged = applyFeatureProfile(existing, recommendedProfile(), { confirmed: true });
     const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
     assert.strictEqual(cfg.reranker.enabled, false, "existing reranker.enabled preserved");
-    assert.strictEqual(cfg.reranker.timeoutMs, 9999, "existing reranker.timeoutMs preserved");
+    assert.strictEqual(cfg.reranker.timeoutMs, 5000, "Recommended safety timeout restored");
   });
 
   it("manifest defaults remain safe when no explicit profile was selected", () => {
@@ -310,7 +310,7 @@ describe("feature-profiles", () => {
           "memory-lancedb-namespaced": {
             enabled: true,
             config: {
-              reranker: { enabled: false },
+              reranker: { enabled: false, timeoutMs: 9999 },
               merging: { enabled: false, autoApply: true },
               obsidianBridge: {
                 enabled: false,
@@ -332,8 +332,13 @@ describe("feature-profiles", () => {
     const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
 
     assert.strictEqual(cfg.reranker.enabled, false);
+    assert.strictEqual(cfg.reranker.timeoutMs, 5000);
     assert.strictEqual(cfg.merging.enabled, false);
     assert.strictEqual(cfg.merging.autoApply, false);
+    assert.strictEqual(cfg.merging.mode, "safe-versioned");
+    assert.strictEqual(cfg.merging.autoApplyRisk, "low-only");
+    assert.strictEqual(cfg.merging.backupBeforeApply, true);
+    assert.strictEqual(cfg.merging.auditLog, true);
     assert.strictEqual(cfg.obsidianBridge.enabled, false);
     assert.strictEqual(cfg.obsidianBridge.mode, "augment");
     assert.strictEqual(cfg.obsidianBridge.dryRun, true);
@@ -341,6 +346,40 @@ describe("feature-profiles", () => {
     assert.strictEqual(cfg.obsidianBridge.autoApplyLowRisk, false);
     assert.strictEqual(cfg.obsidianBridge.semanticGraph.proposalOnly, true);
     assert.strictEqual(cfg.obsidianBridge.semanticGraph.mutateMemory, false);
+    assert.strictEqual(cfg.obsidianBridge.morningReview.status, "pending_setup");
+    assert.strictEqual(cfg.obsidianBridge.eveningReview.status, "pending_setup");
+  });
+
+  it("explicit Recommended repairs only its historical fixed merge invariants", () => {
+    const legacyConfig = {
+      setupProfile: "recommended",
+      reranker: { enabled: false },
+      merging: { enabled: false, backupBeforeApply: false, auditLog: false },
+      obsidianBridge: { enabled: false },
+    };
+    assert.throws(
+      () => validatePluginConfig(legacyConfig),
+      /plugins\.entries\.memory-lancedb-namespaced\.config\.merging\.backupBeforeApply.*must equal true/,
+    );
+
+    const merged = applyFeatureProfile(
+      {
+        plugins: {
+          entries: {
+            "memory-lancedb-namespaced": { enabled: true, config: legacyConfig },
+          },
+        },
+      },
+      recommendedProfile(),
+      { confirmedAt: "2026-07-19T12:00:00.000Z" },
+    );
+    const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
+
+    assert.strictEqual(cfg.reranker.enabled, false);
+    assert.strictEqual(cfg.merging.enabled, false);
+    assert.strictEqual(cfg.obsidianBridge.enabled, false);
+    assert.strictEqual(cfg.merging.backupBeforeApply, true);
+    assert.strictEqual(cfg.merging.auditLog, true);
   });
 
   it("detectMissingCoreFeatures reports new core features missing from current config", () => {

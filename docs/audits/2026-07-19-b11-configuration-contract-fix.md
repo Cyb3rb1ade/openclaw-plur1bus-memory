@@ -4,6 +4,8 @@ Date: 2026-07-19
 Batch: B11 configuration-contract core
 Branch: `fix/high-mid-audit-findings`
 Fix base: `c588717e2f6e6e108b1a43a659a32f49d4eae723`
+Follow-up correction: 2026-07-20, R1-R5, base
+`0a63a2de23904ec7561115f52a179d33bd987c00`
 Findings: FA-01, FA-02, FA-09, FA-10, FE-ADD-01, the safe B11
 portion of FA-06, and the load-time portion of BUG-ADD-09 / FE-ADD-07
 
@@ -65,10 +67,12 @@ reject `NaN`, and prototype-shaped JSON keys are rejected with complete paths.
 
 Safe and Recommended are schema-valid explicit profiles. Safe enforces the
 listed non-mutating values after merging. Recommended preserves feature
-opt-outs and custom provider/path/runtime values while reasserting mandatory
-merge, Obsidian, semantic-graph, vault-confirmation, and pending-review safety
-gates on repeat application. Both record `setupProfile` and
-`featuresConfirmedAt`.
+opt-outs and custom provider/path/non-safety runtime values while reasserting
+the fixed reranker timeout, mandatory merge invariants, Obsidian,
+semantic-graph, vault-confirmation, and pending-review safety gates on repeat
+application. Explicit Recommended alone repairs the two historical fixed merge
+booleans before strict validation; ordinary validation continues to reject
+them. Both profiles record `setupProfile` and `featuresConfirmedAt`.
 
 Installer `preserve` is clone-only: it does not activate the entry or persist
 effective defaults. Explicit `safe` and `recommended` enable/create the entry
@@ -77,10 +81,13 @@ and apply the corresponding profile. Implicit `fresh`, `force`, and
 to Safe, existing installs to preserve, and treats `--accept-defaults` as the
 documented explicit Recommended selection.
 
-Legacy `config.hooks` migrates to entry-level `hooks` only during explicit
-profile application and never overwrites an explicit entry-level value.
-Legacy review aliases become nested effective values only when the nested path
-is absent; conflicting explicit aliases reject with both complete paths.
+Legacy `config.hooks` migrates to entry-level `hooks` during compatibility-
+aware writes and never overwrites an explicit entry-level value. Installer
+preserve mode remains byte-stable. Fresh explicit profiles receive hook
+defaults only for absent fields. Legacy review aliases become nested effective
+values only when the nested path is absent; equal aliases collapse and
+conflicting explicit aliases reject with both complete paths before a toggle
+can write.
 
 ### Time, Decision Trace, merge, and legacy provider boundaries
 
@@ -96,11 +103,14 @@ advertised without sink enforcement. Existing merge owning tests explicitly
 turn on `autoApply`, preserving both legitimate merge paths.
 
 The effective seam makes a disabled reranker explicit before the existing
-empty-store legacy provider migration runs. Its old condition treated provider
-`disabled` as migration-eligible and re-enabled reranking. The migration now
-short-circuits on explicit `enabled:false`, while an eligible missing embedding
-still migrates locally. The deploy-integrity manifest includes the new direct
-runtime dependency `lib/setup/config-contract.js`.
+empty-store legacy provider migration runs. The migration now treats every
+explicit provider selection as authoritative, including `disabled`, Cohere,
+OpenAI, and OpenAI-compatible selections without inline credential fields.
+Credential resolution and its normal errors remain provider-layer concerns.
+Only genuinely provider-absent embedding/reranker config migrates locally, and
+an explicit `enabled:false` reranker remains untouched. The deploy-integrity
+manifest includes the direct runtime dependency
+`lib/setup/config-contract.js`.
 
 ## Causal TDD evidence
 
@@ -148,13 +158,43 @@ renderer. After the fix it passed 4/4 and proved argument-less listing is
 byte-stable while explicit Safe and Recommended preserve provider/path/
 rollback/opt-out state.
 
-The final direct-caller review then exposed a canonical-writer bypass:
-`/enable morningReview` and `/enable eveningReview` still wrote accepted
-legacy aliases. With canonical profile values already present, that could
-create a conflicting pair rejected by the next effective-config load. The
-focused test first failed 0/1 because the canonical nested value remained
-false, then passed 1/1 after the whitelist paths were changed; the full toggle
-file passed 9/9.
+The original direct-caller review moved `/enable morningReview` and `/enable
+eveningReview` to canonical paths, but did not normalize an already-present
+legacy alias or reject a pre-existing conflict before mutation. The R1-R5
+follow-up corrected that writer boundary: normalization and complete plugin-
+config validation now happen inside the existing lock before the atomic write;
+conflicts return a structured error and leave the file byte-identical.
+
+### R1-R5 follow-up causal evidence
+
+The correction report at `/tmp/plur1bus-sdd/b11-fix-report.md` records every
+command and observed output. The causal totals were:
+
+```text
+Cycle 1 Recommended forced safety set:
+RED  tests 1; pass 0; fail 1 (9999 !== 5000)
+GREEN tests 2; pass 2; fail 0
+
+Cycle 2 narrow historical merge repair:
+RED  tests 1; pass 0; fail 1 (backupBeforeApply must equal true)
+GREEN tests 1; pass 1; fail 0
+
+Cycle 3 toggle normalize/validate/no-write:
+RED  tests 2; pass 0; fail 2
+GREEN tests 2; pass 2; fail 0; complete toggle file 11/11
+
+Cycle 4 explicit provider authority:
+RED  tests 4; pass 1; fail 3
+GREEN tests 4; pass 4; fail 0
+
+Cycle 5 helper-owned hook defaults and authoritative shell sinks:
+RED/GREEN helper 0/1 then 1/1
+RED/GREEN executable local+remote transforms 0/2 then 2/2
+
+Cycle 6 manifest-derived documentation contract:
+RED  tests 1; pass 0; fail 1 ('true' !== 'false')
+GREEN tests 1; pass 1; fail 0
+```
 
 ## Positive-path and bypass review
 
@@ -178,12 +218,16 @@ file passed 9/9.
   untouched. Registered `setup safe` and `setup recommended` exercise the real
   authorized lock/read/validate/write/render path. Repeated Recommended resets
   mandatory gates but keeps feature opt-outs.
-- `/enable morningReview` and `/enable eveningReview` write the canonical
-  nested review paths, so toggling a profiled config cannot create a conflicting
-  legacy alias pair.
+- `/enable morningReview` and `/enable eveningReview` normalize legacy-only
+  aliases, collapse equal aliases, validate the complete plugin config, and
+  reject conflicts without changing the file.
 - Vault discovery is display-only and never clears confirmation requirements.
-- Static shell fixtures cover both local JQ and remote Node patch bodies, the
-  existing memory slot, and dry-run's explicit no-backend-switch statement.
+- Executable tests extract and run the production local JQ heredoc and remote
+  Node body. Both persist the helper-returned entry directly, preserve explicit
+  and migrated hook values, the existing memory slot, enabled legacy backend,
+  and unrelated root state. The local branch consumes the same tested JQ
+  program; the dry-run text describes direct helper persistence and preserved
+  explicit hooks.
 - The model-tool and bridge/store merge owning fixtures explicitly opt into
   merge auto-apply, so removing its unsafe implicit default does not hide the
   legitimate paths.
@@ -230,28 +274,39 @@ Documentation:
 - `docs/recall-architecture.md`
 - this receipt
 
+Follow-up correction files were confined to the brief's allowlist:
+
+- `lib/setup/feature-profiles.js`
+- `lib/telegram-commands/feature-toggle.js`
+- `lib/providers/legacy-provider-migration.js`
+- `scripts/lib/installer-config.mjs`
+- `scripts/install-memory-system.sh`
+- `docs/configuration.md`
+- `tests/smoke-feature-profiles.test.js`
+- `tests/installer-config.test.js`
+- `tests/plur1bus-start-flow.test.js`
+- `test/feature-toggle.test.js`
+- `tests/legacy-provider-migration.test.js`
+- `tests/upgrade-v6.test.js`
+- `tests/config-docs-contract.test.js`
+- this receipt
+
 ## Final verification
 
-Fresh post-resume completion evidence:
+Authoritative R1-R5 follow-up completion evidence:
 
 ```text
-$ node --test --test-concurrency=1 <ten B11 focused files>
-tests 239; suites 28; pass 239; fail 0; skipped 0
-duration_ms 3283.200202; exit 0
+$ node --test --test-concurrency=1 <seven B11 R1-R5 focused files>
+tests 93; suites 11; pass 93; fail 0; skipped 0
+duration_ms 4129.158593; exit 0
 
-$ node --test --test-concurrency=1 <five B10 preservation files>
-tests 49; suites 5; pass 49; fail 0; skipped 0
-duration_ms 1485.641954; exit 0
+$ node --test --test-concurrency=1 <eight config/runtime preservation files>
+tests 187; suites 22; pass 187; fail 0; skipped 0
+duration_ms 2018.488509; exit 0
 
-$ node --test --test-concurrency=1 <nine profile/provider/deploy/merge/lease owning files>
-tests 80; suites 21; pass 79; fail 0; skipped 1
-duration_ms 122609.796075; exit 0
-
-$ node --check index.js
-$ node --check lib/setup/config-contract.js
 $ node --check lib/setup/feature-profiles.js
 $ node --check lib/telegram-commands/feature-toggle.js
-$ node --check lib/time-window.js
+$ node --check lib/providers/legacy-provider-migration.js
 $ node --check scripts/lib/installer-config.mjs
 $ bash -n scripts/install-memory-system.sh
 $ npm run lint
@@ -259,8 +314,8 @@ $ git diff --check
 all exit 0
 
 $ node --test --test-concurrency=1 tests/*.test.js test/*.test.js
-tests 2678; suites 512; pass 2677; fail 0; cancelled 0; skipped 1
-todo 0; duration_ms 363884.914782; exit 0
+tests 2689; suites 512; pass 2688; fail 0; cancelled 0; skipped 1
+todo 0; duration_ms 366571.560265; exit 0
 ```
 
 The single skip is the repository's environment-dependent non-writable

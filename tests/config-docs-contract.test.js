@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { validatePluginConfig } from "../lib/setup/config-contract.js";
+import { manifestConfigDefaults, validatePluginConfig } from "../lib/setup/config-contract.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..");
@@ -20,6 +20,13 @@ function canonicalExample() {
   const fenceEnd = configuration.indexOf("\n```", jsonStart);
   assert.ok(fenceStart >= start && fenceEnd > jsonStart, "canonical JSON fence must be complete");
   return JSON.parse(configuration.slice(jsonStart, fenceEnd));
+}
+
+function documentedTableDefault(key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = configuration.match(new RegExp(`\\|\\s*\\\`${escaped}\\\`\\s*\\|[^|]*\\|\\s*\\\`([^\\\`]*)\\\``));
+  assert.ok(match, `documented default row missing for ${key}`);
+  return match[1];
 }
 
 describe("copyable configuration documentation contract", () => {
@@ -40,5 +47,15 @@ describe("copyable configuration documentation contract", () => {
     assert.match(readme, /`\/plur1bus setup`[^\n]*(list|choice|profile)/i);
     assert.match(readme, /`\/plur1bus start`[^\n]*(status|guidance|onboarding)/i);
     assert.doesNotMatch(readme, /`\/plur1bus setup`[^\n]*confirm the recommended feature profile/i);
+  });
+
+  it("keeps published safety-sensitive defaults aligned with the manifest", () => {
+    const defaults = manifestConfigDefaults();
+
+    assert.equal(documentedTableDefault("emotion.t3.enabled"), String(defaults.emotion.t3.enabled));
+    assert.match(readme, new RegExp(`Reranker timeout[^\\n]*default ${defaults.reranker.timeoutMs / 1000}s`, "i"));
+    assert.match(readme, new RegExp(`merging\\.autoApply[^\\n]*defaults to[^\\n]*${defaults.merging.autoApply}`, "i"));
+    assert.match(readme, new RegExp(`reviews marked[^\\n]*${defaults.obsidianBridge.morningReview.status}`, "i"));
+    assert.equal(defaults.obsidianBridge.eveningReview.status, defaults.obsidianBridge.morningReview.status);
   });
 });
