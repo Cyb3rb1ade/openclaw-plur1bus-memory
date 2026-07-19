@@ -61,6 +61,14 @@ FILES=(
   lib/relevant-memory-context.js
   test/neo-maintenance.test.js
 )
+# Optional release metadata restored alongside runtime code. Together with
+# FILES this is the single source of truth for preflight, copy, and equality.
+METADATA_FILES=(
+  package.json
+  README.md
+  LICENSE
+)
+RESTORE_FILES=("${FILES[@]}" "${METADATA_FILES[@]}")
 # Marker that must be present in deployed code (proves the fix is in place).
 MARKER_FILE="lib/neo-arch.js"
 MARKER="isInjectedContextText"
@@ -81,9 +89,20 @@ if ! grep -q "$MARKER" "$DEPLOY/$MARKER_FILE" 2>/dev/null; then
   drift=1; reasons+=("missing-marker:$MARKER")
 fi
 
-# 2) md5 check — each runtime file must match source
-for f in "${FILES[@]}"; do
-  [ -f "$SRC/$f" ] || continue   # only enforce files that exist in source
+# 2) safety and md5 check — each restorable source must be a regular file,
+# and every source file must have a matching deployed file and hash.
+for f in "${RESTORE_FILES[@]}"; do
+  if [ ! -e "$SRC/$f" ] && [ ! -L "$SRC/$f" ]; then
+    continue
+  fi
+  if [ -L "$SRC/$f" ] || [ ! -f "$SRC/$f" ]; then
+    drift=1; reasons+=("unsafe-source:$f")
+    continue
+  fi
+  if [ ! -f "$DEPLOY/$f" ]; then
+    drift=1; reasons+=("missing:$f")
+    continue
+  fi
   s=$(md5sum "$SRC/$f" 2>/dev/null | cut -d' ' -f1)
   d=$(md5sum "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
   if [ "$s" != "$d" ]; then drift=1; reasons+=("mismatch:$f"); fi
@@ -147,22 +166,28 @@ source_file_is_broken_stub() {
 }
 
 # Validate every source candidate before creating a backup or changing deploy.
-for f in "${FILES[@]}"; do
-  [ -e "$SRC/$f" ] || continue
+for f in "${RESTORE_FILES[@]}"; do
+  if [ ! -e "$SRC/$f" ] && [ ! -L "$SRC/$f" ]; then
+    continue
+  fi
   if [ -L "$SRC/$f" ] || [ ! -f "$SRC/$f" ]; then
     log "ERROR: refusing unsafe source candidate: $SRC/$f"
     exit 1
   fi
-  if source_file_is_broken_stub "$SRC/$f" >/dev/null 2>&1; then
-    log "ERROR: refusing to propagate broken re-export stub from $SRC/$f"
-    exit 1
-  else
-    checker_status=$?
-    if [ "$checker_status" -ne 1 ]; then
-      log "ERROR: deploy-integrity checker failed for $SRC/$f (status=$checker_status)"
-      exit 1
-    fi
-  fi
+  case "$f" in
+    *.js|*.mjs)
+      if source_file_is_broken_stub "$SRC/$f" >/dev/null 2>&1; then
+        log "ERROR: refusing to propagate broken re-export stub from $SRC/$f"
+        exit 1
+      else
+        checker_status=$?
+        if [ "$checker_status" -ne 1 ]; then
+          log "ERROR: deploy-integrity checker failed for $SRC/$f (status=$checker_status)"
+          exit 1
+        fi
+      fi
+      ;;
+  esac
 done
 
 # Drift-Backup bewusst ausserhalb des Extension-Scan-Roots ablegen: ein Backup-
@@ -170,23 +195,19 @@ done
 BK_ROOT="${PLUR1BUS_BACKUP_DIR:-$HOME/.openclaw-backups/plur1bus-drift}"
 BK="$BK_ROOT/$(basename "${DEPLOY%/}").drift-bak-$(date +%Y%m%dT%H%M%S)"
 mkdir -p "$BK"
-for f in "${FILES[@]}"; do
-  [ -f "$DEPLOY/$f" ] && { mkdir -p "$BK/$(dirname "$f")"; cp -a "$DEPLOY/$f" "$BK/$f"; }
-done
-for m in openclaw.plugin.json package.json README.md LICENSE; do
-  [ -f "$DEPLOY/$m" ] && cp -a "$DEPLOY/$m" "$BK/$m"
+for f in "${RESTORE_FILES[@]}"; do
+  if [ -f "$DEPLOY/$f" ]; then
+    mkdir -p "$BK/$(dirname "$f")"
+    cp -a "$DEPLOY/$f" "$BK/$f"
+  fi
 done
 log "backed up drifted deploy -> $BK"
 
 # Restore canonical source over the deploy (code only; never touch node_modules/state).
-for f in "${FILES[@]}"; do
+for f in "${RESTORE_FILES[@]}"; do
   [ -f "$SRC/$f" ] || continue
   mkdir -p "$DEPLOY/$(dirname "$f")"
   cp -a "$SRC/$f" "$DEPLOY/$f"
-done
-# Keep version metadata in sync so the deploy reports the right version.
-for m in openclaw.plugin.json package.json README.md LICENSE; do
-  [ -f "$SRC/$m" ] && cp -a "$SRC/$m" "$DEPLOY/$m"
 done
 log "restored canonical source from $SRC"
 
@@ -195,7 +216,7 @@ if ! grep -q "$MARKER" "$DEPLOY/$MARKER_FILE" 2>/dev/null; then
   log "ERROR: restore failed, marker still missing"
   exit 1
 fi
-for f in "${FILES[@]}" package.json README.md LICENSE; do
+for f in "${RESTORE_FILES[@]}"; do
   [ -f "$SRC/$f" ] || continue
   source_hash=$(md5sum "$SRC/$f" | cut -d' ' -f1)
   deploy_hash=$(md5sum "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
