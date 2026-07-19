@@ -6,6 +6,8 @@ Branch: `fix/high-mid-audit-findings`
 Fix base: `c588717e2f6e6e108b1a43a659a32f49d4eae723`
 Follow-up correction: 2026-07-20, R1-R5, base
 `0a63a2de23904ec7561115f52a179d33bd987c00`
+R5 review correction: 2026-07-20, base
+`923a91af65d0f6aad49bcd9568e283d641d2ac14`
 Findings: FA-01, FA-02, FA-09, FA-10, FE-ADD-01, the safe B11
 portion of FA-06, and the load-time portion of BUG-ADD-09 / FE-ADD-07
 
@@ -191,8 +193,12 @@ Cycle 5 helper-owned hook defaults and authoritative shell sinks:
 RED/GREEN helper 0/1 then 1/1
 RED/GREEN executable local+remote transforms 0/2 then 2/2
 
-Cycle 6 manifest-derived documentation contract:
+Cycle 6 manifest-derived enabled-default documentation contract:
 RED  tests 1; pass 0; fail 1 ('true' !== 'false')
+GREEN tests 1; pass 1; fail 0
+
+R5 review correction, Emotion T3 model default/fallback:
+RED  tests 1; pass 0; fail 1 ('"gpt-4o-mini"' !== '—')
 GREEN tests 1; pass 1; fail 0
 ```
 
@@ -231,6 +237,10 @@ GREEN tests 1; pass 1; fail 0
 - The model-tool and bridge/store merge owning fixtures explicitly opt into
   merge auto-apply, so removing its unsafe implicit default does not hide the
   legitimate paths.
+- The Emotion T3 table distinguishes the absent `emotion.t3.model` manifest
+  default from its runtime fallback chain: configured `merging.model`, then
+  `"kimi-for-coding"`. Explicit `gpt-4o-mini` examples remain examples, not
+  default claims.
 - The B10 wizard/i18n files are untouched and its preservation suite is a
   mandatory final gate.
 
@@ -321,6 +331,25 @@ todo 0; duration_ms 366571.560265; exit 0
 The single skip is the repository's environment-dependent non-writable
 workspace permission fixture. The real nested-child symlink test passed inside
 the serial run, so no sandbox-EPERM fallback was required.
+
+R5 review-correction verification:
+
+```text
+$ node --test --test-isolation=none --test-concurrency=1 \
+    --test-name-pattern='keeps published safety-sensitive defaults aligned with the manifest' \
+    tests/config-docs-contract.test.js
+tests 1; suites 1; pass 1; fail 0; skipped 0; exit 0
+
+$ node --test --test-concurrency=1 tests/config-docs-contract.test.js
+tests 3; suites 1; pass 3; fail 0; skipped 0; exit 0
+
+$ node --test --test-concurrency=1 <eight config/runtime preservation files>
+tests 187; suites 22; pass 187; fail 0; skipped 0; exit 0
+
+$ npm run lint
+$ git diff --check
+both exit 0
+```
 
 ## Remaining uncertainty and non-claims
 

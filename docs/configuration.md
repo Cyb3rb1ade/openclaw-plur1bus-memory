@@ -165,7 +165,7 @@ Steuert die 3-Tier-Emotions-Inferenz beim Memory-Capture.
 | `emotion.tier` | `"t1" \| "t2" \| "t3" \| "auto"` | `"auto"` | Festes Tier oder automatisches Routing |
 | `emotion.t2.enabled` | `boolean` | `true` | Tier-2 (Keyword-Fallback) aktivieren |
 | `emotion.t3.enabled` | `boolean` | `false` | Tier-3 (LLM-basiert) aktivieren — **provider-gated/fail-soft**: kein API-Call ohne konfigurierten Provider |
-| `emotion.t3.model` | `string` | `"gpt-4o-mini"` | Modell für Tier-3 |
+| `emotion.t3.model` | `string` | — | Modell für Tier-3; Fallback: `merging.model`, dann `"kimi-for-coding"` |
 | `emotion.t3.apiKey` | `string` | — | Optionaler API-Key (fallback zu `OPENAI_API_KEY`) |
 | `emotion.t3.baseUrl` | `string` | — | Optionaler Base-URL für OpenAI-compatible Provider |
 
