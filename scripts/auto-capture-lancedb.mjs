@@ -9,11 +9,25 @@
  * v2.2.0: Gruppen-Erkennung + Sender-Attribution + saubere Textextraktion
  */
 
-import { createReadStream, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import {
+  closeSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
+import { resolveInside, safeAgentId, safeUuid, sqlString } from "../lib/sql-safety.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 // Operator-local fallback agents. Keep personal IDs out of the public repo.
@@ -32,6 +46,8 @@ const MAX_TEXT_LEN = 15000;
 const DUPLICATE_THRESHOLD = 0.95;
 const SUMMARY_MAX_WORDS = 150;
 const MIN_TEXT_LEN = 10;
+const CHECKPOINT_FINGERPRINT_WINDOW = 2048;
+const CHECKPOINT_STATE_VERSION = 2;
 const PLUGIN_DIR = process.env.PLUR1BUS_PLUGIN_DIR || join(BASE, "extensions", "memory-lancedb-namespaced");
 
 let distanceToScore;
@@ -363,6 +379,7 @@ function extractTexts(messages, sessionCtx = null) {
       sourceTurnId: msg.id || msg.parentId || msg.runId || "",
       sourceTimestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : (msg.createdAt || 0),
       sourceUrl: urlMatch ? urlMatch[0].slice(0, 500) : "",
+      _sourceMessage: msg,
     });
   }
   return items;
@@ -370,7 +387,8 @@ function extractTexts(messages, sessionCtx = null) {
 
 // ─── State tracking ───────────────────────────────────────────────────────────
 function getStateFile(agentId) {
-  return join(STATE_DIR, `${agentId}.json`);
+  mkdirSync(STATE_DIR, { recursive: true });
+  return resolveInside(STATE_DIR, `${safeAgentId(agentId)}.json`);
 }
 
 function loadState(agentId) {
@@ -383,14 +401,96 @@ function loadState(agentId) {
       return { files: { [raw.lastFile]: raw.lastSize } };
     }
     return { files: {} };
-  } catch {
+  } catch (err) {
+    console.warn(`[${agentId}] auto-capture state could not be loaded: ${err.message}`);
     return { files: {} };
   }
 }
 
 function saveState(agentId, state) {
   mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(getStateFile(agentId), JSON.stringify(state));
+  const stateFile = getStateFile(agentId);
+  const tempFile = resolveInside(STATE_DIR, `${safeAgentId(agentId)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tempFile, JSON.stringify({ version: CHECKPOINT_STATE_VERSION, ...state }), "utf8");
+    renameSync(tempFile, stateFile);
+  } catch (err) {
+    if (existsSync(tempFile)) {
+      try {
+        unlinkSync(tempFile);
+      } catch (cleanupErr) {
+        console.warn(`[${agentId}] auto-capture state temp cleanup failed: ${cleanupErr.message}`);
+      }
+    }
+    throw err;
+  }
+}
+
+function normalizeFileCheckpoint(value) {
+  if (typeof value === "number") {
+    return { offset: Math.max(0, Number(value) || 0), identity: "", fingerprint: "" };
+  }
+  if (!value || typeof value !== "object") {
+    return { offset: 0, identity: "", fingerprint: "" };
+  }
+  return {
+    offset: Math.max(0, Number(value.offset) || 0),
+    identity: typeof value.identity === "string" ? value.identity : "",
+    fingerprint: typeof value.fingerprint === "string" ? value.fingerprint : "",
+  };
+}
+
+function getFileIdentity(stats) {
+  const device = Number(stats.dev || 0);
+  const inode = Number(stats.ino || 0);
+  if (device !== 0 || inode !== 0) return `${device}:${inode}`;
+  return `birth:${Math.trunc(Number(stats.birthtimeMs || 0))}`;
+}
+
+function readFingerprintChunk(fd, start, length) {
+  const buffer = Buffer.alloc(length);
+  let read = 0;
+  while (read < length) {
+    const count = readSync(fd, buffer, read, length - read, start + read);
+    if (count === 0) break;
+    read += count;
+  }
+  return buffer.subarray(0, read);
+}
+
+function createCheckpointFingerprint(filePath, offset) {
+  const stats = statSync(filePath);
+  const safeOffset = Math.min(stats.size, Math.max(0, Number(offset) || 0));
+  const hash = createHash("sha256").update(`plur1bus-auto-capture-v2:${safeOffset}:`);
+  if (safeOffset === 0) return hash.digest("hex");
+
+  const firstLength = Math.min(CHECKPOINT_FINGERPRINT_WINDOW, safeOffset);
+  const tailStart = Math.max(firstLength, safeOffset - CHECKPOINT_FINGERPRINT_WINDOW);
+  const tailLength = safeOffset - tailStart;
+  const fd = openSync(filePath, "r");
+  try {
+    hash.update(readFingerprintChunk(fd, 0, firstLength));
+    if (tailLength > 0) {
+      hash.update(`:${tailStart}:`);
+      hash.update(readFingerprintChunk(fd, tailStart, tailLength));
+    }
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+function deterministicCaptureId(agentId, item, trimmed) {
+  const hex = createHash("sha256")
+    .update(JSON.stringify([
+      safeAgentId(agentId),
+      item._sourceFile,
+      item._fileIdentity,
+      item._checkpointOffset,
+      trimmed,
+    ]))
+    .digest("hex");
+  return safeUuid(`${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`);
 }
 
 function isSessionFile(name) {
@@ -405,11 +505,12 @@ function isSessionFile(name) {
  * Read complete non-empty JSONL lines from a byte offset without loading the full file.
  * @param {string} filePath Session JSONL file path.
  * @param {number} offset Byte offset to start reading from.
- * @returns {Promise<{ lines: string[], nextOffset: number }>} Complete lines and the next safe byte offset.
+ * @returns {Promise<{ lines: string[], records: Array<{line: string, endOffset: number}>, nextOffset: number }>} Complete lines, record boundaries, and the next safe byte offset.
  */
 export async function readSessionLinesSinceOffset(filePath, offset = 0) {
   const start = Math.max(0, Number(offset) || 0);
   const lines = [];
+  const records = [];
   let nextOffset = start;
   let pending = "";
 
@@ -421,6 +522,7 @@ export async function readSessionLinesSinceOffset(filePath, offset = 0) {
       pending = parts.pop() || "";
       for (const line of parts) {
         nextOffset += Buffer.byteLength(`${line}\n`, "utf8");
+        records.push({ line, endOffset: nextOffset });
         if (line.trim().length > 0) lines.push(line);
       }
     });
@@ -428,7 +530,7 @@ export async function readSessionLinesSinceOffset(filePath, offset = 0) {
     stream.on("end", resolve);
   });
 
-  return { lines, nextOffset };
+  return { lines, records, nextOffset };
 }
 
 /**
@@ -473,6 +575,7 @@ async function findExistingDuplicateIndexesFallback(table, vectors, options = {}
       }
     } catch (err) {
       options.onWarn?.(`fallback duplicate check failed for candidate ${i}: ${err.message}`);
+      options.unresolvedIndexes?.add(i);
       duplicates.add(i);
     }
   }
@@ -554,17 +657,181 @@ export async function filterPreparedForStorageByBatchDedup(table, prepared, opti
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
+function resolveCheckpointStart(agentId, file, checkpoint) {
+  if (checkpoint.offset > file.size) {
+    console.warn(`[${agentId}] session truncation detected for ${file.name}; restarting from byte zero`);
+    return 0;
+  }
+  if (checkpoint.identity && checkpoint.identity !== file.identity) {
+    console.warn(`[${agentId}] session rotation detected for ${file.name}; restarting from byte zero`);
+    return 0;
+  }
+  if (checkpoint.fingerprint && checkpoint.offset > 0) {
+    const currentFingerprint = createCheckpointFingerprint(file.path, checkpoint.offset);
+    if (currentFingerprint !== checkpoint.fingerprint) {
+      console.warn(`[${agentId}] session fingerprint changed for ${file.name}; restarting from byte zero`);
+      return 0;
+    }
+  }
+  return checkpoint.offset;
+}
+
+function acknowledgedOffset(fileRun) {
+  let offset = fileRun.startOffset;
+  for (const record of fileRun.records) {
+    if (!record.acknowledged) break;
+    offset = record.endOffset;
+  }
+  return offset;
+}
+
+function checkpointEntriesEqual(left, right) {
+  const normalized = normalizeFileCheckpoint(left);
+  return normalized.offset === right.offset
+    && normalized.identity === right.identity
+    && normalized.fingerprint === right.fingerprint;
+}
+
+function persistAcknowledgedCheckpoints(agentId, stateFiles, fileRuns) {
+  let changed = false;
+  for (const fileRun of fileRuns) {
+    if (fileRun.invalidated) continue;
+    const offset = acknowledgedOffset(fileRun);
+    const latestStats = statSync(fileRun.path);
+    const latestIdentity = getFileIdentity(latestStats);
+    let nextEntry;
+    if (latestIdentity !== fileRun.identity || latestStats.size < offset) {
+      console.warn(`[${agentId}] ${fileRun.name} changed during capture; deferring the new file to the next run`);
+      fileRun.invalidated = true;
+      nextEntry = {
+        offset: 0,
+        identity: latestIdentity,
+        fingerprint: createCheckpointFingerprint(fileRun.path, 0),
+      };
+    } else {
+      nextEntry = {
+        offset,
+        identity: fileRun.identity,
+        fingerprint: createCheckpointFingerprint(fileRun.path, offset),
+      };
+    }
+    if (!checkpointEntriesEqual(stateFiles[fileRun.name], nextEntry)) {
+      stateFiles[fileRun.name] = nextEntry;
+      changed = true;
+    }
+  }
+  if (changed) saveState(agentId, { files: stateFiles });
+}
+
+async function findDurableCaptureRow(table, expected) {
+  const id = safeUuid(expected.id);
+  const rows = await table.query().where(`id = ${sqlString(id)}`).limit(2).toArray();
+  if (!Array.isArray(rows) || rows.length === 0) return false;
+  if (rows.length !== 1) {
+    throw new Error(`capture durability verification found ${rows.length} rows for ${id}`);
+  }
+  const row = rows[0];
+  const durableVector = Array.from(row.vector || []);
+  const expectedVector = Array.isArray(expected.vector) ? expected.vector : null;
+  const vectorMatches = expectedVector
+    ? durableVector.length === expectedVector.length
+      && durableVector.every((value, index) => Number.isFinite(Number(value))
+        && Math.abs(Number(value) - Number(expectedVector[index])) <= 1e-6)
+    : durableVector.length === Number(expected.dim)
+      && durableVector.every((value) => Number.isFinite(Number(value)));
+  if (row.id !== id
+    || row.text !== expected.text
+    || row.storedBy !== expected.storedBy
+    || !vectorMatches
+    || (row.status !== undefined && row.status !== "active")) {
+    throw new Error(`capture durability verification mismatch for ${id}`);
+  }
+  return true;
+}
+
+function buildCaptureRow(agentId, entry, captureTimestamp) {
+  const { it, trimmed, vector, id } = entry;
+  const origin = it._isGroup ? "group" : "dm";
+  const evidenceBase = (it.rawText || "").slice(0, 180);
+  const evidenceQuote = it.senderLabel
+    ? `[${it.senderLabel}] ${evidenceBase}`.slice(0, 200)
+    : evidenceBase;
+
+  return {
+    id,
+    text: trimmed,
+    summary: generateSummary(trimmed, SUMMARY_MAX_WORDS),
+    origin,
+    vector,
+    importance: 0.7,
+    category: categorizeMemory(trimmed),
+    createdAt: captureTimestamp,
+    mergedFrom: "[]",
+    expiresAt: 0,
+    storedBy: agentId,
+    sourceTurnId: it.sourceTurnId || "",
+    sourceMessageRole: it.role || "",
+    sourceTimestamp: it.sourceTimestamp || captureTimestamp,
+    sourceUrl: it.sourceUrl || "",
+    evidenceQuote,
+    scope: "agent-private",
+    type: "memory",
+    confirmed: false,
+    emotionalValence: "",
+    emotionalIntensity: 0,
+    emotionalDominant: "neutral",
+    moodContextAtCapture: "",
+    replayCount: 0,
+    lastReplayed: 0,
+    retrievalCount: 0,
+    lastRetrievedAt: 0,
+    memoryStrength: 1.0,
+    halfLifeDays: 30,
+    lastStrengthenedAt: 0,
+    lastDynamicsAt: 0,
+    memoryClass: "standard",
+    neverForget: 0,
+    coreMemoryScore: 0.0,
+    coreMemoryReason: "",
+    versionNumber: 1,
+    previousVersion: "",
+    supersededBy: "",
+    updateSource: "auto-capture",
+    updateEvidence: "",
+    reconsolidationConfidence: 0.0,
+    status: "active",
+    versionCreatedAt: captureTimestamp,
+    updatedAt: captureTimestamp,
+    memoryKind: "memory",
+    reminderStatus: "",
+    remindAt: 0,
+    remindedAt: 0,
+    dispatchedAt: 0,
+    acknowledgedAt: 0,
+    cancelledAt: 0,
+    reminderKey: "",
+    dispatchCount: 0,
+    lastDispatchAttemptAt: 0,
+    nextDispatchAttemptAt: 0,
+    workspaceKey: "",
+  };
+}
+
 async function captureAgent(agentId, embeddings) {
-  const sessionsDir = join(AGENTS_DIR, agentId, "sessions");
+  const safeAgent = safeAgentId(agentId);
+  if (!existsSync(AGENTS_DIR)) return { stored: 0, candidates: 0 };
+  const sessionsDir = resolveInside(AGENTS_DIR, safeAgent, "sessions");
   if (!existsSync(sessionsDir)) return { stored: 0, candidates: 0 };
 
   const files = readdirSync(sessionsDir)
     .filter(isSessionFile)
     .map((f) => {
-      const path = join(sessionsDir, f);
+      const path = resolveInside(sessionsDir, f);
       try {
-        return { name: f, path, size: statSync(path).size };
-      } catch {
+        const stats = statSync(path);
+        return { name: f, path, size: stats.size, identity: getFileIdentity(stats) };
+      } catch (err) {
+        console.warn(`[${safeAgent}] session stat failed for ${f}: ${err.message}`);
         return null;
       }
     })
@@ -572,39 +839,58 @@ async function captureAgent(agentId, embeddings) {
 
   if (files.length === 0) return { stored: 0, candidates: 0 };
 
-  const state = loadState(agentId);
+  const state = loadState(safeAgent);
   const stateFiles = state.files || {};
 
+  const fileRuns = [];
   const allItems = [];
   for (const file of files) {
-    const lastOffset = stateFiles[file.name] || 0;
-    if (file.size <= lastOffset) continue;
-
-    const { lines: newLines, nextOffset } = await readSessionLinesSinceOffset(file.path, lastOffset);
+    const checkpoint = normalizeFileCheckpoint(stateFiles[file.name]);
+    const lastOffset = resolveCheckpointStart(safeAgent, file, checkpoint);
+    const slice = file.size > lastOffset
+      ? await readSessionLinesSinceOffset(file.path, lastOffset)
+      : { records: [], nextOffset: lastOffset };
+    const records = slice.records.map((record) => ({ ...record, acknowledged: true }));
 
     const messages = [];
+    const recordByMessage = new Map();
     let parseErrors = 0;
-    for (const line of newLines) {
-      try { messages.push(JSON.parse(line)); } catch { parseErrors++; }
+    for (const record of records) {
+      if (!record.line.trim()) continue;
+      try {
+        const message = JSON.parse(record.line);
+        messages.push(message);
+        recordByMessage.set(message, record);
+      } catch (err) {
+        parseErrors++;
+        console.warn(`[${safeAgent}] unparsable session line ending at byte ${record.endOffset} in ${file.name}: ${err.message}`);
+      }
     }
     if (parseErrors > 0) {
-      console.warn(`[${agentId}] skipped ${parseErrors} unparsable session lines in ${file.name}`);
+      console.warn(`[${safeAgent}] skipped ${parseErrors} unparsable session lines in ${file.name}`);
     }
 
     // v2.2.0: Gruppen-Kontext aus ALLEN Nachrichten (inkl. role="") lesen
     const sessionCtx = parseSessionContext(messages);
     const items = extractTexts(messages, sessionCtx);
     for (const it of items) {
+      const record = recordByMessage.get(it._sourceMessage);
+      if (!record) continue;
       it._sourceFile = file.name;
+      it._fileIdentity = file.identity;
+      it._checkpointOffset = record.endOffset;
       it._isGroup = sessionCtx.isGroup;
+      it._record = record;
+      record.item = it;
     }
     allItems.push(...items);
-    stateFiles[file.name] = nextOffset;
-  }
-
-  if (allItems.length === 0) {
-    saveState(agentId, { files: stateFiles });
-    return { stored: 0, candidates: 0 };
+    fileRuns.push({
+      ...file,
+      startOffset: lastOffset,
+      nextOffset: slice.nextOffset,
+      records,
+      invalidated: false,
+    });
   }
 
   const userUrlItems = allItems.filter(it => it.sourceUrl);
@@ -615,135 +901,153 @@ async function captureAgent(agentId, embeddings) {
     if (toCapture.length >= 50) break;
   }
 
-  const dbPath = join(BASE_DB_PATH, agentId);
+  for (const item of toCapture) item._record.acknowledged = false;
+  persistAcknowledgedCheckpoints(safeAgent, stateFiles, fileRuns);
+  if (toCapture.length === 0) return { stored: 0, candidates: 0 };
+
+  mkdirSync(BASE_DB_PATH, { recursive: true });
+  const dbPath = resolveInside(BASE_DB_PATH, safeAgent);
   mkdirSync(dbPath, { recursive: true });
   const table = await getOrCreateTable(dbPath, embeddings.dim);
 
   const captureTimestamp = Date.now();
   let stored = 0;
-  const prepared = toCapture.map((it) => ({ it, trimmed: it.text.slice(0, MAX_TEXT_LEN) }));
+  const prepared = toCapture.map((it) => {
+    const trimmed = it.text.slice(0, MAX_TEXT_LEN);
+    return {
+      it,
+      trimmed,
+      id: deterministicCaptureId(safeAgent, it, trimmed),
+    };
+  });
+  const pendingEmbedding = [];
+  for (const entry of prepared) {
+    try {
+      if (await findDurableCaptureRow(table, {
+        ...entry,
+        storedBy: safeAgent,
+        text: entry.trimmed,
+        dim: embeddings.dim,
+      })) {
+        entry.it._record.acknowledged = true;
+      } else {
+        pendingEmbedding.push(entry);
+      }
+    } catch (err) {
+      console.error(`[${safeAgent}] capture idempotency check error: ${err.message}`);
+    }
+  }
+  persistAcknowledgedCheckpoints(safeAgent, stateFiles, fileRuns);
+
   let batchVectors = [];
-  try {
-    batchVectors = await embeddings.embedBatch(prepared.map((entry) => entry.trimmed), { agentId });
-  } catch (err) {
-    console.warn(`[${agentId}] embedBatch failed, falling back to per-item embeddings: ${err.message}`);
+  if (pendingEmbedding.length > 0) {
+    try {
+      batchVectors = await embeddings.embedBatch(pendingEmbedding.map((entry) => entry.trimmed), { agentId: safeAgent });
+    } catch (err) {
+      console.warn(`[${safeAgent}] embedBatch failed, falling back to per-item embeddings: ${err.message}`);
+    }
   }
 
   const preparedWithVectors = [];
-  for (let i = 0; i < prepared.length; i++) {
-    const { it, trimmed } = prepared[i];
+  for (let i = 0; i < pendingEmbedding.length; i++) {
+    const entry = pendingEmbedding[i];
     try {
-      const vector = batchVectors[i] || await embeddings.embed(trimmed, { agentId });
-      preparedWithVectors.push({ it, trimmed, vector });
+      const vector = Array.isArray(batchVectors[i])
+        ? batchVectors[i]
+        : await embeddings.embed(entry.trimmed, { agentId: safeAgent });
+      if (!Array.isArray(vector)
+        || vector.length !== embeddings.dim
+        || vector.some((value) => !Number.isFinite(Number(value)))) {
+        throw new Error(`invalid embedding vector (expected ${embeddings.dim} finite dimensions)`);
+      }
+      preparedWithVectors.push({ ...entry, vector });
     } catch (err) {
-      console.error(`[${agentId}] capture vector error: ${err.message}`);
+      console.error(`[${safeAgent}] capture vector error: ${err.message}`);
     }
   }
 
-  const toStore = await filterPreparedForStorageByBatchDedup(table, preparedWithVectors, {
-    duplicateThreshold: DUPLICATE_THRESHOLD,
-    distanceToScoreFn: distanceToScore,
-    onWarn: (message) => console.warn(`[${agentId}] ${message}`),
-  });
+  const unresolvedDuplicateChecks = new Set();
+  const existingDuplicates = await findExistingDuplicateIndexes(
+    table,
+    preparedWithVectors.map((entry) => entry.vector),
+    {
+      duplicateThreshold: DUPLICATE_THRESHOLD,
+      distanceToScoreFn: distanceToScore,
+      onWarn: (message) => console.warn(`[${safeAgent}] ${message}`),
+      unresolvedIndexes: unresolvedDuplicateChecks,
+    },
+  );
+
+  const canonicalEntries = [];
+  const duplicateDependencies = [];
+  for (let i = 0; i < preparedWithVectors.length; i++) {
+    const entry = preparedWithVectors[i];
+    if (unresolvedDuplicateChecks.has(i)) continue;
+    if (existingDuplicates.has(i)) {
+      entry.it._record.acknowledged = true;
+      continue;
+    }
+    const canonical = canonicalEntries.find((candidate) => isDuplicateDistance(
+      squaredL2Distance(candidate.vector, entry.vector),
+      { duplicateThreshold: DUPLICATE_THRESHOLD, distanceToScoreFn: distanceToScore },
+    ));
+    if (canonical) {
+      duplicateDependencies.push({ duplicate: entry, canonical });
+    } else {
+      canonicalEntries.push(entry);
+    }
+  }
+  persistAcknowledgedCheckpoints(safeAgent, stateFiles, fileRuns);
+
   const rowsToAdd = [];
-  for (const { it, trimmed, vector } of toStore) {
+  const entryByRowId = new Map();
+  for (const entry of canonicalEntries) {
     try {
-      // v2.2.0: origin aus Session-Kontext ableiten
-      const origin = it._isGroup ? "group" : "dm";
-
-      // Sender-Info in evidenceQuote vermerken
-      const evidenceBase = (it.rawText || "").slice(0, 180);
-      const evidenceQuote = it.senderLabel
-        ? `[${it.senderLabel}] ${evidenceBase}`.slice(0, 200)
-        : evidenceBase;
-
-      rowsToAdd.push({
-        id: randomUUID(),
-        text: trimmed,
-        summary: generateSummary(trimmed, SUMMARY_MAX_WORDS),
-        origin,
-        vector,
-        importance: 0.7,
-        category: categorizeMemory(trimmed),
-        createdAt: captureTimestamp,
-        mergedFrom: "[]",
-        expiresAt: 0,
-        storedBy: agentId,
-        sourceTurnId: it.sourceTurnId || "",
-        sourceMessageRole: it.role || "",
-        sourceTimestamp: it.sourceTimestamp || captureTimestamp,
-        sourceUrl: it.sourceUrl || "",
-        evidenceQuote,
-        scope: "agent-private",
-        // PLUR1BUS schema compat (v2.3.0)
-        type: "memory",
-        confirmed: false,
-        emotionalValence: "",
-        emotionalIntensity: 0,
-        emotionalDominant: "neutral",
-        moodContextAtCapture: "",
-        replayCount: 0,
-        lastReplayed: 0,
-        retrievalCount: 0,
-        lastRetrievedAt: 0,
-        memoryStrength: 1.0,
-        halfLifeDays: 30,
-        lastStrengthenedAt: 0,
-        lastDynamicsAt: 0,
-        memoryClass: "standard",
-        neverForget: 0,
-        coreMemoryScore: 0.0,
-        coreMemoryReason: "",
-        versionNumber: 1,
-        previousVersion: "",
-        supersededBy: "",
-        updateSource: "auto-capture",
-        updateEvidence: "",
-        reconsolidationConfidence: 0.0,
-        status: "active",
-        versionCreatedAt: captureTimestamp,
-        updatedAt: captureTimestamp,
-        memoryKind: "memory",
-        reminderStatus: "",
-        remindAt: 0,
-        remindedAt: 0,
-        dispatchedAt: 0,
-        acknowledgedAt: 0,
-        cancelledAt: 0,
-        reminderKey: "",
-        dispatchCount: 0,
-        lastDispatchAttemptAt: 0,
-        nextDispatchAttemptAt: 0,
-        workspaceKey: "",
-      });
+      const row = buildCaptureRow(safeAgent, entry, captureTimestamp);
+      rowsToAdd.push(row);
+      entryByRowId.set(row.id, entry);
     } catch (err) {
-      console.error(`[${agentId}] capture error: ${err.message}`);
+      console.error(`[${safeAgent}] capture error: ${err.message}`);
     }
   }
 
+  let batchFailed = false;
   if (rowsToAdd.length > 0) {
     try {
       await table.add(rowsToAdd);
-      stored += rowsToAdd.length;
     } catch (err) {
-      console.error(`[${agentId}] batch capture add error: ${err.message}`);
-      for (const row of rowsToAdd) {
-        try {
-          await table.add([row]);
-          stored++;
-        } catch (rowErr) {
-          console.error(`[${agentId}] capture add error: ${rowErr.message}`);
-        }
-      }
+      batchFailed = true;
+      console.error(`[${safeAgent}] batch capture add error: ${err.message}`);
     }
   }
 
-  saveState(agentId, { files: stateFiles });
+  for (const row of rowsToAdd) {
+    const entry = entryByRowId.get(row.id);
+    try {
+      let durable = await findDurableCaptureRow(table, row);
+      if (!durable && batchFailed) {
+        await table.add([row]);
+        durable = await findDurableCaptureRow(table, row);
+      }
+      if (!durable) throw new Error(`capture row ${row.id} was not readable after insert`);
+      entry.it._record.acknowledged = true;
+      stored++;
+      persistAcknowledgedCheckpoints(safeAgent, stateFiles, fileRuns);
+    } catch (err) {
+      console.error(`[${safeAgent}] capture add error: ${err.message}`);
+    }
+  }
+
+  for (const { duplicate, canonical } of duplicateDependencies) {
+    if (canonical.it._record.acknowledged) duplicate.it._record.acknowledged = true;
+  }
+  persistAcknowledgedCheckpoints(safeAgent, stateFiles, fileRuns);
+
   if (stored > 0) {
     const groupCount = toCapture.filter(it => it._isGroup).length;
-    console.log(`[${agentId}] captured ${stored}/${toCapture.length} memories (${groupCount} group) from ${files.length} session-files`);
+    console.log(`[${safeAgent}] captured ${stored}/${toCapture.length} memories (${groupCount} group) from ${files.length} session-files`);
   }
-  return { stored, candidates: items.length };
+  return { stored, candidates: toCapture.length };
 }
 
 async function main() {
