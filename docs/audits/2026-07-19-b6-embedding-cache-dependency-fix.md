@@ -49,7 +49,7 @@ The restored contract is:
 
 - serialize and count the incoming vector, optional debug text, key fields, and a conservative row/index metadata allowance before writing;
 - never count a rejected or rolled-back row as `persistWrites`;
-- delete expired/LRU rows in bounded sets, checkpoint WAL with supported `TRUNCATE` behavior, run incremental vacuum, and stop after 256 removed rows per write;
+- delete expired/LRU rows in bounded sets, inspect the real `{busy, log, checkpointed}` result from `wal_checkpoint(TRUNCATE)`, stop destructive cleanup immediately when a checkpoint is busy, run incremental vacuum only after a completed checkpoint, cap each checkpoint wait at 50 ms and the total attempts at 64, and stop after 256 removed rows per write;
 - preserve at least the newest existing row before a write and protect the just-written timestamp cohort during post-write cleanup;
 - atomically restore replaced rows and remove new rows if physical post-write measurement still exceeds the hard limit;
 - preserve explicit `0` with nullish configuration fallback;
@@ -96,6 +96,104 @@ tests 8; pass 8; fail 0; duration_ms 5338.244657
 
 This covers cache/provider configuration, local batching and per-item fallback, patched dependency APIs, provider factory wiring, chained-reranker null fallback, reranker pipeline smoke behavior, and runtime reranker configuration.
 
+### Independent review fix wave
+
+An independent review identified that `node:sqlite` can return a busy checkpoint row
+without throwing, that the dependency regression resolved `adm-zip` from the project
+root rather than the ONNX consumer root, and three focused test gaps. The fix wave was
+kept to `lib/embedding-cache.js`, `tests/embedding-cache.test.js`, and
+`tests/local-inference-dependency.test.js`.
+
+The checkpoint premise was verified directly on Node `v24.15.0`: an idle checkpoint
+returned `{busy: 0, log: 0, checkpointed: 0}`, while a second connection holding a
+read transaction caused `wal_checkpoint(TRUNCATE)` to return
+`{busy: 1, log: 1, checkpointed: 0}` in 53 ms. The cache now treats that result as
+blocked reclamation, reports it, performs no further LRU deletion in that trim attempt,
+and makes the final hard-size decision before crediting any persistent write.
+
+To preserve the active dirty worktree, causal RED was reconstructed in an isolated
+`/tmp` archive of the reviewed commit `ec29ad25a0adeaeaeaa7bce00063ab1747992493`
+with only the new regression overlaid:
+
+```text
+$ node --test --test-name-pattern="rolls back promptly without deleting rows when a WAL checkpoint is busy" tests/embedding-cache.test.js
+tests 1; pass 0; fail 1; duration_ms 20943.489691
+```
+
+The same contention regression and the normal-reclamation positive control are GREEN
+on the fix wave:
+
+```text
+$ node --test --test-isolation=none --test-name-pattern="rolls back promptly without deleting rows when a WAL checkpoint is busy|reclaims SQLite space in LRU batches and retains the newly written row" tests/embedding-cache.test.js
+tests 2; pass 2; fail 0; duration_ms 719.08827
+```
+
+The busy case admitted the estimated write, completed in 249 ms, preserved both
+existing rows, reported `checkpoint_busy` plus the post-write rollback, and recorded
+zero writes/one skip. The normal case completed in 340 ms, reclaimed an LRU subset,
+and retained the new row. Separate controls now
+independently prove `cacheMaxEntries: 0` and `cacheTtlMs: 0`. A committed regression
+also forces physical post-write overshoot and proves that the previous row is restored,
+the hard bound is recovered, and no rolled-back write is credited.
+
+A final checkpoint-budget boundary regression then exposed that the loop could consume
+all 64 attempts after 31 batches and delete one more eight-row batch before discovering
+there was no checkpoint pair left. Its causal RED retained only 44 of 300 rows instead
+of the required 52. `_compactAndMeasure()` now requires a complete checkpoint pair
+before it begins, and `_trimToSize()` verifies that pair before every LRU deletion:
+
+```text
+$ node --test --test-isolation=none --test-name-pattern="stops before a cleanup batch that cannot fit the checkpoint budget" tests/embedding-cache.test.js
+tests 1; pass 1; fail 0; duration_ms 848.022676
+
+$ node --test --test-isolation=none --test-name-pattern="rolls back promptly without deleting rows when a WAL checkpoint is busy|stops before a cleanup batch that cannot fit the checkpoint budget|reclaims SQLite space in LRU batches and retains the newly written row" tests/embedding-cache.test.js
+tests 3; pass 3; fail 0; duration_ms 1881.846573
+```
+
+The bounded case now stops after 31 completed batches, retains 52 rows, reports budget
+exhaustion, skips the incoming write, and never performs an LRU batch that cannot be
+followed by the required checkpoint pair.
+
+The fresh review-wave owning gate is:
+
+```text
+$ node --test tests/embedding-cache.test.js tests/embedding-openai-batch.test.js tests/local-transformers-batch.test.js tests/local-inference-dependency.test.js tests/provider-factory.test.js tests/chained-reranker-null-fallback.test.js tests/smoke-reranker-pipeline.test.js tests/runtime-reranker-config.test.js
+tests 8; pass 8; fail 0; duration_ms 5538.974299
+```
+
+Fresh dependency evidence remains:
+
+```text
+$ npm ls @huggingface/transformers onnxruntime-node adm-zip --all
+@huggingface/transformers@4.2.0
+└─ onnxruntime-node@1.24.3
+   └─ adm-zip@0.6.0 overridden
+
+$ npm audit --json
+info 0; low 0; moderate 0; high 0; critical 0; total 0
+```
+
+The review wave also repeated the real production-provider proof under the
+coordinator-granted exclusive model/dependency lane on Node `v24.15.0`. The sandboxed
+attempt reached Hugging Face and failed with `EAI_AGAIN`; the approved network rerun
+returned a finite 384-element `Xenova/all-MiniLM-L6-v2` embedding and two finite,
+correctly shaped `Xenova/ms-marco-MiniLM-L-6-v2` reranker records. No mock or
+import-only shortcut was used, and the lane was released immediately after the proof.
+`npm run lint` and `git diff --check` also exited zero after the final test edit. Per
+coordinator instruction, the review-wave worker did not start another full serial
+suite. After the production and test diff stabilized, the coordinator ran the
+authoritative repository serial gate on this exact dirty checkout:
+
+```text
+$ node --test --test-concurrency=1 tests/*.test.js test/*.test.js
+tests 2593; suites 502; pass 2592; fail 0; skipped 1
+duration_ms 367254.320522
+exit 0
+```
+
+Only this receipt and the external B6 report were edited afterward; no production or
+test file changed after that serial run.
+
 ## Original cache PoCs and bypass review
 
 The audit's preserved `repro-embedding-cache-gaps.mjs` was pointed at this worktree without editing the artifact. Its four cases now report:
@@ -139,7 +237,11 @@ $ npm audit --json
 vulnerabilities: {}; total 0; high 0; critical 0
 ```
 
-`tests/local-inference-dependency.test.js` also constructs an `adm-zip@0.6.0` archive and exercises the exact ONNX Runtime-compatible constructor, `getEntry`, `getData`, and `extractEntryTo(entry, target, false, true)` surface.
+`tests/local-inference-dependency.test.js` resolves `adm-zip` with a `createRequire`
+rooted at `onnxruntime-node/package.json`, checks that exact installed and lockfile path,
+writes a temporary `.nupkg`, reopens it by filesystem path through the consumer-rooted
+`adm-zip@0.6.0` constructor, and exercises `getEntry`, `getData`, and
+`extractEntryTo(entry, target, false, true)`.
 
 A real provider-level operation ran on the available supported runtime, Node `v24.15.0`, using the actual Transformers pipelines (not mocks or import-only checks):
 
@@ -210,6 +312,7 @@ Only the two receipts together prove complete BUG-08 closure. B6 does not claim 
 
 - The pre-write byte estimate is deliberately conservative but cannot predict SQLite page/WAL allocation exactly. Physical size is therefore measured after the transaction and an overshooting write is restored/removed atomically before metrics are credited.
 - Cleanup work is bounded to 256 expired/LRU rows per write. If that bounded work cannot recover enough capacity, persistence skips the incoming rows and leaves volatile caching functional; a later write retries cleanup.
+- Checkpoint work is additionally bounded to 64 total attempts per write and a temporary 50 ms SQLite busy timeout. A nonzero checkpoint `busy` result stops that trim attempt before further deletion; persistence is skipped or rolled back whenever the final physical size remains above the hard limit.
 - The newest existing row is preserved during pre-write cleanup. This can prefer availability of one recent row over accepting a new row when a configured limit is below SQLite's irreducible file/SHM footprint.
 - SQLite's synchronous API cannot cancel a currently executing open/pragma call. Concurrent callers share that generation; later calls retry after its failure according to the bounded backoff.
 - `adm-zip@0.6.0` is a narrow transitive override because no compatibility-proven released upstream chain currently removes the advisory-range version. The exact archive APIs used by ONNX Runtime and real Local Transformers execution pass, but future ONNX/Transformers upgrades should remove the override when their manifests adopt a patched range.

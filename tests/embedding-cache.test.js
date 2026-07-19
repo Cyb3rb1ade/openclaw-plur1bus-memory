@@ -253,34 +253,66 @@ describe("embedding-cache config passthrough", () => {
     assert.strictEqual(calls, 2);
   });
 
-  it("preserves explicit zero cache limits in local and OpenAI providers", async () => {
+  function providersWithCacheOptions(cacheOptions) {
+    return [
+      new LocalTransformersEmbeddingProvider({
+        model: "mock-local",
+        dimensions: 1,
+        ...cacheOptions,
+      }),
+      new OpenAIEmbeddingProvider({
+        model: "mock-openai",
+        dimensions: 1,
+        ...cacheOptions,
+      }),
+    ];
+  }
+
+  async function countProviderComputes(provider, text) {
+    let calls = 0;
+    provider._computeBatch = async (texts) => {
+      calls += 1;
+      return texts.map(() => [calls]);
+    };
+
+    await provider.embedBatch([text]);
+    await provider.embedBatch([text]);
+    return calls;
+  }
+
+  it("preserves explicit cacheMaxEntries zero in local and OpenAI providers", async () => {
+    const providers = providersWithCacheOptions({
+      cacheMaxEntries: 0,
+      cacheTtlMs: 60_000,
+    });
+
+    for (const provider of providers) {
+      const calls = await countProviderComputes(provider, "zero-capacity-cache");
+      assert.strictEqual(calls, 2, `${provider.id} must not replace explicit zero max entries`);
+      assert.strictEqual(provider._cache.size, 0, `${provider.id} memory cache must remain disabled`);
+    }
+  });
+
+  it("preserves explicit cacheTtlMs zero in local and OpenAI providers", async () => {
     const providers = [
       new LocalTransformersEmbeddingProvider({
         model: "mock-local",
         dimensions: 1,
-        cacheMaxEntries: 0,
+        cacheMaxEntries: 8,
         cacheTtlMs: 0,
       }),
       new OpenAIEmbeddingProvider({
         model: "mock-openai",
         dimensions: 1,
-        cacheMaxEntries: 0,
+        cacheMaxEntries: 8,
         cacheTtlMs: 0,
       }),
     ];
 
     for (const provider of providers) {
-      let calls = 0;
-      provider._computeBatch = async (texts) => {
-        calls += 1;
-        return texts.map(() => [calls]);
-      };
-
-      await provider.embedBatch(["zero-cache"]);
-      await provider.embedBatch(["zero-cache"]);
-
-      assert.strictEqual(calls, 2, `${provider.id} must not replace explicit zero cache limits`);
-      assert.strictEqual(provider._cache.size, 0, `${provider.id} memory cache must remain disabled`);
+      const calls = await countProviderComputes(provider, "zero-ttl-cache");
+      assert.strictEqual(calls, 2, `${provider.id} must not replace explicit zero TTL`);
+      assert.ok(provider._cache, `${provider.id} cache control must remain enabled`);
     }
   });
 });
@@ -616,6 +648,12 @@ describeSqlite("embedding-cache v2 size limits", () => {
     return mkdtempSync(join(tmpdir(), "plur1bus-emb-cache-"));
   }
 
+  function physicalDbSize(dbPath) {
+    return [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]
+      .filter(existsSync)
+      .reduce((total, path) => total + statSync(path).size, 0);
+  }
+
   it("skips persist writes when the hard byte limit is reached", async () => {
     const basePath = makeTempBase();
     const cache = createEmbeddingCache({
@@ -785,6 +823,162 @@ describeSqlite("embedding-cache v2 size limits", () => {
       hitRate: 0,
     });
     cache.close();
+  });
+
+  it("rolls back a post-write overshoot without crediting or replacing the prior row", async (t) => {
+    const basePath = makeTempBase();
+    t.after(() => rmSync(basePath, { recursive: true, force: true }));
+    const dbPath = join(basePath, "embedding-cache-v2", "a1.db");
+    const seed = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      persistDebug: true,
+      maxBytes: 50_000_000,
+    });
+    await seed.setMany([{ text: "rollback-seed", vector: [1] }], { agentId: "a1" });
+    seed.close();
+
+    const warnings = [];
+    const cache = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      persistDebug: true,
+      metrics: true,
+      maxBytes: 50_000_000,
+      logger: { warn: (...args) => warnings.push(args), debug() {} },
+    });
+    assert.deepStrictEqual(await cache.getMany(["rollback-seed"], { agentId: "a1" }), [[1]]);
+    const beforeBytes = physicalDbSize(dbPath);
+    const hardLimit = beforeBytes + 1_024;
+
+    await cache.setMany(
+      [{ text: "rollback-seed", vector: [2] }],
+      { agentId: "a1", maxBytes: hardLimit },
+    );
+
+    const metrics = cache.getMetrics();
+    cache.close();
+    const { DatabaseSync } = await import("node:sqlite");
+    const database = new DatabaseSync(dbPath);
+    const row = database.prepare("SELECT vector FROM embeddings WHERE debug_text = ?").get("rollback-seed");
+    database.close();
+
+    assert.deepStrictEqual(JSON.parse(Buffer.from(row.vector).toString("utf8")), [1]);
+    assert.strictEqual(metrics.persistWrites, 0, "rolled-back writes must not be credited");
+    assert.strictEqual(metrics.persistWriteSkipped, 1);
+    assert.ok(physicalDbSize(dbPath) <= hardLimit, "rollback must restore the physical hard bound");
+    assert.ok(
+      warnings.some((args) => String(args[0]).includes("persist_write_rolled_back_size_limit")),
+      "the post-write rollback must stay observable",
+    );
+  });
+
+  it("rolls back promptly without deleting rows when a WAL checkpoint is busy", async (t) => {
+    const basePath = makeTempBase();
+    t.after(() => rmSync(basePath, { recursive: true, force: true }));
+    const dbPath = join(basePath, "embedding-cache-v2", "a1.db");
+    const seed = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      persistDebug: true,
+      maxBytes: 50_000_000,
+    });
+    await seed.setMany([{ text: "old", vector: Array(1_000).fill(1) }], { agentId: "a1" });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await seed.setMany([{ text: "newer", vector: Array(1_000).fill(2) }], { agentId: "a1" });
+    seed.close();
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const reader = new DatabaseSync(dbPath);
+    reader.exec("PRAGMA journal_mode=WAL; BEGIN;");
+    reader.prepare("SELECT COUNT(*) AS count FROM embeddings").get();
+    const mutator = new DatabaseSync(dbPath);
+    mutator.exec("PRAGMA journal_mode=WAL;");
+    mutator.prepare("UPDATE embeddings SET accessed_at = accessed_at + 1 WHERE debug_text = ?").run("newer");
+    mutator.close();
+
+    const warnings = [];
+    const hardLimit = physicalDbSize(dbPath) + 1_024;
+    const limited = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      persistDebug: true,
+      metrics: true,
+      maxBytes: hardLimit,
+      logger: { warn: (...args) => warnings.push(args), debug() {} },
+    });
+    const startedAt = Date.now();
+    await limited.setMany([{ text: "incoming", vector: [3] }], { agentId: "a1" });
+    const elapsedMs = Date.now() - startedAt;
+    const metrics = limited.getMetrics();
+    limited.close();
+    reader.exec("ROLLBACK;");
+    reader.close();
+
+    const verify = new DatabaseSync(dbPath);
+    const rows = verify.prepare("SELECT debug_text FROM embeddings ORDER BY debug_text").all();
+    verify.close();
+
+    assert.ok(elapsedMs < 1_000, `busy checkpoint handling blocked for ${elapsedMs}ms`);
+    assert.deepStrictEqual(rows.map((row) => row.debug_text), ["newer", "old"]);
+    assert.strictEqual(metrics.persistWrites, 0);
+    assert.strictEqual(metrics.persistWriteSkipped, 1);
+    assert.ok(
+      warnings.some((args) => String(args[0]).includes("checkpoint_busy")),
+      "checkpoint contention must be reported instead of treated as reclamation",
+    );
+    assert.ok(
+      warnings.some((args) => String(args[0]).includes("persist_write_rolled_back_size_limit")),
+      "post-write overshoot must be rolled back instead of credited under contention",
+    );
+  });
+
+  it("stops before a cleanup batch that cannot fit the checkpoint budget", async (t) => {
+    const basePath = makeTempBase();
+    t.after(() => rmSync(basePath, { recursive: true, force: true }));
+    const dbPath = join(basePath, "embedding-cache-v2", "a1.db");
+    const seed = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      persistDebug: true,
+      maxBytes: 50_000_000,
+    });
+    await seed.setMany(
+      Array.from({ length: 300 }, (_, index) => ({
+        text: `budget-${String(index).padStart(3, "0")}`,
+        vector: Array(64).fill(index),
+      })),
+      { agentId: "a1" },
+    );
+    seed.close();
+
+    const warnings = [];
+    const limited = createEmbeddingCache({
+      cacheBasePath: basePath,
+      persist: true,
+      persistDebug: true,
+      metrics: true,
+      maxBytes: 10_000,
+      logger: { warn: (...args) => warnings.push(args), debug() {} },
+    });
+    await limited.setMany([{ text: "incoming", vector: [999] }], { agentId: "a1" });
+    const metrics = limited.getMetrics();
+    limited.close();
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const database = new DatabaseSync(dbPath);
+    const count = database.prepare("SELECT COUNT(*) AS count FROM embeddings").get().count;
+    const incoming = database.prepare("SELECT 1 FROM embeddings WHERE debug_text = ?").get("incoming");
+    database.close();
+
+    assert.strictEqual(count, 52, "the final eight rows must not be deleted without checkpoint budget");
+    assert.strictEqual(incoming, undefined);
+    assert.strictEqual(metrics.persistWrites, 0);
+    assert.strictEqual(metrics.persistWriteSkipped, 1);
+    assert.ok(
+      warnings.some((args) => String(args[0]).includes("checkpoint_budget_exhausted")),
+      "checkpoint budget exhaustion must remain observable",
+    );
   });
 
   it("reclaims SQLite space in LRU batches and retains the newly written row", async (t) => {

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const require = createRequire(import.meta.url);
@@ -20,22 +21,35 @@ function versionAtLeast(actual, minimum) {
 
 test("Local Inference resolves patched adm-zip with ONNX Runtime-compatible APIs", () => {
   const lockfile = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
-  const lockedVersion = lockfile.packages?.["node_modules/adm-zip"]?.version;
-  const runtimeVersion = require("adm-zip/package.json").version;
+  const onnxPackagePath = require.resolve("onnxruntime-node/package.json");
+  const onnxRequire = createRequire(onnxPackagePath);
+  const admZipPackagePath = onnxRequire.resolve("adm-zip/package.json");
+  const projectRoot = fileURLToPath(new URL("..", import.meta.url));
+  const lockPackagePath = relative(projectRoot, dirname(admZipPackagePath)).replaceAll("\\", "/");
+  const lockedVersion = lockfile.packages?.[lockPackagePath]?.version;
+  const runtimeVersion = onnxRequire("adm-zip/package.json").version;
 
-  assert.ok(versionAtLeast(lockedVersion, "0.6.0"), `lockfile resolved vulnerable adm-zip ${lockedVersion}`);
-  assert.ok(versionAtLeast(runtimeVersion, "0.6.0"), `installed adm-zip is vulnerable: ${runtimeVersion}`);
+  assert.ok(
+    versionAtLeast(lockedVersion, "0.6.0"),
+    `onnxruntime-node lock path ${lockPackagePath} resolved vulnerable adm-zip ${lockedVersion}`,
+  );
+  assert.ok(
+    versionAtLeast(runtimeVersion, "0.6.0"),
+    `onnxruntime-node resolved vulnerable adm-zip ${runtimeVersion} from ${admZipPackagePath}`,
+  );
 
-  const AdmZip = require("adm-zip");
+  const AdmZip = onnxRequire("adm-zip");
   const archive = new AdmZip();
   archive.addFile("payload/model.bin", Buffer.from("local-inference-compatibility"));
-  const reopened = new AdmZip(archive.toBuffer());
-  const entry = reopened.getEntry("payload/model.bin");
-  assert.ok(entry, "ONNX Runtime's constructor/getEntry path must remain available");
-  assert.strictEqual(entry.getData().toString("utf8"), "local-inference-compatibility");
-
-  const extractDir = mkdtempSync(join(tmpdir(), "plur1bus-adm-zip-"));
+  const tempRoot = mkdtempSync(join(tmpdir(), "plur1bus-adm-zip-"));
+  const packagePath = join(tempRoot, "local-inference-runtime.nupkg");
+  const extractDir = join(tempRoot, "extracted");
   try {
+    writeFileSync(packagePath, archive.toBuffer());
+    const reopened = new AdmZip(packagePath);
+    const entry = reopened.getEntry("payload/model.bin");
+    assert.ok(entry, "ONNX Runtime's filesystem constructor/getEntry path must remain available");
+    assert.strictEqual(entry.getData().toString("utf8"), "local-inference-compatibility");
     reopened.extractEntryTo(entry, extractDir, false, true);
     assert.strictEqual(
       readFileSync(join(extractDir, "model.bin"), "utf8"),
@@ -43,6 +57,6 @@ test("Local Inference resolves patched adm-zip with ONNX Runtime-compatible APIs
       "ONNX Runtime's extractEntryTo(entry, target, false, true) call must remain compatible",
     );
   } finally {
-    rmSync(extractDir, { recursive: true, force: true });
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 });
