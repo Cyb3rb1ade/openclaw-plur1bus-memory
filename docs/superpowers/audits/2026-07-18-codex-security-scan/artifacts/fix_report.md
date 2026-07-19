@@ -373,3 +373,17 @@ Remaining uncertainty and non-claims:
 - B3, B6, BUG-13, and all other batches are untouched.
 
 Main-checkout proof: `/root/openclaw-plur1bus-memory` remained clean at `6dff096efe936f7ec3d0e11a8ba83bf08671ad4e`. The B7 worktree remained on `fix/high-mid-audit-findings` with a one-commit range from `fc8134747118b46f15760da3c8c8294098fcdaef` while this amendment report was written. No push or merge occurred.
+
+---
+
+# B3 Fix Report — Timeout, Admission, and Recall Cache
+
+Date: 2026-07-19  
+Findings: BUG-03, BUG-07, BUG-ADD-03  
+Base: `cb0cfdcc21ab62e2c775b76fb3366e499e07ccf2`
+
+B3 separates prompt timeout from mutating settlement. Same-agent capture admission now releases only when the callback actually settles, with supported phase abort checks in the real capture hook. Recall fallback uses a configurable bounded LRU (default 128), absolute TTL, and opportunistic expiry sweeps. `TimeoutError` retains the underlying operation settlement so the existing B7 lease and B2 same-candidate durable-merge queue do not unwind around a live mutation. Durable merge uses a deterministic per-agent/candidate/complete-input replacement identity, reuses or rejects an existing identity, resumes verification/delete after a late store, and logs a late committed delete with its idempotency key exactly once in-process.
+
+Causal regressions covered an ignored AbortSignal with measured `maxActive`, 200 high-cardinality recall keys, LRU hit/eviction/absolute expiry, raw timeout settlement, B7 shutdown deferral, a real auto-capture embed timeout before store, late replacement store plus queued retry, late delete plus audit log, same-input repair reuse, and provenance/retention-changing alternate input. The final combined focused gate passed 9/9 file workers (`duration_ms 34194.281414`); the owning gate passed 19/19 (`duration_ms 34115.249535`). Direct scheduler/timeout/lease/capture/merge controls passed 3/3, 6/6, 4/4, 3/3, and 8/8. Syntax, lint, and diff checks exited 0. The authoritative serial suite passed with 2,592 tests, 2,591 passed, zero failures, and one existing environment-dependent skip (`duration_ms 360090.901414`); the symlink test passed in-run without the sandbox fallback.
+
+Detailed evidence: `docs/audits/2026-07-19-b3-timeout-admission-recall-cache-fix.md`.

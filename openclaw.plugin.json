@@ -277,6 +277,10 @@
             "type": "number",
             "default": 120000
           },
+          "recallCacheMaxEntries": {
+            "type": "number",
+            "default": 128
+          },
           "maxQueueDepthRecall": {
             "type": "number",
             "default": 20

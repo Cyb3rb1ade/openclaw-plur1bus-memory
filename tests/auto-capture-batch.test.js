@@ -13,6 +13,20 @@ function makeVector(offset = 0) {
   return vec;
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function makeMockApi(baseDbPath, overrides = {}) {
   const handlers = {};
   return {
@@ -51,6 +65,10 @@ async function loadFreshPlugin() {
   // Frische Modulinstanz für jeden Test, damit register() isoliert läuft.
   const { default: plugin } = await import(`../index.js?test=${Date.now()}`);
   return plugin;
+}
+
+async function loadFreshPluginModule() {
+  return import(`../index.js?b3-test=${Date.now()}`);
 }
 
 describe("auto-capture uses embedBatch when available", () => {
@@ -146,5 +164,47 @@ describe("auto-capture uses embedBatch when available", () => {
 
     assert.ok(individualCalls.length > 0, "individual embed should be used as fallback");
     assert.ok(individualCalls.some((t) => t.includes("blue")), "individual embed should include captured text");
+  });
+
+  it("checks abort after a late batch embed and performs no durable capture write", async (t) => {
+    const batchStarted = deferred();
+    const batchGate = deferred();
+    LocalTransformersEmbeddingProvider.prototype.embedBatch = async function slowBatch(texts) {
+      batchStarted.resolve();
+      await batchGate.promise;
+      return texts.map((_, index) => makeVector(index * 0.01));
+    };
+
+    const pluginModule = await loadFreshPluginModule();
+    const originalStore = pluginModule.MemoryDB.prototype.store;
+    let storeCalls = 0;
+    pluginModule.MemoryDB.prototype.store = async function trackedStore(...args) {
+      storeCalls += 1;
+      return originalStore.apply(this, args);
+    };
+    t.after(() => {
+      batchGate.resolve();
+      pluginModule.MemoryDB.prototype.store = originalStore;
+    });
+
+    const api = makeMockApi(basePath, {
+      runtime: { captureTimeoutMs: 20, maxConcurrentCapturePerAgent: 1 },
+    });
+    pluginModule.default.register(api);
+    const event = {
+      success: true,
+      turnId: "turn-b3-abort",
+      sessionKey: "agent:abort-agent:main",
+      messages: [{ role: "user", content: "Remember this delayed batch capture must stop after timeout." }],
+    };
+
+    const emitted = api.emit("agent_end", event, { agentId: "abort-agent" });
+    await batchStarted.promise;
+    const results = await emitted;
+    assert.equal(results[0]?.timedOut, true, "the hook should preserve its prompt timeout result");
+
+    batchGate.resolve();
+    await sleep(100);
+    assert.equal(storeCalls, 0, "an abort observed after embedding must stop before the durable store boundary");
   });
 });
