@@ -1,0 +1,296 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-005",
+  "reviewer": "security-frontier-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/db-adapter.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-db-classifier-cross-scope",
+        "cand-db-autoaccept-cross-scope",
+        "cand-critical-push-sensitive-log"
+      ],
+      "evidence": "Read in full (713 lines; SHA-256 a583c9dbceb3058740051c0bc060cceaf1b33ea655bb0d6c338143e592c3ddaf). The default resolver validates agent names with safeAgentId before the per-agent path join (294-333), ID mutations validate UUIDs (482-488, 492-567, 599-610, 653-664), and ordinary reads apply checkAccess when a ctx is supplied (335-369, 374-458, 460-480). Production forget/correct wrappers additionally perform record ACL checks before calling raw deleteCard/updateCard (lib/telegram-commands/memory-edit.js:153-181, 189-225; tests/forget-correct-confirm.test.js:218-280), so those raw exports were not promoted independently. The background APIs are different: findRecentUnclassified selects only by time/type (571-591), findUnconfirmedCritical only by time/type/confirmed (618-645), and updateCardType/markConfirmed mutate by UUID without ctx, workspace, scope, or owner checks (599-616, 653-670). Mixed-row validation returned workspace-a and workspace-b rows together; end-to-end mocks using a valid scope:'user' row owned by victim then produced a critical push/type mutation and confirmed a stale credential row. Existing tests cover time/type behavior but contain no mixed-workspace/owner assertion (test/memory-edit.test.js:339-388). Query/result caps, operation timeouts, and a 50-entry table cache bound normal resource use; no attacker-controlled traversal segment or separate remote exhaustion chain was established. This file also supplies the unscoped content source for the already tracked cand-critical-push-sensitive-log."
+    },
+    {
+      "path": "lib/dream-echo.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-dream-echo-cross-session-leak"
+      ],
+      "evidence": "Read in full (105 lines; SHA-256 ac5e03ce69ebb22800fdd9f2b6ad1eae5489288180847ec5c163662e2a00aafc). A narrative or first insight is distilled to a sentence (25-59), but the persisted workspace-wide record carries only sentence/topics/createdAt (43-47, 54-58); append and load use one fixed .dream-echoes.jsonl file and select the newest fresh entry without agent, session, chat, user, or delivery identity (66-86). The before-prompt formatter escapes markup, labels the block untrusted/historical-only, and caps it at 400 characters (92-101), which suppresses prompt-injection and output-size hypotheses but not wrong-recipient disclosure. Dynamic validation wrote a victim-chat health topic, loaded it through the identity-free API for a later context, and observed that the formatted prompt retained the topic; the record keys were exactly sentence/topics/createdAt. tests/dream-echo.test.js passes freshness, 20-line, corruption, size, and escaping cases (1-88) but has no identity-scoping case. File names are fixed beneath host workspaceDir, so missing resolveInside is policy hardening rather than an exploitable traversal here; the full-file read before trimming (69-72) is reachable only after local file tampering, not from a remote append API."
+    },
+    {
+      "path": "lib/dreaming/dream-narrative.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-rem-dream-cross-workspace-leak",
+        "cand-rem-dream-sensitive-log",
+        "cand-mood-state-prompt-injection"
+      ],
+      "evidence": "Read in full (324 lines; SHA-256 0d65b6c6fe7ba1bc4ff459ed899a975a85d75b87f5b225ad03d15727cbcfe3b4). Mood and SOUL inputs use fixed workspace filenames (37-70, 82-98), SOUL is capped at 1,200 characters, and memory material is explicitly declared untrusted and bounded to 15 x 250 characters (161-198). LLM output is capped at 1,200/3,000 characters (238-269), and optional storage marks output as an agent-private dream with bounded embedding input (281-324). Consequently, ordinary memory prompt injection has explicit counterinstructions and no privileged tool sink. However, this module is the external-model and persistence leg of the REM scope bug: foreign rows reach material at rem-dream.js:586-600 and then this prompt/call (161-198, 238-265), while a resulting narrative can be stored under the requested workspace (281-318). It also supplies the full narrative later serialized to info logs. Mood label/trend/nuance strings loaded at 59-66 are interpolated into the instruction area at 169-186 without their own sanitizer; this is additional sink evidence for the already tracked cand-mood-state-prompt-injection, not a duplicate raw candidate. The fixed paths contain no attacker-controlled suffix, and the expected dream-memory/vault writes are bounded additive artifacts rather than an independent filesystem-containment issue."
+    },
+    {
+      "path": "lib/dreaming/light-dream.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-light-dream-cross-scope-strengthening",
+        "cand-dream-echo-cross-session-leak",
+        "cand-mood-state-prompt-injection"
+      ],
+      "evidence": "Read in full (495 lines; SHA-256 f7467e88101aff0102d07910f52caa6d525a05b436c87cee2a5ced4c7fecc810). Session text is bounded per turn and explicitly framed as untrusted before insight extraction (38-88); the production caller restricts new turns to 3-50 (index.js:4640-4672), searches at most three hits per insight/top five overall (98-120), and dream material/output is bounded (289-336). Yet findActivatedMemories calls raw per-agent db.search with no ctx/workspace/owner filter, and strengthenMemory then updates the returned UUID directly, with an older-Lance fallback that deletes and re-adds the row (98-120, 130-175, 271-283). A dynamic valid scope:'user' test initiated from workspace-a, returned a victim-owned workspace-b hit, and changed its replayCount from 2 to 3. Separately, per-session turns/insights/narrative are distilled and appended to the identity-free workspace echo file (245-266, 289-345), supporting the cross-session echo candidate. Behavior instructions remain status:'candidate' (185-225, 375-390), and safeUuid plus rollback reduce corruption risk, but neither supplies object authorization. Vault destinations use only fixed date/time-derived components (428-490), so no traversal source exists. Mood values flow into dream generation and unquoted diary metadata (297-316, 446-460), supplying secondary evidence for the existing mood-state candidate."
+    },
+    {
+      "path": "lib/dreaming/rem-dream.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-rem-dream-cross-workspace-leak",
+        "cand-rem-dream-sensitive-log",
+        "cand-dream-echo-cross-session-leak"
+      ],
+      "evidence": "Read in full (748 lines; SHA-256 df44b112cc0593de445b60651d44f4e21abb37c6bdfac4a60c7e1c5ad45378f1). loadCandidateMemories accepts workspaceKey/agentId but its database WHERE clause filters only time/status; the JS pass filters schema/status/dream/time and merely defaults missing workspace/agent fields instead of requiring equality or checkAccess (90-133). runRemDream labels resulting patterns with the requested workspace/agent, copies exact source text into evidenceQuotes, sends samples to the configured LLM, appends trends to the requested Neo store, optionally creates a requested-workspace dream/echo, and writes narrative/evidence into that workspace's vault (536-641, 673-743). End-to-end validation supplied three active workspace-b rows to a workspace-a run and observed a persisted workspace-a pattern whose evidenceQuotes were the three exact workspace-b strings. Memory prompts are explicitly untrusted (352-371 and dream-narrative.js:181-198), so instruction-following was not retained as the root cause; confidentiality/authorization is. The default-enabled narrative is placed whole in report.narrative (571-600, 646-660), and index.js:3084 info-logs JSON.stringify(report); a mock validation carried a secret from material through the narrative/report serialization unchanged. REM also writes an identity-free dream echo (623-629). Internal callers cap candidates at 1,000/5,000 and topK at 10/20 (index.js:3057-3078), cluster/sample/prompt sizes are capped (217-291, 318-389), and lock/vault suffixes derive only from the system week, so no separate remote resource or path-traversal candidate was established."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-rem-dream-cross-workspace-leak",
+      "title": "REM dreaming relabels and persists memories from other workspaces and owners",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "CWE-200",
+        "cross-workspace-data-exposure"
+      ],
+      "source": "Recent active memory rows in one per-agent LanceDB table carry workspaceKey, scope, and ownerUserId and can belong to different workspaces/users.",
+      "control": "loadCandidateMemories receives the requested workspaceKey/agentId but filters only time/status/dream class; it neither compares row bindings nor calls checkAccess, and it preserves or defaults those bindings only after selection.",
+      "sink": "Foreign row text is sent to the pattern/narrative LLMs and copied into evidenceQuotes, patterns, trends, dream memories, dream echoes, and Markdown under the requested workspace identity.",
+      "impact": "A REM run for one workspace can disclose another workspace/user's memories to the configured model provider and persist exact evidence or derived content into artifacts visible and influential in the wrong workspace.",
+      "locations": [
+        "lib/dreaming/rem-dream.js:90",
+        "lib/dreaming/rem-dream.js:91",
+        "lib/dreaming/rem-dream.js:96",
+        "lib/dreaming/rem-dream.js:99",
+        "lib/dreaming/rem-dream.js:109",
+        "lib/dreaming/rem-dream.js:115",
+        "lib/dreaming/rem-dream.js:126",
+        "lib/dreaming/rem-dream.js:127",
+        "lib/dreaming/rem-dream.js:352",
+        "lib/dreaming/rem-dream.js:353",
+        "lib/dreaming/rem-dream.js:374",
+        "lib/dreaming/rem-dream.js:536",
+        "lib/dreaming/rem-dream.js:551",
+        "lib/dreaming/rem-dream.js:555",
+        "lib/dreaming/rem-dream.js:561",
+        "lib/dreaming/rem-dream.js:586",
+        "lib/dreaming/rem-dream.js:590",
+        "lib/dreaming/rem-dream.js:608",
+        "lib/dreaming/rem-dream.js:617",
+        "lib/dreaming/rem-dream.js:628",
+        "lib/dreaming/rem-dream.js:635",
+        "lib/dreaming/rem-dream.js:730",
+        "lib/dreaming/rem-dream.js:736",
+        "lib/dreaming/rem-dream.js:743",
+        "lib/dreaming/dream-narrative.js:161",
+        "lib/dreaming/dream-narrative.js:181",
+        "lib/dreaming/dream-narrative.js:251",
+        "lib/dreaming/dream-narrative.js:299",
+        "lib/dreaming/dream-narrative.js:317",
+        "index.js:3057",
+        "index.js:3060",
+        "index.js:3065",
+        "index.js:3072",
+        "index.js:3078",
+        "index.js:3082"
+      ],
+      "validationFacts": "A fake Lance query containing workspace-a and workspace-b rows returned both when workspace-a was requested. A full run with three workspace-b rows, force=true, and a workspace-a Neo store persisted one pattern labeled workspace-a whose evidenceQuotes were the three exact workspace-b confidential strings. The 14 related test files passed, but no REM mixed-workspace/owner assertion exists.",
+      "attackFacts": "Requires a single agent table to contain rows for multiple workspace/user scopes and an enabled or authorized REM run targeting one of them. No control of the LLM is needed for exact pattern evidence persistence; narrative/echo disclosure quality depends on generation. Operational guidance prefers one agent per workspace for feature crons (README.md:221-224), but the schema and ACL model expressly support workspace/user distinctions inside an agent DB, and this REM command does not enforce that deployment assumption."
+    },
+    {
+      "candidateId": "cand-db-classifier-cross-scope",
+      "title": "Critical classifier processes and exports foreign-scope cards without object authorization",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "CWE-200",
+        "cross-user-memory-mutation"
+      ],
+      "source": "Fresh unclassified memory rows can be workspace-scoped or scope:'user' with an ownerUserId while sharing an agent table.",
+      "control": "findRecentUnclassified receives only agent/time, filters no workspace/scope/owner, and runClassifier has no caller identity; updateCardType mutates the selected UUID without a record ACL check.",
+      "sink": "The full card enters the classifier model, its type is mutated, and critical content is returned as a pushMessages payload for the current cron carrier and serialized by the caller.",
+      "impact": "A private card can be disclosed to the wrong cron destination/provider and changed outside its owner/workspace authorization context.",
+      "locations": [
+        "lib/db-adapter.js:571",
+        "lib/db-adapter.js:579",
+        "lib/db-adapter.js:585",
+        "lib/db-adapter.js:589",
+        "lib/db-adapter.js:599",
+        "lib/db-adapter.js:607",
+        "lib/jobs/critical-classifier.js:25",
+        "lib/jobs/critical-classifier.js:57",
+        "lib/jobs/critical-classifier.js:80",
+        "lib/jobs/critical-classifier.js:83",
+        "lib/jobs/critical-classifier.js:93",
+        "lib/jobs/critical-classifier.js:109",
+        "lib/jobs/critical-classifier.js:112",
+        "lib/jobs/critical-classifier.js:131",
+        "lib/critical-push-classifier.js:32",
+        "lib/critical-push-classifier.js:51",
+        "lib/critical-push-classifier.js:97",
+        "lib/critical-push-classifier.js:105",
+        "index.js:3039",
+        "index.js:3045",
+        "index.js:3046"
+      ],
+      "validationFacts": "With a valid scope:'user', owner:'victim', workspace-b row, an agent-only run classified it as gesundheit, updated its type, and returned a push containing the full diagnosis string. test/memory-edit.test.js and critical-classifier tests passed but cover only time/type/error/rate behavior, not ctx or mixed ownership. The existing cand-critical-push-sensitive-log covers generic log disclosure; this candidate's independent root cause is cross-object selection and mutation.",
+      "attackFacts": "Requires multiple owners/workspaces in one agent table and a classifier run. Classification/mutation occurs automatically; confidentiality impact additionally requires the cron carrier/log/provider to be visible outside the victim scope. A victim simply storing an unclassified critical memory supplies the trigger."
+    },
+    {
+      "candidateId": "cand-db-autoaccept-cross-scope",
+      "title": "Stale critical auto-accept confirms foreign user/workspace records",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-863",
+        "CWE-639",
+        "unauthorized-state-change"
+      ],
+      "source": "Old unconfirmed critical rows include owner and workspace scope metadata in a shared per-agent table.",
+      "control": "findUnconfirmedCritical filters only cutoff/type/confirmed and autoAcceptStale passes only agent; markConfirmed updates by UUID with no ctx, owner, or workspace comparison.",
+      "sink": "The selected row's confirmed field is set to 1 by the daily background job.",
+      "impact": "A sensitive memory can be silently accepted under a different user's/workspace's job context, bypassing the owner review state and affecting later retention or confirmation workflows.",
+      "locations": [
+        "lib/db-adapter.js:618",
+        "lib/db-adapter.js:634",
+        "lib/db-adapter.js:639",
+        "lib/db-adapter.js:640",
+        "lib/db-adapter.js:653",
+        "lib/db-adapter.js:661",
+        "lib/jobs/auto-accept-stale-criticals.js:14",
+        "lib/jobs/auto-accept-stale-criticals.js:24",
+        "lib/jobs/auto-accept-stale-criticals.js:36",
+        "lib/jobs/auto-accept-stale-criticals.js:39",
+        "index.js:3048",
+        "index.js:3049",
+        "index.js:3050"
+      ],
+      "validationFacts": "A valid scope:'user' credential row owned by victim in workspace-b was returned to an agent-only auto-accept run and produced values:{confirmed:1}. The existing unit test verifies critical/cutoff selection and the mutation itself but supplies no owner/workspace mix (test/memory-edit.test.js:364-388).",
+      "attackFacts": "Requires an unconfirmed victim critical row older than 24 hours in an agent table containing more than one authorization scope. The scheduled job itself supplies execution; no UUID knowledge or direct command control is necessary. Security relevance depends on confirmed state having approval/retention consequences, which later validation should trace."
+    },
+    {
+      "candidateId": "cand-light-dream-cross-scope-strengthening",
+      "title": "Light dreaming strengthens semantically matched foreign-scope memories",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "cross-user-memory-mutation"
+      ],
+      "source": "Conversation-derived insights drive a raw vector search that can return workspace- or user-scoped rows belonging to another principal in the same agent table.",
+      "control": "findActivatedMemories passes no ACL context or workspace filter to db.search, and lightDream forwards every non-dream hit UUID to strengthenMemory without checking entry.scope/owner/workspace.",
+      "sink": "strengthenMemory increments replayCount/lastReplayed in place; its compatibility fallback deletes and re-adds the complete foreign row.",
+      "impact": "One conversation can alter another user's memory dynamics and potentially its lifecycle/salience metadata, violating object-level integrity even though the foreign text is not directly returned.",
+      "locations": [
+        "lib/dreaming/light-dream.js:98",
+        "lib/dreaming/light-dream.js:104",
+        "lib/dreaming/light-dream.js:107",
+        "lib/dreaming/light-dream.js:108",
+        "lib/dreaming/light-dream.js:130",
+        "lib/dreaming/light-dream.js:136",
+        "lib/dreaming/light-dream.js:143",
+        "lib/dreaming/light-dream.js:159",
+        "lib/dreaming/light-dream.js:167",
+        "lib/dreaming/light-dream.js:271",
+        "lib/dreaming/light-dream.js:279",
+        "lib/dreaming/light-dream.js:281",
+        "index.js:969",
+        "index.js:987",
+        "index.js:990",
+        "index.js:991",
+        "index.js:4683"
+      ],
+      "validationFacts": "A workspace-a lightDream mock returned a valid scope:'user', owner:'victim', workspace-b hit from db.search; the run strengthened it and changed replayCount 2 to 3. light-dream data-loss and injection-guard tests passed, but no ACL/scope test covers activated-memory selection.",
+      "attackFacts": "Requires a same-agent foreign memory semantically close to an attacker-controlled/session-derived insight and light dreaming enabled after the session. Top-five bounds limit breadth but do not authorize the selected object. Later validation should confirm whether replayCount/lastReplayed affect recall, decay, promotion, or only diagnostics."
+    },
+    {
+      "candidateId": "cand-dream-echo-cross-session-leak",
+      "title": "Workspace-wide dream echoes can surface one session's topic in another session",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-862",
+        "cross-session-data-exposure"
+      ],
+      "source": "Light dreams derive insights/narratives from one completed session, and REM dreams derive them from stored memories.",
+      "control": "The echo schema and workspace-wide file omit agent/session/chat/user/destination identity; loadFreshDreamEcho selects only by freshness, while the before-prompt hook knows the current context but supplies only workspaceDir.",
+      "sink": "The newest echo sentence is inserted into the next eligible prompt's fullMemoriesContext and can be reflected in the response to whichever session contacts that workspace first.",
+      "impact": "A confidential health, relationship, credential, or project topic from one chat can be alluded to or repeated to another user/session sharing the agent workspace.",
+      "locations": [
+        "lib/dream-echo.js:25",
+        "lib/dream-echo.js:39",
+        "lib/dream-echo.js:43",
+        "lib/dream-echo.js:52",
+        "lib/dream-echo.js:55",
+        "lib/dream-echo.js:66",
+        "lib/dream-echo.js:69",
+        "lib/dream-echo.js:72",
+        "lib/dream-echo.js:79",
+        "lib/dream-echo.js:81",
+        "lib/dream-echo.js:86",
+        "lib/dream-echo.js:92",
+        "lib/dream-echo.js:101",
+        "lib/dreaming/light-dream.js:262",
+        "lib/dreaming/light-dream.js:299",
+        "lib/dreaming/light-dream.js:342",
+        "lib/dreaming/light-dream.js:343",
+        "lib/dreaming/rem-dream.js:623",
+        "lib/dreaming/rem-dream.js:628",
+        "index.js:4650",
+        "index.js:4654",
+        "index.js:4683",
+        "index.js:6196",
+        "index.js:6207",
+        "index.js:6209",
+        "index.js:6225",
+        "index.js:6256"
+      ],
+      "validationFacts": "A temp-workspace validation appended 'victim-chat confidential health topic', then loaded and formatted it for a later hypothetical context; the text survived and the stored object had only sentence/topics/createdAt, with no identity field accepted by either API. tests/dream-echo.test.js passed escaping and bounding but contains no multi-session test.",
+      "attackFacts": "Requires two principals/sessions sharing workspaceDir, a generated echo from the victim, an allowed governor budget, and the other session being the next eligible contact before expiry/daily cooldown. The one-agent-per-workspace cron rule does not imply one chat/session per agent; final exploitability depends on actual binding topology and whether the answering model repeats the advisory echo."
+    },
+    {
+      "candidateId": "cand-rem-dream-sensitive-log",
+      "title": "REM command info-logs the full generated dream narrative",
+      "taxonomy": [
+        "CWE-532",
+        "sensitive-data-exposure"
+      ],
+      "source": "Up to 15 bounded snippets of stored memory text feed the default-enabled REM narrative generator, whose output can retain names, medical details, credentials, or other private content.",
+      "control": "Output is length-capped but not redacted; runRemDream assigns the whole narrative to report.narrative and the internal command serializes the complete report at info level.",
+      "sink": "api.logger.info receives JSON.stringify(result.report), including up to 3,000 narrative characters.",
+      "impact": "Service/plugin log readers can recover sensitive dream-derived memory content outside normal memory ACL and chat visibility controls.",
+      "locations": [
+        "index.js:2271",
+        "index.js:2273",
+        "index.js:3053",
+        "index.js:3076",
+        "index.js:3084",
+        "lib/dreaming/rem-dream.js:586",
+        "lib/dreaming/rem-dream.js:590",
+        "lib/dreaming/rem-dream.js:646",
+        "lib/dreaming/rem-dream.js:656",
+        "lib/dreaming/dream-narrative.js:161",
+        "lib/dreaming/dream-narrative.js:165",
+        "lib/dreaming/dream-narrative.js:195",
+        "lib/dreaming/dream-narrative.js:251",
+        "lib/dreaming/dream-narrative.js:265"
+      ],
+      "validationFacts": "A no-write mock REM run placed a marker secret from memory material into a 72-character generated narrative; report.narrative and JSON.stringify(report) both retained the marker exactly. Code-level logging is complete. Validation must establish production logger persistence/access and representative model tendency to repeat versus abstract sensitive details.",
+      "attackFacts": "The narrative feature is enabled unless explicitly false. A stored sensitive memory plus an internal REM run is sufficient to create the log payload; no chat attacker is required. Confidentiality impact requires another principal/component with log access, and model behavior controls how much original detail appears."
+    }
+  ],
+  "notes": "All five assigned paths were read in full at the immutable target. Six new candidates were retained for later validation, while cand-critical-push-sensitive-log and cand-mood-state-prompt-injection receive supporting evidence only. Prompt-data framing, fixed file suffixes, bounded outputs, and production forget/correct ACL wrappers suppress separate prompt-injection, traversal, resource-exhaustion, and raw delete/update candidates. No repository edits or feature changes were made."
+}

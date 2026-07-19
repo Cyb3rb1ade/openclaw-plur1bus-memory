@@ -1,0 +1,5 @@
+{"path":"lib/providers/reranker-local-transformers.js","area":"."}
+{"path":"lib/query-refiner.js","area":"."}
+{"path":"lib/reaction-directive.js","area":"."}
+{"path":"lib/recall-budget.js","area":"."}
+{"path":"lib/recall-confidence-framing.js","area":"."}

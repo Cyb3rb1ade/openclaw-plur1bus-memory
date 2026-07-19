@@ -1,0 +1,39 @@
+Script started on 2026-07-18 21:57:58+02:00 [COMMAND="node /tmp/codex-security-targets/openclaw-plur1bus-memory-6dff096e/scripts/provider-wizard.mjs" <not executed on terminal>]
+=== Embedding Provider Configuration ===
+Embedding converts your memories to vectors. Which provider do you want to use?
+
+[1] OpenAI text-embedding-3-large (paid, recommended, 3072d)
+    Requires OPENAI_API_KEY. Remote, no local model download, very fast.
+[2] Local: intfloat/multilingual-e5-small (no API key, multilingual, 384d)
+    Downloads model on first run (~130 MB). CPU-intensive, no API key needed.
+[1G[0J[1/2]: [8G1
+OPENAI_API_KEY: [1] store as env reference (recommended) / [2] as literal
+[1G[0J[1/2]: [8G2
+[1G[0JEnter key: [12GDEMO_KEY_ONLY_NOT_A_SECRET
+Step 2/2: Reranker
+A reranker improves recall quality but adds latency. Which option do you want to use?
+
+[1] Cohere rerank-v3.5 (paid, recommended for best quality)
+    Requires COHERE_API_KEY. No local CPU/RAM load. On error: recall continues without reranker.
+[2] Local: BAAI/bge-reranker-v2-m3 (multilingual, no API key)
+    Recommended for German/multilingual. Lazy loads on first recall. Uses CPU/RAM.
+[3] No reranker (fastest and most stable baseline)
+    Recall remains fully functional. No extra cost, no local model load.
+[4] Advanced options (additional local models)
+    Alibaba-NLP/gte-reranker-modernbert-base (English/long-context/code), jinaai/jina-reranker-v2-base-multilingual, mixedbread-ai/mxbai-rerank-base-v2
+[1G[0J[1/2/3/4]: [12G3
+{
+  "embedding": {
+    "provider": "openai",
+    "apiKey": "DEMO_KEY_ONLY_NOT_A_SECRET",
+    "model": "text-embedding-3-large",
+    "dimensions": 3072
+  },
+  "reranker": {
+    "provider": "disabled",
+    "enabled": false,
+    "candidates": 20
+  }
+}
+
+Script done on 2026-07-18 21:57:59+02:00 [COMMAND_EXIT_CODE="0"]

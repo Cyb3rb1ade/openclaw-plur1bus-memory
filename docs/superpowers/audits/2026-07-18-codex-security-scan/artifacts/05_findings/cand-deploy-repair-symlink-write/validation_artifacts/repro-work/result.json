@@ -1,0 +1,18 @@
+{
+  "report": {
+    "ok": true,
+    "results": [
+      {
+        "file": "lib/target.mjs",
+        "ok": true,
+        "reasons": [],
+        "repaired": true
+      }
+    ]
+  },
+  "outsideFile": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-deploy-repair-symlink-write/validation_artifacts/repro-work/outside/sentinel.mjs",
+  "outsideExisted": true,
+  "before": "outside sentinel before repair\n",
+  "after": "export const value = 'trusted';\n",
+  "overwriteProven": true
+}

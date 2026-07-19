@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-048",
+  "reviewer": "shard006-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "scripts/run-semantic-discover-once.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (73 lines; SHA-256 8aad116176dccfe6da1256f79a4e0e8df33a4059b65ccdcd9f48df2f24a56495). A direct invocation exits 1 before reading records with ReferenceError: homedir is not defined at line 10 because only join is imported (8-11). Importing homedir alone would still leave the advertised one-shot update inoperative: discoverSemanticLinks writes only when options.confirm === true (semantic-link-discoverer.js:73-77,147-155), while this caller omits confirm (61-64), so any dirty batch is returned as confirm_required and the link index is unchanged. The script also hard-codes a 1536-vector MemoryDB (55), making the maintenance path incompatible with supported deployments that use another embedding dimension. These are concrete feature/maintenance defects, including the parent-reported missing import, but no untrusted source reaches an independent security-sensitive sink in the current operator-local script. Preserve discovery by importing homedir, explicitly honoring the write confirmation contract, and deriving the active embedding/database configuration rather than removing semantic discovery."
+    },
+    {
+      "path": "scripts/run-semantic-link-index-phase43c.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (138 lines; SHA-256 9c48304e2c0dd1bd0627c9e90b95ce6208118a9599eb1d61fb63b657322957af). Apply is unreachable: the first applySemanticLinkIndex call deliberately sets confirm:false (85-93), whose API contract always returns ok:false/reason=confirm_required with its plan (semantic-link-discoverer.js:710-714); line 113 then returns whenever !dryRun.ok, so the confirm:true call at 118-127 can never execute even with --apply. An isolated two-record/vector probe produced {ok:false, blocked:true, reason:'confirm_required', wouldWrite:true, scriptWouldReturnEarly:true}. Malformed PLUR1BUS_WORKSPACES and search/database failures are silently converted to [] (10-19,50-55), allowing an empty or incomplete successful-looking summary, and the database root is fixed to ~/.openclaw/memory/lancedb-namespaced (24), bypassing supported custom storage configuration. safeAgentId protects the agent path (59-61), and all workspace/database inputs are operator-local environment/configuration values, so no separate security candidate was retained. A feature-preserving correction should inspect dryRun.plan despite the expected confirmation result, log malformed/search errors, and apply only after the explicit --apply gate."
+    },
+    {
+      "path": "scripts/setup-feature-crons.mjs",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-feature-cron-channel-target-confusion",
+        "cand-afterthought-cross-session-leak"
+      ],
+      "evidence": "Read in full (370 lines; SHA-256 a4987a7ab1b43fca4444d35b45161dff5cd58b09e3c873c03a0b496df720bc36). The script makes both previously discovered delivery candidates operational: it loads channel configuration for planner fallback (118-124), passes it with discovered agents (240-242), turns planned delivery.channel/to/accountId into fixed cron argv (46-74), and invokes cron add/edit with those argv (287-326). This confirms reachability for cand-feature-cron-channel-target-confusion and the fixed-target half of cand-afterthought-cross-session-leak; the data-selection half is documented in their original receipts. The CLI wrapper receives an argv array rather than a shell string, so no command-injection candidate was added. Feature-preservation findings: the bootstrap advertises and provisions only persona-evolve and afterthought (3-5 and imported REQUIRED_FEATURE_CRONS), leaving the broader advertised background-job set outside automatic setup; loadChannelConfig uses strict JSON.parse and a home-path convention (118-124) that misses valid JSON5 and supported alternate OpenClaw state/config locations. Symlink-aware main detection uses realpath correctly (353-364); its dedicated regression test passed here (1/1), so the previously observed sandbox spawnSync EPERM is not a product defect."
+    },
+    {
+      "path": "scripts/verify-plugin-deploy.mjs",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-deploy-repair-symlink-write",
+        "cand-deploy-verifier-executes-unverified-module"
+      ],
+      "evidence": "Read in full (101 lines; SHA-256 7e279c50907d9ad4f918791c0be73e120cd1a98f9409cccaf1559aebaa4ccf92). --repair reaches validateDeployment with repair:true (56-62), confirming this script as a runtime entry point for the existing cand-deploy-repair-symlink-write in deploy-integrity.mjs. A separate candidate remains: after checksum/stub validation, the verifier builds deployed-file import paths and calls smokeTestExports unconditionally (74-78), even when report.ok is already false; the helper executes each file through dynamic import (deploy-integrity.mjs:279-285). A benign temporary-module probe confirmed the import executes top-level code by creating a marker file. Thus a check-only integrity verifier can execute a replaced deployment module before reporting the known checksum failure. The risk requires deployment-write influence and a verifier invocation at a stronger trust level; same-owner-only topology materially lowers severity. Preserve the real-import smoke feature by performing it only after successful checksum validation/repair, or against a separately trusted/contained source."
+    },
+    {
+      "path": "scripts/verify-workspace-writer.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (194 lines; SHA-256 000086fd37967f00e082bb7b32407e47590648b65931e06072438c85319fbd32). The command's main guard compares import.meta.url to the lexical argv URL (183), unlike setup-feature-crons' realpath-safe guard; a direct invocation through a temporary symlink with a nonexistent --openclaw-home emitted no output and exited 0, while the real script path reported no workspaces and exited 1. Discovery also scans only top-level directory names beginning with workspace (82-99) and does not use configured per-agent workspace paths, so custom-named or external supported workspaces are silently omitted. resolveOpenclawHome uses strict JSON.parse and noncanonical cfg.openclawHome/home/path fields (44-71), missing JSON5 and alternate state/config conventions. Despite calling itself read-only, the probe creates and retains <memory>/.healthcheck (3-8,118-130); only its temporary file is removed. resolveInside constrains the discovered probe path, inputs are local operator configuration, and no credible lower-trust source-to-sensitive-sink path was established. Preserve writable-path verification by fixing symlink main detection, discovering canonical configured workspaces, and cleaning up a newly created empty health directory or accurately documenting the small persistent write."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-deploy-verifier-executes-unverified-module",
+      "title": "Deploy integrity verifier imports a module after detecting that its checksum is untrusted",
+      "taxonomy": [
+        "CWE-829",
+        "CWE-494",
+        "unsafe-code-loading",
+        "integrity-check-bypass"
+      ],
+      "instanceKey": "unsafe-import:scripts/verify-plugin-deploy.mjs:78",
+      "source": "A file in the deployed extension is replaced or modified before an operator, automation, or higher-privilege maintenance context runs verify-plugin-deploy.mjs in its default check-only mode.",
+      "control": "validateDeployment computes the checksum/stub report first, but report.ok does not gate smoke testing. The verifier constructs import targets from deployDir and continues to smokeTestExports regardless of a known mismatch; no sandbox, signature gate, or trusted-copy substitution contains the import.",
+      "sink": "smokeTestExports dynamically imports each deployed file with a cache-busting query at scripts/lib/deploy-integrity.mjs:285, executing arbitrary module top-level code before the verifier prints FAIL and exits nonzero.",
+      "impact": "A principal able to modify the deployment tree can turn a nominal integrity check into code execution with the verifier's filesystem, credential, and process privileges. This may advance privilege when verification runs under a stronger maintenance/CI account or execute payloads earlier than the guarded gateway restart.",
+      "locations": [
+        "scripts/verify-plugin-deploy.mjs:56",
+        "scripts/verify-plugin-deploy.mjs:74",
+        "scripts/verify-plugin-deploy.mjs:78",
+        "scripts/verify-plugin-deploy.mjs:92",
+        "scripts/lib/deploy-integrity.mjs:279",
+        "scripts/lib/deploy-integrity.mjs:285"
+      ],
+      "validationFacts": "Static control flow proves smokeTestExports is unconditional after validateDeployment. An isolated benign probe imported a temporary module through smokeTestExports and observed its top-level marker write, confirming that the helper is an execution sink rather than static export inspection. Existing deploy-integrity tests pass but do not assert that a known checksum mismatch prevents deployed-code execution.",
+      "attackFacts": "The attacker needs write/symlink influence over one expected deployed module and a subsequent verifier invocation. If the deploy tree is strictly private to the same service account that runs both verifier and gateway, incremental severity is limited because that account would later load the plugin anyway; ownership/mode and CI privilege topology must be validated before final ranking. Gate real imports on successful checksum validation or completed repair, and retain the smoke test after that gate so deployment verification remains fully functional."
+    }
+  ],
+  "notes": "All five assigned files were read completely from immutable commit snapshot 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Eight grouped targeted regression files passed (deploy-integrity, feature-cron-bootstrap, feature-cron-plan, find-deploy-dir, protect-plur1bus-deploy, repair-scripts, smoke-semantic-link-discoverer, verify-workspace-writer), and setup-feature-crons-symlink passed separately: 9/9 test files, 0 failures. node --check passed for all five scripts. Direct/offline probes reproduced the missing homedir crash, the Phase-43c confirm/--apply contradiction, the workspace-writer symlink no-op, and dynamic top-level execution by the deployment smoke-import helper. The real product repository remained at HEAD 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e with an empty git status before this receipt was written. No product source or test was modified; the only write is this audit receipt. All suggested remediations retain semantic discovery/application, feature crons, deployment repair/smoke testing, and workspace writer verification rather than disabling any feature."
+}

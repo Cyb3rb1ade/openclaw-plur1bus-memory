@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-043",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "plur1bus/lib/safe-logging.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1 line; sha256 97bb2f0bbe40d602630c889559c35511b24000d2bd6d552a7585e9fe82234418). Static re-export of the canonical lib/safe-logging.js; no alternate implementation or new data flow."
+    },
+    {
+      "path": "plur1bus/lib/score.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1 line; sha256 67da2f6c70b274e93129d53d7774c10f6c321a0868adbfa9a0e2bbf6b75be2a6). Static re-export of canonical scoring code; no alternate implementation."
+    },
+    {
+      "path": "plur1bus/lib/sql-safety.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1 line; sha256 3c49f8a2dae774d449b277d8cb80d73e194c3547b85d3c42d6e817d0e929be41). Static re-export of the canonical safety helpers; concrete callers and canonical implementation are reviewed in their own shards."
+    },
+    {
+      "path": "plur1bus/lib/temporal-filter.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1 line; sha256 1608856b952de57796dbaf2713126e8dae3ad4c1737232486169d4b40e9c70fe). Static re-export of the canonical temporal filter; no new logic."
+    },
+    {
+      "path": "plur1bus/lib/temporal-parser.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1 line; sha256 a4d6f0c498b3a899911a49f5308c96153283f75e6f3b1abd648442cba10dd5d6). Static re-export of the canonical temporal parser; no new logic."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "All five files are compatibility re-exports. Security dispositions belong to the fully reviewed canonical targets, not these forwarding modules."
+}

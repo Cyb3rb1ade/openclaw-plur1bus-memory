@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-031",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/reminder-parser.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (112 lines; SHA-256 2de65b993ae8782b351149fc8e16897c962684141483997b48d6bd382a7435a3). This is pure relative/vague-time parsing over bounded regex matches and Date arithmetic. It creates no filesystem, database, network, authorization, or process sink. Very large numeric durations can yield an invalid timestamp and cause store failure, a reliability/validation issue rather than a privilege boundary violation."
+    },
+    {
+      "path": "lib/reminder-pending.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (74 lines; SHA-256 99ebba23958a5b1d50e3f9425b9f79df3c4f3326594ef0ec70bc3aafd59f75cf). workspaceKey and agentId are reduced to a 64-character [A-Za-z0-9_-] segment before path construction (10-17), so neither can traverse from the host-provided workspaceDir. The catch-all read/clear behavior can hide operational failures and the read-modify-write queue is not serialized, but no untrusted base directory or cross-boundary write path was established from production callers."
+    },
+    {
+      "path": "lib/reminder-store.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-reminder-cancel-cross-scope"
+      ],
+      "evidence": "Read in full (168 lines; SHA-256 00da8cd88dee55a6961454ee5d845085ea2065b4f92553adc3831fc0f491b074). Save/list queries correctly quote agent/workspace values and ID mutations call safeUuid (13-163). cancelReminder nevertheless performs an unconditional table.update where only id matches (140-146). The registered /plur1bus reminders cancel handler checks global destructive authorization, but passes only its selected agent DB and user-supplied UUID (index.js:3558-3572), never the caller workspaceKey, owner/user scope, or a record ACL. The sibling list path does bind its query to reminderWsKey, making the missing per-object check in cancellation material. Reminder list itself has no checkAuth and is supporting evidence for cand-chat-read-auth-bypass."
+    },
+    {
+      "path": "lib/reply-outcome-tracking.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (358 lines; SHA-256 5e5b787b9c5b8490a8360a727d03afe1e2a890475d09556b23ff149b3aa9b54a). It stores bounded local outcome state under the host-provided workspaceDir and hashes prompt identity for loop avoidance. Normal pending memory IDs originate after the recall pipeline's ACL stage; dynamics ultimately uses safe UUID lookup/update in MemoryDB. The module does not independently re-check workspace ownership when feedback is applied, but no reachable foreign ID producer was established here apart from the separately tracked semantic-lens/pre-ACL recall candidates. File read/parse failures are silently treated as empty and raw prompts/replies are retained locally, both privacy/reliability observations rather than a distinct remote security sink."
+    },
+    {
+      "path": "lib/retroactive-interference.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-retroactive-interference-cross-scope"
+      ],
+      "evidence": "Read in full (45 lines; SHA-256 226e1d01fd6606683ba24df209ebef7cd0f27426fe3d571a35e8b44df057848f). When enabled, a newly stored memory invokes db.search(vector, maxAffected+1, threshold) and weakens every non-core match by UUID without checking candidate scope, owner, storedBy, or workspaceKey (24-36). MemoryDB.search reads the whole per-agent table before any ACL logic (index.js:969-1034), and the normal store path invokes this helper with a pool keyed only by agentId (index.js:2756-2766; lib/multi-namespace-pool.js:29-44). Therefore a semantically similar new memory in workspace A can change retention of up to five rows from workspace B sharing an agent DB. The feature is opt-in (riCfg.enabled) and changes integrity/availability, not raw content disclosure."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-reminder-cancel-cross-scope",
+      "instanceKey": "object-authz:lib/reminder-store.js:140",
+      "title": "Authorized reminder cancellation ignores workspace and record ownership",
+      "taxonomy": [
+        "CWE-639",
+        "CWE-862",
+        "improper-object-authorization"
+      ],
+      "source": "A globally authorized user in one workspace of an agent who obtains a valid UUID for another workspace's reminder in the same per-agent LanceDB table.",
+      "control": "The command applies checkAuth(..., { destructive:true }) and cancelReminder validates UUID syntax, but neither the command nor the mutation carries workspaceKey, ownerUserId, or a checkAccess decision.",
+      "sink": "cancelReminder updates the matching row's reminderStatus and cancelledAt using only `where: id = <uuid>`.",
+      "impact": "An authorized user can suppress another workspace's scheduled reminder, affecting availability/integrity of that workspace's memory-driven workflow.",
+      "closestControl": "listReminders correctly filters storedBy and workspaceKey, demonstrating the scope inputs that cancellation omits; global command authorization does not establish object ownership.",
+      "locations": [
+        "lib/reminder-store.js:140",
+        "lib/reminder-store.js:142",
+        "lib/reminder-store.js:145",
+        "index.js:3558",
+        "index.js:3565",
+        "index.js:3568",
+        "index.js:3579"
+      ],
+      "validationFacts": "Static call-path validation is complete: the command's selected DB is keyed by agent only and cancellation receives no scope argument. Dynamic validation should use a fake/in-memory table with a workspace-B reminder and prove that a workspace-A command context can issue the same UUID, then distinguish UUID disclosure preconditions from generic command access.",
+      "attackFacts": "The attacker must be allowlisted for a route served by the same agent and know the victim reminder UUID; no unauthenticated caller is implied. A feature-preserving repair fetches the row and applies the existing record/workspace ACL before a scoped update, leaving cross-workspace reminder sharing available only when explicitly authorized."
+    },
+    {
+      "candidateId": "cand-retroactive-interference-cross-scope",
+      "instanceKey": "cross-workspace-mutation:lib/retroactive-interference.js:24",
+      "title": "Retroactive interference weakens semantically similar memories across workspace boundaries",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-668",
+        "cross-tenant-data-integrity"
+      ],
+      "source": "A user or model stores a normal non-core memory in workspace A for an agent whose per-agent DB also holds workspace-B memories, while retroactiveInterference is enabled.",
+      "control": "The helper excludes the new row and core rows and caps mutations, but it does not retain or compare workspaceKey, scope, ownerUserId, or storedBy. MemoryDB.search is an unscoped per-agent nearest-neighbor read.",
+      "sink": "For each match, db.update writes a reduced memoryStrength and lastDynamicsAt to the foreign row.",
+      "impact": "A tenant can indirectly reduce retention/retrieval priority of up to five semantically similar memories owned by another workspace sharing the agent DB, undermining isolation and integrity.",
+      "closestControl": "The main recall pipeline has ACL filtering, but that control is absent from this background mutation path. The opt-in gate limits exposure but is not a scope authorization check.",
+      "locations": [
+        "lib/retroactive-interference.js:24",
+        "lib/retroactive-interference.js:30",
+        "lib/retroactive-interference.js:33",
+        "index.js:969",
+        "index.js:1204",
+        "index.js:2756",
+        "index.js:2758",
+        "lib/multi-namespace-pool.js:29"
+      ],
+      "validationFacts": "Static data flow establishes an unscoped search followed by mutation of returned IDs. Dynamic validation should instantiate a fake DB that returns a workspace-B candidate for a workspace-A newEntry and assert update is called without a scope comparison; validate whether runtime configuration defaults the feature off and whether model tools can make the required semantic write without independent human authorization.",
+      "attackFacts": "This is an integrity/availability path, not direct content exfiltration. It requires the opt-in feature, shared agent table, and semantic similarity above threshold. A compatible repair filters candidates to an equal authorized scope before applying dynamics rather than disabling interference."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Two candidate families require validation; reminder list read access supports the existing chat read-authorization family. No repository file was modified and no feature-disable recommendation is implied."
+}

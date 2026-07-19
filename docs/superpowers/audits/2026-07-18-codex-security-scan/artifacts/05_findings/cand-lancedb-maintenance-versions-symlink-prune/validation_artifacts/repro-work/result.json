@@ -1,0 +1,15 @@
+{
+  "run": {
+    "status": 0,
+    "signal": null,
+    "stdout": "",
+    "stderr": ""
+  },
+  "base": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-lancedb-maintenance-versions-symlink-prune/validation_artifacts/repro-work/base",
+  "linkedVersions": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-lancedb-maintenance-versions-symlink-prune/validation_artifacts/repro-work/base/agent-a/memories/_versions",
+  "outside": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-lancedb-maintenance-versions-symlink-prune/validation_artifacts/repro-work/outside-versions",
+  "oldest": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-lancedb-maintenance-versions-symlink-prune/validation_artifacts/repro-work/outside-versions/manifest-00.json",
+  "oldestWasRemoved": true,
+  "remainingManifestCount": 50,
+  "containedBackupCreated": true
+}

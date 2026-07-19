@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-023",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/obsidian/provenance-graph.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (24 lines; sha256 b55042d29005803693532aa2bf10008fdffd2a2ce889e384116233289b7162fb). Generates non-authoritative provenance mirrors only; record-index and record-writer trust boundaries are covered by their own receipts."
+    },
+    {
+      "path": "lib/obsidian/record-index.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": ["cand-obsidian-symlink-escape"],
+      "evidence": "Read in full (126 lines; sha256 9ae3d82a4e92fe895302e225106afd78f5149158c8eacc0b4d032d8002f29828). Collection paths are lexical joins beneath resolveReviewPath output, then readdirSync/readFileSync follows any pre-existing directory symlink. Since the bridge treats Obsidian content as untrusted, a symlinked records collection can expose external .md files to index consumers."
+    },
+    {
+      "path": "lib/obsidian/record-schema.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (97 lines; sha256 9e637683780f8b7be46dc6c8faa263d8860f1271498f5a3af6f276bf232af9c7). Record types map through a fixed allowlist and record IDs are safe-slugged before path construction. Output is explicitly authoritative=false. The downstream base-path symlink issue is recorded separately."
+    },
+    {
+      "path": "lib/obsidian/record-writer.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": ["cand-obsidian-symlink-escape"],
+      "evidence": "Read in full (69 lines; sha256 7fc6056fad98db7da6a49978b92acf279cdb144bebc45633b37bf0def29f1689). Relative filenames are safe-slugged and manual managed-block edits are hash protected, but atomicWriteText is called on a lexically contained path without resolving pre-existing parent symlinks, allowing the actual write/rename to occur outside the vault."
+    },
+    {
+      "path": "lib/obsidian/safe-paths.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": ["cand-obsidian-symlink-escape"],
+      "evidence": "Read in full (132 lines; sha256 441f1a85347bb1edf553fff65ccedea7c97a2e762294d4568fe4f333a7846ccd). resolveReviewPath uses resolve/relative lexical containment only and atomicWriteText never realpaths the parent. Dynamic reproduction created vault/plur1bus/records/tasks as a symlink to a sibling directory; resolveReviewPath accepted records/tasks/probe.md and atomicWriteText created outside/probe.md with content 'escaped'."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-obsidian-symlink-escape",
+      "title": "Lexical Obsidian path checks allow directory-symlink read and write escape outside the vault",
+      "taxonomy": ["CWE-59", "CWE-22", "arbitrary-file-read-write"],
+      "source": "The Obsidian vault and its review tree are explicitly treated as untrusted, bidirectionally synchronized input; an attacker able to add a filesystem/Git symlink can point a generated collection or nested output directory at another process-readable/writable directory.",
+      "control": "assertSafeRelativePath rejects .. and absolute input, but resolveReviewPath only compares lexical resolved paths. It does not realpath the vault root, review root, or nearest existing parent, and atomicWriteText does not revalidate before creating its temporary file and renaming it.",
+      "sink": "record-index readdirSync/readFileSync follows symlinked collection directories; record-writer and the many generators using atomicWriteText create/replace files through symlinked parents outside the configured vault.",
+      "impact": "A malicious shared/synchronized vault can cause PLUR1BUS commands or background rebuilds to disclose external Markdown through dashboards/explanations and to create or overwrite predictable external .md/.jsonl files with the OpenClaw process's privileges. Chaining attacker-chosen record IDs/output directories can target security-relevant workspace Markdown without disabling any PLUR1BUS feature.",
+      "locations": [
+        "lib/obsidian/safe-paths.js:111",
+        "lib/obsidian/safe-paths.js:116",
+        "lib/obsidian/safe-paths.js:118",
+        "lib/obsidian/safe-paths.js:127",
+        "lib/obsidian/safe-paths.js:129",
+        "lib/obsidian/safe-paths.js:131",
+        "lib/obsidian/record-index.js:46",
+        "lib/obsidian/record-index.js:52",
+        "lib/obsidian/record-index.js:57",
+        "lib/obsidian/record-writer.js:36",
+        "lib/obsidian/record-writer.js:60",
+        "lib/obsidian/record-writer.js:63"
+      ],
+      "validationFacts": "A dynamic temp-directory proof succeeded: a symlink at vault/plur1bus/records/tasks pointed to an outside sibling; resolveReviewPath returned a lexically in-vault path and atomicWriteText wrote outside/probe.md. Validation should additionally exercise readRecords through a symlinked collection and establish realistic creation of symlinks through supported shared-vault/Git workflows.",
+      "attackFacts": "The attacker needs the ability to place a directory symlink in the configured vault (for example via a shared Git-backed vault or local untrusted collaborator) and a subsequent PLUR1BUS read/rebuild/write action. Existing slug and '..' checks do not help because the supplied relative path is benign. A feature-preserving fix is to use the existing realpath-aware resolveInside contract for every read/write parent, reject symlink components, and revalidate immediately before atomic rename."
+    }
+  ],
+  "notes": "One cross-cutting path candidate with a successful isolated proof. All Obsidian features can remain enabled; containment must be made symlink-aware at the shared path primitive."
+}

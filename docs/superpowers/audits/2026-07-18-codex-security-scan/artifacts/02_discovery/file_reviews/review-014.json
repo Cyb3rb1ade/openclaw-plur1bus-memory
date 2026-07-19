@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-014",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/jobs/skill-miner/proposal-writer.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-skill-miner-dryrun-write",
+        "cand-skill-approval-blind-executable"
+      ],
+      "evidence": "Read in full (90 lines). writeProposal performs the persistent append invoked during dry-run (34-44). Proposal/status/presentation files use fixed names below host workspaceDir (14-20, 71-81), so no user-controlled traversal segment exists. Status rewrites are non-atomic and read/append dedupe is race-prone (26-44, 47-64), which can corrupt or lose review state. Proposal identity is not cryptographically bound to reviewed content, supporting cand-skill-approval-blind-executable."
+    },
+    {
+      "path": "lib/jobs/skill-miner/skill-md-renderer.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-skill-approval-blind-executable"
+      ],
+      "evidence": "Read in full (50 lines). LLM-supplied title, description, instructions, examples, and provenance values are rendered verbatim into SKILL.md (7-49). This is the intended feature sink, but it becomes security-sensitive because the default approval list does not display the executable instructions or bind approval to their hash."
+    },
+    {
+      "path": "lib/jsonl-utils.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (114 lines). Reads are optionally byte-bounded and tail reads allocate only maxBytes (21-48, 65-113). Every stat/read/parse/close catch silently swallows errors (29-30, 36-37, 44-45, 73-74, 87-95, 109-110), violating the repository error-handling standard and making review-state corruption invisible, but path trust and mutation are caller-owned and no independent exploit sink is present."
+    },
+    {
+      "path": "lib/llm-call.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (88 lines). Configured baseUrl, API key, and headers reach the OpenAI SDK (27-49), and memory-bearing messages may leave the host. This is an explicit operator-selected provider boundary; no chat/model path that can set llmCfg.baseUrl or credentials is present in this module. Timeout and exact-result-cache context are applied. FRT-028 remains to close configuration authority and redirects across callers, but this file alone does not establish attacker-controlled SSRF."
+    },
+    {
+      "path": "lib/llm-result-cache.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (656 lines). Keys hash messages, credential, and headers and include scope/purpose/endpoint/model/options (126-148); purposes are allowlisted (15-29, 585-590); persistent scope paths use safeAgentId and resolveInside (320-330); files are chmod 0600 and SQL parameters are bound (337-361, 402-412, 456-540); errors log and disable only persistence while compute continues (305-318, 368-370, 485-549). Size trimming/TTL behavior at 430-545 has confirmed functional regressions in the bug audit, but no confidentiality or privilege-crossing exploit was established."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No new candidate IDs; this shard supplies sink/control evidence for the skill-approval and dry-run candidates. Functional audit separately covers non-atomic proposal rewrites, silent JSONL corruption handling, and persistent-cache eviction/TTL defects."
+}

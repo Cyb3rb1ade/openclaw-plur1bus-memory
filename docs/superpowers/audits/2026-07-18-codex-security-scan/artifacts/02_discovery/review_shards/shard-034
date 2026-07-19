@@ -1,0 +1,5 @@
+{"path":"lib/session-time.js","area":"."}
+{"path":"lib/setup/feature-cron-bootstrap.js","area":"."}
+{"path":"lib/setup/feature-cron-plan.js","area":"."}
+{"path":"lib/setup/feature-profiles.js","area":"."}
+{"path":"lib/shared-memory.js","area":"."}

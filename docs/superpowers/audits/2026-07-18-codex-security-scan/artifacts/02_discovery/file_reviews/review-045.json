@@ -1,0 +1,189 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-045",
+  "reviewer": "security-file-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "scripts/install-memory-system.sh",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-installer-agent-id-shell-injection",
+        "cand-installer-workspace-shell-injection",
+        "cand-installer-agent-id-path-traversal",
+        "cand-installer-agent-id-generated-gc-code-injection",
+        "cand-startup-cohere-reranker-config-bypass"
+      ],
+      "evidence": "Read in full (1,871 lines; SHA-256 eba31b3bc9170c5d9ec119a71a845ebbc51a7d5490053732aceca369276e63c3). The installer reads agent IDs and workspace paths verbatim from target openclaw.json (928-950), then passes interpolated command strings to run_target, whose local branch is bash -c and remote branch is an SSH remote shell (216-221). Neither field is validated or shell-escaped at the second parsing boundary. Agent IDs also become direct filesystem components (947, 1384) and are inserted with printf into generated JavaScript (1410). This violates the documented safeAgentId/resolveInside policy and creates the four distinct candidate proof tuples below. The script also unconditionally applies the native-memory patch (1579-1596) even though its own provider wizard offers local/disabled rerank modes (786-805), supporting cand-startup-cohere-reranker-config-bypass from review-040. Function-preservation evidence for the parent audit: the config patch forcibly sets legacy plugins.entries.memory-lancedb.enabled=false (1234, 1298) without a migration/confirmation path; this is a feature-regression finding, not a separate security candidate."
+    },
+    {
+      "path": "scripts/lib/deploy-integrity.mjs",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-deploy-repair-symlink-write"
+      ],
+      "evidence": "Read in full (298 lines; SHA-256 038e3f7e5ba777c0f9bd0794f0418b90c5b5d2d65009d9091f2ce03d00b4774f). DEPLOY_FILES is a static allowlist and its consumers use fixed relative members, but validateDeployment forms deploy paths with join only (250-254); validateFile follows a deployed symlink while hashing (206-226); and repairFile mkdirs/copies directly to that path (233-242). No lstat, realpath containment, resolveInside, or no-follow write protects repair mode. repair-installed-plugin.mjs reaches this helper as a destructive maintenance action after copying a backup, so a pre-planted symlink at a listed deployed path can redirect both reads/backup and the subsequent overwrite outside the deploy directory. DEPLOY_FILES contains memory-merge-safety.js twice (23, 51), causing redundant checking/repair but no separate security impact."
+    },
+    {
+      "path": "scripts/lib/find-deploy-dir.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (46 lines; SHA-256 9d54dedb79341d1eaa2f8735651b674495a399d0c7acca6e27943db8434aa084). The helper deterministically prefers the explicit PLUR1BUS_DEPLOY operator override, otherwise derives the plugin ID from the local manifest and chooses extensions/<pluginId> before a checkout candidate (21-45). Environment and repoDir are explicit privileged CLI/operator inputs; callers resolve the returned path before use. The catch around malformed local manifest JSON intentionally retains a documented default and does not conceal a privileged runtime failure."
+    },
+    {
+      "path": "scripts/lib/installer-config.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (280 lines; SHA-256 685fe2ffa4630884f9101624494e121b83afb770969cbb5f90bd30bbd3dfd779). JSON input is parsed explicitly, feature policy output is cloned, and install-log events deliberately exclude provider credentials (202-240). No direct filesystem, process, network, query, or authorization sink exists here. Robustness/feature-preservation concern passed to the parent audit: applyInstallerFeaturePolicy always assigns entry.enabled=true (67-77), including preserve mode, while restoreExplicitDisabledFeatures only restores false values below config; an explicitly disabled top-level plugin entry is silently reactivated during an update. parseInstallLog counts malformed/unrelated lines rather than logging each one (105-130), which is bounded diagnostic loss but not a demonstrated security path."
+    },
+    {
+      "path": "scripts/lib/openclaw-cli.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (18 lines; SHA-256 1b9e80f6f2069504d3172ab27538776608a15bdb00232d4c5606eb56a19d0a73). The wrapper uses spawnSync with a fixed openclaw executable and an argv array, never a shell (15-17), returns status/stdout/stderr/error to its callers, and bounds execution to 15 seconds by default. Its reviewed consumers provide fixed CLI verbs/options; no separately reachable command-injection or authorization bypass was established."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-installer-agent-id-shell-injection",
+      "title": "Target-config agent IDs break the installer's second shell parse",
+      "taxonomy": [
+        "CWE-78",
+        "CWE-20",
+        "shell-injection"
+      ],
+      "instanceKey": "shell-injection:scripts/install-memory-system.sh:944",
+      "source": "The target openclaw.json supplies .agents.list[].id or object-form .agents keys; jq emits each value unchanged into AGENT_LIST at lines 928-932.",
+      "control": "No safeAgentId allowlist is applied before the value is embedded between single quotes inside a command string. run_target then gives that string a second parse through local bash -c or the remote SSH shell (216-221).",
+      "sink": "The workspace lookup at line 944 executes a constructed jq command containing --arg agent '$agent'. An agent ID containing a single quote terminates that quote at the second shell parse and can append arbitrary shell syntax.",
+      "impact": "A principal who can introduce a crafted agent ID into a target configuration and induce an operator/automation to run the installer can execute commands as the invoking local user or the selected remote SSH account before installation completes.",
+      "locations": [
+        "scripts/install-memory-system.sh:216",
+        "scripts/install-memory-system.sh:218",
+        "scripts/install-memory-system.sh:220",
+        "scripts/install-memory-system.sh:928",
+        "scripts/install-memory-system.sh:930",
+        "scripts/install-memory-system.sh:944"
+      ],
+      "validationFacts": "Static source-to-control-to-sink tracing is complete. The vulnerable value crosses a jq raw-output boundary, is retained in a Bash array, and is interpolated into a quoted command that is parsed again; no shell-safe argv transport or identifier validation exists. Dynamic validation should use an isolated temporary OpenClaw config and a harmless marker command only.",
+      "attackFacts": "The precondition is configuration-write or imported-configuration influence plus installer execution; the installer is a privileged maintenance surface, not a chat endpoint. Replacing constructed shell strings with argument-safe local/SSH invocations and rejecting IDs outside safeAgentId preserves all supported agent installations."
+    },
+    {
+      "candidateId": "cand-installer-workspace-shell-injection",
+      "title": "Target-config workspace paths are re-parsed as shell code by installer writes",
+      "taxonomy": [
+        "CWE-78",
+        "CWE-20",
+        "shell-injection"
+      ],
+      "instanceKey": "shell-injection:scripts/install-memory-system.sh:1385",
+      "source": "The target openclaw.json workspace field is selected at line 944 and retained as WORKSPACE_MAP[$agent] at line 949 without validation or canonical containment checks.",
+      "control": "The path is expanded into an already-quoted command string and then re-parsed by run_target's local bash -c or by the remote shell. The inner single quotes do not sanitize a quote embedded in the stored workspace value.",
+      "sink": "Directory creation at line 1385, SOUL.md probes/appends at 1533-1543, and AGENTS.md reads/writes at 1559-1572 all interpolate the workspace-derived path into run_target/read_target_file/write_target_file command surfaces.",
+      "impact": "A crafted workspace value can execute commands as the installer account when normal setup writes workspace artifacts, rather than merely selecting a different workspace directory.",
+      "locations": [
+        "scripts/install-memory-system.sh:216",
+        "scripts/install-memory-system.sh:218",
+        "scripts/install-memory-system.sh:239",
+        "scripts/install-memory-system.sh:271",
+        "scripts/install-memory-system.sh:944",
+        "scripts/install-memory-system.sh:949",
+        "scripts/install-memory-system.sh:1385",
+        "scripts/install-memory-system.sh:1533",
+        "scripts/install-memory-system.sh:1543",
+        "scripts/install-memory-system.sh:1559",
+        "scripts/install-memory-system.sh:1566",
+        "scripts/install-memory-system.sh:1571"
+      ],
+      "validationFacts": "Static tracing shows the workspace string is obtained as raw jq text and later inserted into command strings rather than passed as a process argument. No resolveInside, canonical ownership validation, or shell escaping remains at the executing branch. Validate in a disposable target directory because the normal installer intentionally makes durable configuration and workspace changes.",
+      "attackFacts": "The attacker needs target-config workspace influence and a subsequent full installer run. A path-aware, argv-based remote/local file helper that treats configured workspace paths as data preserves custom workspace support without executing their contents."
+    },
+    {
+      "candidateId": "cand-installer-agent-id-path-traversal",
+      "title": "Installer treats target-config agent IDs as uncontained filesystem components",
+      "taxonomy": [
+        "CWE-22",
+        "CWE-73",
+        "filesystem-containment"
+      ],
+      "instanceKey": "path-traversal:scripts/install-memory-system.sh:1384",
+      "source": "The same raw target-config agent IDs populate AGENT_LIST at lines 928-932, including values such as ../sibling that are not rejected by the installer.",
+      "control": "The installer never enforces safeAgentId and never resolves the composed target beneath the intended LanceDB base before creating directories or generating per-agent jobs.",
+      "sink": "run_target creates '$TARGET_DIR/memory/lancedb-namespaced/$agent' at line 1384; the fallback workspace path also concatenates agent at line 947. Dot-dot components therefore escape the intended per-agent LanceDB/workspace subtree when the command executes.",
+      "impact": "A configuration writer can cause setup to create or use paths outside the per-agent data root, corrupting adjacent target state and defeating per-agent filesystem isolation. This is separate from the shell-injection proof tuple because a traversal-only value needs no shell metacharacters.",
+      "locations": [
+        "scripts/install-memory-system.sh:928",
+        "scripts/install-memory-system.sh:930",
+        "scripts/install-memory-system.sh:944",
+        "scripts/install-memory-system.sh:947",
+        "scripts/install-memory-system.sh:949",
+        "scripts/install-memory-system.sh:1382",
+        "scripts/install-memory-system.sh:1384",
+        "scripts/install-memory-system.sh:1385"
+      ],
+      "validationFacts": "Static containment failure is direct: the agent field is concatenated into a shell-quoted path, and shell quoting preserves ../ semantics. An isolated dry-run/reproduction should verify exact paths and confirm whether target deployment permissions make the escaped sibling writable.",
+      "attackFacts": "Preconditions are target-config agent-ID influence and installer execution. Validating agent IDs before any path composition and using a containment-resolving path helper preserves arbitrary supported agents while blocking path separators and traversal."
+    },
+    {
+      "candidateId": "cand-installer-agent-id-generated-gc-code-injection",
+      "title": "Unescaped agent IDs are persisted into executable generated GC JavaScript",
+      "taxonomy": [
+        "CWE-94",
+        "CWE-116",
+        "generated-code-injection"
+      ],
+      "instanceKey": "generated-code-injection:scripts/install-memory-system.sh:1410",
+      "source": "AGENT_LIST carries raw target-config agent IDs from lines 928-932 into the memory-gc.mjs heredoc.",
+      "control": "The generated AGENTS array uses printf '\"%s\",' rather than JSON/JavaScript escaping or a safeAgentId check. A double quote in an ID can terminate the generated string literal even when it did not break the earlier single-quoted shell argument.",
+      "sink": "Line 1410 writes the resulting JavaScript array into TARGET_GC_SCRIPT, which line 1445 marks executable; it is later runnable manually and, with --legacy-host-cron, automatically by the installed cron entry at 1453-1469.",
+      "impact": "A malicious configuration value can persist JavaScript chosen by the attacker into an executable maintenance script, leading to code execution under the account that later runs memory-gc.mjs.",
+      "locations": [
+        "scripts/install-memory-system.sh:928",
+        "scripts/install-memory-system.sh:930",
+        "scripts/install-memory-system.sh:1402",
+        "scripts/install-memory-system.sh:1410",
+        "scripts/install-memory-system.sh:1443",
+        "scripts/install-memory-system.sh:1445",
+        "scripts/install-memory-system.sh:1453",
+        "scripts/install-memory-system.sh:1465"
+      ],
+      "validationFacts": "Static data flow is complete. The code generator emits a raw quoted token rather than JSON.stringify/argv-derived data, and the output is explicitly executable. A controlled validation should choose an ID with only double-quote JavaScript syntax (not a single quote) to distinguish this delayed sink from cand-installer-agent-id-shell-injection, and should run only in a disposable target.",
+      "attackFacts": "The attacker needs configuration influence, a full installer run that reaches GC generation, and a later GC invocation (automatic only when the opt-in legacy cron is enabled, otherwise manual). Generating AGENTS through JSON serialization after safeAgentId validation preserves GC for every valid agent."
+    },
+    {
+      "candidateId": "cand-deploy-repair-symlink-write",
+      "title": "Deploy-integrity repair follows a listed deployment symlink outside its root",
+      "taxonomy": [
+        "CWE-59",
+        "CWE-22",
+        "arbitrary-file-overwrite"
+      ],
+      "instanceKey": "symlink-write:scripts/lib/deploy-integrity.mjs:240",
+      "source": "A listed file path inside the deployed extension is replaced before repair with a symbolic link whose target lies outside deployDir.",
+      "control": "validateDeployment only uses lexical join; validateFile/repairFile use existsSync/readFileSync/copyFileSync without lstat, realpath containment, O_NOFOLLOW, or an atomic contained replacement.",
+      "sink": "repairFile calls copyFileSync(repoPath, deployPath) at line 241. Node follows the destination symlink, so repair-installed-plugin.mjs and verify-plugin-deploy.mjs --repair can overwrite the link target instead of the deployed file; repair-installed-plugin's backup path also follows it first.",
+      "impact": "A symlink planted in a deployment tree writable by a lower-privilege principal can redirect a privileged maintenance repair's file read, backup, and overwrite outside the intended extension directory, causing integrity loss or data exposure.",
+      "locations": [
+        "scripts/lib/deploy-integrity.mjs:206",
+        "scripts/lib/deploy-integrity.mjs:209",
+        "scripts/lib/deploy-integrity.mjs:233",
+        "scripts/lib/deploy-integrity.mjs:240",
+        "scripts/lib/deploy-integrity.mjs:241",
+        "scripts/lib/deploy-integrity.mjs:250",
+        "scripts/lib/deploy-integrity.mjs:252",
+        "scripts/repair-installed-plugin.mjs:58",
+        "scripts/repair-installed-plugin.mjs:63",
+        "scripts/repair-installed-plugin.mjs:67",
+        "scripts/repair-installed-plugin.mjs:160",
+        "scripts/repair-installed-plugin.mjs:168",
+        "scripts/verify-plugin-deploy.mjs:56"
+      ],
+      "validationFacts": "Static analysis establishes the missing no-follow/containment control. Validate with a disposable deployDir containing a symlink for one DEPLOY_FILES member and an outside sentinel, then determine actual deployment ownership/mode topology before severity calibration. Existing tests cover regular files and broken re-export stubs but not symlink targets.",
+      "attackFacts": "The precondition is a lower-trust principal able to plant a symlink in the deployed extension before a higher-trust repair invocation. If the deployment directory is strictly private to the same service account, severity is limited but the containment guarantee still fails. A contained temporary copy plus lstat/no-follow checks retains repair functionality."
+    }
+  ],
+  "notes": "All five assigned source files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. No product-repository file was modified. Four installer candidates and one deploy-repair containment candidate are discovery-stage only and require isolated validation plus deployment-topology calibration. The receipt also forwards two concrete feature-preservation regressions (forced legacy-plugin disable and preserve-mode top-level reactivation) without recommending that any feature be disabled."
+}

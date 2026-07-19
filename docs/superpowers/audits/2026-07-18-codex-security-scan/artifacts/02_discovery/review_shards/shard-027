@@ -1,0 +1,5 @@
+{"path":"lib/providers/dimension-guard.js","area":"."}
+{"path":"lib/providers/dimensions.js","area":"."}
+{"path":"lib/providers/embedding-local-transformers.js","area":"."}
+{"path":"lib/providers/embedding-openai.js","area":"."}
+{"path":"lib/providers/env.js","area":"."}

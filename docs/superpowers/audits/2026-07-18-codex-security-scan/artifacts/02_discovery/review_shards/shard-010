@@ -1,0 +1,5 @@
+{"path":"lib/interpretation-overlay.js","area":"."}
+{"path":"lib/job-lock.js","area":"."}
+{"path":"lib/job-rate-limit.js","area":"."}
+{"path":"lib/jobs/auto-accept-stale-criticals.js","area":"."}
+{"path":"lib/jobs/conflict-resolver.js","area":"."}

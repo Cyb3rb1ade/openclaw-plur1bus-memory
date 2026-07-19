@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-037",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/telegram-commands/status.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (148 lines; SHA-256 149e67808165573176addc1a563701111773a394ed2a677bb813c8cbc240dac6). This is a presentation-only status renderer; it creates no file, process, network, database, authorization, or state-changing sink. It can display diagnostic strings supplied by the trusted status collector, but the reviewed renderer does not confer an attacker-controlled capability. The independently reachable status command authorization issue is represented by cand-chat-read-auth-bypass in shard-036."
+    },
+    {
+      "path": "lib/temperament-command.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (82 lines; SHA-256 79fd73c45b28ee39c135a2d0e38f47123ff09d3d1a9ca588cdf749f4d88e915a). The module parses a bounded operator-selected temperament enum/slider configuration and delegates mutation/authentication to its caller. No filesystem, shell, query-concatenation, network, or independently reachable authorization sink exists in this file."
+    },
+    {
+      "path": "lib/temporal-context.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (161 lines; SHA-256 fbd4976a7d1c40e738a7cec02c008d1971a1198badba2da4c9f5bb7110c443d7). It derives session-gap metadata and renders a fixed-rule temporal context block. The only interpolated values are bounded time/session-derived fields and operator configuration timezone; no user memory or executable sink is introduced."
+    },
+    {
+      "path": "lib/temporal-filter.js",
+      "status": "full_reviewed",
+      "disposition": "candidate_support",
+      "candidateIds": [
+        "cand-pattern-pre-acl-cross-scope"
+      ],
+      "evidence": "Read in full (64 lines; SHA-256 ce863673819e2e43cbae02e1f83390ae8dc9b359d952c675eebd7695a56e361c). temporalRangeFromAnchor embeds an attacker query and directly searches the unfiltered dbTable for a nearest row (38-58); its createdAt is used to alter the candidate result set. In runRecallPipeline this happens at 734-760 after raw vector/refinement results and before the canonical ACL pass at 1036-1066. Thus this is an additional pre-ACL retrieval consumer of the same shared-table boundary identified in cand-pattern-pre-acl-cross-scope, though it exposes only a derived 48-hour range rather than raw content. The catch at 59-62 silently returns null, a reliability observation covered by the bug audit rather than a distinct security candidate."
+    },
+    {
+      "path": "lib/temporal-parser.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (173 lines; SHA-256 8a87da786396c4f17f5e51297a14892df31d03144ae06b7eb28a76fae0ee7ac3). Pure bounded natural-language date/anchor parsing uses fixed regular expressions and Date arithmetic only. It has no privileged sink and unknown input returns null."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. The temporal anchor query supplies corroborating evidence for an existing pre-ACL recall candidate; no distinct candidate was created. No repository file was modified."
+}

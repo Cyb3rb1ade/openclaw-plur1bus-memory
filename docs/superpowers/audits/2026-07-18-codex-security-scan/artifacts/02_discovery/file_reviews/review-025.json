@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-025",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/open-threads.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (115 lines; SHA-256 17c4d5dc4c1dc0e7157790d9236742b3e690381cdca1fe17dbd45be074040e8d). Pure outcome helpers deduplicate and age-bound topic hints; prompt output is capped at 400 chars, uses sanitizeMemoryTextForPrompt, and sits in an explicit untrusted historical-context block. No file, network, database, authorization, or mutation sink is present."
+    },
+    {
+      "path": "lib/overlay-commands.js",
+      "status": "full_reviewed",
+      "disposition": "candidate_support",
+      "candidateIds": [
+        "cand-chat-read-auth-bypass"
+      ],
+      "evidence": "Read in full (144 lines; SHA-256 79dc3b0e303949220c9716030e758adebd0c2d15366b6c2492d0d94d249919ef). The command helper validates UUIDs for object lookups; production wraps disable/supersede with destructive checkAuth and appendDestructiveOpLog (index.js:3644-3668), so no standalone mutation bypass remains. However overlays, overlay, contradictions, and doctor return workspace overlay lineage/descriptions/diagnostics and the contradiction route can submit those descriptions to the configured LLM (39-104). Their registered path does not call checkAuth, extending the independently reachable sensitive chat-read family to overlay and continuity-review metadata."
+    },
+    {
+      "path": "lib/overlay-generator.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (279 lines; SHA-256 ce292c4fe8f0f3139bc0b6771abdf06b15e1604c916f690ef4c9cc30386abf72). Automatic overlays are opt-in, rate/deduped, constrained to allowed shift types, confidence-bounded, provisional by default, and do not alter factual memory. Active overlay rendering remains inside the relevant-memories untrusted/historical evidence block and sanitizes description text (index.js:5880-5960; lib/relevant-memory-context.js:169-190, 217). Model output can influence a provisional file record but no confirmed privilege or cross-scope sink was established; full-content external-LLM trust is addressed as configuration/feature governance rather than a distinct vulnerability."
+    },
+    {
+      "path": "lib/pattern-detector-embedding.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (205 lines; SHA-256 f2cc9f89aedda2bf85d2dbfd7f0ad402382927913fd2dd54b07c86490fae7158). This module performs local bounded lookback clustering and returns data only. It silently skips embedding failures (94-98) and accepts unconstrained option values, both reliability concerns, but no independent file/network/process/authorization sink exists."
+    },
+    {
+      "path": "lib/pattern-detector.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (202 lines; SHA-256 6f2442202e2884620d4273ebde61c5b2e69d9de3c4d63941d142893b52b8d448). It performs local keyword or delegated embedding clustering and normalizes invalid timestamps. Raw representative text is not rendered to a privileged sink here; later pattern prompting is reviewed separately in shard-042. No direct security candidate remains in this detector."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Overlay read/diagnostic commands supply one additional child instance of the existing chat read-authorization candidate; no new candidate was created. No repository file was modified."
+}

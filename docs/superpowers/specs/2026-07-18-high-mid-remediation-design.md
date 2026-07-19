@@ -11,7 +11,11 @@ Fix every validated high- and medium-severity bug, feature, and security finding
 
 ## Scope
 
-The authoritative audit is under:
+The authoritative audit snapshot is versioned under:
+
+`docs/superpowers/audits/2026-07-18-codex-security-scan/`
+
+Its original scan provenance was:
 
 `/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/`
 

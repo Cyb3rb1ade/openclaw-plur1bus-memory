@@ -1,0 +1,5 @@
+{"path":"scripts/lib/patch-agents-memory-instructions.mjs","area":"."}
+{"path":"scripts/maintain-lancedb.mjs","area":"."}
+{"path":"scripts/migrate-missing-columns.mjs","area":"."}
+{"path":"scripts/protect-plur1bus-deploy.sh","area":"."}
+{"path":"scripts/provider-wizard.mjs","area":"."}
