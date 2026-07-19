@@ -21,46 +21,81 @@
  *   1  Error
  */
 
-import { existsSync, readdirSync, statSync, unlinkSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
-import { join, extname } from "node:path";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { extname, join, relative } from "node:path";
 import { homedir } from "node:os";
+import { appendDestructiveOpLog, resolveInside, safeAgentId } from "../lib/sql-safety.js";
 
 const DEFAULT_KEEP = 50;
+const MAX_KEEP = 100_000;
 const WARN_THRESHOLD = 500;
 const CRITICAL_THRESHOLD = 1500;
+
+function parseKeep(raw) {
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) {
+    throw new Error(`--keep must be a positive decimal integer between 1 and ${MAX_KEEP}`);
+  }
+  const keep = Number(raw);
+  if (!Number.isSafeInteger(keep) || keep < 1 || keep > MAX_KEEP) {
+    throw new Error(`--keep must be a positive decimal integer between 1 and ${MAX_KEEP}`);
+  }
+  return keep;
+}
 
 function parseArgs(argv) {
   const opts = { apply: false, keep: DEFAULT_KEEP, dbPath: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--apply")     opts.apply = true;
-    else if (a === "--keep") opts.keep = parseInt(argv[++i], 10) || DEFAULT_KEEP;
-    else if (a === "--db-path") opts.dbPath = argv[++i];
+    else if (a === "--keep") opts.keep = parseKeep(argv[++i]);
+    else if (a === "--db-path") {
+      const dbPath = argv[++i];
+      if (!dbPath || dbPath.startsWith("--")) throw new Error("--db-path requires a path value");
+      opts.dbPath = dbPath;
+    }
   }
   return opts;
 }
 
 function sortedManifests(versionsDir) {
-  return readdirSync(versionsDir)
-    .filter((f) => [".json", ".manifest"].includes(extname(f)))
-    .map((f) => ({ name: f, mtime: statSync(join(versionsDir, f)).mtimeMs }))
+  return readdirSync(versionsDir, { withFileTypes: true })
+    .filter((entry) => [".json", ".manifest"].includes(extname(entry.name)))
+    .map((entry) => {
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error(`Unsafe manifest entry (expected regular file): ${entry.name}`);
+      }
+      const manifestPath = resolveInside(versionsDir, entry.name);
+      return { name: entry.name, mtime: statSync(manifestPath).mtimeMs };
+    })
     .sort((a, b) => b.mtime - a.mtime); // newest first
 }
 
-function backupPrunedManifests(versionsDir, toRemove, backupRoot) {
-  const relPath = versionsDir.split("/").slice(-3).join("/");
-  const destDir = join(backupRoot, relPath);
+function backupPrunedManifests(base, versionsDir, toRemove, backupRoot) {
+  const relPath = relative(base, versionsDir);
+  if (!relPath || relPath.startsWith("..")) {
+    throw new Error(`Unsafe versions path outside DB base: ${versionsDir}`);
+  }
+  const destDir = resolveInside(backupRoot, relPath);
   mkdirSync(destDir, { recursive: true });
   for (const m of toRemove) {
-    copyFileSync(join(versionsDir, m.name), join(destDir, m.name));
+    copyFileSync(resolveInside(versionsDir, m.name), resolveInside(destDir, m.name));
   }
   writeFileSync(
-    join(destDir, "_prune-manifest.json"),
+    resolveInside(destDir, "_prune-manifest.json"),
     JSON.stringify({ prunedAt: new Date().toISOString(), count: toRemove.length, files: toRemove.map((m) => m.name) }, null, 2),
   );
 }
 
-function pruneTable(versionsDir, keep, apply, backupRoot) {
+function pruneTable(base, versionsDir, keep, apply, backupRoot) {
   const manifests = sortedManifests(versionsDir);
   const total = manifests.length;
   const toRemove = manifests.slice(keep);
@@ -77,13 +112,53 @@ function pruneTable(versionsDir, keep, apply, backupRoot) {
   console.log(`  ${icon} ${versionsDir.split("/").slice(-3).join("/")}/_versions: ${total} versions  [${status}]  (${label})`);
 
   if (apply) {
-    backupPrunedManifests(versionsDir, toRemove, backupRoot);
+    backupPrunedManifests(base, versionsDir, toRemove, backupRoot);
     for (const m of toRemove) {
-      unlinkSync(join(versionsDir, m.name));
+      unlinkSync(resolveInside(versionsDir, m.name));
     }
+    const verified = sortedManifests(versionsDir);
+    const expected = Math.min(total, keep);
+    if (verified.length !== expected) {
+      throw new Error(`Post-prune verification failed for ${versionsDir}: expected ${expected}, found ${verified.length}`);
+    }
+    console.log(`    verified: ${verified.length} manifests remain`);
   }
 
   return { removed: apply ? toRemove.length : 0, total, status };
+}
+
+function discoverVersionDirs(base) {
+  if (lstatSync(base).isSymbolicLink()) throw new Error(`Unsafe DB base symlink: ${base}`);
+  const resolvedBase = resolveInside(base);
+  const versionsDirs = [];
+  const agentEntries = readdirSync(resolvedBase, { withFileTypes: true });
+
+  for (const entry of agentEntries) {
+    if (entry.isSymbolicLink()) throw new Error(`Unsafe agent symlink: ${entry.name}`);
+    if (!entry.isDirectory()) continue;
+    const agent = safeAgentId(entry.name);
+    const agentPath = resolveInside(resolvedBase, agent);
+    const tableEntries = readdirSync(agentPath, { withFileTypes: true });
+
+    for (const tableEntry of tableEntries) {
+      if (tableEntry.isSymbolicLink()) throw new Error(`Unsafe table symlink: ${agent}/${tableEntry.name}`);
+      if (!tableEntry.isDirectory()) continue;
+      const tablePath = resolveInside(agentPath, tableEntry.name);
+      const candidate = join(tablePath, "_versions");
+      if (!existsSync(candidate)) continue;
+      if (lstatSync(candidate).isSymbolicLink()) {
+        throw new Error(`Unsafe _versions symlink: ${agent}/${tableEntry.name}`);
+      }
+      const versionsDir = resolveInside(tablePath, "_versions");
+      if (!lstatSync(versionsDir).isDirectory()) {
+        throw new Error(`Unsafe _versions target (expected directory): ${versionsDir}`);
+      }
+      sortedManifests(versionsDir);
+      versionsDirs.push(versionsDir);
+    }
+  }
+
+  return { base: resolvedBase, versionsDirs };
 }
 
 async function main() {
@@ -98,37 +173,41 @@ async function main() {
     process.exit(0);
   }
 
+  const discovered = discoverVersionDirs(base);
+  const plannedRemovalCount = discovered.versionsDirs.reduce(
+    (count, versionsDir) => count + Math.max(0, sortedManifests(versionsDir).length - opts.keep),
+    0,
+  );
+
   let totalRemoved = 0;
   let tablesProcessed = 0;
   let elevated = 0;
 
-  // Create a timestamped backup root once for this run (only used if --apply).
+  // Create a timestamped backup root only after the complete read-only
+  // discovery/validation phase has succeeded and deletion is actually planned.
   const ts = new Date().toISOString().replace(/[:.]/g, "").slice(0, 15);
-  const backupRoot = join(homedir(), ".openclaw-backups", `lancedb-prune-${ts}`);
-  if (opts.apply) {
+  const backupRoot = resolveInside(homedir(), ".openclaw-backups", `lancedb-prune-${ts}`);
+  if (opts.apply && plannedRemovalCount > 0) {
     mkdirSync(backupRoot, { recursive: true });
     console.log(`  backup root: ${backupRoot}`);
   }
 
-  const agentDirs = readdirSync(base, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => d.name);
+  for (const versionsDir of discovered.versionsDirs) {
+    tablesProcessed++;
+    const { removed, status } = pruneTable(discovered.base, versionsDir, opts.keep, opts.apply, backupRoot);
+    totalRemoved += removed;
+    if (status !== "ok") elevated++;
+  }
 
-  for (const agent of agentDirs) {
-    const agentPath = join(base, agent);
-    const tables = readdirSync(agentPath, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-
-    for (const table of tables) {
-      const versionsDir = join(agentPath, table, "_versions");
-      if (!existsSync(versionsDir)) continue;
-
-      tablesProcessed++;
-      const { removed, total, status } = pruneTable(versionsDir, opts.keep, opts.apply, backupRoot);
-      totalRemoved += removed;
-      if (status !== "ok") elevated++;
-    }
+  if (opts.apply && totalRemoved > 0) {
+    appendDestructiveOpLog(homedir(), {
+      timestamp: new Date().toISOString(),
+      operation: "maintain-lancedb-prune",
+      dbPath: discovered.base,
+      keep: opts.keep,
+      manifestsRemoved: totalRemoved,
+      backupRoot,
+    });
   }
 
   console.log("");

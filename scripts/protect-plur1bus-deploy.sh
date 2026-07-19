@@ -43,6 +43,7 @@ SRC="${PLUR1BUS_SRC:-$OPENCLAW_HOME/plur1bus-release}"
 DEPLOY="${PLUR1BUS_DEPLOY:-$OPENCLAW_HOME/extensions/memory-lancedb-namespaced}"
 GW="${PLUR1BUS_GW:-openclaw-gateway.service}"
 LOG="${PLUR1BUS_LOG:-$OPENCLAW_HOME/logs/protect-deploy.log}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # Runtime files that carry the fixes and must always match source.
 # NOTE: scripts/cleanup-stores.mjs is intentionally NOT listed here; the file
@@ -69,6 +70,8 @@ log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG"; }
 
 [ -d "$SRC" ]    || { log "ERROR: source missing: $SRC"; exit 1; }
 [ -d "$DEPLOY" ] || { log "ERROR: deploy missing: $DEPLOY"; exit 1; }
+SRC="$(cd -- "$SRC" && pwd -P)"
+DEPLOY="$(cd -- "$DEPLOY" && pwd -P)"
 
 drift=0
 reasons=()
@@ -92,9 +95,79 @@ fi
 
 log "DRIFT detected: ${reasons[*]}"
 
+# Stub-guard: never propagate a broken re-export shim from SRC into DEPLOY.
+# Resolve the checker beside this canonicalized script, or (for the installed
+# mirror) inside the canonical pinned source repository. Missing, linked,
+# unimportable, or incomplete checker state is an explicit fail-closed error.
+SCRIPT_CHECKER="$SCRIPT_DIR/lib/deploy-integrity.mjs"
+SOURCE_CHECKER="$SRC/scripts/lib/deploy-integrity.mjs"
+if [ -e "$SCRIPT_CHECKER" ] || [ -L "$SCRIPT_CHECKER" ]; then
+  STUB_CHECKER="$SCRIPT_CHECKER"
+  CHECKER_ROOT="$SCRIPT_DIR"
+elif [ -e "$SOURCE_CHECKER" ] || [ -L "$SOURCE_CHECKER" ]; then
+  STUB_CHECKER="$SOURCE_CHECKER"
+  CHECKER_ROOT="$SRC"
+else
+  log "ERROR: deploy-integrity checker missing: $SCRIPT_CHECKER and $SOURCE_CHECKER"
+  exit 1
+fi
+if [ ! -f "$STUB_CHECKER" ] || [ -L "$STUB_CHECKER" ]; then
+  log "ERROR: deploy-integrity checker missing or unsafe: $STUB_CHECKER"
+  exit 1
+fi
+STUB_CHECKER_REAL="$(realpath -- "$STUB_CHECKER")" || {
+  log "ERROR: deploy-integrity checker cannot be canonicalized: $STUB_CHECKER"
+  exit 1
+}
+case "$STUB_CHECKER_REAL" in
+  "$CHECKER_ROOT"/*) ;;
+  *) log "ERROR: deploy-integrity checker escapes repository script location: $STUB_CHECKER_REAL"; exit 1 ;;
+esac
+if ! node --input-type=module -e '
+  import { pathToFileURL } from "node:url";
+  const checker = await import(pathToFileURL(process.argv[1]).href);
+  if (typeof checker.detectBrokenStub !== "function") process.exit(1);
+' "$STUB_CHECKER_REAL" >/dev/null 2>&1; then
+  log "ERROR: deploy-integrity checker is broken or lacks detectBrokenStub: $STUB_CHECKER_REAL"
+  exit 1
+fi
+
+source_file_is_broken_stub() {
+  node --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    try {
+      const checker = await import(pathToFileURL(process.argv[1]).href);
+      const result = checker.detectBrokenStub(process.argv[2]);
+      process.exit(result.isBroken ? 0 : 1);
+    } catch (error) {
+      console.error(error?.message ?? error);
+      process.exit(2);
+    }
+  ' "$STUB_CHECKER_REAL" "$1"
+}
+
+# Validate every source candidate before creating a backup or changing deploy.
+for f in "${FILES[@]}"; do
+  [ -e "$SRC/$f" ] || continue
+  if [ -L "$SRC/$f" ] || [ ! -f "$SRC/$f" ]; then
+    log "ERROR: refusing unsafe source candidate: $SRC/$f"
+    exit 1
+  fi
+  if source_file_is_broken_stub "$SRC/$f" >/dev/null 2>&1; then
+    log "ERROR: refusing to propagate broken re-export stub from $SRC/$f"
+    exit 1
+  else
+    checker_status=$?
+    if [ "$checker_status" -ne 1 ]; then
+      log "ERROR: deploy-integrity checker failed for $SRC/$f (status=$checker_status)"
+      exit 1
+    fi
+  fi
+done
+
 # Drift-Backup bewusst ausserhalb des Extension-Scan-Roots ablegen: ein Backup-
 # Verzeichnis neben der Extension wuerde dieselbe Plugin-ID erneut deklarieren.
-BK_ROOT="${PLUR1BUS_BACKUP_DIR:-/root/.openclaw-backups/plur1bus-drift}"
+BK_ROOT="${PLUR1BUS_BACKUP_DIR:-$HOME/.openclaw-backups/plur1bus-drift}"
 BK="$BK_ROOT/$(basename "${DEPLOY%/}").drift-bak-$(date +%Y%m%dT%H%M%S)"
 mkdir -p "$BK"
 for f in "${FILES[@]}"; do
@@ -105,25 +178,9 @@ for m in openclaw.plugin.json package.json README.md LICENSE; do
 done
 log "backed up drifted deploy -> $BK"
 
-# Stub-guard: never propagate a broken re-export shim from SRC into DEPLOY.
-# Reuses the exact detector that caught the 2026-06-16 incident, so this stays
-# safe even if PLUR1BUS_SRC is ever pointed at a stale/partial directory again.
-STUB_CHECKER="/root/scripts/lib/deploy-integrity.mjs"
-source_file_is_broken_stub() {
-  [ -f "$STUB_CHECKER" ] || return 1   # checker missing: don't block on it
-  node --input-type=module -e "
-    import { detectBrokenStub } from '$STUB_CHECKER';
-    process.exit(detectBrokenStub(process.argv[1]).isBroken ? 0 : 1);
-  " "$1" 2>/dev/null
-}
-
 # Restore canonical source over the deploy (code only; never touch node_modules/state).
 for f in "${FILES[@]}"; do
   [ -f "$SRC/$f" ] || continue
-  if source_file_is_broken_stub "$SRC/$f"; then
-    log "ERROR: refusing to propagate broken re-export stub from $SRC/$f — leaving deploy untouched for this file"
-    continue
-  fi
   mkdir -p "$DEPLOY/$(dirname "$f")"
   cp -a "$SRC/$f" "$DEPLOY/$f"
 done
@@ -138,6 +195,16 @@ if ! grep -q "$MARKER" "$DEPLOY/$MARKER_FILE" 2>/dev/null; then
   log "ERROR: restore failed, marker still missing"
   exit 1
 fi
+for f in "${FILES[@]}" package.json README.md LICENSE; do
+  [ -f "$SRC/$f" ] || continue
+  source_hash=$(md5sum "$SRC/$f" | cut -d' ' -f1)
+  deploy_hash=$(md5sum "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
+  if [ "$source_hash" != "$deploy_hash" ]; then
+    log "ERROR: restore hash verification failed for $f"
+    exit 1
+  fi
+done
+log "verified restored file hashes from $SRC"
 
 if [ "${PLUR1BUS_NO_RESTART:-0}" = "1" ]; then
   log "restore complete (restart suppressed by PLUR1BUS_NO_RESTART)"
