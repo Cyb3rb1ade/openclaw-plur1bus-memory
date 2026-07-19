@@ -18,6 +18,49 @@ const AGENT_ID = "agent-a";
 const SESSION_NAME = "session.jsonl";
 const tempDirs = [];
 
+const LIVE_ROTATION_PRELOAD = `
+const fs = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+
+const targetPath = process.env.CAPTURE_ROTATE_AFTER_IDENTITY_PATH || "";
+const replacementPath = process.env.CAPTURE_ROTATION_REPLACEMENT_PATH || "";
+
+if (targetPath && replacementPath) {
+  const originalOpenSync = fs.openSync;
+  const originalStatSync = fs.statSync;
+  const originalFstatSync = fs.fstatSync;
+  const originalRenameSync = fs.renameSync;
+  const targetDescriptors = new Set();
+  let rotated = false;
+
+  function rotateAfterIdentityCapture() {
+    if (rotated) return;
+    originalRenameSync.call(fs, replacementPath, targetPath);
+    rotated = true;
+  }
+
+  fs.openSync = function patchedOpenSync(path, ...args) {
+    const descriptor = originalOpenSync.call(this, path, ...args);
+    if (String(path) === targetPath) targetDescriptors.add(descriptor);
+    return descriptor;
+  };
+
+  fs.statSync = function patchedStatSync(path, ...args) {
+    const stats = originalStatSync.call(this, path, ...args);
+    if (String(path) === targetPath) rotateAfterIdentityCapture();
+    return stats;
+  };
+
+  fs.fstatSync = function patchedFstatSync(descriptor, ...args) {
+    const stats = originalFstatSync.call(this, descriptor, ...args);
+    if (targetDescriptors.has(descriptor)) rotateAfterIdentityCapture();
+    return stats;
+  };
+
+  syncBuiltinESMExports();
+}
+`;
+
 function jsonlMessage(role, content, id) {
   return JSON.stringify({
     id,
@@ -203,10 +246,12 @@ function createFixture(sessionText) {
   const sessionPath = join(sessionsDir, SESSION_NAME);
   const statePath = join(openClawDir, ".auto-capture-state", `${AGENT_ID}.json`);
   const rowsPath = join(openClawDir, "memory", "lancedb-namespaced", AGENT_ID, "memories.fixture.json");
+  const liveRotationPreloadPath = join(root, "live-rotation-preload.cjs");
 
   mkdirSync(sessionsDir, { recursive: true });
   mkdirSync(pluginDir, { recursive: true });
   createPluginFixture(pluginDir);
+  writeFileSync(liveRotationPreloadPath, LIVE_ROTATION_PRELOAD, "utf8");
   writeFileSync(join(openClawDir, "openclaw.json"), JSON.stringify({
     agents: { list: [{ id: AGENT_ID }] },
     plugins: {
@@ -244,8 +289,16 @@ function createFixture(sessionText) {
     appendSession(text) {
       writeFileSync(sessionPath, text, { encoding: "utf8", flag: "a" });
     },
+    stageReplacement(text) {
+      const replacementPath = join(root, "live-replacement.jsonl");
+      writeFileSync(replacementPath, text, "utf8");
+      return replacementPath;
+    },
     run(overrides = {}) {
-      return spawnSync(process.execPath, [SCRIPT_PATH, AGENT_ID], {
+      const nodeArgs = overrides.CAPTURE_ROTATE_AFTER_IDENTITY_PATH
+        ? ["--require", liveRotationPreloadPath]
+        : [];
+      return spawnSync(process.execPath, [...nodeArgs, SCRIPT_PATH, AGENT_ID], {
         cwd: process.cwd(),
         encoding: "utf8",
         env: {
@@ -402,6 +455,36 @@ describe("auto-capture durable checkpointing", () => {
     const state = fixture.readState();
     assert.strictEqual(checkpointOffset(state), Buffer.byteLength(replacement));
     assert.notStrictEqual(state.files[SESSION_NAME].fingerprint, originalFingerprint);
+  });
+
+  it("binds live-rotation bytes to their opened file identity", () => {
+    const original = jsonlMessage("user", "Opened predecessor memory must retain its own source identity.", "turn-live-old");
+    const replacement = jsonlMessage("user", "Live replacement memory must be captured exactly once.", "turn-live-new");
+    const fixture = createFixture(original);
+    const replacementPath = fixture.stageReplacement(replacement);
+
+    const rotated = fixture.run({
+      CAPTURE_DISABLE_SEMANTIC_DEDUP: "1",
+      CAPTURE_ROTATE_AFTER_IDENTITY_PATH: fixture.sessionPath,
+      CAPTURE_ROTATION_REPLACEMENT_PATH: replacementPath,
+    });
+
+    assert.strictEqual(rotated.status, 0, rotated.stderr);
+    const firstRunRows = fixture.readMemories();
+    assert.deepStrictEqual(firstRunRows.map((row) => row.text), [
+      "User: Opened predecessor memory must retain its own source identity.",
+    ]);
+    assert.strictEqual(checkpointOffset(fixture.readState()), 0);
+
+    const retry = fixture.run({ CAPTURE_DISABLE_SEMANTIC_DEDUP: "1" });
+
+    assert.strictEqual(retry.status, 0, retry.stderr);
+    assert.match(retry.stdout, /\[main\] done — stored=1, candidates=1, errors=0/);
+    assert.deepStrictEqual(fixture.readMemories().map((row) => row.text).sort(), [
+      "User: Live replacement memory must be captured exactly once.",
+      "User: Opened predecessor memory must retain its own source identity.",
+    ]);
+    assert.strictEqual(checkpointOffset(fixture.readState()), Buffer.byteLength(replacement));
   });
 
   it("does not acknowledge a crash-recovered row whose vector is not durable", () => {
