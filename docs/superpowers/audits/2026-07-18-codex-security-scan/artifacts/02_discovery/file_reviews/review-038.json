@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-038",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/temporal-provenance.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (311 lines; SHA-256 2a32c4841ed914625003b266982ed8aabfe241fc134030ed2a0fb97674e84223). Pure deterministic provenance/risk classification with no file, DB, network, authorization, or process sink. The operational live-verification guard is advisory trace/context metadata rather than an enforcement point, and computeMemoryAge prefers updatedAt even if a corrupt row makes it older than createdAt; both are feature/reliability observations, not a distinct attacker-controlled privilege path."
+    },
+    {
+      "path": "lib/text-utils.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (175 lines; SHA-256 e438459bb248199d11c751a1636596529e2db87a06478553dc46fab3827f5020). Pure tokenization, similarity, summary, and prompt-compression helpers. No external or privileged sink exists. compressMemoriesForPrompt is currently test-only (repository call search finds no production caller), and zero/invalid budgets can yield at least one word per item rather than a strict zero budget; this is tracked as a feature/reliability gap rather than a security candidate."
+    },
+    {
+      "path": "lib/tier1-lexicon.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (410 lines; SHA-256 b4f0e03d727355e52806cda8761f4b38c3af3dc064a051f804ed99981b3d09f8). Deterministic lexicon classification only. Custom lexicons are operator configuration and feed an EmotionScore that validates numeric VAD/confidence values. No filesystem, network, command, or authorization sink was found."
+    },
+    {
+      "path": "lib/tier2-transformer.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (224 lines; SHA-256 f928294f31e1cf5c69ffff8b3a8c98b42af8ccc4205877036895d35acc13a120). The named transformer tier is deliberately a local keyword-density fallback; loadModel is an explicit no-op and no model/network/filesystem load occurs. README/configuration accurately describe this as a heuristic/keyword fallback, so it is not a deceptive security boundary or a separate candidate."
+    },
+    {
+      "path": "lib/tier3-llm.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (175 lines; SHA-256 92698992c21411f950f72a3bb083dc70a1d7fdf56361fdeac9f898aac8c61f46). Tier 3 sends text only after explicit provider configuration through the emotion-engine budget gate; its intended external LLM processing is not an unauthorized sink by itself. Parsed numeric fields are validated by EmotionScore and failure falls back locally. The raw response can appear in a thrown parse error for direct callers, but normal inferEmotionalValenceAsync catches it; no reachable remote disclosure or privilege escalation was established."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Feature/quality observations (unwired compression helper and edge-budget behavior) are reserved for the bug/feature report. No repository source file was modified and no feature-disable recommendation is implied."
+}

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-000",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": ".claude/launch.json",
+      "status": "complete",
+      "disposition": "not_applicable",
+      "evidence": "Read in full (29 lines); local IDE launch metadata contains only fixed npm script names and no deployed runtime or attacker-controlled data path."
+    },
+    {
+      "path": ".openclaw/extensions/emotional-state-injector/index.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (100 lines); deployed before_prompt_build hook reads two fixed filenames below trusted ctx.workspaceDir, parses JSON, and injects bounded-shape mood context. No attacker-selectable path, command, query, network, or authorization sink. Workspace-file integrity remains an explicit local-host assumption."
+    },
+    {
+      "path": ".openclaw/extensions/emotional-state-injector/index.test.js",
+      "status": "complete",
+      "disposition": "not_applicable",
+      "evidence": "Read in full (271 lines); unit-test-only temporary-directory I/O and assertions, not a shipped runtime entrypoint."
+    },
+    {
+      "path": ".openclaw/extensions/emotional-state-injector/openclaw.plugin.json",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (7 lines); static extension manifest with no configurable privileged input."
+    },
+    {
+      "path": ".openclaw/extensions/emotional-state-injector/package.json",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (11 lines); private CommonJS package metadata and a fixed local test command."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No reportable high-impact candidate. The mood strings originate from workspace state and enter model context by design; no cross-boundary writer was found in this shard."
+}

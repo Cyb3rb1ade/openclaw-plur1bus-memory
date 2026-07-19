@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-012",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/jobs/memory-compaction.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-compaction-cross-scope"
+      ],
+      "evidence": "Read in full (521 lines). Candidate loading queries up to 5,000 active rows and drops scope, ownerUserId, and workspaceKey (99-119), then clusters across the entire per-agent table (123-171, 453-480). Generated actions can contain cross-principal merged text and are persisted into the current workspace proposal file when autoApply is false (252-289); when enabled, identical duplicates are archived with no ACL comparison (191-195, 270-310). ID interpolation is protected by safeUuid in tryArchive (237-249). Timeout does not cancel the body, and archive failures are ignored while executed counts advance, both functional data-integrity defects."
+    },
+    {
+      "path": "lib/jobs/memory-dynamics-maintenance.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (363 lines). Every selected/persisted memory ID is checked with safeUuid before db access (22-29, 76-105, 224-265); retrieval events are filtered by exact agent/workspace scope (45-50, 288-292); dry-run skips updates and watermarks (102-140, 263-278); batches, tail size, and update counts are bounded. Silent readRunState fallback at 311-317 is a repository error-handling defect but no privilege bypass was established."
+    },
+    {
+      "path": "lib/jobs/proactive-check.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (205 lines). Reads are limited to 500 turns (129), pattern/cooldown logs are capped (15-16, 51-73), nudges are capped to 100 (191-195), and all file suffixes are fixed below host workspaceDir (126, 145, 159-162). Memory-derived keyword enters JSON values/IDs only, not a path or executable context. The silent JSON parse catch and use of join(path, '..') instead of dirname/resolveInside are correctness/policy gaps."
+    },
+    {
+      "path": "lib/jobs/reflection-job.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (122 lines). Neo reads are bounded (44, 59, 84), behavior updates remain candidate status in the delegated module, output gaps are capped to 20, and fixed report paths stay below host workspaceDir (22-25, 73-106). No external process/network/query sink or cross-workspace store selection is present here."
+    },
+    {
+      "path": "lib/jobs/reminder-dispatch.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-reminder-dryrun-delivery",
+        "cand-reminder-webhook-ssrf",
+        "cand-reminder-sensitive-log",
+        "cand-reminder-agent-lock-path"
+      ],
+      "evidence": "Read in full (141 lines). dryRun suppresses DB/pending writes but does not suppress webhook or host-callback delivery (62-105), so a dry-run can perform the external side effect. Configured webhookUrl is passed directly to fetchWithTimeout with reminder content and no destination/redirect checks (73-84). Full reminder text is returned in details (108, 128-137) and the caller info-logs JSON.stringify(result) at index.js:3166. agentId is embedded in a lock filename without safeAgentId/resolveInside (36-48). SQL values use sqlString; returned reminder IDs are DB-derived."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-compaction-cross-scope",
+      "title": "Memory compaction mixes user and workspace scopes inside a per-agent table",
+      "taxonomy": ["CWE-862", "CWE-200", "tenant-isolation"],
+      "source": "Active rows for multiple ownerUserId/workspaceKey/scope values coexist in one agent database.",
+      "control": "Compaction filters status/core/age but neither retains nor compares scope, ownerUserId, storedBy, or workspaceKey.",
+      "sink": "Rows are clustered and sent together to the LLM; cross-scope merged actions are persisted to the invoking workspace, and identical rows can be archived when auto-apply is enabled.",
+      "impact": "One user's/workspace's maintenance run can disclose another scope's memory through proposals/LLM output or archive a memory belonging to another principal.",
+      "locations": [
+        "lib/jobs/memory-compaction.js:99",
+        "lib/jobs/memory-compaction.js:107",
+        "lib/jobs/memory-compaction.js:123",
+        "lib/jobs/memory-compaction.js:191",
+        "lib/jobs/memory-compaction.js:203",
+        "lib/jobs/memory-compaction.js:252",
+        "lib/jobs/memory-compaction.js:274",
+        "lib/jobs/memory-compaction.js:306",
+        "lib/jobs/daily-consolidation.js:197"
+      ],
+      "validationFacts": "The scope metadata omission is confirmed. Validate schema population, multi-user/workspace coexistence in one agent DB, proposal consumers, and the exact configuration path for compaction auto-apply.",
+      "attackFacts": "A second user/workspace sharing an agent DB can store semantically identical/compatible text and wait for authorized maintenance. Confidentiality through LLM/proposal generation does not require auto-apply; destructive impact does."
+    },
+    {
+      "candidateId": "cand-reminder-dryrun-delivery",
+      "title": "Reminder dry-run performs real webhook or host-callback delivery",
+      "taxonomy": ["CWE-693", "unsafe-dry-run", "external-side-effect"],
+      "source": "An operator/caller invokes runReminderDispatch with dryRun=true and a due reminder.",
+      "control": "The flag wraps local state changes only and is absent from delivery branches.",
+      "sink": "fetchWithTimeout sends the reminder to webhookUrl or callApi receives it.",
+      "impact": "A supposedly non-mutating test can send private reminder content and trigger external actions.",
+      "locations": [
+        "lib/jobs/reminder-dispatch.js:25",
+        "lib/jobs/reminder-dispatch.js:62",
+        "lib/jobs/reminder-dispatch.js:65",
+        "lib/jobs/reminder-dispatch.js:73",
+        "lib/jobs/reminder-dispatch.js:87",
+        "lib/jobs/reminder-dispatch.js:93"
+      ],
+      "validationFacts": "Control flow is confirmed; validate with injected fetch/callApi and identify any administrative production caller that exposes dryRun.",
+      "attackFacts": "Requires an authorized/internal caller, due data, and configured delivery; it is an operator-confusion confidentiality/integrity failure rather than an unauthenticated trigger."
+    },
+    {
+      "candidateId": "cand-reminder-webhook-ssrf",
+      "title": "Reminder webhook accepts an unrestricted destination",
+      "taxonomy": ["CWE-918", "SSRF", "data-exfiltration"],
+      "source": "reminders.webhookUrl from plugin configuration.",
+      "control": "No URL scheme, host, address-range, redirect, or credential policy is applied in reminder-dispatch/fetch-with-timeout.",
+      "sink": "An HTTP POST containing agentId, workspaceKey, reminder ID/text/time is sent to the URL.",
+      "impact": "If a lower-trust configuration path exists, it can probe internal services and exfiltrate reminder data.",
+      "locations": [
+        "index.js:3158",
+        "index.js:3164",
+        "lib/jobs/reminder-dispatch.js:24",
+        "lib/jobs/reminder-dispatch.js:73",
+        "lib/jobs/reminder-dispatch.js:74",
+        "lib/jobs/reminder-dispatch.js:77"
+      ],
+      "validationFacts": "Unrestricted fetch is confirmed. Validate config-schema reachability (reminders keys appear absent from strict manifest), config mutation authority, redirect behavior, and deployment network exposure.",
+      "attackFacts": "Requires control of plugin configuration or an equivalent injected opts object; ordinary reminder text cannot choose the URL."
+    },
+    {
+      "candidateId": "cand-reminder-sensitive-log",
+      "title": "Reminder-dispatch logs full private reminder text",
+      "taxonomy": ["CWE-532", "sensitive-data-exposure"],
+      "source": "Due reminder text from the agent database.",
+      "control": "Returned details are not redacted or summarized.",
+      "sink": "runReminderDispatch includes text in every dispatched detail and index.js info-logs the entire result.",
+      "impact": "Service-log readers can recover private reminder content.",
+      "locations": [
+        "lib/jobs/reminder-dispatch.js:108",
+        "lib/jobs/reminder-dispatch.js:128",
+        "lib/jobs/reminder-dispatch.js:134",
+        "index.js:3166"
+      ],
+      "validationFacts": "Code source-to-log is complete; validate logger persistence/access and whether result formatting also reaches cron transcripts.",
+      "attackFacts": "No malicious payload is needed; any due private reminder triggers exposure to principals with log access."
+    },
+    {
+      "candidateId": "cand-reminder-agent-lock-path",
+      "title": "Reminder lock path interpolates an unvalidated agent identifier",
+      "taxonomy": ["CWE-22", "path-traversal"],
+      "source": "Host command context agentId reaches runReminderDispatch.",
+      "control": "No safeAgentId/resolveInside precedes lock construction.",
+      "sink": "acquireJobLock creates and releaseJobLock removes reminder-dispatch-${agentId}.lock.",
+      "impact": "A separator-bearing agent ID could affect a fixed-suffix file outside the workspace locks directory.",
+      "locations": [
+        "index.js:2995",
+        "index.js:3159",
+        "lib/jobs/reminder-dispatch.js:18",
+        "lib/jobs/reminder-dispatch.js:44",
+        "lib/jobs/reminder-dispatch.js:47",
+        "lib/jobs/reminder-dispatch.js:139"
+      ],
+      "validationFacts": "Unsafe construction is confirmed; validate host agent-ID guarantees and job-lock canonicalization.",
+      "attackFacts": "Requires influence over host agentId, not reminder body or chat command arguments alone."
+    }
+  ],
+  "notes": "Feature-preserving controls are per-scope compaction partitions/ACL checks, true no-side-effect dry-run, redacted structured logs, validated webhook policy, and safe agent paths."
+}

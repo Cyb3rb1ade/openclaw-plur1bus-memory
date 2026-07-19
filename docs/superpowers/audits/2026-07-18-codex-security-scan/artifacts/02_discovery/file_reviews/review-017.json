@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-017",
+  "reviewer": "shard006-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/metrics.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (83 lines; SHA-256 c5c77788dc72d151eb21c34311aa65f4c73876a8b2fd1526084a12a832e82ac2). Both writers target the fixed run-state.json filename below a host-supplied workspace directory and use atomicJsonUpdate; no chat-controlled path component or independent privilege boundary was found. getMetrics silently converts every read/parse error to {}, and the graph path inherits the already-reviewed metrics-debouncer loss/flush semantics, which are reliability and observability defects rather than a separate security candidate. recordObsidianSyncMetrics also writes whenever called, but the actionable read-only-policy bypass is already captured by cand-obsidian-readonly-controls-bypass at its Obsidian callers."
+    },
+    {
+      "path": "lib/mood-style-directive.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (131 lines; SHA-256 59cb14f22124b304015ff2ec4d19b0aab2318e1db32d4ac55ada261ae255116c). Prompt output is assembled only from fixed templates after dominant-dimension, intensity, trend, and temperament allowlisting and is bounded to 400 characters; no attacker-controlled prompt string reaches the directive. Out-of-range integer hours are accepted (negative values become morning and values above 23 become evening), and the catch at 128-130 is silent, but these are minor correctness/observability defects rather than a security boundary violation."
+    },
+    {
+      "path": "lib/multi-namespace-pool.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (54 lines; SHA-256 e643b71338dff5fea44523a1aec76fbc34a6bfc12b0a47eee473b265f1531630). getWriteDb and getReadDbs implement separate routing, but _getPool joins an unvalidated raw namespace to baseDir and never calls isLegacyReadOnly; a probe resolved activeWriteNamespace='../escaped' outside /srv/openclaw/memory and allowed a namespace simultaneously declared active-write and legacy-read-only to be written. The strict product manifest currently rejects cfg.namespaces entirely, so no independently attacker-reachable namespace source was established; this corroborates feature-audit FA-03/FA-06 and is required validation/hardening before making the feature reachable. shutdown also silently swallows pool failures at 47-51, violating repository observability guidance."
+    },
+    {
+      "path": "lib/namespace-config.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (26 lines; SHA-256 9b922e2dde86bd0d1426476bcbda7a289040bb6cdc77b13da307f0903ac776e8). Resolvers deduplicate recall namespaces but do not validate namespace syntax, path containment, non-empty recall sets, or the invariant that activeWriteNamespace cannot also be legacyReadOnly. isLegacyReadOnly is not used by production routing. Combined with index.js:2523-2549, cfg.namespaces is absent from the strict manifest and custom/default path-shape handling can silently replace the requested write/read namespaces with '.', so the shipped feature contract remains broken as already described by FA-03/FA-06. No ordinary untrusted input reaches this config-only API under the current manifest."
+    },
+    {
+      "path": "lib/neo-arch.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-neo-agent-private-cross-agent-recall",
+        "cand-neo-workspace-key-collision"
+      ],
+      "evidence": "Read in full (1,769 lines; SHA-256 5c3f25a20680d08d55a333cf8b20f63a8bf861e7dad08013f91595e3d6b8d9c4). Assistant turns and their candidates are explicitly tagged agent_private and retain agentId (715-877), but createNeoStore partitions only by sanitized workspace key (1140-1187), while routeNeoRecall and findLatestNeoRecord do not accept requester identity or filter scope/ownership (985-1074). Production before_prompt_build and corpus search/get read those workspace-wide records without a filter (index.js:2846-2903, 5563-5574). A temporary-store probe captured Agent A's private candidate, opened the same workspace store as Agent B, read A's record, and selected it for recall. Separately, sanitizePathPart is non-injective (186-189); the probe confirmed tenant/a and tenant_a both become tenant_a, so distinct workspace keys share all Neo files. Prompt text is escaped, bounded, marked untrusted, and injection-suspected capture is excluded; no separate prompt-injection candidate was retained. Reliability/feature review also found unlocked JSONL/index read-modify-write sequences across worker/main-thread writers (1425-1524), a best-effort cap that can overwrite a concurrent append (1416-1436), and an embedding drain that marks targets fresh without computing or persisting an embedding (1647-1758)."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-neo-agent-private-cross-agent-recall",
+      "title": "Neo recall exposes agent-private records to other agents sharing a workspace",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-668",
+        "cross-agent-isolation",
+        "privacy"
+      ],
+      "source": "Auto-capture records assistant-authored turns and memory candidates for Agent A with origin/visibility scope agent_private and an explicit agentId.",
+      "control": "The Neo store path contains only the workspace key, and every read/recall helper ignores origin.scope, visibility.scope, and record.agentId; no requester agent is accepted by routeNeoRecall or findLatestNeoRecord.",
+      "sink": "Agent B's before_prompt_build path reads all candidates/behavior cards from the shared workspace store and injects matching records into B's prompt. The registered memory corpus search/get paths can also return the unfiltered record.",
+      "impact": "Assistant output, plans, mistakes, or sensitive context explicitly classified as agent-private can be disclosed to and influence another agent. This violates the plugin's per-agent isolation model and can also provide a cross-agent persistent prompt-poisoning channel through historical evidence.",
+      "locations": [
+        "lib/neo-arch.js:61",
+        "lib/neo-arch.js:715",
+        "lib/neo-arch.js:733",
+        "lib/neo-arch.js:740",
+        "lib/neo-arch.js:770",
+        "lib/neo-arch.js:803",
+        "lib/neo-arch.js:836",
+        "lib/neo-arch.js:848",
+        "lib/neo-arch.js:858",
+        "lib/neo-arch.js:985",
+        "lib/neo-arch.js:1003",
+        "lib/neo-arch.js:1023",
+        "lib/neo-arch.js:1064",
+        "lib/neo-arch.js:1140",
+        "lib/neo-arch.js:1186",
+        "lib/neo-arch.js:1250",
+        "index.js:2472",
+        "index.js:2846",
+        "index.js:2858",
+        "index.js:2887",
+        "index.js:5563",
+        "index.js:5570",
+        "index.js:5572"
+      ],
+      "validationFacts": "An offline temporary-store probe created an assistant candidate with scope=agent_private and agentId=agent-a, appended it through createNeoStore(root, 'shared-workspace'), then opened createNeoStore(root, 'shared-workspace') as the simulated Agent B. Both handles had the same workspaceDir, B read agent-a's row, and routeNeoRecall selected it for query 'ultraviolet kestrel'. The public route API has no requester-agent parameter. Existing Neo tests assert scope normalization and single-agent capture/dedupe, not cross-agent authorization.",
+      "attackFacts": "Requires two agents to resolve to the same Neo workspace key, a supported operational shape because repository documentation discusses multiple bound agents sharing one workspace. Agent B only needs a prompt that sufficiently overlaps Agent A's stored text; direct corpus get additionally requires the record ID. If a deployment strictly guarantees one agent per workspace, exploitability is reduced, but the code still labels rows agent_private without enforcing that label. Preserve all sharing features by filtering every Neo read on scope and requester identity: allow workspace_shared/global records as designed, while requiring matching agentId for agent_private records (or partitioning private rows by agent)."
+    },
+    {
+      "candidateId": "cand-neo-workspace-key-collision",
+      "title": "Non-injective Neo workspace-key sanitization merges distinct workspace stores",
+      "taxonomy": [
+        "CWE-668",
+        "CWE-706",
+        "cross-workspace-isolation",
+        "identifier-collision"
+      ],
+      "source": "Host context, explicit workspace identifiers, configured aliases, paths, and corpus defaults supply a raw Neo workspace key.",
+      "control": "sanitizePathPart replaces every run of characters outside [A-Za-z0-9._-] with '_', strips edge underscores, maps empty results to default, and truncates at 120 characters without retaining a hash of the original identifier.",
+      "sink": "workspaceKeyFromContext returns the lossy value and createNeoStore uses it directly as the sole workspaces/<key> directory name for all turn, candidate, behavior, graph, run-state, and hook files.",
+      "impact": "Two distinct workspaces can read, recall, modify, deduplicate, migrate, or prune each other's Neo records, causing cross-workspace confidentiality and integrity loss. The collision can be accidental or chosen when workspace names/IDs are user- or tenant-influenced.",
+      "locations": [
+        "lib/neo-arch.js:186",
+        "lib/neo-arch.js:188",
+        "lib/neo-arch.js:229",
+        "lib/neo-arch.js:386",
+        "lib/neo-arch.js:403",
+        "lib/neo-arch.js:411",
+        "lib/neo-arch.js:418",
+        "lib/neo-arch.js:428",
+        "lib/neo-arch.js:447",
+        "lib/neo-arch.js:455",
+        "lib/neo-arch.js:1140",
+        "lib/neo-arch.js:1142",
+        "index.js:2452",
+        "index.js:2472"
+      ],
+      "validationFacts": "A direct probe confirmed sanitizePathPart('tenant/a') === sanitizePathPart('tenant_a') === 'tenant_a'; createNeoStore therefore resolves both raw keys to the identical workspaces/tenant_a directory. Additional collisions arise from punctuation normalization, all-invalid identifiers mapping to default, and 120-character truncation. Existing tests check traversal-shaped sanitization but do not assert collision resistance or reject colliding configured mappings.",
+      "attackFacts": "Exploitability depends on whether an untrusted tenant/user can influence canonical workspaceKey/workspaceId/name values or configured aliases. If OpenClaw guarantees a safe, unique <=120-character alphabet before every plugin boundary, this is primarily accidental-collision hardening. A feature-preserving repair should derive the directory from a canonical validated ID or append a stable hash of the full raw canonical identifier, migrate existing directories additively, and detect alias collisions instead of disabling multi-workspace Neo storage."
+    }
+  ],
+  "notes": "All five assigned files were read completely from immutable commit snapshot 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Eight targeted regression files passed: metrics-debounce, mood-style-directive, multi-namespace-pool, namespace-config, neo-arch-jsonl-utf8, neo-arch-regex-perf, neo-worker-runtime, and smoke-neo (8/8 files). Offline probes confirmed the private-record cross-agent flow, workspace-key collision, namespace path escape, and missing legacy-read-only enforcement. Namespace findings corroborate existing feature-audit FA-03/FA-06; an additional runtime issue is that index.js:2531-2547 silently replaces requested namespace routing with '.' whenever baseDbPath does not already end in the requested active namespace. The Neo embedding drain only appends metadata transitions to fresh/done and never invokes an embedder or stores a vector; routeNeoRecall remains lexical Jaccard/metadata scoring. Unlocked JSONL/index/cap updates can lose dedupe/index or appended data when command/main-thread and worker writers overlap. getMetrics, mood directive, Neo file readers/cap, and pool shutdown contain silent catches contrary to repository standards. The real repository remained at HEAD 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e with an empty git status before this receipt was written. No product source or test was changed, no feature-disable remedy is recommended, and all proposed remediations preserve agent-private, workspace-shared, multi-workspace, multi-namespace, and Neo recall functionality."
+}

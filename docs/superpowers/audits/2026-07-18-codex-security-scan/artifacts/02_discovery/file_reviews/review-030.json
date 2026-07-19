@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-030",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/recall-decision-trace.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (523 lines; SHA-256 afd05cc838898dbbf9b015487d22b8bac117db37dcde9253bf408f73e2e8a790). The trace is an in-memory, bounded diagnostic object; user-derived text is reduced to configured previews, and its only sinks are the caller-controlled trace formatter/logger path. Operator-configured preview limits could expose more data to an operator, but no untrusted remote privilege boundary or distinct source-to-sink vulnerability was established."
+    },
+    {
+      "path": "lib/recall-phase-timer.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (104 lines; SHA-256 ee8080ab2843421942b37606dc856f91081105d5ac73b014100aeeb36d53526d). This module measures elapsed phases and returns bounded summaries. Error text is truncated but not secret-redacted before logging; this is a generic observability hardening gap, not a demonstrated attacker-controlled disclosure sink in this module."
+    },
+    {
+      "path": "lib/recall-pipeline.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-pattern-pre-acl-cross-scope",
+        "cand-acl-missing-ownership-fail-open"
+      ],
+      "evidence": "Read in full (1,089 lines; SHA-256 5b59ed0a4f800971c1e2ea44eefdb36c58f7dae8bd0c566d2ec3944599f18cb9). Vector rows carry storedBy/workspaceKey into the normal entry (578-619), but reranking happens before the final ACL gate (964-1007 versus 1035-1066), so a configured external Cohere reranker can receive summaries from foreign scoped rows in the same per-agent table. Graph-only hydration reconstructs entries from row.agentId and row.workspaceId only (296-333), although the persisted schema uses storedBy/workspaceKey (index.js:683,716,756-808,822-870). The reconstruction therefore drops ownership bindings, and checkAccess deliberately treats missing agent/workspace bindings as legacy-accessible (acl-middleware.js:59-79). The call sites pass workspaceKey but omit workspaceId and userId (index.js:4932-4944,5725-5739), which makes legitimate workspace/user recall fail closed and is recorded as a bug/feature-preservation issue; it does not mitigate the graph-hydration fail-open if a foreign graph-only ID becomes reachable."
+    },
+    {
+      "path": "lib/relevant-memory-context.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-semantic-lens-acl-bypass",
+        "cand-pattern-continuity-prompt-injection"
+      ],
+      "evidence": "Read in full (393 lines; SHA-256 79bda4be7b4de2b0cedbef0de55331eee75319694e3a7745bafb34efe93384d4). The primary relevant-memories block is explicitly untrusted and carries a recall safety preamble (217), while semantic-lens items are appended in a separate block after that boundary (222-225) and continuity patterns are appended after it (227-235). Text/attributes are sanitized, but these additive blocks do not independently declare their contents untrusted or repeat the safety instruction. This file is the prompt sink for the already tracked semantic-lens authorization and pattern-injection candidate families; no separate control bypass was identified here."
+    },
+    {
+      "path": "lib/reminder-nudge.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (39 lines; SHA-256 f76afdf6f201c1da05951b84962ae91f610ffcb2f9d58d1e47a185e4b43d7471). The helper only emits a compact escaped reminder nudge and caps text at 500 characters. Stored reminder evidence is parsed upstream; no independent filesystem, network, database, authorization, or command-execution sink exists in this file."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-pattern-pre-acl-cross-scope",
+      "instanceKey": "pre-acl-external-rerank:lib/recall-pipeline.js:964",
+      "title": "Recall sends cross-scope candidate summaries to an external reranker before authorization",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-862",
+        "authorization-ordering"
+      ],
+      "source": "A per-agent LanceDB table can contain records from multiple workspace or user scopes, because storage records workspaceKey/ownerUserId while the DB pool is keyed by agent. A requester in one scope triggers recall while another scope has semantically ranked records in that same table.",
+      "control": "The pipeline has a final checkAccess filter, but it is applied only after graph processing, budgeting, and optional reranking. No ACL predicate is applied to the vector result set before constructing reranker documents.",
+      "sink": "When the optional Cohere provider is configured, rerank(query, docs, ...) POSTs every selected candidate summary to https://api.cohere.com/v2/rerank (lib/recall-pipeline.js:964-989; lib/providers/reranker-cohere.js:15-38).",
+      "impact": "An otherwise unauthorized memory summary can be disclosed to the configured third-party reranking service even when the final response correctly excludes it. Up to the configured candidate cap is affected per recall.",
+      "closestControl": "The final ACL gate at 1035-1066 protects normal response rendering but is too late for an external processing sink; vector entries already preserve enough storedBy/workspaceKey metadata to filter before reranking.",
+      "locations": [
+        "lib/recall-pipeline.js:578",
+        "lib/recall-pipeline.js:590",
+        "lib/recall-pipeline.js:964",
+        "lib/recall-pipeline.js:1035",
+        "lib/providers/reranker-cohere.js:24",
+        "lib/multi-namespace-pool.js:29"
+      ],
+      "validationFacts": "Static call-path evidence establishes the external sink and ACL order. Dynamic validation should use a fake table with a workspace-B row, a workspace-A caller context, and a fake reranker that records documents; it must also confirm that the production call sites currently omit workspaceId/userId, which affects final rendering but not pre-ACL provider exposure.",
+      "attackFacts": "Requires a deployment with an external reranker enabled, two scopes sharing one agent DB, and a query whose candidate list includes the protected row. A compatible repair filters candidates with the existing ACL before every external/local enrichment stage, while retaining all recall and reranking features for authorized rows."
+    },
+    {
+      "candidateId": "cand-acl-missing-ownership-fail-open",
+      "instanceKey": "graph-hydration-ownership-drop:lib/recall-pipeline.js:296",
+      "title": "Graph hydration drops persisted ownership bindings before the final ACL check",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "authorization-context-loss"
+      ],
+      "source": "A graph-only neighbor references a row whose persisted ownership is represented by storedBy and/or workspaceKey, as used by the actual LanceDB schema.",
+      "control": "hydrateGraphResults copies only row.agentId and row.workspaceId, neither of which is a persisted schema column, then final checkAccess sees blank bindings and intentionally permits legacy agent-private/workspace records.",
+      "sink": "The reconstructed graph result survives the final ACL filter and is returned for prompt/tool rendering if a foreign graph-only ID is reachable.",
+      "impact": "A reachable cross-scope graph edge can turn an authorization-protected record into a legacy fail-open recall result, disclosing its text/summary to the requester or model context.",
+      "closestControl": "Normal vector mapping correctly derives agentId/workspaceId from storedBy/workspaceKey (589-594), demonstrating the intended preservation rule. The graph path is the divergent metadata-loss producer.",
+      "locations": [
+        "lib/recall-pipeline.js:296",
+        "lib/recall-pipeline.js:309",
+        "lib/recall-pipeline.js:310",
+        "lib/recall-pipeline.js:1035",
+        "lib/acl-middleware.js:59",
+        "lib/acl-middleware.js:71",
+        "index.js:683",
+        "index.js:716"
+      ],
+      "validationFacts": "A unit-level fake-table proof can show that hydration of a row with storedBy/workspaceKey yields blank agentId/workspaceId and checkAccess therefore allows it. Exploitability remains conditional on establishing a production-reachable foreign graph-only edge: the standard graph store is workspace-partitioned, so validation must trace graph-edge creation and workspace-key collision/alias behavior before severity is finalized.",
+      "attackFacts": "No unauthenticated graph-file writer is assumed. The candidate is strongest where a shared workspace graph can contain cross-tenant IDs or a context/alias error makes such an edge reachable. Preserve associative recall by carrying storedBy/workspaceKey/ownerUserId through hydration and applying ACL before graph expansion and rendering."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. The missing workspaceId/userId propagation is a verified feature/reliability break for workspace/user recall and will be included in the bug/feature audit; security candidate severity awaits the required dynamic and attack-path validation. No repository source file was modified and no feature-disable recommendation is implied."
+}

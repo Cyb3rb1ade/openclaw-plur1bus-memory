@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-034",
+  "reviewer": "shard006-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/session-time.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (89 lines; SHA-256 31a10a905ffc53995281094056696f07007c936d34abf594dcaa36e47ae6403d). The only rendered prompt content is derived from Date/elapsed arithmetic and fixed language templates (50-89), so neither workspaceKey nor agentId is interpolated into the prompt. The state filename is fixed as run-state.json, but workspaceDir is trusted without resolveInside and agentId/workspaceKey become raw object keys (11-47); a hostile host context could therefore redirect the file path or use prototype-sensitive keys, although the production caller uses ctx.workspaceDir as both the base and workspace key (index.js:6291-6304, 6404-6416) and no ordinary chat-controlled source was established. The broad read catch silently converts permission/corruption errors to an empty state and can overwrite recoverable state (11-18). Concurrent read-modify-write operations share one .tmp filename and have no queue/lock (20-41), causing lost updates or rename failures. These are standards/reliability issues rather than a retained remote security chain under the current host-context trust boundary."
+    },
+    {
+      "path": "lib/setup/feature-cron-bootstrap.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (68 lines; SHA-256 a9ce597ec623c44b3d7b88c16fb5dfbf0fc62ea7b964fe2ffd15c4e728942c5b). This module is pure decision logic with no process, file, network, identity, or delivery mutation sink. Missing, malformed, stale, or old-version markers safely trigger a rerun/hint (31-38, 54-66). A future-dated valid marker suppresses bootstrap until wall time catches up, and negative lastPlanCreateCount suppresses the hint; both require marker tampering or a bad writer and are operational hardening gaps. The surrounding index bootstrap owns spawning and marker I/O, not this file."
+    },
+    {
+      "path": "lib/setup/feature-cron-plan.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-feature-cron-channel-target-confusion",
+        "cand-afterthought-cross-session-leak"
+      ],
+      "evidence": "Read in full (514 lines; SHA-256 d4479ce2b04d15adfec975212667a60a114e5980f3db9aee9ec34832a441a619). The planner is array/argv oriented rather than shell-oriented, disables delivery-requiring jobs when no target is derived (364-390), rejects conflicting existing-cron targets (192-225), and preserves operator delivery decisions during migrations (473-510). However, the channel-config fallback selects a Telegram account from a binding while ignoring binding.match.peer, then treats the account's inbound DM allowFrom sender list as the outbound chat target (228-256). Current OpenClaw docs distinguish allowFrom user IDs from group chat IDs and define match.peer as the exact conversation identity. A benign check with a group binding peer -100777 and allowFrom user 12345 returned delivery.to=12345 and created the afterthought cron enabled for that DM. The helper also ignores default-account bindings without accountId, top-level/inherited effective allowFrom rules, wildcard rejection, group configuration, and target numeric/shape validation. Independently, the design creates one afterthought cron and one fixed target per selected agent/workspace even when the agent has multiple chat bindings (16-20, 177-225, 260-310, 330-390), completing the delivery side of cand-afterthought-cross-session-leak because the afterthought selector itself is not session/chat scoped. Idempotency matching is also correctness-weak: per-agent skips trust only a name prefix and do not verify job.agentId/payload (134-155, 342-361), and workspace dedupe does not canonicalize path aliases (277-310)."
+    },
+    {
+      "path": "lib/setup/feature-profiles.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-safe-profile-unexpected-privileged-activation"
+      ],
+      "evidence": "Read in full (501 lines; SHA-256 6d4688132af545d64be3a0d0a012d59cd70751cc83c307a6c4969f92ad8624d8). Existing explicit values are normally preserved by mergeMissing, and config writes use a unique temporary file plus rename (54-95, 203-223, 281-305, 469-481). The advertised Safe Profile, however, specifies only a small disabled subset and sets Obsidian mode='dry-run' (232-250); applyFeatureProfile then always applies Full Experience defaults to every omitted key (290-303). A benign public-API check showed a Safe Profile result with skillMiner.enabled=true, dailyConsolidation.enabled=true, criticalPush.enabled=true, soulPatch enabled/createIfMissing, Obsidian allowWrite=true, backupBeforeApply=false, and dryRun=false. The manifest does not allow mode='dry-run' (only augment/apply), while runtime safety actually keys on dryRun. Thus an authorized operator choosing `/plur1bus setup safe` can receive the opposite of the promised write/LLM-safe state. The same default-on policy is also applied at every plugin register for missing keys (index.js:2129-2136), so newly introduced privileged features become active after update without an explicit per-feature confirmation. Additional feature-contract contradictions: Full Experience sets Obsidian mode='apply' while the control-room doctor requires augment; requireVaultPathConfirmation defaults false; and applyFeatureProfile shallow-clones the root but mutates the original nested plugin entry. Notice-file paths trust openclawHome and consume unvalidated text that is later injected into a prompt, but the file is service-user state and no lower-trust writer was established (465-500; index.js:6381-6385)."
+    },
+    {
+      "path": "lib/shared-memory.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-acl-missing-ownership-fail-open",
+        "cand-agent-db-path-traversal"
+      ],
+      "evidence": "Read in full (228 lines; SHA-256 53477d7429fce23abec4d1b930778e12a2538040a07a130389daf2c5b7e75032). The store guard rejects empty text and several sensitive categories/core/neverForget/high-importance records unless an explicit boolean is supplied (30-65), strips that boolean before persistence (67-83), and the conflict scan has hard candidate/result bounds (135-201). Yet a helper whose stated scope is workspace_shared neither requires nor adds workspaceKey/workspaceId; arbitrary metadata is spread and only id/text/scope/time/status are overwritten (54-83). Its sole non-test producer, shareCard, also omits workspace identity (lib/telegram-commands/memory-edit.js:296-329). querySharedMemories accepts no workspace identity and filters only scope, so it returns every workspace_shared row in the selected agent database (96-132). A benign mock stored a workspace_shared entry with both workspaceKey and workspaceId absent. This is a concrete producer for the already discovered missing-workspace-binding ACL fail-open issue, although the share/query helpers have no registered production command caller in current main and therefore need reachability validation. agentId is checked only as a non-empty string before dbPool.getDb and not with safeAgentId (54-67, 96-105), supporting cand-agent-db-path-traversal in deployments that wire this feature. User-facing text/query have no validateInput length checks; query can throw on a non-string; embedding errors are silently swallowed (96-132). Sensitive approval is a bare caller boolean rather than a user/chat/nonce-bound confirmation at this layer, but the known shareCard wrapper also performs ACL and sensitivity checks and is currently dormant."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-feature-cron-channel-target-confusion",
+      "title": "Feature-cron fallback ignores bound conversation identity and uses Telegram DM allowFrom as the delivery target",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-441",
+        "wrong-recipient-delivery"
+      ],
+      "source": "OpenClaw bindings identify the agent's routed Telegram account and may include an exact direct/group/channel peer; Telegram allowFrom contains inbound DM sender identities.",
+      "control": "deriveDeliveryFromChannelConfig filters only agentId/channel/accountId, ignores match.peer, and chooses the sole account.allowFrom entry without applying OpenClaw's effective inherited/default-account semantics or validating target kind.",
+      "sink": "planSpecForAgents marks the afterthought cron enabled and passes the derived user ID as delivery.to for recurring proactive messages.",
+      "impact": "Afterthought content can be delivered to a DM identity instead of the group/topic/conversation actually bound to the agent, causing wrong-recipient disclosure or silently breaking the intended feature route.",
+      "locations": [
+        "lib/setup/feature-cron-plan.js:177",
+        "lib/setup/feature-cron-plan.js:192",
+        "lib/setup/feature-cron-plan.js:228",
+        "lib/setup/feature-cron-plan.js:241",
+        "lib/setup/feature-cron-plan.js:245",
+        "lib/setup/feature-cron-plan.js:251",
+        "lib/setup/feature-cron-plan.js:253",
+        "lib/setup/feature-cron-plan.js:256",
+        "lib/setup/feature-cron-plan.js:367",
+        "lib/setup/feature-cron-plan.js:378",
+        "scripts/setup-feature-crons.mjs:118",
+        "scripts/setup-feature-crons.mjs:242"
+      ],
+      "validationFacts": "A benign planner check using a Telegram group peer binding for -100777 and account allowFrom=['12345'] returned {channel:'telegram',to:'12345'} and created an enabled afterthought cron. Installed OpenClaw documentation states channels.telegram.allowFrom is a numeric DM user allowlist, group IDs live under groups, match.peer is exact conversation identity, and explicit Telegram group announce targets are negative chat IDs. Validate the current setup script's JSON5/config loading, generated CLI argv, gateway target validation/rerouting, and common real configurations before final severity.",
+      "attackFacts": "The common precondition is a fresh agent with no existing delivery-capable cron, exactly one Telegram account binding, a peer-specific group/topic route, and exactly one account allowFrom user. No malicious input is required; the setup itself selects the wrong semantic identifier. The recipient may still be the bot owner in one-owner deployments, reducing confidentiality severity, but the conversation boundary remains wrong. Preserve automatic cron setup by deriving explicit peer/defaultTo/live targets with target-kind validation, not by disabling afterthoughts."
+    },
+    {
+      "candidateId": "cand-afterthought-cross-session-leak",
+      "title": "Per-agent feature-cron planning binds workspace-wide afterthought selection to one fixed chat target",
+      "taxonomy": [
+        "CWE-200",
+        "cross-session-data-exposure",
+        "identity-target-misbinding"
+      ],
+      "source": "A bound agent can serve multiple conversations, while afterthought outcome records retain session/chat-associated user prompts in workspace-wide state.",
+      "control": "selectAgentsForCronSetup intentionally chooses only one agent per workspace and planSpecForAgents creates only one afterthought job per agent, deriving one target from unrelated existing cron/config state rather than the selected outcome's session/destination.",
+      "sink": "The recurring cron announces the generated follow-up to that single fixed delivery target.",
+      "impact": "A follow-up derived from one conversation can be delivered in another conversation or to the agent's chosen default recipient.",
+      "locations": [
+        "lib/setup/feature-cron-plan.js:16",
+        "lib/setup/feature-cron-plan.js:177",
+        "lib/setup/feature-cron-plan.js:260",
+        "lib/setup/feature-cron-plan.js:277",
+        "lib/setup/feature-cron-plan.js:330",
+        "lib/setup/feature-cron-plan.js:367",
+        "lib/setup/feature-cron-plan.js:378",
+        "lib/afterthought.js:36",
+        "lib/afterthought.js:105",
+        "lib/reply-outcome-tracking.js:289"
+      ],
+      "validationFacts": "This shard confirms the fixed-target delivery half of the candidate; review-001 confirms the unscoped selection half dynamically. Validate whether supported agents can have multiple peer bindings/sessions and whether cron execution can preserve a trustworthy originating delivery target per outcome.",
+      "attackFacts": "Requires at least two conversations sharing an agent/workspace plus an eligible outcome and enabled afterthought cron. Content selection and delivery are independently unbound, so an attacker can influence one conversation and wait for delivery to the fixed other target. Keep the feature by storing and validating a destination binding with each outcome and scheduling/delivering per eligible outcome."
+    },
+    {
+      "candidateId": "cand-safe-profile-unexpected-privileged-activation",
+      "title": "Safe setup profile is merged with write-enabled Full Experience defaults",
+      "taxonomy": [
+        "CWE-16",
+        "CWE-1188",
+        "unsafe-configuration"
+      ],
+      "source": "An authorized owner invokes /plur1bus setup safe expecting the documented write-/LLM-intensive features to remain inactive.",
+      "control": "safeProfile defines only a small disabled subset; applyFeatureProfile then calls applyFullExperiencePolicy, whose mergeMissing fills every omitted core feature and operational flag with enabled Full Experience values. The Safe Profile's mode='dry-run' is schema-invalid and does not set the runtime dryRun boolean.",
+      "sink": "The resulting runtime config enables skill mining, daily consolidation, critical push, Obsidian writes/semantic graph/SoulPatch creation and other intensive features, with obsidianBridge.dryRun=false and allowWrite=true.",
+      "impact": "The safety choice can authorize persistent writes, LLM processing, notifications, and maintenance behavior that the operator explicitly selected Safe Profile to avoid.",
+      "locations": [
+        "lib/setup/feature-profiles.js:20",
+        "lib/setup/feature-profiles.js:118",
+        "lib/setup/feature-profiles.js:140",
+        "lib/setup/feature-profiles.js:146",
+        "lib/setup/feature-profiles.js:152",
+        "lib/setup/feature-profiles.js:232",
+        "lib/setup/feature-profiles.js:236",
+        "lib/setup/feature-profiles.js:243",
+        "lib/setup/feature-profiles.js:245",
+        "lib/setup/feature-profiles.js:281",
+        "lib/setup/feature-profiles.js:296",
+        "lib/setup/feature-profiles.js:302",
+        "index.js:2131",
+        "index.js:3424",
+        "index.js:3446",
+        "openclaw.plugin.json:1694"
+      ],
+      "validationFacts": "A benign public-API check applied safeProfile to an empty enabled plugin config and observed skillMiner/dailyConsolidation/criticalPush enabled, soulPatch createIfMissing enabled, and Obsidian allowWrite=true, backupBeforeApply=false, dryRun=false. The manifest's obsidianBridge.mode enum contains augment/apply, not dry-run. All targeted profile tests pass because they assert the current contradictory contract rather than a complete safe effective configuration. Validate which enabled jobs have installed schedules/live hooks and the exact Obsidian runtime normalization for final impact.",
+      "attackFacts": "No external attacker input is necessary; this is a dangerous operator-expectation failure after an authenticated configuration command. Exploitation impact depends on subsequent triggers/crons/providers. Preserve all features in Recommended/Full Experience while making Safe's effective configuration complete, schema-valid, and genuinely dry-run; do not globally disable functionality."
+    },
+    {
+      "candidateId": "cand-acl-missing-ownership-fail-open",
+      "title": "Shared-memory helper creates and queries workspace-shared rows without a workspace binding",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-862",
+        "tenant-isolation"
+      ],
+      "source": "An existing memory card can be promoted through shareCard/storeSharedMemory, and shared-memory queries operate in the per-agent database.",
+      "control": "storeSharedMemory forces scope='workspace_shared' but neither requires nor supplies workspaceKey/workspaceId; shareCard omits both, and querySharedMemories has no workspace argument or workspace filter.",
+      "sink": "The unbound row is stored in the agent DB and shared-memory query returns all rows having scope workspace_shared, while the general ACL layer separately fails open on missing workspace bindings.",
+      "impact": "Once the share/query feature is wired, a card shared from one workspace can be recalled from another workspace served by the same agent database.",
+      "locations": [
+        "lib/shared-memory.js:46",
+        "lib/shared-memory.js:54",
+        "lib/shared-memory.js:67",
+        "lib/shared-memory.js:69",
+        "lib/shared-memory.js:73",
+        "lib/shared-memory.js:86",
+        "lib/shared-memory.js:96",
+        "lib/shared-memory.js:113",
+        "lib/shared-memory.js:125",
+        "lib/telegram-commands/memory-edit.js:296",
+        "lib/telegram-commands/memory-edit.js:314",
+        "lib/acl-middleware.js:71"
+      ],
+      "validationFacts": "A benign mock captured a stored entry with scope='workspace_shared' and both workspaceKey/workspaceId absent. Repository search found shareCard only at its definition and storeSharedMemory otherwise only in tests, so the direct feature path appears dormant/test-only on current main. This evidence should merge into the existing ACL candidate and remain suppressed from final reporting unless a reachable caller or alternate shared-memory consumer is confirmed.",
+      "attackFacts": "Requires the share/query helper to be exposed and at least two workspaces sharing an agent database. The storage/lookup isolation failure is code-complete once wired. Preserve sharing by requiring a validated workspace identity on store and query and applying the same ACL filter, not by removing the feature."
+    }
+  ],
+  "notes": "Five assigned files were read completely. Targeted tests feature-cron-plan, feature-cron-bootstrap, smoke-feature-profiles, shared-memory-store-guard, and shared-memory-conflict-limit all passed (5/5 files), but do not cover group-peer target derivation, effective Safe Profile behavior, or mandatory shared workspace binding. No repository or product file was modified and no feature-disable remedy is proposed."
+}

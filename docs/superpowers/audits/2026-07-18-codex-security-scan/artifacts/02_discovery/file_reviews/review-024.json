@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-024",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/obsidian/semantic-conflict-graph.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (39 lines; SHA-256 727100b7d205d132f07cac770d47052191adc55828c93ae83a997cf6be25acb4). The function deterministically creates proposal-only conflict records and delegates bounded vault writing to the reviewed record writer. It neither applies mutations to memories nor exposes a raw file/process/network sink. Pairwise work is unbounded, but this is performance behavior rather than an authorization breach."
+    },
+    {
+      "path": "lib/obsidian/semantic-duplicate-scan.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (102 lines; SHA-256 193aa338993cddd990aa91430f445c20165a1f247eda63a7ab22b9a74de33076). It creates capped proposal records from index data, with bounded fallback buckets for large sets. Threshold/max settings accept invalid operator values through Number coercion, but no attacker-controlled privileged sink or memory mutation is reachable here."
+    },
+    {
+      "path": "lib/obsidian/semantic-link-discoverer.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-semantic-discovery-mirror-cross-workspace",
+        "cand-acl-missing-ownership-fail-open"
+      ],
+      "evidence": "Read in full (969 lines; SHA-256 286b09d476e089db9bca0c000250de0ef8e46b2bc99f9fef7a8f679a6b590522). The new dry-run/apply APIs protect link-index writes behind options.confirm (710-735), but the production batch integration calls legacy discoverSemanticLinks without confirm and, before that, writes every scanned row to the current vault (index.js:393-404; 3065-3101; this module:73-145). MemoryDB.scanActiveBatches scans an entire per-agent table with only status filtering, omits workspaceKey/agentId from its normalized records, and performs no record ACL (index.js:1138-1170). semVaultCfg is built from a current vault path without injecting the active workspace identity. Consequently readMemoryMirrorRecords/join sidecar scope checks have no expected workspace and treat missing metadata as non-mismatching (188-245, 339-456, 539-604). Foreign rows are materialized into the current workspace by memory-note-writer with their raw text; subsequent semantic linking can also retain cross-scope IDs. This supports both a direct mirror disclosure candidate and the existing missing-ownership fail-open family. The automatic call never sets confirm:true, so semantic link-index persistence is feature-incomplete (also captured by feature audit), while the mirror write remains active."
+    },
+    {
+      "path": "lib/obsidian/tasks-generator.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (47 lines; SHA-256 147a03c860461c76d29f763feea08a29a5231600787374748d749de0a0d5c1d2). The optional task UI writes only suggestions via resolveReviewPath/atomicWriteText and explicitly states checkboxes are not approval. Markdown task fields are not escaped beyond line collapse, but no automatic execution, memory mutation, or prompt consumer was established from this file."
+    },
+    {
+      "path": "lib/obsidian/weekly-synthesis.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (67 lines; SHA-256 79c5dd3014d139745720a69d93bd7a20715e9c9d3c4adb6902500c04ba967fec). It emits a proposal-only weekly report using resolveReviewPath/atomicWriteText. An external `options.week` is path-checked at the sink; records are rendered as dashboard metadata only, with no privileged execution or memory mutation."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-semantic-discovery-mirror-cross-workspace",
+      "instanceKey": "cross-workspace-vault-mirror:index.js:393",
+      "title": "Semantic discovery mirrors all active agent memories into the invoking workspace vault",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-862",
+        "CWE-668",
+        "cross-workspace-data-exposure"
+      ],
+      "source": "A semanticDiscovery-enabled REM dream or internal discovery job runs for workspace A and an agent whose table contains active workspace-B/user-scoped memories.",
+      "control": "Semantic discovery is opt-in and link-index persistence has a confirmation gate, but runSemanticDiscoveryBatches scans the entire per-agent table, does not supply a workspace filter or authorization context, and invokes writeMemoryNotes before the confirmation-gated index logic. Normalized scan rows omit workspaceKey/agentId, preventing downstream scope comparison.",
+      "sink": "writeMemoryNotes writes each returned memory's raw text to `<workspace-A vault>/plur1bus/memories/<id>.md`; semantic link discovery then operates on the same unfiltered record set and may retain foreign IDs in discovery state.",
+      "impact": "Private memory content from workspace B can be copied into workspace A's human-readable Obsidian vault and later surfaced through vault/index workflows, violating the plugin's per-workspace isolation despite no direct recall response being requested.",
+      "closestControl": "The main recall pipeline applies record ACL, and mirror helpers can compare scope only when both expected and record metadata are present. This batch path supplies neither usable expected workspace identity nor preserved record workspace fields.",
+      "locations": [
+        "index.js:393",
+        "index.js:399",
+        "index.js:400",
+        "index.js:3085",
+        "index.js:3087",
+        "index.js:3088",
+        "index.js:3198",
+        "index.js:3203",
+        "index.js:1138",
+        "index.js:1152",
+        "index.js:1165",
+        "lib/obsidian/semantic-link-discoverer.js:73",
+        "lib/obsidian/semantic-link-discoverer.js:79",
+        "lib/obsidian/semantic-link-discoverer.js:188",
+        "lib/obsidian/semantic-link-discoverer.js:266",
+        "lib/obsidian/semantic-link-discoverer.js:339",
+        "lib/obsidian/semantic-link-discoverer.js:539",
+        "lib/obsidian/memory-note-writer.js:171",
+        "lib/obsidian/memory-note-writer.js:218"
+      ],
+      "validationFacts": "Static flow establishes status-only scan -> current workspace vault write with no workspace filtering. Dynamic validation should use two active rows in a fake per-agent scan (workspace A and B), execute runSemanticDiscoveryBatches against a temporary workspace-A vault, and assert the B text/note is written. Validate whether actual MultiNamespacePool deployments can share an agent DB across workspaces; the architecture and normal storage path indicate they can.",
+      "attackFacts": "The feature must be enabled and an authorized/automatic semantic-discovery job must run; no unauthenticated direct vault write is asserted. A compatible repair preserves discovery by filtering source rows and ANN candidates with the same record-level scope/ACL used for recall, carrying workspace metadata through scan normalization, and retaining only same-scope links."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. One cross-workspace mirror candidate was retained; semantic-index confirmation behavior is also a feature audit item. No repository file was modified and no feature-disable recommendation is implied."
+}

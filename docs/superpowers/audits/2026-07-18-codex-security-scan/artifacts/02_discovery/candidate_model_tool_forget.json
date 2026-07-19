@@ -1,0 +1,31 @@
+{
+  "candidateId": "cand-model-tool-forget-authz",
+  "title": "Model-facing memory_forget mutates durable memory without user-bound authorization",
+  "instanceKey": "agent-tool-authz:index.js:5216",
+  "affectedLocations": [
+    { "label": "entrypoint", "path": "index.js", "line": 5206, "detail": "Registers memory_forget as a model-facing tool." },
+    { "label": "root_control", "path": "index.js", "line": 4868, "detail": "Guard allows destructive model tools unless config is explicitly false." },
+    { "label": "root_control", "path": "openclaw.plugin.json", "line": 1714, "detail": "Schema default is true." },
+    { "label": "sink", "path": "index.js", "line": 5232, "detail": "Deletes an ID-selected memory after archive." },
+    { "label": "sink", "path": "index.js", "line": 5255, "detail": "Deletes a query-selected memory after archive." }
+  ],
+  "attackerControlledSource": "Untrusted chat, retrieved content, or stored memory can influence the model's tool-selection and tool arguments; model tool calls carry no userId/chatId authorization context (as acknowledged by index.js:4872).",
+  "sinkOrBrokenControl": "The only control is an opt-out config flag that defaults to allow. The command-path isAuthorized plus user/chat/nonce confirmation flow is not called before db.delete.",
+  "impact": "A prompt-injection or mistaken model action can remove durable long-term memories for the active agent. The archive makes recovery possible but does not prevent integrity/availability loss or user-visible forgetting.",
+  "plausibility": "Source inspection proves direct reachability from the registered model tool to two deletion sinks and proves the missing user-bound guard. README.md:356 and :365 document that the default intentionally keeps the operation available.",
+  "closestControl": "Archive-first backup and an explicit configuration opt-out reduce impact, but neither authenticates or confirms the initiating user/action. The chat-command authorization/confirmation control is a safe sibling, not applied here.",
+  "validationRecommended": true,
+  "candidateLocalValidation": {
+    "method": "static source-to-sink trace and configuration-default verification",
+    "evidence": "index.js:4864-4874, 5206-5262; openclaw.plugin.json:1706-1718; README.md:356,365",
+    "counterevidence": "Archive-first backup at index.js:5222-5233 and 5246-5256 limits irreversibility; per-agent DB selection limits cross-agent blast radius."
+  },
+  "candidateLocalAttackPath": {
+    "source": "untrusted content influencing the active model",
+    "transformations": ["model emits memory_forget tool call", "optional vector search selects one memory or supplied ID selects exact memory", "archiveCard writes backup"],
+    "sink": "db.delete(memoryId)",
+    "outcome": "durable active memory removed from recall",
+    "preconditions": ["default or explicit allowModelDestructiveMemoryOps=true", "agent follows injected/mistaken instruction and invokes tool"]
+  },
+  "taxonomy": ["CWE-862", "CWE-284"]
+}

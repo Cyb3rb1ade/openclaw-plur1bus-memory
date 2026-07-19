@@ -1,0 +1,5 @@
+{"path":"lib/atomic-file.js","area":"."}
+{"path":"lib/atomic-json.js","area":"."}
+{"path":"lib/bounded-cache.js","area":"."}
+{"path":"lib/bounded-operation-queue.js","area":"."}
+{"path":"lib/categorize.js","area":"."}

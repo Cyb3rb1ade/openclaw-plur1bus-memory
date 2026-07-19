@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-032",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/review-narrative-lead.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (95 lines; SHA-256 96a82b2d9dc5031fc2f87cf608070fca0092fde209b78858e75119477b259fe7). A pure deterministic summary/mood renderer with a 400-character cap; no persistence, authorization, network, query, or process sink exists. Its fail-open catch can hide malformed caller data but does not create a security boundary bypass."
+    },
+    {
+      "path": "lib/runtime-pressure-gate.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (68 lines; SHA-256 100440d328af2db0c494f60bf6922fdbf84905069db96ab40c89b88285db8d42). The module only normalizes positive operator-configured RSS thresholds and classifies process.memoryUsage(); it has no untrusted sink or state mutation. A warning threshold greater than critical is not normalized, but this is availability configuration hygiene rather than an exploitable authorization issue."
+    },
+    {
+      "path": "lib/runtime-scheduler.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-recall-timeout-cache-cross-workspace"
+      ],
+      "evidence": "Read in full (571 lines; SHA-256 8ccc64ed7b4a4f56617a9720160710c9a540ea4510df4bf8ea6a521df5964dd1). Completed recall values, including a full prependContext, are retained in recallCache under an opaque caller cacheKey (279-297, 334-339). On timeout, the scheduler returns that cached value without invoking an ACL or caller filter (374-383). The production caller constructs cacheKey from agentId, session identifier, and the first 500 prompt characters only (index.js:5540-5556), then returns scheduledRecall.value directly into the new hook response (index.js:6341-6345); workspaceKey/workspaceDir/user identity are absent. Thus reuse can cross workspace scope when a later request with the same agent/session/prompt times out. The same file's timer behavior lets timed-out capture work continue (397-445), which is tracked in the bug audit, and unbounded cache cardinality is also a separate reliability issue."
+    },
+    {
+      "path": "lib/runtime-shutdown.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (25 lines; SHA-256 497529234513ca5591d96179d4b180a95c5df202910ae554e8898f36e022f4ec). This thin gateway-stop sequencer invokes only plugin-owned dependencies supplied at registration. It logs raw error messages rather than safeWarn and does not close every provider/cache resource, but no external caller controls those dependency objects or an authorization/file/network sink through this module; shutdown completeness is covered by the bug audit."
+    },
+    {
+      "path": "lib/safe-logging.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (58 lines; SHA-256 098ee75634b71b734ed25aa928974c0f13ac0a08b3545e644136d8cf5eae1519). safeWarn redacts selected token patterns and payload-like extras; safeDebug passes extras through unfiltered, and SENSITIVE_HINTS is unused. Reviewed in-repository safeDebug call sites pass IDs, counts, paths, and lengths rather than memory text, credentials, or chat payloads, so no concrete sensitive-log exploit chain was retained. Treat generic error redaction and debug-extra sanitization as defense-in-depth hardening, not a confirmed finding."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-recall-timeout-cache-cross-workspace",
+      "instanceKey": "cross-workspace-cache:lib/runtime-scheduler.js:374",
+      "title": "Timeout fallback can replay another workspace's cached recall context",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-862",
+        "CWE-522",
+        "cross-tenant-cache-key"
+      ],
+      "source": "A caller in workspace B reaches before_prompt_build for the same agent, session identifier, and first 500 prompt characters as an earlier workspace-A recall, while its own recall operation reaches the scheduler timeout.",
+      "control": "The normal recall function applies ACL for its own context, but recallCache stores the completed result without scope metadata and cachedRecall returns it based only on the caller-supplied key. The production key omits workspaceKey, workspaceDir, user identity, and access context.",
+      "sink": "runRecall returns `{ok:true, value, timedOut:true, fromCache:true}` and index.js returns that unfiltered `value` as the new prompt hook's prependContext.",
+      "impact": "A timeout in one workspace can inject stale memory/Neo/reminder context constructed for another workspace into the new model invocation, enabling confidential-context disclosure and incorrect cross-workspace behavior.",
+      "closestControl": "The final scheduler return path has no re-entry into the recall ACL stage. Cache TTL and matching agent/session/prompt constraints reduce likelihood but do not bind the cached object to a tenant boundary.",
+      "locations": [
+        "lib/runtime-scheduler.js:279",
+        "lib/runtime-scheduler.js:334",
+        "lib/runtime-scheduler.js:374",
+        "lib/runtime-scheduler.js:379",
+        "index.js:5540",
+        "index.js:5543",
+        "index.js:5549",
+        "index.js:6341",
+        "index.js:6345"
+      ],
+      "validationFacts": "Static flow confirms both missing scope fields and direct return of cached value. Dynamic validation should use createBackgroundMemoryScheduler with a short timeout: complete a workspace-A job under key `${agent}:shared-session:prompt`, then make a workspace-B job with the same key time out and prove it receives the A value. The host integration must then show that distinct workspace contexts can share the selected session key; if session routing always namespaces workspace, calibrate severity/defer accordingly.",
+      "attackFacts": "The attacker needs a shared-agent deployment and a session/key collision plus timing pressure; it is not an unauthenticated direct cache read. A feature-preserving repair includes canonical workspace/user authorization dimensions in the cache key and/or stores scope metadata and validates it before timeout fallback, retaining resilience for same-scope recalls."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. One cache-scope candidate requires dynamic and integration validation. No repository file was modified."
+}

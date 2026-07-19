@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-007",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/emotional-state.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-emotional-state-cross-workspace",
+        "cand-mood-state-prompt-injection"
+      ],
+      "evidence": "Read in full (607 lines). The pool is keyed only by agentId (562-605) despite the module describing agent/workspace state, while index.js calls get(agentId) and hydrates only once from the first workspace file (index.js:5629-5655). Thus mood can cross workspace boundaries. applyEmotionScore accepts any truthy nuance label into nuanceState (134-158), hydrateOnce restores arbitrary labels from JSON (422-445), and describe/format functions emit unknown labels without prompt escaping (310-359, 525-552). The packaged emotional-state injector then interpolates label/nuances directly into prompt instructions (.openclaw/extensions/emotional-state-injector/index.js:52-67). Validation must determine upstream label allowlisting and writer trust."
+    },
+    {
+      "path": "lib/episodes.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-episode-generated-metadata-injection"
+      ],
+      "evidence": "Read in full (475 lines). Conversation turns are embedded in an LLM prompt without an explicit untrusted-data instruction (246-278); parsed title/narrativeArc/turningPoint/summary are accepted without enum/length/type validation (280-299), stored in Neo and automatically written after agent_end (index.js:4710-4735). writeEpisodeToVault sanitizes the filename slug but writes generated values verbatim into YAML/Markdown (334-420), so newline-bearing fields can forge frontmatter or prompt-like note content. Obsidian scanning treats generic notes as review-only by default, reducing but not eliminating the persistent-content boundary. LLM/parse catches at 283-297 and recall catch at 464-468 are silent; episodic recall is also a placeholder-only feature."
+    },
+    {
+      "path": "lib/event-loop-lag-snapshot.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (63 lines). It reads only local perf_hooks histogram metrics and exposes no untrusted input or privileged output. Multiple silent catches violate observability rules but only disable telemetry."
+    },
+    {
+      "path": "lib/explainability.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (126 lines). Pure arithmetic/rendering helpers; no file, query, process, network, authorization, or model-tool sink. Non-finite component values can produce misleading percentages, a correctness validation gap only."
+    },
+    {
+      "path": "lib/feedback-log.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (254 lines). Feedback enum is enforced (51-63), logs are capped at 5,000 and atomically rewritten (14-16, 39-49, 124-168), and runtime command use records feedback without enabling dynamics (index.js:4185). The optional dynamics path does not call safeUuid/safeAgentId itself (77-109), but its only production caller omits dbPool/agentId so it is dormant. Fixed .tmp filenames are race-prone and negative-query reports retain raw query text, both functional/privacy-hardening concerns."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-emotional-state-cross-workspace",
+      "title": "Emotional state is isolated by agent but not by workspace",
+      "taxonomy": ["CWE-668", "tenant-isolation", "privacy"],
+      "source": "Conversation emotion from any workspace served by an agent updates emotionalPool.get(agentId).",
+      "control": "The pool key and hydrate-once guard omit workspace identity.",
+      "sink": "The shared state affects recall boosting, serialized mood files, and prompt/style injection in later turns for the same agent in another workspace.",
+      "impact": "A workspace can infer or inherit another workspace's emotional state and have its recall/response behavior influenced across the intended isolation boundary.",
+      "locations": [
+        "lib/emotional-state.js:48",
+        "lib/emotional-state.js:562",
+        "lib/emotional-state.js:575",
+        "lib/emotional-state.js:583",
+        "index.js:5629",
+        "index.js:5633",
+        "index.js:5642",
+        "index.js:5654"
+      ],
+      "validationFacts": "Pool-key omission is confirmed. Validate whether one long-lived plugin instance can handle the same agentId across distinct ctx.workspaceKey/workspaceDir values and whether recall uses this exact pool state.",
+      "attackFacts": "Requires access to one of multiple workspaces sharing an agent process/ID; sending emotionally salient text changes state that the other workspace later consumes."
+    },
+    {
+      "candidateId": "cand-mood-state-prompt-injection",
+      "title": "Unvalidated mood labels and nuances are interpolated into prompt instructions",
+      "taxonomy": ["CWE-94", "agent-tool-prompt-injection", "persistent-data-poisoning"],
+      "source": "Emotion-engine output or persisted .emotional-state.json supplies nuance labels/state.",
+      "control": "Intensities are clamped, but unknown labels are retained and no text/attribute sanitizer is applied before formatting.",
+      "sink": "The packaged emotional-state injector places label and nuances into a before_prompt_build instruction block, including an instruction to reproduce a generated display line.",
+      "impact": "If upstream classification or a writable workspace state file can introduce control text/newlines, persistent prompt instructions can be injected into later model turns.",
+      "locations": [
+        "lib/emotional-state.js:150",
+        "lib/emotional-state.js:153",
+        "lib/emotional-state.js:310",
+        "lib/emotional-state.js:348",
+        "lib/emotional-state.js:422",
+        ".openclaw/extensions/emotional-state-injector/index.js:52",
+        ".openclaw/extensions/emotional-state-injector/index.js:62",
+        ".openclaw/extensions/emotional-state-injector/index.js:64",
+        ".openclaw/extensions/emotional-state-injector/index.js:90"
+      ],
+      "validationFacts": "Sink is confirmed. Validate emotion-score/engine label schemas, actual file-writer provenance, newline handling, extension activation, and whether OpenClaw treats the block as higher-trust context.",
+      "attackFacts": "Requires either prompt influence over a configured emotion LLM that can emit an unallowlisted label or write access to the workspace mood state; ordinary known emotion labels are harmless."
+    },
+    {
+      "candidateId": "cand-episode-generated-metadata-injection",
+      "title": "Episode LLM output is persisted as unsanitized Neo and YAML/Markdown metadata",
+      "taxonomy": ["CWE-74", "prompt-injection", "persistent-data-poisoning"],
+      "source": "Untrusted conversation turns influence narrative LLM JSON fields.",
+      "control": "JSON parsing exists and filename characters are stripped, but field types, lengths, enum membership, newlines, and YAML quoting are not validated.",
+      "sink": "Generated episode metadata is appended to Neo storage and written verbatim into an automatically generated Markdown note/frontmatter.",
+      "impact": "A crafted conversation/model response can forge note metadata or plant prompt-like persistent content that enters later review, graph, or recall workflows.",
+      "locations": [
+        "lib/episodes.js:251",
+        "lib/episodes.js:255",
+        "lib/episodes.js:282",
+        "lib/episodes.js:289",
+        "lib/episodes.js:334",
+        "lib/episodes.js:351",
+        "lib/episodes.js:361",
+        "lib/episodes.js:363",
+        "lib/episodes.js:372",
+        "lib/episodes.js:376",
+        "index.js:4717",
+        "index.js:4724",
+        "index.js:4728"
+      ],
+      "validationFacts": "Source-to-persistence is complete. Validate downstream Neo episode consumers, Obsidian classification/approval requirements, Markdown/YAML parser behavior, and model prompt priority.",
+      "attackFacts": "Requires at least five turns and configured LLM narrative enrichment; the attacker influences source text, while successful field injection depends on the LLM following embedded instructions or being compromised."
+    }
+  ],
+  "notes": "Three candidates retained for later validation. No feature-disable remedy is needed: scope mood state by agent+workspace and schema/sanitize generated labels/episode metadata while keeping emotion and episode features active."
+}

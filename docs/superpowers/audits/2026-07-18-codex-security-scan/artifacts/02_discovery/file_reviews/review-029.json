@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-029",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/providers/reranker-local-transformers.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (83 lines; sha256 1a087d83dbfc58f43c369d9b1cfb1e25422dd871d696b510777c36dd3efaf081). Local-only model execution, allowlisted cache-path environment expansion, bounded topN output, and logged fallback errors. The optional dependency advisory is already tracked separately."
+    },
+    {
+      "path": "lib/query-refiner.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (170 lines; sha256 cdd747637716702f3579268c5dd2ead078b40d7bc2abc83c3fb7ad34b27294ea). Pure bounded synonym/keyword transformation with punctuation normalization and at most three contextual keywords; no SQL, file, or command sink."
+    },
+    {
+      "path": "lib/reaction-directive.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (106 lines; sha256 6414554d57e5fd486368cb053af4431296116a71fa8c50605c116ed67207ac3c). Runtime capability traversal is depth/cycle bounded. The persona-derived palette is reduced by loadPersonaEmojiPalette to Extended_Pictographic sequences only; the alternative palette is trusted administrator config. Directive output is capped at 400 characters, suppressing message-driven prompt injection here."
+    },
+    {
+      "path": "lib/recall-budget.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (152 lines; sha256 13eee28bde5a5bfc57740d8a79621c93597d31dac087f063a1c59c55d3170112). Pure allocation over already-authorized recall results; it preserves priority and applies explicit caps without adding a data source or sink."
+    },
+    {
+      "path": "lib/recall-confidence-framing.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (65 lines; sha256 3e5bd09b5313d21ee40bf86a3c2aabac616806f4a73bd97db21759639c17824e). Pure, non-mutating uncertainty annotation with bounded output; no authorization or persistence effect. Silent fallback is a diagnostics-policy issue only."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No new security candidate. These modules operate after authorized recall or on trusted provider/persona configuration and do not introduce a new privileged sink."
+}

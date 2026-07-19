@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-041",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "plur1bus/lib/emotional-state.js",
+      "status": "complete",
+      "disposition": "candidate_support",
+      "candidateIds": ["cand-emotional-state-cross-workspace"],
+      "evidence": "Read in full (430 lines; sha256 8c8a5dc02382cf7c7dd60416932112676a28444629e78946001ec8464662e47f) and traced calls in plur1bus/index.js. The packaged runtime also keys its module-level pool by agentId alone at lines 394-403 while calls at plur1bus/index.js:3824 and 3852 provide no workspace key. This independently supports the cross-workspace state candidate already opened by review-007. Its arbitrary nuance-label path is dormant in this runtime because updateFromRecalledMemory has no caller."
+    },
+    {
+      "path": "plur1bus/lib/interpretation-overlay.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (160 lines; sha256 9332ca03f76ef3c18fc3264eb7d38fe6e6e568461f1482fca9cdae37833ccb2e) plus callers at plur1bus/index.js:1158-1237 and 3893-3913. The store is append-only, keyed by a runtime workspace directory, serializes appends, and never mutates LanceDB. LLM output is bounded to 200 characters. Full-file reads and missing schema validation are robustness gaps, but no current caller loads overlays into the prompt or authoritative memory in this packaged runtime."
+    },
+    {
+      "path": "plur1bus/lib/memory-context-sanitize.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (18 lines; sha256 f0f5ea4399b87fb4e4bc6a061bcd7bd2545fab95cf762c9ee665ebadecd7f49b). Attribute values are reduced to a 160-character conservative character set and then escaped; memory text delegates to the canonical prompt sanitizer."
+    },
+    {
+      "path": "plur1bus/lib/memory-graph.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1 line; sha256 351ab261440522de0588bf111a226b326da16d2a770bddb61adb26d18b1c8735). Static re-export of the fully reviewed canonical memory-graph implementation."
+    },
+    {
+      "path": "plur1bus/lib/metrics.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1 line; sha256 57f87a2bd733c9f99ab2ef94c8199cc911be981215dba53eae58dcc24066c79e). Static re-export of canonical metrics; no alternate implementation."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No new unique candidate. The packaged alternate runtime supplies independent evidence for agent-only emotional-state scoping; overlay consumption is presently unwired and therefore a feature/robustness concern rather than a reachable prompt-injection sink here."
+}

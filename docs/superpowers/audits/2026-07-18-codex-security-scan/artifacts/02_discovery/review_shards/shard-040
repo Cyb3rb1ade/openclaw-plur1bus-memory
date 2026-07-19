@@ -1,0 +1,5 @@
+{"path":"patches/apply-memory-patches.sh","area":"."}
+{"path":"plur1bus/index.js","area":"."}
+{"path":"plur1bus/lib/acl-middleware.js","area":"."}
+{"path":"plur1bus/lib/continuity-gate.js","area":"."}
+{"path":"plur1bus/lib/emotion.js","area":"."}

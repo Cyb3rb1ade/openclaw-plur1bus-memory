@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-047",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "scripts/reindex-provider.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_security_candidate",
+      "evidence": "Read in full (125 lines; SHA-256 961863c5895af7498d9178b23c8b740244dc1d8475407f7f773be06afeb0ae01). This explicitly report-only local operator CLI never implements --apply, but it joins unvalidated --agent/--from/--to values into local read paths. No remote or chat-controlled caller was found; retain as local CLI input-hardening debt rather than a security candidate. Feature gap: reindex is advertised but intentionally cannot perform re-embedding/config switching."
+    },
+    {
+      "path": "scripts/repair-dreaming-cron.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (114 lines; SHA-256 540dbe8be69889c2f76472cb4e6121179ab7e24d456ec812a372838b46163122). Cron UUIDs are parsed from trusted local CLI output and passed as argv elements to the OpenClaw wrapper. It does not implement documented --help (the flag falls through to an unavailable-CLI check), a minor usability defect; no independent untrusted security boundary was found."
+    },
+    {
+      "path": "scripts/repair-installed-plugin.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_new_candidate",
+      "candidateIds": ["cand-deploy-repair-symlink-write", "cand-lancedb-maintenance-versions-symlink-prune"],
+      "evidence": "Read in full (225 lines; SHA-256 cd0520620a5da2de6602fe143b023c2952f12923790e626c2febcfc6e267c3a9). The repair doctor is a local operator CLI and uses argv-array spawnSync calls. Its deploy repair and optional LanceDB maintenance delegate to separately reviewed sinks, corroborating the listed candidates but adding no distinct remote path. It ignores the maintenance child exit status, so it can claim a completed run after a failed prune; this is a reliability finding."
+    },
+    {
+      "path": "scripts/restore-snapshot.sh",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (168 lines; SHA-256 d1f142078733608318ac3845e0086cef147529ad607e5c98feb2babe39048694). Restore is dry-run by default, demands --confirm for writes, validates the snapshot root with realpath, creates a pre-restore safety backup, and validates destination parents. A locally injected malicious snapshot could still contain interior symlinks, but no lower-privileged/in-scope source for such a snapshot was established; generated backups remove symlinks and snapshot tests cover source-root rejection."
+    },
+    {
+      "path": "scripts/run-graph-links-once.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_security_candidate",
+      "evidence": "Read in full (30 lines; SHA-256 37aa6a3b646cf5aee99d2356d34765a07d8a486fac5daf6fd63c94f8961a7598). Manual one-shot wrapper delegates to the reviewed graph-link writer with an operator-supplied vault environment path. It has no confirmation switch of its own, but is a local explicit execution surface; no distinct security path beyond graph-link writer behavior was established."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "All five assigned files were read completely from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. tests/snapshot-scripts.test.js and tests/repair-scripts.test.js passed; node --check passed for all JS scripts and bash -n passed for restore-snapshot.sh. The missing OpenClaw CLI in the local test environment correctly prevents a live dreaming-cron check. No repository source file was modified."
+}

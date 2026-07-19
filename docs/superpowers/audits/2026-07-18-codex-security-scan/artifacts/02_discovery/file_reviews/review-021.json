@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-021",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/obsidian/knowledge-hub-graph.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (145 lines; sha256 17c2be5d34ed2cebbda11ef78e879d717bc586c2f241f0d5397c032d56b8067e). Apply is blocked unless confirm=true, managed-block conflicts stop writes, a before/after manifest is written, and the only target is fixed memory/KNOWLEDGE.md beneath the configured vault. Repository search found no runtime caller of applyKnowledgeHubGraphLinks, so there is no current remote source-to-sink path."
+    },
+    {
+      "path": "lib/obsidian/link-hygiene.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (9 lines; sha256 225b250f8eb296e13d2e34d8e88b1d1bb59f3aceed01952d0005ddc10c0590ac). Read-only proposal detector with no privileged sink."
+    },
+    {
+      "path": "lib/obsidian/link-index.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (42 lines; sha256 4bcb3fc658183dc421bd4670664e97f87455edca149dbb29894eaccfee231f1d). Index filename is a fixed .plur1bus/link-index.json suffix and writes are atomic. Malformed JSON fails closed to an empty index; the silent catch is a reliability/logging-policy issue. Live semantic discovery and its confirmation boundary are reviewed separately."
+    },
+    {
+      "path": "lib/obsidian/link-suggestions.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (34 lines; sha256 e904a82209ec90bc0fa0df03f52e7005e66a0d1f0da95ac842ff408abbdc051c). Record text/IDs can affect generated Markdown presentation, but both targets are fixed, contained review artifacts explicitly labeled suggestions only; this module does not alter memory truth or execute content."
+    },
+    {
+      "path": "lib/obsidian/maintenance-deep.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": ["cand-obsidian-maintenance-auth-bypass"],
+      "evidence": "Read in full (63 lines; sha256 a49b0595260bfdc07d8fabd2c00be9223a2e738377898deadc8636e204c1fcf4) and traced its chat route through lib/obsidian-control-room.js:3444 and index.js:2948-2983. runMaintenanceDeep always invokes cleanupResolvedFindings, which unlinks matching generated task notes at line 38. The encompassing Obsidian dispatch precedes checkAuth, offers no dry-run/confirmation here, and emits no destructive audit log."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-obsidian-maintenance-auth-bypass",
+      "title": "Deep-maintenance chat command deletes generated task notes without authorization, confirmation, or audit",
+      "taxonomy": ["CWE-862", "CWE-749", "destructive-operation"],
+      "source": "Any chat user able to invoke /plur1bus can request obsidian maintenance deep; the common Obsidian command dispatch does not enforce configured PLUR1BUS allowlists.",
+      "control": "runLivingMaintenanceDeep is called directly at lib/obsidian-control-room.js:3444, with no dry-run flag, user/chat-bound confirmation nonce, or checkAuth; index.js:2948-2983 reaches it before destructive authorization branches.",
+      "sink": "cleanupResolvedFindings unconditionally enumerates records/tasks and calls unlinkSync for every missing-<field>-<id>.md whose source ID is no longer classified as missing at lib/obsidian/maintenance-deep.js:31-39.",
+      "impact": "An unauthorized shared-chat participant can remove generated review findings/evidence and alter the human control-room state despite an allowlist; deletions have no archive or appendDestructiveOpLog receipt.",
+      "locations": [
+        "index.js:2948",
+        "index.js:2960",
+        "lib/obsidian-control-room.js:3444",
+        "lib/obsidian/maintenance-deep.js:12",
+        "lib/obsidian/maintenance-deep.js:31",
+        "lib/obsidian/maintenance-deep.js:38",
+        "lib/obsidian/maintenance-deep.js:59"
+      ],
+      "validationFacts": "Static reachability is direct. Validation should invoke the registered command handler as a user excluded by allowedUserIds against a temporary contained review root with a matching stale missing-field task, and verify that the file is removed while no confirmation or destructive audit callback is consulted.",
+      "attackFacts": "Preconditions are chat command access, at least one generated missing-field task whose source no longer appears missing, and write access to the review vault. File-name matching and the fixed contained tasks directory limit scope. A feature-preserving fix is to retain automatic cleanup but place its mutating phase behind existing authorization, preview/confirmation, archival, and audit-log primitives."
+    }
+  ],
+  "notes": "One destructive command candidate. Non-mutating maintenance analysis should remain available; only the cleanup mutation needs the existing authorization/confirmation/audit boundary."
+}

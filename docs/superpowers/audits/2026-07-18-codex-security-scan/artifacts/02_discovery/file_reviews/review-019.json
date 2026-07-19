@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-019",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/obsidian/archive-rotation.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": ["cand-obsidian-rotate-auth-bypass"],
+      "evidence": "Read in full (188 lines; sha256 b562b96736deb21c71106696804683c5308aada8127b522bd1c674b59b781e77) and traced the concrete chat caller at lib/obsidian-control-room.js:3463-3486 plus dispatch at index.js:2948-2983. The low-level routine has good traversal/symlink guards and dry-run defaults, but explicit action=delete + allowDelete=true calls unlinkSync at line 158. The reachable /plur1bus obsidian rotate --apply --delete --allow-delete route is dispatched before any checkAuth and records no destructive audit entry."
+    },
+    {
+      "path": "lib/obsidian/bases-generator.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (65 lines; sha256 7a2b92cda24ade6ab67cfde04bd89484b36d4b7c8498532c92b7e8ef28da67cc). All output names, types, and labels are fixed constants; target resolution and atomic writing are delegated to safe-paths. No untrusted scalar reaches a path or executable sink."
+    },
+    {
+      "path": "lib/obsidian/conflict-collector.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (34 lines; sha256 3df9673689149ec035549ff0d8bf511bc7f9a615066b383d8366aeac5e9265b2). Read-only grouping and proposal generation; it neither mutates authoritative memory nor executes record content. Record-index parsing and path containment remain covered by their own shard."
+    },
+    {
+      "path": "lib/obsidian/conflict-report.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (20 lines; sha256 3ed42f0759ec623d7019f23524c862c49606c3fcb7b98b6d02fc718fc4b237ca). Conflict reason/target values are rendered into a proposal-only Markdown report and records. They may affect presentation, but this module has no authoritative-memory mutation or code/command execution sink; contained path and record serialization are reviewed separately."
+    },
+    {
+      "path": "lib/obsidian/dashboard-generator.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (100 lines; sha256 97cd7abb24ac2a3c50f04ccb8980f5efdaf379521b9885ca5677896f09f89500). Record fields are emitted unescaped into generated Markdown tables/wikilinks, but the result is a non-authoritative dashboard, not an execution or memory-write path. The concrete target is resolved by safe-paths and atomically written. Downstream ingestion/prompt boundaries remain independently open."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-obsidian-rotate-auth-bypass",
+      "title": "Obsidian rotate chat command can permanently delete review-vault files without authorization, confirmation, or destructive audit",
+      "taxonomy": ["CWE-862", "CWE-749", "destructive-operation"],
+      "source": "Any chat user who can invoke /plur1bus can supply obsidian rotate --apply --delete --allow-delete plus age/size options.",
+      "control": "runPlur1busCommand dispatches every obsidian action to handleObsidianBridgeCommand at index.js:2948-2983 before calling checkAuth; the rotate branch treats the two flags as sufficient approval and has no user/chat-bound confirmation nonce.",
+      "sink": "rotateOldArchives reaches unlinkSync(f.path) at lib/obsidian/archive-rotation.js:156-160 for matching top-level .json, .md, or .txt files beneath the configured review root.",
+      "impact": "A non-whitelisted user in a shared chat can permanently remove review/control-room artifacts and evidence despite a configured PLUR1BUS whitelist; the operation is not recoverable from an in-command archive and leaves no appendDestructiveOpLog receipt.",
+      "locations": [
+        "index.js:2948",
+        "index.js:2960",
+        "lib/obsidian-control-room.js:3463",
+        "lib/obsidian-control-room.js:3465",
+        "lib/obsidian-control-room.js:3466",
+        "lib/obsidian-control-room.js:3467",
+        "lib/obsidian-control-room.js:3470",
+        "lib/obsidian/archive-rotation.js:110",
+        "lib/obsidian/archive-rotation.js:156",
+        "lib/obsidian/archive-rotation.js:158"
+      ],
+      "validationFacts": "Static reachability is direct and the plugin's other destructive routes call checkAuth, making this branch an enforcement outlier. Validation should execute the registered command handler with configured allowedUserIds excluding the caller and a temporary review root containing an old Markdown file, first proving dry-run safety and then proving the explicit delete flags remove it without invoking confirmation/audit callbacks.",
+      "attackFacts": "Preconditions are access to a chat where /plur1bus commands are registered, a writable configured review root, and a matching old/oversize top-level supported-extension file. Traversal and symlink defenses constrain the target set, but they do not restore caller authorization. A feature-preserving fix is to require the existing user/chat authorization and bound confirmation flow while retaining move, delete, and dry-run modes."
+    }
+  ],
+  "notes": "One destructive-command candidate. The archive engine itself correctly defaults to dry-run and contains paths; the defect is the missing chat authorization/confirmation/audit boundary, so remediation need not remove or disable rotation."
+}

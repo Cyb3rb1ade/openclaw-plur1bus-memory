@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-006",
+  "reviewer": "shard006-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/embedding-cache.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-embedding-cache-default-scope-cross-agent"
+      ],
+      "evidence": "Read in full (647 lines; SHA-256 91689d7969c7101e55a44e63ed4bd5a9b06d8c8c5011af82d4b8732a5605481c). Cache keys correctly include provider, model, dimensions, scope, version, and a normalized-text hash (lines 26-53), and persistent filenames are constrained with safeAgentId/hash fallback plus resolveInside (60-65, 151-160). However, agent scope silently becomes the literal shared value 'default' whenever callers omit agentId/scopeId (138-142); production recall and reminder call sites do omit it (lib/recall-pipeline.js:488,645; lib/reminder-store.js:49), while provider adapters pass that undefined value through. With persistence debug enabled, normalized plaintext is written into that default database (304-338), so the promised per-agent cache boundary is not upheld. No cache API exposes debug_text and persistDebug defaults false, so direct cross-principal disclosure remains a validation question. Correctness defects also confirmed: a persistent hit gives the memory tier a fresh TTL rather than the database row's remaining TTL (247-259, 434-441); the hard byte cap is checked only before inserts, and WAL-inclusive size eviction deletes rows one at a time without checkpointing (266-301, 312-346), which can empty/wedge persistence at the soft threshold; transient initialization failures are permanently memoized for the process (123-126, 180-220); and duplicate normalized keys in one request are added to toCompute more than once because inflight is populated only after collection (459-489). A benign dynamic check with ['Alpha',' alpha '] computed two entries and returned the second vector for both slots. setMany also permits a caller-supplied raw key that bypasses key construction (535-554), but no production caller was found."
+    },
+    {
+      "path": "lib/emotion-blends.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (221 lines; SHA-256 653021f8048772dc6a2c1da0e60bfef08250bcd61aacf45ba1a9bf379fa7ca29). This is a pure fixed-rule classifier. Blend labels, evidence polarity, and semantic-trigger output all come from constant rule tables (26-105, 126-191, 201-206), not from user-controlled label names. Input text is used only for lower-cased substring tests (107-109, 122, 147-157), with no file, process, query, network, authorization, or prompt sink. Numeric label values are not type/finiteness validated before arithmetic (128-145), and detectTransition will concatenate an arbitrary currentPrimary supplied by a caller (216-220); those are correctness/supporting validation gaps handled at the EmotionScore/engine boundary, not independent source-to-sink candidates here."
+    },
+    {
+      "path": "lib/emotion-engine.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-emotion-engine-cross-agent-context",
+        "cand-mood-state-prompt-injection"
+      ],
+      "evidence": "Read in full (319 lines; SHA-256 553d5d78d41d260bfcba4973526ad9d96c31bec5579ad0d67716843f51326168). The engine accepts an agentId context for Tier-3 provider calls (101-118, 191-204, 213-228, 257-268), but its previous-emotion context is one instance-global object and is neither keyed nor reset by agent/workspace/session (52-56, 121-126, 144-159). A benign public-API validation analyzed fear as agent-a then joy as agent-b; the agent-b result contained agent-a's previous emotion and timestamp with transition fear_to_joy. Because lib/emotion.js holds one module-global engine, this is a concrete cross-context state flow. Label/schema validation is delegated to EmotionScore; Tier-3 results can therefore carry model-generated string fields into enrichment, which supports cand-mood-state-prompt-injection, although fixed Tier-1 blend labels are safe. The Tier-3 timeout does not cancel the underlying request and its catch is silent (263-276), violating repository error-handling rules and permitting background cost/work after fallback, but no separate security impact was established."
+    },
+    {
+      "path": "lib/emotion-score.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-mood-state-prompt-injection"
+      ],
+      "evidence": "Read in full (223 lines; SHA-256 4f5aff9b4bb80e9673c2d1d0a748bd69f12979e11241f946e0b43e48a0df3573). Core VAD/intensity/confidence values receive finite-number and range checks (61-81), but primary/secondary emotion, language, source, tier, emotion-label keys/values, nuance labels, complex-emotion labels/evidence, emotional context, object shapes, lengths, and newline/control characters are not schema-validated (28-58, 83-101). Nuance and complex confidence range checks also omit Number.isFinite, and invalid timestamp strings are accepted until toISOString throws (47-58, 104-131). A benign constructor check accepted newline-bearing primary and nuance labels verbatim. effectiveLabel and serialization then return those strings unchanged (104-133, 158-172). This confirms the missing validation link for cand-mood-state-prompt-injection; built-in Tier-1 nuances use a fixed lexicon and Tier-3 currently does not populate nuances, so validation must retain the candidate only if persisted state, an extension/custom classifier, or another reachable producer can introduce a label before the known prompt sink. fromDict discards the supplied timestamp entirely (136-144), a separate correctness defect."
+    },
+    {
+      "path": "lib/emotion.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-emotion-engine-cross-agent-context",
+        "cand-mood-state-prompt-injection"
+      ],
+      "evidence": "Read in full (276 lines; SHA-256 4f1a3f78f97dc69ec47589d0444501e380bfcffb5a97ffe381210a7b6e7fa60e). One module-global _engine and one module-global mutable _emotionConfig serve every call (30-63); inferEmotionalValenceAsync forwards agentId only to analyze, which does not use it for the previous-emotion state (152-170). This makes the engine-level cross-agent/session contamination process-wide and can also make multiple plugin instances overwrite each other's emotion configuration if such a deployment is supported. emotionScoreToLegacy preserves arbitrary primary_emotion as emotionalDominant and passes nuance/complex/context objects through without copying or schema checks (66-105), supporting the label-injection candidate and persistent metadata poisoning analysis. The normal built-in synchronous path uses fixed Tier-1 output (115-127), and only the eight fixed dimension keys are serialized (173-200), which are meaningful mitigations. Both inference catches silently convert all failures to neutral/Tier-1 output (115-137, 161-170), violating the no-silent-catch rule and obscuring classifier/configuration failures without creating an independent privilege boundary."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-embedding-cache-default-scope-cross-agent",
+      "title": "Agent-scoped embedding cache silently collapses missing identities into a shared default scope",
+      "taxonomy": [
+        "CWE-668",
+        "CWE-200",
+        "tenant-isolation"
+      ],
+      "source": "Recall queries, reminder text, and other agent-associated text reach the embedding providers; several production call sites omit the agentId option.",
+      "control": "In agent scope, _resolveScopeId returns options.agentId || 'default' instead of requiring a validated agent identity, and providers pass an omitted identity through to the cache.",
+      "sink": "All such entries share the same in-memory key scope and persistent default.db; when embeddingCachePersistDebug is enabled, normalized plaintext is stored in that shared database.",
+      "impact": "The configured per-agent cache isolation guarantee is lost. This can mix cache accounting/state between agents and co-locate plaintext from different agents at rest; a direct confidentiality impact depends on whether another principal can inspect/export the default cache database.",
+      "locations": [
+        "lib/embedding-cache.js:79",
+        "lib/embedding-cache.js:138",
+        "lib/embedding-cache.js:141",
+        "lib/embedding-cache.js:151",
+        "lib/embedding-cache.js:203",
+        "lib/embedding-cache.js:304",
+        "lib/embedding-cache.js:325",
+        "lib/providers/embedding-openai.js:156",
+        "lib/providers/embedding-openai.js:160",
+        "lib/providers/embedding-local-transformers.js:125",
+        "lib/providers/embedding-local-transformers.js:129",
+        "lib/recall-pipeline.js:488",
+        "lib/recall-pipeline.js:645",
+        "lib/reminder-store.js:49"
+      ],
+      "validationFacts": "Static call-site tracing confirms recall-pipeline and reminder-store omit agentId while both first-party embedding providers pass options.agentId into the cache. persistDebug defaults false and the returned cache API exposes vectors/metrics, not debug_text. Validate cache instance lifetime, enabled production configurations, backup/export/admin surfaces, and whether all omitted calls can instead supply the current agent. Shared vectors for identical normalized text are normally semantically correct, so vector reuse alone is not a demonstrated disclosure.",
+      "attackFacts": "Cross-agent co-location is code-complete whenever two agents share a cache instance and both omit agentId. Plaintext-at-rest impact additionally requires persistence and persistDebug. Reading another agent's text requires cache-file visibility or a later exposure surface not established in this shard; otherwise this should be treated as isolation hardening rather than a reportable vulnerability. Preserve caching by propagating and validating agent identity, not by disabling the cache."
+    },
+    {
+      "candidateId": "cand-emotion-engine-cross-agent-context",
+      "title": "Global emotion engine carries previous-message state across agent, workspace, and session boundaries",
+      "taxonomy": [
+        "CWE-668",
+        "cross-session-state-leak",
+        "tenant-isolation"
+      ],
+      "source": "Emotion analyses are performed for user or assistant messages associated with potentially distinct agentId/workspace/session contexts.",
+      "control": "EmotionEngine stores one _context object per engine and never keys it by the supplied agentId; lib/emotion.js exposes one module-global engine/config for the entire process.",
+      "sink": "The next analysis uses the prior principal's emotion and timestamp to select blends and returns emotional_context.previous_top_emotion, previous_timestamp, and transition to its caller.",
+      "impact": "One conversation can influence or reveal coarse emotional state in a later unrelated conversation, contaminating emotion-derived behavior and violating agent/workspace/session isolation.",
+      "locations": [
+        "lib/emotion-engine.js:52",
+        "lib/emotion-engine.js:104",
+        "lib/emotion-engine.js:121",
+        "lib/emotion-engine.js:125",
+        "lib/emotion-engine.js:144",
+        "lib/emotion-engine.js:151",
+        "lib/emotion-engine.js:154",
+        "lib/emotion.js:30",
+        "lib/emotion.js:43",
+        "lib/emotion.js:63",
+        "lib/emotion.js:158",
+        "lib/emotion.js:165"
+      ],
+      "validationFacts": "A benign public-API check on one EmotionEngine analyzed a fear phrase with agent-a and then a joy phrase with agent-b; the second result returned previous_top_emotion='fear', the first call's timestamp, and transition='fear_to_joy'. Validate whether a single plugin process/engine handles multiple principals in supported deployments and whether complexEmotion/emotionalContext has a user-visible or persistence consumer; current main capture paths appear to persist only fixed dimensions, intensity, and dominant emotion.",
+      "attackFacts": "An attacker needs a message processed shortly before a victim or another workspace on the same long-lived engine. The exposed data is coarse emotion plus timestamp rather than message text, and behavioral impact depends on downstream consumption. Preserve emotion features by partitioning context by agent+workspace/session with bounded state rather than disabling enrichment."
+    },
+    {
+      "candidateId": "cand-mood-state-prompt-injection",
+      "title": "Emotion value objects accept unbounded labels that can reach persistent mood prompt formatting",
+      "taxonomy": [
+        "CWE-74",
+        "agent-tool-prompt-injection",
+        "persistent-data-poisoning"
+      ],
+      "source": "EmotionScore can be constructed from classifier/custom-extension output, and emotional state can also be hydrated from persisted workspace JSON.",
+      "control": "Only core numeric ranges are validated; label enums, string lengths, newlines/control characters, nested object shapes, and nuance/complex-emotion label provenance are not enforced.",
+      "sink": "Downstream emotional-state formatting preserves unknown nuance labels and the packaged before_prompt_build injector interpolates the resulting mood label/nuance line into model instructions.",
+      "impact": "If a reachable producer introduces control text as a mood/nuance label, it can persist and inject instruction-like content into later model turns.",
+      "locations": [
+        "lib/emotion-score.js:28",
+        "lib/emotion-score.js:33",
+        "lib/emotion-score.js:42",
+        "lib/emotion-score.js:61",
+        "lib/emotion-score.js:83",
+        "lib/emotion-score.js:104",
+        "lib/emotion-score.js:162",
+        "lib/emotion.js:70",
+        "lib/emotion.js:84",
+        "lib/emotion.js:86",
+        "lib/emotional-state.js:150",
+        "lib/emotional-state.js:422",
+        "lib/emotional-state.js:540",
+        ".openclaw/extensions/emotional-state-injector/index.js:52",
+        ".openclaw/extensions/emotional-state-injector/index.js:62"
+      ],
+      "validationFacts": "A benign constructor check accepted newline-bearing primary and nuance labels verbatim. The known downstream formatter/injector sink exists. However, built-in Tier-1 nuance names are fixed, built-in blend labels are fixed, and the current Tier-3 prompt/output adapter populates primary emotion but not nuances. Validate persisted-file writer permissions, extension activation, custom classifier support, Tier-3 primary-emotion consumers, and prompt role/priority before retaining severity.",
+      "attackFacts": "Ordinary Tier-1 messages cannot create arbitrary nuance labels. Exploitability requires writable mood state, a custom/compromised classifier or extension, or another producer that can supply untrusted labels. Preserve mood injection by enforcing enums/lengths and safely delimiting generated values rather than disabling the feature."
+    }
+  ],
+  "notes": "Three raw candidates were retained for validation, with reachability limitations stated explicitly. Full-file review also found cache TTL/eviction/coalescing/retry defects and silent emotion-classifier fallback issues suitable for the parallel bug audit. No proposed remedy disables caching, emotion analysis, blends, or mood injection."
+}

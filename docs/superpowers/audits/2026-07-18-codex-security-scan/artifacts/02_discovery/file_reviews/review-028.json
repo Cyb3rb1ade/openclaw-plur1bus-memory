@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-028",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/providers/factory.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (52 lines; sha256 a57e52892e9f7a6e8935dfdee45916eea55c2a7b1ca021f399c58a455f0acc36). Provider selection is a fixed branch over normalized operator configuration; no dynamic module name, shell, or untrusted endpoint is introduced here."
+    },
+    {
+      "path": "lib/providers/legacy-provider-migration.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (243 lines; sha256 3d450d9a0f64602aef3430beffb60870284eeaa395e90f09af9168b21f6a4837). The bounded migration probe realpaths its root, skips symlinks, uses resolveInside for descendants, caps recursion depth and file scan bytes, and only returns configuration defaults; it neither mutates tables nor follows attacker-controlled paths."
+    },
+    {
+      "path": "lib/providers/openclaw-memory-embedding-adapters.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (319 lines; sha256 8f0fc1c653577e16ab9424c84871bc501da4c39d52612d3a5bb44e6f1dca3aee). Remote endpoint/header/model values are administrator provider configuration, secret templates use the explicit OpenAI env allowlist, control characters are stripped from headers, text length is capped, response counts/dimensions are validated, and fetches have timeouts. The optional local dependency advisory is tracked separately."
+    },
+    {
+      "path": "lib/providers/reranker-chained.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (36 lines; sha256 a85a9d51f97237d343d6d14631bbb24426e4a4e28e61e8b37361588d1d97ef51). Fixed provider fallback only; primary errors are logged and the empty result deliberately signals recall to preserve its base ordering. No authorization or data-write sink."
+    },
+    {
+      "path": "lib/providers/reranker-cohere.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (49 lines; sha256 384fa9db120e3856dab12c34a807c6517355203f1dceded95bb240e5fbbc8a8b). Destination is the fixed Cohere HTTPS endpoint, key resolution is explicit, and AbortController bounds requests. Sending query/documents is the configured remote-reranker feature, not an attacker-selected exfiltration destination."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No new security candidate. Remote embeddings/reranking are explicit administrator-selected features; feature correctness and fallback behavior are covered by the feature/bug audits."
+}

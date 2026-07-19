@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-013",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/jobs/schicht15-tracker.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (97 lines). It uses a fixed run-state.json suffix below host workspaceDir (32-40), hashes content with SHA-256 (71-96), and stores agent/workspace only as JSON keys, not path segments (28-29). Read-modify-rename can lose concurrent updates because it does not use the shared atomicJsonUpdate mutex (39-55), and checkMaxPromotions counts lifetime IDs despite its per-run name (64-68); these are functional/concurrency defects, not an attacker-reachable privileged sink in this module."
+    },
+    {
+      "path": "lib/jobs/skill-miner.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-skill-miner-dryrun-write",
+        "cand-skill-miner-agent-lock-path",
+        "cand-skill-approval-blind-executable"
+      ],
+      "evidence": "Read in full (203 lines). runSkillMiner writes every accepted LLM proposal at lines 124-169 even when opts.dryRun is true; dryRun gates only the report and rate-state writes at 183-197. Agent is interpolated into the lock filename without safeAgentId/resolveInside at 76-88. Trusted stored evidence becomes LLM-generated instructions in a pending proposal (29-50, 124-159); supporting command review omits instructions (lib/telegram-commands/skill-commands.js:24-49) while approval writes them as SKILL.md (52-71), retaining a model-to-executable-instructions candidate."
+    },
+    {
+      "path": "lib/jobs/skill-miner/evidence-aggregator.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (112 lines). It performs deterministic in-memory token clustering and scoring only. The all-pairs algorithm at lines 48-59 is quadratic over up to 5,000 rows from the caller and is a performance/availability bug candidate, but input must already pass trusted-evidence filters and there is no independent privileged sink here."
+    },
+    {
+      "path": "lib/jobs/skill-miner/llm-extractor.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-skill-approval-blind-executable"
+      ],
+      "evidence": "Read in full (98 lines). Memory text is marked untrusted in the prompt (13-34), output uses JSON mode, a token cap, confidence gate, and required-field check (53-93), but instructions and examples have no structural/content constraints and are forwarded verbatim. The timeout race does not cancel the underlying LLM call (54-64), a cost/reliability issue. Candidate severity depends on the later user-review/approval boundary, which does not show the instructions by default."
+    },
+    {
+      "path": "lib/jobs/skill-miner/nudge-renderer.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (30 lines). It renders a proposal description/title through the localization layer; it has no file, process, query, or automatic activation sink. Presentation injection is bounded by downstream chat handling and does not itself approve a proposal."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-skill-miner-dryrun-write",
+      "title": "Skill-miner dry-run still persists LLM-generated proposals",
+      "taxonomy": ["CWE-693", "unsafe-dry-run"],
+      "source": "An operator/caller invokes runSkillMiner with opts.dryRun=true and qualifying evidence exists.",
+      "control": "dryRun gates only report append and recordJobRun; it is not checked before writeProposal.",
+      "sink": "writeProposal appends the LLM candidate to .adaptive-learning/skill-proposals.jsonl.",
+      "impact": "A purported non-mutating run changes the executable-skill review queue and permanently blocks same-name proposals through deduplication.",
+      "locations": [
+        "lib/jobs/skill-miner.js:124",
+        "lib/jobs/skill-miner.js:159",
+        "lib/jobs/skill-miner.js:183",
+        "lib/jobs/skill-miner.js:186",
+        "lib/jobs/skill-miner/proposal-writer.js:34",
+        "lib/jobs/skill-miner/proposal-writer.js:43"
+      ],
+      "validationFacts": "Control-flow mismatch is confirmed. Validate with a stub extractor/write target and establish which production or administrative callers expose dryRun.",
+      "attackFacts": "Requires an authorized/internal caller plus qualifying evidence and LLM output; no remote unauthenticated trigger is established."
+    },
+    {
+      "candidateId": "cand-skill-miner-agent-lock-path",
+      "title": "Skill-miner lock path interpolates an unvalidated agent identifier",
+      "taxonomy": ["CWE-22", "path-traversal"],
+      "source": "Host command context agentId is passed into runSkillMiner.",
+      "control": "No safeAgentId or resolveInside call precedes the lock path join.",
+      "sink": "acquireJobLock creates and releaseJobLock removes skill-miner-${agent}.lock.",
+      "impact": "A separator-bearing agent ID may create/remove a fixed-suffix file outside the intended locks directory.",
+      "locations": [
+        "lib/jobs/skill-miner.js:60",
+        "lib/jobs/skill-miner.js:76",
+        "lib/jobs/skill-miner.js:85",
+        "lib/jobs/skill-miner.js:88",
+        "lib/jobs/skill-miner.js:201"
+      ],
+      "validationFacts": "Unsafe construction is confirmed; establish exact caller source and OpenClaw agent-ID canonicalization.",
+      "attackFacts": "Requires control of host agentId, not skill-miner evidence or ordinary command arguments alone."
+    },
+    {
+      "candidateId": "cand-skill-approval-blind-executable",
+      "title": "Skill approval can activate LLM-generated instructions that the default review omits",
+      "taxonomy": ["CWE-451", "agent-tool-prompt-injection", "supply-chain"],
+      "source": "Stored memory excerpts are supplied to an LLM that returns arbitrary instructions.",
+      "control": "Evidence trust/confidence gates and explicit authorized approval exist, but the default pending-proposal review shows only title, score, confidence, and an 80-character description; approval is bound only to an ID, not an exact displayed content hash.",
+      "sink": "approveProposal renders the unshown instructions verbatim into workspace skills/<safeSlug>/SKILL.md, which is executable agent configuration on later skill loading.",
+      "impact": "Prompt-injected or compromised-model instructions can be approved under an innocuous summary and later steer tool use/data access with the user's skill authority.",
+      "locations": [
+        "lib/jobs/skill-miner.js:29",
+        "lib/jobs/skill-miner.js:124",
+        "lib/jobs/skill-miner.js:146",
+        "lib/jobs/skill-miner/llm-extractor.js:13",
+        "lib/jobs/skill-miner/llm-extractor.js:85",
+        "lib/telegram-commands/skill-commands.js:24",
+        "lib/telegram-commands/skill-commands.js:45",
+        "lib/telegram-commands/skill-commands.js:52",
+        "lib/telegram-commands/skill-commands.js:68",
+        "lib/telegram-commands/skill-commands.js:69"
+      ],
+      "validationFacts": "Code-level review/approval mismatch is complete. Validate router authorization, exact chat UX, proposal tamper window, skill auto-discovery semantics, and whether /skills show is mandatory or merely optional.",
+      "attackFacts": "Requires influence over qualifying trusted evidence or the configured LLM plus convincing an authorized user to approve by ID. safeSlug prevents path traversal but not malicious instruction content."
+    }
+  ],
+  "notes": "Three candidates retained. Feature-preserving remedies are genuine no-write dry-run, agent validation, and exact full-content/hash-bound approval—not disabling skill mining."
+}

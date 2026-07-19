@@ -1,0 +1,39 @@
+{
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "workspace": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-installer-workspace-shell-injection/validation_artifacts/repro-work/target/workspace'; printf workspace-shell > \"/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-installer-workspace-shell-injection/validation_artifacts/repro-work/proof-marker\"; #"
+      }
+    ]
+  },
+  "plugins": {
+    "allow": [
+      "memory-lancedb-namespaced"
+    ],
+    "slots": {
+      "memory": "memory-lancedb-namespaced"
+    },
+    "entries": {
+      "memory-lancedb-namespaced": {
+        "enabled": true,
+        "config": {
+          "embedding": {
+            "provider": "openai",
+            "apiKey": "${OPENAI_API_KEY}",
+            "model": "text-embedding-3-large",
+            "dimensions": 3072
+          },
+          "reranker": {
+            "provider": "disabled"
+          },
+          "baseDbPath": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-installer-workspace-shell-injection/validation_artifacts/repro-work/target/memory/lancedb-namespaced"
+        }
+      },
+      "active-memory": {
+        "enabled": false,
+        "config": {}
+      }
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-026",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/pattern-surface.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-pattern-continuity-prompt-injection"
+      ],
+      "evidence": "Read in full (187 lines; SHA-256 e65b2ec958b0564f44ae374579ee59f52f2c9b5be50e3a95e9bb33527b276b8b). Pattern names/descriptions and trigger IDs are prompt-sanitized before the XML continuity block is generated (149-186), but the block is later appended outside the primary untrusted-memory safety boundary (relevant-memory-context.js:219-235). This is a supporting formatter/sink for the existing continuity prompt-injection family, not a distinct authorization bypass."
+    },
+    {
+      "path": "lib/persona-voice.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-persona-seed-persistent-prompt-injection"
+      ],
+      "evidence": "Read in full (407 lines; SHA-256 b0a47e1ad2cb60fdec30f860b6598152d23d46699db081e375ace7c6e34e4e4f). Initial seed generation reads workspace identity files including AGENT.md (140-146), provides up to 2,000 raw characters to an LLM (56-71), and accepts any returned line beginning '- ' (72-74). It persists that line inside persona-voice.md (82-102); loadPersonaDirective later turns every managed bullet into an imperative style directive (241-252), which index.js injects before normal memory context (6131-6148,6256). There is no semantic allowlist or untrusted-data framing between workspace text/LLM output and the persistent prompt directive. The module also has several silent fail-open catches and acceptPersonaProposal uses join rather than personaPath/resolveInside for its final write, but no user-controlled workspaceDir source was established for that fixed-filename path."
+    },
+    {
+      "path": "lib/proactive-governor.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (228 lines; SHA-256 d288dc49bf31b663150f6f07c6b4e11b94b85b37a1a395d1702acc12a3c84a2b). This local budget/state helper has advisory locks with ownership tokens and no external sink. It relies on host-provided workspaceDir without resolveInside for its state/lock file and intentionally fails open on IO errors; these are robustness/conformance observations, but no reachable untrusted base-directory or cross-boundary write was proven from production callers."
+    },
+    {
+      "path": "lib/proactive-nudge.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (156 lines; SHA-256 21c4b78fc5d1ef78362baa17f912b57c1e834b145408f8a86264da0c693fa785). Pure deterministic nudge text/timing logic. User-derived pattern keywords are rendered in plain text and are covered by the broader pattern-continuity prompt-context review; no independent privileged sink is present. The first-nudge quiet-hours bypass is deliberate, explicitly tested, and documented to allow cron-only schedules to create their first nudge."
+    },
+    {
+      "path": "lib/providers/config-normalize.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (114 lines; SHA-256 a3348b63bcda8593448c5e3b79abd63a1cf06e8ed40e80bf528309675a1634ec). Pure configuration normalization. Invalid dimensions/candidate values are not range-validated here, but config is operator-controlled and later provider/database paths reject or fail safely; no remote input-to-sink security issue is established in this module."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-persona-seed-persistent-prompt-injection",
+      "instanceKey": "persona-seed-workspace-content-to-persistent-directive:lib/persona-voice.js:56",
+      "title": "Workspace identity content can become a persistent imperative persona directive",
+      "taxonomy": [
+        "CWE-74",
+        "prompt-injection",
+        "persistent-instruction-injection"
+      ],
+      "source": "On a workspace without persona-voice.md, the default-enabled startup path reads SOUL.md, IDENTITY.md, or AGENT.md and sends their raw content as identity hints to the configured LLM. These workspace files can be supplied by an imported/untrusted workspace or altered by a party with workspace-content write access.",
+      "control": "The seed parser checks only that at least three response lines begin with '- '. It does not constrain bullets to style attributes, remove imperative content, mark source material untrusted, or require a user confirmation before persisting the generated directive.",
+      "sink": "writePersonaVoice persists the generated bullets; loadPersonaDirective converts them to 'Deine Grundstimme (befolge sie...)' and index.js places that directive ahead of normal recalled-memory context on future model turns.",
+      "impact": "A successful seed-time instruction injection can survive across turns and steer the agent's behavior, rather than remaining a one-turn untrusted document effect. It can also influence the emoji/reaction palette derived from the same managed block.",
+      "closestControl": "The module correctly keeps free-form user notes outside the managed block and bounds the directive to 400 characters, but LLM-produced bullets sourced from workspace identity text are treated as trusted once inside the block.",
+      "locations": [
+        "lib/persona-voice.js:140",
+        "lib/persona-voice.js:56",
+        "lib/persona-voice.js:72",
+        "lib/persona-voice.js:82",
+        "lib/persona-voice.js:241",
+        "index.js:6140",
+        "index.js:6256"
+      ],
+      "validationFacts": "Static flow confirms source, persistence, and prompt sink. Dynamic validation should use a controlled fake LLM response containing a directive-shaped bullet, run ensurePersonaVoiceSeed in a temporary workspace, then assert loadPersonaDirective and the before_prompt_build composition preserve it. Severity must distinguish ordinary trusted operator identity files from an imported/untrusted workspace-content threat model.",
+      "attackFacts": "Requires the persona feature (default enabled), an initial/missing persona file, access to influence a selected identity file or the seed LLM response, and a subsequent model turn. A feature-preserving repair uses a restricted structured schema for benign style fields, validates generated bullets against it, preserves the managed-file workflow, and surfaces generated seeds for review rather than disabling persona voice."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. The persona finding requires the scan's validation/attack-path phase; no product source file was modified and no feature-disable recommendation is implied."
+}
