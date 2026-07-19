@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import plugin, * as pluginModule from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { TimeoutError } from "../lib/with-timeout.js";
 
 const VECTOR_DIM = 3;
 
@@ -114,6 +115,32 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   it("exposes the callback-scoped withDb contract", () => {
     assert.equal(typeof pluginModule.AgentDbPool, "function", "AgentDbPool must be exported for lifecycle verification");
     assert.equal(typeof pluginModule.AgentDbPool?.prototype?.withDb, "function", "AgentDbPool.withDb is required");
+  });
+
+  it("keeps a timed-out operation leased until its attached raw settlement", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b3-agent-pool-timeout-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      info() {}, warn() {}, error() {}, debug() {},
+    });
+    const rawSettlement = deferred();
+    const timeoutError = new TimeoutError("MemoryDB.store", 15);
+    timeoutError.settlement = rawSettlement.promise;
+    let shutdownCalls = 0;
+
+    const operation = pool.withDb("agent-timeout", async (db) => {
+      db.shutdown = async () => { shutdownCalls += 1; };
+      throw timeoutError;
+    });
+    await assert.rejects(operation, (error) => error === timeoutError);
+
+    const shutdown = pool.shutdown();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownCalls, 0, "the DB must remain leased after the public timeout");
+
+    rawSettlement.resolve("late-write-settled");
+    await shutdown;
+    assert.equal(shutdownCalls, 1, "shutdown may close the DB only after raw mutation settlement");
   });
 
   it("keeps the oldest of 51 agent DBs open until its operation settles", async (t) => {

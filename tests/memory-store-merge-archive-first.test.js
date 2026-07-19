@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { withTimeout } from "../lib/with-timeout.js";
 import OpenAI from "openai";
 
 const VECTOR_DIM = 384;
@@ -62,6 +63,20 @@ function mergedText(existingText, incomingText) {
   return `${existingText}; ${incomingText}`;
 }
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
   let basePath;
   let api;
@@ -80,6 +95,7 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
   let originalEmbed;
   let originalStore;
   let originalGetById;
+  let originalFindSimilar;
   let originalFindMergeCandidate;
   let originalDelete;
 
@@ -112,8 +128,8 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     }
   }
 
-  async function executeStore(text = "Additional cat fact") {
-    return storeTool.execute(`call-${randomUUID()}`, { text, category: "fact" });
+  async function executeStore(text = "Additional cat fact", overrides = {}) {
+    return storeTool.execute(`call-${randomUUID()}`, { text, category: "fact", ...overrides });
   }
 
   before(async () => {
@@ -129,6 +145,7 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     originalStore = MemoryDB.prototype.store;
     originalGetById = MemoryDB.prototype.getById;
+    originalFindSimilar = MemoryDB.prototype.findSimilar;
     originalFindMergeCandidate = MemoryDB.prototype.findMergeCandidate;
     originalDelete = MemoryDB.prototype.delete;
 
@@ -157,6 +174,7 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
   beforeEach(async () => {
     MemoryDB.prototype.store = originalStore;
     MemoryDB.prototype.getById = originalGetById;
+    MemoryDB.prototype.findSimilar = originalFindSimilar;
     MemoryDB.prototype.findMergeCandidate = originalFindMergeCandidate;
     MemoryDB.prototype.delete = originalDelete;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mockedEmbed() {
@@ -207,6 +225,7 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
   afterEach(async () => {
     MemoryDB.prototype.store = originalStore;
     MemoryDB.prototype.getById = originalGetById;
+    MemoryDB.prototype.findSimilar = originalFindSimilar;
     MemoryDB.prototype.findMergeCandidate = originalFindMergeCandidate;
     MemoryDB.prototype.delete = originalDelete;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbed;
@@ -218,6 +237,7 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbed;
     MemoryDB.prototype.store = originalStore;
     MemoryDB.prototype.getById = originalGetById;
+    MemoryDB.prototype.findSimilar = originalFindSimilar;
     MemoryDB.prototype.findMergeCandidate = originalFindMergeCandidate;
     MemoryDB.prototype.delete = originalDelete;
 
@@ -274,7 +294,7 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     assert.deepEqual(readDestructiveOps(), [], "store failure must not emit a deletion log");
   });
 
-  it("keeps a repairable fork when replacement readback verification fails", async () => {
+  it("keeps a repairable fork after failed readback and reuses it on the same-input retry", async () => {
     let replacementReadbacks = 0;
     MemoryDB.prototype.getById = async function missingReplacementReadback(id) {
       const row = await originalGetById.call(this, id);
@@ -291,7 +311,11 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
 
     assert.match(result.content[0].text, /Memory store failed:.*verification/i);
     assert.notEqual(result.details?.action, "merged", "failed readback must never acknowledge merge success");
-    assert.equal(replacementReadbacks, 1, "replacement must be read back exactly once");
+    assert.equal(
+      replacementReadbacks,
+      2,
+      "the deterministic replacement key is checked before store and read back again after store",
+    );
 
     const rows = await readRows();
     assert.ok(rows.some((row) => row.id === ORIGINAL_ID), "failed readback must leave the original active");
@@ -302,6 +326,33 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     assert.equal(archives.length, 1);
     assert.deepEqual(archives[0].card, jsonClone(authoritativeOriginal));
     assert.deepEqual(readDestructiveOps(), [], "failed readback must not emit a deletion log");
+
+    MemoryDB.prototype.findSimilar = async function bypassRepairableForkDuplicate() {
+      return [];
+    };
+    MemoryDB.prototype.findMergeCandidate = async function selectRepairableOriginal() {
+      const entry = await originalGetById.call(this, ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    let retryReplacementWrites = 0;
+    MemoryDB.prototype.store = async function trackUnexpectedRetryWrite(entry) {
+      if (JSON.parse(entry?.mergedFrom || "[]").includes(ORIGINAL_ID)) {
+        retryReplacementWrites += 1;
+      }
+      return originalStore.call(this, entry);
+    };
+
+    const retry = await executeStore(incomingText);
+    assert.equal(retry.details?.action, "merged");
+    assert.equal(retry.details?.id, replacement.id, "the same input should reuse its deterministic replacement");
+    assert.equal(retryReplacementWrites, 0, "repair must not write a duplicate replacement");
+    const repairedRows = await readRows();
+    assert.equal(repairedRows.some((row) => row.id === ORIGINAL_ID), false);
+    assert.equal(
+      repairedRows.filter((row) => JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)).length,
+      1,
+    );
+    assert.equal(readDestructiveOps().filter((entry) => entry.source === "memory_store_merge").length, 1);
   });
 
   it("stores and verifies the replacement before deleting and logging the original", async () => {
@@ -384,5 +435,200 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     assert.ok(!rows.some((row) => row.id === ORIGINAL_ID));
     assert.equal(rows.filter((row) => JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)).length, 1);
     assert.equal(readDestructiveOps().filter((entry) => entry.source === "memory_store_merge").length, 1);
+  });
+
+  it("keeps a timed-out replacement store in the B2 queue until its late commit completes", async (t) => {
+    const storeGate = deferred();
+    const lateStoreStarted = deferred();
+    const retrySelectedCandidate = deferred();
+    let replacementStoreAttempts = 0;
+    let candidateSelections = 0;
+    let rawStoreActive = 0;
+    let first;
+    let second;
+
+    MemoryDB.prototype.store = function timeoutFirstReplacement(entry) {
+      const mergedFrom = JSON.parse(entry?.mergedFrom || "[]");
+      if (!mergedFrom.includes(ORIGINAL_ID)) return originalStore.call(this, entry);
+      replacementStoreAttempts += 1;
+      if (replacementStoreAttempts !== 1) return originalStore.call(this, entry);
+      const rawStore = (async () => {
+        rawStoreActive += 1;
+        lateStoreStarted.resolve();
+        try {
+          await storeGate.promise;
+          return await originalStore.call(this, entry);
+        } finally {
+          rawStoreActive -= 1;
+        }
+      })();
+      return withTimeout(rawStore, 20, "MemoryDB.store");
+    };
+    MemoryDB.prototype.findMergeCandidate = async function trackRetryCandidate(...args) {
+      const candidate = await originalFindMergeCandidate.apply(this, args);
+      if (candidate?.entry?.id === ORIGINAL_ID) {
+        candidateSelections += 1;
+        if (candidateSelections === 2) retrySelectedCandidate.resolve();
+      }
+      return candidate;
+    };
+    t.after(async () => {
+      storeGate.resolve();
+      await Promise.allSettled([first, second].filter(Boolean));
+      MemoryDB.prototype.findMergeCandidate = originalFindMergeCandidate;
+    });
+
+    first = executeStore("Additional cat fact");
+    await lateStoreStarted.promise;
+    const firstResult = await first;
+    assert.match(firstResult.content[0].text, /Memory store failed:.*timed out/i);
+    assert.equal(rawStoreActive, 1, "the public timeout occurs while the raw add is still live");
+
+    let secondSettled = false;
+    second = executeStore("Additional cat fact").then((result) => {
+      secondSettled = true;
+      return result;
+    });
+    await retrySelectedCandidate.promise;
+    await sleep(20);
+    assert.equal(secondSettled, false, "the queued retry must not outrun the first raw store settlement");
+    assert.equal(replacementStoreAttempts, 1, "the retry must not start a competing replacement write");
+
+    storeGate.resolve();
+    const secondResult = await second;
+    assert.match(secondResult.content[0].text, /stale|no longer active|not found/i);
+
+    const rows = await readRows();
+    assert.equal(rows.some((row) => row.id === ORIGINAL_ID), false);
+    assert.equal(
+      rows.filter((row) => JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)).length,
+      1,
+      "late settlement plus retry must leave one idempotent replacement",
+    );
+    assert.equal(readDestructiveOps().filter((entry) => entry.source === "memory_store_merge").length, 1);
+  });
+
+  it("logs a timed-out delete exactly once when the underlying delete later commits", async (t) => {
+    const deleteGate = deferred();
+    const lateDeleteStarted = deferred();
+    const retrySelectedCandidate = deferred();
+    let originalDeleteAttempts = 0;
+    let candidateSelections = 0;
+    let rawDeleteActive = 0;
+    let first;
+    let second;
+
+    MemoryDB.prototype.delete = function timeoutFirstOriginalDelete(id) {
+      if (id !== ORIGINAL_ID) return originalDelete.call(this, id);
+      originalDeleteAttempts += 1;
+      if (originalDeleteAttempts !== 1) return originalDelete.call(this, id);
+      const rawDelete = (async () => {
+        rawDeleteActive += 1;
+        lateDeleteStarted.resolve();
+        try {
+          await deleteGate.promise;
+          return await originalDelete.call(this, id);
+        } finally {
+          rawDeleteActive -= 1;
+        }
+      })();
+      return withTimeout(rawDelete, 20, `MemoryDB.delete:${id}`);
+    };
+    MemoryDB.prototype.findMergeCandidate = async function trackRetryCandidate(...args) {
+      const candidate = await originalFindMergeCandidate.apply(this, args);
+      if (candidate?.entry?.id === ORIGINAL_ID) {
+        candidateSelections += 1;
+        if (candidateSelections === 2) retrySelectedCandidate.resolve();
+      }
+      return candidate;
+    };
+    t.after(async () => {
+      deleteGate.resolve();
+      await Promise.allSettled([first, second].filter(Boolean));
+      MemoryDB.prototype.findMergeCandidate = originalFindMergeCandidate;
+    });
+
+    first = executeStore("Additional cat fact");
+    await lateDeleteStarted.promise;
+    const firstResult = await first;
+    assert.match(firstResult.content[0].text, /Memory store failed:.*timed out/i);
+    assert.equal(rawDeleteActive, 1);
+    assert.equal(readDestructiveOps().filter((entry) => entry.source === "memory_store_merge").length, 0);
+
+    let secondSettled = false;
+    second = executeStore("Additional cat fact").then((result) => {
+      secondSettled = true;
+      return result;
+    });
+    await retrySelectedCandidate.promise;
+    await sleep(20);
+    assert.equal(secondSettled, false, "the retry must wait for the first delete's real settlement");
+    assert.equal(originalDeleteAttempts, 1, "no overlapping delete may enter the same candidate boundary");
+
+    deleteGate.resolve();
+    const secondResult = await second;
+    assert.match(secondResult.content[0].text, /stale|no longer active|not found/i);
+
+    const rows = await readRows();
+    assert.equal(rows.some((row) => row.id === ORIGINAL_ID), false);
+    assert.equal(
+      rows.filter((row) => JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)).length,
+      1,
+    );
+    const mergeLogs = readDestructiveOps().filter((entry) => entry.source === "memory_store_merge");
+    assert.equal(mergeLogs.length, 1, "the late committed delete must retain exactly one audit record");
+    assert.equal(typeof mergeLogs[0].idempotencyKey, "string");
+    assert.ok(mergeLogs[0].idempotencyKey.length > 0);
+  });
+
+  it("uses provenance-changing input in the deterministic replacement identity", async () => {
+    let deleteAttempts = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() {
+      return [];
+    };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await originalGetById.call(this, ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    MemoryDB.prototype.delete = async function failFirstOriginalDelete(id) {
+      if (id === ORIGINAL_ID) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) throw new Error("injected first delete failure");
+      }
+      return originalDelete.call(this, id);
+    };
+
+    const first = await executeStore("Additional cat fact", {
+      sourceUrl: "https://example.test/source-a",
+      evidenceQuote: "Source A evidence",
+      importance: 0.72,
+      ttl: "week",
+    });
+    assert.match(first.content[0].text, /Memory store failed:.*delete failure/i);
+    const afterFirst = await readRows();
+    const firstReplacement = afterFirst.find((row) => (
+      JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)
+    ));
+    assert.ok(firstReplacement, "the failed delete leaves the first durable replacement repairable");
+    assert.equal(firstReplacement.sourceUrl, "https://example.test/source-a");
+
+    const second = await executeStore("Additional cat fact", {
+      sourceUrl: "https://example.test/source-b",
+      evidenceQuote: "Source B evidence",
+      importance: 0.81,
+      ttl: "month",
+    });
+    assert.equal(second.details?.action, "merged");
+    assert.notEqual(
+      second.details.id,
+      firstReplacement.id,
+      "materially different merge input must not silently reuse the first replacement identity",
+    );
+
+    const afterSecond = await readRows();
+    const acknowledged = afterSecond.find((row) => row.id === second.details.id);
+    assert.equal(acknowledged?.sourceUrl, "https://example.test/source-b");
+    assert.equal(acknowledged?.evidenceQuote, "Source B evidence");
+    assert.equal(acknowledged?.importance, 0.81);
   });
 });

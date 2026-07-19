@@ -27,7 +27,7 @@
  *   evidenceQuote, scope.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -597,6 +597,31 @@ const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fi
 // Operation-level timeouts for LanceDB calls (P0 Performance-Audit K3).
 const LANCEDB_READ_TIMEOUT_MS = 10_000;
 const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
+
+async function waitForTimeoutSettlement(error) {
+  let currentError = error;
+  let waited = false;
+  const seen = new Set();
+  while (
+    currentError instanceof TimeoutError
+    && currentError.settlement
+    && typeof currentError.settlement.then === "function"
+    && !seen.has(currentError.settlement)
+  ) {
+    const settlement = currentError.settlement;
+    seen.add(settlement);
+    waited = true;
+    try {
+      const value = await settlement;
+      return { waited, status: "fulfilled", value };
+    } catch (settlementError) {
+      currentError = settlementError;
+    }
+  }
+  return waited
+    ? { waited, status: "rejected", error: currentError }
+    : { waited: false, status: "unavailable", error };
+}
 
 function normalizeVectorValue(vector) {
   if (!vector || Array.isArray(vector) || typeof vector !== "object") return vector;
@@ -1338,22 +1363,48 @@ class AgentDbPool {
     const id = agentId || "default";
     let startLease;
     const startGate = new Promise((resolve) => { startLease = resolve; });
-    const leasePromise = (async () => {
+    let acquired = false;
+    const callbackPromise = (async () => {
       await startGate;
       this.dbs.acquire(id);
+      acquired = true;
+      const db = this._getOrCreateDb(id);
+      return fn(db);
+    })();
+    const leasePromise = (async () => {
       try {
-        const db = this._getOrCreateDb(id);
-        return await fn(db);
+        await callbackPromise;
+      } catch (error) {
+        const settlement = await waitForTimeoutSettlement(error);
+        if (settlement.status === "rejected") {
+          this.logger?.warn?.(
+            `memory-lancedb-namespaced: late DB operation settlement failed for agent=${id}: ${String(settlement.error)}`,
+          );
+        }
       } finally {
-        this.dbs.release(id);
+        if (acquired) this.dbs.release(id);
       }
     })();
     this.activeOperations.add(leasePromise);
     startLease();
+    leasePromise.then(
+      () => this.activeOperations.delete(leasePromise),
+      (trackingError) => {
+        this.activeOperations.delete(leasePromise);
+        this.logger?.warn?.(`memory-lancedb-namespaced: DB lease tracking failed for agent=${id}: ${String(trackingError)}`);
+      },
+    );
     try {
-      return await leasePromise;
+      return await callbackPromise;
+    } catch (error) {
+      // The caller observes the original timeout/error immediately. leasePromise
+      // independently retains the B7 lease through any attached settlement.
+      throw error;
     } finally {
-      this.activeOperations.delete(leasePromise);
+      if (!acquired) {
+        // Failed acquisition has no callback settlement to retain.
+        await leasePromise;
+      }
     }
   }
 
@@ -2773,9 +2824,56 @@ const plugin = {
 
     const durableMergeQueues = new Map();
 
+    function durableMergeWriteKey({
+      workspaceKey,
+      text,
+      category,
+      origin,
+      importance,
+      ttl,
+      sourceUrl,
+      evidenceQuote,
+      scope,
+      ownerUserId,
+    }) {
+      return JSON.stringify([
+        workspaceKey,
+        text,
+        category,
+        origin,
+        importance,
+        ttl,
+        sourceUrl,
+        evidenceQuote,
+        scope,
+        ownerUserId,
+      ]);
+    }
+
+    function durableMergeIdentity(agentId, candidateId, writeKey) {
+      const digest = createHash("sha256")
+        .update(JSON.stringify(["memory_store_merge", agentId, candidateId, String(writeKey || "")]))
+        .digest("hex");
+      return {
+        idempotencyKey: `sha256:${digest}`,
+        replacementId: `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`,
+      };
+    }
+
+    function isExpectedMergeReplacement(entry, replacementId, candidateId, text) {
+      if (!entry || entry.id !== replacementId || entry.text !== text) return false;
+      if (entry.status && entry.status !== "active") return false;
+      try {
+        return JSON.parse(entry.mergedFrom || "[]").includes(candidateId);
+      } catch (error) {
+        api.logger?.debug?.(`memory-lancedb-namespaced: invalid mergedFrom for replacement=${replacementId}: ${String(error)}`);
+        return false;
+      }
+    }
+
     function runDurableMergeQueued(queueKey, operation) {
       const predecessor = durableMergeQueues.get(queueKey) || Promise.resolve();
-      const next = predecessor
+      const operationPromise = predecessor
         .catch((predecessorErr) => {
           // The predecessor already delivered its own failure. Keep the key
           // usable for the next independent attempt and make the continuation
@@ -2783,16 +2881,25 @@ const plugin = {
           api.logger?.debug?.(`memory-lancedb-namespaced: durable merge predecessor failed for ${queueKey}: ${String(predecessorErr)}`);
         })
         .then(operation);
-      durableMergeQueues.set(queueKey, next);
-      next.then(
+      const settlementTail = operationPromise.catch(async (error) => {
+        const settlement = await waitForTimeoutSettlement(error);
+        if (settlement.status === "rejected") {
+          api.logger?.debug?.(
+            `memory-lancedb-namespaced: durable merge late settlement failed for ${queueKey}: ${String(settlement.error)}`,
+          );
+        }
+      });
+      durableMergeQueues.set(queueKey, settlementTail);
+      settlementTail.then(
         () => {
-          if (durableMergeQueues.get(queueKey) === next) durableMergeQueues.delete(queueKey);
+          if (durableMergeQueues.get(queueKey) === settlementTail) durableMergeQueues.delete(queueKey);
         },
-        () => {
-          if (durableMergeQueues.get(queueKey) === next) durableMergeQueues.delete(queueKey);
+        (trackingError) => {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge settlement tracking failed for ${queueKey}: ${String(trackingError)}`);
+          if (durableMergeQueues.get(queueKey) === settlementTail) durableMergeQueues.delete(queueKey);
         },
       );
-      return next;
+      return operationPromise;
     }
 
     async function withDurableMerge({
@@ -2801,11 +2908,17 @@ const plugin = {
       selectedCandidate,
       accessCtx,
       workspaceDir,
+      writeKey,
       prepareReplacement,
     }) {
       const candidateId = safeUuid(selectedCandidate?.entry?.id);
       const selectedText = selectedCandidate?.entry?.text;
       const queueKey = JSON.stringify([agentId, candidateId]);
+      const { idempotencyKey, replacementId } = durableMergeIdentity(
+        agentId,
+        candidateId,
+        writeKey || selectedText,
+      );
       return runDurableMergeQueued(queueKey, async () => {
         const authoritativeCandidate = await db.getById(candidateId);
         const candidateIsActive = authoritativeCandidate
@@ -2820,11 +2933,11 @@ const plugin = {
           throw staleErr;
         }
 
-        const prepared = await prepareReplacement(authoritativeCandidate);
-        if (!prepared) return null;
+        const preparedResult = await prepareReplacement(authoritativeCandidate, replacementId);
+        if (!preparedResult) return null;
 
-        const { mergedEntry } = prepared;
-        const replacementId = safeUuid(mergedEntry?.id);
+        const mergedEntry = { ...preparedResult.mergedEntry, id: safeUuid(replacementId) };
+        const prepared = { ...preparedResult, mergedEntry };
         let archivePath = "";
         try {
           archivePath = archiveCard(authoritativeCandidate, agentId);
@@ -2833,48 +2946,88 @@ const plugin = {
           throw archiveErr;
         }
 
+        let deletionLogged = false;
+        const appendDeletionLog = () => {
+          if (deletionLogged) return;
+          appendDestructiveOpLog(workspaceDir, {
+            event: "memory.deleted",
+            source: "memory_store_merge",
+            agentId,
+            memoryId: candidateId,
+            via: "merge",
+            archivePath,
+            idempotencyKey,
+            timestamp: new Date().toISOString(),
+          });
+          deletionLogged = true;
+        };
+
+        const finishDurableMerge = async () => {
+          let verifiedReplacement;
+          try {
+            verifiedReplacement = await db.getById(replacementId);
+          } catch (verificationErr) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
+            throw verificationErr;
+          }
+          if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry.text)) {
+            const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
+            throw verificationErr;
+          }
+
+          try {
+            await db.delete(candidateId);
+          } catch (deleteErr) {
+            if (deleteErr instanceof TimeoutError && deleteErr.settlement) {
+              const rawDeleteSettlement = deleteErr.settlement;
+              deleteErr.settlement = rawDeleteSettlement.then(
+                () => appendDeletionLog(),
+                (lateDeleteError) => {
+                  api.logger?.warn?.(`memory-lancedb-namespaced: durable merge late delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateDeleteError)}`);
+                  throw lateDeleteError;
+                },
+              );
+            }
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(deleteErr)}`);
+            throw deleteErr;
+          }
+          appendDeletionLog();
+          return { ...prepared, authoritativeCandidate, archivePath, idempotencyKey };
+        };
+
+        let existingReplacement;
+        try {
+          existingReplacement = await db.getById(replacementId);
+        } catch (idempotencyReadError) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge idempotency read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(idempotencyReadError)}`);
+          throw idempotencyReadError;
+        }
+        if (existingReplacement) {
+          if (!isExpectedMergeReplacement(existingReplacement, replacementId, candidateId, mergedEntry.text)) {
+            throw new Error(`durable merge idempotency collision for ${replacementId}`);
+          }
+          return finishDurableMerge();
+        }
+
         try {
           await db.store(mergedEntry);
         } catch (storeErr) {
+          if (storeErr instanceof TimeoutError && storeErr.settlement) {
+            const rawStoreSettlement = storeErr.settlement;
+            storeErr.settlement = rawStoreSettlement.then(
+              () => finishDurableMerge(),
+              (lateStoreError) => {
+                api.logger?.warn?.(`memory-lancedb-namespaced: durable merge late store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateStoreError)}`);
+                throw lateStoreError;
+              },
+            );
+          }
           api.logger?.warn?.(`memory-lancedb-namespaced: durable merge store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(storeErr)}`);
           throw storeErr;
         }
 
-        let verifiedReplacement;
-        try {
-          verifiedReplacement = await db.getById(replacementId);
-        } catch (verificationErr) {
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
-          throw verificationErr;
-        }
-        const replacementIsActive = verifiedReplacement
-          && (!verifiedReplacement.status || verifiedReplacement.status === "active");
-        if (
-          verifiedReplacement?.id !== replacementId
-          || verifiedReplacement?.text !== mergedEntry.text
-          || !replacementIsActive
-        ) {
-          const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
-          throw verificationErr;
-        }
-
-        try {
-          await db.delete(candidateId);
-        } catch (deleteErr) {
-          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(deleteErr)}`);
-          throw deleteErr;
-        }
-        appendDestructiveOpLog(workspaceDir, {
-          event: "memory.deleted",
-          source: "memory_store_merge",
-          agentId,
-          memoryId: candidateId,
-          via: "merge",
-          archivePath,
-          timestamp: new Date().toISOString(),
-        });
-        return { ...prepared, authoritativeCandidate, archivePath };
+        return finishDurableMerge();
       });
     }
 
@@ -2953,7 +3106,19 @@ const plugin = {
               selectedCandidate: mergeCandidate,
               accessCtx: storeAccessCtx,
               workspaceDir: storeCtx?.workspaceDir,
-              prepareReplacement: async (authoritativeCandidate) => {
+              writeKey: durableMergeWriteKey({
+                workspaceKey: storeWorkspaceKey,
+                text: params.text,
+                category,
+                origin,
+                importance,
+                ttl: params.ttl && TTL_MAP[params.ttl] ? params.ttl : "",
+                sourceUrl,
+                evidenceQuote,
+                scope,
+                ownerUserId,
+              }),
+              prepareReplacement: async (authoritativeCandidate, replacementId) => {
                 let mergeResult = null;
                 if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
                   api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
@@ -2983,7 +3148,7 @@ const plugin = {
                 }
                 const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
-                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
+                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
                 return { mergedEntry, mergeResult, mergedImportance };
               },
             });
@@ -4537,6 +4702,13 @@ const plugin = {
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+          const throwIfCaptureAborted = () => {
+            if (!signal?.aborted) return;
+            if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
+            const abortError = new Error("auto-capture aborted");
+            abortError.name = "AbortError";
+            throw abortError;
+          };
           if (neoEnabled) {
             try {
               const neoWorkspaceKey = rememberNeoWorkspace(ctx, event);
@@ -4594,6 +4766,8 @@ const plugin = {
             }
           }
 
+          throwIfCaptureAborted();
+
           if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
             api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
             return;
@@ -4606,6 +4780,7 @@ const plugin = {
 
           return pool.withDb(agentId, async (db) => {
           try {
+            throwIfCaptureAborted();
             // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
             const maxChars = cfg.captureMaxChars || 15000;
             const turnId = event.turnId || event.runId || "";
@@ -4725,6 +4900,7 @@ const plugin = {
                 return { it, text, ok: false };
               }
             }));
+            throwIfCaptureAborted();
 
             // Phase 1b: Batch-Embedding, falls der Provider es unterstützt.
             const batchSize = cfg.embeddingBatchSize || 8;
@@ -4734,8 +4910,10 @@ const plugin = {
               const textsToEmbed = validPreps.map((p) => p.text);
               try {
                 for (let i = 0; i < textsToEmbed.length; i += batchSize) {
+                  throwIfCaptureAborted();
                   const batch = textsToEmbed.slice(i, i + batchSize);
                   const batchVectors = await embeddings.embedBatch(batch, 3, { agentId });
+                  throwIfCaptureAborted();
                   for (let j = 0; j < batch.length; j++) {
                     textToVector.set(batch[j], batchVectors[j]);
                   }
@@ -4746,6 +4924,7 @@ const plugin = {
                 textToVector.clear();
               }
             }
+            throwIfCaptureAborted();
 
             // Phase 1c: Einzel-Embedding-Fallback für nicht gebatchte/fehlgeschlagene Items.
             const prepared = await Promise.all(validPreps.map(async (p) => {
@@ -4760,6 +4939,7 @@ const plugin = {
               }
               return { it: p.it, text: p.text, vector, ok: true };
             }));
+            throwIfCaptureAborted();
 
             // Phase 2: Dedup-Checks parallel (schnell mit ANN-Index)
             const toStore = (await Promise.all(
@@ -4774,6 +4954,7 @@ const plugin = {
                 }
               })
             )).filter(Boolean);
+            throwIfCaptureAborted();
 
             skipped = prepared.filter(p => p.ok).length - toStore.length;
 
@@ -4781,6 +4962,7 @@ const plugin = {
             const storedMemoryRows = [];
             for (const p of toStore) {
               try {
+                throwIfCaptureAborted();
                 const categoryResult = categorizeMemoryWithReason(p.text);
                 const category = categoryResult.category;
                 const categoryReason = categoryResult.reason;
@@ -4793,6 +4975,7 @@ const plugin = {
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
                 const captureEmotion = await inferEmotionalValenceAsync(p.text, "user", null, { agentId });
+                throwIfCaptureAborted();
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
                 const memoryId = randomUUID();
@@ -4832,11 +5015,13 @@ const plugin = {
                 api.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
               }
             }
+            throwIfCaptureAborted();
 
             api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
 
             // Speaker naming pipeline: propose display names from merged diarization segments.
             await runSpeakerProposalPipeline(agentId, [...mediaOutputIds]);
+            throwIfCaptureAborted();
 
             // Meta-Cognition: Session-Counter erhöhen, ggf. Reflection triggern
             if (metaCognitionEnabled && stored > 0) {
@@ -4872,6 +5057,7 @@ const plugin = {
             // --- Reminder Extraction ---
             for (const it of items) {
               try {
+                throwIfCaptureAborted();
                 const parsed = parseReminderIntent(it.text, { now: Date.now() });
                 if (parsed.remindAt && parsed.timePrecision !== "none") {
                   const wsKey = ctx?.workspaceDir || "default";
@@ -4905,6 +5091,8 @@ const plugin = {
                 api.logger.warn(`plur1bus-reminder: store failed: ${String(reminderStoreErr)}`);
               }
             }
+
+            throwIfCaptureAborted();
 
             // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten
             const neoStore = getNeoStore(ctx, event);
@@ -5014,6 +5202,7 @@ const plugin = {
             // v5.4.0 — Memory-Graph: Assoziative Verknüpfung
             if (!background && neoEnabled && storedMemoryRows.length > 0) {
               try {
+                throwIfCaptureAborted();
                 const neoStore = getNeoStore(ctx, event);
                 const graphMetrics = createGraphMetrics();
 
@@ -5380,7 +5569,19 @@ const plugin = {
                     selectedCandidate: mergeCandidate,
                     accessCtx: storeAccessCtx,
                     workspaceDir: ctx?.workspaceDir,
-                    prepareReplacement: async (authoritativeCandidate) => {
+                    writeKey: durableMergeWriteKey({
+                      workspaceKey,
+                      text: params.text,
+                      category,
+                      origin,
+                      importance,
+                      ttl: params.ttl && TTL_MAP[params.ttl] ? params.ttl : "",
+                      sourceUrl,
+                      evidenceQuote,
+                      scope,
+                      ownerUserId,
+                    }),
+                    prepareReplacement: async (authoritativeCandidate, replacementId) => {
                       let mergeResult = null;
                       if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
                         api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
@@ -5414,7 +5615,7 @@ const plugin = {
                       const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user", null, { agentId });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedEntry = applyDynamicsDefaults({
-                        id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
+                        id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
                         importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]),
                         expiresAt, storedBy: agentId, workspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId,
                         emotionalValence: serializeEmotionalValence(mergedEmotion),

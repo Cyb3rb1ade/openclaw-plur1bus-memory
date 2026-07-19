@@ -125,6 +125,8 @@ describe("Schema-Default-Typen (Runtime / Cache)", () => {
     assertNumberDefault("runtime.maxConcurrentCapturePerAgent", 1));
   it("runtime.recallCacheTtlMs ist eine Zahl", () =>
     assertNumberDefault("runtime.recallCacheTtlMs", 120000));
+  it("runtime.recallCacheMaxEntries ist eine Zahl", () =>
+    assertNumberDefault("runtime.recallCacheMaxEntries", 128));
   it("runtime.embeddingCacheEnabled ist ein Boolean", () =>
     assertBooleanDefault("runtime.embeddingCacheEnabled", true));
   it("runtime.embeddingCacheTtlMs ist eine Zahl", () =>
