@@ -24,10 +24,9 @@ function makeMockApi(baseDbPath) {
     pluginConfig: {
       baseDbPath,
       embedding: { provider: "local-transformers", local: { dimensions: VECTOR_DIM } },
-      merging: { enabled: true, model: "mock-model", apiKey: "sk-test" },
-      // Isolate merge-safety behavior from the emotion Tier-3 feature, which is
-      // on by default since v6.8.8 (full-experience policy) and otherwise adds an
-      // extra store-time LLM call that this test's global llmCalls counter would catch.
+      merging: { enabled: true, autoApply: true, model: "mock-model", apiKey: "sk-test" },
+      // Isolate merge-safety behavior from an explicitly enabled emotion Tier-3,
+      // which would add a store-time LLM call to this test's global counter.
       emotion: { t3: { enabled: false } },
       duplicateThreshold: 0.9999,
       obsidianBridge: { enabled: false },

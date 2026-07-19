@@ -2,8 +2,9 @@
 
 Diese Datei dokumentiert die wichtigsten Konfigurationsfelder rund um **Recall**, **Embedding-Cache**, **Emotion** und **Obsidian-Graph-Links**.
 
-Die Recall-/Dedupe-Optionen liegen in `openclaw.json` unter `config.recall`.
-Runtime-Optionen (Cache, Re-Ranker etc.) liegen in `config.runtime`.
+Die Recall-/Dedupe-Optionen liegen in `openclaw.json` unter
+`plugins.entries.memory-lancedb-namespaced.config.recall`. Runtime-Optionen
+liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runtime`.
 
 ---
 
@@ -105,36 +106,50 @@ Runtime-Optionen (Cache, Re-Ranker etc.) liegen in `config.runtime`.
 
 ```json
 {
-  "maxPromptMemories": 12,
-  "candidateTopK": 40,
-  "importanceBoost": 0.3,
-  "dedup": true,
-  "dedupJaccard": 0.78,
-  "canonicalFirst": true,
-  "canonicalMinScore": 0.30,
-  "canonicalMaxItems": 5,
-  "halfLifeDaysMap": {
-    "transient": 60,
-    "episodic": 180,
-    "longContext": 600,
-    "project": 600
-  },
-  "runtime": {
-    "embeddingCacheEnabled": true,
-    "embeddingCacheMaxEntries": 128,
-    "embeddingCacheTtlMs": 300000,
-    "embeddingCachePersist": false,
-    "embeddingCachePersistDebug": false,
-    "embeddingCacheCoalesce": true,
-    "embeddingCacheMetrics": false,
-    "embeddingCacheScope": "agent",
-    "embeddingCacheMaxBytes": 1073741824,
-    "llmResultCacheEnabled": true,
-    "llmResultCacheTtlMs": 86400000,
-    "llmResultCacheMaxEntries": 256,
-    "llmResultCachePersist": false,
-    "llmResultCacheMaxBytes": 67108864,
-    "llmResultCacheMetrics": true
+  "plugins": {
+    "entries": {
+      "memory-lancedb-namespaced": {
+        "enabled": true,
+        "config": {
+          "autoCapture": true,
+          "autoRecall": true,
+          "recall": {
+            "maxPromptMemories": 12,
+            "candidateTopK": 40,
+            "importanceBoost": 0.3,
+            "dedup": true,
+            "dedupJaccard": 0.78,
+            "canonicalFirst": true,
+            "canonicalMinScore": 0.30,
+            "canonicalMaxItems": 5,
+            "halfLifeDaysMap": {
+              "transient": 60,
+              "episodic": 180,
+              "longContext": 600,
+              "project": 600
+            }
+          },
+          "runtime": {
+            "embeddingCacheEnabled": true,
+            "embeddingCacheMaxEntries": 128,
+            "embeddingCacheTtlMs": 300000,
+            "embeddingCachePersist": false,
+            "embeddingCachePersistDebug": false,
+            "embeddingCacheCoalesce": true,
+            "embeddingCacheMetrics": false,
+            "embeddingCacheScope": "agent",
+            "llmResultCacheEnabled": true,
+            "llmResultCacheTtlMs": 86400000,
+            "llmResultCacheMaxEntries": 256,
+            "llmResultCachePersist": false,
+            "llmResultCacheMaxBytes": 67108864,
+            "llmResultCacheMetrics": true,
+            "recallCacheTtlMs": 120000,
+            "recallCacheMaxEntries": 128
+          }
+        }
+      }
+    }
   }
 }
 ```
@@ -156,11 +171,13 @@ Steuert die 3-Tier-Emotions-Inferenz beim Memory-Capture.
 
 ### Budget-Gate
 
-Tier-3 läuft **niemals heimlich**. Es ist default ON, führt aber **keinen API-Call aus**, wenn:
+Tier-3 läuft **niemals heimlich**. Der Manifest-Default ist `enabled:false`;
+das explizite Recommended-Profil kann es einschalten. Auch dann erfolgt kein
+API-Call, wenn:
 - Kein Provider konfiguriert ist (`onlyWhenProviderAvailable: true`)
 - Der Provider nicht antwortet (`fallbackOnError: true` → Fallback auf Tier-2)
 
-Ab v6.7.0 ist `emotion.t3.enabled` im Full Experience Default aktiv. Ohne konfigurierten Embedding-/LLM-Provider bleibt Tier-3 stumm.
+Ohne konfigurierten Embedding-/LLM-Provider bleibt Tier-3 stumm.
 
 Der Feature-Toggle `/disable emotionTier` steuert `emotion.t3.enabled` auf `false`.
 

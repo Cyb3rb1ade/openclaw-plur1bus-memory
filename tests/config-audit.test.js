@@ -100,6 +100,8 @@ describe("Schema-Default-Typen (Recall)", () => {
 });
 
 describe("Schema-Default-Typen (Recall Decision Trace)", () => {
+  it("recall.decisionTrace ist ein striktes Objekt", () =>
+    assertStrictObjectNode("recall.decisionTrace"));
   it("recall.decisionTrace.enabled ist false", () =>
     assertBooleanDefault("recall.decisionTrace.enabled", false));
   it("recall.decisionTrace.includeInPrompt ist false", () =>
@@ -112,6 +114,10 @@ describe("Schema-Default-Typen (Recall Decision Trace)", () => {
     assertBooleanDefault("recall.decisionTrace.persist", false));
   it("recall.decisionTrace.visibleHints ist false", () =>
     assertBooleanDefault("recall.decisionTrace.visibleHints", false));
+  it("reserved Decision-Trace flags sind auf false fixiert", () => {
+    assert.strictEqual(getSchemaNode("recall.decisionTrace.persist")?.const, false);
+    assert.strictEqual(getSchemaNode("recall.decisionTrace.visibleHints")?.const, false);
+  });
 });
 
 describe("Schema-Default-Typen (Runtime / Cache)", () => {
@@ -422,16 +428,22 @@ describe("Schema-Default-Typen (Core Features)", () => {
     assertBooleanDefault("temporalContext.enabled", true));
   it("metaCognition.enabled ist default true", () =>
     assertBooleanDefault("metaCognition.enabled", true));
-  it("metaCognition.llmReport ist default true", () =>
-    assertBooleanDefault("metaCognition.llmReport", true));
+  it("metaCognition.llmReport ist ohne explizites Recommended default false", () =>
+    assertBooleanDefault("metaCognition.llmReport", false));
   it("merging.autoApplyRisk ist low-only", () =>
     assert.strictEqual(getDefault("merging.autoApplyRisk"), "low-only"));
   it("merging.backupBeforeApply ist default true", () =>
     assertBooleanDefault("merging.backupBeforeApply", true));
   it("merging.auditLog ist default true", () =>
     assertBooleanDefault("merging.auditLog", true));
-  it("merging.maxAutoApplyPerRun ist 5", () =>
-    assertNumberDefault("merging.maxAutoApplyPerRun", 5));
+  it("unwired merging.maxAutoApplyPerRun wird nicht öffentlich angeboten", () =>
+    assert.strictEqual(getSchemaNode("merging.maxAutoApplyPerRun"), undefined));
+  it("merge safety invariants sind unveränderlich", () => {
+    assert.strictEqual(getSchemaNode("merging.mode")?.const, "safe-versioned");
+    assert.strictEqual(getSchemaNode("merging.autoApplyRisk")?.const, "low-only");
+    assert.strictEqual(getSchemaNode("merging.backupBeforeApply")?.const, true);
+    assert.strictEqual(getSchemaNode("merging.auditLog")?.const, true);
+  });
   it("emotion.t3.fallbackOnError ist default true", () =>
     assertBooleanDefault("emotion.t3.fallbackOnError", true));
   it("emotion.t3.onlyWhenProviderAvailable ist default true", () =>
@@ -444,10 +456,14 @@ describe("Schema-Default-Typen (Core Features)", () => {
     assertBooleanDefault("obsidianBridge.semanticGraph.writeDerivedEdges", true));
   it("obsidianBridge.soulPatch.promptForLegacyMigration ist default true", () =>
     assertBooleanDefault("obsidianBridge.soulPatch.promptForLegacyMigration", true));
-  it("morningReview.enabled ist default false", () =>
-    assertBooleanDefault("morningReview.enabled", false));
-  it("eveningReview.enabled ist default false", () =>
-    assertBooleanDefault("eveningReview.enabled", false));
+  it("canonical nested morningReview.enabled ist default false", () =>
+    assertBooleanDefault("obsidianBridge.morningReview.enabled", false));
+  it("canonical nested eveningReview.enabled ist default false", () =>
+    assertBooleanDefault("obsidianBridge.eveningReview.enabled", false));
+  it("legacy review aliases do not materialize competing defaults", () => {
+    assert.strictEqual(getDefault("morningReview.enabled"), undefined);
+    assert.strictEqual(getDefault("eveningReview.enabled"), undefined);
+  });
 });
 
 describe("Schema-Default-Typen (Emotion)", () => {
@@ -500,7 +516,7 @@ describe("Schema-Default-Typen (Humanization strict schema coverage)", () => {
   it("styleDirective ist ein striktes Objekt mit den erwarteten Defaults", () => {
     assertStrictObjectNode("styleDirective");
     assertBooleanDefault("styleDirective.timeOfDay", true);
-    assert.strictEqual(getSchemaNode("styleDirective.timezone")?.type, "string");
+    assert.deepStrictEqual(getSchemaNode("styleDirective.timezone")?.type, ["string", "null"]);
     assertBooleanDefault("styleDirective.opinion", true);
     assertBooleanDefault("styleDirective.askBack", true);
   });
@@ -518,7 +534,7 @@ describe("Schema-Default-Typen (Humanization strict schema coverage)", () => {
   it("afterthought ist ein striktes Objekt mit enabled default true", () => {
     assertStrictObjectNode("afterthought");
     assertBooleanDefault("afterthought.enabled", true);
-    assert.strictEqual(getSchemaNode("afterthought.timezone")?.type, "string");
+    assert.deepStrictEqual(getSchemaNode("afterthought.timezone")?.type, ["string", "null"]);
   });
 
   it("reactionNudge ist ein striktes Objekt with enum-backed enabled default", () => {

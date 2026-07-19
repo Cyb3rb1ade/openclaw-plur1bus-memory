@@ -90,23 +90,108 @@
       "baseDbPath": {
         "type": "string"
       },
-      "hooks": {
+      "embeddingBatchSize": {
+        "type": "number",
+        "minimum": 1,
+        "default": 8
+      },
+      "language": {
+        "type": "string",
+        "default": "de"
+      },
+      "timezone": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "replyOutcomeTracking": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "allowConversationAccess": {
+          "enabled": {
             "type": "boolean",
             "default": true
           },
-          "allowPromptInjection": {
-            "type": "boolean",
-            "default": true
+          "maxAgeMs": {
+            "type": "number",
+            "minimum": 0,
+            "default": 604800000
           },
-          "timeoutMs": {
-            "type": "number"
+          "maxMemoryIds": {
+            "type": "number",
+            "minimum": 1,
+            "default": 12
           },
-          "timeouts": {
-            "type": "object"
+          "maxReplyChars": {
+            "type": "number",
+            "minimum": 1,
+            "default": 4000
+          },
+          "maxAssistantChars": {
+            "type": "number",
+            "minimum": 1,
+            "default": 4000
+          },
+          "maxOutcomeLogEntries": {
+            "type": "number",
+            "minimum": 1,
+            "default": 5000
+          },
+          "maxFeedbackLogEntries": {
+            "type": "number",
+            "minimum": 1,
+            "default": 5000
+          }
+        }
+      },
+      "dreaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "narrative": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "temperature": {
+                "type": "number",
+                "minimum": 0,
+                "default": 0.9
+              },
+              "storeAsMemory": {
+                "type": "boolean",
+                "default": true
+              },
+              "importanceMax": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 0.49,
+                "default": 0.45
+              }
+            }
+          }
+        }
+      },
+      "reminders": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "deliveryMode": {
+            "type": "string",
+            "enum": [
+              "pending_only",
+              "webhook",
+              "host_callback"
+            ],
+            "default": "pending_only"
+          },
+          "webhookUrl": {
+            "type": "string"
           }
         }
       },
@@ -498,28 +583,22 @@
           },
           "autoApplyRisk": {
             "type": "string",
-            "enum": [
-              "low-only"
-            ],
+            "const": "low-only",
             "default": "low-only"
           },
           "backupBeforeApply": {
             "type": "boolean",
+            "const": true,
             "default": true
           },
           "auditLog": {
             "type": "boolean",
+            "const": true,
             "default": true
-          },
-          "maxAutoApplyPerRun": {
-            "type": "number",
-            "default": 5
           },
           "mode": {
             "type": "string",
-            "enum": [
-              "safe-versioned"
-            ],
+            "const": "safe-versioned",
             "default": "safe-versioned"
           }
         }
@@ -570,7 +649,10 @@
             "default": "0 3 * * 0"
           },
           "timezone": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "default": "Europe/Berlin"
           },
           "maxPerRun": {
@@ -683,29 +765,37 @@
             }
           },
           "decisionTrace": {
-            "enabled": {
-              "type": "boolean",
-              "default": false
-            },
-            "includeInPrompt": {
-              "type": "boolean",
-              "default": false
-            },
-            "maxCandidates": {
-              "type": "number",
-              "default": 50
-            },
-            "maxTextPreviewChars": {
-              "type": "number",
-              "default": 160
-            },
-            "persist": {
-              "type": "boolean",
-              "default": false
-            },
-            "visibleHints": {
-              "type": "boolean",
-              "default": false
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "includeInPrompt": {
+                "type": "boolean",
+                "default": false
+              },
+              "maxCandidates": {
+                "type": "number",
+                "minimum": 1,
+                "default": 50
+              },
+              "maxTextPreviewChars": {
+                "type": "number",
+                "minimum": 0,
+                "default": 160
+              },
+              "persist": {
+                "type": "boolean",
+                "const": false,
+                "default": false
+              },
+              "visibleHints": {
+                "type": "boolean",
+                "const": false,
+                "default": false
+              }
             }
           }
         }
@@ -1072,7 +1162,10 @@
                 "default": "0 9 * * *"
               },
               "timezone": {
-                "type": "string",
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "default": "Europe/Berlin"
               },
               "delivery": {
@@ -1125,7 +1218,10 @@
                 "default": "0 18 * * *"
               },
               "timezone": {
-                "type": "string",
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "default": "Europe/Berlin"
               },
               "delivery": {
@@ -1623,7 +1719,10 @@
             "default": true
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "opinion": {
             "type": "boolean",
@@ -1664,7 +1763,10 @@
             "default": true
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -1758,20 +1860,44 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean",
-            "default": false
+            "type": "boolean"
           },
           "cron": {
             "type": "string"
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "delivery": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "announce",
+              "silent"
+            ]
+          },
+          "session": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "current"
+            ]
+          },
+          "writeReviewBundle": {
+            "type": "boolean"
+          },
+          "applyMode": {
+            "type": "string",
+            "const": "manual"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "pending_setup",
+              "active"
+            ]
           }
         }
       },
@@ -1780,20 +1906,41 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean",
-            "default": false
+            "type": "boolean"
           },
           "cron": {
             "type": "string"
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "delivery": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "announce",
+              "silent"
+            ]
+          },
+          "session": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "current"
+            ]
+          },
+          "applyMode": {
+            "type": "string",
+            "const": "manual"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "pending_setup",
+              "active"
+            ]
           }
         }
       },
@@ -1807,7 +1954,7 @@
           },
           "llmReport": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "llmReportMode": {
             "type": "string",
@@ -1816,6 +1963,16 @@
           "fallbackOnError": {
             "type": "boolean",
             "default": true
+          },
+          "sessionThreshold": {
+            "type": "number",
+            "minimum": 1,
+            "default": 50
+          },
+          "intervalDays": {
+            "type": "number",
+            "minimum": 0,
+            "default": 7
           }
         }
       },

@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { hourInTimeZone, isQuietHour } from "../lib/time-window.js";
+import {
+  hourInTimeZone,
+  isQuietHour,
+  validateHourWindow,
+  validateTimeZone,
+} from "../lib/time-window.js";
 
 describe("hourInTimeZone", () => {
   // 2026-01-15 23:30 UTC → 23 in UTC, 00:30 next day in Europe/Berlin (CET, UTC+1)
@@ -17,9 +22,9 @@ describe("hourInTimeZone", () => {
     assert.equal(hourInTimeZone(EPOCH, ""), new Date(EPOCH).getHours());
   });
 
-  it("invalid timezone fails open to server-local hour", () => {
-    assert.equal(hourInTimeZone(EPOCH, "Not/AZone"), new Date(EPOCH).getHours());
-    assert.equal(hourInTimeZone(EPOCH, "garbage"), new Date(EPOCH).getHours());
+  it("invalid explicit timezone no longer silently changes to server-local time", () => {
+    assert.throws(() => hourInTimeZone(EPOCH, "Not/AZone"), RangeError);
+    assert.throws(() => hourInTimeZone(EPOCH, "garbage"), RangeError);
   });
 
   it("normalizes en-GB midnight rendering ('24') to 0", () => {
@@ -74,13 +79,60 @@ describe("isQuietHour", () => {
     assert.equal(isQuietHour(23, qh), false);
   });
 
-  it("null/invalid quietHours or non-integer bounds → false (fail-open)", () => {
+  it("null/disabled quietHours returns false", () => {
     assert.equal(isQuietHour(23, null), false);
     assert.equal(isQuietHour(23, undefined), false);
     assert.equal(isQuietHour(23, false), false);
-    assert.equal(isQuietHour(23, {}), false);
-    assert.equal(isQuietHour(23, { start: "22", end: 8 }), false);
-    assert.equal(isQuietHour(23, { start: 22.5, end: 8 }), false);
-    assert.equal(isQuietHour(23, { start: 22 }), false);
+  });
+
+  it("invalid explicit quiet-hour bounds throw instead of silently changing semantics", () => {
+    for (const value of [
+      {},
+      { start: -1, end: 8 },
+      { start: 22, end: 24 },
+      { start: "22", end: 8 },
+      { start: 22.5, end: 8 },
+      { start: 22 },
+    ]) {
+      assert.throws(() => isQuietHour(23, value));
+    }
+  });
+});
+
+describe("path-aware time config validation", () => {
+  it("accepts falsy timezone compatibility values and supported IANA zones", () => {
+    for (const value of [undefined, null, "", "UTC", "Europe/Berlin"]) {
+      assert.equal(validateTimeZone(value, { path: "config.timezone" }), value);
+    }
+  });
+
+  it("invalid timezone errors carry the exact path", () => {
+    assert.throws(
+      () => validateTimeZone("Not/AZone", { path: "config.afterthought.timezone" }),
+      (error) => error?.configPath === "config.afterthought.timezone",
+    );
+  });
+
+  it("rejects -1, 24, fractions, numeric strings, and half-pairs at the leaf path", () => {
+    for (const [value, leaf] of [
+      [{ start: -1, end: 8 }, "start"],
+      [{ start: 22, end: 24 }, "end"],
+      [{ start: 1.5, end: 8 }, "start"],
+      [{ start: "22", end: 8 }, "start"],
+      [{ start: 22 }, "end"],
+      [{ end: 8 }, "start"],
+    ]) {
+      assert.throws(
+        () => validateHourWindow(value, { path: "config.quietHours" }),
+        (error) => error?.configPath === `config.quietHours.${leaf}`,
+      );
+    }
+  });
+
+  it("accepts a valid wrap-around pair", () => {
+    assert.deepEqual(
+      validateHourWindow({ start: 22, end: 8 }, { path: "config.quietHours" }),
+      { start: 22, end: 8 },
+    );
   });
 });

@@ -75,6 +75,36 @@ test('toggleFeature erstellt fehlende Zwischenebenen an', () => {
   }
 });
 
+test('review toggles write the canonical nested paths without creating legacy aliases', () => {
+  const { path, dir } = makeTmpConfig({
+    plugins: {
+      entries: {
+        'memory-lancedb-namespaced': {
+          config: {
+            obsidianBridge: {
+              morningReview: { enabled: false },
+              eveningReview: { enabled: false },
+            },
+          },
+        },
+      },
+    },
+  });
+  try {
+    assert.strictEqual(toggleFeature('morningReview', true, { configPath: path }).ok, true);
+    assert.strictEqual(toggleFeature('eveningReview', true, { configPath: path }).ok, true);
+    const config = JSON.parse(readFileSync(path, 'utf8'))
+      .plugins.entries['memory-lancedb-namespaced'].config;
+
+    assert.strictEqual(config.obsidianBridge.morningReview.enabled, true);
+    assert.strictEqual(config.obsidianBridge.eveningReview.enabled, true);
+    assert.strictEqual(Object.hasOwn(config, 'morningReview'), false);
+    assert.strictEqual(Object.hasOwn(config, 'eveningReview'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('toggleFeature ablehnt unbekanntes Feature', () => {
   const { path, dir } = makeTmpConfig({});
   try {

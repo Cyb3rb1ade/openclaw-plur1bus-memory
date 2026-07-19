@@ -623,8 +623,8 @@ KEEP_EXISTING_MEMORY_CONFIG=0
 KEEP_EXISTING_ACTIVE_MEMORY_CONFIG=0
 MEMORY_CONFIG_MODE=""
 ACTIVE_MEMORY_MODE=""
-FEATURE_UPDATE_MODE="fresh"
-FEATURE_POLICY_MODE="fresh"
+FEATURE_UPDATE_MODE="preserve"
+FEATURE_POLICY_MODE="preserve"
 FEATURE_UPDATE_PLAN=""
 FEATURE_UPDATE_IS_UPDATE="false"
 INSTALL_LOG_PATH="$TARGET_DIR/state/$INSTALL_LOG_FILE"
@@ -666,23 +666,32 @@ eval "$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '@sh "FEATURE_UPDATE_IS_UPDAT
 if [[ "$FEATURE_UPDATE_IS_UPDATE" == "true" ]]; then
   info "Bestehende PLUR1BUS-Installation erkannt (config=$DETECTED_BY_CONFIG, log=$DETECTED_BY_LOG)."
   if [[ "$NEW_FEATURE_COUNT" -gt 0 ]]; then
-    info "Fehlende Core-Features, die im sicheren Update-Modus default-on ergänzt werden:"
+    info "Fehlende Core-Features mit wirksamen Manifest-Defaults (ohne die Rohconfig umzuschreiben):"
     printf '%s\n' "$FEATURE_UPDATE_PLAN" | jq -r '.newlyActivated[]? | "  - " + .label'
   fi
   if [[ "$PRESERVED_DISABLED_COUNT" -gt 0 ]]; then
     warn "Explizit deaktivierte Features bleiben im sicheren Update-Modus deaktiviert:"
     printf '%s\n' "$FEATURE_UPDATE_PLAN" | jq -r '.preservedDisabled[]? | "  - " + .label'
   fi
-  prompt_choice FEATURE_UPDATE_MODE "Feature-Update-Modus: enable-all=Recommended Full Experience, keep=User-Entscheidungen bewahren + fehlende Defaults ergänzen" "enable-all" "keep" "enable-all"
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    FEATURE_UPDATE_MODE="recommended"
+    info "--accept-defaults: Recommended wurde ausdrücklich ausgewählt."
+  else
+    prompt_choice FEATURE_UPDATE_MODE "Feature-Profil: preserve=unverändert, safe=Safe, recommended=Recommended" "preserve" "preserve" "safe" "recommended"
+  fi
 else
-  info "Keine bestehende PLUR1BUS-Installation in Config/Install-Log erkannt — Fresh-Install nutzt Full Experience Defaults."
-  FEATURE_UPDATE_MODE="fresh"
+  info "Keine bestehende PLUR1BUS-Installation in Config/Install-Log erkannt."
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    FEATURE_UPDATE_MODE="recommended"
+    info "--accept-defaults: Recommended wurde ausdrücklich ausgewählt."
+  else
+    prompt_choice FEATURE_UPDATE_MODE "Feature-Profil: safe=Safe, recommended=Recommended" "safe" "safe" "recommended"
+  fi
 fi
 
 case "$FEATURE_UPDATE_MODE" in
-  keep) FEATURE_POLICY_MODE="preserve" ;;
-  enable-all) FEATURE_POLICY_MODE="enable-all" ;;
-  fresh|*) FEATURE_POLICY_MODE="fresh" ;;
+  preserve|safe|recommended) FEATURE_POLICY_MODE="$FEATURE_UPDATE_MODE" ;;
+  *) error "Ungültiger Feature-Modus: $FEATURE_UPDATE_MODE"; exit 2 ;;
 esac
 EMBEDDING_KEY_DEFAULT="$EXISTING_EMBEDDING_KEY"
 [[ -z "$EMBEDDING_KEY_DEFAULT" ]] && EMBEDDING_KEY_DEFAULT="$MEMORY_SEARCH_EMBEDDING_KEY"
@@ -1181,8 +1190,10 @@ else
         "obsidianBridge": {
           "enabled": true,
           "watch": false,
-          "dryRun": false,
-          "autoApplyLowRisk": true,
+          "mode": "augment",
+          "dryRun": true,
+          "requireVaultPathConfirmation": true,
+          "autoApplyLowRisk": false,
           "workspaces": $obsidian_workspaces,
           "graphLinks": {
             "semanticDiscovery": {
@@ -1231,7 +1242,6 @@ JQ_PATCH=$(cat <<'JQEOF'
       "agent_end": 60000
     }))
   })})
-| if .plugins.entries["memory-lancedb"] then .plugins.entries["memory-lancedb"].enabled = false else . end
 JQEOF
 )
 
@@ -1239,6 +1249,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   dryrun "Würde openclaw.json mit Plugin-Config patchen"
   dryrun "  - plugins.allow += memory-lancedb-namespaced"
   dryrun "  - plugins.slots.memory bleibt '${EXISTING_MEMORY_SLOT:-memory-core}'"
+  dryrun "  - kein Backend-Wechsel: bestehende Legacy-Backends bleiben unverändert"
   dryrun "  - hooks.allowConversationAccess/allowPromptInjection + Hook-Timeouts werden sichergestellt"
   if [[ "$KEEP_EXISTING_MEMORY_CONFIG" == "1" ]]; then
     dryrun "  - plugins.entries.memory-lancedb-namespaced bleibt inhaltlich erhalten; Hook-Rechte werden sichergestellt"
@@ -1277,7 +1288,6 @@ plugin.hooks = {
   },
 };
 cfg.plugins.entries['memory-lancedb-namespaced'] = plugin;
-if (cfg.plugins.entries['memory-lancedb']) cfg.plugins.entries['memory-lancedb'].enabled = false;
 writeFileSync('${TARGET_CONFIG}', JSON.stringify(cfg, null, 2) + '\n', 'utf8');
 console.log('patched');
 NODEOF
@@ -1295,7 +1305,6 @@ NODEOF
              "agent_end": 60000
            }))
          })})
-       | if .plugins.entries["memory-lancedb"] then .plugins.entries["memory-lancedb"].enabled = false else . end
       ' \
       "$TARGET_CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$TARGET_CONFIG"
   fi

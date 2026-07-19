@@ -5,7 +5,7 @@
  *   1. Recommended Profile erkannt
  *   2. Rate-Limit für Daily Consolidation
  *   3. Status Command: echte cardCount, transparenter Sync
- *   4. Full Experience Policy writes no feature-selection history
+ *   4. Normal effective config loading writes no feature-selection history
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
@@ -18,21 +18,21 @@ import { checkJobRateLimit, recordJobRun } from "../lib/job-rate-limit.js";
 import { collectStatusData } from "../lib/telegram-commands/status-data.js";
 
 describe("recommended-mode-full", () => {
-  it("recommendedProfile has all full-experience features enabled", () => {
+  it("recommendedProfile enables advanced features behind required safety gates", () => {
     const p = recommendedProfile();
-    assert.strictEqual(p.morningReview.enabled, true);
-    assert.strictEqual(p.morningReview.status, "active");
-    assert.strictEqual(p.eveningReview.enabled, true);
-    assert.strictEqual(p.eveningReview.status, "active");
+    assert.strictEqual(p.obsidianBridge.morningReview.enabled, true);
+    assert.strictEqual(p.obsidianBridge.morningReview.status, "pending_setup");
+    assert.strictEqual(p.obsidianBridge.eveningReview.enabled, true);
+    assert.strictEqual(p.obsidianBridge.eveningReview.status, "pending_setup");
     assert.strictEqual(p.reranker.enabled, true);
     assert.strictEqual(p.reranker.fallbackOnError, true);
-    assert.strictEqual(p.reranker.timeoutMs, 2500);
+    assert.strictEqual(p.reranker.timeoutMs, 5000);
     assert.strictEqual(p.merging.enabled, true);
-    assert.strictEqual(p.merging.autoApply, true);
+    assert.strictEqual(p.merging.autoApply, false);
     assert.strictEqual(p.merging.autoApplyRisk, "low-only");
     assert.strictEqual(p.schicht15.enabled, true);
     assert.strictEqual(p.obsidianBridge.enabled, true);
-    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, false);
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
     assert.strictEqual(p.temporalContext.enabled, true);
     assert.strictEqual(p.metaCognition.enabled, true);
   });
@@ -46,13 +46,13 @@ describe("recommended-mode-full", () => {
   });
 
   it("isApplyBlocked does not require feature-selection history", () => {
-    const p = recommendedProfile();
+    const p = { merging: { enabled: true } };
     const blocked = isApplyBlocked(p);
     assert.strictEqual(blocked.blocked, false);
   });
 
   it("isApplyBlocked when pending setup exists", () => {
-    const p = { ...recommendedProfile(), morningReview: { enabled: true, status: "pending_setup" } };
+    const p = { obsidianBridge: { morningReview: { enabled: true, status: "pending_setup" } } };
     const blocked = isApplyBlocked(p);
     assert.strictEqual(blocked.blocked, true);
     assert.strictEqual(blocked.reason, "pending_setup");

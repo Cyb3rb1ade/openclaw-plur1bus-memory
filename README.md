@@ -66,7 +66,7 @@ The index is written to `.plur1bus/code-index.json` and contains normalized file
 - **Multi-Namespace Pool** — Each agent gets its own isolated LanceDB namespace; cross-agent recall stays opt-in.
 - **Temporal Continuity Context** — Auto-injected time-anchor block lets the agent orient itself after gaps or compactions without hallucinating dates.
 - **Conflict Summary Management** — Contradiction detector now emits structured conflict summaries; `/plur1bus obsidian conflicts build` renders them as Obsidian pages.
-- **`/plur1bus start` onboarding** — Single command walks new users through feature-profile confirmation and vault setup.
+- **`/plur1bus start` onboarding** — Read-only status and onboarding guidance for feature profiles and vault setup.
 - **Auto-capture schema sync** — `scripts/auto-capture-lancedb.mjs` gains `workspaceKey` field; schema migration is backward-compatible and idempotent.
 - **Internal-turn skip guard** — `shouldSkipAutoRecallForInternalTurn` prevents feedback loops when the gateway injects synthetic cron messages.
 
@@ -182,7 +182,10 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 | `/share <id>` | Copy a memory card into the workspace-shared pool. ACL-protected. |
 | `/enable <feature>` | Turn on a whitelisted feature (`vaultSync`, `kritischPush`, `dailyConsolidation`). |
 | `/disable <feature>` | Turn off the same. Writes atomically into `openclaw.json`; gateway restart required. |
-| `/plur1bus setup` | Confirm the recommended feature profile. Required before advanced features can apply changes. |
+| `/plur1bus setup` | List the available profile choices without changing configuration. |
+| `/plur1bus setup safe` | Explicitly apply the Safe profile; core capture/recall stays usable and additional mutators remain off. |
+| `/plur1bus setup recommended` | Explicitly apply Recommended while preserving existing opt-outs and write-safety gates. |
+| `/plur1bus start` | Show read-only status and onboarding guidance; it does not change configuration. |
 
 ### `/plur1bus` subcommands
 
@@ -325,7 +328,7 @@ All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` an
 
 PLUR1BUS caches only exact, agent-scoped results from an explicit allowlist of deterministic internal LLM transformations. The default in-memory cache uses a 24-hour absolute TTL (`llmResultCacheTtlMs: 86400000`, clamped to 60 s–7 d) and holds 256 entries per plugin registration (`llmResultCacheMaxEntries`, clamped to at most 10,000). Optional prompt-free SQLite persistence is off by default; when enabled with `llmResultCachePersist`, it stores hashed keys, results, usage metadata, and timestamps under the memory database path without storing plaintext prompts, credentials, or headers. `llmResultCacheMaxBytes` defaults to 67,108,864 bytes and is clamped to at most 1 GiB; clamped values log a warning.
 
-The six runtime settings are `llmResultCacheEnabled` (default `true`), `llmResultCacheTtlMs` (default `86400000`), `llmResultCacheMaxEntries` (default `256`), `llmResultCachePersist` (default `false`), `llmResultCacheMaxBytes` (default `67108864`), and `llmResultCacheMetrics` (default `true`). Full Experience enables the cache when the setting is missing and preserves an explicit `false` opt-out.
+The six runtime settings are `llmResultCacheEnabled` (default `true`), `llmResultCacheTtlMs` (default `86400000`), `llmResultCacheMaxEntries` (default `256`), `llmResultCachePersist` (default `false`), `llmResultCacheMaxBytes` (default `67108864`), and `llmResultCacheMetrics` (default `true`). Missing values come from the manifest; an explicit `false` remains authoritative.
 
 Operational notes:
 
@@ -364,16 +367,24 @@ The `/state` status section reports cache hit rate, memory/persistent hits, pers
 
 **`security.allowModelDestructiveMemoryOps`** (default `true`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state. Set this flag to `false` if you want a hard opt-out for model-driven destructive memory writes.
 
-### Feature profile confirmation
+### Feature profiles
 
-On first start v6 warns about unconfirmed features. Core memory (capture, recall, search) works immediately. To enable advanced features (Obsidian apply mode, morning/evening reviews, merging), run:
+Core memory (capture, recall, search) works from manifest-safe defaults without profile confirmation. Argument-less setup only lists the choices, and start is read-only status/onboarding guidance:
 
 ```bash
 # In Telegram
 /plur1bus setup
+/plur1bus start
 ```
 
-This sets `featuresConfirmedAt` in the plugin state and marks features as `active`.
+Apply a profile only by naming it explicitly:
+
+```bash
+/plur1bus setup safe
+/plur1bus setup recommended
+```
+
+An explicit selection records `setupProfile` and `featuresConfirmedAt`. Recommended enables additional features while retaining merge and Obsidian safety gates; vault discovery alone never counts as confirmation.
 
 ## Architecture
 
@@ -381,7 +392,7 @@ LanceDB is the authoritative store: every memory card lives there first, indexed
 
 A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The plugin SDK currently exposes no outbound send API, so these messages are returned in the job result (`pushMessages`) for the cron carrier agent to deliver; once the SDK gains a reply-send hook, the same `telegramSend` path delivers them directly. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
 
-The recall pipeline runs Query → Embedding → LanceDB Top-N → **Query Refinement** (optional, on poor first results) → **Temporal Filter** (when time expressions detected) → Importance-Boost → optional Rerank (with timeout/fallback) → Inter-Result-Dedup → Canonical-First (KNOWLEDGE.md) → **ACL Filter** (agent/workspace scoped) → optional **Semantic Lens** append → optional **Conversation Reactivation Recall** append → Top results injected into the prompt.
+The recall pipeline runs embedding → LanceDB vector search → optional query refinement → temporal filter → canonical `KNOWLEDGE.md` search → score/status processing → graph spread and hydration → budget allocation → optional rerank → deduplication → ACL filtering → finalization. The caller may then append bounded Semantic Lens and Conversation Reactivation Recall results; neither replaces the primary recall.
 
 ## Development
 
@@ -403,11 +414,11 @@ The recall block uses escaped metadata attributes and wraps recalled text in `qu
 Version 6.x is a major upgrade. If you ran 5.x:
 
 - **Schema migration** — LanceDB table schema is auto-migrated on first `init()`. New columns: `status`, `versionNumber`, `previousVersion`, `supersededBy`, `updateSource`, `updateEvidence`, `reconsolidationConfidence`, `versionCreatedAt`, `updatedAt`. Migration is idempotent and non-destructive.
-- **Feature confirmation required** — Advanced features now require explicit confirmation via `featuresConfirmedAt`. Run `/plur1bus setup` on first start, or manually set `featuresConfirmedAt` in the plugin state.
+- **Explicit profile selection** — Missing values use manifest-safe defaults. Use `/plur1bus setup safe` or `/plur1bus setup recommended` only when you intentionally want to persist a profile; `/plur1bus setup` and `/plur1bus start` are non-mutating.
 - **Merging is proposal-only** — `merging.autoApply` defaults to `false`. Merge candidates are written to `merge-proposals.jsonl` instead of being applied automatically. Set `autoApply: true` to restore 5.x behavior.
 - **Obsidian bridge apply mode** — New `mode: "apply"` with safety gates (backups, audit log, vault path confirmation). Default is `mode: "augment"` (read-only). Confirm vault path explicitly before first write.
 - **Command input handling** — Hard length limits removed. Very long inputs are semantically compressed; beyond 100k chars use a file or vault source.
-- **Config keys added** — `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.mode`, `obsidianBridge.backupBeforeApply`, `obsidianBridge.auditLog`, `obsidianBridge.requireVaultPathConfirmation`, `morningReview.status`, `eveningReview.status`, `emotion.tier`, `emotion.t2.enabled`, `emotion.t3.enabled`, `emotion.t3.model`, `emotion.t3.apiKey`, `emotion.t3.escalationConfidence`, `emotion.t3.timeoutMs`, `emotion.moodInfluence`, `emotion.intensityHalfLifeFactor`, `emotion.temperaments.<agentId>`.
+- **Config keys added** — `reranker.timeoutMs`, `reranker.fallbackOnError`, `merging.autoApply`, `merging.mode`, `obsidianBridge.backupBeforeApply`, `obsidianBridge.auditLog`, `obsidianBridge.requireVaultPathConfirmation`, `obsidianBridge.morningReview.status`, `obsidianBridge.eveningReview.status`, `emotion.tier`, `emotion.t2.enabled`, `emotion.t3.enabled`, `emotion.t3.model`, `emotion.t3.apiKey`, `emotion.t3.escalationConfidence`, `emotion.t3.timeoutMs`, `emotion.moodInfluence`, `emotion.intensityHalfLifeFactor`, `emotion.temperaments.<agentId>`.
 
 See `v5_TO_v6_MIGRATION.md` for the full migration guide.
 

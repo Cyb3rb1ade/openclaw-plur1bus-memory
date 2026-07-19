@@ -59,8 +59,9 @@ export const DEPLOY_FILES = [
   "lib/semantic-lens-index.js",
   "lib/sql-safety.js",
   "lib/text-utils.js",
-  // ── Full Experience + temporal (v6.7.0) ────────────────────────────────────
+  // ── setup/config contract + temporal (v6.7.0+) ─────────────────────────────
   "lib/session-time.js",
+  "lib/setup/config-contract.js",
   "lib/setup/feature-profiles.js",
   "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",

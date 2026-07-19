@@ -22,6 +22,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const schemaPath = join(__dirname, "..", "openclaw.plugin.json");
 const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+const installerScript = readFileSync(join(__dirname, "..", "scripts", "install-memory-system.sh"), "utf8");
 
 function getSchemaDefault(path) {
   const parts = path.split(".");
@@ -153,5 +154,29 @@ describe("Upgrade-Simulation: Config-Override funktioniert", () => {
     assert.strictEqual(resolveHalfLifeDays("project", null, overrides), 600);
     assert.strictEqual(resolveHalfLifeDays("person", null, overrides), 600);
     assert.strictEqual(resolveHalfLifeDays("other", null, overrides), 180);
+  });
+});
+
+describe("Upgrade-Simulation: installer preserves backend selection", () => {
+  it("local JQ patch never disables an enabled legacy memory-lancedb backend", () => {
+    assert.doesNotMatch(
+      installerScript,
+      /plugins\.entries\["memory-lancedb"\]\.enabled\s*=\s*false/,
+    );
+  });
+
+  it("remote Node patch never disables an enabled legacy memory-lancedb backend", () => {
+    assert.doesNotMatch(
+      installerScript,
+      /entries\['memory-lancedb'\]\.enabled\s*=\s*false/,
+    );
+  });
+
+  it("keeps an existing memory slot and reports no backend switch in dry-run", () => {
+    assert.match(
+      installerScript,
+      /\.plugins\.slots\.memory\s*=\s*\(\.plugins\.slots\.memory\s*\/\/\s*"memory-core"\)/,
+    );
+    assert.match(installerScript, /dryrun\s+"[^"]*(kein|no)[^"]*backend[^"]*(wechsel|switch)/i);
   });
 });
