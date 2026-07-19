@@ -105,7 +105,7 @@ function diagnoseLancedb() {
   return ok;
 }
 
-function diagnoseDreamingCron(runCron) {
+function diagnoseDreamingCron({ runRequested, mutationAllowed }) {
   let cronOutput = "";
   const cronList = spawnSync("openclaw", ["cron", "list"], { encoding: "utf8", timeout: 10000 });
   if (cronList.status !== 0 || cronList.error) {
@@ -123,11 +123,15 @@ function diagnoseDreamingCron(runCron) {
   const idMatch = dreaming.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
   const cronId = idMatch?.[0];
   console.log(`  ✗ Dreaming Promotion cron status=error`);
-  if (cronId && runCron) {
-    console.log(`  → Triggering: openclaw cron run ${cronId}`);
-    const r = spawnSync("openclaw", ["cron", "run", cronId], { encoding: "utf8", timeout: 30000 });
-    if (r.status === 0) { console.log("  ✓ Cron triggered"); }
-    else { console.log(`  ✗ Trigger failed: ${r.stderr?.trim()}`); }
+  if (cronId && runRequested) {
+    if (!mutationAllowed) {
+      console.log(`  dry-run: would trigger openclaw cron run ${cronId}; no cron started`);
+    } else {
+      console.log(`  → Triggering: openclaw cron run ${cronId}`);
+      const r = spawnSync("openclaw", ["cron", "run", cronId], { encoding: "utf8", timeout: 30000 });
+      if (r.status === 0) { console.log("  ✓ Cron triggered"); }
+      else { console.log(`  ✗ Trigger failed: ${r.stderr?.trim()}`); }
+    }
   } else if (cronId) {
     console.log(`    → node scripts/repair-dreaming-cron.mjs --run`);
     console.log(`    → openclaw cron run ${cronId}`);
@@ -160,6 +164,7 @@ async function main() {
 
   const repoDir = resolve(process.cwd());
   const deployDir = resolve(opts.deployDir ?? findDeployDir(repoDir));
+  const mutationAllowed = !opts.dryRun;
 
   console.log("PLUR1BUS Repair");
   console.log(`  repo:    ${repoDir}`);
@@ -179,13 +184,19 @@ async function main() {
   // files are modified.
   const checkReport = validateDeployment({ deployDir, repoDir, files: DEPLOY_FILES, repair: false });
   const hasViolations = !checkReport.ok;
-  if (hasViolations && !opts.dryRun) {
+  if (hasViolations && mutationAllowed) {
     const backupDir = backupDeployDir(deployDir, DEPLOY_FILES);
     console.log(`  backup → ${backupDir}`);
   }
 
   // Repair pass (no-op in dry-run).
-  const report = validateDeployment({ deployDir, repoDir, files: DEPLOY_FILES, repair: !opts.dryRun, dryRun: opts.dryRun });
+  const report = validateDeployment({
+    deployDir,
+    repoDir,
+    files: DEPLOY_FILES,
+    repair: mutationAllowed,
+    dryRun: !mutationAllowed,
+  });
   for (const r of report.results) {
     const icon = r.ok || r.repaired ? "✓" : "✗";
     const label = r.ok ? "OK   " : r.repaired ? "FIXED" : "FAIL ";
@@ -216,7 +227,7 @@ async function main() {
   section("2/3  LanceDB manifest versions");
   let lancedbOk = diagnoseLancedb();
   if (opts.maintainLancedb && !lancedbOk) {
-    if (opts.dryRun) {
+    if (!mutationAllowed) {
       console.log("  dry-run: would run maintain-lancedb --apply; no maintenance started");
     } else {
       const maintenance = spawnSync("node", ["scripts/maintain-lancedb.mjs", "--apply"], {
@@ -231,7 +242,7 @@ async function main() {
 
   // 3. Dreaming cron
   section("3/3  Dreaming Promotion cron");
-  const cronOk = diagnoseDreamingCron(opts.runCron);
+  const cronOk = diagnoseDreamingCron({ runRequested: opts.runCron, mutationAllowed });
 
   // Summary
   section("Summary");

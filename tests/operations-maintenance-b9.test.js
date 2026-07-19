@@ -29,6 +29,7 @@ const REPAIR_SCRIPT = join(REPO_ROOT, "scripts", "repair-installed-plugin.mjs");
 const DEPLOY_GUARD = join(REPO_ROOT, "scripts", "protect-plur1bus-deploy.sh");
 const DEPLOY_CHECKER = join(REPO_ROOT, "scripts", "lib", "deploy-integrity.mjs");
 const REINDEX_SCRIPT = join(REPO_ROOT, "scripts", "reindex-provider.mjs");
+const DREAMING_CRON_ID = "12345678-1234-1234-1234-123456789abc";
 
 function makeTempDir(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -113,6 +114,20 @@ async function readDbState(dbPath) {
 
 function installFakeOpenClaw(binDir) {
   writeExecutable(join(binDir, "openclaw"), "#!/bin/sh\nexit 1\n");
+}
+
+function installDreamingCronOpenClaw(binDir) {
+  writeExecutable(join(binDir, "openclaw"), `#!/bin/sh
+printf '%s\\n' "$*" >> "$PLUR1BUS_OPENCLAW_CALL_LOG"
+if [ "$1" = "cron" ] && [ "$2" = "list" ]; then
+  printf '%s\\n' "${DREAMING_CRON_ID} Memory Dreaming Promotion error"
+  exit 0
+fi
+if [ "$1" = "cron" ] && [ "$2" = "run" ]; then
+  exit 0
+fi
+exit 1
+`);
 }
 
 function makeElevatedHome(root, count = 501) {
@@ -340,6 +355,58 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
       assert.equal(readdirSync(versionsDir).filter((name) => name.endsWith(".manifest")).length, 501);
       assert.equal(existsSync(join(root, ".openclaw-backups")), false);
       assert.match(result.stdout, /dry-run|would run|würde/i);
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
+  it("lists but never runs an errored cron during --dry-run --run-cron", () => {
+    const root = makeTempDir("plur1bus-b9-repair-cron-dry-");
+    try {
+      const binDir = join(root, "bin");
+      const callLog = join(root, "openclaw-calls.log");
+      installDreamingCronOpenClaw(binDir);
+
+      const result = runNode(REPAIR_SCRIPT, ["--dry-run", "--run-cron", "--no-smoke"], {
+        env: {
+          HOME: root,
+          PATH: `${binDir}:${process.env.PATH}`,
+          PLUR1BUS_DEPLOY: REPO_ROOT,
+          PLUR1BUS_OPENCLAW_CALL_LOG: callLog,
+        },
+      });
+
+      assert.ok(existsSync(callLog), result.output);
+      assert.deepEqual(readFileSync(callLog, "utf8").trim().split("\n"), ["cron list"], result.output);
+      assert.equal(result.status, 3, result.output);
+      assert.match(result.stdout, /dry-run[^\n]*would|would[^\n]*cron run/i);
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
+  it("still runs an errored cron when --run-cron is applying", () => {
+    const root = makeTempDir("plur1bus-b9-repair-cron-apply-");
+    try {
+      const binDir = join(root, "bin");
+      const callLog = join(root, "openclaw-calls.log");
+      installDreamingCronOpenClaw(binDir);
+
+      const result = runNode(REPAIR_SCRIPT, ["--run-cron", "--no-smoke"], {
+        env: {
+          HOME: root,
+          PATH: `${binDir}:${process.env.PATH}`,
+          PLUR1BUS_DEPLOY: REPO_ROOT,
+          PLUR1BUS_OPENCLAW_CALL_LOG: callLog,
+        },
+      });
+
+      assert.equal(result.status, 3, result.output);
+      assert.deepEqual(readFileSync(callLog, "utf8").trim().split("\n"), [
+        "cron list",
+        `cron run ${DREAMING_CRON_ID}`,
+      ]);
+      assert.match(result.stdout, /Cron triggered/i);
     } finally {
       removeTempDir(root);
     }
@@ -582,6 +649,29 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
     }
   });
 
+  it("rejects symlinked optional metadata before backup or restore", () => {
+    const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
+    try {
+      const externalPackage = join(fixture.root, "external-package.json");
+      const sourcePackage = join(fixture.sourceDir, "package.json");
+      const deployPackage = join(fixture.deployDir, "package.json");
+      writeFileSync(externalPackage, '{"version":"unsafe"}\n');
+      writeFileSync(deployPackage, '{"version":"deployed"}\n');
+      symlinkSync(externalPackage, sourcePackage);
+
+      const result = runDeployGuard(fixture);
+
+      assert.equal(result.status, 1, `${result.stdout}${result.stderr}\n${result.log}`);
+      assert.equal(lstatSync(deployPackage).isSymbolicLink(), false);
+      assert.equal(readFileSync(deployPackage, "utf8"), '{"version":"deployed"}\n');
+      assert.equal(readFileSync(fixture.deployFile, "utf8"), oldDeploy);
+      assert.equal(existsSync(fixture.backupRoot), false, "metadata preflight must finish before backup");
+      assert.match(result.log, /unsafe source candidate|refus/i);
+    } finally {
+      removeTempDir(fixture.root);
+    }
+  });
+
   it("fails verified restore when copy reports success without changing the deploy", () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
@@ -600,10 +690,24 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
   it("backs up drift, restores a legitimate source, verifies hashes, and honors restart suppression", () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
+      const metadata = [
+        ["openclaw.plugin.json", '{"version":"2.0.0"}\n', '{"version":"1.0.0"}\n'],
+        ["package.json", '{"version":"2.0.0"}\n', '{"version":"1.0.0"}\n'],
+        ["README.md", "new readme\n", "old readme\n"],
+        ["LICENSE", "new license\n", null],
+      ];
+      for (const [name, sourceValue, deployValue] of metadata) {
+        writeFileSync(join(fixture.sourceDir, name), sourceValue);
+        if (deployValue !== null) writeFileSync(join(fixture.deployDir, name), deployValue);
+      }
+
       const result = runDeployGuard(fixture);
 
       assert.equal(result.status, 0, `${result.stdout}${result.stderr}\n${result.log}`);
       assert.equal(readFileSync(fixture.deployFile, "utf8"), safeSource);
+      for (const [name, sourceValue] of metadata) {
+        assert.equal(readFileSync(join(fixture.deployDir, name), "utf8"), sourceValue, `${name} must be restored`);
+      }
       assert.match(result.log, /backed up drifted deploy/i);
       assert.match(result.log, /verified|restore complete/i);
       assert.match(result.log, /restart suppressed/i);
@@ -612,6 +716,9 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
       assert.ok(backedUpNeo, "backup must contain the pre-restore file");
       const backupPath = join(fixture.backupRoot, backedUpNeo);
       assert.equal(readFileSync(backupPath, "utf8"), oldDeploy);
+      const backedUpPackage = backupFiles.find((name) => name.endsWith("package.json"));
+      assert.ok(backedUpPackage, "backup must contain the pre-restore package metadata");
+      assert.equal(readFileSync(join(fixture.backupRoot, backedUpPackage), "utf8"), '{"version":"1.0.0"}\n');
       assert.ok(statSync(backupPath).mtimeMs <= statSync(fixture.deployFile).mtimeMs || readFileSync(backupPath, "utf8") === oldDeploy);
     } finally {
       removeTempDir(fixture.root);
