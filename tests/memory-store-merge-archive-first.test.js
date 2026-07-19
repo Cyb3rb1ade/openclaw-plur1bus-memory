@@ -33,7 +33,7 @@ function makeMockApi(baseDbPath) {
     pluginConfig: {
       baseDbPath,
       embedding: { provider: "local-transformers", local: { dimensions: VECTOR_DIM } },
-      merging: { enabled: true, model: "mock-model", apiKey: "sk-test" },
+      merging: { enabled: true, autoApply: true, model: "mock-model", apiKey: "sk-test" },
       duplicateThreshold: 0.99,
       obsidianBridge: { enabled: false },
       runtime: { llmResultCacheEnabled: false },

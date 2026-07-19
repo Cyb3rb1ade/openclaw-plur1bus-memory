@@ -35,7 +35,6 @@ function makeApi(baseDbPath) {
       autoRecall: false,
       neo: { enabled: false },
       gc: { enabled: false },
-      retroactiveInterference: { enabled: false },
       featureCronSetup: { auto: false },
     },
     logger: {

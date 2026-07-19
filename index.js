@@ -102,11 +102,9 @@ import { resolveLocale, readSoulToneCached, pickTone, t } from "./lib/i18n.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions, computeContentHash } from "./lib/jobs/schicht15-tracker.js";
 import {
   PLUGIN_KEY,
-  applyFullExperiencePolicy,
   applyFeatureProfile,
   consumePlur1busStartNotice,
   describeProfileDiff,
-  detectMissingCoreFeatures,
   detectObsidianVaults,
   detectPendingFeatures,
   isApplyBlocked,
@@ -114,6 +112,7 @@ import {
   renderPlur1busStartStatus,
   safeProfile,
 } from "./lib/setup/feature-profiles.js";
+import { resolveEffectiveConfig } from "./lib/setup/config-contract.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
@@ -2329,8 +2328,7 @@ const plugin = {
   kind: "extension",
 
   register(api) {
-    const rawCfg = api.pluginConfig || {};
-    let cfg = applyFullExperiencePolicy(rawCfg);
+    let cfg = resolveEffectiveConfig(api.pluginConfig || {});
     pluginLogger = api.logger;
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
@@ -2352,8 +2350,8 @@ const plugin = {
       );
     }
 
-    // Full Experience setup notices: pending setup still warns, but feature
-    // selection itself is config-as-truth and no prompted/confirmed history is required.
+    // Explicit-profile setup notices: pending setup still warns, while normal
+    // manifest-derived config loading requires no selection history.
     const applyBlocked = isApplyBlocked(cfg);
     if (applyBlocked.blocked) {
       if (applyBlocked.reason === "pending_setup") {
@@ -2434,7 +2432,6 @@ const plugin = {
     const traceCfg = cfg.recall?.decisionTrace || {};
     const traceEnabled = traceCfg.enabled === true;
     const traceInPrompt = traceEnabled && traceCfg.includeInPrompt === true;
-    const tracePersist = traceEnabled && traceCfg.persist === true;
 
     const riCfg = cfg.retroactiveInterference ?? {};
 
@@ -3725,7 +3722,6 @@ const plugin = {
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
-              const rawMissing = detectMissingCoreFeatures(rawCfg);
               const statusText = renderPlur1busStartStatus(cfg, {
                 vaultPath: cfg.obsidianBridge?.vaultPath || null,
                 workspaceRoot: cfg.obsidianBridge?.workspaceRoot || null,
@@ -3739,11 +3735,7 @@ const plugin = {
               const startTemperament = cfg.emotion?.temperaments?.[startAgentId];
               const startTemperamentLabel = startTemperament?.preset || (startTemperament ? "custom" : (DEFAULT_TEMPERAMENTS[startAgentId] ? "default-Profil" : "ausgewogen"));
               lines.push("", `🎭 Temperament (${startAgentId}): ${startTemperamentLabel} — ändern mit /plur1bus temperament <preset>`);
-              if (rawMissing.length > 0) {
-                lines.push("", "New core features defaulted on for this update:");
-                for (const feature of rawMissing) lines.push(`- ${feature.label}`);
-              }
-              lines.push("", "To intentionally reapply the full core selection, run: /plur1bus setup recommended --full");
+              lines.push("", "Setup choices: /plur1bus setup safe or /plur1bus setup recommended");
               return { text: lines.join("\n") };
             }
             if (actionKey === "temperament") {
@@ -3906,18 +3898,13 @@ const plugin = {
                 const pluginKey = PLUGIN_KEY;
                 const existingPluginCfg = rawCfg.plugins?.entries?.[pluginKey]?.config || null;
 
-                // Auto-detect Obsidian vaults before applying profile
+                // Discovery is informational only; explicit confirmation remains required.
                 const vaultResult = detectObsidianVaults(existingPluginCfg?.obsidianBridge || profile.obsidianBridge || {});
-                if (vaultResult.detected && profile.obsidianBridge) {
-                  profile.obsidianBridge.requireVaultPathConfirmation = false;
-                }
 
                 // Compute diff before applying (shows what changes)
                 const diff = describeProfileDiff(existingPluginCfg, profile);
 
-                const merged = applyFeatureProfile(rawCfg, profile, {
-                  forceFullExperience: tokens.includes("--full"),
-                });
+                const merged = applyFeatureProfile(rawCfg, profile);
                 const pendingInner = detectPendingFeatures(merged.plugins?.entries?.[pluginKey]?.config);
                 try {
                   const tmp = `${openclawConfigPath}.tmp-${process.pid}-${Date.now()}`;
@@ -3965,7 +3952,7 @@ const plugin = {
               lines.push(t("plur1bus.setup_activated", { lang, tone }));
               for (const [key, value] of Object.entries(profile)) {
                 if (key === "setupProfile" || key === "featuresConfirmedAt") continue;
-                if (typeof value !== "object" || value.enabled === undefined) continue;
+                if (value === null || typeof value !== "object" || value.enabled === undefined) continue;
                 const actualEnabled = mergedCfg[key]?.enabled ?? value.enabled;
                 if (!actualEnabled) {
                   lines.push(`• ${key}: disabled`);
@@ -4231,7 +4218,7 @@ const plugin = {
           };
         const plur1busCommands = [
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
-          { name: "plur1bus_start", description: "Complete PLUR1BUS installation and show Full Experience status.", acceptsArgs: false, prefixTokens: ["start"] },
+          { name: "plur1bus_start", description: "Show PLUR1BUS status and onboarding guidance.", acceptsArgs: false, prefixTokens: ["start"] },
           { name: "plur1bus_temperament", description: "Show or set the agent's emotional temperament.", acceptsArgs: true, prefixTokens: ["temperament"] },
           { name: "plur1bus_persona", description: "Show or (re)generate the agent's persona voice profile.", acceptsArgs: true, prefixTokens: ["persona"] },
           { name: "plur1bus_status", description: "Show PLUR1BUS memory status.", acceptsArgs: true, prefixTokens: ["status"] },

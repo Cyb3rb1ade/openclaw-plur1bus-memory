@@ -4,20 +4,34 @@
  */
 
 import {
-  applyFullExperiencePolicy,
+  PLUGIN_KEY,
+  applyFeatureProfile,
   listCoreFeatures,
+  recommendedProfile,
+  safeProfile,
 } from "../../lib/setup/feature-profiles.js";
+import { resolveEffectiveConfig } from "../../lib/setup/config-contract.js";
 
 export const INSTALL_LOG_FILE = "plur1bus-install-log.jsonl";
 export const INSTALL_LOG_KIND = "plur1bus_install";
 export const INSTALL_LOG_SCHEMA_VERSION = 1;
 
 function clone(value) {
-  return value == null || typeof value !== "object" ? value : JSON.parse(JSON.stringify(value));
+  return value == null || typeof value !== "object" ? value : structuredClone(value);
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function hasObjectValue(value) {
-  return value != null && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length > 0;
+  return isPlainObject(value) && Object.keys(value).length > 0;
+}
+
+function effectivePlanInput(config) {
+  const input = clone(config || {});
+  if (isPlainObject(input.hooks)) delete input.hooks;
+  return input;
 }
 
 function getPath(obj, path) {
@@ -29,52 +43,33 @@ function getPath(obj, path) {
   return cur;
 }
 
-function setPath(obj, path, value) {
-  let cur = obj;
-  for (let i = 0; i < path.length - 1; i++) {
-    const part = path[i];
-    if (cur[part] == null || typeof cur[part] !== "object" || Array.isArray(cur[part])) {
-      cur[part] = {};
-    }
-    cur = cur[part];
-  }
-  cur[path[path.length - 1]] = value;
-}
-
-function isForceMode(mode) {
-  return mode === "fresh" || mode === "enable-all" || mode === "force";
-}
-
 function featureKeySet(items) {
   return new Set(items.map((feature) => feature.key));
-}
-
-function restoreExplicitDisabledFeatures(originalConfig, mergedConfig) {
-  for (const feature of listCoreFeatures()) {
-    if (getPath(originalConfig || {}, feature.path) === false) {
-      setPath(mergedConfig, feature.path, false);
-    }
-  }
-  return mergedConfig;
 }
 
 /**
  * Apply installer feature policy to a memory plugin entry.
  * @param {object} pluginEntry - The generated or existing plugin entry.
- * @param {{mode?: "fresh"|"preserve"|"enable-all"|"force"}} opts - Feature policy mode.
- * @returns {object} A cloned plugin entry with full-experience defaults merged into config.
+ * @param {{mode?: "preserve"|"safe"|"recommended", confirmedAt?: string}} opts - Explicit feature policy.
+ * @returns {object} A cloned plugin entry, unchanged for preserve mode.
  */
 export function applyInstallerFeaturePolicy(pluginEntry = {}, opts = {}) {
   const mode = opts.mode || "preserve";
-  const entry = clone(pluginEntry || {});
-  entry.enabled = true;
-  entry.config = applyFullExperiencePolicy(entry.config || {}, {
-    forceFullExperience: isForceMode(mode),
-  });
-  if (!isForceMode(mode)) {
-    entry.config = restoreExplicitDisabledFeatures(pluginEntry?.config || {}, entry.config);
+  if (!new Set(["preserve", "safe", "recommended"]).has(mode)) {
+    throw new RangeError(`Feature policy mode must be preserve, safe, or recommended; received ${mode}`);
   }
-  return entry;
+  if (mode === "preserve") return clone(pluginEntry || {});
+
+  const document = {
+    plugins: {
+      entries: {
+        [PLUGIN_KEY]: clone(pluginEntry || {}),
+      },
+    },
+  };
+  const profile = mode === "safe" ? safeProfile() : recommendedProfile();
+  const applied = applyFeatureProfile(document, profile, { confirmedAt: opts.confirmedAt });
+  return applied.plugins.entries[PLUGIN_KEY];
 }
 
 /**
@@ -169,10 +164,12 @@ export function createFeatureUpdatePlan(input = {}) {
   });
 
   const before = summarizeCoreFeatureState(existingPluginConfig);
-  const afterConfig = applyInstallerFeaturePolicy(
-    { enabled: true, config: proposedPluginConfig },
-    { mode },
-  ).config;
+  const afterConfig = mode === "preserve"
+    ? resolveEffectiveConfig(effectivePlanInput(proposedPluginConfig))
+    : resolveEffectiveConfig(applyInstallerFeaturePolicy(
+      { enabled: true, config: proposedPluginConfig },
+      { mode, confirmedAt: input.confirmedAt },
+    ).config);
   const after = summarizeCoreFeatureState(afterConfig);
 
   const beforeMissing = featureKeySet(before.missing);
@@ -259,7 +256,10 @@ function main() {
   const input = readJsonEnv("PLUR1BUS_INSTALLER_INPUT", {});
 
   if (command === "complete-plugin-entry") {
-    writeJson(applyInstallerFeaturePolicy(input.pluginEntry || {}, { mode: input.mode || "preserve" }));
+    writeJson(applyInstallerFeaturePolicy(input.pluginEntry || {}, {
+      mode: input.mode || "preserve",
+      confirmedAt: input.confirmedAt,
+    }));
     return;
   }
   if (command === "feature-plan") {

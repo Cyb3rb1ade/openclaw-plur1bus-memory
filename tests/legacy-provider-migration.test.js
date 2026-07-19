@@ -52,7 +52,8 @@ describe("legacy provider migration", () => {
 
     assert.equal(result.changed, true);
     assert.equal(result.config.embedding.provider, "local-transformers");
-    assert.equal(result.config.reranker.provider, "local-transformers");
+    assert.equal(result.config.reranker.provider, "disabled");
+    assert.equal(result.config.reranker.enabled, false);
   });
 
   it("treats PLUR1BUS schema-seed-only LanceDB tables as switchable", async () => {
@@ -75,7 +76,8 @@ describe("legacy provider migration", () => {
     assert.equal(await table.countRows(), 0);
     assert.equal(result.changed, true);
     assert.equal(result.config.embedding.provider, "local-transformers");
-    assert.equal(result.config.reranker.provider, "local-transformers");
+    assert.equal(result.config.reranker.provider, "disabled");
+    assert.equal(result.config.reranker.enabled, false);
   });
 
   it("does not switch a one-fragment real LanceDB table with a later delete transaction", async () => {
@@ -98,7 +100,7 @@ describe("legacy provider migration", () => {
     assert.deepEqual(result.config, existing);
   });
 
-  it("moves legacy no-provider installs with no tables to local embedding and reranker", () => {
+  it("moves a missing embedding locally without overriding an explicit reranker opt-out", () => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-legacy-"));
     const result = applyLegacyProviderDefaults(
       {
@@ -111,9 +113,9 @@ describe("legacy provider migration", () => {
     assert.equal(result.config.embedding.provider, "local-transformers");
     assert.equal(result.config.embedding.local.model, "intfloat/multilingual-e5-small");
     assert.equal(result.config.embedding.local.dimensions, 384);
-    assert.equal(result.config.reranker.provider, "local-transformers");
-    assert.equal(result.config.reranker.enabled, true);
-    assert.equal(result.config.reranker.local.model, "BAAI/bge-reranker-v2-m3");
+    assert.equal(result.config.reranker.enabled, false);
+    assert.equal(Object.hasOwn(result.config.reranker, "provider"), false);
+    assert.deepEqual(result.migrations, ["embedding"]);
   });
 
   it("does not switch providers once a memory table has data", () => {
