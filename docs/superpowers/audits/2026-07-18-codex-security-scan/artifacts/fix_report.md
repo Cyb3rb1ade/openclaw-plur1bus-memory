@@ -386,4 +386,14 @@ B3 separates prompt timeout from mutating settlement. Same-agent capture admissi
 
 Causal regressions covered an ignored AbortSignal with measured `maxActive`, 200 high-cardinality recall keys, LRU hit/eviction/absolute expiry, raw timeout settlement, B7 shutdown deferral, a real auto-capture embed timeout before store, late replacement store plus queued retry, late delete plus audit log, same-input repair reuse, and provenance/retention-changing alternate input. The final combined focused gate passed 9/9 file workers (`duration_ms 34194.281414`); the owning gate passed 19/19 (`duration_ms 34115.249535`). Direct scheduler/timeout/lease/capture/merge controls passed 3/3, 6/6, 4/4, 3/3, and 8/8. Syntax, lint, and diff checks exited 0. The authoritative serial suite passed with 2,592 tests, 2,591 passed, zero failures, and one existing environment-dependent skip (`duration_ms 360090.901414`); the symlink test passed in-run without the sandbox fallback.
 
+Independent task review closed two remaining early-settlement catches in real auto-capture (normal memory and reminder storage), both direct `memory_forget` late-delete audit paths, and deterministic replacement ownership/provenance equivalence. The scheduler timeout remains prompt, but each catch follows raw settlement so same-agent mutation `maxActive` stays one. Both ID and query forget paths rethrow the prompt timeout while a shared continuation appends one deterministic-key audit record after a late commit. A corrected causal provenance RED returned an unsafe merge before the equivalence fix (1/1 failed; `duration_ms 30924.760658`) and passed afterward (1/1; `duration_ms 30868.995096`). The review-focused three-file gate passed 3/3 (`duration_ms 35851.375218`), and a covering owning gate passed 21/21 (`duration_ms 35414.594434`).
+
+The final post-review B3 checkout then passed the authoritative serial command
+`node --test --test-concurrency=1 tests/*.test.js test/*.test.js`: 2,599 tests,
+2,598 passed, zero failures, one skip, `duration_ms 378428.7499`, exit 0. This
+supersedes the earlier pre-review serial result for B3 completion. The known
+runner summary records one skip but the retained streamed output does not name
+the skipped test or expose the symlink-test result line. No isolated fallback
+was invoked.
+
 Detailed evidence: `docs/audits/2026-07-19-b3-timeout-admission-recall-cache-fix.md`.

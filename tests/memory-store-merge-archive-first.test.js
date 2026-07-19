@@ -631,4 +631,59 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     assert.equal(acknowledged?.evidenceQuote, "Source B evidence");
     assert.equal(acknowledged?.importance, 0.81);
   });
+
+  it("rejects an existing deterministic replacement with mismatched provenance", async () => {
+    let deleteAttempts = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() {
+      return [];
+    };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await originalGetById.call(this, ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    MemoryDB.prototype.delete = async function failFirstOriginalDelete(id) {
+      if (id === ORIGINAL_ID) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) throw new Error("injected first delete failure");
+      }
+      return originalDelete.call(this, id);
+    };
+
+    const input = {
+      sourceUrl: "https://example.test/expected-source",
+      evidenceQuote: "Expected source evidence",
+      importance: 0.78,
+      scope: "agent-private",
+    };
+    const first = await executeStore("Additional cat fact", input);
+    assert.match(first.content[0].text, /Memory store failed:.*delete failure/i);
+
+    const afterFirst = await readRows();
+    const replacement = afterFirst.find((row) => (
+      JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)
+    ));
+    assert.ok(replacement, "the failed delete should leave the deterministic replacement available for retry");
+    MemoryDB.prototype.getById = async function exposeMismatchedReplacement(id) {
+      const row = await originalGetById.call(this, id);
+      if (id !== replacement.id || !row) return row;
+      return {
+        ...row,
+        storedBy: "otheragent",
+        workspaceKey: "other-workspace",
+        scope: "workspace",
+        ownerUserId: "other-owner",
+        sourceUrl: "https://example.test/tampered-source",
+        evidenceQuote: "Tampered source evidence",
+      };
+    };
+
+    const retry = await executeStore("Additional cat fact", input);
+    assert.match(retry.content[0].text, /idempotency collision/i);
+    assert.notEqual(retry.details?.action, "merged");
+    assert.equal(deleteAttempts, 1, "a provenance mismatch must be rejected before deleting the original");
+
+    const afterRetry = await readRows();
+    assert.ok(afterRetry.some((row) => row.id === ORIGINAL_ID));
+    assert.deepEqual(readDestructiveOps(), []);
+  });
 });
