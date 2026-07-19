@@ -258,6 +258,98 @@ describe("B9 maintain-lancedb retention boundary", () => {
     }
   });
 
+  it("rejects invalid --keep=value before planning or mutation", () => {
+    const root = makeTempDir("plur1bus-b9-keep-equals-invalid-");
+    try {
+      const base = join(root, "db");
+      const versionsDir = join(base, "main", "memories.lance", "_versions");
+      writeManifests(versionsDir, 60);
+      const before = snapshotTree(base);
+
+      const result = runNode(MAINTAIN_SCRIPT, ["--apply", "--keep=-100", "--db-path", base], {
+        env: { HOME: root },
+      });
+
+      assert.equal(result.status, 1, result.output);
+      assert.match(result.stderr, /--keep must be a positive decimal integer between 1 and 100000/i);
+      assert.deepEqual(snapshotTree(base), before);
+      assert.equal(existsSync(join(root, ".openclaw-backups")), false);
+      assert.doesNotMatch(result.stdout, /Tables scanned|would prune|pruning|backup root/i);
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
+  it("accepts valid --keep=value through strict retention parsing", () => {
+    const root = makeTempDir("plur1bus-b9-keep-equals-valid-");
+    try {
+      const base = join(root, "db");
+      const versionsDir = join(base, "main", "memories.lance", "_versions");
+      writeManifests(versionsDir, 5);
+
+      const result = runNode(MAINTAIN_SCRIPT, ["--db-path", base, "--apply", "--keep=3"], {
+        env: { HOME: root },
+      });
+
+      assert.equal(result.status, 0, result.output);
+      assert.equal(readdirSync(versionsDir).filter((name) => name.endsWith(".manifest")).length, 3);
+      assert.match(result.stdout, /keep=3/);
+      assert.match(result.stdout, /verified[^\n]*3|3[^\n]*verified/i);
+      assert.ok(readdirSync(join(root, ".openclaw-backups"), { recursive: true })
+        .map(String).some((name) => name.endsWith("_prune-manifest.json")));
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
+  it("rejects unknown arguments before planning or mutation", () => {
+    const root = makeTempDir("plur1bus-b9-unknown-argument-");
+    try {
+      const base = join(root, "db");
+      const versionsDir = join(base, "main", "memories.lance", "_versions");
+      writeManifests(versionsDir, 5);
+      const before = snapshotTree(base);
+
+      const result = runNode(
+        MAINTAIN_SCRIPT,
+        ["--db-path", base, "--apply", "--keep", "3", "--typo"],
+        { env: { HOME: root } },
+      );
+
+      assert.equal(result.status, 1, result.output);
+      assert.match(result.stderr, /Unknown argument: --typo/);
+      assert.deepEqual(snapshotTree(base), before);
+      assert.equal(existsSync(join(root, ".openclaw-backups")), false);
+      assert.doesNotMatch(result.stdout, /Tables scanned|would prune|pruning|backup root/i);
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
+  it("rejects undocumented --db-path=value before discovery", () => {
+    const root = makeTempDir("plur1bus-b9-db-path-equals-");
+    try {
+      const base = join(root, "db");
+      const versionsDir = join(base, "main", "memories.lance", "_versions");
+      writeManifests(versionsDir, 5);
+      const before = snapshotTree(base);
+
+      const result = runNode(
+        MAINTAIN_SCRIPT,
+        ["--apply", "--keep", "3", `--db-path=${base}`],
+        { env: { HOME: root } },
+      );
+
+      assert.equal(result.status, 1, result.output);
+      assert.match(result.stderr, /Unknown argument: --db-path=/);
+      assert.deepEqual(snapshotTree(base), before);
+      assert.equal(existsSync(join(root, ".openclaw-backups")), false);
+      assert.doesNotMatch(result.stdout, /Tables scanned|would prune|pruning|backup root/i);
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
   it("keeps a valid positive value, backs up first, and reports the verified end state", () => {
     const root = makeTempDir("plur1bus-b9-keep-valid-");
     try {
@@ -672,6 +764,146 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
     }
   });
 
+  for (const linkKind of ["relative", "absolute"]) {
+    it(`rejects a ${linkKind} symlinked source parent before backup or restore`, () => {
+      const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
+      try {
+        const externalLib = join(fixture.root, "external-lib");
+        mkdirSync(externalLib, { recursive: true });
+        writeFileSync(join(externalLib, "neo-arch.js"), "export const isInjectedContextText = 'external-source';\n");
+        rmSync(join(fixture.sourceDir, "lib"), { recursive: true, force: true });
+        symlinkSync(
+          linkKind === "relative" ? "../external-lib" : externalLib,
+          join(fixture.sourceDir, "lib"),
+          "dir",
+        );
+
+        const result = runDeployGuard(fixture);
+
+        assert.equal(result.status, 1, `${result.stdout}${result.stderr}\n${result.log}`);
+        assert.equal(readFileSync(fixture.deployFile, "utf8"), oldDeploy);
+        assert.equal(existsSync(fixture.backupRoot), false);
+        assert.match(result.log, /unsafe source candidate|symlink component|canonical source root/i);
+      } finally {
+        removeTempDir(fixture.root);
+      }
+    });
+  }
+
+  it("rejects a broken symlinked source parent instead of treating the candidate as missing", () => {
+    const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
+    try {
+      rmSync(join(fixture.sourceDir, "lib"), { recursive: true, force: true });
+      symlinkSync("../missing-external-lib", join(fixture.sourceDir, "lib"), "dir");
+
+      const result = runDeployGuard(fixture);
+
+      assert.equal(result.status, 1, `${result.stdout}${result.stderr}\n${result.log}`);
+      assert.equal(readFileSync(fixture.deployFile, "utf8"), oldDeploy);
+      assert.equal(existsSync(fixture.backupRoot), false);
+      assert.match(result.log, /unsafe source candidate|symlink component/i);
+    } finally {
+      removeTempDir(fixture.root);
+    }
+  });
+
+  it("accepts a canonical source reached through a source-root symlink", () => {
+    const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
+    try {
+      const sourceAlias = join(fixture.root, "source-alias");
+      symlinkSync(fixture.sourceDir, sourceAlias, "dir");
+      const result = runDeployGuard(fixture, { PLUR1BUS_SRC: sourceAlias });
+
+      assert.equal(result.status, 0, `${result.stdout}${result.stderr}\n${result.log}`);
+      assert.equal(readFileSync(fixture.deployFile, "utf8"), safeSource);
+      assert.match(result.log, /verified|restore complete/i);
+    } finally {
+      removeTempDir(fixture.root);
+    }
+  });
+
+  it("rejects a broken source-root symlink before backup or restore", () => {
+    const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
+    try {
+      const brokenAlias = join(fixture.root, "broken-source-alias");
+      symlinkSync(join(fixture.root, "missing-source-root"), brokenAlias, "dir");
+      const result = runDeployGuard(fixture, { PLUR1BUS_SRC: brokenAlias });
+
+      assert.equal(result.status, 1, `${result.stdout}${result.stderr}\n${result.log}`);
+      assert.equal(readFileSync(fixture.deployFile, "utf8"), oldDeploy);
+      assert.equal(existsSync(fixture.backupRoot), false);
+      assert.match(result.log, /source missing/i);
+    } finally {
+      removeTempDir(fixture.root);
+    }
+  });
+
+  it("revalidates a source-parent swap after backup and before the first restore copy", () => {
+    const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
+    try {
+      const externalLib = join(fixture.root, "external-lib");
+      const binDir = join(fixture.root, "bin");
+      mkdirSync(externalLib, { recursive: true });
+      writeFileSync(join(externalLib, "neo-arch.js"), "export const isInjectedContextText = 'external-after-preflight';\n");
+      writeExecutable(join(binDir, "cp"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ ! -e "$PLUR1BUS_SWAP_DONE" ]; then
+  mv -- "$PLUR1BUS_SWAP_PARENT" "$PLUR1BUS_SWAP_ORIGINAL"
+  ln -s -- "$PLUR1BUS_SWAP_TARGET" "$PLUR1BUS_SWAP_PARENT"
+  : > "$PLUR1BUS_SWAP_DONE"
+fi
+exec /bin/cp "$@"
+`);
+
+      const sourceLib = join(fixture.sourceDir, "lib");
+      const result = runDeployGuard(fixture, {
+        PATH: `${binDir}:${process.env.PATH}`,
+        PLUR1BUS_SWAP_DONE: join(fixture.root, "swap.done"),
+        PLUR1BUS_SWAP_PARENT: sourceLib,
+        PLUR1BUS_SWAP_ORIGINAL: join(fixture.sourceDir, "lib.preflight"),
+        PLUR1BUS_SWAP_TARGET: externalLib,
+      });
+
+      assert.equal(result.status, 1, `${result.stdout}${result.stderr}\n${result.log}`);
+      assert.equal(readFileSync(fixture.deployFile, "utf8"), oldDeploy);
+      assert.equal(existsSync(fixture.backupRoot), true, "the preflight passed before the backup-time swap");
+      assert.match(result.log, /changed after preflight|unsafe source candidate|symlink component/i);
+    } finally {
+      removeTempDir(fixture.root);
+    }
+  });
+
+  it("rejects a regular source replacement after preflight and before restore copy", () => {
+    const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
+    try {
+      const binDir = join(fixture.root, "bin");
+      const replacement = join(fixture.root, "replacement-neo-arch.js");
+      writeFileSync(replacement, "export const isInjectedContextText = 'replacement-after-preflight';\n");
+      writeExecutable(join(binDir, "cp"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ ! -e "$PLUR1BUS_SWAP_DONE" ]; then
+  mv -- "$PLUR1BUS_REPLACEMENT" "$PLUR1BUS_SWAP_FILE"
+  : > "$PLUR1BUS_SWAP_DONE"
+fi
+exec /bin/cp "$@"
+`);
+
+      const result = runDeployGuard(fixture, {
+        PATH: `${binDir}:${process.env.PATH}`,
+        PLUR1BUS_SWAP_DONE: join(fixture.root, "swap.done"),
+        PLUR1BUS_REPLACEMENT: replacement,
+        PLUR1BUS_SWAP_FILE: fixture.sourceFile,
+      });
+
+      assert.equal(result.status, 1, `${result.stdout}${result.stderr}\n${result.log}`);
+      assert.equal(readFileSync(fixture.deployFile, "utf8"), oldDeploy);
+      assert.equal(existsSync(fixture.backupRoot), true);
+      assert.match(result.log, /source candidate changed after preflight/i);
+    } finally {
+      removeTempDir(fixture.root);
+    }
+  });
+
   it("fails verified restore when copy reports success without changing the deploy", () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
@@ -692,13 +924,18 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
     try {
       const metadata = [
         ["openclaw.plugin.json", '{"version":"2.0.0"}\n', '{"version":"1.0.0"}\n'],
+        ["lib/jobs/daily-consolidation.js", "export const dailyConsolidation = 'new';\n", "export const dailyConsolidation = 'old';\n"],
         ["package.json", '{"version":"2.0.0"}\n', '{"version":"1.0.0"}\n'],
         ["README.md", "new readme\n", "old readme\n"],
         ["LICENSE", "new license\n", null],
       ];
       for (const [name, sourceValue, deployValue] of metadata) {
+        mkdirSync(dirname(join(fixture.sourceDir, name)), { recursive: true });
         writeFileSync(join(fixture.sourceDir, name), sourceValue);
-        if (deployValue !== null) writeFileSync(join(fixture.deployDir, name), deployValue);
+        if (deployValue !== null) {
+          mkdirSync(dirname(join(fixture.deployDir, name)), { recursive: true });
+          writeFileSync(join(fixture.deployDir, name), deployValue);
+        }
       }
 
       const result = runDeployGuard(fixture);
