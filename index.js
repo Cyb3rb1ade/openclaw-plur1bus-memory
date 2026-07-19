@@ -398,6 +398,7 @@ async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defa
     if (!Array.isArray(lancedbRecords) || lancedbRecords.length === 0) continue;
     await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger });
     const result = await discoverSemanticLinks(semVaultCfg, lancedbRecords, {
+      db,
       pool,
       logger,
       defaultAgentId,
@@ -622,6 +623,7 @@ class MemoryDB {
     this.db = null;
     this.table = null;
     this.initPromise = null;
+    this.shutdownPromise = null;
     this.schemaFieldNames = null;
     this._writeCounter = 0;
     this._reindexing = false;
@@ -631,22 +633,54 @@ class MemoryDB {
   }
 
   async shutdown() {
-    if (this.isShuttingDown || this.isShutdown) return;
+    if (this.shutdownPromise) return this.shutdownPromise;
+    if (this.isShutdown) return;
     this.isShuttingDown = true;
+    const shutdownPromise = (async () => {
+      const errors = await this._closeHandles("shutdown");
+      this.initPromise = null;
+      this.isShutdown = true;
+      if (errors.length > 0) {
+        throw new AggregateError(
+          errors,
+          `MemoryDB shutdown failed for ${this.dbPath} (${errors.length} close error${errors.length === 1 ? "" : "s"})`,
+        );
+      }
+    })();
+    this.shutdownPromise = shutdownPromise;
     try {
-      if (this.table && typeof this.table.close === "function") {
-        try { await this._write(this.table.close(), "MemoryDB.table.close"); } catch (_) { /* ignore */ }
+      return await shutdownPromise;
+    } finally {
+      this.isShuttingDown = false;
+      if (this.shutdownPromise === shutdownPromise) this.shutdownPromise = null;
+    }
+  }
+
+  async _closeHandles(_context) {
+    const errors = [];
+    const table = this.table;
+    const db = this.db;
+    try {
+      if (table && typeof table.close === "function") {
+        // Close is lifecycle settlement, not an ordinary DB write. A timeout
+        // wrapper cannot abort it and must not let cleanup/retry run ahead.
+        await table.close();
       }
-      if (this.db && typeof this.db.close === "function") {
-        try { await this._write(this.db.close(), "MemoryDB.db.close"); } catch (_) { /* ignore */ }
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      if (db && typeof db.close === "function") {
+        await db.close();
       }
+    } catch (error) {
+      errors.push(error);
     } finally {
       this.table = null;
       this.db = null;
-      this.initPromise = null;
-      this.isShutdown = true;
-      this.isShuttingDown = false;
+      this.schemaFieldNames = null;
     }
+    return errors;
   }
 
   _read(promise, label) {
@@ -735,9 +769,10 @@ class MemoryDB {
 
   async init() {
     if (this.initPromise) return this.initPromise;
-    this.initPromise = (async () => {
-      const lancedb = await getLanceDB();
-      this.db = await this._write(lancedb.connect(this.dbPath), "MemoryDB.connect");
+    const generationPromise = (async () => {
+      try {
+        const lancedb = await getLanceDB();
+        this.db = await this._write(lancedb.connect(this.dbPath), "MemoryDB.connect");
       const tables = await this._read(this.db.tableNames(), "MemoryDB.tableNames");
       if (tables.includes(TABLE_NAME)) {
         this.table = await this._write(this.db.openTable(TABLE_NAME), "MemoryDB.openTable");
@@ -871,9 +906,25 @@ class MemoryDB {
         ]), "MemoryDB.createTable");
         await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
       }
-      await this.refreshSchemaFields();
+        await this.refreshSchemaFields();
+      } catch (error) {
+        const cleanupErrors = await this._closeHandles("failed-init");
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError(
+            [error, ...cleanupErrors],
+            `MemoryDB initialization and cleanup failed for ${this.dbPath}`,
+          );
+        }
+        throw error;
+      }
     })();
-    return this.initPromise;
+    this.initPromise = generationPromise;
+    try {
+      return await generationPromise;
+    } catch (error) {
+      if (this.initPromise === generationPromise) this.initPromise = null;
+      throw error;
+    }
   }
 
   async store(entry) {
@@ -1106,7 +1157,24 @@ class MemoryDB {
       throw new Error(`Memory not found: ${id}`);
     }
     const existing = rows[0];
-    const updated = { ...existing, ...patch };
+    const patchObject = patch && typeof patch === "object" ? patch : {};
+    const schemaFields = this.schemaFieldNames || new Set(Object.keys(existing));
+    if (typeof this.table.update === "function") {
+      const values = {};
+      for (const [key, value] of Object.entries(patchObject)) {
+        if (key === "id" || !schemaFields.has(key)) continue;
+        values[key] = key === "vector" ? normalizeVectorValue(value) : value;
+      }
+      if (Object.keys(values).length > 0) {
+        await this._write(
+          this.table.update({ where: `id = "${safe}"`, values }),
+          `MemoryDB.update.inPlace:${safe}`,
+        );
+      }
+      return;
+    }
+
+    const updated = { ...existing, ...patchObject, id: existing.id };
     const normalizedUpdated = this.normalizeEntryForTable(updated);
     await this._write(this.table.delete(`id = "${safe}"`), `MemoryDB.update.delete:${safe}`);
     try {
@@ -1117,7 +1185,15 @@ class MemoryDB {
       // Fehler weiterreichen.
       try {
         await this._write(this.table.add([this.normalizeEntryForTable(existing)]), `MemoryDB.update.restore:${safe}`);
-      } catch (_) { /* Original-Restore ebenfalls failed — Fehler unten */ }
+      } catch (restoreErr) {
+        this.logger?.warn?.(
+          `memory-lancedb-namespaced: MemoryDB.update restore failed dbPath=${this.dbPath} id=${safe}: ${String(restoreErr)}`,
+        );
+        throw new AggregateError(
+          [addErr, restoreErr],
+          `MemoryDB.update replacement and restore failed for ${safe} at ${this.dbPath}`,
+        );
+      }
       throw addErr;
     }
   }
@@ -1201,45 +1277,120 @@ class MemoryDB {
   }
 }
 
+/** Per-agent MemoryDB cache with callback-scoped operation leases. */
 class AgentDbPool {
   constructor(basePath, vectorDim, logger = null) {
     this.basePath = basePath;
     this.vectorDim = vectorDim;
     this.logger = logger;
-    this.dbs = makeBoundedCache(50, async (_id, db) => {
+    this.dbs = makeBoundedCache(50, async (id, db) => {
       if (db && typeof db.shutdown === "function") {
-        try { await db.shutdown(); } catch (_) { /* ignore */ }
+        try {
+          await db.shutdown();
+        } catch (error) {
+          const contextual = this._contextualizeDbError(id, "eviction", error);
+          this.logger?.warn?.(`memory-lancedb-namespaced: ${contextual.message}`);
+          throw contextual;
+        }
       }
     });
+    this.activeOperations = new Set();
+    this.shutdownPromise = null;
     this.isShutdown = false;
   }
 
+  _contextualizeDbError(agentId, phase, error) {
+    const cause = error instanceof Error ? error : new Error(String(error));
+    const contextual = new Error(
+      `agent=${agentId} ${phase} failed: ${cause.message}`,
+      { cause },
+    );
+    contextual.agentId = agentId;
+    contextual.phase = phase;
+    return contextual;
+  }
+
+  _getOrCreateDb(id) {
+    const cached = this.dbs.get(id);
+    if (cached) return cached;
+    const dbPath = join(this.basePath, id);
+    const db = new MemoryDB(dbPath, this.vectorDim, this.logger);
+    this.dbs.set(id, db);
+    return db;
+  }
+
+  /** Compatibility accessor; production operations must prefer withDb(). */
   getDb(agentId) {
     if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
     const id = agentId || "default";
-    this.dbs.acquire(id);
+    return this._getOrCreateDb(id);
+  }
+
+  /**
+   * Lease an agent DB until the callback settles.
+   * @param {string} agentId Agent identity used for path and cache isolation.
+   * @param {(db: MemoryDB) => unknown} fn Operation to run while the DB is leased.
+   * @returns {Promise<unknown>} Callback result.
+   */
+  async withDb(agentId, fn) {
+    if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
+    if (typeof fn !== "function") throw new TypeError("AgentDbPool.withDb requires a callback");
+    const id = agentId || "default";
+    let startLease;
+    const startGate = new Promise((resolve) => { startLease = resolve; });
+    const leasePromise = (async () => {
+      await startGate;
+      this.dbs.acquire(id);
+      try {
+        const db = this._getOrCreateDb(id);
+        return await fn(db);
+      } finally {
+        this.dbs.release(id);
+      }
+    })();
+    this.activeOperations.add(leasePromise);
+    startLease();
     try {
-      const cached = this.dbs.get(id);
-      if (cached) return cached;
-      const dbPath = join(this.basePath, id);
-      const db = new MemoryDB(dbPath, this.vectorDim, this.logger);
-      this.dbs.set(id, db);
-      return db;
+      return await leasePromise;
     } finally {
-      this.dbs.release(id);
+      this.activeOperations.delete(leasePromise);
     }
   }
 
   async shutdown() {
+    if (this.shutdownPromise) return this.shutdownPromise;
     if (this.isShutdown) return;
     this.isShutdown = true;
-    for (const db of this.dbs.values()) {
-      if (db && typeof db.shutdown === "function") {
-        try { await db.shutdown(); } catch (_) { /* ignore */ }
+    const shutdownPromise = (async () => {
+      await Promise.allSettled([...this.activeOperations]);
+      const errors = [];
+      for (const [agentId, db] of this.dbs.entries()) {
+        if (!db || typeof db.shutdown !== "function") continue;
+        try {
+          await db.shutdown();
+        } catch (error) {
+          const contextual = this._contextualizeDbError(agentId, "shutdown", error);
+          this.logger?.warn?.(`memory-lancedb-namespaced: ${contextual.message}`);
+          errors.push(contextual);
+        }
       }
+      try {
+        await this.dbs.awaitPendingEvictions();
+      } catch (error) {
+        if (error instanceof AggregateError) errors.push(...error.errors);
+        else errors.push(error);
+      }
+      this.dbs.clear();
+      if (errors.length > 0) {
+        throw new AggregateError(errors, `agent DB pool shutdown failures (${errors.length})`);
+      }
+    })();
+    this.shutdownPromise = shutdownPromise;
+    try {
+      return await shutdownPromise;
+    } finally {
+      if (this.shutdownPromise === shutdownPromise) this.shutdownPromise = null;
     }
-    await this.dbs.awaitPendingEvictions();
-    this.dbs.clear();
   }
 
   clear() {
@@ -2729,7 +2880,6 @@ const plugin = {
 
     async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
       const storeAgentId = storeCtx.agentId || "default";
-      const storeDb = pool.getWriteDb(storeAgentId);
       const storeWorkspaceKey = storeCtx.workspaceKey || workspaceKeyFromContext(storeCtx, {
         workspaceDir: storeCtx.workspaceDir,
       });
@@ -2745,6 +2895,7 @@ const plugin = {
         maxCandidates: traceCfg.maxCandidates ?? 50,
       });
       try {
+        return await pool.withWriteDb(storeAgentId, async (storeDb) => {
         const vector = await embeddings.embed(params.text, { agentId: storeAgentId });
         const categoryResult = params.category
           ? { category: params.category, reason: "caller-provided" }
@@ -2862,11 +3013,13 @@ const plugin = {
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
-            applyRetroactiveInterference(storeDb, entry, {
-              threshold: riCfg.threshold ?? 0.65,
-              multiplier: riCfg.multiplier ?? 0.9,
-              maxAffected: riCfg.maxAffected ?? 5,
-            }).catch((err) => {
+            const maintenance = pool.withWriteDb(storeAgentId, (maintenanceDb) =>
+              applyRetroactiveInterference(maintenanceDb, entry, {
+                threshold: riCfg.threshold ?? 0.65,
+                multiplier: riCfg.multiplier ?? 0.9,
+                maxAffected: riCfg.maxAffected ?? 5,
+              }));
+            return maintenance.catch((err) => {
               api.logger?.warn?.("[retroactive-interference] failed", err?.message ?? err);
             });
           });
@@ -2877,6 +3030,7 @@ const plugin = {
         }
         addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
         return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id, decisionTrace: trace } };
+        });
       } catch (err) {
         return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
       }
@@ -3107,16 +3261,17 @@ const plugin = {
                 if (dcCfg.enabled === false) {
                   return formatJsonCommandResult({ job: "consolidate-daily", skipped: true, reason: "dailyConsolidation_disabled" });
                 }
-                const rawDb = pool.getDb(internalAgent);
-                await rawDb.init();
-                const result = await runDailyConsolidation(rawDb, internalAgent, {
-                  logger: api.logger,
-                  neoStore: commandStore,
-                  workspaceDir: commandCtx.workspaceDir,
-                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                  llmCfg: mergingLlmCfg,
-                  callLlm,
-                  embeddings,
+                const result = await pool.withDb(internalAgent, async (rawDb) => {
+                  await rawDb.init();
+                  return runDailyConsolidation(rawDb, internalAgent, {
+                    logger: api.logger,
+                    neoStore: commandStore,
+                    workspaceDir: commandCtx.workspaceDir,
+                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                    llmCfg: mergingLlmCfg,
+                    callLlm,
+                    embeddings,
+                  });
                 });
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
@@ -3163,29 +3318,30 @@ const plugin = {
                 if (!mergingLlmCfg) {
                   return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "no_llm_config" });
                 }
-                const db = pool.getDb(internalAgent);
-                await db.init();
                 const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
-                const result = await runRemDream({
-                  db,
-                  llmCfg: mergingLlmCfg,
-                  callLlm,
-                  neoStore: commandStore,
-                  workspaceKey: workspaceKeyFromContext(commandCtx, {
-                    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-                    rootDir: neoRoot,
-                    runtime: api.runtime,
-                    sessionWorkspaceKeys,
-                    workspaceAliases: neoWorkspaceAliases,
-                  }),
-                  agentId: internalAgent,
-                  logger: api.logger,
-                  maxMemories: isLocalProvider ? 1000 : 5000,
-                  topK: isLocalProvider ? 10 : 20,
-                  narrativeCfg: dreamNarrativeCfg,
-                  embeddings,
-                  workspaceDir: commandCtx?.workspaceDir || null,
-                  temperamentName: resolveTemperamentName(internalAgent),
+                const result = await pool.withDb(internalAgent, async (db) => {
+                  await db.init();
+                  return runRemDream({
+                    db,
+                    llmCfg: mergingLlmCfg,
+                    callLlm,
+                    neoStore: commandStore,
+                    workspaceKey: workspaceKeyFromContext(commandCtx, {
+                      defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+                      rootDir: neoRoot,
+                      runtime: api.runtime,
+                      sessionWorkspaceKeys,
+                      workspaceAliases: neoWorkspaceAliases,
+                    }),
+                    agentId: internalAgent,
+                    logger: api.logger,
+                    maxMemories: isLocalProvider ? 1000 : 5000,
+                    topK: isLocalProvider ? 10 : 20,
+                    narrativeCfg: dreamNarrativeCfg,
+                    embeddings,
+                    workspaceDir: commandCtx?.workspaceDir || null,
+                    temperamentName: resolveTemperamentName(internalAgent),
+                  });
                 });
                 if (result.report && commandCtx.workspaceDir) {
                   writeRemDreamToVault(result.report, result.trends, commandCtx.workspaceDir);
@@ -3194,17 +3350,14 @@ const plugin = {
                 const semanticCfg = obsidianBridgeCfg?.graphLinks?.semanticDiscovery;
                 if (semanticCfg?.enabled && commandCtx.workspaceDir) {
                   const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
-                  const semDb = pool.getDb(internalAgent);
-                  Promise.resolve()
-                    .then(async () => {
-                      return runSemanticDiscoveryBatches({
+                  pool.withDb(internalAgent, (semDb) =>
+                    runSemanticDiscoveryBatches({
                         db: semDb,
                         semVaultCfg,
                         pool,
                         logger: api.logger,
                         defaultAgentId: internalAgent,
-                      });
-                    })
+                      }))
                     .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
                     .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
                 }
@@ -3214,18 +3367,19 @@ const plugin = {
                 if (!skillMinerEnabled || !skillMinerLlmCfg) {
                   return formatJsonCommandResult({ job: "skill-miner", skipped: true, reason: "not_configured" });
                 }
-                const rawDb = pool.getDb(internalAgent);
-                await rawDb.init();
-                const result = await runSkillMiner(rawDb, internalAgent, {
-                  logger: api.logger,
-                  neoStore: commandStore,
-                  workspaceDir: commandCtx.workspaceDir,
-                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                  llmCfg: skillMinerLlmCfg,
-                  callLlm,
-                  maxPerRun: skillMinerCfg.maxPerRun ?? 5,
-                  minConfidence: skillMinerCfg.minConfidence ?? 0.6,
-                  minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                const result = await pool.withDb(internalAgent, async (rawDb) => {
+                  await rawDb.init();
+                  return runSkillMiner(rawDb, internalAgent, {
+                    logger: api.logger,
+                    neoStore: commandStore,
+                    workspaceDir: commandCtx.workspaceDir,
+                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                    llmCfg: skillMinerLlmCfg,
+                    callLlm,
+                    maxPerRun: skillMinerCfg.maxPerRun ?? 5,
+                    minConfidence: skillMinerCfg.minConfidence ?? 0.6,
+                    minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                  });
                 });
                 api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "skill-miner", ...result });
@@ -3262,15 +3416,16 @@ const plugin = {
                 return formatJsonCommandResult({ job: "persona-evolve", ...result });
               }
               if (subKey === "reminder-dispatch") {
-                const rawDb = pool.getDb(internalAgent);
-                await rawDb.init();
                 const remindersCfg = cfg.reminders || {};
-                const result = await runReminderDispatch(rawDb, internalAgent, {
-                  logger: api.logger,
-                  workspaceDir: commandCtx.workspaceDir,
-                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                  deliveryMode: remindersCfg.deliveryMode || "pending_only",
-                  webhookUrl: remindersCfg.webhookUrl ? resolveEnvVars(remindersCfg.webhookUrl) : null,
+                const result = await pool.withDb(internalAgent, async (rawDb) => {
+                  await rawDb.init();
+                  return runReminderDispatch(rawDb, internalAgent, {
+                    logger: api.logger,
+                    workspaceDir: commandCtx.workspaceDir,
+                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                    deliveryMode: remindersCfg.deliveryMode || "pending_only",
+                    webhookUrl: remindersCfg.webhookUrl ? resolveEnvVars(remindersCfg.webhookUrl) : null,
+                  });
                 });
                 api.logger?.info?.(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "reminder-dispatch", ...result });
@@ -3309,14 +3464,14 @@ const plugin = {
                   try {
                     const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
                     const wsAgentId = ws.agentId || internalAgent;
-                    const wsDb = pool.getDb(wsAgentId);
-                    const semResult = await runSemanticDiscoveryBatches({
-                      db: wsDb,
-                      semVaultCfg,
-                      pool,
-                      logger: api.logger,
-                      defaultAgentId: wsAgentId,
-                    });
+                    const semResult = await pool.withDb(wsAgentId, (wsDb) =>
+                      runSemanticDiscoveryBatches({
+                        db: wsDb,
+                        semVaultCfg,
+                        pool,
+                        logger: api.logger,
+                        defaultAgentId: wsAgentId,
+                      }));
                     api.logger?.info?.(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
                     totalProcessed += semResult.processed;
                     totalSkipped += semResult.skipped;
@@ -3671,39 +3826,41 @@ const plugin = {
                 const denied = checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (!id) return { text: t("reminder.cancel_usage", { lang, tone }) };
-                const rdb = pool.getDb(reminderAgent);
-                await rdb.init();
-                try {
-                  await cancelReminder(rdb, id);
-                  return { text: t("reminder.cancel_success", { lang, tone, vars: { id } }) };
-                } catch (e) {
-                  return { text: t("reminder.cancel_failed", { lang, tone, vars: { id, error: e?.message || String(e) } }) };
-                }
+                return pool.withDb(reminderAgent, async (rdb) => {
+                  await rdb.init();
+                  try {
+                    await cancelReminder(rdb, id);
+                    return { text: t("reminder.cancel_success", { lang, tone, vars: { id } }) };
+                  } catch (e) {
+                    return { text: t("reminder.cancel_failed", { lang, tone, vars: { id, error: e?.message || String(e) } }) };
+                  }
+                });
               }
-              const rdb = pool.getDb(reminderAgent);
-              await rdb.init();
               if (subKey === "list" || subKey === "show" || subKey === "help") {
-                let rows = [];
-                try {
-                  rows = await listReminders(rdb, reminderAgent, reminderWsKey);
-                } catch (e) {
-                  api.logger.warn(`plur1bus-reminder: list failed: ${String(e)}`);
-                }
-                const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
-                if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };
-                active.sort((a, b) => (a.remindAt || 0) - (b.remindAt || 0));
-                const lines = [t("reminder.list_header", { lang, tone })];
-                for (const r of active) {
-                  const when = r.remindAt ? new Date(r.remindAt).toISOString().replace("T", " ").slice(0, 16) : "?";
-                  lines.push(t("reminder.list_item", { lang, tone, vars: {
-                    when,
-                    text: String(r.text || "").slice(0, 80),
-                    status: r.reminderStatus || "scheduled",
-                    id: r.id,
-                  } }));
-                }
-                lines.push(t("reminder.list_hint", { lang, tone }));
-                return { text: lines.join("\n") };
+                return pool.withDb(reminderAgent, async (rdb) => {
+                  await rdb.init();
+                  let rows = [];
+                  try {
+                    rows = await listReminders(rdb, reminderAgent, reminderWsKey);
+                  } catch (e) {
+                    api.logger.warn(`plur1bus-reminder: list failed: ${String(e)}`);
+                  }
+                  const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
+                  if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };
+                  active.sort((a, b) => (a.remindAt || 0) - (b.remindAt || 0));
+                  const lines = [t("reminder.list_header", { lang, tone })];
+                  for (const r of active) {
+                    const when = r.remindAt ? new Date(r.remindAt).toISOString().replace("T", " ").slice(0, 16) : "?";
+                    lines.push(t("reminder.list_item", { lang, tone, vars: {
+                      when,
+                      text: String(r.text || "").slice(0, 80),
+                      status: r.reminderStatus || "scheduled",
+                      id: r.id,
+                    } }));
+                  }
+                  lines.push(t("reminder.list_hint", { lang, tone }));
+                  return { text: lines.join("\n") };
+                });
               }
               return { text: t("reminder.unknown", { lang, tone, vars: { sub: subKey } }) };
             }
@@ -3901,12 +4058,13 @@ const plugin = {
             const mood = emotionalPool.describe(agentId);
             let cardCount = null;
             try {
-              const db = pool.getDb(agentId);
-              if (db?.table) {
-                cardCount = await db.table.countRows();
-              }
-            } catch (_) {
+              cardCount = await pool.withDb(agentId, async (db) => {
+                if (!db?.table) return null;
+                return db.table.countRows();
+              });
+            } catch (error) {
               // DB not available → cardCount stays null
+              api.logger?.debug?.(`memory-lancedb-namespaced: status card count unavailable for agent=${agentId}: ${String(error)}`);
             }
             const data = collectStatusData({
               memoryStats: { cardCount, lastUpdateMinutes: null },
@@ -4205,32 +4363,33 @@ const plugin = {
                   workspaceDir: commandCtx.workspaceDir,
                 },
                 updateMemory: async ({ id, newContent }) => {
-                  const rawDb = pool.getDb(agentId);
-                  await rawDb.init();
-                  const vector = await embeddings.embed(newContent, { agentId });
-                  const neoStore = getNeoStore(commandCtx, {});
-                  const { newId } = await safeUpdate(
-                    rawDb,
-                    id,
-                    { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
-                    {
-                      updateSource: "telegram:/correct",
-                      updateEvidence: pending.payload?.oldText
-                        ? `User corrected "${pending.payload.oldText}" to "${newContent}"`
-                        : `User correction via /correct`,
-                      confidence: 1,
-                    },
-                    { neoStore, logger: api.logger, skipDriftGate: true },
-                  );
-                  // newId === id on idempotent skip; reinforcement still valid
-                  try {
-                    const correctedCard = await rawDb.getById(newId);
-                    if (correctedCard) {
-                      await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
+                  return pool.withDb(agentId, async (rawDb) => {
+                    await rawDb.init();
+                    const vector = await embeddings.embed(newContent, { agentId });
+                    const neoStore = getNeoStore(commandCtx, {});
+                    const { newId } = await safeUpdate(
+                      rawDb,
+                      id,
+                      { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
+                      {
+                        updateSource: "telegram:/correct",
+                        updateEvidence: pending.payload?.oldText
+                          ? `User corrected "${pending.payload.oldText}" to "${newContent}"`
+                          : `User correction via /correct`,
+                        confidence: 1,
+                      },
+                      { neoStore, logger: api.logger, skipDriftGate: true },
+                    );
+                    // newId === id on idempotent skip; reinforcement still valid
+                    try {
+                      const correctedCard = await rawDb.getById(newId);
+                      if (correctedCard) {
+                        await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
+                      }
+                    } catch (err) {
+                      api.logger?.warn?.(`[/correct] reinforcement failed: ${err?.message}`);
                     }
-                  } catch (err) {
-                    api.logger?.warn?.(`[/correct] reinforcement failed: ${err?.message}`);
-                  }
+                  });
                 },
               });
               if (!result.ok) return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: result.error } }) };
@@ -4445,8 +4604,7 @@ const plugin = {
             return;
           }
 
-          const db = pool.getDb(agentId);
-
+          return pool.withDb(agentId, async (db) => {
           try {
             // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
             const maxChars = cfg.captureMaxChars || 15000;
@@ -4943,6 +5101,7 @@ const plugin = {
           } catch (err) {
             api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
           }
+          });
         }); // runtimeScheduler.enqueueCapture
       }, { timeoutMs: 60_000 });
     }
@@ -4974,8 +5133,6 @@ const plugin = {
 
     api.registerTool((ctx) => {
       const agentId = ctx.agentId;
-      const db = pool.getWriteDb(agentId);        // write-db — used by memory_store/forget
-      const readDbs = pool.getReadDbs(agentId);   // read namespaces — used by memory_recall
       const modelDestructiveToolsAllowed = () => (cfg.security?.allowModelDestructiveMemoryOps !== false);
       const blockModelDestructiveTool = (toolName) => ({
         content: [{
@@ -4999,6 +5156,7 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
+              return await pool.withReadDbs(agentId, async (readDbs) => {
               const limit = params.limit || maxPromptMemories;
               const assocCfg = cfg?.continuityEngine?.associativeRecall || {};
               for (const { db: rdb } of readDbs) { await rdb.init(); }
@@ -5107,6 +5265,7 @@ const plugin = {
                 lines.push(`[decision-trace] totalCandidates:${summary.totalCandidates} included:${summary.included} rejected:${summary.rejected} downranked:${summary.downranked} superseded:${summary.superseded} deduped:${summary.deduped} merged:${summary.merged} guardPass:${summary.guardPass} guardFail:${summary.guardFail}`);
               }
               return { content: [{ type: "text", text: lines.join("\n") }] };
+              });
             } catch (err) {
               return { content: [{ type: "text", text: `Memory recall failed: ${String(err)}` }] };
             }
@@ -5142,6 +5301,7 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
+              return await pool.withWriteDb(agentId, async (db) => {
               // Keep the agent-facing store path aligned with storeMemoryFromToolParams:
               // reject invalid text before embedding or writing it.
               const textValidation = validateMemoryText(params.text);
@@ -5306,6 +5466,7 @@ const plugin = {
               }
               addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
               return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id, decisionTrace: trace } };
+              });
             } catch (err) {
               return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
             }
@@ -5327,6 +5488,7 @@ const plugin = {
               if (!modelDestructiveToolsAllowed()) {
                 return blockModelDestructiveTool("memory_forget");
               }
+              return await pool.withWriteDb(agentId, async (db) => {
               if (params.memoryId) {
                 // Archive-First: vor dem Löschen ein JSON-Backup schreiben.
                 // Schlägt das Archiv fehl, NICHT löschen (wie bei /forget).
@@ -5366,6 +5528,7 @@ const plugin = {
                 return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (archived).` }] };
               }
               return { content: [{ type: "text", text: "Provide query or memoryId." }] };
+              });
             } catch (err) {
               return { content: [{ type: "text", text: `Memory forget failed: ${String(err)}` }] };
             }
@@ -5392,6 +5555,7 @@ const plugin = {
               return { content: [{ type: "text", text: "knowledge_update: workspaceDir not available." }] };
             }
 
+            return pool.withWriteDb(agentId, async (db) => {
             // Pending snapshot: hold only the short pending-file lock, then release
             // before attempting the KNOWLEDGE.md lock.
             const pendingSnapshot = readKnowledgePendingSnapshot(ctx.workspaceDir);
@@ -5564,6 +5728,7 @@ const plugin = {
               // Release lock
               try { if (existsSync(lockPath)) { const { unlinkSync } = await import("node:fs"); unlinkSync(lockPath); } } catch (_e) { dbg(_e); }
             }
+            });
           },
         },
       ];
@@ -5591,7 +5756,6 @@ const plugin = {
     // GC-Purge durch, erzeugt aber KEINEN Recall-Context.
     function runMinimalBeforePromptMaintenance(event, ctx, { neoEnabled, gcEnabled }) {
       const agentId = ctx?.agentId;
-      const db = pool.getDb(agentId);
       if (neoEnabled) {
         try {
           const neoStore = getNeoStore(ctx, event);
@@ -5607,11 +5771,9 @@ const plugin = {
       }
       // GC: purge expired memories (non-blocking, throttled on hot path)
       if (gcEnabled) {
-        try {
-          db.purgeExpiredThrottled(api.logger);
-        } catch (gcErr) {
+        pool.withDb(agentId, (db) => db.purgeExpiredThrottled(api.logger)).catch((gcErr) => {
           api.logger?.warn?.(`memory-lancedb-namespaced: GC purge on internal turn failed: ${String(gcErr)}`);
-        }
+        });
       }
       return undefined;
     }
@@ -5700,11 +5862,13 @@ const plugin = {
           ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
           : "";
         const agentId = ctx?.agentId;
-        const db = pool.getDb(agentId);       // write-db — used for GC/maintenance
-        const readDbs = pool.getReadDbs(agentId); // read namespaces — used for recall
+        return pool.withWriteDb(agentId, (db) => pool.withReadDbs(agentId, async (readDbs) => {
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
-          db.purgeExpiredThrottled(api.logger);
+          pool.withWriteDb(agentId, (maintenanceDb) => maintenanceDb.purgeExpiredThrottled(api.logger))
+            .catch((gcErr) => {
+              api.logger?.warn?.(`memory-lancedb-namespaced: GC purge before recall failed: ${String(gcErr)}`);
+            });
         }
         try {
           await db.init();
@@ -6446,6 +6610,7 @@ const plugin = {
           const fallbackContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
           if (fallbackContext) return { prependContext: fallbackContext };
         }
+        }));
         });
         if (scheduledRecall.ok) {
           if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
@@ -6466,7 +6631,6 @@ const plugin = {
       // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.
       api.on("before_prompt_build", async (_event, ctx) => {
         const agentId = ctx?.agentId;
-        const db = pool.getDb(agentId);
         if (neoEnabled) {
           try {
             const neoStore = getNeoStore(ctx, _event);
@@ -6481,7 +6645,9 @@ const plugin = {
         }
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
-          db.purgeExpiredThrottled(api.logger);
+          pool.withDb(agentId, (db) => db.purgeExpiredThrottled(api.logger)).catch((gcErr) => {
+            api.logger?.warn?.(`memory-lancedb-namespaced: GC purge with auto-recall disabled failed: ${String(gcErr)}`);
+          });
         }
         // P0-1: Interne/background Turns bekommen keine Nudges (kein Prompt-Overhead).
         if (shouldSkipAutoRecallForInternalTurn(_event, ctx)) {
@@ -6509,6 +6675,7 @@ const plugin = {
         let temporalContinuityContext = "";
         let reminderNudge = "";
         try {
+          await pool.withDb(agentId, async (db) => {
           // lang/tone bereits oben via resolveCommandLocale aufgelöst.
           const wsKey = ctx?.workspaceDir || "default";
           // Capture previous activity before recording the current turn
@@ -6545,6 +6712,7 @@ const plugin = {
               await writePendingReminders(ctx?.workspaceDir, wsKey, agentId, pendingData);
             }
           }
+          });
         } catch (reminderErr) {
           api.logger.warn(`plur1bus-reminder: nudge injection failed (auto-recall off): ${String(reminderErr)}`);
         }
@@ -6560,5 +6728,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
+export { MemoryDB, AgentDbPool, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
 export default plugin;
