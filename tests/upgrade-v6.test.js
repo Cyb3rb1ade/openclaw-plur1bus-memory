@@ -11,18 +11,84 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   applyDynamicsDefaults,
   resolveHalfLifeDays,
 } from "../lib/memory-dynamics.js";
+import { applyInstallerFeaturePolicy } from "../scripts/lib/installer-config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const schemaPath = join(__dirname, "..", "openclaw.plugin.json");
 const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
 const installerScript = readFileSync(join(__dirname, "..", "scripts", "install-memory-system.sh"), "utf8");
+
+function installerPatchFixtures() {
+  return [
+    applyInstallerFeaturePolicy(
+      {
+        enabled: false,
+        hooks: {
+          allowConversationAccess: false,
+          allowPromptInjection: false,
+          timeouts: { before_prompt_build: 123, agent_end: 456, custom: 789 },
+        },
+        config: {
+          baseDbPath: "/custom/memory",
+          embedding: {
+            provider: "openai-compatible",
+            model: "custom-embed",
+            dimensions: 3072,
+            baseUrl: "https://embedding.example.test/v1",
+          },
+          reranker: { provider: "cohere", enabled: true, model: "custom-rerank", timeoutMs: 2222 },
+          runtime: { recallCacheTtlMs: 77, recallCacheMaxEntries: 4 },
+        },
+        rollback: { previousBackend: "memory-lancedb", marker: "keep" },
+      },
+      { mode: "preserve" },
+    ),
+    applyInstallerFeaturePolicy(
+      {
+        enabled: true,
+        config: {
+          hooks: {
+            allowConversationAccess: false,
+            allowPromptInjection: false,
+            timeouts: { before_prompt_build: 321, agent_end: 654, legacyCustom: 987 },
+          },
+        },
+      },
+      { mode: "safe", confirmedAt: "2026-07-19T12:00:00.000Z" },
+    ),
+  ];
+}
+
+function installerDocument() {
+  return {
+    unrelated: { keep: true },
+    plugins: {
+      allow: ["other-plugin"],
+      slots: { memory: "custom-memory-slot" },
+      entries: {
+        "memory-lancedb": { enabled: true, config: { keep: true } },
+        "memory-lancedb-namespaced": { enabled: true, hooks: { stale: true } },
+      },
+    },
+  };
+}
+
+function assertInstallerPatchResult(actual, expectedEntry) {
+  assert.deepStrictEqual(actual.plugins.entries["memory-lancedb-namespaced"], expectedEntry);
+  assert.deepStrictEqual(actual.plugins.entries["memory-lancedb"], { enabled: true, config: { keep: true } });
+  assert.strictEqual(actual.plugins.slots.memory, "custom-memory-slot");
+  assert.deepStrictEqual(actual.unrelated, { keep: true });
+  assert.ok(actual.plugins.allow.includes("memory-lancedb-namespaced"));
+}
 
 function getSchemaDefault(path) {
   const parts = path.split(".");
@@ -158,6 +224,45 @@ describe("Upgrade-Simulation: Config-Override funktioniert", () => {
 });
 
 describe("Upgrade-Simulation: installer preserves backend selection", () => {
+  it("executes the canonical local JQ patch without rewriting helper-returned entries", () => {
+    const match = installerScript.match(/JQ_PATCH=\$\(cat <<'JQEOF'\n([\s\S]*?)\nJQEOF\n\)/);
+    assert.ok(match, "canonical JQ_PATCH heredoc missing");
+
+    for (const pluginEntry of installerPatchFixtures()) {
+      const run = spawnSync(
+        "jq",
+        ["--argjson", "plugin_config", JSON.stringify(pluginEntry), match[1]],
+        { input: JSON.stringify(installerDocument()), encoding: "utf8" },
+      );
+      assert.strictEqual(run.status, 0, run.stderr);
+      assertInstallerPatchResult(JSON.parse(run.stdout), pluginEntry);
+    }
+  });
+
+  it("executes the remote Node patch without rewriting helper-returned entries", () => {
+    const match = installerScript.match(/ssh "\$SSH_HOST" node --input-type=module << NODEOF\n([\s\S]*?)\nNODEOF/);
+    assert.ok(match, "remote NODEOF body missing");
+
+    for (const pluginEntry of installerPatchFixtures()) {
+      const dir = mkdtempSync(join(tmpdir(), "plur1bus-installer-remote-"));
+      const configPath = join(dir, "openclaw.json");
+      try {
+        writeFileSync(configPath, `${JSON.stringify(installerDocument(), null, 2)}\n`);
+        const program = match[1]
+          .replaceAll("'${TARGET_CONFIG}'", JSON.stringify(configPath))
+          .replace("${PLUGIN_CONFIG_ESCAPED}", JSON.stringify(pluginEntry));
+        const run = spawnSync("node", ["--input-type=module"], {
+          input: program,
+          encoding: "utf8",
+        });
+        assert.strictEqual(run.status, 0, run.stderr);
+        assertInstallerPatchResult(JSON.parse(readFileSync(configPath, "utf8")), pluginEntry);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("local JQ patch never disables an enabled legacy memory-lancedb backend", () => {
     assert.doesNotMatch(
       installerScript,

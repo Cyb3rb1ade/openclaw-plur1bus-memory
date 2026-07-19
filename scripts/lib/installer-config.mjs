@@ -47,8 +47,24 @@ function featureKeySet(items) {
   return new Set(items.map((feature) => feature.key));
 }
 
+function fillMissingHookDefaults(pluginEntry) {
+  const hooks = isPlainObject(pluginEntry.hooks) ? pluginEntry.hooks : {};
+  const timeouts = isPlainObject(hooks.timeouts) ? hooks.timeouts : {};
+  pluginEntry.hooks = {
+    allowConversationAccess: true,
+    allowPromptInjection: true,
+    ...hooks,
+    timeouts: {
+      before_prompt_build: 90000,
+      agent_end: 60000,
+      ...timeouts,
+    },
+  };
+  return pluginEntry;
+}
+
 /**
- * Apply installer feature policy to a memory plugin entry.
+ * Apply installer feature policy and missing hook defaults to a memory plugin entry.
  * @param {object} pluginEntry - The generated or existing plugin entry.
  * @param {{mode?: "preserve"|"safe"|"recommended", confirmedAt?: string}} opts - Explicit feature policy.
  * @returns {object} A cloned plugin entry, unchanged for preserve mode.
@@ -69,7 +85,7 @@ export function applyInstallerFeaturePolicy(pluginEntry = {}, opts = {}) {
   };
   const profile = mode === "safe" ? safeProfile() : recommendedProfile();
   const applied = applyFeatureProfile(document, profile, { confirmedAt: opts.confirmedAt });
-  return applied.plugins.entries[PLUGIN_KEY];
+  return fillMissingHookDefaults(applied.plugins.entries[PLUGIN_KEY]);
 }
 
 /**
