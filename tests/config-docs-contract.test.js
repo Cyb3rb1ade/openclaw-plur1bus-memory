@@ -24,9 +24,9 @@ function canonicalExample() {
 
 function documentedTableDefault(key) {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = configuration.match(new RegExp(`\\|\\s*\\\`${escaped}\\\`\\s*\\|[^|]*\\|\\s*\\\`([^\\\`]*)\\\``));
+  const match = configuration.match(new RegExp(`\\|\\s*\\\`${escaped}\\\`\\s*\\|[^|]*\\|\\s*([^|]*?)\\s*\\|`));
   assert.ok(match, `documented default row missing for ${key}`);
-  return match[1];
+  return match[1].replace(/^`(.*)`$/, "$1");
 }
 
 describe("copyable configuration documentation contract", () => {
@@ -53,6 +53,13 @@ describe("copyable configuration documentation contract", () => {
     const defaults = manifestConfigDefaults();
 
     assert.equal(documentedTableDefault("emotion.t3.enabled"), String(defaults.emotion.t3.enabled));
+    assert.equal(Object.hasOwn(defaults.emotion.t3, "model"), false);
+    assert.equal(
+      documentedTableDefault("emotion.t3.model"),
+      "—",
+      "emotion.t3.model must not claim a manifest default",
+    );
+    assert.match(configuration, /`emotion\.t3\.model`[^\n]*Fallback[^\n]*`merging\.model`[^\n]*`"kimi-for-coding"`/);
     assert.match(readme, new RegExp(`Reranker timeout[^\\n]*default ${defaults.reranker.timeoutMs / 1000}s`, "i"));
     assert.match(readme, new RegExp(`merging\\.autoApply[^\\n]*defaults to[^\\n]*${defaults.merging.autoApply}`, "i"));
     assert.match(readme, new RegExp(`reviews marked[^\\n]*${defaults.obsidianBridge.morningReview.status}`, "i"));
