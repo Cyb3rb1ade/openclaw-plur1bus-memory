@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -114,6 +114,20 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   it("exposes the callback-scoped withDb contract", () => {
     assert.equal(typeof pluginModule.AgentDbPool, "function", "AgentDbPool must be exported for lifecycle verification");
     assert.equal(typeof pluginModule.AgentDbPool?.prototype?.withDb, "function", "AgentDbPool.withDb is required");
+  });
+
+  it("creates a missing writable base safely and blocks an existing outside agent symlink", (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-agent-route-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-agent-route-outside-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    t.after(() => rmSync(outside, { recursive: true, force: true }));
+
+    const basePath = join(root, "active");
+    const pool = new pluginModule.AgentDbPool(basePath, VECTOR_DIM);
+    assert.equal(pool.getDb("agent-a").dbPath, join(basePath, "agent-a"));
+    assert.equal(existsSync(basePath), true);
+    symlinkSync(outside, join(basePath, "agent-outside"));
+    assert.throws(() => pool.getDb("agent-outside"), /traversal/i);
   });
 
   it("keeps a timed-out operation leased until its attached raw settlement", async (t) => {

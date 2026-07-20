@@ -4,7 +4,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import plugin from "../index.js";
+import plugin, * as pluginModule from "../index.js";
+import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 
 function makeApi(pluginConfig) {
   const calls = {
@@ -28,7 +29,7 @@ function makeApi(pluginConfig) {
       return value;
     },
     registerCommand() { calls.registerCommand += 1; },
-    registerTool() { calls.registerTool += 1; },
+    registerTool(factory) { calls.registerTool += 1; this.toolFactory = factory; },
     registerService() { calls.registerService += 1; },
     on() { calls.on += 1; },
     calls,
@@ -50,6 +51,163 @@ function minimalConfig(baseDbPath, override = {}) {
 }
 
 describe("runtime config contract", () => {
+  async function capturePublicStoreAndRecallPaths(t, pluginConfig, expectedPath, options = {}) {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-runtime-route-ws-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const seen = { store: [], init: [] };
+    const originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    const originalSimilar = pluginModule.MemoryDB.prototype.findSimilar;
+    const originalStore = pluginModule.MemoryDB.prototype.store;
+    const originalInit = pluginModule.MemoryDB.prototype.init;
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => Array(384).fill(0.1);
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => Array(384).fill(0.1);
+    pluginModule.MemoryDB.prototype.findSimilar = async () => [];
+    pluginModule.MemoryDB.prototype.store = async function storeCapture() { seen.store.push(this.dbPath); };
+    pluginModule.MemoryDB.prototype.init = async function initCapture() {
+      seen.init.push(this.dbPath);
+      if (options.initErrorSuffix && this.dbPath.endsWith(options.initErrorSuffix)) {
+        throw new Error("legacy init sentinel failure");
+      }
+      if (options.missingSuffix && this.dbPath.endsWith(options.missingSuffix)) {
+        this.table = null;
+        return false;
+      }
+      this.table = {
+        countRows: async () => 0,
+        vectorSearch() { return { limit() { return this; }, toArray: async () => [] }; },
+        query() { return { where() { return this; }, limit() { return this; }, toArray: async () => [] }; },
+      };
+      return true;
+    };
+    t.after(() => {
+      LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbed;
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      pluginModule.MemoryDB.prototype.findSimilar = originalSimilar;
+      pluginModule.MemoryDB.prototype.store = originalStore;
+      pluginModule.MemoryDB.prototype.init = originalInit;
+    });
+
+    const api = makeApi(pluginConfig);
+    plugin.register(api);
+    const tools = api.toolFactory({
+      agentId: "route-agent",
+      workspaceDir,
+      workspaceKey: "runtime-route",
+      userId: "owner",
+    });
+    const store = tools.find(({ name }) => name === "memory_store");
+    const recall = tools.find(({ name }) => name === "memory_recall");
+    const stored = await store.execute("store-route", { text: "runtime route capture", category: "fact" });
+    assert.equal(stored.details?.action, "stored", JSON.stringify(stored));
+    const recallResult = await recall.execute("recall-route", { query: "runtime route capture" });
+    assert.deepEqual(seen.store, [expectedPath]);
+    assert.ok(seen.init.includes(expectedPath), JSON.stringify(seen));
+    return { recallResult, seen };
+  }
+
+  it("uses the exact custom flat base for public store and recall when namespaces are absent", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-flat-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    await capturePublicStoreAndRecallPaths(
+      t,
+      minimalConfig(baseDbPath, { merging: { enabled: false } }),
+      join(baseDbPath, "route-agent"),
+    );
+  });
+
+  it("routes an explicit named root through its active writer", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-root-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    await capturePublicStoreAndRecallPaths(t, minimalConfig(baseDbPath, {
+      merging: { enabled: false },
+      namespaces: { activeWriteNamespace: "ns-write" },
+    }), join(baseDbPath, "ns-write", "route-agent"));
+  });
+
+  it("preserves an explicit active namespace leaf without duplicating it", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-runtime-leaf-"));
+    const baseDbPath = join(root, "ns-write");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    await capturePublicStoreAndRecallPaths(t, minimalConfig(baseDbPath, {
+      merging: { enabled: false },
+      namespaces: { activeWriteNamespace: "ns-write" },
+    }), join(baseDbPath, "route-agent"));
+  });
+
+  it("skips an absent read-only legacy DB during public recall", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-legacy-missing-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const { recallResult, seen } = await capturePublicStoreAndRecallPaths(t, minimalConfig(baseDbPath, {
+      merging: { enabled: false },
+      namespaces: {
+        activeWriteNamespace: "active",
+        activeRecallNamespaces: ["active"],
+        legacyReadOnlyNamespaces: ["legacy"],
+        crossNamespaceRecall: true,
+      },
+    }), join(baseDbPath, "active", "route-agent"), {
+      missingSuffix: join("legacy", "route-agent"),
+    });
+    assert.ok(seen.init.some((path) => path.endsWith(join("legacy", "route-agent"))));
+    assert.match(recallResult.content[0].text, /no relevant memories/i);
+  });
+
+  it("fails the whole public recall when a legacy DB init throws", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-legacy-error-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const { recallResult } = await capturePublicStoreAndRecallPaths(t, minimalConfig(baseDbPath, {
+      merging: { enabled: false },
+      namespaces: {
+        activeWriteNamespace: "active",
+        activeRecallNamespaces: ["active"],
+        legacyReadOnlyNamespaces: ["legacy"],
+        crossNamespaceRecall: true,
+      },
+    }), join(baseDbPath, "active", "route-agent"), {
+      initErrorSuffix: join("legacy", "route-agent"),
+    });
+    assert.match(recallResult.content[0].text, /memory recall failed.*legacy init sentinel failure/i);
+  });
+
+  it("rejects an explicit base ending in a configured non-writer at the exact namespaces path", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-runtime-nonwriter-"));
+    const api = makeApi(minimalConfig(join(root, "ns-read"), {
+      namespaces: {
+        activeWriteNamespace: "ns-write",
+        activeRecallNamespaces: ["ns-write", "ns-read"],
+      },
+    }));
+    try {
+      assert.throws(() => plugin.register(api), (error) => {
+        assert.equal(error?.configPath, "plugins.entries.memory-lancedb-namespaced.config.namespaces");
+        assert.match(error.message, /non-writer|ambiguous/i);
+        return true;
+      });
+      assert.equal(api.calls.registerTool, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid namespace config before the first API or filesystem action", () => {
+    const parent = mkdtempSync(join(tmpdir(), "plur1bus-runtime-invalid-ns-"));
+    const baseDbPath = join(parent, "must-not-exist");
+    const api = makeApi(minimalConfig(baseDbPath, {
+      namespaces: { activeWriteNamespace: "../escape" },
+    }));
+    try {
+      assert.throws(() => plugin.register(api), (error) => {
+        assert.equal(error?.configPath, "plugins.entries.memory-lancedb-namespaced.config.namespaces.activeWriteNamespace");
+        return true;
+      });
+      assert.equal(api.calls.resolvePath, 0);
+      assert.equal(existsSync(baseDbPath), false);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   it("rejects an invalid timezone before the first API call or filesystem setup", () => {
     const parent = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-"));
     const baseDbPath = join(parent, "must-not-exist");
