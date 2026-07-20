@@ -581,6 +581,7 @@ test("direct explicit dispatch uses only the direct adapter and retains exact-ca
   };
   const messages = [{ role: "user", content: "extract a skill" }];
   const resultCacheContext = { scopeId: "agent-a", purpose: "skill-extraction" };
+  const callerSignal = new AbortController().signal;
 
   const result = await completeFeatureLlm(messages, route, {
     agentId: "agent-a",
@@ -590,6 +591,7 @@ test("direct explicit dispatch uses only the direct adapter and retains exact-ca
     jsonMode: true,
     disableThinking: false,
     timeoutMs: 2_500,
+    signal: callerSignal,
     resultCacheContext,
   }, { directCall });
 
@@ -606,6 +608,7 @@ test("direct explicit dispatch uses only the direct adapter and retains exact-ca
     jsonMode: true,
     disableThinking: false,
     timeoutMs: 2_500,
+    signal: callerSignal,
     resultCache,
     resultCacheContext,
   });
