@@ -16,6 +16,7 @@ import { summarizeClusterWithLlm } from "../lib/dreaming/rem-dream.js";
 import { runConflictResolver } from "../lib/jobs/conflict-resolver.js";
 import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
 import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
+import { withAbortableLlmTimeout } from "../lib/llm-failure.js";
 
 const SECRET = "Authorization Bearer TEST_SECRET";
 const tempDirs = [];
@@ -210,6 +211,26 @@ describe("LLM caller error hygiene", () => {
 });
 
 describe("LLM caller timeout cleanup", () => {
+  it("does not start a transport for an already-aborted caller signal", async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    let starts = 0;
+    let lateEffects = 0;
+
+    await assert.rejects(
+      withAbortableLlmTimeout(async () => {
+        starts += 1;
+        lateEffects += 1;
+        return "late";
+      }, { signal: controller.signal, timeoutMs: 10_000 }),
+      { name: "AbortError" },
+    );
+    await Promise.resolve();
+
+    assert.strictEqual(starts, 0);
+    assert.strictEqual(lateEffects, 0);
+  });
+
   it("clears the skill-miner timeout after a fast response", async () => {
     const { created, cleared } = await trackTimers(() => extractSkillFromEvidence(makeEvidenceGroup(), {
       llmCfg: { model: "mock" },
