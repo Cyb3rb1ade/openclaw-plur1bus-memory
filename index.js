@@ -3546,9 +3546,16 @@ const plugin = {
                 }
                 const cpLlmCfg = createFeatureRoute("criticalPush", cpCfg);
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
-                const criticalRouteAvailable = cpLlmCfg?.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
-                  || typeof sessionRuntime?.complete === "function"
+                const directCriticalRoute = cpLlmCfg?.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE;
+                const nativeCriticalRuntimeAvailable = typeof sessionRuntime?.complete === "function"
                   || typeof cpLlmCfg?.runtimeLlm?.complete === "function";
+                if (cpLlmCfg && !directCriticalRoute && !nativeCriticalRuntimeAvailable) {
+                  api.logger.warn(
+                    "memory-lancedb-namespaced: Critical Push skipped: openclaw-runtime-unavailable",
+                    { feature: "criticalPush" },
+                  );
+                }
+                const criticalRouteAvailable = directCriticalRoute || nativeCriticalRuntimeAvailable;
                 const criticalModel = cpLlmCfg && criticalRouteAvailable ? {
                   complete: async ({ prompt }) => {
                     const callContext = typeof sessionRuntime?.complete === "function"

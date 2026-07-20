@@ -563,6 +563,9 @@ test("Critical Push leaves cards unclassified when no native runtime is availabl
   assert.match(result.text, /"processed": 0/);
   assert.match(result.text, /no classification model configured/i);
   assert.equal(stored.type, "");
+  const logs = JSON.stringify(api.logger.calls);
+  assert.match(logs, /openclaw-runtime-unavailable/);
+  assert.match(logs, /criticalPush/);
 });
 
 test("Critical Push direct override works without a host runtime", async (t) => {
