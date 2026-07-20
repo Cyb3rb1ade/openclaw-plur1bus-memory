@@ -148,7 +148,52 @@ describe("manifest-derived configuration contract", () => {
     }
   });
 
-  for (const forbidden of ["namespaces", "retroactiveInterference", "quietHours"]) {
+  it("accepts strict namespace routing without materializing absent defaults", () => {
+    const raw = {
+      namespaces: {
+        activeWriteNamespace: "ns-write",
+        activeRecallNamespaces: ["ns-write", "ns-read"],
+        legacyReadOnlyNamespaces: ["ns-old"],
+        crossNamespaceRecall: true,
+      },
+    };
+    const cfg = resolveEffectiveConfig(raw);
+
+    assert.deepEqual(cfg.namespaces, raw.namespaces);
+    assert.equal(Object.isFrozen(cfg.namespaces), true);
+    assert.equal(Object.isFrozen(cfg.namespaces.activeRecallNamespaces), true);
+    assert.equal(Object.hasOwn(resolveEffectiveConfig({}), "namespaces"), false);
+    assertConfigError(
+      () => validatePluginConfig({ namespaces: { unknown: true } }),
+      `${PLUGIN_CONFIG_PATH}.namespaces.unknown`,
+      /unknown/,
+    );
+  });
+
+  it("validates namespace identifier patterns at exact leaf and array-index paths", () => {
+    assertConfigError(
+      () => validatePluginConfig({ namespaces: { activeWriteNamespace: "../escape" } }),
+      `${PLUGIN_CONFIG_PATH}.namespaces.activeWriteNamespace`,
+      /pattern|match|format/i,
+    );
+    assertConfigError(
+      () => validatePluginConfig({ namespaces: { activeRecallNamespaces: ["ok", "bad/name"] } }),
+      `${PLUGIN_CONFIG_PATH}.namespaces.activeRecallNamespaces[1]`,
+      /pattern|match|format/i,
+    );
+    assertConfigError(
+      () => validatePluginConfig({ namespaces: { legacyReadOnlyNamespaces: ["ok", "bad name"] } }),
+      `${PLUGIN_CONFIG_PATH}.namespaces.legacyReadOnlyNamespaces[1]`,
+      /pattern|match|format/i,
+    );
+    assertConfigError(
+      () => validatePluginConfig({ namespaces: { activeRecallNamespaces: [] } }),
+      `${PLUGIN_CONFIG_PATH}.namespaces.activeRecallNamespaces`,
+      /at least 1 item/i,
+    );
+  });
+
+  for (const forbidden of ["retroactiveInterference", "quietHours"]) {
     it(`keeps ${forbidden} schema-unreachable in B11`, () => {
       assertConfigError(
         () => validatePluginConfig({ [forbidden]: {} }),
