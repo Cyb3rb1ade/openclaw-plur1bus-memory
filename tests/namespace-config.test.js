@@ -218,4 +218,34 @@ describe("namespace compatibility wrappers", () => {
       /identifier|pattern/i,
     );
   });
+
+  it("accepts only the exact temporary internal legacy-flat sentinel", () => {
+    const sentinel = {
+      activeWriteNamespace: ".",
+      activeRecallNamespaces: ["."],
+    };
+
+    assert.equal(resolveWriteNamespace(sentinel), ".");
+    assert.deepEqual(resolveRecallReadNamespaces(sentinel), ["."]);
+    assert.equal(isLegacyReadOnly(".", sentinel), false);
+    assertNamespaceError(
+      () => resolveNamespaceLayout("/memory", sentinel, { explicit: true, path: NS_PATH }),
+      `${NS_PATH}.activeWriteNamespace`,
+      /identifier|pattern/i,
+    );
+
+    for (const malformed of [
+      { ...sentinel, activeRecallNamespaces: [".", "ns-read"] },
+      { ...sentinel, legacyReadOnlyNamespaces: [] },
+      { ...sentinel, legacyReadOnlyNamespaces: ["ns-old"] },
+      { ...sentinel, crossNamespaceRecall: false },
+      { ...sentinel, crossNamespaceRecall: true },
+    ]) {
+      assertNamespaceError(
+        () => resolveRecallReadNamespaces(malformed),
+        `${NS_PATH}.activeWriteNamespace`,
+        /identifier|pattern/i,
+      );
+    }
+  });
 });
