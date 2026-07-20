@@ -186,6 +186,7 @@ import {
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
+import { safeWarnLlmFailure } from "./lib/llm-failure.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
   LLM_ROUTE_KINDS,
@@ -578,7 +579,7 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId, call
     ));
     if (result && result.length > 20) return result;
   } catch (e) {
-    if (logger) logger.warn(`memory-lancedb-namespaced: summarize failed (${e.message}), falling back to truncation`);
+    safeWarnLlmFailure(logger, "capture-summary.llm", e, { fallback: "truncate" });
   }
   // Fallback: truncate if LLM fails
   return text.slice(0, maxChars);
