@@ -12,11 +12,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { extractKeyInsights } from "../lib/dreaming/light-dream.js";
+import { generateDreamNarrative } from "../lib/dreaming/dream-narrative.js";
 import { summarizeClusterWithLlm } from "../lib/dreaming/rem-dream.js";
+import { ContradictionDetector } from "../lib/contradiction-detector.js";
 import { runConflictResolver } from "../lib/jobs/conflict-resolver.js";
 import { runMemoryCompaction } from "../lib/jobs/memory-compaction.js";
 import { extractSkillFromEvidence } from "../lib/jobs/skill-miner/llm-extractor.js";
 import { withAbortableLlmTimeout } from "../lib/llm-failure.js";
+import { OverlayGenerator } from "../lib/overlay-generator.js";
 
 const SECRET = "Authorization Bearer TEST_SECRET";
 const tempDirs = [];
@@ -197,6 +200,55 @@ describe("LLM caller error hygiene", () => {
 
     assert.strictEqual(result.error, "llm_error");
     assert.doesNotMatch(serialized({ entries, result }), /TEST_SECRET|Authorization|Bearer/);
+  });
+
+  it("keeps provider error text out of dream-narrative logs", async () => {
+    const { logger, entries } = captureLogger();
+    const result = await generateDreamNarrative({
+      mode: "light",
+      llmCfg: {},
+      callLlm: async () => { throw new Error(SECRET); },
+      material: ["A substantive memory"],
+      logger,
+    });
+
+    assert.strictEqual(result, null);
+    assert.match(serialized(entries), /llm_error/);
+    assert.doesNotMatch(serialized(entries), /TEST_SECRET|Authorization|Bearer/);
+  });
+
+  it("keeps provider error text out of overlay-generation logs", async () => {
+    const { logger, entries } = captureLogger();
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => { throw new Error(SECRET); },
+      logger,
+    });
+    const result = await generator.generate({
+      memory: { id: "memory-1", text: "We chose Postgres." },
+      conversationContext: "Since then, the context changed.",
+      relevanceScore: 0.9,
+    });
+
+    assert.strictEqual(result, null);
+    assert.match(serialized(entries), /llm_error/);
+    assert.doesNotMatch(serialized(entries), /TEST_SECRET|Authorization|Bearer/);
+  });
+
+  it("keeps provider error text out of contradiction logs", async () => {
+    const { logger, entries } = captureLogger();
+    const detector = new ContradictionDetector({
+      llm: async () => { throw new Error(SECRET); },
+      logger,
+    });
+    const result = await detector.findContradictions([
+      { id: "overlay-a", targetMemoryId: "memory-1", shiftType: "meaning", shiftDescription: "Use Postgres." },
+      { id: "overlay-b", targetMemoryId: "memory-1", shiftType: "meaning", shiftDescription: "Use MySQL." },
+    ]);
+
+    assert.deepStrictEqual(result, []);
+    assert.match(serialized(entries), /llm_error/);
+    assert.doesNotMatch(serialized(entries), /TEST_SECRET|Authorization|Bearer/);
   });
 
   it("uses safe failure logging in capture summarization", () => {
