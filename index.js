@@ -81,7 +81,7 @@ import {
   archiveCard,
 } from "./lib/telegram-commands/memory-edit.js";
 import { normalizeCommandInput } from "./lib/semantic-input.js";
-import { validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
+import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
@@ -196,6 +196,7 @@ import {
 import {
   LLM_RESULT_CACHE_PURPOSES,
   createLlmResultCache,
+  withLlmCallContext,
   withLlmResultCacheContext,
 } from "./lib/llm-result-cache.js";
 import {
@@ -555,19 +556,25 @@ function readFileHeadSync(path, maxBytes = 8192) {
  * @param {object} llmCfg
  * @param {object} logger
  * @param {string} agentId
+ * @param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [callContext]
  * @returns {Promise<string>}
  */
-async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId) {
+async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId, callContext = {}) {
   try {
     const result = await callLlm([
       {
         role: "user",
         content: `Summarize this text into the most important facts, decisions, preferences, and actionable information. Keep all specific names, numbers, URLs, dates, technical details, and configuration values. Output ONLY the summary, no preamble. Target length: ${Math.round(maxChars / 4)} characters.\n\n${text.slice(0, 60000)}`,
       },
-    ], withLlmResultCacheContext(
-      { ...llmCfg, maxTokens: Math.round(maxChars / 3), temperature: 0 },
-      agentId,
+    ], withLlmCallContext(
+      withLlmResultCacheContext(
+        { ...llmCfg, maxTokens: Math.round(maxChars / 3), temperature: 0 },
+        agentId,
+        LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
+      ),
+      callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
       LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
+      { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
     ));
     if (result && result.length > 20) return result;
   } catch (e) {
@@ -585,9 +592,10 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId) {
  * @param {object|null} llmCfg
  * @param {object} logger
  * @param {string} agentId
+ * @param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [callContext]
  * @returns {Function|null}
  */
-function makeQuerySummarizer(llmCfg, logger, agentId) {
+function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
   if (!llmCfg) return null;
   return async (query) => {
     const result = await callLlm([
@@ -595,10 +603,15 @@ function makeQuerySummarizer(llmCfg, logger, agentId) {
         role: "user",
         content: `Extract the key topics, names, events, decisions, and facts from the following text that are relevant for a semantic memory search. Output ONLY a compact summary (2-4 sentences, max 800 chars) capturing the most searchable information. Do not add commentary.\n\n${query.slice(0, 60000)}`,
       },
-    ], withLlmResultCacheContext(
-      { ...llmCfg, maxTokens: 300, temperature: 0 },
-      agentId,
+    ], withLlmCallContext(
+      withLlmResultCacheContext(
+        { ...llmCfg, maxTokens: 300, temperature: 0 },
+        agentId,
+        LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
+      ),
+      callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
       LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
+      { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
     ));
     if (result && result.length > 20) return result;
     throw new Error("empty summarizer response");
@@ -2015,7 +2028,7 @@ async function callLlm(messages, llmCfg) {
     jsonMode: llmCfg?.jsonMode,
     disableThinking: llmCfg?.disableThinking,
     timeoutMs: llmCfg?.timeoutMs,
-    signal: llmCfg?.signal,
+    signal: llmCfg?.callContext?.signal ?? llmCfg?.signal,
     resultCacheContext: llmCfg?.resultCacheContext,
   }, {
     directCall: (directMessages, directCfg) => callOpenAiLlm(directMessages, directCfg, {
@@ -2025,6 +2038,24 @@ async function callLlm(messages, llmCfg) {
   });
   if (result.status === "failed") throw result.error;
   return result.status === "ok" ? result.text : null;
+}
+
+/**
+ * Compose deterministic result caching before call-local routing context.
+ * @param {object} llmCfg
+ * @param {string} agentId
+ * @param {string} purpose
+ * @param {object} overrides
+ * @param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [callContext]
+ * @returns {object}
+ */
+function withDeterministicLlmContext(llmCfg, agentId, purpose, overrides = {}, callContext = {}) {
+  return withLlmCallContext(
+    withLlmResultCacheContext({ ...llmCfg, ...overrides }, agentId, purpose),
+    callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
+    purpose,
+    { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
+  );
 }
 
 /**
@@ -2044,24 +2075,12 @@ async function callMergeCheck(existingText, newText, llmCfg, agentId, callContex
       role: "user",
       content: `Two memory fragments — should they be merged into one?\n\nFragment A: ${A}\nFragment B: ${B}\n\nRespond with JSON only: {"merge": boolean, "reason": "brief explanation", "mergedText": "merged version (only if merge=true)"}\nRules:\n- merge=true only if both fragments describe the same subject/fact from different angles\n- mergedText must contain ALL information from both fragments\n- mergedText must be longer than the shorter of the two fragments`,
     },
-  ], withLlmResultCacheContext(
-    {
-      ...llmCfg,
-      jsonMode: true,
-      maxTokens: 300,
-      temperature: 0,
-      callContext: typeof callContext?.runtimeLlm?.complete === "function"
-        ? {
-            runtimeLlm: callContext.runtimeLlm,
-            purpose: LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
-          }
-        : {
-            agentId,
-            purpose: LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
-          },
-    },
+  ], withDeterministicLlmContext(
+    llmCfg,
     agentId,
     LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+    { jsonMode: true, maxTokens: 300, temperature: 0 },
+    callContext,
   ));
   if (!content) return null;
   let parsed;
@@ -2284,10 +2303,12 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
       role: "user",
       content: `Here is the current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memory (category=${category}, importance=${importance.toFixed(1)}, date=${today}):\n${text}\n\nIntegrate this information into the KNOWLEDGE.md body.\n- Add a new entry under the appropriate section with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.`,
     },
-  ], withLlmResultCacheContext(
-    { ...llmCfg, maxTokens: 3000, temperature: 0 },
+  ], withDeterministicLlmContext(
+    llmCfg,
     agentId,
     LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+    { maxTokens: 3000, temperature: 0 },
+    llmCfg?.callContext,
   ));
 
   if (!updated) return;
@@ -2300,10 +2321,12 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
         role: "user",
         content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
       },
-    ], withLlmResultCacheContext(
-      { ...llmCfg, maxTokens: 4000, temperature: 0 },
+    ], withDeterministicLlmContext(
+      llmCfg,
       agentId,
       LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+      { maxTokens: 4000, temperature: 0 },
+      llmCfg?.callContext,
     ));
 
     const compactedLines = compacted?.split("\n").length ?? Infinity;
@@ -2564,6 +2587,24 @@ const plugin = {
       api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (route: ${skillMinerLlmCfg.kind})`);
     }
 
+    // Generic enhancement routes remain behind their existing feature gates,
+    // but each prompt owns its model-selection descriptor.
+    const captureSummaryLlmCfg = createFeatureRoute("capture-summary", {});
+    const recallQueryLlmCfg = createFeatureRoute("recall-query-summary", {});
+    const memoryCompactionLlmCfg = createFeatureRoute("memory-compaction", {});
+    const conflictResolutionLlmCfg = createFeatureRoute("conflict-resolution", {});
+    const remPatternLlmCfg = createFeatureRoute("rem-pattern-analysis", {});
+    const conversationInsightsLlmCfg = createFeatureRoute("conversation-insights", {});
+    const dreamNarrativeLlmCfg = createFeatureRoute("dream-narrative", {});
+    const dreamEchoLlmCfg = createFeatureRoute("dream-echo", {});
+    const episodeExtractionLlmCfg = createFeatureRoute("episode-extraction", {});
+    const afterthoughtLlmCfg = createFeatureRoute("afterthought", cfg.afterthought || {});
+    const personaVoiceLlmCfg = createFeatureRoute("persona-voice", cfg.personaVoice || {});
+    const wikiLlmCfg = createFeatureRoute("wiki", {});
+    const overlayLlmCfg = createFeatureRoute("continuity-overlay", cfg.continuityEngine?.overlays || {});
+    const overlayAuditLlmCfg = createFeatureRoute("overlay-audit-contradiction", {});
+    const memoryTextContradictionLlmCfg = createFeatureRoute("memory-text-contradiction", {});
+
     // Emotion Tier Config
     const emotionCfg = cfg.emotion || {};
     const emotionTier = emotionCfg.tier || "auto";
@@ -2582,25 +2623,31 @@ const plugin = {
       ? /**
          * Call the emotion provider with optional agent-scoped cache context.
          * @param {Array<object>} messages
-         * @param {{agentId?: string}} [context]
+         * @param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [context]
          * @returns {Promise<string|null>}
          */
         (messages, context = {}) => {
-          const emotionLlmCfg = {
-            ...emotionT3LlmCfg,
-            maxTokens: 300,
-            temperature: 0,
-            disableThinking: true,
-            callContext: {
-              ...(context.agentId ? { agentId: context.agentId } : {}),
-              purpose: LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+          const emotionLlmCfg = withLlmCallContext(
+            {
+              ...emotionT3LlmCfg,
+              maxTokens: 300,
+              temperature: 0,
+              disableThinking: true,
             },
-          };
+            context.agentId,
+            LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+            { runtimeLlm: context.runtimeLlm, signal: context.signal },
+          );
           return context.agentId
-            ? callLlm(messages, withLlmResultCacheContext(
-                { ...emotionLlmCfg, temperature: 0 },
+            ? callLlm(messages, withLlmCallContext(
+                withLlmResultCacheContext(
+                  { ...emotionLlmCfg, temperature: 0 },
+                  context.agentId,
+                  LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+                ),
                 context.agentId,
                 LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+                { runtimeLlm: context.runtimeLlm, signal: context.signal },
               ))
             : callLlm(messages, emotionLlmCfg);
         }
@@ -3524,6 +3571,7 @@ const plugin = {
                 if (dcCfg.enabled === false) {
                   return formatJsonCommandResult({ job: "consolidate-daily", skipped: true, reason: "dailyConsolidation_disabled" });
                 }
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const result = await pool.withDb(internalAgent, async (rawDb) => {
                   await rawDb.init();
                   return runDailyConsolidation(rawDb, internalAgent, {
@@ -3531,7 +3579,18 @@ const plugin = {
                     neoStore: commandStore,
                     workspaceDir: commandCtx.workspaceDir,
                     workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                    llmCfg: mergingLlmCfg,
+                    compactionLlmCfg: mergingEnabled ? withLlmCallContext(
+                      memoryCompactionLlmCfg,
+                      typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                      "memory-compaction",
+                      { runtimeLlm: sessionRuntime },
+                    ) : null,
+                    conflictLlmCfg: mergingEnabled ? withLlmCallContext(
+                      conflictResolutionLlmCfg,
+                      typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                      "conflict-resolution",
+                      { runtimeLlm: sessionRuntime },
+                    ) : null,
                     callLlm,
                     embeddings,
                   });
@@ -3590,15 +3649,24 @@ const plugin = {
                 return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
               }
               if (subKey === "rem-dream") {
-                if (!mergingLlmCfg) {
+                if (!mergingEnabled || !isLlmRouteAvailable(remPatternLlmCfg)) {
                   return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "no_llm_config" });
                 }
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const commandRoute = (route, purpose) => withLlmCallContext(
+                  route,
+                  typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                  purpose,
+                  { runtimeLlm: sessionRuntime },
+                );
                 const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
                 const result = await pool.withDb(internalAgent, async (db) => {
                   await db.init();
                   return runRemDream({
                     db,
-                    llmCfg: mergingLlmCfg,
+                    patternLlmCfg: commandRoute(remPatternLlmCfg, "rem-pattern-analysis"),
+                    narrativeLlmCfg: commandRoute(dreamNarrativeLlmCfg, "dream-narrative"),
+                    echoLlmCfg: commandRoute(dreamEchoLlmCfg, "dream-echo"),
                     callLlm,
                     neoStore: commandStore,
                     workspaceKey: workspaceKeyFromContext(commandCtx, {
@@ -3659,10 +3727,12 @@ const plugin = {
                     neoStore: commandStore,
                     workspaceDir: commandCtx.workspaceDir,
                     workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                    llmCfg: {
-                      ...skillMinerLlmCfg,
-                      callContext: skillMinerCallContext,
-                    },
+                    llmCfg: withLlmCallContext(
+                      skillMinerLlmCfg,
+                      skillMinerCallContext.agentId,
+                      LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                      { runtimeLlm: skillMinerCallContext.runtimeLlm },
+                    ),
                     callLlm,
                     maxPerRun: skillMinerCfg.maxPerRun ?? 5,
                     minConfidence: skillMinerCfg.minConfidence ?? 0.6,
@@ -3673,14 +3743,22 @@ const plugin = {
                 return formatJsonCommandResult({ job: "skill-miner", ...result });
               }
               if (subKey === "afterthought") {
-                if ((cfg.afterthought?.enabled ?? true) === false) {
+                if ((cfg.afterthought?.enabled ?? true) === false
+                  || !(skillMinerEnabled || mergingEnabled)
+                  || !isLlmRouteAvailable(afterthoughtLlmCfg)) {
                   return formatJsonCommandResult({ job: "afterthought", skipped: true, reason: "disabled" });
                 }
                 const { runAfterthoughtJob } = await import("./lib/afterthought.js");
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const result = await runAfterthoughtJob({
                   workspaceDir: commandCtx.workspaceDir,
                   agentId: internalAgent,
-                  llmCfg: skillMinerLlmCfg || mergingLlmCfg || null,
+                  llmCfg: withLlmCallContext(
+                    afterthoughtLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    "afterthought",
+                    { runtimeLlm: sessionRuntime },
+                  ),
                   callLlm,
                   timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
                   logger: api.logger,
@@ -3689,15 +3767,23 @@ const plugin = {
                 return formatJsonCommandResult({ job: "afterthought", ...result });
               }
               if (subKey === "persona-evolve") {
-                if ((cfg.personaVoice?.enabled ?? true) === false || !skillMinerLlmCfg) {
+                if ((cfg.personaVoice?.enabled ?? true) === false
+                  || !skillMinerEnabled
+                  || !isLlmRouteAvailable(personaVoiceLlmCfg)) {
                   return formatJsonCommandResult({ job: "persona-evolve", skipped: true, reason: "not_configured" });
                 }
                 const { evolvePersonaVoice } = await import("./lib/persona-voice.js");
                 const outcomes = readReplyOutcomeLog(commandCtx.workspaceDir, 200);
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const result = await evolvePersonaVoice({
                   workspaceDir: commandCtx.workspaceDir,
                   outcomes,
-                  llmCfg: skillMinerLlmCfg,
+                  llmCfg: withLlmCallContext(
+                    personaVoiceLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    "persona-voice",
+                    { runtimeLlm: sessionRuntime },
+                  ),
                   callLlm,
                 });
                 api.logger?.info?.(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(result)}`);
@@ -3887,11 +3973,21 @@ const plugin = {
                     ? "⚠️ Persona-Profil existiert bereits — erst `persona-voice.md` manuell löschen, um neu zu erzeugen."
                     : "⚠️ Persona profile already exists — delete `persona-voice.md` manually first to regenerate." };
                 }
-                const personaLlmCfg = skillMinerLlmCfg || mergingLlmCfg;
-                if (!personaLlmCfg) {
+                if (!(skillMinerEnabled || mergingEnabled) || !isLlmRouteAvailable(personaVoiceLlmCfg)) {
                   return { text: de ? "❌ Kein LLM konfiguriert." : "❌ No LLM configured." };
                 }
-                const seed = await generatePersonaSeed({ agentId: personaAgentId, lang, llmCfg: personaLlmCfg, callLlm });
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const seed = await generatePersonaSeed({
+                  agentId: personaAgentId,
+                  lang,
+                  llmCfg: withLlmCallContext(
+                    personaVoiceLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : personaAgentId,
+                    "persona-voice",
+                    { runtimeLlm: sessionRuntime },
+                  ),
+                  callLlm,
+                });
                 if (!seed) {
                   return { text: de ? "❌ Persona-Seed-Generierung fehlgeschlagen." : "❌ Persona seed generation failed." };
                 }
@@ -4192,13 +4288,20 @@ const plugin = {
                 }
                 const extraArgs = ["supersede-overlay", "doctor"].includes(subKey) ? tokens.slice(3) : [];
                 const doctorCfg = cfg?.continuityEngine?.doctor ?? { enabled: false };
+                const auditAgentId = commandCtx?.agentId || "default";
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const result = await runOverlayAuditCommand({
                   subCommand: subKey,
                   id,
                   extraArgs,
                   workspaceDir: commandCtx?.workspaceDir,
                   callLlm,
-                  mergingLlmCfg,
+                  overlayAuditLlmCfg: mergingEnabled ? withLlmCallContext(
+                    overlayAuditLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : auditAgentId,
+                    "overlay-audit-contradiction",
+                    { runtimeLlm: sessionRuntime },
+                  ) : null,
                   doctorCfg,
                 });
                 if ((subKey === "disable-overlay" || subKey === "supersede-overlay") && result.ok) {
@@ -4321,7 +4424,12 @@ const plugin = {
             description: command.description,
             acceptsArgs: command.acceptsArgs ?? false,
             channels: ["telegram", "discord", "slack", "mattermost", "cron"],
-            handler: (commandCtx) => runPlur1busCommand(commandCtx, command.prefixTokens),
+            handler: (commandCtx) => {
+              if (command.name === "plur1bus_memory") return runMemoryCommand(commandCtx);
+              if (command.name === "plur1bus_forget") return runForgetCommand(commandCtx);
+              if (command.name === "plur1bus_correct") return runCorrectCommand(commandCtx);
+              return runPlur1busCommand(commandCtx, command.prefixTokens);
+            },
           });
         }
 
@@ -4409,6 +4517,12 @@ const plugin = {
 
         const checkArgsLength = (commandCtx) => {
           const v = validateCommandArgs(commandCtx.args);
+          if (!v.ok) return { text: `❌ ${v.error}` };
+          return null;
+        };
+
+        const checkSemanticArgsLength = (commandCtx) => {
+          const v = validateSemanticCommandArgs(commandCtx.args);
           if (!v.ok) return { text: `❌ ${v.error}` };
           return null;
         };
@@ -4515,12 +4629,14 @@ const plugin = {
 
         const runMemoryCommand = async (commandCtx) => {
           try {
-            const deniedLen = checkArgsLength(commandCtx);
+            const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const input = (commandCtx.args || "").trim();
             const agentId = commandCtx.agentId || "default";
-            const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger, agentId);
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+              runtimeLlm: commandCtx?.runtimeContext?.llm,
+            });
             const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const parsed = parseMemoryQuery(normalized.canonicalText);
@@ -4546,14 +4662,16 @@ const plugin = {
 
         const runForgetCommand = async (commandCtx) => {
           try {
-            const deniedLen = checkArgsLength(commandCtx);
+            const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const denied = checkAuth(commandCtx, { destructive: true });
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const agentId = commandCtx.agentId || "default";
-            const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger, agentId);
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+              runtimeLlm: commandCtx?.runtimeContext?.llm,
+            });
 
             // Completion: /forget confirm <token>
             const token = parseConfirmArg(args);
@@ -4610,14 +4728,16 @@ const plugin = {
 
         const runCorrectCommand = async (commandCtx) => {
           try {
-            const deniedLen = checkArgsLength(commandCtx);
+            const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const denied = checkAuth(commandCtx, { destructive: true });
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const agentId = commandCtx.agentId || "default";
-            const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger, agentId);
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+              runtimeLlm: commandCtx?.runtimeContext?.llm,
+            });
 
             // Completion: /correct confirm <token>
             const token = parseConfirmArg(args);
@@ -4682,10 +4802,20 @@ const plugin = {
             }
             const [oldNorm, newNorm] = await Promise.all([
               normalizeCommandInput({ kind: "correction-old", text: parsed.old, summarizer, logger: api.logger, lang, tone }),
-              normalizeCommandInput({ kind: "correction-new", text: parsed.new, summarizer, logger: api.logger, lang, tone }),
+              normalizeCommandInput({
+                kind: "correction-new",
+                text: parsed.new,
+                summarizer,
+                maxDirectChars: INPUT_LIMITS.CORRECTION_TEXT,
+                logger: api.logger,
+                lang,
+                tone,
+              }),
             ]);
             if (oldNorm.error) return { text: `❌ ${oldNorm.error}` };
             if (newNorm.error) return { text: `❌ ${newNorm.error}` };
+            const validatedCanonicalCorrection = validateCorrectionText(newNorm.canonicalText);
+            if (!validatedCanonicalCorrection.ok) return { text: `❌ ${validatedCanonicalCorrection.error}` };
             const { userId: requestUserId } = resolveIdentity(commandCtx);
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, oldNorm.canonicalText, {
               ctx: {
@@ -4771,7 +4901,24 @@ const plugin = {
           description: "PLUR1BUS — Wiki durchsuchen, hinzufügen, löschen",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
-          handler: (ctx) => runWikiCommand(ctx, { pool, embeddings, reranker, callLlm, cfg, api, llmCfg: mergingLlmCfg }),
+          handler: (ctx) => {
+            const wikiAgentId = ctx?.agentId || "default";
+            const sessionRuntime = ctx?.runtimeContext?.llm;
+            return runWikiCommand(ctx, {
+              pool,
+              embeddings,
+              reranker,
+              callLlm,
+              cfg,
+              api,
+              llmCfg: mergingEnabled ? withLlmCallContext(
+                wikiLlmCfg,
+                typeof sessionRuntime?.complete === "function" ? undefined : wikiAgentId,
+                "wiki",
+                { runtimeLlm: sessionRuntime },
+              ) : null,
+            });
+          },
         });
       }
 
@@ -5000,9 +5147,16 @@ const plugin = {
               let text = it.text;
               try {
                 if (text.length > maxChars) {
-                  if (mergingLlmCfg) {
+                  if (mergingEnabled && isLlmRouteAvailable(captureSummaryLlmCfg)) {
                     api.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
-                    text = await summarizeForCapture(text, maxChars, mergingLlmCfg, api.logger, agentId);
+                    text = await summarizeForCapture(
+                      text,
+                      maxChars,
+                      captureSummaryLlmCfg,
+                      api.logger,
+                      agentId,
+                      { agentId, signal },
+                    );
                   } else {
                     text = text.slice(0, maxChars);
                   }
@@ -5087,7 +5241,7 @@ const plugin = {
                 });
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user", null, { agentId });
+                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user", null, { agentId, signal });
                 throwIfCaptureAborted();
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
@@ -5239,7 +5393,7 @@ const plugin = {
               const digestHash = createHash("sha256").update(sessionDigest).digest("hex").slice(0, 16);
 
               // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)
-              if (!background && mergingLlmCfg && neoEnabled) {
+              if (!background && mergingEnabled && isLlmRouteAvailable(conversationInsightsLlmCfg) && neoEnabled) {
                 const processedDreams = hooks?.agent_end?.processedDreams || [];
                 if (processedDreams.includes(digestHash)) {
                   api.logger.info(`memory-lancedb-namespaced: light dream already processed for this session (digest=${digestHash})`);
@@ -5263,7 +5417,30 @@ const plugin = {
                     neoStore,
                     db,
                     embeddings,
-                    llmCfg: mergingLlmCfg,
+                    insightLlmCfg: withLlmCallContext(
+                      conversationInsightsLlmCfg,
+                      agentId,
+                      "conversation-insights",
+                      { signal },
+                    ),
+                    narrativeLlmCfg: withLlmCallContext(
+                      dreamNarrativeLlmCfg,
+                      agentId,
+                      "dream-narrative",
+                      { signal },
+                    ),
+                    echoLlmCfg: withLlmCallContext(
+                      dreamEchoLlmCfg,
+                      agentId,
+                      "dream-echo",
+                      { signal },
+                    ),
+                    personaLlmCfg: (skillMinerEnabled || mergingEnabled) ? withLlmCallContext(
+                      personaVoiceLlmCfg,
+                      agentId,
+                      "persona-voice",
+                      { signal },
+                    ) : null,
                     callLlm,
                     logger: api.logger,
                     narrativeCfg: dreamNarrativeCfg,
@@ -5295,7 +5472,12 @@ const plugin = {
                   extractEpisodesFromTurns(normalizedTurns, {
                     workspaceKey: ctx?.workspaceKey,
                     agentId,
-                    llmCfg: mergingLlmCfg,
+                    llmCfg: mergingEnabled ? withLlmCallContext(
+                      episodeExtractionLlmCfg,
+                      agentId,
+                      "episode-extraction",
+                      { signal },
+                    ) : null,
                     callLlm,
                   }).then((episodes) => {
                     if (episodes.length > 0) {
@@ -5510,7 +5692,12 @@ const plugin = {
                 rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
                 rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
                 summaryMaxWords,
-                querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger, agentId),
+                querySummarizer: makeQuerySummarizer(
+                  mergingEnabled ? recallQueryLlmCfg : null,
+                  api.logger,
+                  agentId,
+                  { agentId },
+                ),
                 logger: api.logger,
                 emotionalState: emotionalPool.get(agentId),
                 graphEdges,
@@ -6021,18 +6208,12 @@ const plugin = {
                   role: "user",
                   content: `Current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memories to integrate (date=${today}):\n${newEntriesBlock}${params?.note ? `\n\nCurator note: ${params.note}` : ""}\n\nIntegrate these into the KNOWLEDGE.md body.\n- Do not rewrite the document from scratch.\n- Preserve existing wording unless merging an exact duplicate or lightly compacting closely related points.\n- Only add or merge knowledge that is directly supported by the new memories.\n- Add entries under appropriate sections with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Return ONLY the Markdown body, NO YAML frontmatter, NO explanation, NO code block wrapper.`,
                 },
-              ], withLlmResultCacheContext(
-                {
-                  ...schicht15LlmCfg,
-                  maxTokens: 3000,
-                  temperature: 0,
-                  callContext: {
-                    agentId,
-                    purpose: LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
-                  },
-                },
+              ], withDeterministicLlmContext(
+                schicht15LlmCfg,
                 agentId,
                 LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+                { maxTokens: 3000, temperature: 0 },
+                { agentId },
               ));
 
               if (!updated) {
@@ -6048,18 +6229,12 @@ const plugin = {
                     role: "user",
                     content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
                   },
-                ], withLlmResultCacheContext(
-                  {
-                    ...schicht15LlmCfg,
-                    maxTokens: 4000,
-                    temperature: 0,
-                    callContext: {
-                      agentId,
-                      purpose: LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
-                    },
-                  },
+                ], withDeterministicLlmContext(
+                  schicht15LlmCfg,
                   agentId,
                   LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+                  { maxTokens: 4000, temperature: 0 },
+                  { agentId },
                 ));
 
                 const compactedLines = compacted?.split("\n").length ?? Infinity;
@@ -6284,7 +6459,7 @@ const plugin = {
             const lastUserText = promptText
               || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
             if (lastUserText.length >= 3) {
-              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId });
+              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
               emoState.applyEmotionScore(turnEmotion);
             } else {
               emoState.updateFromMessages(voiceMessages);
@@ -6318,13 +6493,22 @@ const plugin = {
           const autoCreateOverlays = continuityEnabled && overlayCfg.autoCreateOnRecall === true;
           let overlayGenerator = null;
           let overlayStore = null;
-          if (autoCreateOverlays && ctx?.workspaceDir) {
+          if (autoCreateOverlays
+            && mergingEnabled
+            && isLlmRouteAvailable(overlayLlmCfg)
+            && ctx?.workspaceDir) {
             overlayStore = new InterpretationOverlayStore(ctx.workspaceDir);
+            const overlayCallCfg = mergingEnabled ? withLlmCallContext(
+              overlayLlmCfg,
+              agentId,
+              "continuity-overlay",
+              { signal },
+            ) : null;
             overlayGenerator = new OverlayGenerator({
               enabled: true,
-              llm: (messages) => callLlm(messages, mergingLlmCfg),
-              contradictionLlm: overlayCfg.autoResolveContradictions
-                ? async (messages) => callLlm(messages, mergingLlmCfg)
+              llm: overlayCallCfg ? (messages) => callLlm(messages, overlayCallCfg) : null,
+              contradictionLlm: overlayCfg.autoResolveContradictions && overlayCallCfg
+                ? async (messages) => callLlm(messages, overlayCallCfg)
                 : null,
               autoResolveContradictions: overlayCfg.autoResolveContradictions ?? false,
               workspaceDir: ctx?.workspaceDir,
@@ -6367,7 +6551,12 @@ const plugin = {
             rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
             rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
             summaryMaxWords,
-            querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger, agentId),
+            querySummarizer: makeQuerySummarizer(
+              mergingEnabled ? recallQueryLlmCfg : null,
+              api.logger,
+              agentId,
+              { agentId, signal },
+            ),
             logger: api.logger,
             emotionalState: emotionalPool.get(agentId),
             graphEdges,
@@ -6601,11 +6790,15 @@ const plugin = {
           const contraCfg = cfg?.continuityEngine?.contradictionDetection || {};
           if (contraCfg.enabled === true && ctx?.workspaceDir) {
             try {
-              const llm = typeof api?.llm === "function"
-                ? api.llm.bind(api)
-                : (mergingLlmCfg?.model
-                    ? (messages) => callLlm(messages, mergingLlmCfg)
-                    : null);
+              const memoryContradictionCallCfg = mergingEnabled ? withLlmCallContext(
+                memoryTextContradictionLlmCfg,
+                agentId,
+                "memory-text-contradiction",
+                { signal },
+              ) : null;
+              const llm = memoryContradictionCallCfg
+                ? (messages) => callLlm(messages, memoryContradictionCallCfg)
+                : null;
               const detector = new ContradictionDetector({
                 llm,
                 workspaceDir: ctx.workspaceDir,
@@ -6786,12 +6979,21 @@ const plugin = {
                 workspaceDir: ctx.workspaceDir,
                 agentId,
                 lang: cfg.language || "de",
-                llmCfg: skillMinerLlmCfg || mergingLlmCfg || null,
+                llmCfg: (skillMinerEnabled || mergingEnabled) ? withLlmCallContext(
+                  personaVoiceLlmCfg,
+                  agentId,
+                  "persona-voice",
+                  { signal },
+                ) : null,
                 callLlm,
-              })?.catch(() => {});
+              })?.catch((err) => {
+                api.logger?.debug?.(`persona-voice: scheduled seed failed (fail-open): ${normalizedLlmErrorClass(err)}`);
+              });
               personaDirective = loadPersonaDirective(ctx.workspaceDir);
               personaEmojiPalette = loadPersonaEmojiPalette(ctx.workspaceDir);
-            } catch (_) { /* fail-open */ }
+            } catch (err) {
+              api.logger?.debug?.(`persona-voice: scheduled seed setup failed (fail-open): ${normalizedLlmErrorClass(err)}`);
+            }
           }
 
           const styleCfg = cfg.styleDirective || {};

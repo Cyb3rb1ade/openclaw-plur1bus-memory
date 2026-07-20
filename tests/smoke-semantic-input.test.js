@@ -2,6 +2,11 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 
 import { normalizeCommandInput } from "../lib/semantic-input.js";
+import {
+  INPUT_LIMITS,
+  validateCommandArgs,
+  validateSemanticCommandArgs,
+} from "../lib/input-limits.js";
 
 describe("semantic-input", () => {
   it("passes short input through directly", async () => {
@@ -25,6 +30,18 @@ describe("semantic-input", () => {
     assert.ok(result.error, "should return error");
     assert.ok(result.error.includes("file/vault note/source"), "should suggest external source");
     assert.ok(!result.canonicalText);
+  });
+
+  it("centralizes exact semantic and generic command boundaries", async () => {
+    assert.strictEqual(INPUT_LIMITS.SEMANTIC_COMMAND_ARGS, 100_000);
+    assert.strictEqual(validateSemanticCommandArgs("x".repeat(100_000)).ok, true);
+    assert.strictEqual(validateSemanticCommandArgs("x".repeat(100_001)).ok, false);
+    assert.strictEqual(validateCommandArgs("x".repeat(4_001)).ok, false);
+
+    const exact = await normalizeCommandInput({ kind: "recall-query", text: "x".repeat(100_000) });
+    const over = await normalizeCommandInput({ kind: "recall-query", text: "x".repeat(100_001) });
+    assert.ok(!exact.error);
+    assert.ok(over.error);
   });
 
   it("preserves semantic meaning in heuristic compression", async () => {
