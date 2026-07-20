@@ -102,6 +102,68 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 
 ---
 
+## Chat-LLM-Routing über OpenClaw
+
+Ein nicht gesetztes Feature-Modell (`model` absent) verwendet das effective
+OpenClaw agent model des Ziel-Agenten. PLUR1BUS hat keinen globalen
+Chat-Modell-Default und erbt keine Route zwischen Features: `schicht15`,
+`skillMiner`, `criticalPush` und `emotion.t3` übernehmen insbesondere weder
+`merging.model` noch dessen Endpoint, Credential oder Header.
+
+Jeder aktivierte Chat-Aufruf löst genau einen von vier Route-Modi auf:
+
+- `openclaw-default`: native OpenClaw-Completion ohne `model`-Property; OpenClaw wählt das effektive primäre Agentenmodell.
+- `openclaw-override`: ein feature-lokales `model` ohne direkte Transportfelder; OpenClaw verwaltet Provider und Credentials.
+- `direct-override`: feature-lokales `model` plus `baseUrl`, aufgelöstes `apiKey` oder nicht-leere `headers`; der bestehende begrenzte OpenAI-kompatible Direktpfad wird verwendet.
+- `unavailable`: die Route kann sicher keinen Request senden. Direct transport without a feature-local model fails closed as an ambiguous partial override.
+
+`failed` ist der stabile Diagnosewert für einen gescheiterten Transport, kein
+fünfter Auswahlmodus. Erfolgreiche native Ergebnisse übernehmen ausschließlich
+die von OpenClaw zurückgegebenen Provider-/Modellwerte in die Diagnose; Prompts,
+Credentials und Auth-Header werden nicht aufgezeichnet. Native routes bypass
+the PLUR1BUS result cache; nur vollständige `direct-override`-Routen behalten
+den exakten PLUR1BUS-Ergebnis-Cache.
+
+A configured credential that is unresolved is unavailable. PLUR1BUS never
+substitutes native OpenClaw host credentials, erfindet keine Host-Credential-
+Fallback-Kette und bricht deshalb nicht die gesamte Plugin-Registrierung ab.
+`runtime.llm.complete` missing or unavailable is fail-soft: das owning Feature
+nutzt seinen bestehenden Skip-/Fallbackpfad, ohne einen zweiten Modellversuch.
+
+### Agentenbindung und Trust
+
+A session-bound command capability omits `agentId`, weil sie bereits an die
+aktive Session gebunden ist. Global hook, tool, and background calls senden den
+Ziel-Agenten und benötigen am Plugin-Entry
+`llm.allowAgentIdOverride:true`. A model-only native override requires
+`llm.allowModelOverride:true` und muss gegebenenfalls in `allowedModels`
+zugelassen sein. Eine Policy-Ablehnung bleibt fail-soft; PLUR1BUS wiederholt
+den Request nicht ohne Agent oder Modell. Installer `preserve` never grants LLM
+trust; Safe und Recommended setzen ebenfalls keine dieser Entry-Level-Bits.
+
+`runtime.llm.complete` resolves the effective primary selection and does not
+execute the configured model fallback array in the installed Runtime. Die
+Fallback-Policy bleibt OpenClaw-Konfiguration, aber PLUR1BUS behauptet oder
+implementiert keine Host-Fallback-Kette.
+
+Komplette explizite Direkt-Overrides bleiben möglich, müssen aber vollständig
+feature-lokal sein. Beispiel:
+
+```json
+{
+  "merging": {
+    "enabled": true,
+    "model": "vendor/merge-model",
+    "baseUrl": "https://llm.example/v1",
+    "apiKey": "${MERGING_LLM_API_KEY}"
+  }
+}
+```
+
+Das benannte Modell ist nur ein explizites Override-Beispiel, kein Default.
+
+---
+
 ## Beispiel-Konfiguration (Minimal)
 
 ```json
@@ -164,24 +226,26 @@ Steuert die 3-Tier-Emotions-Inferenz beim Memory-Capture.
 |-----|-----|---------|--------------|
 | `emotion.tier` | `"t1" \| "t2" \| "t3" \| "auto"` | `"auto"` | Festes Tier oder automatisches Routing |
 | `emotion.t2.enabled` | `boolean` | `true` | Tier-2 (Keyword-Fallback) aktivieren |
-| `emotion.t3.enabled` | `boolean` | `false` | Tier-3 (LLM-basiert) aktivieren — **provider-gated/fail-soft**: kein API-Call ohne konfigurierten Provider |
-| `emotion.t3.model` | `string` | — | Modell für Tier-3; Fallback: `merging.model`, dann `"kimi-for-coding"` |
-| `emotion.t3.apiKey` | `string` | — | Optionaler API-Key (fallback zu `OPENAI_API_KEY`) |
-| `emotion.t3.baseUrl` | `string` | — | Optionaler Base-URL für OpenAI-compatible Provider |
+| `emotion.t3.enabled` | `boolean` | `false` | Tier-3 (LLM-basiert) aktivieren — **provider-gated/fail-soft**: kein API-Call ohne verfügbare native oder vollständige direkte Route |
+| `emotion.t3.model` | `string` | — | Wenn `model` absent ist, gilt das effective OpenClaw agent model; kein Fallback zu `merging.model` |
+| `emotion.t3.apiKey` | `string` | — | Optionales feature-lokales Credential für einen direkten Override; benötigt ein explizites `emotion.t3.model` |
+| `emotion.t3.baseUrl` | `string` | — | Optionaler feature-lokaler Endpoint für einen direkten Override; benötigt ein explizites `emotion.t3.model` |
 
 ### Budget-Gate
 
 Tier-3 läuft **niemals heimlich**. Der Manifest-Default ist `enabled:false`;
 das explizite Recommended-Profil kann es einschalten. Auch dann erfolgt kein
-API-Call, wenn:
-- Kein Provider konfiguriert ist (`onlyWhenProviderAvailable: true`)
-- Der Provider nicht antwortet (`fallbackOnError: true` → Fallback auf Tier-2)
+API-Call, wenn keine vollständige native oder direkte Route verfügbar ist
+(`onlyWhenProviderAvailable: true`). Providerfehler bleiben fail-soft
+(`fallbackOnError: true` → Fallback auf Tier-2).
 
-Ohne konfigurierten Embedding-/LLM-Provider bleibt Tier-3 stumm.
+Ohne native OpenClaw-Completion und ohne vollständigen expliziten Direkt-
+Override bleibt Tier-3 stumm. Embedding-Provider und -Credentials sind dafür
+nicht maßgeblich.
 
 Der Feature-Toggle `/disable emotionTier` steuert `emotion.t3.enabled` auf `false`.
 
-### Beispiel
+### Explizites Override-Beispiel
 
 ```json
 {

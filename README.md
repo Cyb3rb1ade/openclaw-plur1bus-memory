@@ -86,9 +86,9 @@ The index is written to `.plur1bus/code-index.json` and contains normalized file
 ### New in v6.4.0 — Emotion Tier-Config
 
 - **Budget-Gate per tier** — Tier-1 (regex), Tier-2 (heuristic), Tier-3 (LLM) independently enable/disable.
-- **Configurable model per tier** — Use `gpt-4o-mini` for Tier-3 or bring your own via `baseUrl`/`apiKey`.
+- **Configurable model per tier** — An absent model uses the effective OpenClaw agent model; `gpt-4o-mini` is only an explicit override example.
 - **Feature-Toggle** — Lock `emotionTier` to a specific tier or use `auto` for dynamic escalation.
-- **Graceful degradation** — Falls back from Tier-3 to Tier-2 when no API key is available.
+- **Graceful degradation** — Falls back from Tier-3 to Tier-2 when neither a native OpenClaw route nor a complete direct override is available.
 
 ### New in v6.3.0 — Explainability & GC
 
@@ -250,7 +250,9 @@ Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `opencla
 
 ## Configuration
 
-Minimal config block in `openclaw.json`:
+Minimal config block in `openclaw.json`. This is an explicit override example:
+the named `gpt-4o-mini` value and its credential are illustrative user choices,
+not PLUR1BUS defaults.
 
 ```json
 {
@@ -324,6 +326,40 @@ Minimal config block in `openclaw.json`:
 
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
 
+### OpenClaw chat-LLM routing
+
+Chat models are selected per owning feature. If an optional feature `model` is
+absent, PLUR1BUS uses the effective OpenClaw agent model and sends no `model`
+property. Features never inherit `merging.model`, its endpoint, credential, or
+headers. Existing feature/profile activation, budgets, confirmation gates,
+rate limits, and fail-soft behavior remain unchanged; Safe produces zero
+PLUR1BUS native/direct chat calls.
+
+The four selection modes are `openclaw-default` (native with no model),
+`openclaw-override` (feature-local model through OpenClaw), `direct-override`
+(feature-local model plus direct transport), and `unavailable`. `failed` is the
+stable diagnostic outcome when a selected transport rejects. Provider/model
+metadata returned by OpenClaw may be recorded without credentials, prompts, or
+headers. Native routes bypass the PLUR1BUS result cache; complete direct routes
+retain exact caching.
+
+Direct transport without a feature-local model fails closed and sends no
+request. A configured credential that is unresolved is unavailable; it never
+falls through to native OpenClaw host credentials and does not abort plugin
+registration. `runtime.llm.complete` missing or unavailable is fail-soft and
+does not select a hard-coded model.
+
+A session-bound command capability omits `agentId`. Global hook, tool, and
+background calls retain the target agent and require entry-level
+`llm.allowAgentIdOverride:true`. A model-only native override requires
+`llm.allowModelOverride:true` and obeys `allowedModels`. Installer `preserve`
+never grants LLM trust, and neither Safe nor Recommended adds those entry-level
+bits.
+
+`runtime.llm.complete` resolves the effective primary selection and does not
+execute the configured model fallback array in the installed runtime. PLUR1BUS
+neither claims nor emulates a host fallback chain.
+
 ### LLM result cache
 
 PLUR1BUS caches only exact, agent-scoped results from an explicit allowlist of deterministic internal LLM transformations. The default in-memory cache uses a 24-hour absolute TTL (`llmResultCacheTtlMs: 86400000`, clamped to 60 s–7 d) and holds 256 entries per plugin registration (`llmResultCacheMaxEntries`, clamped to at most 10,000). Optional prompt-free SQLite persistence is off by default; when enabled with `llmResultCachePersist`, it stores hashed keys, results, usage metadata, and timestamps under the memory database path without storing plaintext prompts, credentials, or headers. `llmResultCacheMaxBytes` defaults to 67,108,864 bytes and is clamped to at most 1 GiB; clamped values log a warning.
@@ -345,7 +381,11 @@ Non-goals and bypasses:
 
 The `/state` status section reports cache hit rate, memory/persistent hits, persistence state, and avoided input/output tokens. It intentionally reports token counts, not money.
 
-**`emotion.t3`** — the tier-3 emotion classifier needs an OpenAI-compatible chat model. Without any chat model configured the classifier falls back to Tier-2 heuristics: it does **not** label cards, so it never poisons results by marking everything `fakt`.
+**`emotion.t3`** — the tier-3 emotion classifier uses the effective OpenClaw
+agent model when its model is absent. A complete feature-local direct override
+may instead provide its own model and transport. If neither route is available,
+the classifier falls back to Tier-2 heuristics: it does **not** label cards, so
+it never poisons results by marking everything `fakt`.
 
 **`emotion.temperaments`** — per-agent emotional temperament. Ships with generic defaults only (`main` slightly more sensitive, everyone else balanced). Pick a preset via `/plur1bus temperament <preset>` (`ausgewogen`, `warm`, `kühl`, `feurig`, `stoisch`) — requires a gateway restart. Mood always derives from conversation content; the temperament only shapes how strongly and how long it swings. The current mood is written to `.emotional-state.json` (machine-readable, survives restarts) and `.current-mood.txt` (human-readable) in the agent workspace, injected as a mood line into the recall context, stamped on every memory card (`moodContextAtCapture`), and emotionally intense memories decay slower (`intensityHalfLifeFactor`).
 

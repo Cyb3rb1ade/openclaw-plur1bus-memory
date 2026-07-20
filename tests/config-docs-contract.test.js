@@ -59,7 +59,8 @@ describe("copyable configuration documentation contract", () => {
       "—",
       "emotion.t3.model must not claim a manifest default",
     );
-    assert.match(configuration, /`emotion\.t3\.model`[^\n]*Fallback[^\n]*`merging\.model`[^\n]*`"kimi-for-coding"`/);
+    assert.match(configuration, /absent[^\n]*effective OpenClaw agent model/i);
+    assert.doesNotMatch(configuration, /Fallback[^\n]*merging\.model[^\n]*kimi-for-coding/i);
     assert.match(readme, new RegExp(`Reranker timeout[^\\n]*default ${defaults.reranker.timeoutMs / 1000}s`, "i"));
     assert.match(readme, new RegExp(`merging\\.autoApply[^\\n]*defaults to[^\\n]*${defaults.merging.autoApply}`, "i"));
     assert.match(readme, new RegExp(`reviews marked[^\\n]*${defaults.obsidianBridge.morningReview.status}`, "i"));

@@ -52,6 +52,10 @@ describe("feature-profiles", () => {
     assert.strictEqual(p.metaCognition.enabled, true);
     assert.strictEqual(p.obsidianBridge.semanticGraph.mutateMemory, false);
     assert.strictEqual(p.obsidianBridge.soulPatch.force, false);
+    for (const route of [p.merging, p.schicht15, p.skillMiner, p.criticalPush, p.emotion.t3]) {
+      assert.equal(Object.hasOwn(route, "model"), false);
+    }
+    assert.equal(Object.hasOwn(p, "llm"), false);
   });
 
   it("safeProfile is schema-valid, non-mutating, and keeps core capture/recall usable", () => {
@@ -77,6 +81,10 @@ describe("feature-profiles", () => {
     assert.strictEqual(p.obsidianBridge.autoApplyLowRisk, false);
     assert.strictEqual(p.obsidianBridge.semanticGraph.proposalOnly, true);
     assert.strictEqual(p.obsidianBridge.semanticGraph.mutateMemory, false);
+    for (const route of [p.merging, p.schicht15, p.skillMiner, p.criticalPush, p.emotion.t3]) {
+      assert.equal(Object.hasOwn(route, "model"), false);
+    }
+    assert.equal(Object.hasOwn(p, "llm"), false);
   });
 
   it("customProfileFromSelection merges user choices", () => {
