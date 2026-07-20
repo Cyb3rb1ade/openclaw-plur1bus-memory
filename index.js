@@ -30,7 +30,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 
@@ -112,13 +112,13 @@ import {
   renderPlur1busStartStatus,
   safeProfile,
 } from "./lib/setup/feature-profiles.js";
-import { resolveEffectiveConfig } from "./lib/setup/config-contract.js";
+import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "./lib/setup/config-contract.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import { runWikiCommand } from "./lib/wiki-command.js";
 import { checkAccess } from "./lib/acl-middleware.js";
-import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
+import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
@@ -240,7 +240,7 @@ import {
   sessionKeyFrom,
 } from "./lib/reply-outcome-tracking.js";
 import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
-import { DEFAULT_NAMESPACE } from "./lib/namespace-config.js";
+import { resolveNamespaceLayout } from "./lib/namespace-config.js";
 import {
   extractMediaOutputIds,
   stripMediaOutputIdToken,
@@ -675,10 +675,17 @@ function normalizeVectorValue(vector) {
 }
 
 class MemoryDB {
-  constructor(dbPath, vectorDim, logger = null) {
+  /**
+   * @param {string} dbPath LanceDB agent path.
+   * @param {number} vectorDim Vector dimension.
+   * @param {object} [logger] Optional logger.
+   * @param {{readOnly?: boolean}} [options] Non-mutating legacy-read mode.
+   */
+  constructor(dbPath, vectorDim, logger = null, { readOnly = false } = {}) {
     this.dbPath = dbPath;
     this.vectorDim = vectorDim;
     this.logger = logger;
+    this.readOnly = readOnly === true;
     this.db = null;
     this.table = null;
     this.initPromise = null;
@@ -748,6 +755,12 @@ class MemoryDB {
 
   _write(promise, label) {
     return withTimeout(promise, LANCEDB_WRITE_TIMEOUT_MS, label);
+  }
+
+  _assertWritable(operation) {
+    if (this.readOnly) {
+      throw new Error(`MemoryDB.${operation} rejected: database is read-only`);
+    }
   }
 
   async refreshSchemaFields() {
@@ -830,11 +843,20 @@ class MemoryDB {
     if (this.initPromise) return this.initPromise;
     const generationPromise = (async () => {
       try {
+        if (this.readOnly && !existsSync(this.dbPath)) return false;
         const lancedb = await getLanceDB();
-        this.db = await this._write(lancedb.connect(this.dbPath), "MemoryDB.connect");
+        this.db = this.readOnly
+          ? await this._read(lancedb.connect(this.dbPath), "MemoryDB.connect")
+          : await this._write(lancedb.connect(this.dbPath), "MemoryDB.connect");
       const tables = await this._read(this.db.tableNames(), "MemoryDB.tableNames");
       if (tables.includes(TABLE_NAME)) {
-        this.table = await this._write(this.db.openTable(TABLE_NAME), "MemoryDB.openTable");
+        this.table = this.readOnly
+          ? await this._read(this.db.openTable(TABLE_NAME), "MemoryDB.openTable")
+          : await this._write(this.db.openTable(TABLE_NAME), "MemoryDB.openTable");
+        if (this.readOnly) {
+          await this.refreshSchemaFields();
+          return true;
+        }
         // Migrate: add missing columns
         // Statt eines großen try/catch: Schema einmal lesen, dann pro Spalte
         // einzeln migrieren. So verhindert ein Fehler bei einer Spalte nicht
@@ -912,6 +934,9 @@ class MemoryDB {
             }
           }
         }
+      } else if (this.readOnly) {
+        await this._closeHandles("read-only-missing-table");
+        return false;
       } else {
         this.table = await this._write(this.db.createTable(TABLE_NAME, [
           {
@@ -987,6 +1012,7 @@ class MemoryDB {
   }
 
   async store(entry) {
+    this._assertWritable("store");
     await this.init();
     const text = typeof entry?.text === "string" ? entry.text.trim() : "";
     const summary = typeof entry?.summary === "string" ? entry.summary.trim() : "";
@@ -1053,6 +1079,7 @@ class MemoryDB {
   }
 
   async _maybeReindex() {
+    this._assertWritable("reindex");
     if (this._reindexing) return;
     // v6.2.1 — Zeitbasiertes Intervall enforce (P0-Fix)
     if (Date.now() - this._lastReindexAt < REINDEX_MIN_INTERVAL_MS) return;
@@ -1195,6 +1222,7 @@ class MemoryDB {
   }
 
   async delete(id) {
+    this._assertWritable("delete");
     await this.init();
     // safeUuid wirft Error wenn id nicht exakt UUID-Format hat
     const safe = safeUuid(id);
@@ -1209,6 +1237,7 @@ class MemoryDB {
   }
 
   async update(id, patch) {
+    this._assertWritable("update");
     await this.init();
     const safe = safeUuid(id);
     const rows = await this._read(this.table.query().where(`id = "${safe}"`).limit(1).toArray(), `MemoryDB.update.query:${safe}`);
@@ -1314,6 +1343,7 @@ class MemoryDB {
   }
 
   async purgeExpired() {
+    this._assertWritable("purgeExpired");
     await this.init();
     const now = safeTimestamp(Date.now());
     const protectedWhere = "(neverForget IS NULL OR neverForget = 0) AND (memoryClass IS NULL OR memoryClass != 'core')";
@@ -1325,6 +1355,7 @@ class MemoryDB {
    * Used by before_prompt_build; explicit/admin calls still use purgeExpired().
    */
   purgeExpiredThrottled(logger) {
+    this._assertWritable("purgeExpiredThrottled");
     const last = purgeThrottleMap.get(this.dbPath);
     if (last && Date.now() - last < PURGE_THROTTLE_MS) {
       return Promise.resolve();
@@ -1338,10 +1369,17 @@ class MemoryDB {
 
 /** Per-agent MemoryDB cache with callback-scoped operation leases. */
 class AgentDbPool {
-  constructor(basePath, vectorDim, logger = null) {
+  /**
+   * @param {string} basePath Validated namespace base path.
+   * @param {number} vectorDim Vector dimension.
+   * @param {object} [logger] Optional logger.
+   * @param {{readOnly?: boolean}} [options] Non-mutating legacy namespace mode.
+   */
+  constructor(basePath, vectorDim, logger = null, { readOnly = false } = {}) {
     this.basePath = basePath;
     this.vectorDim = vectorDim;
     this.logger = logger;
+    this.readOnly = readOnly === true;
     this.dbs = makeBoundedCache(50, async (id, db) => {
       if (db && typeof db.shutdown === "function") {
         try {
@@ -1370,18 +1408,36 @@ class AgentDbPool {
   }
 
   _getOrCreateDb(id) {
+    const dbPath = this._resolveAgentPath(id);
     const cached = this.dbs.get(id);
     if (cached) return cached;
-    const dbPath = join(this.basePath, id);
-    const db = new MemoryDB(dbPath, this.vectorDim, this.logger);
+    const db = new MemoryDB(dbPath, this.vectorDim, this.logger, { readOnly: this.readOnly });
     this.dbs.set(id, db);
     return db;
+  }
+
+  _resolveAgentPath(id) {
+    if (!this.readOnly) {
+      if (!existsSync(this.basePath)) mkdirSync(this.basePath, { recursive: true });
+      return resolveInside(this.basePath, id);
+    }
+    if (existsSync(this.basePath)) return resolveInside(this.basePath, id);
+
+    const missingParts = [];
+    let existingAncestor = resolve(this.basePath);
+    while (!existsSync(existingAncestor)) {
+      const parent = dirname(existingAncestor);
+      if (parent === existingAncestor) throw new Error(`No existing ancestor for read-only DB path: ${this.basePath}`);
+      missingParts.unshift(basename(existingAncestor));
+      existingAncestor = parent;
+    }
+    return resolveInside(existingAncestor, ...missingParts, id);
   }
 
   /** Compatibility accessor; production operations must prefer withDb(). */
   getDb(agentId) {
     if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
-    const id = agentId || "default";
+    const id = safeAgentId(agentId || "default");
     return this._getOrCreateDb(id);
   }
 
@@ -1394,7 +1450,7 @@ class AgentDbPool {
   async withDb(agentId, fn) {
     if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
     if (typeof fn !== "function") throw new TypeError("AgentDbPool.withDb requires a callback");
-    const id = agentId || "default";
+    const id = safeAgentId(agentId || "default");
     let startLease;
     const startGate = new Promise((resolve) => { startLease = resolve; });
     let acquired = false;
@@ -2403,10 +2459,16 @@ const plugin = {
   kind: "extension",
 
   register(api) {
-    let cfg = resolveEffectiveConfig(api.pluginConfig || {});
+    const rawPluginConfig = api.pluginConfig || {};
+    const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
+    let cfg = resolveEffectiveConfig(rawPluginConfig);
     pluginLogger = api.logger;
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
+    const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
+      explicit: namespacesExplicit,
+      path: `${PLUGIN_CONFIG_PATH}.namespaces`,
+    });
     const providerMigration = applyLegacyProviderDefaults(cfg, { baseDbPath });
     cfg = providerMigration.config;
     const llmResultCache = createLlmResultCache({
@@ -2818,33 +2880,7 @@ const plugin = {
       return `plur1bus:${key}`;
     };
 
-    const nsCfg = cfg.namespaces || {};
-    // MultiNamespacePool stores agents at: join(memoryBaseDir, namespace, agentId).
-    // Production default: baseDbPath = ~/.openclaw/memory/lancedb-namespaced
-    //   → resolveWriteNamespace({}) = "lancedb-namespaced"
-    //   → memoryBaseDir = join(baseDbPath, "..") = ~/.openclaw/memory
-    //   → effective agent path = join(memoryBaseDir, "lancedb-namespaced", agentId) = baseDbPath/agentId ✓
-    // Tests / custom cfg.baseDbPath: path like /tmp/test-XXX (not ending with namespace name).
-    //   → activeWriteNamespace overridden to "." so join(baseDbPath, ".", agentId) = baseDbPath/agentId ✓
-    const _writeNsName = nsCfg.activeWriteNamespace || DEFAULT_NAMESPACE;
-    const _basePathEndsWithNs = baseDbPath.endsWith("/" + _writeNsName) || baseDbPath.endsWith("\\" + _writeNsName);
-    let _memoryBaseDir, _effectiveNsCfg;
-    if (_basePathEndsWithNs) {
-      // Normal production path: strip the namespace segment, let MultiNamespacePool re-append it.
-      _memoryBaseDir = join(baseDbPath, "..");
-      _effectiveNsCfg = nsCfg;
-    } else {
-      // Non-namespaced baseDbPath (tests, custom path): agents live directly in baseDbPath.
-      // Use "." as namespace so join(baseDbPath, ".", agentId) normalises to baseDbPath/agentId.
-      _memoryBaseDir = baseDbPath;
-      _effectiveNsCfg = {
-        ...nsCfg,
-        activeWriteNamespace: ".",
-        activeRecallNamespaces: ["."],
-        // legacyReadOnlyNamespaces intentionally not set — no cross-ns recall for flat paths.
-      };
-    }
-    const pool = new MultiNamespacePool(_memoryBaseDir, _effectiveNsCfg, vectorDim, AgentDbPool, api.logger);
+    const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
     const emotionalPool = createEmotionalStatePool({
       temperaments: emotionCfg.temperaments || {},
       moodInfluence: emotionMoodInfluence,
@@ -5665,7 +5701,12 @@ const plugin = {
               return await pool.withReadDbs(agentId, async (readDbs) => {
               const limit = params.limit || maxPromptMemories;
               const assocCfg = cfg?.continuityEngine?.associativeRecall || {};
-              for (const { db: rdb } of readDbs) { await rdb.init(); }
+              const initializedReadDbs = [];
+              for (const entry of readDbs) {
+                const initialized = await entry.db.init();
+                if (initialized !== false && entry.db.table) initializedReadDbs.push(entry);
+              }
+              readDbs = initializedReadDbs;
               // v5.4.0 — Graph-Edges für assoziativen Spread laden
               let graphEdges = [];
               try {
@@ -6435,7 +6476,12 @@ const plugin = {
         try {
           await db.init();
           // Init additional read namespaces (skip write-db instance — already inited above)
-          for (const { db: rdb } of readDbs) { if (rdb !== db) await rdb.init(); }
+          const initializedReadDbs = [];
+          for (const entry of readDbs) {
+            const initialized = entry.db === db ? true : await entry.db.init();
+            if (initialized !== false && entry.db.table) initializedReadDbs.push(entry);
+          }
+          readDbs = initializedReadDbs;
           // v5.5.0 — Fast-Bernd IPC: merge pending voice turns + export state
           let voiceMessages = event.messages || [];
           if (ctx?.workspaceDir) {

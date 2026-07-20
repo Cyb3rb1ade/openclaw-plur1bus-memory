@@ -219,15 +219,27 @@ describe("namespace compatibility wrappers", () => {
     );
   });
 
-  it("accepts only the exact temporary internal legacy-flat sentinel", () => {
+  it("rejects the removed private legacy-flat sentinel through public wrappers", () => {
     const sentinel = {
       activeWriteNamespace: ".",
       activeRecallNamespaces: ["."],
     };
 
-    assert.equal(resolveWriteNamespace(sentinel), ".");
-    assert.deepEqual(resolveRecallReadNamespaces(sentinel), ["."]);
-    assert.equal(isLegacyReadOnly(".", sentinel), false);
+    assertNamespaceError(
+      () => resolveWriteNamespace(sentinel),
+      `${NS_PATH}.activeWriteNamespace`,
+      /identifier|pattern/i,
+    );
+    assertNamespaceError(
+      () => resolveRecallReadNamespaces(sentinel),
+      `${NS_PATH}.activeWriteNamespace`,
+      /identifier|pattern/i,
+    );
+    assertNamespaceError(
+      () => isLegacyReadOnly(".", sentinel),
+      `${NS_PATH}.activeWriteNamespace`,
+      /identifier|pattern/i,
+    );
     assertNamespaceError(
       () => resolveNamespaceLayout("/memory", sentinel, { explicit: true, path: NS_PATH }),
       `${NS_PATH}.activeWriteNamespace`,

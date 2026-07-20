@@ -1,18 +1,33 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
+import { resolveNamespaceLayout } from "../lib/namespace-config.js";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 
-const TMP_BASE = join(homedir(), ".openclaw", "memory");
+const TMP_BASE = mkdtempSync(join(tmpdir(), "plur1bus-multi-ns-"));
+after(() => rmSync(TMP_BASE, { recursive: true, force: true }));
+
+function namedLayout(nsCfg) {
+  return resolveNamespaceLayout(TMP_BASE, nsCfg, { explicit: true });
+}
+
+function legacyLayout(baseDbPath = TMP_BASE) {
+  return resolveNamespaceLayout(baseDbPath, {}, { explicit: false });
+}
 
 // FakeAgentDbPool — no real LanceDB, just path-tracking
 class FakeAgentDbPool {
-  constructor(basePath, _vectorDim) {
+  static constructed = [];
+
+  constructor(basePath, _vectorDim, _logger, options) {
     this.basePath = basePath;
+    this.options = options;
     this.isShutdown = false;
     this.active = new Map();
     this.events = [];
+    FakeAgentDbPool.constructed.push(this);
   }
   getDb(agentId) {
     if (this.isShutdown) throw new Error("FakeAgentDbPool is shutdown");
@@ -35,9 +50,17 @@ class FakeAgentDbPool {
 }
 
 describe("MultiNamespacePool", () => {
+  it("routes legacy-flat agents directly below the exact base path", () => {
+    const customBase = join(TMP_BASE, "custom-flat");
+    mkdirSync(customBase, { recursive: true });
+    const pool = new MultiNamespacePool(legacyLayout(customBase), 384, FakeAgentDbPool);
+    assert.equal(pool.getWriteDb("agent-a").dbPath, join(customBase, "agent-a"));
+    assert.deepEqual(pool.getReadDbs("agent-a").map(({ namespace }) => namespace), [null]);
+  });
+
   it("getWriteDb gives DB from activeWriteNamespace", () => {
     const nsCfg = { activeWriteNamespace: "lancedb-local", activeRecallNamespaces: ["lancedb-local"] };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const db = pool.getWriteDb("default");
     assert.ok(db);
     assert.ok(db.dbPath.includes("lancedb-local"), `Expected lancedb-local in: ${db.dbPath}`);
@@ -48,7 +71,7 @@ describe("MultiNamespacePool", () => {
       activeWriteNamespace: "lancedb-new",
       legacyReadOnlyNamespaces: ["lancedb-old"],
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const db = pool.getWriteDb("default");
     assert.ok(!db.dbPath.includes("lancedb-old"), `Write-DB points to legacyReadOnly: ${db.dbPath}`);
   });
@@ -60,7 +83,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: true,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const dbs = pool.getReadDbs("default");
     assert.strictEqual(dbs.length, 2);
     assert.ok(dbs.some(d => d.namespace === "lancedb-new"));
@@ -74,7 +97,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: false,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const dbs = pool.getReadDbs("default");
     assert.strictEqual(dbs.length, 1);
     assert.strictEqual(dbs[0].namespace, "lancedb-new");
@@ -82,7 +105,7 @@ describe("MultiNamespacePool", () => {
 
   it("getDb (backward-compat) delegates to getWriteDb", () => {
     const nsCfg = { activeWriteNamespace: "lancedb-local" };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const a = pool.getDb("default");
     const b = pool.getWriteDb("default");
     assert.strictEqual(a.dbPath, b.dbPath);
@@ -95,7 +118,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: true,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
     let callbackStarted;
@@ -124,7 +147,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: true,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
 
     const result = await pool.withReadDbs("agent-a", async (dbs) => {
       assert.deepEqual(dbs.map((entry) => entry.namespace), ["lancedb-new", "lancedb-second", "lancedb-old"]);
@@ -155,7 +178,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: true,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const failure = new Error("read callback failed");
 
     await assert.rejects(
@@ -169,7 +192,7 @@ describe("MultiNamespacePool", () => {
 
   it("withDb remains a backward-compatible lease alias for withWriteDb", async () => {
     const nsCfg = { activeWriteNamespace: "lancedb-local" };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const result = await pool.withDb("agent-a", async (db) => db.dbPath);
     assert.equal(result, join(TMP_BASE, "lancedb-local", "agent-a"));
     assert.equal(pool._pools.get("lancedb-local").active.has("agent-a"), false);
@@ -182,7 +205,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: true,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     pool.getReadDbs("default"); // initialize pools
     await assert.doesNotReject(() => pool.shutdown());
   });
@@ -205,7 +228,7 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["lancedb-old"],
       crossNamespaceRecall: true,
     };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, FailingAgentDbPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FailingAgentDbPool);
     pool.getReadDbs("agent-a");
 
     await assert.rejects(pool.shutdown(), (err) => {
@@ -219,12 +242,7 @@ describe("MultiNamespacePool", () => {
   });
 
   it("rejects child creation and leased work after terminal shutdown", async () => {
-    const pool = new MultiNamespacePool(
-      TMP_BASE,
-      { activeWriteNamespace: "lancedb-new" },
-      384,
-      FakeAgentDbPool,
-    );
+    const pool = new MultiNamespacePool(namedLayout({ activeWriteNamespace: "lancedb-new" }), 384, FakeAgentDbPool);
 
     await pool.shutdown();
     await assert.rejects(
@@ -255,7 +273,7 @@ describe("MultiNamespacePool", () => {
     }
 
     const nsCfg = { activeWriteNamespace: "lancedb-new" };
-    const pool = new MultiNamespacePool(TMP_BASE, nsCfg, 384, CountingShutdownPool);
+    const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, CountingShutdownPool);
     const operation = pool.withWriteDb("agent-a", async () => {
       markOperationStarted();
       await operationGate;
@@ -270,7 +288,6 @@ describe("MultiNamespacePool", () => {
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(child.shutdownCalls, 0, "shutdown must not close a child while its top-level lease is active");
 
-      pool.nsCfg.activeWriteNamespace = "lancedb-late";
       await assert.rejects(
         () => pool.withWriteDb("agent-b", async () => "must-not-run"),
         /shutdown/i,
@@ -285,5 +302,73 @@ describe("MultiNamespacePool", () => {
     assert.equal(child.shutdownCalls, 1, "concurrent shutdown calls must share one child-close pass");
     await pool.shutdown();
     assert.equal(child.shutdownCalls, 1, "repeated shutdown must remain idempotent");
+  });
+
+  it("validates malicious agent IDs through every public alias before child use", async () => {
+    const pool = new MultiNamespacePool(namedLayout({ activeWriteNamespace: "active" }), 384, FakeAgentDbPool);
+    const invalidIds = ["../escape", "bad/name", "bad\\name", ".", 7, { id: "agent" }];
+    for (const agentId of invalidIds) {
+      assert.throws(() => pool.getWriteDb(agentId), /invalid agent/i);
+      assert.throws(() => pool.getReadDbs(agentId), /invalid agent/i);
+      assert.throws(() => pool.getDb(agentId), /invalid agent/i);
+      await assert.rejects(() => pool.withWriteDb(agentId, async () => {}), /invalid agent/i);
+      await assert.rejects(() => pool.withReadDbs(agentId, async () => {}), /invalid agent/i);
+      await assert.rejects(() => pool.withDb(agentId, async () => {}), /invalid agent/i);
+    }
+    assert.equal(pool._pools.size, 0);
+  });
+
+  it("rejects an outside symlink and canonical route collision before creating a child", () => {
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-outside-"));
+    const symlinkRoot = mkdtempSync(join(tmpdir(), "plur1bus-route-root-"));
+    try {
+      symlinkSync(outside, join(symlinkRoot, "outside"));
+      const outsideLayout = resolveNamespaceLayout(symlinkRoot, {
+        activeWriteNamespace: "outside",
+      }, { explicit: true });
+      FakeAgentDbPool.constructed.length = 0;
+      assert.throws(() => new MultiNamespacePool(outsideLayout, 384, FakeAgentDbPool), /traversal|outside/i);
+      assert.equal(FakeAgentDbPool.constructed.length, 0);
+
+      mkdirSync(join(symlinkRoot, "shared"));
+      symlinkSync(join(symlinkRoot, "shared"), join(symlinkRoot, "alias-a"));
+      symlinkSync(join(symlinkRoot, "shared"), join(symlinkRoot, "alias-b"));
+      const collisionLayout = resolveNamespaceLayout(symlinkRoot, {
+        activeWriteNamespace: "alias-a",
+        activeRecallNamespaces: ["alias-a", "alias-b"],
+      }, { explicit: true });
+      FakeAgentDbPool.constructed.length = 0;
+      assert.throws(() => new MultiNamespacePool(collisionLayout, 384, FakeAgentDbPool), /collision|same canonical/i);
+      assert.equal(FakeAgentDbPool.constructed.length, 0);
+    } finally {
+      rmSync(symlinkRoot, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("clones and freezes routes, marks only legacy children read-only, and never writes legacy", () => {
+    const source = {
+      mode: "named",
+      baseDir: TMP_BASE,
+      baseDbPath: TMP_BASE,
+      activeWriteNamespace: "active",
+      activeRecallNamespaces: ["active"],
+      legacyReadOnlyNamespaces: ["legacy"],
+      recallReadNamespaces: ["active", "legacy"],
+      crossNamespaceRecall: true,
+    };
+    FakeAgentDbPool.constructed.length = 0;
+    const pool = new MultiNamespacePool(source, 384, FakeAgentDbPool);
+    source.activeWriteNamespace = "legacy";
+    source.recallReadNamespaces.reverse();
+    const reads = pool.getReadDbs("agent-a");
+    assert.deepEqual(reads.map(({ namespace }) => namespace), ["active", "legacy"]);
+    assert.equal(Object.isFrozen(pool.layout), true);
+    assert.equal(Object.isFrozen(pool.layout.recallReadNamespaces), true);
+    const activeChild = pool._pools.get("active");
+    const legacyChild = pool._pools.get("legacy");
+    assert.equal(activeChild.options, undefined);
+    assert.deepEqual(legacyChild.options, { readOnly: true });
+    assert.equal(pool.getWriteDb("agent-a").dbPath, join(TMP_BASE, "active", "agent-a"));
   });
 });
