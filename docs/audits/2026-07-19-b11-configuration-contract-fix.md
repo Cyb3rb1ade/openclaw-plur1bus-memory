@@ -366,14 +366,16 @@ both exit 0
 - This batch does not claim a legacy backend or data migration; it prevents an
   unproven switch and preserves rollback state.
 
-## OpenClaw-default LLM implementation follow-up (independent review pending)
+## OpenClaw-default LLM implementation follow-up — final review complete
 
 The docs-only R5 model-default correction was not an adequate runtime closure:
 runtime callers, feature ownership, installer output, trust requirements, and
-deploy integrity also had to agree. The implementation series now present on
-the isolated feature branch is:
+deploy integrity also had to agree. The implementation and review-fix series
+on the isolated feature branch ends at
+`94a7376dd8e4689ff2a9541f76fdb2242b118496`:
 
 ```text
+3532a76 feat: add OpenClaw LLM router
 f0818ad docs: document LLM route kinds
 b7ffa0d feat: use OpenClaw default for core LLM routes
 03c4a62 fix: preserve LLM command context and critical no-op
@@ -381,41 +383,87 @@ b7ffa0d feat: use OpenClaw default for core LLM routes
 267fb71 feat: add LLM call context helper
 211b18d fix: preserve existing LLM call context
 5c8492b refactor: isolate feature LLM routes
-cf01840 fix: remove hard-coded chat model defaults
-Task 5  docs: align config with OpenClaw LLM defaults
+3be8e18 fix: bound semantic input fallback
+e8dfb26 fix: remove hard-coded chat model defaults
+743ede9 fix: sanitize LLM failures and cancel timeouts
+1ea8072 fix: propagate LLM cancellation before dispatch
+a3547cf fix: block writes after LLM abort
+60b0786 docs: align config with OpenClaw LLM defaults
+07f56a7 fix: deploy LLM failure helper
+90d7dd6 fix: sanitize remaining LLM failure logs
+e9fedab fix: make LLM cancellation authoritative
+94a7376 fix: clear Emotion Tier 3 timeout
 ```
 
-Task 5 aligns every optional chat-model schema description without adding a
-default; removes installer-forced Merging direct/model config and the copied
+The series aligns every optional chat-model schema description without adding
+a default; removes installer-forced Merging direct/model config and the copied
 Schicht 1.5 route; leaves Safe, Recommended, and preserve free of implicit
 models or entry-level LLM trust grants; documents the session/global/model
-trust boundaries and the one-primary-attempt runtime behavior; and adds
-`lib/llm-router.js` to deployment integrity.
+trust boundaries and the one-primary-attempt runtime behavior; and deploys the
+router plus its abort/error helpers.
 
-Focused causal evidence:
+Focused causal evidence for the configuration/documentation wave:
 
 ```text
 RED Task 5 contract/profile/deploy wave:
 tests 63; pass 54; fail 9
-Expected gaps: old Emotion fallback docs, missing schema descriptions,
-missing route/trust/fail-closed docs, and missing router deploy entry.
 
 RED installer wave:
 tests 17; pass 16; fail 1
-Expected gap: installer forced MERGING_* direct/model fields and copied them
-into SCHICHT15_BLOCK.
 
 GREEN exact focused Task 5 gate:
 tests 72; suites 11; pass 72; fail 0; skipped 0
 
 GREEN installer contract:
 tests 17; suites 2; pass 17; fail 0; skipped 0
-
-Task 5 lint and whitespace gates:
-`npm run lint` exit 0; `git diff --check` exit 0
 ```
 
-This receipt does **not** close the final B11 review. Task 6 still owns the
-independent review, any remediation it finds, the authoritative full serial
-gate, and the final closure decision. No Main/Remote/Primary integration is
-claimed here.
+### Independent review and final verification
+
+Independent specification review of `33bb9c4..94a7376` inventoried all 20
+owner routes and returned PASS with 0 Critical, 0 Important, and 0 Minor
+findings. Earlier quality passes exposed provider-error leakage,
+abort-ignoring runtimes, late Emotion mutation, strengthen rollback loss,
+missing direct-call cancellation, and an Emotion Tier-3 timeout lifetime.
+Every validated Critical/Important issue was first reproduced by a failing
+focused test, fixed, and independently re-reviewed; no finding remains open.
+
+```text
+Focused B11/default-LLM gate:
+tests 391; pass 391; fail 0; skipped 0
+
+Independent route/spec gate:
+tests 334; pass 334; fail 0; skipped 0
+
+Independent cancellation/error-hygiene gate:
+tests 72; pass 72; fail 0
+
+Authoritative serial gate at 94a7376:
+node --test --test-concurrency=1 tests/*.test.js test/*.test.js
+suites 524; tests 2855; pass 2854; fail 0; cancelled 0; skipped 1
+todo 0; duration_ms 411318.698593; exit 0
+
+npm run lint: exit 0
+git diff --check 33bb9c4..94a7376: exit 0
+```
+
+The single unchanged skip is
+`exits 1 when memory/.healthcheck/ directory is not writable` in
+`tests/repair-scripts.test.js`; the fixture is deliberately skipped under UID
+0 because root permissions cannot prove the intended failure. Full review and
+serial receipts are stored at
+`/tmp/plur1bus-sdd/openclaw-default-llm-review.md` and
+`/tmp/plur1bus-sdd/openclaw-default-llm-serial.md`.
+
+**B11 final review complete.** No Main, Remote, or primary-checkout mutation is
+claimed or was performed.
+
+### B12 seam handoff
+
+B12-Core owns namespace exposure, identifier/path containment, read/write-role
+validation, and deterministic multi-namespace result/canonical/trace merging.
+B12-P owns query refinement, adaptive budgeting, semantic compression,
+candidate limits, and graph-index behavior. Its query-refinement and semantic-
+compression calls must consume `lib/llm-router.js`, carry the current target
+`agentId`, preserve base-recall fallback and timeout behavior, and never add a
+named model default or inherit another feature's model/transport.
