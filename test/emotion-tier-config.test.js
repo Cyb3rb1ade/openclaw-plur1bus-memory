@@ -127,6 +127,60 @@ describe("EmotionEngine Budget-Gate", () => {
     assert.strictEqual(score.tier_used, 3);
     assert.strictEqual(score.primary_emotion, "joy");
   });
+
+  it("commits no context or stats after an abort-ignoring Tier-3 call", async () => {
+    const controller = new AbortController();
+    let resolveLlm;
+    const engine = new EmotionEngine({
+      tier3: {
+        enabled: true,
+        callLlm: async () => new Promise((resolve) => {
+          resolveLlm = resolve;
+        }),
+      },
+    });
+
+    const pending = engine.analyze("I am happy.", "user", 3, {
+      signal: controller.signal,
+    });
+    await Promise.resolve();
+    controller.abort(new DOMException("cancelled", "AbortError"));
+    resolveLlm(TIER3_RESPONSE);
+
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.strictEqual(engine._context.previous_top_emotion, null);
+    assert.strictEqual(engine._context.previous_timestamp, null);
+    assert.strictEqual(engine.stats.total, 0);
+    assert.strictEqual(engine.stats.tier3, 0);
+  });
+
+  it("forwards the caller signal to the direct Tier-3 provider", async () => {
+    const controller = new AbortController();
+    let requestOptions;
+    const engine = new EmotionEngine({
+      tier3: {
+        enabled: true,
+        model: "vendor/emotion-model",
+        openaiClient: {
+          chat: {
+            completions: {
+              create: async (_body, options) => {
+                requestOptions = options;
+                return { choices: [{ message: { content: TIER3_RESPONSE } }] };
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const score = await engine.analyze("I am happy.", "user", 3, {
+      signal: controller.signal,
+    });
+
+    assert.strictEqual(score.primary_emotion, "joy");
+    assert.strictEqual(requestOptions.signal, controller.signal);
+  });
 });
 
 describe("Tier3LLMClassifier provider ownership", () => {

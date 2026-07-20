@@ -63,4 +63,30 @@ describe("strengthenMemory — delete+add fallback data-loss guard", () => {
     assert.strictEqual(added[0].id, ID);
     assert.strictEqual(added[0].replayCount, 1);
   });
+
+  it("surfaces both re-add and rollback failures after delete", async () => {
+    const addErrors = [
+      new Error("strengthened re-add failed"),
+      new Error("original rollback failed"),
+    ];
+    let addCalls = 0;
+    const db = {
+      table: {
+        query: () => ({ where: () => ({ limit: () => ({ toArray: async () => [{ ...ORIGINAL }] }) }) }),
+        update: async () => { throw new Error("update() not supported"); },
+        delete: async () => {},
+        add: async () => {
+          throw addErrors[addCalls++];
+        },
+      },
+    };
+
+    await assert.rejects(
+      strengthenMemory(db, ID),
+      (error) => error instanceof AggregateError
+        && error.errors[0] === addErrors[0]
+        && error.errors[1] === addErrors[1],
+    );
+    assert.strictEqual(addCalls, 2, "the rollback re-add must still be attempted exactly once");
+  });
 });

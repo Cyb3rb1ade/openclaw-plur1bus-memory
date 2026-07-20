@@ -759,6 +759,79 @@ test("native timeout aborts the request and clears its timer", async () => {
   assert.deepEqual(timer.cleared, [timer.scheduled[0]]);
 });
 
+test("native timeout settles even when the runtime ignores abort", async () => {
+  let receivedSignal;
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "recall-query",
+    runtimeLlm: {
+      async complete(params) {
+        receivedSignal = params.signal;
+        return new Promise(() => {});
+      },
+    },
+    logger: createLogger(),
+  });
+
+  const pending = completeFeatureLlm([], route, {
+    agentId: "agent-a",
+    purpose: "recall-query",
+    timeoutMs: 15,
+  });
+  const outcome = await Promise.race([
+    pending,
+    new Promise((resolve) => setTimeout(() => resolve("still-pending"), 60)),
+  ]);
+
+  assert.notEqual(outcome, "still-pending", "timeout must release the caller slot");
+  assert.equal(receivedSignal.aborted, true);
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.error, receivedSignal.reason);
+  assert.equal(outcome.error.name, "TimeoutError");
+});
+
+test("a pre-aborted caller starts neither native nor direct transport", async () => {
+  const controller = new AbortController();
+  controller.abort(new DOMException("cancelled", "AbortError"));
+  let nativeCalls = 0;
+  let directCalls = 0;
+  const nativeRoute = resolveFeatureLlmRoute({}, {
+    feature: "capture-summary",
+    runtimeLlm: {
+      async complete() {
+        nativeCalls += 1;
+        return "late native";
+      },
+    },
+    logger: createLogger(),
+  });
+  const directRoute = resolveFeatureLlmRoute({
+    model: "vendor/model-a",
+    apiKey: "direct-secret",
+  }, {
+    feature: "capture-summary",
+    logger: createLogger(),
+  });
+
+  const nativeResult = await completeFeatureLlm([], nativeRoute, {
+    signal: controller.signal,
+  });
+  const directResult = await completeFeatureLlm([], directRoute, {
+    signal: controller.signal,
+  }, {
+    async directCall() {
+      directCalls += 1;
+      return "late direct";
+    },
+  });
+
+  assert.equal(nativeCalls, 0);
+  assert.equal(directCalls, 0);
+  assert.equal(nativeResult.status, "failed");
+  assert.equal(directResult.status, "failed");
+  assert.equal(nativeResult.error.name, "AbortError");
+  assert.equal(directResult.error.name, "AbortError");
+});
+
 test("caller cancellation aborts native dispatch and removes its listener after settlement", async () => {
   const logger = createLogger();
   const timer = createTimerHarness();
