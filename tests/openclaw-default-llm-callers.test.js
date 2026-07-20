@@ -536,8 +536,8 @@ test("capture scheduler abort reaches summary and Emotion without late durable w
   }
 });
 
-test("recall scheduler abort reaches query summary and overlay without late overlay writes", async (t) => {
-  for (const scenario of ["recall-query-summary", "continuity-overlay"]) {
+test("recall commit barriers block writes when the runtime ignores abort and succeeds late", async (t) => {
+  for (const scenario of ["emotion-classification", "continuity-overlay"]) {
     const baseDbPath = mkdtempSync(join(tmpdir(), `plur1bus-recall-abort-${scenario}-`));
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
@@ -553,16 +553,21 @@ test("recall scheduler abort reaches query summary and overlay without late over
     const agentId = `${scenario}-agent`;
     {
       const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
-      if (scenario === "continuity-overlay") {
-      await db.store({
-        id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-        text: "The project used to follow the original roadmap.",
-        summary: "Original project roadmap",
-        vector: makeVector(),
-        category: "project",
-        createdAt: Date.now(),
-        storedBy: agentId,
-      });
+      if (scenario !== "emotion-classification") {
+        const memories = [{
+          id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          text: "The project used to follow the original roadmap.",
+          summary: "Original project roadmap",
+        }];
+        for (const memory of memories) {
+          await db.store({
+            ...memory,
+            vector: makeVector(),
+            category: "project",
+            createdAt: Date.now(),
+            storedBy: agentId,
+          });
+        }
       } else {
         await db.init();
       }
@@ -575,8 +580,10 @@ test("recall scheduler abort reaches query summary and overlay without late over
     const api = createApi(baseDbPath, {
       autoRecall: true,
       merging: { enabled: true },
-      runtime: { recallTimeoutMs: 200 },
-      emotion: { t3: { enabled: false } },
+      runtime: { recallTimeoutMs: 1_500 },
+      emotion: scenario === "emotion-classification"
+        ? { tier: "t3", t3: { enabled: true, timeoutMs: 5_000 } }
+        : { t3: { enabled: false } },
       personaVoice: { enabled: false },
       continuityEngine: scenario === "continuity-overlay" ? {
         enabled: true,
@@ -587,17 +594,34 @@ test("recall scheduler abort reaches query summary and overlay without late over
       async complete(params) {
         calls.push(params);
         startedResolve();
-        return new Promise((resolve, reject) => {
-          if (params.signal.aborted) return reject(params.signal.reason);
-          params.signal.addEventListener("abort", () => reject(params.signal.reason), { once: true });
-        });
+        await new Promise((resolve) => setTimeout(resolve, 1_750));
+        const text = scenario === "emotion-classification"
+          ? JSON.stringify({
+              valence: 0.5,
+              arousal: 0.5,
+              dominance: 0.5,
+              intensity: 0.8,
+              primary_emotion: "joy",
+              emotion_labels: { joy: 0.8 },
+              confidence: 0.9,
+              language: "en",
+            })
+          : scenario === "continuity-overlay"
+            ? JSON.stringify({
+                shiftType: "meaning",
+                shiftDescription: "The roadmap now has a different meaning.",
+                confidence: 0.9,
+                confidenceDelta: 0.1,
+              })
+            : "yes";
+        return { text, provider: "late-runtime", model: "late-model", usage: {} };
       },
     });
     t.after(() => api._shutdown());
     pluginModule.default.register(api);
-    const prompt = scenario === "recall-query-summary"
-      ? "long recall query topic. ".repeat(1_000)
-      : "Since then the project now follows a different roadmap.";
+    const prompt = scenario === "continuity-overlay"
+      ? "Since then the project now follows a different roadmap."
+      : "This project decision feels unexpectedly joyful and important.";
     const emitted = api._emit("before_prompt_build", {
       prompt,
       messages: [{ role: "user", content: prompt }],
@@ -606,16 +630,22 @@ test("recall scheduler abort reaches query summary and overlay without late over
 
     const didStart = await Promise.race([
       started.then(() => true),
-      new Promise((resolve) => setTimeout(() => resolve(false), 2_000)),
+      new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
     ]);
     assert.equal(didStart, true, JSON.stringify(api._logs));
     await emitted;
     assert.match(JSON.stringify(api._logs), /recall timed out without cache/);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(calls.length, 1);
     assert.equal(calls[0].purpose, scenario);
     assert.equal(calls[0].agentId, agentId);
     assert.equal(calls[0].signal.aborted, true);
-    assert.equal(existsSync(join(baseDbPath, "interpretation-overlays.jsonl")), false);
+    if (scenario === "continuity-overlay") {
+      assert.equal(existsSync(join(baseDbPath, "interpretation-overlays.jsonl")), false);
+    }
+    if (scenario === "emotion-classification") {
+      assert.equal(existsSync(join(baseDbPath, ".emotional-state.json")), false);
+      assert.equal(existsSync(join(baseDbPath, ".current-mood.txt")), false);
+    }
   }
 });
