@@ -188,6 +188,11 @@ import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
+  completeFeatureLlm,
+  isLlmRouteAvailable,
+  resolveFeatureLlmRoute,
+} from "./lib/llm-router.js";
+import {
   LLM_RESULT_CACHE_PURPOSES,
   createLlmResultCache,
   withLlmResultCacheContext,
@@ -1986,10 +1991,25 @@ function appendConflictLog(workspaceDir, entry) {
 // ============================================================================
 
 async function callLlm(messages, llmCfg) {
-  return callOpenAiLlm(messages, llmCfg, {
-    loadOpenAI: getOpenAI,
-    resultCache: llmCfg?.resultCache,
+  const result = await completeFeatureLlm(messages, llmCfg, {
+    runtimeLlm: llmCfg?.callContext?.runtimeLlm,
+    agentId: llmCfg?.callContext?.agentId,
+    purpose: llmCfg?.callContext?.purpose,
+    maxTokens: llmCfg?.maxTokens,
+    temperature: llmCfg?.temperature,
+    jsonMode: llmCfg?.jsonMode,
+    disableThinking: llmCfg?.disableThinking,
+    timeoutMs: llmCfg?.timeoutMs,
+    signal: llmCfg?.signal,
+    resultCacheContext: llmCfg?.resultCacheContext,
+  }, {
+    directCall: (directMessages, directCfg) => callOpenAiLlm(directMessages, directCfg, {
+      loadOpenAI: getOpenAI,
+      resultCache: directCfg?.resultCache,
+    }),
   });
+  if (result.status === "failed") throw result.error;
+  return result.status === "ok" ? result.text : null;
 }
 
 /**
@@ -2009,7 +2029,16 @@ async function callMergeCheck(existingText, newText, llmCfg, agentId) {
       content: `Two memory fragments — should they be merged into one?\n\nFragment A: ${A}\nFragment B: ${B}\n\nRespond with JSON only: {"merge": boolean, "reason": "brief explanation", "mergedText": "merged version (only if merge=true)"}\nRules:\n- merge=true only if both fragments describe the same subject/fact from different angles\n- mergedText must contain ALL information from both fragments\n- mergedText must be longer than the shorter of the two fragments`,
     },
   ], withLlmResultCacheContext(
-    { ...llmCfg, jsonMode: true, maxTokens: 300, temperature: 0 },
+    {
+      ...llmCfg,
+      jsonMode: true,
+      maxTokens: 300,
+      temperature: 0,
+      callContext: {
+        agentId,
+        purpose: LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+      },
+    },
     agentId,
     LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
   ));
@@ -2344,6 +2373,30 @@ const plugin = {
       baseDbPath,
       logger: api.logger,
     });
+    const createFeatureRoute = (feature, featureConfig = {}) => {
+      const routeConfig = { ...featureConfig };
+      let credentialUnavailable = false;
+      if (typeof routeConfig.apiKey === "string" && routeConfig.apiKey.trim()) {
+        try {
+          const unresolvedReference = routeConfig.apiKey.replace(/\$\{[^{}]+\}/g, "");
+          if (unresolvedReference.includes("${")) {
+            throw new Error("Malformed environment reference");
+          }
+          routeConfig.apiKey = resolveEnvVars(routeConfig.apiKey);
+        } catch (_) {
+          credentialUnavailable = true;
+          delete routeConfig.apiKey;
+        }
+      }
+      const route = resolveFeatureLlmRoute(routeConfig, {
+        feature,
+        runtimeLlm: api.runtime?.llm,
+        logger: api.logger,
+        resultCache: llmResultCache,
+        credentialUnavailable,
+      });
+      return isLlmRouteAvailable(route) ? route : null;
+    };
     if (providerMigration.changed) {
       api.logger.info(
         `memory-lancedb-namespaced: applied local provider defaults for empty legacy install (${providerMigration.migrations.join(", ")})`
@@ -2442,26 +2495,17 @@ const plugin = {
     // TTL presets
     const TTL_MAP = { session: 86_400_000, short: 14 * 86_400_000 };
 
-    // Merging config. Provider-neutral default: optional LLM features must
-    // declare their chat model explicitly; do not silently fall back to Kimi.
+    // Merging config
     const mergingCfg = cfg.merging || {};
-    const mergingRequested = mergingCfg.enabled === true;
-    const mergingModel = typeof mergingCfg.model === "string" ? mergingCfg.model.trim() : "";
-    const mergingEnabled = mergingRequested && mergingModel !== "";
+    const mergingEnabled = mergingCfg.enabled === true;
     const mergingAutoApply = mergingCfg.autoApply === true;
     const mergingThreshold = mergingCfg.threshold ?? 0.70;
-    const mergingLlmCfg = mergingEnabled ? {
-      model: mergingModel,
-      baseUrl: mergingCfg.baseUrl || undefined,
-      apiKey: mergingCfg.apiKey ? resolveEnvVars(mergingCfg.apiKey) : apiKey,
-      disableThinking: mergingCfg.disableThinking ?? false,
-      headers: mergingCfg.headers || undefined,
-      resultCache: llmResultCache,
-    } : null;
-    if (mergingRequested && !mergingEnabled) {
-      api.logger.warn("memory-lancedb-namespaced: merging.enabled=true but merging.model is empty; disabling LLM merging. Set config.merging.model for any OpenAI-compatible chat provider.");
+    const mergingLlmCfg = mergingEnabled
+      ? createFeatureRoute("merging", mergingCfg)
+      : null;
+    if (mergingEnabled && mergingLlmCfg) {
+      api.logger.info(`memory-lancedb-namespaced: merging enabled (threshold: ${mergingThreshold}, route: ${mergingLlmCfg.kind})`);
     }
-    if (mergingEnabled) api.logger.info(`memory-lancedb-namespaced: merging enabled (threshold: ${mergingThreshold}, model: ${mergingLlmCfg.model})`);
 
     // Dreaming-Narrative config: menschenähnliche, stimmungsgefärbte Träume
     // als additive Schicht über Light/REM Dream. Default an, aber effektiv
@@ -2479,60 +2523,41 @@ const plugin = {
 
     // Schicht 1.5 config
     const schicht15Cfg = cfg.schicht15 || {};
-    const schicht15Requested = schicht15Cfg.enabled === true;
-    const schicht15Model = (typeof schicht15Cfg.model === "string" && schicht15Cfg.model.trim() !== "")
-      ? schicht15Cfg.model.trim()
-      : mergingModel;
-    const schicht15Enabled = schicht15Requested && schicht15Model !== "";
+    const schicht15Enabled = schicht15Cfg.enabled === true;
     const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
     const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 3;
-    const schicht15LlmCfg = schicht15Enabled ? {
-      model: schicht15Model,
-      baseUrl: schicht15Cfg.baseUrl || mergingCfg.baseUrl || undefined,
-      apiKey: schicht15Cfg.apiKey ? resolveEnvVars(schicht15Cfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
-      disableThinking: schicht15Cfg.disableThinking ?? mergingCfg.disableThinking ?? false,
-      headers: schicht15Cfg.headers || mergingCfg.headers || undefined,
-      resultCache: llmResultCache,
-    } : null;
-    if (schicht15Requested && !schicht15Enabled) {
-      api.logger.warn("memory-lancedb-namespaced: schicht15.enabled=true but no schicht15.model or merging.model is configured; disabling KNOWLEDGE.md LLM tooling.");
+    const schicht15LlmCfg = schicht15Enabled
+      ? createFeatureRoute("schicht15", schicht15Cfg)
+      : null;
+    if (schicht15LlmCfg) {
+      api.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance}, route: ${schicht15LlmCfg.kind})`);
     }
-    if (schicht15Enabled) api.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance})`)
 
     // Skill Miner config
     const skillMinerCfg = cfg.skillMiner || {};
     const skillMinerEnabled = skillMinerCfg.enabled === true;
-    const skillMinerModel = (typeof skillMinerCfg.model === "string" && skillMinerCfg.model.trim() !== "")
-      ? skillMinerCfg.model.trim()
-      : mergingModel;
-    const skillMinerLlmCfg = skillMinerEnabled && skillMinerModel
-      ? {
-          model: skillMinerModel,
-          baseUrl: skillMinerCfg.baseUrl || mergingCfg.baseUrl || undefined,
-          apiKey: skillMinerCfg.apiKey ? resolveEnvVars(skillMinerCfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
-          disableThinking: skillMinerCfg.disableThinking ?? mergingCfg.disableThinking ?? false,
-          headers: skillMinerCfg.headers || mergingCfg.headers || undefined,
-          resultCache: llmResultCache,
-        }
+    const skillMinerLlmCfg = skillMinerEnabled
+      ? createFeatureRoute("skillMiner", skillMinerCfg)
       : null;
-    if (skillMinerEnabled && !skillMinerLlmCfg) {
-      api.logger.warn("memory-lancedb-namespaced: skillMiner.enabled=true but no skillMiner.model or merging.model is configured; disabling skill miner.");
+    if (skillMinerLlmCfg) {
+      api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (route: ${skillMinerLlmCfg.kind})`);
     }
-    if (skillMinerLlmCfg) api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (model: ${skillMinerLlmCfg.model})`);
 
     // Emotion Tier Config
     const emotionCfg = cfg.emotion || {};
     const emotionTier = emotionCfg.tier || "auto";
     const emotionT2Enabled = emotionCfg.t2?.enabled !== false;
-    // Tier 3: enabled if wanted AND a provider exists (merging LLM via callLlm, or direct apiKey).
+    // Tier 3: enabled if wanted AND its feature-local route is available.
     // onlyWhenProviderAvailable (default: true) makes T3 soft-skip instead of error when no provider.
     const emotionT3WantsEnabled = emotionCfg.t3?.enabled === true;
-    const emotionT3HasProvider = !!(mergingLlmCfg || emotionCfg.t3?.apiKey || emotionCfg.t3?.openaiClient);
+    const emotionT3LlmCfg = emotionT3WantsEnabled
+      ? createFeatureRoute("emotionT3", emotionCfg.t3 || {})
+      : null;
+    const emotionT3HasProvider = Boolean(emotionT3LlmCfg);
     const emotionT3OnlyWhenProviderAvailable = emotionCfg.t3?.onlyWhenProviderAvailable !== false;
     const emotionT3Enabled = emotionT3WantsEnabled && (emotionT3HasProvider || !emotionT3OnlyWhenProviderAvailable);
-    const emotionT3Model = emotionCfg.t3?.model || mergingModel || "kimi-for-coding";
-    // Prefer plugin-internal callLlm (routes through configured model); falls back to apiKey path in Tier3LLMClassifier
-    const emotionT3CallLlm = (emotionT3Enabled && mergingLlmCfg)
+    const emotionT3Model = emotionT3LlmCfg?.model || "";
+    const emotionT3CallLlm = (emotionT3Enabled && emotionT3LlmCfg)
       ? /**
          * Call the emotion provider with optional agent-scoped cache context.
          * @param {Array<object>} messages
@@ -2541,11 +2566,14 @@ const plugin = {
          */
         (messages, context = {}) => {
           const emotionLlmCfg = {
-            ...mergingLlmCfg,
-            model: emotionT3Model,
+            ...emotionT3LlmCfg,
             maxTokens: 300,
             temperature: 0,
             disableThinking: true,
+            callContext: {
+              ...(context.agentId ? { agentId: context.agentId } : {}),
+              purpose: LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+            },
           };
           return context.agentId
             ? callLlm(messages, withLlmResultCacheContext(
@@ -2556,10 +2584,8 @@ const plugin = {
             : callLlm(messages, emotionLlmCfg);
         }
       : null;
-    if (emotionT3Enabled && mergingLlmCfg) {
-      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled via callLlm (model: ${emotionT3Model})`);
-    } else if (emotionT3Enabled) {
-      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled via apiKey (model: ${emotionT3Model})`);
+    if (emotionT3Enabled && emotionT3LlmCfg) {
+      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled (route: ${emotionT3LlmCfg.kind})`);
     } else if (emotionT3WantsEnabled && !emotionT3HasProvider) {
       api.logger.info("memory-lancedb-namespaced: emotion tier-3 deferred — no LLM provider configured (onlyWhenProviderAvailable)");
     }
@@ -2572,7 +2598,7 @@ const plugin = {
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
-      t3: { enabled: emotionT3Enabled, model: emotionT3Model, callLlm: emotionT3CallLlm, apiKey: emotionCfg.t3?.apiKey || null, baseUrl: emotionCfg.t3?.baseUrl || undefined, timeoutMs: emotionT3TimeoutMs },
+      t3: { enabled: emotionT3Enabled, model: emotionT3Model, callLlm: emotionT3CallLlm, apiKey: null, baseUrl: undefined, timeoutMs: emotionT3TimeoutMs },
       escalationConfidence: emotionT3EscalationConfidence,
     });
     if (emotionTier !== "auto") {
@@ -3486,22 +3512,24 @@ const plugin = {
                 if (cpCfg.enabled === false) {
                   return formatJsonCommandResult({ job: "classify-recent", skipped: true, reason: "criticalPush_disabled" });
                 }
-                // Klassifikations-Modell: criticalPush.model bevorzugt, sonst
-                // das merging-Chat-Modell. Ohne Modell führt der Job einen
-                // No-op aus (kein Vergiften der Karten als "fakt").
-                const cpModelName = (typeof cpCfg.model === "string" && cpCfg.model.trim())
-                  ? cpCfg.model.trim()
-                  : mergingModel;
-                const cpLlmCfg = cpModelName ? {
-                  model: cpModelName,
-                  baseUrl: cpCfg.baseUrl || mergingCfg.baseUrl || undefined,
-                  apiKey: cpCfg.apiKey ? resolveEnvVars(cpCfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
-                  disableThinking: cpCfg.disableThinking ?? mergingCfg.disableThinking ?? false,
-                  headers: cpCfg.headers || mergingCfg.headers || undefined,
-                } : null;
+                const cpLlmCfg = createFeatureRoute("criticalPush", cpCfg);
                 const criticalModel = cpLlmCfg ? {
                   complete: async ({ prompt }) => {
-                    const text = await callLlm([{ role: "user", content: prompt }], { ...cpLlmCfg, maxTokens: 16 });
+                    const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                    const callContext = typeof sessionRuntime?.complete === "function"
+                      ? {
+                          runtimeLlm: sessionRuntime,
+                          purpose: "critical-push-classification",
+                        }
+                      : {
+                          agentId: internalAgent,
+                          purpose: "critical-push-classification",
+                        };
+                    const text = await callLlm([{ role: "user", content: prompt }], {
+                      ...cpLlmCfg,
+                      maxTokens: 16,
+                      callContext,
+                    });
                     return { text: text || "" };
                   },
                 } : null;
@@ -3572,6 +3600,16 @@ const plugin = {
                 if (!skillMinerEnabled || !skillMinerLlmCfg) {
                   return formatJsonCommandResult({ job: "skill-miner", skipped: true, reason: "not_configured" });
                 }
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const skillMinerCallContext = typeof sessionRuntime?.complete === "function"
+                  ? {
+                      runtimeLlm: sessionRuntime,
+                      purpose: LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                    }
+                  : {
+                      agentId: internalAgent,
+                      purpose: LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                    };
                 const result = await pool.withDb(internalAgent, async (rawDb) => {
                   await rawDb.init();
                   return runSkillMiner(rawDb, internalAgent, {
@@ -3579,7 +3617,10 @@ const plugin = {
                     neoStore: commandStore,
                     workspaceDir: commandCtx.workspaceDir,
                     workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                    llmCfg: skillMinerLlmCfg,
+                    llmCfg: {
+                      ...skillMinerLlmCfg,
+                      callContext: skillMinerCallContext,
+                    },
                     callLlm,
                     maxPerRun: skillMinerCfg.maxPerRun ?? 5,
                     minConfidence: skillMinerCfg.minConfidence ?? 0.6,
@@ -5937,7 +5978,15 @@ const plugin = {
                   content: `Current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memories to integrate (date=${today}):\n${newEntriesBlock}${params?.note ? `\n\nCurator note: ${params.note}` : ""}\n\nIntegrate these into the KNOWLEDGE.md body.\n- Do not rewrite the document from scratch.\n- Preserve existing wording unless merging an exact duplicate or lightly compacting closely related points.\n- Only add or merge knowledge that is directly supported by the new memories.\n- Add entries under appropriate sections with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Return ONLY the Markdown body, NO YAML frontmatter, NO explanation, NO code block wrapper.`,
                 },
               ], withLlmResultCacheContext(
-                { ...schicht15LlmCfg, maxTokens: 3000, temperature: 0 },
+                {
+                  ...schicht15LlmCfg,
+                  maxTokens: 3000,
+                  temperature: 0,
+                  callContext: {
+                    agentId,
+                    purpose: LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+                  },
+                },
                 agentId,
                 LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
               ));
@@ -5956,7 +6005,15 @@ const plugin = {
                     content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
                   },
                 ], withLlmResultCacheContext(
-                  { ...schicht15LlmCfg, maxTokens: 4000, temperature: 0 },
+                  {
+                    ...schicht15LlmCfg,
+                    maxTokens: 4000,
+                    temperature: 0,
+                    callContext: {
+                      agentId,
+                      purpose: LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+                    },
+                  },
                   agentId,
                   LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
                 ));
