@@ -15,9 +15,15 @@ function makeApi(pluginConfig) {
     on: 0,
   };
   const noop = () => {};
+  const logs = [];
   return {
     pluginConfig,
-    logger: { info: noop, warn: noop, error: noop, debug: noop },
+    logger: {
+      info(...args) { logs.push(["info", ...args]); },
+      warn(...args) { logs.push(["warn", ...args]); },
+      error(...args) { logs.push(["error", ...args]); },
+      debug(...args) { logs.push(["debug", ...args]); },
+    },
     resolvePath(value) {
       calls.resolvePath += 1;
       return value;
@@ -27,6 +33,7 @@ function makeApi(pluginConfig) {
     registerService() { calls.registerService += 1; },
     on() { calls.on += 1; },
     calls,
+    logs,
   };
 }
 
@@ -90,4 +97,57 @@ describe("runtime config contract", () => {
       }
     });
   }
+
+  it("keeps enabled model-less core LLM features active without registration-time calls", () => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-native-"));
+    let llmCalls = 0;
+    const api = makeApi(minimalConfig(baseDbPath, {
+      merging: { enabled: true },
+      schicht15: { enabled: true },
+      skillMiner: { enabled: true },
+      criticalPush: { enabled: true },
+      emotion: { tier: "t3", t3: { enabled: true } },
+    }));
+    api.runtime = {
+      llm: {
+        async complete() {
+          llmCalls += 1;
+          return { text: "unused", provider: "fake", model: "fake", agentId: "default", usage: {} };
+        },
+      },
+    };
+    try {
+      assert.doesNotThrow(() => plugin.register(api));
+      assert.equal(llmCalls, 0);
+      assert.doesNotMatch(JSON.stringify(api.logs), /model is empty; disabling/i);
+    } finally {
+      rmSync(baseDbPath, { recursive: true, force: true });
+    }
+  });
+
+  it("treats an unresolved feature-local chat credential as unavailable without aborting registration", () => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-credential-"));
+    const missingEnv = "PLUR1BUS_TEST_MISSING_CHAT_CREDENTIAL_90210";
+    const previous = process.env[missingEnv];
+    delete process.env[missingEnv];
+    const api = makeApi(minimalConfig(baseDbPath, {
+      merging: {
+        enabled: true,
+        model: "vendor/explicit-model",
+        baseUrl: "https://credential-endpoint.invalid/v1",
+        apiKey: `\${${missingEnv}}`,
+      },
+    }));
+    try {
+      assert.doesNotThrow(() => plugin.register(api));
+      const logs = JSON.stringify(api.logs);
+      assert.match(logs, /direct-credential-unavailable/);
+      assert.doesNotMatch(logs, new RegExp(missingEnv));
+      assert.doesNotMatch(logs, /credential-endpoint/);
+    } finally {
+      if (previous === undefined) delete process.env[missingEnv];
+      else process.env[missingEnv] = previous;
+      rmSync(baseDbPath, { recursive: true, force: true });
+    }
+  });
 });
