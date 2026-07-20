@@ -544,11 +544,11 @@ describe("deterministic LLM result-cache allowlist", () => {
       ["lib/dreaming/rem-dream.js", "export async function summarizeClusterWithLlm", ["@param {string} [agentId=\"default\"]", "@returns {Promise<object>}"]],
       ["lib/dreaming/rem-dream.js", "export async function runRemDream", ["@param {string} [params.agentId", "@returns {Promise<object>}"]],
       ["lib/emotion.js", "export async function inferEmotionalValenceAsync", ["@param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [context]", "@returns {Promise<"]],
-      ["lib/emotion-engine.js", "async analyze", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
-      ["lib/emotion-engine.js", "async _tier3Only", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
-      ["lib/emotion-engine.js", "async _defaultRouting", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
-      ["lib/emotion-engine.js", "async _maybeT3", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
-      ["lib/tier3-llm.js", "async classify", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/emotion-engine.js", "async analyze", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/emotion-engine.js", "async _tier3Only", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/emotion-engine.js", "async _defaultRouting", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/emotion-engine.js", "async _maybeT3", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/tier3-llm.js", "async classify", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
     ];
 
     for (const [relativePath, signature, fragments] of contracts) {
