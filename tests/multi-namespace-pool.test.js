@@ -17,6 +17,21 @@ function legacyLayout(baseDbPath = TMP_BASE) {
   return resolveNamespaceLayout(baseDbPath, {}, { explicit: false });
 }
 
+function forgedFrozenLayout(overrides = {}) {
+  const freezeArray = (value) => Object.freeze([...(value || [])]);
+  return Object.freeze({
+    mode: "named",
+    baseDir: TMP_BASE,
+    baseDbPath: TMP_BASE,
+    activeWriteNamespace: "active",
+    activeRecallNamespaces: freezeArray(overrides.activeRecallNamespaces ?? ["active"]),
+    legacyReadOnlyNamespaces: freezeArray(overrides.legacyReadOnlyNamespaces ?? ["legacy"]),
+    recallReadNamespaces: freezeArray(overrides.recallReadNamespaces ?? ["active", "legacy"]),
+    crossNamespaceRecall: overrides.crossNamespaceRecall ?? true,
+    ...overrides,
+  });
+}
+
 // FakeAgentDbPool — no real LanceDB, just path-tracking
 class FakeAgentDbPool {
   static constructed = [];
@@ -346,8 +361,43 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("clones and freezes routes, marks only legacy children read-only, and never writes legacy", () => {
-    const source = {
+  it("revalidates all routes before creating each late child", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-late-route-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-late-route-outside-"));
+    try {
+      mkdirSync(join(root, "active"));
+      mkdirSync(join(root, "legacy"));
+      const layout = resolveNamespaceLayout(root, {
+        activeWriteNamespace: "active",
+        activeRecallNamespaces: ["active"],
+        legacyReadOnlyNamespaces: ["legacy"],
+        crossNamespaceRecall: true,
+      }, { explicit: true });
+      const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
+      pool.getWriteDb("agent-a");
+      assert.equal(pool._pools.has("active"), true);
+      assert.equal(pool._pools.has("legacy"), false);
+
+      rmSync(join(root, "legacy"), { recursive: true });
+      symlinkSync(outside, join(root, "legacy"));
+      assert.throws(() => pool.getReadDbs("agent-a"), /traversal|outside/i);
+      assert.equal(pool._pools.has("legacy"), false, "late invalid route must not create a child");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects mutable and internally inconsistent forged layouts", () => {
+    assert.throws(() => new MultiNamespacePool({
+      mode: "legacy-flat",
+      baseDir: TMP_BASE,
+      baseDbPath: TMP_BASE,
+      activeRecallNamespaces: [],
+      legacyReadOnlyNamespaces: [],
+      recallReadNamespaces: [],
+    }, 384, FakeAgentDbPool), /frozen/i);
+    assert.throws(() => new MultiNamespacePool(Object.freeze({
       mode: "named",
       baseDir: TMP_BASE,
       baseDbPath: TMP_BASE,
@@ -356,11 +406,52 @@ describe("MultiNamespacePool", () => {
       legacyReadOnlyNamespaces: ["legacy"],
       recallReadNamespaces: ["active", "legacy"],
       crossNamespaceRecall: true,
+    }), 384, FakeAgentDbPool), /frozen array/i);
+
+    const invalidNamedLayouts = [
+      forgedFrozenLayout({ activeWriteNamespace: "." }),
+      forgedFrozenLayout({ activeWriteNamespace: "bad/name", activeRecallNamespaces: Object.freeze(["bad/name"]) }),
+      forgedFrozenLayout({ activeWriteNamespace: "bad\\name", activeRecallNamespaces: Object.freeze(["bad\\name"]) }),
+      forgedFrozenLayout({ activeRecallNamespaces: Object.freeze(["other"]), recallReadNamespaces: Object.freeze(["other", "legacy"]) }),
+      forgedFrozenLayout({ legacyReadOnlyNamespaces: Object.freeze(["active"]), recallReadNamespaces: Object.freeze(["active"]) }),
+      forgedFrozenLayout({ recallReadNamespaces: Object.freeze(["legacy", "active"]) }),
+      forgedFrozenLayout({ crossNamespaceRecall: false, recallReadNamespaces: Object.freeze(["active", "legacy"]) }),
+      forgedFrozenLayout({ crossNamespaceRecall: true, recallReadNamespaces: Object.freeze(["active"]) }),
+    ];
+    for (const layout of invalidNamedLayouts) {
+      assert.throws(() => new MultiNamespacePool(layout, 384, FakeAgentDbPool), /invalid|namespace|layout|order|recall|overlap/i);
+    }
+
+    const empty = Object.freeze([]);
+    for (const layout of [
+      Object.freeze({
+        mode: "legacy-flat", baseDir: TMP_BASE, baseDbPath: join(TMP_BASE, "other"),
+        activeWriteNamespace: null, activeRecallNamespaces: empty,
+        legacyReadOnlyNamespaces: empty, recallReadNamespaces: empty, crossNamespaceRecall: false,
+      }),
+      Object.freeze({
+        mode: "legacy-flat", baseDir: TMP_BASE, baseDbPath: TMP_BASE,
+        activeWriteNamespace: "active", activeRecallNamespaces: empty,
+        legacyReadOnlyNamespaces: empty, recallReadNamespaces: empty, crossNamespaceRecall: false,
+      }),
+    ]) {
+      assert.throws(() => new MultiNamespacePool(layout, 384, FakeAgentDbPool), /legacy-flat|layout|invalid/i);
+    }
+  });
+
+  it("clones and freezes routes, marks only legacy children read-only, and never writes legacy", () => {
+    const source = {
+      activeWriteNamespace: "active",
+      activeRecallNamespaces: ["active"],
+      legacyReadOnlyNamespaces: ["legacy"],
+      crossNamespaceRecall: true,
     };
+    const layout = resolveNamespaceLayout(TMP_BASE, source, { explicit: true });
     FakeAgentDbPool.constructed.length = 0;
-    const pool = new MultiNamespacePool(source, 384, FakeAgentDbPool);
+    const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
     source.activeWriteNamespace = "legacy";
-    source.recallReadNamespaces.reverse();
+    source.activeRecallNamespaces.reverse();
+    source.legacyReadOnlyNamespaces.push("later");
     const reads = pool.getReadDbs("agent-a");
     assert.deepEqual(reads.map(({ namespace }) => namespace), ["active", "legacy"]);
     assert.equal(Object.isFrozen(pool.layout), true);

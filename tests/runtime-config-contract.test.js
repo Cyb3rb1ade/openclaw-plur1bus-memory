@@ -16,6 +16,7 @@ function makeApi(pluginConfig) {
     on: 0,
   };
   const logs = [];
+  const handlers = new Map();
   return {
     pluginConfig,
     logger: {
@@ -31,9 +32,14 @@ function makeApi(pluginConfig) {
     registerCommand() { calls.registerCommand += 1; },
     registerTool(factory) { calls.registerTool += 1; this.toolFactory = factory; },
     registerService() { calls.registerService += 1; },
-    on() { calls.on += 1; },
+    on(event, handler) {
+      calls.on += 1;
+      if (!handlers.has(event)) handlers.set(event, []);
+      handlers.get(event).push(handler);
+    },
     calls,
     logs,
+    handlers,
   };
 }
 
@@ -133,6 +139,115 @@ describe("runtime config contract", () => {
       merging: { enabled: false },
       namespaces: { activeWriteNamespace: "ns-write" },
     }), join(baseDbPath, "route-agent"));
+  });
+
+  it("creates and uses a missing explicit named root through public store and recall", async (t) => {
+    const parent = mkdtempSync(join(tmpdir(), "plur1bus-runtime-missing-root-parent-"));
+    const baseDbPath = join(parent, "missing-root");
+    const agentPath = join(baseDbPath, "ns-write", "route-agent");
+    t.after(() => rmSync(parent, { recursive: true, force: true }));
+    assert.equal(existsSync(baseDbPath), false);
+
+    const originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => [0.1, 0.2, 0.3];
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => [0.1, 0.2, 0.3];
+    t.after(() => {
+      LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbed;
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+    });
+
+    const api = makeApi(minimalConfig(baseDbPath, {
+      embedding: { provider: "local-transformers", local: { dimensions: 3 } },
+      merging: { enabled: false },
+      namespaces: { activeWriteNamespace: "ns-write" },
+    }));
+    plugin.register(api);
+    const tools = api.toolFactory({
+      agentId: "route-agent", workspaceDir: parent, workspaceKey: "missing-root", userId: "owner",
+    });
+    const store = tools.find(({ name }) => name === "memory_store");
+    const recall = tools.find(({ name }) => name === "memory_recall");
+    const storeResult = await store.execute("missing-root-store", {
+      text: "missing named root route fixture", category: "fact",
+    });
+    assert.equal(storeResult.details?.action, "stored", JSON.stringify(storeResult));
+    const recallResult = await recall.execute("missing-root-recall", { query: "missing named root route fixture" });
+    assert.equal(existsSync(agentPath), true);
+    assert.doesNotMatch(recallResult.content[0].text, /failed/i);
+    for (const stop of api.handlers.get("gateway_stop") || []) await stop();
+  });
+
+  async function runBeforePromptLegacyInit(t, initLegacy) {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-hook-legacy-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    const originalInit = pluginModule.MemoryDB.prototype.init;
+    let activeTableUses = 0;
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => Array(384).fill(0.1);
+    pluginModule.MemoryDB.prototype.init = async function hookInitCapture() {
+      if (this.dbPath.endsWith(join("legacy", "hook-agent"))) return initLegacy.call(this);
+      this.table = {
+        countRows: async () => { activeTableUses += 1; return 0; },
+        vectorSearch() {
+          activeTableUses += 1;
+          return { where() { return this; }, limit() { return this; }, toArray: async () => [] };
+        },
+        query() {
+          activeTableUses += 1;
+          return { where() { return this; }, select() { return this; }, limit() { return this; }, toArray: async () => [] };
+        },
+      };
+      return true;
+    };
+    t.after(() => {
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      pluginModule.MemoryDB.prototype.init = originalInit;
+    });
+
+    const api = makeApi(minimalConfig(baseDbPath, {
+      autoRecall: true,
+      merging: { enabled: false },
+      runtime: { recallTimeoutMs: 5000 },
+      continuityEngine: { enabled: false },
+      conversationReactivationRecall: { enabled: false },
+      namespaces: {
+        activeWriteNamespace: "active",
+        activeRecallNamespaces: ["active"],
+        legacyReadOnlyNamespaces: ["legacy"],
+        crossNamespaceRecall: true,
+      },
+    }));
+    plugin.register(api);
+    const hook = api.handlers.get("before_prompt_build")?.at(-1);
+    assert.equal(typeof hook, "function");
+    const result = await hook(
+      { prompt: "causal legacy hook recall", messages: [{ role: "user", content: "causal legacy hook recall" }] },
+      { agentId: "hook-agent", workspaceDir: null, sessionKey: `hook-${Math.random()}` },
+    );
+    return { result, activeTableUses, logs: api.logs, baseDbPath };
+  }
+
+  it("before_prompt_build skips an absent legacy DB and completes active recall", async (t) => {
+    const state = await runBeforePromptLegacyInit(t, async function missingLegacy() {
+      this.table = null;
+      return false;
+    });
+    assert.ok(state.activeTableUses > 0, "active recall pipeline must still run");
+    assert.doesNotMatch(JSON.stringify(state.logs), /hook legacy init failure|recall failed/i);
+    assert.ok(state.result && Object.hasOwn(state.result, "prependContext"));
+    assert.equal(existsSync(join(state.baseDbPath, "legacy")), false, "read-only legacy route must stay absent");
+  });
+
+  it("before_prompt_build aborts without active partial recall when legacy init throws", async (t) => {
+    const state = await runBeforePromptLegacyInit(t, async function failingLegacy() {
+      this.table = null;
+      throw new Error("hook legacy init failure");
+    });
+    assert.equal(state.activeTableUses, 0, "no active namespace pipeline may run after init failure");
+    assert.equal(state.result, undefined);
+    assert.match(JSON.stringify(state.logs), /recall failed.*hook legacy init failure/i);
+    assert.equal(existsSync(join(state.baseDbPath, "legacy")), false, "failed read-only legacy route must stay absent");
   });
 
   it("skips an absent read-only legacy DB during public recall", async (t) => {
