@@ -188,6 +188,7 @@ import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
+  LLM_ROUTE_KINDS,
   completeFeatureLlm,
   isLlmRouteAvailable,
   resolveFeatureLlmRoute,
@@ -497,6 +498,20 @@ function resolveConfiguredApiKey(cfg = {}, defaultRef = "") {
     return resolveEnvVars(cfg.apiKey);
   }
   return defaultRef ? resolveOptionalEnvVars(defaultRef) : undefined;
+}
+
+function normalizedLlmErrorClass(error) {
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  if (error instanceof SyntaxError) return "SyntaxError";
+  if (error?.name === "TimeoutError" && error?.code === "ETIMEOUT") return "TimeoutError";
+  if (typeof DOMException === "function"
+    && error instanceof DOMException
+    && error.name === "AbortError") {
+    return "AbortError";
+  }
+  if (error instanceof Error) return "Error";
+  return "NonError";
 }
 
 function commandOption(tokens = [], flag, fallback = "") {
@@ -2018,9 +2033,10 @@ async function callLlm(messages, llmCfg) {
  * @param {string} newText
  * @param {object} llmCfg
  * @param {string} agentId
+ * @param {{runtimeLlm?: object}} [callContext]
  * @returns {Promise<object|null>}
  */
-async function callMergeCheck(existingText, newText, llmCfg, agentId) {
+async function callMergeCheck(existingText, newText, llmCfg, agentId, callContext = {}) {
   const A = String(existingText || "").slice(0, 2000);
   const B = String(newText || "").slice(0, 2000);
   const content = await callLlm([
@@ -2034,10 +2050,15 @@ async function callMergeCheck(existingText, newText, llmCfg, agentId) {
       jsonMode: true,
       maxTokens: 300,
       temperature: 0,
-      callContext: {
-        agentId,
-        purpose: LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
-      },
+      callContext: typeof callContext?.runtimeLlm?.complete === "function"
+        ? {
+            runtimeLlm: callContext.runtimeLlm,
+            purpose: LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+          }
+        : {
+            agentId,
+            purpose: LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+          },
     },
     agentId,
     LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
@@ -2668,10 +2689,10 @@ const plugin = {
       api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
     // Versteckte Kopplung sichtbar machen: Light/REM-Dreaming und
-    // Episoden-Extraktion brauchen ein Chat-Modell (merging.model). Ohne das
-    // laufen diese Features still als No-op, obwohl sie "aktiv" wirken.
+    // Episoden-Extraktion brauchen eine aktive Merging-Route. Ohne sie laufen
+    // diese Features still als No-op, obwohl sie "aktiv" wirken.
     if (neoEnabled && !mergingLlmCfg) {
-      api.logger.warn("memory-lancedb-namespaced: light/REM dreaming and episode extraction require a chat model (config.merging.model). Without it these features silently no-op. Set merging.model to enable them.");
+      api.logger.warn("memory-lancedb-namespaced: light/REM dreaming and episode extraction require merging.enabled and an available LLM route. They will no-op until that route is available.");
     }
     const sessionWorkspaceKeys = new Map();
     const rememberNeoWorkspace = (ctx = {}, event = {}) => {
@@ -3192,11 +3213,19 @@ const plugin = {
                 } else {
                   try {
                     mergeResult = await Promise.race([
-                      callMergeCheck(authoritativeCandidate.text, params.text, mergingLlmCfg, storeAgentId),
+                      callMergeCheck(
+                        authoritativeCandidate.text,
+                        params.text,
+                        mergingLlmCfg,
+                        storeAgentId,
+                        storeCtx.callContext,
+                      ),
                       new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
                     ]);
                   } catch (mergeErr) {
-                    api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+                    api.logger.warn("memory-lancedb-namespaced: merge check skipped", {
+                      errorClass: normalizedLlmErrorClass(mergeErr),
+                    });
                   }
                 }
                 if (category === "decision" && storeCtx.workspaceDir && authoritativeCandidate.storedBy && authoritativeCandidate.storedBy !== storeAgentId) {
@@ -3468,6 +3497,9 @@ const plugin = {
                     agentId: commandCtx.agentId || "command",
                     workspaceDir: commandCtx.workspaceDir,
                     userId,
+                    callContext: {
+                      runtimeLlm: commandCtx?.runtimeContext?.llm,
+                    },
                   }, payload);
                   const text = result?.content?.[0]?.text || "";
                   if (result?.error) throw new Error(`Memory store failed: ${result.error}`);
@@ -3513,9 +3545,12 @@ const plugin = {
                   return formatJsonCommandResult({ job: "classify-recent", skipped: true, reason: "criticalPush_disabled" });
                 }
                 const cpLlmCfg = createFeatureRoute("criticalPush", cpCfg);
-                const criticalModel = cpLlmCfg ? {
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const criticalRouteAvailable = cpLlmCfg?.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
+                  || typeof sessionRuntime?.complete === "function"
+                  || typeof cpLlmCfg?.runtimeLlm?.complete === "function";
+                const criticalModel = cpLlmCfg && criticalRouteAvailable ? {
                   complete: async ({ prompt }) => {
-                    const sessionRuntime = commandCtx?.runtimeContext?.llm;
                     const callContext = typeof sessionRuntime?.complete === "function"
                       ? {
                           runtimeLlm: sessionRuntime,
@@ -5672,7 +5707,9 @@ const plugin = {
                             new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
                           ]);
                         } catch (mergeErr) {
-                          api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
+                          api.logger.warn("memory-lancedb-namespaced: merge check skipped", {
+                            errorClass: normalizedLlmErrorClass(mergeErr),
+                          });
                         }
                       }
                       // Conflict detection: log if decision from different agent
@@ -6048,7 +6085,10 @@ const plugin = {
               const lineCount = finalContent.split("\n").length;
               return { content: [{ type: "text", text: `KNOWLEDGE.md updated (${pendingTexts.length} memories integrated, ${lineCount} lines total).` }] };
             } catch (err) {
-              return { content: [{ type: "text", text: `knowledge_update failed: ${String(err)}` }] };
+              api.logger.warn("memory-lancedb-namespaced: knowledge_update failed", {
+                errorClass: normalizedLlmErrorClass(err),
+              });
+              return { content: [{ type: "text", text: "knowledge_update failed: provider or file operation unavailable." }] };
             } finally {
               // Release lock
               try { if (existsSync(lockPath)) { const { unlinkSync } = await import("node:fs"); unlinkSync(lockPath); } } catch (_e) { dbg(_e); }

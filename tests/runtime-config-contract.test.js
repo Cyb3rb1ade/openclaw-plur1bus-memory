@@ -14,7 +14,6 @@ function makeApi(pluginConfig) {
     registerService: 0,
     on: 0,
   };
-  const noop = () => {};
   const logs = [];
   return {
     pluginConfig,
@@ -120,6 +119,22 @@ describe("runtime config contract", () => {
       assert.doesNotThrow(() => plugin.register(api));
       assert.equal(llmCalls, 0);
       assert.doesNotMatch(JSON.stringify(api.logs), /model is empty; disabling/i);
+    } finally {
+      rmSync(baseDbPath, { recursive: true, force: true });
+    }
+  });
+
+  it("describes Neo LLM availability in route terms instead of requiring merging.model", () => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-neo-route-"));
+    const api = makeApi(minimalConfig(baseDbPath, {
+      neo: { enabled: true },
+      merging: { enabled: false },
+    }));
+    try {
+      assert.doesNotThrow(() => plugin.register(api));
+      const logs = JSON.stringify(api.logs);
+      assert.match(logs, /merging\.enabled and an available LLM route/i);
+      assert.doesNotMatch(logs, /config\.merging\.model|set merging\.model/i);
     } finally {
       rmSync(baseDbPath, { recursive: true, force: true });
     }
