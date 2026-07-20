@@ -120,6 +120,20 @@ test("call context preserves config and adds native routing metadata without cac
   });
 });
 
+test("session-bound call context omits agentId as an own property", () => {
+  const runtimeLlm = { async complete() {} };
+  const contextual = withLlmCallContext(
+    { model: "model-a" },
+    undefined,
+    "wiki",
+    { runtimeLlm },
+  );
+
+  assert.equal(contextual.callContext.runtimeLlm, runtimeLlm);
+  assert.equal(contextual.callContext.purpose, "wiki");
+  assert.equal(Object.hasOwn(contextual.callContext, "agentId"), false);
+});
+
 test("cache context preserves config and annotates matching call and cache contexts", () => {
   const llmCfg = { model: "model-a", temperature: 0 };
   assert.deepEqual(
@@ -138,6 +152,35 @@ test("cache context preserves config and annotates matching call and cache conte
     },
   );
   assert.deepEqual(llmCfg, { model: "model-a", temperature: 0 });
+});
+
+test("cache context preserves a session-bound runtime and signal without adding agentId", () => {
+  const runtimeLlm = { async complete() {} };
+  const signal = new AbortController().signal;
+  const llmCfg = withLlmCallContext(
+    { model: "model-a" },
+    undefined,
+    "old-purpose",
+    { runtimeLlm, signal },
+  );
+
+  const contextual = withLlmResultCacheContext(
+    llmCfg,
+    "agent-a",
+    LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+  );
+
+  assert.deepEqual(contextual.resultCacheContext, {
+    scopeId: "agent-a",
+    purpose: LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+  });
+  assert.equal(contextual.callContext.runtimeLlm, runtimeLlm);
+  assert.equal(contextual.callContext.signal, signal);
+  assert.equal(
+    contextual.callContext.purpose,
+    LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+  );
+  assert.equal(Object.hasOwn(contextual.callContext, "agentId"), false);
 });
 
 test("eligible identical requests hit memory without extending absolute TTL", async () => {
