@@ -10,6 +10,7 @@ import {
   normalizeLlmResultCacheMaxBytes,
   normalizeLlmResultCacheMaxEntries,
   normalizeLlmResultCacheTtlMs,
+  withLlmCallContext,
   withLlmResultCacheContext,
 } from "../lib/llm-result-cache.js";
 
@@ -85,7 +86,41 @@ test("clamped maxEntries/maxBytes log a warning, in-range values stay silent", (
   assert.equal(quiet.length, 0);
 });
 
-test("cache context preserves config and annotates scope and purpose", () => {
+test("call context preserves config and adds native routing metadata without cache context", () => {
+  const runtimeLlm = { async complete() {} };
+  const signal = new AbortController().signal;
+  const llmCfg = {
+    model: "model-a",
+    temperature: 0,
+    callContext: { agentId: "unchanged-source" },
+  };
+
+  const contextual = withLlmCallContext(llmCfg, "agent-a", "wiki", {
+    runtimeLlm,
+    signal,
+  });
+
+  assert.deepEqual(contextual, {
+    model: "model-a",
+    temperature: 0,
+    callContext: {
+      runtimeLlm,
+      agentId: "agent-a",
+      purpose: "wiki",
+      signal,
+    },
+  });
+  assert.equal(Object.hasOwn(contextual, "resultCacheContext"), false);
+  assert.notEqual(contextual, llmCfg);
+  assert.notEqual(contextual.callContext, llmCfg.callContext);
+  assert.deepEqual(llmCfg, {
+    model: "model-a",
+    temperature: 0,
+    callContext: { agentId: "unchanged-source" },
+  });
+});
+
+test("cache context preserves config and annotates matching call and cache contexts", () => {
   const llmCfg = { model: "model-a", temperature: 0 };
   assert.deepEqual(
     withLlmResultCacheContext(llmCfg, "agent-a", LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY),
@@ -94,6 +129,10 @@ test("cache context preserves config and annotates scope and purpose", () => {
       temperature: 0,
       resultCacheContext: {
         scopeId: "agent-a",
+        purpose: LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
+      },
+      callContext: {
+        agentId: "agent-a",
         purpose: LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
       },
     },
