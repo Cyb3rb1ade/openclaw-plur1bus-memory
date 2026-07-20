@@ -205,6 +205,37 @@ test("long /memory query uses its session runtime and recall-query owner route",
   assert.equal(sessionCalls.length, 2);
 });
 
+test("exact-limit punctuation-free /memory input stays usable with merging disabled", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-bounded-query-fallback-"));
+  t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  const runtimeCalls = [];
+  const pluginModule = await loadFreshPlugin();
+  const api = createApi(baseDbPath, {
+    merging: { enabled: false },
+    emotion: { t3: { enabled: false } },
+  }, {
+    async complete(params) {
+      runtimeCalls.push(params);
+      throw new Error("must not run");
+    },
+  });
+  t.after(() => api._shutdown());
+  pluginModule.default.register(api);
+  const memoryCommand = api._commands.find((command) => command.name === "memory");
+  assert.ok(memoryCommand);
+
+  const response = await memoryCommand.handler({
+    args: "x".repeat(100_000),
+    agentId: "bounded-query-agent",
+    workspaceDir: baseDbPath,
+    workspaceKey: "bounded-query-workspace",
+  });
+
+  assert.equal(runtimeCalls.length, 0);
+  assert.doesNotMatch(response.text, /100.?000|maximum length|too large/i);
+  assert.match(response.text, /Nothing found|Nichts gefunden/i);
+});
+
 test("light dreaming fans out to four distinct owner descriptors", async (t) => {
   const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-light-routes-"));
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
@@ -383,7 +414,7 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
   assert.equal(Object.hasOwn(summaryCalls[1], "model"), false);
 });
 
-test("/correct rejects an oversized canonical replacement before confirmation", async (t) => {
+test("/correct bounds an oversized canonical replacement before candidate lookup", async (t) => {
   const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-correction-limit-"));
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const pluginModule = await loadFreshPlugin();
@@ -428,7 +459,8 @@ test("/correct rejects an oversized canonical replacement before confirmation", 
   });
 
   assert.equal(runtimeCalls, 2);
-  assert.match(response.text, /correction text exceeds maximum length of 4000/i);
+  assert.doesNotMatch(response.text, /correction text exceeds maximum length of 4000/i);
+  assert.match(response.text, /Nothing found|Nichts gefunden/i);
   assert.doesNotMatch(response.text, /confirm/i);
 });
 
