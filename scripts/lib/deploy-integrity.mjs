@@ -18,6 +18,7 @@ export const DEPLOY_FILES = [
   "lib/neo-arch.js",
   "lib/neo-worker-runner.js",
   "lib/neo-worker-runtime.js",
+  "lib/abort.js",
   "lib/relevant-memory-context.js",
   "lib/memory-merge-safety.js",
   "lib/contradiction-detector.js",

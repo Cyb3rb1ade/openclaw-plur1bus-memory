@@ -187,6 +187,7 @@ import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
+import { throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
 import {
   LLM_ROUTE_KINDS,
@@ -5453,12 +5454,16 @@ const plugin = {
                     personaSeedCfg: (cfg.personaVoice?.enabled ?? true) !== false
                       ? { agentId, lang: cfg.language || "de", identityText: personaIdentityText }
                       : null,
+                    signal,
                   }).then((dreamResult) => {
+                    throwIfAborted(signal, "light dream commit aborted");
                     if (ctx?.workspaceDir) {
+                      throwIfAborted(signal, "light dream commit aborted");
                       writeLightDreamToVault(dreamResult, ctx.workspaceDir, normalizedTurns);
                     }
                     // Markiere als verarbeitet
                     const mergedDreams = [...processedDreams.slice(-100), digestHash];
+                    throwIfAborted(signal, "light dream commit aborted");
                     neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
                   }).catch((dreamErr) => {
                     api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
@@ -5483,18 +5488,23 @@ const plugin = {
                       { signal },
                     ) : null,
                     callLlm,
+                    signal,
                   }).then((episodes) => {
+                    throwIfAborted(signal, "episode commit aborted");
                     if (episodes.length > 0) {
+                      throwIfAborted(signal, "episode commit aborted");
                       neoStore.appendEpisodes(episodes);
                       api.logger.info(`memory-lancedb-namespaced: ${episodes.length} episode(s) extracted for agent=${agentId}`);
                       if (ctx?.workspaceDir) {
                         for (const ep of episodes) {
+                          throwIfAborted(signal, "episode commit aborted");
                           writeEpisodeToVault(ep, ctx.workspaceDir);
                         }
                       }
                     }
                     // Markiere als verarbeitet
                     const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
+                    throwIfAborted(signal, "episode commit aborted");
                     neoStore.recordHook("agent_end", { processedEpisodes: mergedEpisodes });
                   }).catch((epErr) => {
                     api.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
@@ -6374,6 +6384,7 @@ const plugin = {
           priority: background ? "low" : "normal",
           phaseTimer,
         }, async (signal, timer) => {
+        throwIfAborted(signal, "recall aborted");
         // P0-1: Interne/background Turns bekommen keine volle Recall-Injektion.
         if (skipInternalRecall) {
           return runMinimalBeforePromptMaintenance(event, ctx, { neoEnabled, gcEnabled });
@@ -6464,20 +6475,26 @@ const plugin = {
               || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
             if (lastUserText.length >= 3) {
               const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
+              throwIfAborted(signal, "recall aborted");
               emoState.applyEmotionScore(turnEmotion);
             } else {
               emoState.updateFromMessages(voiceMessages);
             }
           } catch (e) {
+            throwIfAborted(signal, "recall aborted");
             dbg(e);
             emoState.updateFromMessages(voiceMessages);
           }
           if (ctx?.workspaceDir) {
             try {
+              throwIfAborted(signal, "recall aborted");
               const moodNow = emoState.describeMood();
+              throwIfAborted(signal, "recall aborted");
               writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
+              throwIfAborted(signal, "recall aborted");
               writeFileSync(join(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
             } catch (e) {
+              throwIfAborted(signal, "recall aborted");
               dbg(e);
             }
           }
@@ -6769,20 +6786,28 @@ const plugin = {
                     conversationContext: event.prompt,
                     triggerMemoryIds: [item.id],
                     sessionState: overlaySessionState,
+                    signal,
                   });
+                  throwIfAborted(signal, "recall aborted");
                   if (newOverlay) {
-                    const written = await overlayStore.append(newOverlay);
+                    throwIfAborted(signal, "recall aborted");
+                    const written = await overlayStore.append(newOverlay, 7, { signal });
+                    throwIfAborted(signal, "recall aborted");
                     if (written && newOverlay.autoContradiction) {
                       try {
                         const detector = new ContradictionDetector({ workspaceDir: ctx?.workspaceDir });
-                        await detector.persistContradiction(newOverlay.autoContradiction);
+                        throwIfAborted(signal, "recall aborted");
+                        await detector.persistContradiction(newOverlay.autoContradiction, { signal });
+                        throwIfAborted(signal, "recall aborted");
                       } catch (e) {
+                        throwIfAborted(signal, "recall aborted");
                         api.logger.warn?.(`continuity-engine: contradiction audit append failed: ${String(e)}`);
                       }
                     }
                     if (written) overlays.push(newOverlay);
                   }
                 } catch (e) {
+                  throwIfAborted(signal, "recall aborted");
                   api.logger.warn?.(`continuity-engine: overlay generation failed: ${String(e)}`);
                 }
               }
@@ -6810,8 +6835,11 @@ const plugin = {
               });
               memoryTextContradictions = await detector.findMemoryTextContradictions(associativeItems, {
                 maxPairs: contraCfg.maxPairsPerRecall ?? 20,
+                signal,
               });
+              throwIfAborted(signal, "recall aborted");
             } catch (e) {
+              throwIfAborted(signal, "recall aborted");
               api.logger?.warn?.(`continuity-engine: memory-text contradiction detection failed: ${String(e)}`);
             }
           }
@@ -6843,22 +6871,26 @@ const plugin = {
             try {
               const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir, logger: api.logger });
               for (const rec of memoryTextContradictions) {
+                throwIfAborted(signal, "recall aborted");
                 await detector.persistContradiction({
                   targetMemoryId: rec.memoryA,
                   overlayA: rec.memoryA,
                   overlayB: rec.memoryB,
                   descriptionA: rec.descriptionA,
                   descriptionB: rec.descriptionB,
-                });
+                }, { signal });
+                throwIfAborted(signal, "recall aborted");
                 await detector.persistContradiction({
                   targetMemoryId: rec.memoryB,
                   overlayA: rec.memoryA,
                   overlayB: rec.memoryB,
                   descriptionA: rec.descriptionA,
                   descriptionB: rec.descriptionB,
-                });
+                }, { signal });
+                throwIfAborted(signal, "recall aborted");
               }
             } catch (e) {
+              throwIfAborted(signal, "recall aborted");
               api.logger?.warn?.(`continuity-engine: failed to persist memory-text contradictions: ${String(e)}`);
             }
           }
@@ -6990,6 +7022,7 @@ const plugin = {
                   { signal },
                 ) : null,
                 callLlm,
+                signal,
               })?.catch((err) => {
                 api.logger?.debug?.(`persona-voice: scheduled seed failed (fail-open): ${normalizedLlmErrorClass(err)}`);
               });
@@ -7182,8 +7215,10 @@ const plugin = {
           } catch (reminderErr) {
             api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
+          throwIfAborted(signal, "recall aborted");
           return { prependContext: [neoContext, startNoticeContext, fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
         } catch (err) {
+          throwIfAborted(signal, "recall aborted");
           api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
           const fallbackContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
           if (fallbackContext) return { prependContext: fallbackContext };
