@@ -28,7 +28,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -679,13 +679,17 @@ class MemoryDB {
    * @param {string} dbPath LanceDB agent path.
    * @param {number} vectorDim Vector dimension.
    * @param {object} [logger] Optional logger.
-   * @param {{readOnly?: boolean}} [options] Non-mutating legacy-read mode.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void)}} [options] Non-mutating mode and trusted-path guard.
    */
-  constructor(dbPath, vectorDim, logger = null, { readOnly = false } = {}) {
+  constructor(dbPath, vectorDim, logger = null, { readOnly = false, pathGuard = null } = {}) {
+    if (pathGuard !== null && typeof pathGuard !== "function") {
+      throw new TypeError("MemoryDB pathGuard must be a function");
+    }
     this.dbPath = dbPath;
     this.vectorDim = vectorDim;
     this.logger = logger;
     this.readOnly = readOnly === true;
+    this.pathGuard = pathGuard;
     this.db = null;
     this.table = null;
     this.initPromise = null;
@@ -763,7 +767,12 @@ class MemoryDB {
     }
   }
 
+  _assertTrustedPath() {
+    this.pathGuard?.();
+  }
+
   async refreshSchemaFields() {
+    this._assertTrustedPath();
     if (!this.table) return;
     const schema = await this._read(this.table.schema(), "MemoryDB.schema");
     this.schemaFieldNames = new Set((schema.fields || []).map(f => f.name));
@@ -840,19 +849,25 @@ class MemoryDB {
   }
 
   async init() {
+    this._assertTrustedPath();
     if (this.initPromise) return this.initPromise;
     const generationPromise = (async () => {
       try {
+        this._assertTrustedPath();
         if (this.readOnly && !existsSync(this.dbPath)) return false;
         const lancedb = await getLanceDB();
+        this._assertTrustedPath();
         this.db = this.readOnly
           ? await this._read(lancedb.connect(this.dbPath), "MemoryDB.connect")
           : await this._write(lancedb.connect(this.dbPath), "MemoryDB.connect");
+      this._assertTrustedPath();
       const tables = await this._read(this.db.tableNames(), "MemoryDB.tableNames");
       if (tables.includes(TABLE_NAME)) {
+        this._assertTrustedPath();
         this.table = this.readOnly
           ? await this._read(this.db.openTable(TABLE_NAME), "MemoryDB.openTable")
           : await this._write(this.db.openTable(TABLE_NAME), "MemoryDB.openTable");
+        this._assertTrustedPath();
         if (this.readOnly) {
           await this.refreshSchemaFields();
           return true;
@@ -938,6 +953,7 @@ class MemoryDB {
         await this._closeHandles("read-only-missing-table");
         return false;
       } else {
+        this._assertTrustedPath();
         this.table = await this._write(this.db.createTable(TABLE_NAME, [
           {
             id: "__schema__",
@@ -988,6 +1004,7 @@ class MemoryDB {
             workspaceKey: "",
           },
         ]), "MemoryDB.createTable");
+        this._assertTrustedPath();
         await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
       }
         await this.refreshSchemaFields();
@@ -1080,6 +1097,7 @@ class MemoryDB {
 
   async _maybeReindex() {
     this._assertWritable("reindex");
+    this._assertTrustedPath();
     if (this._reindexing) return;
     // v6.2.1 — Zeitbasiertes Intervall enforce (P0-Fix)
     if (Date.now() - this._lastReindexAt < REINDEX_MIN_INTERVAL_MS) return;
@@ -1206,6 +1224,7 @@ class MemoryDB {
   }
 
   async vectorSearchActive(vector, limit) {
+    this._assertTrustedPath();
     const fetchLimit = Math.max(limit, Math.min(limit * 3, 100));
     try {
       const builder = this.table.vectorSearch(vector);
@@ -1305,6 +1324,7 @@ class MemoryDB {
   }
 
   buildActiveScanQuery() {
+    this._assertTrustedPath();
     let query = this.table.query()
       .where("status IS NULL OR (status != 'deleted' AND status != 'archived')");
     if (typeof query.select === "function") {
@@ -1367,19 +1387,56 @@ class MemoryDB {
   }
 }
 
+function pathEntryExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+function deriveExpectedCanonicalTarget(path) {
+  const missingParts = [];
+  const absolutePath = resolve(path);
+  let existingAncestor = absolutePath;
+  while (!pathEntryExists(existingAncestor)) {
+    const parent = dirname(existingAncestor);
+    if (parent === existingAncestor) throw new Error(`No existing ancestor for DB path: ${path}`);
+    missingParts.unshift(basename(existingAncestor));
+    existingAncestor = parent;
+  }
+  const canonicalAncestor = realpathSync(existingAncestor);
+  return {
+    absolutePath,
+    expectedTarget: missingParts.length > 0
+      ? resolveInside(canonicalAncestor, ...missingParts)
+      : canonicalAncestor,
+  };
+}
+
 /** Per-agent MemoryDB cache with callback-scoped operation leases. */
 class AgentDbPool {
   /**
    * @param {string} basePath Validated namespace base path.
    * @param {number} vectorDim Vector dimension.
    * @param {object} [logger] Optional logger.
-   * @param {{readOnly?: boolean}} [options] Non-mutating legacy namespace mode.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void)}} [options] Non-mutating mode and namespace-path guard.
    */
-  constructor(basePath, vectorDim, logger = null, { readOnly = false } = {}) {
-    this.basePath = basePath;
+  constructor(basePath, vectorDim, logger = null, { readOnly = false, pathGuard = null } = {}) {
+    if (pathGuard !== null && typeof pathGuard !== "function") {
+      throw new TypeError("AgentDbPool pathGuard must be a function");
+    }
+    pathGuard?.();
+    const basePin = deriveExpectedCanonicalTarget(basePath);
+    this.basePath = basePin.absolutePath;
+    this.canonicalBasePath = basePin.expectedTarget;
     this.vectorDim = vectorDim;
     this.logger = logger;
     this.readOnly = readOnly === true;
+    this.pathGuard = pathGuard;
+    this.agentPathPins = new Map();
     this.dbs = makeBoundedCache(50, async (id, db) => {
       if (db && typeof db.shutdown === "function") {
         try {
@@ -1411,27 +1468,61 @@ class AgentDbPool {
     const dbPath = this._resolveAgentPath(id);
     const cached = this.dbs.get(id);
     if (cached) return cached;
-    const db = new MemoryDB(dbPath, this.vectorDim, this.logger, { readOnly: this.readOnly });
+    const db = new MemoryDB(dbPath, this.vectorDim, this.logger, {
+      readOnly: this.readOnly,
+      pathGuard: () => this._assertAgentPath(id),
+    });
     this.dbs.set(id, db);
     return db;
   }
 
-  _resolveAgentPath(id) {
-    if (!this.readOnly) {
-      if (!existsSync(this.basePath)) mkdirSync(this.basePath, { recursive: true });
-      return resolveInside(this.basePath, id);
+  _assertBasePath({ create = false } = {}) {
+    this.pathGuard?.();
+    const entryExists = pathEntryExists(this.basePath);
+    if (!entryExists) {
+      if (!create) return false;
+      const beforeCreate = deriveExpectedCanonicalTarget(this.basePath);
+      if (beforeCreate.expectedTarget !== this.canonicalBasePath) {
+        throw new Error("DB base canonical target changed before creation");
+      }
+      // Create at the pinned canonical target; lexical ancestor substitution
+      // cannot redirect this mkdir to a different tree.
+      mkdirSync(this.canonicalBasePath, { recursive: true });
     }
-    if (existsSync(this.basePath)) return resolveInside(this.basePath, id);
+    const currentTarget = realpathSync(this.basePath);
+    if (currentTarget !== this.canonicalBasePath) {
+      throw new Error("DB base canonical target changed after initialization");
+    }
+    this.pathGuard?.();
+    return true;
+  }
 
-    const missingParts = [];
-    let existingAncestor = resolve(this.basePath);
-    while (!existsSync(existingAncestor)) {
-      const parent = dirname(existingAncestor);
-      if (parent === existingAncestor) throw new Error(`No existing ancestor for read-only DB path: ${this.basePath}`);
-      missingParts.unshift(basename(existingAncestor));
-      existingAncestor = parent;
+  _assertAgentPath(id) {
+    const baseExists = this._assertBasePath({ create: !this.readOnly });
+    const configuredPath = resolve(this.canonicalBasePath, id);
+    let pin = this.agentPathPins.get(id);
+    if (!pin) {
+      const existed = baseExists && pathEntryExists(configuredPath);
+      const canonicalTarget = existed
+        ? resolveInside(this.canonicalBasePath, id)
+        : configuredPath;
+      pin = Object.freeze({ configuredPath, canonicalTarget, existed });
+      this.agentPathPins.set(id, pin);
     }
-    return resolveInside(existingAncestor, ...missingParts, id);
+    const entryExists = baseExists && pathEntryExists(pin.configuredPath);
+    if (!entryExists) {
+      if (pin.existed) throw new Error(`agent DB canonical target changed: ${id} is now missing`);
+      return pin.canonicalTarget;
+    }
+    const currentTarget = resolveInside(this.canonicalBasePath, id);
+    if (currentTarget !== pin.canonicalTarget) {
+      throw new Error(`agent DB canonical target changed after initialization: ${id}`);
+    }
+    return pin.canonicalTarget;
+  }
+
+  _resolveAgentPath(id) {
+    return this._assertAgentPath(id);
   }
 
   /** Compatibility accessor; production operations must prefer withDb(). */
