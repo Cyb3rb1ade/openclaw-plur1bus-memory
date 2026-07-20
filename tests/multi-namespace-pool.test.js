@@ -490,6 +490,107 @@ describe("MultiNamespacePool", () => {
     }
   });
 
+  it("pins existing namespace targets and rejects later in-root substitutions", () => {
+    for (const route of ["active", "legacy"]) {
+      const root = mkdtempSync(join(tmpdir(), `plur1bus-pinned-${route}-root-`));
+      try {
+        mkdirSync(join(root, "active"));
+        mkdirSync(join(root, "legacy"));
+        mkdirSync(join(root, "replacement"));
+        const layout = resolveNamespaceLayout(root, {
+          activeWriteNamespace: "active",
+          activeRecallNamespaces: ["active"],
+          legacyReadOnlyNamespaces: ["legacy"],
+          crossNamespaceRecall: true,
+        }, { explicit: true });
+        const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
+        if (route === "active") pool.getWriteDb("cached-agent");
+        else pool.getReadDbs("cached-agent");
+        const child = pool._pools.get(route);
+        const callsBeforeSwap = child.getCalls.length;
+
+        rmSync(join(root, route), { recursive: true });
+        symlinkSync(join(root, "replacement"), join(root, route));
+
+        const invoke = route === "active"
+          ? () => pool.getWriteDb("after-swap")
+          : () => pool.getReadDbs("after-swap");
+        assert.throws(invoke, /canonical|target|changed|substitution/i);
+        assert.equal(child.getCalls.length, callsBeforeSwap, `${route} child must not be reused`);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("pins initially absent namespace targets before any child is created", () => {
+    for (const route of ["active", "legacy"]) {
+      const root = mkdtempSync(join(tmpdir(), `plur1bus-pinned-missing-${route}-root-`));
+      try {
+        mkdirSync(join(root, "replacement"));
+        if (route === "active") mkdirSync(join(root, "legacy"));
+        else mkdirSync(join(root, "active"));
+        const layout = resolveNamespaceLayout(root, {
+          activeWriteNamespace: "active",
+          activeRecallNamespaces: ["active"],
+          legacyReadOnlyNamespaces: ["legacy"],
+          crossNamespaceRecall: true,
+        }, { explicit: true });
+        const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
+        assert.equal(existsSync(join(root, route)), false);
+        symlinkSync(join(root, "replacement"), join(root, route));
+
+        const invoke = route === "active"
+          ? () => pool.getWriteDb("first-agent")
+          : () => pool.getReadDbs("first-agent");
+        assert.throws(invoke, /canonical|target|changed|substitution/i);
+        assert.equal(pool._pools.has(route), false, `${route} child must not be created`);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("rejects frozen accessor layouts without invoking their getters", () => {
+    let getterCalls = 0;
+    const malicious = {
+      mode: "named",
+      baseDir: TMP_BASE,
+      baseDbPath: TMP_BASE,
+      activeWriteNamespace: "active",
+      legacyReadOnlyNamespaces: Object.freeze(["legacy"]),
+      recallReadNamespaces: Object.freeze(["active", "legacy"]),
+      crossNamespaceRecall: true,
+    };
+    Object.defineProperty(malicious, "activeRecallNamespaces", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return Object.freeze(getterCalls === 1 ? ["active"] : ["legacy"]);
+      },
+    });
+    Object.freeze(malicious);
+
+    assert.throws(
+      () => new MultiNamespacePool(malicious, 384, FakeAgentDbPool),
+      /accessor|plain data|layout/i,
+    );
+    assert.equal(getterCalls, 0, "validation must inspect descriptors instead of invoking untrusted getters");
+  });
+
+  it("creates a nested missing named root at the canonical target derived from its existing ancestor", () => {
+    const parent = mkdtempSync(join(tmpdir(), "plur1bus-canonical-missing-parent-"));
+    const root = join(parent, "one", "two", "named-root");
+    try {
+      const layout = resolveNamespaceLayout(root, { activeWriteNamespace: "active" }, { explicit: true });
+      const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
+      assert.equal(existsSync(root), true);
+      assert.equal(pool.getWriteDb("agent-a").dbPath, join(root, "active", "agent-a"));
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
   it("rejects mutable and internally inconsistent forged layouts", () => {
     assert.throws(() => new MultiNamespacePool({
       mode: "legacy-flat",
@@ -560,8 +661,10 @@ describe("MultiNamespacePool", () => {
     assert.equal(Object.isFrozen(pool.layout.recallReadNamespaces), true);
     const activeChild = pool._pools.get("active");
     const legacyChild = pool._pools.get("legacy");
-    assert.equal(activeChild.options, undefined);
-    assert.deepEqual(legacyChild.options, { readOnly: true });
+    assert.equal(activeChild.options?.readOnly, undefined);
+    assert.equal(typeof activeChild.options?.pathGuard, "function");
+    assert.equal(legacyChild.options?.readOnly, true);
+    assert.equal(typeof legacyChild.options?.pathGuard, "function");
     assert.equal(pool.getWriteDb("agent-a").dbPath, join(TMP_BASE, "active", "agent-a"));
   });
 });
