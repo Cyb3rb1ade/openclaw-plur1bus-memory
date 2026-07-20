@@ -1,7 +1,7 @@
 # OpenClaw Default LLM Contract
 
 **Date:** 2026-07-20  
-**Status:** Approved design; written-spec review pending  
+**Status:** Approved
 **Scope:** PLUR1BUS chat/LLM calls only. Embedding and reranker models are not chat LLMs and remain outside this contract.
 
 ## Goal
