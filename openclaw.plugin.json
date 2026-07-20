@@ -563,19 +563,23 @@
             "default": 0.7
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
           },
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
             "type": "boolean"
           },
           "headers": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "autoApply": {
             "type": "boolean",
@@ -612,19 +616,23 @@
             "default": false
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
           },
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
             "type": "boolean"
           },
           "headers": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "minImportance": {
             "type": "number",
@@ -668,19 +676,23 @@
             "default": 3
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
           },
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
             "type": "boolean"
           },
           "headers": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           }
         }
       },
@@ -1684,19 +1696,23 @@
             "default": 3
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
           },
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
             "type": "boolean"
           },
           "headers": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           }
         }
       },
@@ -2009,13 +2025,16 @@
                 "default": false
               },
               "model": {
-                "type": "string"
+                "type": "string",
+                "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
               },
               "apiKey": {
-                "type": "string"
+                "type": "string",
+                "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
               },
               "baseUrl": {
-                "type": "string"
+                "type": "string",
+                "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
               },
               "fallbackOnError": {
                 "type": "boolean",

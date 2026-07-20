@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   applyInstallerFeaturePolicy,
@@ -9,7 +10,29 @@ import {
   parseInstallLog,
 } from "../scripts/lib/installer-config.mjs";
 
+const installerSource = readFileSync(
+  new URL("../scripts/install-memory-system.sh", import.meta.url),
+  "utf8",
+);
+
 describe("installer feature config policy", () => {
+  it("leaves chat model selection to OpenClaw and never copies the merging route into Schicht 1.5", () => {
+    const promptStart = installerSource.indexOf('if confirm "LLM-Merging aktivieren?');
+    const promptEnd = installerSource.indexOf("\nfi\n\nelse", promptStart);
+    assert.ok(promptStart >= 0 && promptEnd > promptStart, "merging prompt block must be present");
+    const promptBlock = installerSource.slice(promptStart, promptEnd);
+    assert.doesNotMatch(promptBlock, /MERGING_(?:MODEL|BASEURL|KEY|DISABLE_THINKING|USER_AGENT)/);
+    assert.doesNotMatch(promptBlock, /explizites Modell|OpenAI-kompatibler Chat-Completions-Endpunkt/i);
+
+    const routeStart = installerSource.indexOf("  # Merging-Block aufbauen");
+    const routeEnd = installerSource.indexOf("  # Embedding Fallback Block", routeStart);
+    assert.ok(routeStart >= 0 && routeEnd > routeStart, "generated chat route block must be present");
+    const routeBlock = installerSource.slice(routeStart, routeEnd);
+    assert.doesNotMatch(routeBlock, /MERGING_(?:MODEL|BASEURL|KEY|DISABLE_THINKING|USER_AGENT)/);
+    assert.doesNotMatch(routeBlock, /\"(?:model|baseUrl|apiKey|headers|disableThinking)\"/);
+    assert.match(routeBlock, /SCHICHT15_BLOCK/);
+  });
+
   it("preserve is byte-stable for missing, enabled, and disabled plugin entries", () => {
     for (const original of [
       {},

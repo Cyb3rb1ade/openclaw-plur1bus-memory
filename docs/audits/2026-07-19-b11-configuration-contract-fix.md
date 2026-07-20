@@ -8,6 +8,8 @@ Follow-up correction: 2026-07-20, R1-R5, base
 `0a63a2de23904ec7561115f52a179d33bd987c00`
 R5 review correction: 2026-07-20, base
 `923a91af65d0f6aad49bcd9568e283d641d2ac14`
+OpenClaw-default LLM implementation follow-up: 2026-07-20, base
+`cf01840ff91e43a1c4a59199823bc7e0e856e981`
 Findings: FA-01, FA-02, FA-09, FA-10, FE-ADD-01, the safe B11
 portion of FA-06, and the load-time portion of BUG-ADD-09 / FE-ADD-07
 
@@ -237,9 +239,10 @@ GREEN tests 1; pass 1; fail 0
 - The model-tool and bridge/store merge owning fixtures explicitly opt into
   merge auto-apply, so removing its unsafe implicit default does not hide the
   legitimate paths.
-- The Emotion T3 table distinguishes the absent `emotion.t3.model` manifest
-  default from its runtime fallback chain: configured `merging.model`, then
-  `"kimi-for-coding"`. Explicit `gpt-4o-mini` examples remain examples, not
+- The earlier R5 docs-only Emotion T3 resolution is superseded by the
+  implemented runtime contract below. An absent `emotion.t3.model` now uses
+  the effective OpenClaw agent model and never inherits `merging.model` or a
+  named PLUR1BUS fallback. Explicit named examples remain examples, not
   default claims.
 - The B10 wizard/i18n files are untouched and its preservation suite is a
   mandatory final gate.
@@ -362,3 +365,57 @@ both exit 0
   effective view while runtime semantics stay canonical.
 - This batch does not claim a legacy backend or data migration; it prevents an
   unproven switch and preserves rollback state.
+
+## OpenClaw-default LLM implementation follow-up (independent review pending)
+
+The docs-only R5 model-default correction was not an adequate runtime closure:
+runtime callers, feature ownership, installer output, trust requirements, and
+deploy integrity also had to agree. The implementation series now present on
+the isolated feature branch is:
+
+```text
+f0818ad docs: document LLM route kinds
+b7ffa0d feat: use OpenClaw default for core LLM routes
+03c4a62 fix: preserve LLM command context and critical no-op
+10afa93 fix: warn when critical LLM runtime is unavailable
+267fb71 feat: add LLM call context helper
+211b18d fix: preserve existing LLM call context
+5c8492b refactor: isolate feature LLM routes
+cf01840 fix: remove hard-coded chat model defaults
+Task 5  docs: align config with OpenClaw LLM defaults
+```
+
+Task 5 aligns every optional chat-model schema description without adding a
+default; removes installer-forced Merging direct/model config and the copied
+Schicht 1.5 route; leaves Safe, Recommended, and preserve free of implicit
+models or entry-level LLM trust grants; documents the session/global/model
+trust boundaries and the one-primary-attempt runtime behavior; and adds
+`lib/llm-router.js` to deployment integrity.
+
+Focused causal evidence:
+
+```text
+RED Task 5 contract/profile/deploy wave:
+tests 63; pass 54; fail 9
+Expected gaps: old Emotion fallback docs, missing schema descriptions,
+missing route/trust/fail-closed docs, and missing router deploy entry.
+
+RED installer wave:
+tests 17; pass 16; fail 1
+Expected gap: installer forced MERGING_* direct/model fields and copied them
+into SCHICHT15_BLOCK.
+
+GREEN exact focused Task 5 gate:
+tests 72; suites 11; pass 72; fail 0; skipped 0
+
+GREEN installer contract:
+tests 17; suites 2; pass 17; fail 0; skipped 0
+
+Task 5 lint and whitespace gates:
+`npm run lint` exit 0; `git diff --check` exit 0
+```
+
+This receipt does **not** close the final B11 review. Task 6 still owns the
+independent review, any remediation it finds, the authoritative full serial
+gate, and the final closure decision. No Main/Remote/Primary integration is
+claimed here.
