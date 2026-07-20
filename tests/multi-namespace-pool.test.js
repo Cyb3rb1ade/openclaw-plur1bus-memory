@@ -2,7 +2,7 @@ import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -42,10 +42,12 @@ class FakeAgentDbPool {
     this.isShutdown = false;
     this.active = new Map();
     this.events = [];
+    this.getCalls = [];
     FakeAgentDbPool.constructed.push(this);
   }
   getDb(agentId) {
     if (this.isShutdown) throw new Error("FakeAgentDbPool is shutdown");
+    this.getCalls.push(agentId);
     return { dbPath: join(this.basePath, agentId) };
   }
   async withDb(agentId, fn) {
@@ -384,6 +386,106 @@ describe("MultiNamespacePool", () => {
       assert.equal(pool._pools.has("legacy"), false, "late invalid route must not create a child");
     } finally {
       rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cached legacy read route swapped to an outside symlink before reuse", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-cached-legacy-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-legacy-outside-"));
+    try {
+      mkdirSync(join(root, "active"));
+      mkdirSync(join(root, "legacy"));
+      const layout = resolveNamespaceLayout(root, {
+        activeWriteNamespace: "active",
+        activeRecallNamespaces: ["active"],
+        legacyReadOnlyNamespaces: ["legacy"],
+        crossNamespaceRecall: true,
+      }, { explicit: true });
+      const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
+      pool.getReadDbs("first");
+      const activeChild = pool._pools.get("active");
+      const legacyChild = pool._pools.get("legacy");
+      assert.equal(activeChild.getCalls.length, 1);
+      assert.equal(legacyChild.getCalls.length, 1);
+
+      rmSync(join(root, "legacy"), { recursive: true });
+      symlinkSync(outside, join(root, "legacy"));
+      assert.throws(() => pool.getReadDbs("second"), /traversal|outside/i);
+      assert.equal(activeChild.getCalls.length, 1, "full validation must reject before any cached read child use");
+      assert.equal(legacyChild.getCalls.length, 1, "cached legacy child must not be reused after route swap");
+      assert.equal(existsSync(join(outside, "second")), false, "outside agent path must remain untouched");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a cached active writer route swapped to an outside symlink before reuse", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-cached-writer-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-writer-outside-"));
+    try {
+      mkdirSync(join(root, "active"));
+      const layout = resolveNamespaceLayout(root, {
+        activeWriteNamespace: "active",
+      }, { explicit: true });
+      const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
+      pool.getWriteDb("first");
+      const activeChild = pool._pools.get("active");
+      assert.equal(activeChild.getCalls.length, 1);
+
+      rmSync(join(root, "active"), { recursive: true });
+      symlinkSync(outside, join(root, "active"));
+      assert.throws(() => pool.getWriteDb("second"), /traversal|outside/i);
+      assert.equal(activeChild.getCalls.length, 1, "cached writer must not be reused after route swap");
+      assert.equal(existsSync(join(outside, "second")), false, "outside writer path must remain untouched");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects whole named-root substitution before the first child is created", () => {
+    const parent = mkdtempSync(join(tmpdir(), "plur1bus-root-swap-parent-"));
+    const root = join(parent, "named-root");
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-root-swap-outside-"));
+    try {
+      mkdirSync(join(root, "active"), { recursive: true });
+      mkdirSync(join(outside, "active"));
+      const layout = resolveNamespaceLayout(root, { activeWriteNamespace: "active" }, { explicit: true });
+      const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
+      rmSync(root, { recursive: true });
+      symlinkSync(outside, root);
+
+      assert.throws(() => pool.getWriteDb("agent-a"), /root|canonical|changed|outside|traversal/i);
+      assert.equal(pool._pools.size, 0, "root substitution must reject before child creation");
+      assert.equal(existsSync(join(outside, "active", "agent-a")), false);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects whole named-root substitution before reusing a cached writer", () => {
+    const parent = mkdtempSync(join(tmpdir(), "plur1bus-cached-root-swap-parent-"));
+    const root = join(parent, "named-root");
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-root-swap-outside-"));
+    try {
+      mkdirSync(join(root, "active"), { recursive: true });
+      mkdirSync(join(outside, "active"));
+      const layout = resolveNamespaceLayout(root, { activeWriteNamespace: "active" }, { explicit: true });
+      const pool = new MultiNamespacePool(layout, 384, FakeAgentDbPool);
+      pool.getWriteDb("first");
+      const child = pool._pools.get("active");
+      assert.equal(child.getCalls.length, 1);
+
+      rmSync(root, { recursive: true });
+      symlinkSync(outside, root);
+      assert.throws(() => pool.getWriteDb("second"), /root|canonical|changed|outside|traversal/i);
+      assert.equal(child.getCalls.length, 1, "cached writer must not be used through a substituted root");
+      assert.equal(existsSync(join(outside, "active", "second")), false);
+    } finally {
+      rmSync(parent, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
     }
   });
