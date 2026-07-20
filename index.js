@@ -85,6 +85,11 @@ import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validat
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
+import {
+  openDirectoryCapability,
+  pathMatchesDirectoryCapability,
+  stableDirectoryCapabilitiesSupported,
+} from "./lib/directory-capability.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
 import { listPendingProposals, approveProposal, rejectProposal, listActiveSkills, showProposal } from "./lib/telegram-commands/skill-commands.js";
@@ -679,17 +684,37 @@ class MemoryDB {
    * @param {string} dbPath LanceDB agent path.
    * @param {number} vectorDim Vector dimension.
    * @param {object} [logger] Optional logger.
-   * @param {{readOnly?: boolean, pathGuard?: (() => void)}} [options] Non-mutating mode and trusted-path guard.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void), directoryCapability?: object|null, secureDirectoryRequired?: boolean, beforeLanceOperation?: ((operation: string, capability: object|null) => void)}} [options] Non-mutating mode and trusted directory routing.
    */
-  constructor(dbPath, vectorDim, logger = null, { readOnly = false, pathGuard = null } = {}) {
+  constructor(dbPath, vectorDim, logger = null, {
+    readOnly = false,
+    pathGuard = null,
+    directoryCapability = null,
+    secureDirectoryRequired = false,
+    beforeLanceOperation = null,
+  } = {}) {
     if (pathGuard !== null && typeof pathGuard !== "function") {
       throw new TypeError("MemoryDB pathGuard must be a function");
+    }
+    if (directoryCapability !== null && (
+      typeof directoryCapability !== "object"
+      || typeof directoryCapability.assertOpen !== "function"
+      || typeof directoryCapability.close !== "function"
+      || typeof directoryCapability.path !== "string"
+    )) {
+      throw new TypeError("MemoryDB directoryCapability must be a stable directory capability");
+    }
+    if (beforeLanceOperation !== null && typeof beforeLanceOperation !== "function") {
+      throw new TypeError("MemoryDB beforeLanceOperation must be a function");
     }
     this.dbPath = dbPath;
     this.vectorDim = vectorDim;
     this.logger = logger;
     this.readOnly = readOnly === true;
     this.pathGuard = pathGuard;
+    this.directoryCapability = directoryCapability;
+    this.secureDirectoryRequired = secureDirectoryRequired === true;
+    this.beforeLanceOperation = beforeLanceOperation;
     this.db = null;
     this.table = null;
     this.initPromise = null;
@@ -708,6 +733,13 @@ class MemoryDB {
     this.isShuttingDown = true;
     const shutdownPromise = (async () => {
       const errors = await this._closeHandles("shutdown");
+      try {
+        this.directoryCapability?.close();
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        this.directoryCapability = null;
+      }
       this.initPromise = null;
       this.isShutdown = true;
       if (errors.length > 0) {
@@ -769,6 +801,19 @@ class MemoryDB {
 
   _assertTrustedPath() {
     this.pathGuard?.();
+    this.directoryCapability?.assertOpen();
+  }
+
+  _lancePath() {
+    if (this.directoryCapability) return this.directoryCapability.path;
+    if (this.secureDirectoryRequired) {
+      throw new Error(`secure directory capability is unavailable for ${this.dbPath}`);
+    }
+    return this.dbPath;
+  }
+
+  _beforeLancePathOperation(operation) {
+    this.beforeLanceOperation?.(operation, this.directoryCapability);
   }
 
   async refreshSchemaFields() {
@@ -854,16 +899,20 @@ class MemoryDB {
     const generationPromise = (async () => {
       try {
         this._assertTrustedPath();
-        if (this.readOnly && !existsSync(this.dbPath)) return false;
+        if (this.readOnly && this.secureDirectoryRequired && !this.directoryCapability) return false;
+        if (this.readOnly && !this.secureDirectoryRequired && !existsSync(this.dbPath)) return false;
         const lancedb = await getLanceDB();
         this._assertTrustedPath();
+        this._beforeLancePathOperation("connect");
+        const lancePath = this._lancePath();
         this.db = this.readOnly
-          ? await this._read(lancedb.connect(this.dbPath), "MemoryDB.connect")
-          : await this._write(lancedb.connect(this.dbPath), "MemoryDB.connect");
+          ? await this._read(lancedb.connect(lancePath), "MemoryDB.connect")
+          : await this._write(lancedb.connect(lancePath), "MemoryDB.connect");
       this._assertTrustedPath();
       const tables = await this._read(this.db.tableNames(), "MemoryDB.tableNames");
       if (tables.includes(TABLE_NAME)) {
         this._assertTrustedPath();
+        this._beforeLancePathOperation("openTable");
         this.table = this.readOnly
           ? await this._read(this.db.openTable(TABLE_NAME), "MemoryDB.openTable")
           : await this._write(this.db.openTable(TABLE_NAME), "MemoryDB.openTable");
@@ -954,6 +1003,7 @@ class MemoryDB {
         return false;
       } else {
         this._assertTrustedPath();
+        this._beforeLancePathOperation("createTable");
         this.table = await this._write(this.db.createTable(TABLE_NAME, [
           {
             id: "__schema__",
@@ -1422,11 +1472,33 @@ class AgentDbPool {
    * @param {string} basePath Validated namespace base path.
    * @param {number} vectorDim Vector dimension.
    * @param {object} [logger] Optional logger.
-   * @param {{readOnly?: boolean, pathGuard?: (() => void)}} [options] Non-mutating mode and namespace-path guard.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void), secureRouting?: boolean, parentDirectoryCapability?: object|null, baseSegment?: string|null}} [options] Non-mutating mode and optional descriptor-bound namespace route.
    */
-  constructor(basePath, vectorDim, logger = null, { readOnly = false, pathGuard = null } = {}) {
+  constructor(basePath, vectorDim, logger = null, {
+    readOnly = false,
+    pathGuard = null,
+    secureRouting = null,
+    parentDirectoryCapability = null,
+    baseSegment = null,
+  } = {}) {
     if (pathGuard !== null && typeof pathGuard !== "function") {
       throw new TypeError("AgentDbPool pathGuard must be a function");
+    }
+    const parentRouted = parentDirectoryCapability !== null || baseSegment !== null;
+    const stableRouting = secureRouting === true
+      || (secureRouting !== false && stableDirectoryCapabilitiesSupported());
+    if (parentRouted && !stableRouting) {
+      throw new Error("explicit named namespace routing requires stable directory capabilities");
+    }
+    if (parentRouted && (
+      !parentDirectoryCapability
+      || typeof parentDirectoryCapability.openChild !== "function"
+      || typeof parentDirectoryCapability.childMatches !== "function"
+    )) {
+      throw new TypeError("secure AgentDbPool routing requires a parent directory capability");
+    }
+    if (parentRouted && (typeof baseSegment !== "string" || !baseSegment)) {
+      throw new TypeError("secure AgentDbPool routing requires a base segment");
     }
     pathGuard?.();
     const basePin = deriveExpectedCanonicalTarget(basePath);
@@ -1436,7 +1508,22 @@ class AgentDbPool {
     this.logger = logger;
     this.readOnly = readOnly === true;
     this.pathGuard = pathGuard;
+    this.secureRouting = stableRouting;
+    this.parentRouted = parentRouted;
+    this.parentDirectoryCapability = parentDirectoryCapability;
+    this.baseSegment = baseSegment;
+    this.baseDirectoryCapability = null;
     this.agentPathPins = new Map();
+    if (this.secureRouting && this.parentRouted) {
+      try {
+        this.baseDirectoryCapability = this.parentDirectoryCapability.openChild(
+          this.baseSegment,
+          { create: !this.readOnly },
+        );
+      } catch (error) {
+        if (!(this.readOnly && (error?.code === "ENOENT" || error?.code === "ENOTDIR"))) throw error;
+      }
+    }
     this.dbs = makeBoundedCache(50, async (id, db) => {
       if (db && typeof db.shutdown === "function") {
         try {
@@ -1465,19 +1552,90 @@ class AgentDbPool {
   }
 
   _getOrCreateDb(id) {
-    const dbPath = this._resolveAgentPath(id);
     const cached = this.dbs.get(id);
-    if (cached) return cached;
-    const db = new MemoryDB(dbPath, this.vectorDim, this.logger, {
-      readOnly: this.readOnly,
-      pathGuard: () => this._assertAgentPath(id),
-    });
-    this.dbs.set(id, db);
+    if (cached) {
+      if (this.secureRouting) this._assertSecureAgentCapability(id, cached.directoryCapability);
+      else this._resolveAgentPath(id);
+      return cached;
+    }
+    const dbPath = resolve(this.canonicalBasePath, id);
+    let directoryCapability = null;
+    if (this.secureRouting) {
+      const baseExists = this._assertBasePath({ create: !this.readOnly });
+      if (baseExists) {
+        try {
+          directoryCapability = this.baseDirectoryCapability.openChild(id, { create: !this.readOnly });
+        } catch (error) {
+          if (!this.readOnly && (error?.code === "ELOOP" || error?.code === "ENOTDIR")) {
+            throw new Error(`Path traversal blocked: ${dbPath}`, { cause: error });
+          }
+          if (!(this.readOnly && (error?.code === "ENOENT" || error?.code === "ENOTDIR"))) throw error;
+        }
+      }
+    } else {
+      this._resolveAgentPath(id);
+    }
+    let db;
+    try {
+      db = new MemoryDB(dbPath, this.vectorDim, this.logger, {
+        readOnly: this.readOnly,
+        pathGuard: this.secureRouting
+          ? () => this._assertSecureAgentCapability(id, directoryCapability)
+          : () => this._assertAgentPath(id),
+        directoryCapability,
+        secureDirectoryRequired: this.secureRouting,
+        beforeLanceOperation: this.secureRouting
+          ? (operation, capability) => this._onBeforeAgentLanceOperation(id, operation, capability)
+          : null,
+      });
+      if (!(this.secureRouting && this.readOnly && !directoryCapability)) {
+        this.dbs.set(id, db);
+      }
+    } catch (error) {
+      directoryCapability?.close();
+      throw error;
+    }
     return db;
+  }
+
+  _onBeforeAgentLanceOperation(_id, _operation, _capability) {}
+
+  _assertSecureAgentCapability(id, capability) {
+    const baseExists = this._assertBasePath({ create: !this.readOnly });
+    if (!capability) {
+      if (!this.readOnly) {
+        throw new Error(`agent DB directory capability is missing: ${id}`);
+      }
+      return false;
+    }
+    if (!baseExists || !this.baseDirectoryCapability.childMatches(id, capability)) {
+      throw new Error(`agent DB linked identity changed after initialization: ${id}`);
+    }
+    return true;
   }
 
   _assertBasePath({ create = false } = {}) {
     this.pathGuard?.();
+    if (this.secureRouting) {
+      if (!this.baseDirectoryCapability) {
+        try {
+          this.baseDirectoryCapability = this.parentRouted
+            ? this.parentDirectoryCapability.openChild(this.baseSegment, { create })
+            : openDirectoryCapability(this.basePath, { create });
+        } catch (error) {
+          if (!create && (error?.code === "ENOENT" || error?.code === "ENOTDIR")) return false;
+          throw error;
+        }
+      }
+      const baseMatches = this.parentRouted
+        ? this.parentDirectoryCapability.childMatches(this.baseSegment, this.baseDirectoryCapability)
+        : pathMatchesDirectoryCapability(this.basePath, this.baseDirectoryCapability);
+      if (!baseMatches) {
+        throw new Error(`DB base linked identity changed after initialization: ${this.baseSegment ?? this.basePath}`);
+      }
+      this.pathGuard?.();
+      return true;
+    }
     const entryExists = pathEntryExists(this.basePath);
     if (!entryExists) {
       if (!create) return false;
@@ -1613,6 +1771,13 @@ class AgentDbPool {
         else errors.push(error);
       }
       this.dbs.clear();
+      try {
+        this.baseDirectoryCapability?.close();
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        this.baseDirectoryCapability = null;
+      }
       if (errors.length > 0) {
         throw new AggregateError(errors, `agent DB pool shutdown failures (${errors.length})`);
       }
