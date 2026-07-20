@@ -1,6 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,6 +19,26 @@ import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 
 const VECTOR_DIM = 3;
+
+function snapshotTree(root) {
+  const rows = [];
+  const visit = (absolutePath, relativePath) => {
+    const stat = lstatSync(absolutePath);
+    rows.push({
+      path: relativePath || ".",
+      type: stat.isDirectory() ? "directory" : stat.isFile() ? "file" : stat.isSymbolicLink() ? "symlink" : "other",
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+    });
+    if (!stat.isDirectory()) return;
+    for (const name of readdirSync(absolutePath).sort()) {
+      visit(join(absolutePath, name), relativePath ? join(relativePath, name) : name);
+    }
+  };
+  visit(root, "");
+  return rows;
+}
 
 describe("read-only MemoryDB", { concurrency: false }, () => {
   it("opens and queries a minimal existing memories table without changing its schema", async (t) => {
@@ -23,6 +52,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     const before = (await table.schema()).fields.map(({ name, type }) => [name, String(type)]);
     await table.close();
     await fixture.close();
+    const beforeTree = snapshotTree(agentPath);
 
     const db = new MemoryDB(agentPath, VECTOR_DIM, null, { readOnly: true });
     assert.equal(await db.init(), true);
@@ -32,6 +62,156 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
       { id: "legacy-row", text: "legacy content" },
     ]);
     await db.shutdown();
+    assert.deepEqual(
+      snapshotTree(agentPath),
+      beforeTree,
+      "read-only init, query, and shutdown must preserve names, types, sizes, mtimes, and ctimes recursively",
+    );
+  });
+
+  it("pins the agent directory before a final guard return can pivot the configured path", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-race-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-capability-race-outside-"));
+    const displaced = join(root, "agent-a-held");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    t.after(() => rmSync(outside, { recursive: true, force: true }));
+    mkdirSync(join(root, "active", "agent-a"), { recursive: true });
+
+    let swapped = false;
+    class DeterministicPivotAgentDbPool extends AgentDbPool {
+      _onBeforeAgentLanceOperation(id, operation, capability) {
+        super._onBeforeAgentLanceOperation(id, operation, capability);
+        if (!swapped && id === "agent-a" && operation === "createTable") {
+          assert.ok(capability, "named routing must hold an agent directory capability before createTable");
+          renameSync(join(root, "active", "agent-a"), displaced);
+          symlinkSync(outside, join(root, "active", "agent-a"));
+          swapped = true;
+        }
+      }
+    }
+
+    const layout = resolveNamespaceLayout(root, { activeWriteNamespace: "active" }, { explicit: true });
+    const pool = new MultiNamespacePool(layout, VECTOR_DIM, DeterministicPivotAgentDbPool);
+    const db = pool.getWriteDb("agent-a");
+
+    await assert.rejects(
+      () => db.store({ text: "capability-routed write", vector: [0.1, 0.2, 0.3] }),
+      /canonical|target|changed|identity|linked|outside|traversal/i,
+    );
+    assert.equal(swapped, true, "fixture must pivot immediately after the last successful pre-create guard");
+    assert.deepEqual(readdirSync(outside), [], "LanceDB must never create or open anything through the outside symlink");
+    assert.ok(readdirSync(displaced).length > 0, "the held original directory may receive the in-flight write");
+    await pool.shutdown();
+  });
+
+  it("opens an existing read-only table through the held agent capability after an openTable pivot", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-read-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-capability-read-outside-"));
+    const insideAgent = join(root, "legacy", "agent-a");
+    const displaced = join(root, "legacy", "agent-a-held");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    t.after(() => rmSync(outside, { recursive: true, force: true }));
+    mkdirSync(join(root, "active"), { recursive: true });
+    const fixture = await lancedb.connect(insideAgent);
+    const table = await fixture.createTable("memories", [{
+      id: "inside-row", text: "inside", vector: [0.1, 0.2, 0.3], importance: 0.7,
+    }], { mode: "overwrite" });
+    await table.close();
+    await fixture.close();
+    const outsideBefore = snapshotTree(outside);
+
+    let swapped = false;
+    class ReadPivotAgentDbPool extends AgentDbPool {
+      _onBeforeAgentLanceOperation(id, operation, capability) {
+        super._onBeforeAgentLanceOperation(id, operation, capability);
+        if (this.readOnly && !swapped && id === "agent-a" && operation === "openTable") {
+          assert.ok(capability);
+          renameSync(insideAgent, displaced);
+          symlinkSync(outside, insideAgent);
+          swapped = true;
+        }
+      }
+    }
+    const layout = resolveNamespaceLayout(root, {
+      activeWriteNamespace: "active",
+      activeRecallNamespaces: ["active"],
+      legacyReadOnlyNamespaces: ["legacy"],
+      crossNamespaceRecall: true,
+    }, { explicit: true });
+    const pool = new MultiNamespacePool(layout, VECTOR_DIM, ReadPivotAgentDbPool);
+    const db = pool.getReadDbs("agent-a").find(({ namespace }) => namespace === "legacy").db;
+
+    await assert.rejects(() => db.init(), /canonical|target|changed|identity|linked|traversal/i);
+    assert.equal(swapped, true);
+    assert.deepEqual(snapshotTree(outside), outsideBefore, "read-only open must not inspect or mutate the pivot target");
+    await pool.shutdown();
+  });
+
+  it("retains a capability across failed init retry and closes capabilities on eviction and shutdown", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-lifecycle-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    let failConnect = true;
+    class RetryAgentDbPool extends AgentDbPool {
+      _onBeforeAgentLanceOperation(_id, operation) {
+        if (operation === "connect" && failConnect) {
+          failConnect = false;
+          throw new Error("injected connect boundary failure");
+        }
+      }
+    }
+    const layout = resolveNamespaceLayout(root, { activeWriteNamespace: "active" }, { explicit: true });
+    const pool = new MultiNamespacePool(layout, VECTOR_DIM, RetryAgentDbPool);
+    const db = pool.getWriteDb("retry-agent");
+    const retryCapability = db.directoryCapability;
+    await assert.rejects(() => db.init(), /injected connect boundary failure/);
+    assert.equal(retryCapability.closed, false, "failed init keeps the same safe capability for retry");
+    await assert.doesNotReject(() => db.init());
+
+    const firstEvicted = pool.getWriteDb("evict-00");
+    const evictedCapability = firstEvicted.directoryCapability;
+    for (let index = 1; index <= 50; index += 1) pool.getWriteDb(`evict-${String(index).padStart(2, "0")}`);
+    const childPool = pool._pools.get("active");
+    await childPool.dbs.awaitPendingEvictions();
+    assert.equal(evictedCapability.closed, true, "cache eviction closes the evicted agent descriptor");
+
+    const namespaceCapability = childPool.baseDirectoryCapability;
+    const rootCapability = pool._baseCapability;
+    const shutdownA = pool.shutdown();
+    const shutdownB = pool.shutdown();
+    await Promise.all([shutdownA, shutdownB]);
+    assert.equal(retryCapability.closed, true, "agent capability closes after DB shutdown");
+    assert.equal(namespaceCapability.closed, true, "namespace capability closes after AgentDbPool shutdown");
+    assert.equal(rootCapability.closed, true, "root capability closes after MultiNamespacePool shutdown");
+  });
+
+  it("pins legacy-flat agent writes through the same stable directory capability", async (t) => {
+    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-flat-capability-base-"));
+    const outside = mkdtempSync(join(tmpdir(), "plur1bus-flat-capability-outside-"));
+    const displaced = join(basePath, "flat-agent-held");
+    t.after(() => rmSync(basePath, { recursive: true, force: true }));
+    t.after(() => rmSync(outside, { recursive: true, force: true }));
+    let swapped = false;
+    class FlatPivotAgentDbPool extends AgentDbPool {
+      _onBeforeAgentLanceOperation(id, operation, capability) {
+        if (!swapped && id === "flat-agent" && operation === "createTable") {
+          assert.ok(capability, "supported POSIX legacy-flat routing must hold a directory capability");
+          renameSync(join(basePath, "flat-agent"), displaced);
+          symlinkSync(outside, join(basePath, "flat-agent"));
+          swapped = true;
+        }
+      }
+    }
+    const pool = new FlatPivotAgentDbPool(basePath, VECTOR_DIM);
+    const db = pool.getDb("flat-agent");
+
+    await assert.rejects(
+      () => db.store({ text: "flat capability write", vector: [0.1, 0.2, 0.3] }),
+      /canonical|target|changed|identity|linked|outside|traversal/i,
+    );
+    assert.equal(swapped, true);
+    assert.deepEqual(readdirSync(outside), [], "legacy-flat pivot target must remain untouched");
+    assert.ok(readdirSync(displaced).length > 0, "the held flat directory receives only the safe in-flight write");
+    await pool.shutdown();
   });
 
   it("returns false without creating a missing agent path", async (t) => {
@@ -117,6 +297,28 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     assert.equal(db.readOnly, true);
     assert.equal(await db.init(), false);
     assert.equal(existsSync(missingBase), false);
+    await pool.shutdown();
+  });
+
+  it("securely acquires a read-only agent that appears after an earlier missing lookup", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-late-agent-"));
+    const basePath = join(root, "legacy");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const pool = new AgentDbPool(basePath, VECTOR_DIM, null, { readOnly: true });
+    const missing = pool.getDb("agent-a");
+    assert.equal(await missing.init(), false);
+
+    const fixture = await lancedb.connect(join(basePath, "agent-a"));
+    const table = await fixture.createTable("memories", [{
+      id: "late-row", text: "late", vector: [0.1, 0.2, 0.3], importance: 0.6,
+    }], { mode: "overwrite" });
+    await table.close();
+    await fixture.close();
+
+    const appeared = pool.getDb("agent-a");
+    assert.notEqual(appeared, missing, "missing secure read-only handles are not cached permanently");
+    assert.equal(await appeared.init(), true);
+    assert.deepEqual((await appeared.table.query().toArray()).map(({ id }) => id), ["late-row"]);
     await pool.shutdown();
   });
 
@@ -213,6 +415,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     t.after(() => rmSync(outside, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM);
     const db = pool.getDb("agent-a");
+    rmSync(join(basePath, "agent-a"), { recursive: true });
     symlinkSync(outside, join(basePath, "agent-a"));
 
     await assert.rejects(

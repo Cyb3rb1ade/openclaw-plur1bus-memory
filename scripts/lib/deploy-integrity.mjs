@@ -72,6 +72,7 @@ export const DEPLOY_FILES = [
   "lib/temporal-provenance.js",
   // ── multi-namespace + provider system (v6.7.0) ────────────────────────────
   "lib/multi-namespace-pool.js",
+  "lib/directory-capability.js",
   "lib/namespace-config.js",
   "lib/providers/config-normalize.js",
   "lib/providers/dimension-guard.js",
