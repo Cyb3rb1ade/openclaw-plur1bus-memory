@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import OpenAI from "openai";
+import { getEmotionConfig } from "../lib/emotion.js";
 
 import {
   prepareReviewBundle,
@@ -812,6 +813,76 @@ test("Emotion Tier 3 uses its own native-default route with global agent scope",
   assert.equal(calls[0].agentId, agentId);
   assert.equal(calls[0].purpose, "emotion-classification");
   assert.equal(Object.hasOwn(calls[0], "model"), false);
+});
+
+test("Emotion Tier 3 provider gate defers when the native runtime is missing", async (t) => {
+  const { baseDbPath } = withTempPaths(t);
+  const pluginModule = await loadFreshPlugin();
+  const api = createApi(baseDbPath, {
+    emotion: { tier: "t3", t3: { enabled: true } },
+  });
+
+  pluginModule.default.register(api);
+
+  const logs = JSON.stringify(api.logger.calls);
+  assert.match(logs, /emotion tier-3 deferred/i);
+  assert.doesNotMatch(logs, /emotion tier-3 enabled/i);
+});
+
+test("Emotion Tier 3 provider gate defers an ambiguous partial direct override", async (t) => {
+  const { baseDbPath } = withTempPaths(t);
+  const pluginModule = await loadFreshPlugin();
+  const api = createApi(baseDbPath, {
+    emotion: {
+      tier: "t3",
+      t3: { enabled: true, apiKey: "test-secret-without-model" },
+    },
+  });
+
+  pluginModule.default.register(api);
+
+  const logs = JSON.stringify(api.logger.calls);
+  assert.match(logs, /ambiguous-partial-override/i);
+  assert.match(logs, /emotion tier-3 deferred/i);
+  assert.doesNotMatch(logs, /emotion tier-3 enabled/i);
+});
+
+test("Emotion Tier 3 provider gate accepts a complete direct override without native runtime", async (t) => {
+  const { baseDbPath } = withTempPaths(t);
+  const pluginModule = await loadFreshPlugin();
+  const api = createApi(baseDbPath, {
+    emotion: {
+      tier: "t3",
+      t3: {
+        enabled: true,
+        model: "vendor/emotion-model",
+        apiKey: "test-secret",
+      },
+    },
+  });
+
+  pluginModule.default.register(api);
+
+  const logs = JSON.stringify(api.logger.calls);
+  assert.match(logs, /emotion tier-3 enabled \(route: direct-override\)/i);
+  assert.doesNotMatch(logs, /emotion tier-3 deferred/i);
+  assert.equal(typeof getEmotionConfig().t3.callLlm, "function");
+});
+
+test("Emotion Tier 3 preserves onlyWhenProviderAvailable:false fail-soft routing", async (t) => {
+  const { baseDbPath } = withTempPaths(t);
+  const pluginModule = await loadFreshPlugin();
+  const api = createApi(baseDbPath, {
+    emotion: {
+      tier: "t3",
+      t3: { enabled: true, onlyWhenProviderAvailable: false },
+    },
+  });
+
+  pluginModule.default.register(api);
+
+  assert.equal(getEmotionConfig().t3.enabled, true);
+  assert.equal(typeof getEmotionConfig().t3.callLlm, "function");
 });
 
 test("host policy denial is attempted once and never retried without the target agent", async (t) => {

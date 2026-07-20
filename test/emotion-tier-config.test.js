@@ -5,10 +5,67 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
+import OpenAI from "openai";
 import { EmotionEngine } from "../lib/emotion-engine.js";
 import { setEmotionConfig, getEmotionConfig, inferEmotionalValenceAsync, inferEmotionalValence } from "../lib/emotion.js";
+import { Tier3LLMClassifier } from "../lib/tier3-llm.js";
+
+const TIER3_RESPONSE = JSON.stringify({
+  valence: 0.8,
+  arousal: 0.4,
+  dominance: 0.3,
+  intensity: 0.9,
+  primary_emotion: "joy",
+  secondary_emotion: null,
+  emotion_labels: { joy: 0.95 },
+  confidence: 0.9,
+  language: "en",
+});
+
+function interceptOpenAiPost(t, calls) {
+  const original = OpenAI.prototype.post;
+  OpenAI.prototype.post = async (path, options) => {
+    calls.push({ path, body: options?.body });
+    return { choices: [{ message: { content: TIER3_RESPONSE } }] };
+  };
+  t.after(() => {
+    OpenAI.prototype.post = original;
+  });
+}
 
 describe("EmotionEngine Budget-Gate", () => {
+  it("passes no named model to injected Tier-3 completion", async () => {
+    let calls = 0;
+    const engine = new EmotionEngine({
+      tier3: {
+        enabled: true,
+        callLlm: async () => {
+          calls += 1;
+          return TIER3_RESPONSE;
+        },
+      },
+    });
+
+    assert.strictEqual(engine._t3.model, undefined);
+    const score = await engine.analyze("I am happy.", "user", 3);
+    assert.strictEqual(calls, 1);
+    assert.strictEqual(score.tier_used, 3);
+    assert.strictEqual(score.primary_emotion, "joy");
+  });
+
+  it("keeps injected completion authoritative over a stray model option", () => {
+    const engine = new EmotionEngine({
+      tier3: {
+        enabled: true,
+        model: "foreign/model-that-belongs-to-the-router",
+        callLlm: async () => TIER3_RESPONSE,
+      },
+    });
+
+    assert.strictEqual(engine._t3.model, undefined);
+  });
+
   it("tier-3 läuft nicht wenn nicht enabled", async () => {
     const engine = new EmotionEngine({
       tier3: { enabled: false, model: "gpt-4o-mini" },
@@ -72,6 +129,68 @@ describe("EmotionEngine Budget-Gate", () => {
   });
 });
 
+describe("Tier3LLMClassifier provider ownership", () => {
+  it("classifies through injected callLlm without a model", async () => {
+    const classifier = new Tier3LLMClassifier({
+      callLlm: async () => TIER3_RESPONSE,
+    });
+
+    const score = await classifier.classify("I am happy.");
+    assert.strictEqual(classifier.model, undefined);
+    assert.strictEqual(score.tier_used, 3);
+    assert.strictEqual(score.primary_emotion, "joy");
+  });
+
+  it("does not issue a direct request with an API key but no explicit model", async (t) => {
+    const directCalls = [];
+    interceptOpenAiPost(t, directCalls);
+    const classifier = new Tier3LLMClassifier({
+      apiKey: "test-secret",
+    });
+    const tier1Result = { tier_used: 1, primary_emotion: "trust" };
+
+    const result = await classifier.classify("Maybe.", "user", tier1Result);
+    assert.strictEqual(result, tier1Result);
+    assert.strictEqual(directCalls.length, 0);
+  });
+
+  it("returns a neutral result without a direct model and without Tier-1 fallback", async (t) => {
+    const directCalls = [];
+    interceptOpenAiPost(t, directCalls);
+    const classifier = new Tier3LLMClassifier({
+      apiKey: "test-secret",
+    });
+
+    const result = await classifier.classify("Maybe.");
+    assert.strictEqual(directCalls.length, 0);
+    assert.strictEqual(result.primary_emotion, "neutral");
+    assert.strictEqual(result.confidence, 0);
+  });
+
+  it("uses the exact explicitly configured direct model", async () => {
+    const requests = [];
+    const classifier = new Tier3LLMClassifier({
+      apiKey: "test-secret",
+      model: "vendor/emotion-model",
+      openaiClient: {
+        chat: {
+          completions: {
+            create: async (request) => {
+              requests.push(request);
+              return { choices: [{ message: { content: TIER3_RESPONSE } }] };
+            },
+          },
+        },
+      },
+    });
+
+    const score = await classifier.classify("I am happy.");
+    assert.strictEqual(score.tier_used, 3);
+    assert.strictEqual(requests.length, 1);
+    assert.strictEqual(requests[0].model, "vendor/emotion-model");
+  });
+});
+
 describe("setEmotionConfig + resolveForceTier", () => {
   it("setEmotionConfig speichert Config", () => {
     setEmotionConfig({ tier: "t1", t2: { enabled: true }, t3: { enabled: false } });
@@ -108,5 +227,20 @@ describe("Feature-Toggle emotionTier", () => {
       FEATURE_WHITELIST.emotionTier.configPath,
       ['plugins', 'entries', 'memory-lancedb-namespaced', 'config', 'emotion', 't3', 'enabled']
     );
+  });
+});
+
+describe("pure emotion and overlay module model ownership", () => {
+  it("contains no hard-coded runtime chat model fallback", () => {
+    for (const relativePath of [
+      "../lib/emotion.js",
+      "../lib/emotion-engine.js",
+      "../lib/tier3-llm.js",
+      "../lib/overlay-generator.js",
+      "../lib/interpretation-overlay.js",
+    ]) {
+      const source = readFileSync(new URL(relativePath, import.meta.url), "utf8");
+      assert.doesNotMatch(source, /kimi-for-coding|gpt-4o-mini/, relativePath);
+    }
   });
 });

@@ -2615,10 +2615,13 @@ const plugin = {
     const emotionT3LlmCfg = emotionT3WantsEnabled
       ? createFeatureRoute("emotionT3", emotionCfg.t3 || {})
       : null;
-    const emotionT3HasProvider = Boolean(emotionT3LlmCfg);
+    const emotionT3HasProvider = Boolean(
+      emotionT3LlmCfg
+      && (emotionT3LlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
+        || typeof api.runtime?.llm?.complete === "function"),
+    );
     const emotionT3OnlyWhenProviderAvailable = emotionCfg.t3?.onlyWhenProviderAvailable !== false;
     const emotionT3Enabled = emotionT3WantsEnabled && (emotionT3HasProvider || !emotionT3OnlyWhenProviderAvailable);
-    const emotionT3Model = emotionT3LlmCfg?.model || "";
     const emotionT3CallLlm = (emotionT3Enabled && emotionT3LlmCfg)
       ? /**
          * Call the emotion provider with optional agent-scoped cache context.
@@ -2666,7 +2669,7 @@ const plugin = {
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
-      t3: { enabled: emotionT3Enabled, model: emotionT3Model, callLlm: emotionT3CallLlm, apiKey: null, baseUrl: undefined, timeoutMs: emotionT3TimeoutMs },
+      t3: { enabled: emotionT3Enabled, callLlm: emotionT3CallLlm, apiKey: null, baseUrl: undefined, timeoutMs: emotionT3TimeoutMs },
       escalationConfidence: emotionT3EscalationConfidence,
     });
     if (emotionTier !== "auto") {
