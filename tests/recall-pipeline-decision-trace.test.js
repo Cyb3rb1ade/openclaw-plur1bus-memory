@@ -209,4 +209,25 @@ describe("recall-pipeline decision trace", () => {
     assert.strictEqual(typeof result.trace.summary.totalCandidates, "number");
     assert.ok(result.trace.summary.totalCandidates > 0);
   });
+
+  it("returns selected memories when both retrieval-ledger and warning delivery fail", async () => {
+    const callbackError = new Error("injected retrieval ledger failure");
+    const loggerError = new Error("injected retrieval logger failure");
+    const seedRow = makeRow({ id: "seed-logger", text: "Selected memory", summary: "selected" });
+
+    const result = await runRecallPipeline({
+      query: "selected",
+      dbTable: mockTable([seedRow]),
+      embeddings: makeEmbeddings(),
+      workspaceDir: null,
+      topN: 5,
+      recallMinScore: 0.1,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      retrievalLogger() { throw callbackError; },
+      logger: { warn() { throw loggerError; } },
+    });
+
+    assert.deepEqual(result.memories.map((item) => item.entry.id), ["seed-logger"]);
+  });
 });

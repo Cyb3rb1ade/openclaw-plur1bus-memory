@@ -4,7 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { redactError, safeWarn, safeDebug } from "../lib/safe-logging.js";
+import { redactError, safeWarn, safeDebug, trySafeWarn } from "../lib/safe-logging.js";
 import { fetchWithTimeout, fetchWithRetry } from "../lib/fetch-with-timeout.js";
 import { validateInput, validateCommandArgs, INPUT_LIMITS } from "../lib/input-limits.js";
 
@@ -29,6 +29,18 @@ describe("redactError", () => {
   it("handles string input", () => {
     const r = redactError("simple string error");
     assert.strictEqual(r.message, "simple string error");
+  });
+});
+
+describe("trySafeWarn", () => {
+  it("returns a logger failure without throwing or replacing caller control flow", () => {
+    const loggerError = new Error("injected warning transport failure");
+    const result = trySafeWarn({
+      warn() { throw loggerError; },
+    }, "test-warning", new Error("original operation failed"));
+
+    assert.strictEqual(result.ok, false);
+    assert.strictEqual(result.error, loggerError);
   });
 });
 

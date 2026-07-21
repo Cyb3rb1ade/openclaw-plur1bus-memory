@@ -318,6 +318,7 @@ describe("multi-namespace registered recall", () => {
     api.pluginConfig.recall.canonicalFirst = false;
     api.pluginConfig.namespaces.legacyReadOnlyNamespaces = ["legacy-a", "legacy-b"];
     plugin.register(api);
+    api.logger.warn = () => { throw new Error("injected namespace phase logger failure"); };
     const recall = api.toolFactory({
       agentId: AGENT_ID,
       workspaceDir,
@@ -327,6 +328,7 @@ describe("multi-namespace registered recall", () => {
 
     const result = await recall.execute("namespace-read-timeout", { query: "timeout isolation" });
     assert.match(result.content[0].text, /memory recall failed.*legacy namespace 1 vector read timed out/i);
+    assert.doesNotMatch(result.content[0].text, /namespace phase logger failure/i);
     assert.doesNotMatch(result.content[0].text, /55555555-5555-4555-8555-555555555555/);
     assert.equal(readRetrievalLedger(baseDbPath).length, 0, "a timed-out sibling emits no partial ledger");
 

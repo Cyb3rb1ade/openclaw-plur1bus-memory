@@ -51,6 +51,20 @@ describe("recall-phase-timer", () => {
     assert.ok(!logs.some((m) => typeof m === "string" && m.includes("secret")));
   });
 
+  it("retains the phase failure and returns a throwing logger as secondary evidence", () => {
+    const loggerError = new Error("injected phase logger failure");
+    const timer = createRecallPhaseTimer({
+      logger: { warn() { throw loggerError; } },
+    });
+
+    const result = timer.fail("namespace-recall", new Error("original namespace timeout"));
+
+    assert.deepEqual(result, { ok: false, error: loggerError });
+    assert.equal(timer.summary().errors.length, 1);
+    assert.equal(timer.summary().errors[0].phase, "namespace-recall");
+    assert.match(timer.summary().errors[0].error, /original namespace timeout/);
+  });
+
   it("returns the current active phase", () => {
     const timer = createRecallPhaseTimer({});
     timer.start("scoring");

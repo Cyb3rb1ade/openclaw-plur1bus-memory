@@ -20,6 +20,13 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+function errorTreeIncludes(error, expected) {
+  if (error === expected) return true;
+  if (error?.cause && errorTreeIncludes(error.cause, expected)) return true;
+  return error instanceof AggregateError
+    && error.errors.some((nested) => errorTreeIncludes(nested, expected));
+}
+
 function makeApi(baseDbPath) {
   const shutdownHandlers = [];
   const warnings = [];
@@ -235,5 +242,133 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       api._warnings.some((line) => line.includes(agentId) && line.includes(closeError.message)),
       `expected agent/namespace shutdown context, got: ${JSON.stringify(api._warnings)}`,
     );
+  });
+
+  it("finishes terminal cleanup and preserves DB plus logger failures when shutdown logging throws", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-shutdown-logger-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const firstCloseError = new Error("injected first shutdown close failure");
+    const secondCloseError = new Error("injected second shutdown close failure");
+    const loggerError = new Error("injected shutdown logger failure");
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      warn() { throw loggerError; },
+    });
+    const firstDb = pool.getDb("agent-shutdown-a");
+    const secondDb = pool.getDb("agent-shutdown-b");
+    const agentCapabilities = [firstDb.directoryCapability, secondDb.directoryCapability];
+    const baseCapability = pool.baseDirectoryCapability;
+    firstDb.table = { close: async () => { throw firstCloseError; } };
+    firstDb.db = { close: async () => {} };
+    secondDb.table = { close: async () => { throw secondCloseError; } };
+    secondDb.db = { close: async () => {} };
+
+    await assert.rejects(pool.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, firstCloseError), "the first DB failure remains observable");
+      assert.ok(errorTreeIncludes(error, secondCloseError), "the second DB failure remains observable");
+      assert.ok(errorTreeIncludes(error, loggerError), "the logger failure remains observable");
+      return true;
+    });
+    assert.deepEqual(agentCapabilities.map((capability) => capability.closed), [true, true]);
+    assert.equal(baseCapability.closed, true, "terminal shutdown still closes the base capability");
+    assert.equal(pool.baseDirectoryCapability, null);
+    assert.equal(pool.dbs.entries().length, 0, "terminal shutdown clears cached DB references");
+    await assert.doesNotReject(() => pool.shutdown(), "terminal retry remains an idempotent no-op");
+  });
+
+  it("clears cached DBs and preserves DB plus logger failures when clear logging throws", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-clear-logger-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const closeError = new Error("injected clear close failure");
+    const loggerError = new Error("injected clear logger failure");
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      warn() { throw loggerError; },
+    });
+    const db = pool.getDb("agent-clear");
+    const agentCapability = db.directoryCapability;
+    const baseCapability = pool.baseDirectoryCapability;
+    db.table = { close: async () => { throw closeError; } };
+    db.db = { close: async () => {} };
+
+    await assert.rejects(pool.clear(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, closeError), "the DB failure remains observable");
+      assert.ok(errorTreeIncludes(error, loggerError), "the logger failure remains observable");
+      return true;
+    });
+    assert.equal(agentCapability.closed, true);
+    assert.equal(baseCapability.closed, false, "a reusable clear retains the base capability");
+    assert.equal(pool.dbs.entries().length, 0, "clear removes the failed DB from the cache");
+
+    const replacement = pool.getDb("agent-clear");
+    assert.notEqual(replacement, db, "the reusable pool creates a fresh DB after clear");
+    await pool.shutdown();
+  });
+
+  it("keeps eviction and logger failures observable without retaining the evicted DB", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-eviction-logger-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const closeError = new Error("injected eviction close failure");
+    const loggerError = new Error("injected eviction logger failure");
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      warn() { throw loggerError; },
+    });
+    const evictedDb = pool.getDb("agent-00");
+    const evictedCapability = evictedDb.directoryCapability;
+    evictedDb.table = { close: async () => { throw closeError; } };
+    evictedDb.db = { close: async () => {} };
+
+    for (let index = 1; index <= 50; index++) {
+      pool.getDb(`agent-${String(index).padStart(2, "0")}`);
+    }
+
+    await assert.rejects(pool.dbs.awaitPendingEvictions(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, closeError), "the eviction failure remains observable");
+      assert.ok(errorTreeIncludes(error, loggerError), "the eviction logger failure remains observable");
+      return true;
+    });
+    assert.equal(evictedCapability.closed, true);
+    assert.equal(pool.dbs.has("agent-00"), false, "the failed eviction does not retain its cache entry");
+    await pool.shutdown();
+  });
+
+  it("settles a late-operation lease when warning delivery throws and reports it during shutdown", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-late-logger-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const lateError = new Error("injected late operation failure");
+    const loggerError = new Error("injected late logger failure");
+    const rawSettlement = deferred();
+    let warningCalls = 0;
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      warn() {
+        warningCalls++;
+        if (warningCalls === 1) throw loggerError;
+      },
+    });
+    const timeoutError = new TimeoutError("MemoryDB.store", 15, rawSettlement.promise);
+    let baseCapability;
+
+    const operation = pool.withDb("agent-late", async (db) => {
+      baseCapability = pool.baseDirectoryCapability;
+      db.shutdown = async () => { db.directoryCapability.close(); };
+      throw timeoutError;
+    });
+    await assert.rejects(operation, (error) => error === timeoutError);
+    const [lease] = [...pool.activeOperations];
+    assert.ok(lease, "the late raw settlement remains tracked after the public timeout");
+
+    rawSettlement.reject(lateError);
+    await assert.doesNotReject(lease, "warning delivery must not reject the lifecycle lease");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(pool.activeOperations.size, 0);
+
+    await assert.rejects(pool.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, loggerError), "the deferred logger failure remains observable");
+      return true;
+    });
+    assert.equal(baseCapability.closed, true, "shutdown still closes the base capability");
+    assert.equal(pool.dbs.entries().length, 0);
   });
 });
