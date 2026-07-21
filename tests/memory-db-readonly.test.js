@@ -214,6 +214,40 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
+  it("keeps a symlinked legacy-flat base usable through its held directory", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-flat-symlink-base-"));
+    const physicalBase = join(root, "physical");
+    const configuredBase = join(root, "legacy");
+    mkdirSync(physicalBase);
+    symlinkSync(physicalBase, configuredBase, "dir");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+
+    const pool = new AgentDbPool(configuredBase, VECTOR_DIM);
+    const db = pool.getDb("agent-a");
+
+    assert.ok(db.directoryCapability, "legacy-flat routing retains its stable agent directory capability");
+    await assert.doesNotReject(() => db.init());
+    assert.ok(db.table, "the configured legacy-flat base remains usable");
+    assert.equal(existsSync(join(physicalBase, "agent-a", "memories.lance")), true);
+    await pool.shutdown();
+  });
+
+  it("closes cached directory capabilities when a reusable pool is cleared", async (t) => {
+    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-agent-pool-clear-"));
+    t.after(() => rmSync(basePath, { recursive: true, force: true }));
+    const pool = new AgentDbPool(basePath, VECTOR_DIM);
+    const first = pool.getDb("agent-a");
+    const firstCapability = first.directoryCapability;
+
+    assert.equal(firstCapability.closed, false);
+    await pool.clear();
+    assert.equal(firstCapability.closed, true, "clearing a pool closes the cached DB capability");
+
+    const replacement = pool.getDb("agent-a");
+    assert.notEqual(replacement, first, "clearing removes the old DB instance from the reusable pool");
+    await pool.shutdown();
+  });
+
   it("returns false without creating a missing agent path", async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-missing-"));
     const agentPath = join(root, "missing-agent");

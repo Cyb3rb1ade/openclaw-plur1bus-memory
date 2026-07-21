@@ -1624,19 +1624,41 @@ class AgentDbPool {
   _assertBasePath({ create = false } = {}) {
     this.pathGuard?.();
     if (this.secureRouting) {
+      if (!this.parentRouted) {
+        const configuredBaseExists = pathEntryExists(this.basePath);
+        if (!configuredBaseExists && !create) {
+          if (this.baseDirectoryCapability) {
+            throw new Error(`DB base linked identity changed after initialization: ${this.basePath}`);
+          }
+          return false;
+        }
+        if (!configuredBaseExists) {
+          const beforeCreate = deriveExpectedCanonicalTarget(this.basePath);
+          if (beforeCreate.expectedTarget !== this.canonicalBasePath) {
+            throw new Error("DB base canonical target changed before creation");
+          }
+        }
+        if (!this.baseDirectoryCapability) {
+          this.baseDirectoryCapability = openDirectoryCapability(this.canonicalBasePath, { create });
+        }
+        const configuredTarget = realpathSync(this.basePath);
+        const baseMatches = configuredTarget === this.canonicalBasePath
+          && pathMatchesDirectoryCapability(this.canonicalBasePath, this.baseDirectoryCapability);
+        if (!baseMatches) {
+          throw new Error(`DB base linked identity changed after initialization: ${this.basePath}`);
+        }
+        this.pathGuard?.();
+        return true;
+      }
       if (!this.baseDirectoryCapability) {
         try {
-          this.baseDirectoryCapability = this.parentRouted
-            ? this.parentDirectoryCapability.openChild(this.baseSegment, { create })
-            : openDirectoryCapability(this.basePath, { create });
+          this.baseDirectoryCapability = this.parentDirectoryCapability.openChild(this.baseSegment, { create });
         } catch (error) {
           if (!create && (error?.code === "ENOENT" || error?.code === "ENOTDIR")) return false;
           throw error;
         }
       }
-      const baseMatches = this.parentRouted
-        ? this.parentDirectoryCapability.childMatches(this.baseSegment, this.baseDirectoryCapability)
-        : pathMatchesDirectoryCapability(this.basePath, this.baseDirectoryCapability);
+      const baseMatches = this.parentDirectoryCapability.childMatches(this.baseSegment, this.baseDirectoryCapability);
       if (!baseMatches) {
         throw new Error(`DB base linked identity changed after initialization: ${this.baseSegment ?? this.basePath}`);
       }
@@ -1797,8 +1819,30 @@ class AgentDbPool {
     }
   }
 
-  clear() {
+  /** Close cached DBs and release their directory capabilities while keeping the pool reusable. */
+  async clear() {
+    await Promise.allSettled([...this.activeOperations]);
+    const errors = [];
+    for (const [agentId, db] of this.dbs.entries()) {
+      if (!db || typeof db.shutdown !== "function") continue;
+      try {
+        await db.shutdown();
+      } catch (error) {
+        const contextual = this._contextualizeDbError(agentId, "clear", error);
+        this.logger?.warn?.(`memory-lancedb-namespaced: ${contextual.message}`);
+        errors.push(contextual);
+      }
+    }
+    try {
+      await this.dbs.awaitPendingEvictions();
+    } catch (error) {
+      if (error instanceof AggregateError) errors.push(...error.errors);
+      else errors.push(error);
+    }
     this.dbs.clear();
+    if (errors.length > 0) {
+      throw new AggregateError(errors, `agent DB pool clear failures (${errors.length})`);
+    }
   }
 }
 
