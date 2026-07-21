@@ -342,4 +342,85 @@ describe("multi-namespace registered recall", () => {
     rawSettlements[1].resolve();
     await shutdownPromise;
   });
+
+  it("rejects a temporal anchor namespace timeout without partial output", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-anchor-timeout-"));
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-anchor-workspace-"));
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+    const originalInit = MemoryDB.prototype.init;
+    const rawSettlement = deferred();
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => vector();
+    MemoryDB.prototype.init = async function initAnchorTimeoutFixture() {
+      const legacy = this.dbPath.endsWith(join("legacy", AGENT_ID));
+      let vectorSearchCalls = 0;
+      this.table = {
+        vectorSearch() {
+          vectorSearchCalls++;
+          const call = vectorSearchCalls;
+          return {
+            limit() { return this; },
+            async toArray() {
+              if (call === 1) {
+                return [{
+                  id: legacy
+                    ? "77777777-7777-4777-8777-777777777777"
+                    : "66666666-6666-4666-8666-666666666666",
+                  text: legacy ? "Legacy temporal candidate." : "Active temporal candidate.",
+                  summary: legacy ? "legacy temporal" : "active temporal",
+                  category: "fact",
+                  createdAt: 2_000,
+                  storedBy: AGENT_ID,
+                  workspaceKey: "namespace-workspace",
+                  _distance: 0,
+                }];
+              }
+              if (legacy) {
+                throw new TimeoutError("legacy temporal anchor read", 10, rawSettlement.promise);
+              }
+              return [{ createdAt: 1_000 }];
+            },
+          };
+        },
+      };
+      return true;
+    };
+    t.after(() => {
+      rawSettlement.resolve();
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
+      MemoryDB.prototype.init = originalInit;
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
+    });
+
+    const api = makeApi(baseDbPath);
+    api.pluginConfig.autoRecall = false;
+    api.pluginConfig.recall.canonicalFirst = false;
+    plugin.register(api);
+    const recall = api.toolFactory({
+      agentId: AGENT_ID,
+      workspaceDir,
+      workspaceKey: "namespace-workspace",
+      userId: "namespace-owner",
+    }).find((tool) => tool.name === "memory_recall");
+
+    const result = await recall.execute("namespace-anchor-timeout", {
+      query: "what happened after the Docker setup",
+    });
+    assert.match(result.content[0].text, /memory recall failed.*legacy temporal anchor read timed out/i);
+    assert.doesNotMatch(result.content[0].text, /66666666-6666-4666-8666-666666666666/);
+    assert.doesNotMatch(result.content[0].text, /77777777-7777-4777-8777-777777777777/);
+    assert.equal(readRetrievalLedger(baseDbPath).length, 0, "anchor failure emits no partial ledger");
+
+    let shutdownSettled = false;
+    const shutdownPromise = Promise.all(
+      (api.handlers.get("gateway_stop") || []).map((stop) => stop()),
+    ).then(() => { shutdownSettled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false, "anchor timeout retains the namespace lease");
+    rawSettlement.resolve();
+    await shutdownPromise;
+  });
 });

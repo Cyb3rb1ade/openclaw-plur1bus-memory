@@ -7,6 +7,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { applyTemporalFilter, temporalRangeFromAnchor } from "../lib/temporal-filter.js";
+import { TimeoutError } from "../lib/with-timeout.js";
 
 describe("applyTemporalFilter", () => {
   it("returns all results when temporal is null", () => {
@@ -76,5 +77,23 @@ describe("temporalRangeFromAnchor", () => {
     };
     const range = await temporalRangeFromAnchor("docker setup", dbTable, embeddings);
     assert.strictEqual(range, null);
+  });
+
+  it("propagates an attached anchor-read timeout only in strict mode", async () => {
+    const rawSettlement = Promise.resolve([]);
+    const timeout = new TimeoutError("temporal anchor read", 10, rawSettlement);
+    const dbTable = {
+      vectorSearch: () => ({
+        limit: () => ({
+          async toArray() { throw timeout; },
+        }),
+      }),
+    };
+    const embeddings = { embed: async () => [0.1, 0.2, 0.3] };
+
+    await assert.rejects(
+      temporalRangeFromAnchor("docker setup", dbTable, embeddings, { strictReadErrors: true }),
+      (error) => error === timeout && error.settlement === rawSettlement,
+    );
   });
 });
