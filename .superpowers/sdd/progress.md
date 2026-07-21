@@ -300,3 +300,6 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
 - Final focused cron/bootstrap/symlink gate: 126/126 across 20 suites, no
   failures or skips. No PLUR1BUS handler, default-LLM route, API-key lookup, or
   per-agent credential inheritance changed.
+- The first quality re-review found one remaining Important DOW step-boundary
+  false-positive (`*/8` versus Croner's maximum `7`). Five- and six-field
+  regressions now reject it while retaining `*/7`; no other route changed.

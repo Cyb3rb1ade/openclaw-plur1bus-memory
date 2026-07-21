@@ -155,7 +155,9 @@ describe("selectEnabledFeatureCronSpecs", () => {
       "0 3 W * *",
       "0 3 * * L",
       "0 3 */999 * *",
+      "0 3 * * */8",
       "*/61 * * * * *",
+      "0 0 3 * * */8",
     ]) {
       const invalidCronerSyntax = selectEnabledFeatureCronSpecs(sourceConfig({
         skillMiner: { enabled: true, cron, timezone: "Europe/Berlin" },
@@ -186,7 +188,7 @@ describe("selectEnabledFeatureCronSpecs", () => {
       );
     }
 
-    for (const cron of ["0 3 * * 5L", "0 3 * * MONL", "*/60 * * * * *"]) {
+    for (const cron of ["0 3 * * 5L", "0 3 * * MONL", "0 3 * * */7", "*/60 * * * * *"]) {
       const validCronerSyntax = selectEnabledFeatureCronSpecs(sourceConfig({
         skillMiner: { enabled: true, cron, timezone: "Europe/Berlin" },
       }));
