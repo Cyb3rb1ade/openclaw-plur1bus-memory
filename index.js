@@ -800,6 +800,7 @@ class MemoryDB {
   }
 
   _assertTrustedPath() {
+    if (this.isShutdown) throw new Error(`MemoryDB is shutdown: ${this.dbPath}`);
     this.pathGuard?.();
     this.directoryCapability?.assertOpen();
   }
@@ -999,7 +1000,13 @@ class MemoryDB {
           }
         }
       } else if (this.readOnly) {
-        await this._closeHandles("read-only-missing-table");
+        const cleanupErrors = await this._closeHandles("read-only-missing-table");
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError(
+            cleanupErrors,
+            `MemoryDB read-only missing-table cleanup failed for ${this.dbPath}`,
+          );
+        }
         return false;
       } else {
         this._assertTrustedPath();

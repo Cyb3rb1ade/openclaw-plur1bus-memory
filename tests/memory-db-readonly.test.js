@@ -317,6 +317,42 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await fixture.close();
   });
 
+  it("rejects an absent read-only table when handle cleanup reports an error", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-close-failure-"));
+    const agentPath = join(root, "agent-a");
+    mkdirSync(agentPath);
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const closeError = new Error("injected read-only cleanup failure");
+    class CleanupFailMemoryDB extends MemoryDB {
+      async _closeHandles(context) {
+        const errors = await super._closeHandles(context);
+        if (context === "read-only-missing-table") errors.push(closeError);
+        return errors;
+      }
+    }
+    const db = new CleanupFailMemoryDB(agentPath, VECTOR_DIM, null, { readOnly: true });
+
+    await assert.rejects(() => db.init(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(error.errors.includes(closeError));
+      return true;
+    });
+    assert.equal(db.db, null);
+    assert.equal(db.table, null);
+    assert.equal(db.initPromise, null, "a failed cleanup remains retryable but never looks like absence");
+  });
+
+  it("does not reopen a MemoryDB after terminal shutdown", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-memory-db-terminal-"));
+    const agentPath = join(root, "agent-a");
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const db = new MemoryDB(agentPath, VECTOR_DIM);
+
+    await db.shutdown();
+    await assert.rejects(() => db.init(), /shutdown/i);
+    assert.equal(existsSync(agentPath), false, "a terminal handle cannot recreate its database path");
+  });
+
   it("rechecks a cached secure read-only directory after a table appears", async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-late-table-"));
     const basePath = join(root, "legacy");
