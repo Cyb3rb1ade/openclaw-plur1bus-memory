@@ -1785,9 +1785,16 @@ class AgentDbPool {
     if (this.isShutdown) return;
     this.isShutdown = true;
     const shutdownPromise = (async () => {
-      if (this.clearPromise) await this.clearPromise;
-      await Promise.allSettled([...this.activeOperations]);
       const errors = [];
+      if (this.clearPromise) {
+        try {
+          await this.clearPromise;
+        } catch (error) {
+          if (error instanceof AggregateError) errors.push(...error.errors);
+          else errors.push(error);
+        }
+      }
+      await Promise.allSettled([...this.activeOperations]);
       for (const [agentId, db] of this.dbs.entries()) {
         if (!db || typeof db.shutdown !== "function") continue;
         try {

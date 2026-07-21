@@ -278,6 +278,22 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
+  it("closes the base capability when a concurrent clear reports a DB close failure", async (t) => {
+    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-agent-pool-clear-failure-"));
+    t.after(() => rmSync(basePath, { recursive: true, force: true }));
+    const pool = new AgentDbPool(basePath, VECTOR_DIM);
+    const db = pool.getDb("agent-a");
+    const baseCapability = pool.baseDirectoryCapability;
+    db.shutdown = async () => { throw new Error("injected clear close failure"); };
+
+    const clearing = pool.clear();
+    const shuttingDown = pool.shutdown();
+
+    await assert.rejects(clearing, /agent DB pool clear failures/i);
+    await assert.rejects(shuttingDown, /agent DB pool shutdown failures/i);
+    assert.equal(baseCapability.closed, true, "shutdown closes its base capability after a failed clear");
+  });
+
   it("returns false without creating a missing agent path", async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-missing-"));
     const agentPath = join(root, "missing-agent");
