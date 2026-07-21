@@ -9,7 +9,7 @@ describe('scope="user" ACL', () => {
 
   it("allows the owning user to access a user-scoped memory", () => {
     const result = checkAccess(
-      { userPrincipal: ownerOne },
+      { agentId: "agent-a", userPrincipal: ownerOne },
       { id: "m1", scope: "user", ownerUserId: ownerOne },
     );
     assert.strictEqual(result.allowed, true);
@@ -17,7 +17,7 @@ describe('scope="user" ACL', () => {
 
   it("denies a different authenticated user from accessing a user-scoped memory", () => {
     const result = checkAccess(
-      { userPrincipal: ownerTwo },
+      { agentId: "agent-a", userPrincipal: ownerTwo },
       { id: "m1", scope: "user", ownerUserId: ownerOne },
     );
     assert.strictEqual(result.allowed, false);
@@ -26,7 +26,7 @@ describe('scope="user" ACL', () => {
 
   it("denies unauthenticated access to a user-scoped memory", () => {
     const result = checkAccess(
-      {},
+      { agentId: "agent-a" },
       { id: "m1", scope: "user", ownerUserId: ownerOne },
     );
     assert.strictEqual(result.allowed, false);
@@ -35,7 +35,7 @@ describe('scope="user" ACL', () => {
 
   it("fails closed for legacy user-scoped rows without an owner binding", () => {
     const result = checkAccess(
-      { userPrincipal: ownerOne },
+      { agentId: "agent-a", userPrincipal: ownerOne },
       { id: "m1", scope: "user" },
     );
     assert.strictEqual(result.allowed, false);
@@ -44,7 +44,7 @@ describe('scope="user" ACL', () => {
 
   it("filters user-scoped memories by owner binding", () => {
     const allowed = filterMemoriesByAcl(
-      { userPrincipal: ownerOne },
+      { agentId: "agent-a", userPrincipal: ownerOne },
       [
         { id: "keep", scope: "user", ownerUserId: ownerOne },
         { id: "drop", scope: "user", ownerUserId: ownerTwo },

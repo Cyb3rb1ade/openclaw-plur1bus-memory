@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { INPUT_LIMITS } from "../lib/input-limits.js";
+import { createConfirmation, validateConfirmation } from "../lib/security.js";
 import {
   buildMemoryAccountTopology,
   buildMemoryWorkspaceAliases,
@@ -35,6 +36,94 @@ const routingCapability = Object.freeze({
     return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
   },
 });
+
+function dispatchFixture({
+  runId = "run-a",
+  sessionKey = "agent:a:telegram:direct:chat-a",
+  senderId = "42",
+  chatId = "chat-a",
+  accountId = "default",
+  threadId = "",
+  commandTurn,
+} = {}) {
+  return {
+    ...(runId ? { runId } : {}),
+    sessionKey,
+    originatingChannel: "telegram",
+    originatingTo: `telegram:${chatId}`,
+    originatingAccountId: accountId,
+    ...(threadId ? { originatingThreadId: threadId } : {}),
+    ctx: {
+      AgentId: "a",
+      SessionKey: sessionKey,
+      AccountId: accountId,
+      SenderId: senderId,
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      ChatId: chatId,
+      OriginatingTo: `telegram:${chatId}`,
+      ...(threadId ? { MessageThreadId: threadId } : {}),
+      CommandBody: commandTurn?.body ?? "ordinary message",
+      ...(commandTurn ? { CommandTurn: commandTurn } : {}),
+    },
+  };
+}
+
+function hookFixture({
+  runId = "run-a",
+  sessionKey = "agent:a:telegram:direct:chat-a",
+  sessionId = "session-a",
+  senderId = "42",
+  chatId = "chat-a",
+  threadId = "",
+  workspaceDir,
+} = {}) {
+  return {
+    runId,
+    agentId: "a",
+    sessionKey,
+    sessionId,
+    workspaceDir,
+    messageProvider: "telegram",
+    senderId,
+    chatId,
+    ...(threadId ? { messageThreadId: threadId } : {}),
+    channelContext: {
+      senderId,
+      sender: { id: senderId },
+      chatId,
+      chat: { id: chatId },
+      ...(threadId ? { threadId } : {}),
+    },
+  };
+}
+
+function sessionEntryFixture({
+  sessionId = "session-a",
+  accountId = "default",
+  chatId = "chat-a",
+  threadId = "",
+} = {}) {
+  const to = threadId ? `telegram:group:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+  return {
+    sessionId,
+    deliveryContext: { channel: "telegram", accountId, to, ...(threadId ? { threadId } : {}) },
+    origin: { provider: "telegram", accountId, to, ...(threadId ? { threadId } : {}) },
+    lastChannel: "telegram",
+    lastAccountId: accountId,
+    lastTo: to,
+    ...(threadId ? { lastThreadId: threadId } : {}),
+  };
+}
+
+function resolveHook(hookCtx, registry, entry, accountTopology = buildMemoryAccountTopology({ channels: { telegram: {} } })) {
+  return resolveHostHookMemoryContext(hookCtx, {
+    routingCapability,
+    turnRoutes: registry,
+    accountTopology,
+    getSessionEntry: () => entry,
+  });
+}
 
 describe("B13 canonical memory request context", () => {
   it("canonicalizes one workspace truth and freezes the complete tuple", () => {
@@ -116,6 +205,21 @@ describe("B13 canonical memory request context", () => {
     }
   });
 
+  it("accepts safe integers only for transport ids and requires strings elsewhere", () => {
+    const transport = resolveMemoryRequestContext({
+      agentId: "a",
+      channel: "telegram",
+      accountId: "default",
+      userId: 42,
+      chatId: -100123,
+    });
+    assert.equal(transport.userId, "42");
+    assert.equal(transport.chatId, "-100123");
+    for (const field of ["agentId", "workspaceId", "workspaceKey", "channel", "accountId", "sessionKey", "sessionId", "conversationPrincipal"]) {
+      assert.throws(() => resolveMemoryRequestContext({ agentId: "a", [field]: 7 }), new RegExp(field));
+    }
+  });
+
   it("loads and validates only the four public routing functions lazily", async () => {
     let calls = 0;
     const loader = createHostRoutingLoader({ importRouting: async () => { calls++; return routingCapability; } });
@@ -127,6 +231,144 @@ describe("B13 canonical memory request context", () => {
     assert.equal(calls, 1);
     const malformed = createHostRoutingLoader({ importRouting: async () => ({}) });
     await assert.rejects(() => malformed(), /routing capability/);
+    let workspaceCalls = 0;
+    await assert.rejects(() => resolveHostCommandMemoryContext({ agentId: "a" }, {
+      routingLoader: async () => { throw new Error("loader failed"); },
+      resolveAgentWorkspaceDir: async () => { workspaceCalls++; return "/unused"; },
+    }), /loader failed/);
+    assert.equal(workspaceCalls, 0);
+    const source = readFileSync(new URL("../lib/memory-request-context.js", import.meta.url), "utf8");
+    assert.match(source, /import\("openclaw\/plugin-sdk\/routing"\)/);
+    assert.doesNotMatch(source, /^import .*openclaw\/plugin-sdk\/routing/m);
+  });
+
+  it("decodes the closed Telegram, Discord, Slack, and Mattermost command route grammar", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-providers-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const cases = [
+      { provider: "telegram", sessionKey: "agent:a:main", from: "telegram:user-a", to: "telegram:user-a", chatId: "user-a", kind: "private" },
+      { provider: "discord", sessionKey: "agent:a:discord:channel:chan-a", from: "discord:channel:chan-a", to: "discord:channel:chan-a", chatId: "chan-a", kind: "group" },
+      { provider: "slack", sessionKey: "agent:a:direct:user-a", from: "slack:user-a", to: "slack:user-a", chatId: "user-a", kind: "private" },
+      { provider: "mattermost", sessionKey: "agent:a:mattermost:group:team-a", from: "mattermost:group:team-a", to: "mattermost:group:team-a", chatId: "team-a", kind: "group" },
+      { provider: "telegram", sessionKey: "agent:a:telegram:group:-100:topic:77", from: "telegram:group:-100:topic:77", to: "telegram:group:-100:topic:77", chatId: "-100", kind: "group", threadId: "77" },
+    ];
+    for (const fixture of cases) {
+      const ctx = await resolveHostCommandMemoryContext({
+        senderId: "42",
+        channel: fixture.provider,
+        accountId: "default",
+        agentId: "a",
+        sessionKey: fixture.sessionKey,
+        from: fixture.from,
+        to: fixture.to,
+        ...(fixture.threadId ? { messageThreadId: fixture.threadId, threadParentId: fixture.chatId } : {}),
+        getCurrentConversationBinding: () => null,
+      }, {
+        resolveAgentWorkspaceDir: async () => workspaceDir,
+        routingLoader: async () => routingCapability,
+        requireConversation: true,
+      });
+      assert.equal(ctx.channel, fixture.provider);
+      assert.equal(ctx.chatId, fixture.chatId);
+      assert.equal(ctx.chatKind, fixture.kind);
+    }
+  });
+
+  it("rejects malformed, foreign, extra, and conflicting command route aliases", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-route-deny-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const base = {
+      senderId: "42", channel: "discord", accountId: "default", agentId: "a",
+      sessionKey: "agent:a:discord:channel:chan-a", from: "discord:channel:chan-a",
+      to: "discord:channel:chan-a", getCurrentConversationBinding: () => null,
+    };
+    const resolve = (delta) => resolveHostCommandMemoryContext({ ...base, ...delta }, {
+      resolveAgentWorkspaceDir: async () => workspaceDir,
+      routingLoader: async () => routingCapability,
+      requireConversation: true,
+    });
+    for (const delta of [
+      { agentId: "b" },
+      { from: "discord:unknown:chan-a" },
+      { to: "telegram:chan-a" },
+      { to: "discord:channel:chan-a:extra" },
+      { messageThreadId: "77", threadParentId: "other-channel" },
+      { accountId: "other", sessionKey: "agent:a:discord:default:direct:chan-a", from: "discord:chan-a", to: "discord:chan-a" },
+      { getCurrentConversationBinding: () => ({ channel: "discord", accountId: "default", conversationId: "other" }) },
+      { getCurrentConversationBinding: () => ({ accountId: "default", conversationId: "chan-a" }) },
+    ]) await assert.rejects(() => resolve(delta), undefined, JSON.stringify(delta));
+    const native = await resolve({ to: "slash:42" });
+    assert.equal(native.chatId, "chan-a");
+  });
+
+  it("binds confirmations field-by-field to the verified host conversation principal", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-confirm-principal-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const base = {
+      senderId: "42", channel: "telegram", accountId: "default", agentId: "a",
+      sessionKey: "agent:a:telegram:group:chat-a:topic:thread-a", sessionId: "sid-a",
+      from: "telegram:group:chat-a:topic:thread-a", to: "telegram:group:chat-a:topic:thread-a",
+      messageThreadId: "thread-a", threadParentId: "chat-a",
+      getCurrentConversationBinding: () => null,
+    };
+    const derive = (delta = {}) => resolveHostCommandMemoryContext({ ...base, ...delta }, {
+      resolveAgentWorkspaceDir: async () => workspaceDir,
+      routingLoader: async () => routingCapability,
+      requireConversation: true,
+    });
+    const original = await derive();
+    const corroborated = await derive({
+      getCurrentConversationBinding: () => ({
+        channel: "telegram", accountId: "default", conversationId: "thread-a",
+        parentConversationId: "chat-a", threadId: "thread-a",
+      }),
+    });
+    assert.equal(corroborated.conversationPrincipal, original.conversationPrincipal);
+    const variants = [
+      { senderId: "99" },
+      { agentId: "b", sessionKey: "agent:b:telegram:group:chat-a:topic:thread-a" },
+      { sessionKey: "agent:a:main" },
+      { sessionId: undefined },
+      { accountId: "other" },
+      {
+        channel: "discord", sessionKey: "agent:a:discord:channel:chat-a",
+        from: "discord:channel:chat-a", to: "discord:channel:chat-a",
+      },
+      {
+        sessionKey: "agent:a:telegram:group:chat-b:topic:thread-a",
+        from: "telegram:group:chat-b:topic:thread-a", to: "telegram:group:chat-b:topic:thread-a",
+        threadParentId: "chat-b",
+      },
+      {
+        sessionKey: "agent:a:telegram:group:chat-a:topic:thread-b",
+        from: "telegram:group:chat-a:topic:thread-b", to: "telegram:group:chat-a:topic:thread-b",
+        messageThreadId: "thread-b",
+      },
+    ];
+    for (const delta of variants) {
+      const changed = await derive(delta);
+      const store = new Map();
+      const confirmation = createConfirmation({
+        userId: original.userId,
+        chatId: original.conversationPrincipal,
+        command: "forget",
+        targetId: "11111111-1111-1111-1111-111111111111",
+      });
+      store.set(`${confirmation.nonce}:${confirmation.targetId}`, confirmation);
+      const validation = validateConfirmation(confirmation.callbackData, store, {
+        userId: changed.userId,
+        chatId: changed.conversationPrincipal,
+      });
+      assert.equal(validation.valid, false, JSON.stringify(delta));
+    }
+    const discord = {
+      ...base,
+      channel: "discord", sessionKey: "agent:a:main", sessionId: undefined,
+      from: "discord:user-a", to: "slash:42", messageThreadId: undefined, threadParentId: undefined,
+    };
+    const d1 = await derive(discord);
+    const d2 = await derive(discord);
+    assert.equal(d1.conversationPrincipal, d2.conversationPrincipal);
   });
 
   it("resolves official command and tool fields without synthetic identity fallbacks", async (t) => {
@@ -156,6 +398,25 @@ describe("B13 canonical memory request context", () => {
     assert.equal(tool.userPrincipal, ctx.userPrincipal);
   });
 
+  it("rejects missing agents before workspace, session-reader, or tool data work", async () => {
+    let workspaceCalls = 0;
+    await assert.rejects(() => resolveHostCommandMemoryContext({
+      channel: "telegram", accountId: "default", sessionKey: "agent:a:main", from: "telegram:42",
+    }, {
+      resolveAgentWorkspaceDir: async () => { workspaceCalls++; return "/unused"; },
+      routingLoader: async () => routingCapability,
+    }), /agentId is required/);
+    assert.equal(workspaceCalls, 0);
+    assert.throws(() => resolveToolMemoryRequestContext({ workspaceDir: "/unused" }), /agentId is required/);
+    let sessionReads = 0;
+    await assert.rejects(() => resolveHostHookMemoryContext({ sessionKey: "agent:a:main" }, {
+      routingCapability,
+      turnRoutes: createMemoryTurnRouteRegistry({ routingCapability }),
+      getSessionEntry: () => { sessionReads++; return null; },
+    }), /agentId is required/);
+    assert.equal(sessionReads, 0);
+  });
+
   it("builds conservative account topology and excludes slash dispatches", () => {
     const topology = buildMemoryAccountTopology({ channels: { telegram: { accounts: { primary: {} } } } });
     assert.equal(Object.isFrozen(topology), true);
@@ -181,6 +442,31 @@ describe("B13 canonical memory request context", () => {
     assert.deepEqual(equal.aliases, [{ alias: "same", workspaceKey: "workspace:v1:target-a" }]);
   });
 
+  it("rejects conflicting raw workspace path basenames before Neo can collapse them", (t) => {
+    const rootA = mkdtempSync(join(tmpdir(), "plur1bus-b13-alias-a-"));
+    const rootB = mkdtempSync(join(tmpdir(), "plur1bus-b13-alias-b-"));
+    const pathA = join(rootA, "shared");
+    const pathB = join(rootB, "shared");
+    mkdirSync(pathA);
+    mkdirSync(pathB);
+    t.after(() => {
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    });
+    const cfg = {
+      neo: {
+        workspaces: [
+          { workspaceKey: "target-a", path: pathA },
+          { workspaceKey: "target-b", path: pathB },
+        ],
+      },
+    };
+    assert.throws(() => buildMemoryWorkspaceAliases(cfg, {
+      paths: [],
+      aliases: [{ alias: "shared", workspaceKey: "target-b" }],
+    }), /conflicting workspace alias declaration/);
+  });
+
   it("joins a real reply_dispatch ticket to the latest prompt session without retaining text", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-hook-"));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
@@ -198,6 +484,7 @@ describe("B13 canonical memory request context", () => {
         SenderId: "42",
         Provider: "telegram",
         ChatId: "chat-a",
+        OriginatingTo: "chat-a",
         CommandBody: "ordinary message",
       },
     }), undefined);
@@ -230,5 +517,357 @@ describe("B13 canonical memory request context", () => {
     assert.match(ctx.userPrincipal, /^user:v1:[a-f0-9]{64}$/);
     assert.equal(ctx.accountId, "default");
     assert.equal(registry.pendingCount(), 0);
+  });
+
+  it("accepts only official normal CommandTurn contexts and excludes command variants", () => {
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    const normal = { kind: "normal", source: "message", authorized: false, body: "ordinary message" };
+    assert.equal(registry.observeReplyDispatch(dispatchFixture({ commandTurn: normal })), undefined);
+    assert.equal(registry.pendingCount(), 1);
+    for (const commandTurn of [
+      { kind: "text-slash", source: "text", authorized: true, body: "/memory" },
+      { kind: "native", source: "native", authorized: true, body: "/memory" },
+    ]) {
+      registry.clear();
+      registry.observeReplyDispatch(dispatchFixture({ commandTurn }));
+      assert.equal(registry.pendingCount(), 0);
+    }
+    for (const excluded of [
+      { CommandSource: "text", CommandBody: "ordinary message" },
+      { CommandSource: "native", CommandBody: "ordinary message" },
+      { CommandBody: "   /unknown" },
+      { CommandBody: "" },
+      { CommandBody: "ordinary message", isTailDispatch: true },
+    ]) {
+      registry.clear();
+      const event = dispatchFixture({ commandTurn: undefined });
+      Object.assign(event, excluded);
+      Object.assign(event.ctx, excluded);
+      registry.observeReplyDispatch(event);
+      assert.equal(registry.pendingCount(), 0);
+      registry.observeReplyDispatch(dispatchFixture({ runId: "run-normal" }));
+      assert.equal(registry.pendingCount(), 1, "an excluded command must not leave a stale FIFO head");
+    }
+  });
+
+  it("requires the complete raw and originating dispatch identity tuple", () => {
+    const removals = [
+      [["sessionKey"]], [["ctx", "SessionKey"]], [["originatingChannel"]], [["ctx", "Provider"], ["ctx", "OriginatingChannel"]],
+      [["originatingAccountId"]], [["ctx", "AccountId"]], [["originatingTo"]], [["ctx", "OriginatingTo"]],
+      [["ctx", "ChatId"]], [["ctx", "SenderId"]],
+    ];
+    for (const paths of removals) {
+      const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+      const event = dispatchFixture();
+      for (const path of paths) {
+        if (path.length === 1) delete event[path[0]];
+        else delete event[path[0]][path[1]];
+      }
+      registry.observeReplyDispatch(event);
+      assert.equal(registry.pendingCount(), 0, paths.map((path) => path.join(".")).join("+"));
+    }
+  });
+
+  it("re-verifies immutable claimed tickets on same-run retries", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-retry-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    registry.observeReplyDispatch(dispatchFixture());
+    const original = await resolveHook(hookFixture({ workspaceDir }), registry, sessionEntryFixture());
+    assert.match(original.userPrincipal, /^user:v1:/);
+    const exactRetry = await resolveHook(hookFixture({ workspaceDir }), registry, sessionEntryFixture());
+    assert.equal(exactRetry.userPrincipal, original.userPrincipal);
+    const switched = await resolveHook(
+      hookFixture({ workspaceDir, senderId: "99" }),
+      registry,
+      sessionEntryFixture(),
+    );
+    assert.equal(switched.userPrincipal, "");
+    assert.equal(switched.agentId, "a");
+  });
+
+  it("treats repeated claimed dispatches as idempotent only for the same identity", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-claimed-dispatch-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    registry.observeReplyDispatch(dispatchFixture());
+    const original = await resolveHook(hookFixture({ workspaceDir }), registry, sessionEntryFixture());
+    registry.observeReplyDispatch(dispatchFixture());
+    assert.equal(registry.pendingCount(), 0);
+    assert.equal((await resolveHook(hookFixture({ workspaceDir }), registry, sessionEntryFixture())).userPrincipal, original.userPrincipal);
+    registry.observeReplyDispatch(dispatchFixture({ senderId: "99" }));
+    assert.equal((await resolveHook(hookFixture({ workspaceDir }), registry, sessionEntryFixture())).userPrincipal, "");
+  });
+
+  it("requires every present ticket run id to match in every proof mode", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-run-proof-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
+    const denied = await resolveHook(
+      hookFixture({ workspaceDir, runId: "run-b" }),
+      registry,
+      sessionEntryFixture(),
+    );
+    assert.equal(denied.userPrincipal, "");
+    assert.equal(denied.agentId, "a");
+  });
+
+  it("exercises account-session, exact-run, and single-account proof modes", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-proof-modes-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const ambiguous = buildMemoryAccountTopology({ channels: { telegram: { accounts: { named: {} } } } });
+    const cases = [
+      {
+        label: "account-bearing session",
+        sessionKey: "agent:a:telegram:acct-a:direct:chat-a",
+        accountId: "acct-a",
+        ticketRun: "",
+        topology: ambiguous,
+      },
+      {
+        label: "exact run",
+        sessionKey: "agent:a:telegram:direct:chat-a",
+        accountId: "default",
+        ticketRun: "run-a",
+        topology: ambiguous,
+      },
+      {
+        label: "single account",
+        sessionKey: "agent:a:telegram:direct:chat-a",
+        accountId: "default",
+        ticketRun: "",
+        topology: buildMemoryAccountTopology({ channels: { telegram: {} } }),
+      },
+    ];
+    for (const fixture of cases) {
+      const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+      registry.observeReplyDispatch(dispatchFixture({
+        runId: fixture.ticketRun,
+        sessionKey: fixture.sessionKey,
+        accountId: fixture.accountId,
+      }));
+      const ctx = await resolveHook(
+        hookFixture({ workspaceDir, sessionKey: fixture.sessionKey }),
+        registry,
+        sessionEntryFixture({ accountId: fixture.accountId }),
+        fixture.topology,
+      );
+      assert.match(ctx.userPrincipal, /^user:v1:/, fixture.label);
+    }
+
+    for (const topology of [
+      ambiguous,
+      buildMemoryAccountTopology({ channels: { telegram: { accounts: { one: {}, two: {} } } } }),
+      buildMemoryAccountTopology({ channels: { telegram: {} }, bindings: [{ match: { channel: "telegram", accountId: "*" } }] }),
+      Object.freeze({ providers: Object.freeze({}) }),
+      Object.freeze({ providers: Object.freeze({ telegram: Object.freeze({ accounts: "default", ambiguous: false }) }) }),
+    ]) {
+      const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+      registry.observeReplyDispatch(dispatchFixture({ runId: "" }));
+      const denied = await resolveHook(hookFixture({ workspaceDir }), registry, sessionEntryFixture(), topology);
+      assert.equal(denied.userPrincipal, "");
+    }
+  });
+
+  it("binds claimed retries to the originally verified session id", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-session-retry-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    registry.observeReplyDispatch(dispatchFixture());
+    const original = await resolveHook(hookFixture({ workspaceDir }), registry, sessionEntryFixture());
+    assert.match(original.userPrincipal, /^user:v1:/);
+    const denied = await resolveHook(
+      hookFixture({ workspaceDir, sessionId: "session-b" }),
+      registry,
+      sessionEntryFixture({ sessionId: "session-b" }),
+    );
+    assert.equal(denied.userPrincipal, "");
+  });
+
+  it("keeps interleaved FIFO users bound to their own sender proofs", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-users-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "", senderId: "42" }));
+    registry.observeReplyDispatch(dispatchFixture({ runId: "", senderId: "99" }));
+    const first = await resolveHook(hookFixture({ workspaceDir, runId: "run-a", senderId: "42" }), registry, sessionEntryFixture());
+    const second = await resolveHook(hookFixture({ workspaceDir, runId: "run-b", senderId: "99" }), registry, sessionEntryFixture());
+    assert.match(first.userPrincipal, /^user:v1:/);
+    assert.match(second.userPrincipal, /^user:v1:/);
+    assert.notEqual(first.userPrincipal, second.userPrincipal);
+
+    const swapped = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    swapped.observeReplyDispatch(dispatchFixture({ runId: "", senderId: "42" }));
+    swapped.observeReplyDispatch(dispatchFixture({ runId: "", senderId: "99" }));
+    const denied = await resolveHook(hookFixture({ workspaceDir, runId: "run-b", senderId: "99" }), swapped, sessionEntryFixture());
+    assert.equal(denied.userPrincipal, "");
+    assert.equal(swapped.pendingCount(), 0);
+  });
+
+  it("bounds pending, claimed, session taint, and global overflow state", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-bounds-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    let current = 1000;
+    const registry = createMemoryTurnRouteRegistry({
+      routingCapability, now: () => current, ttlMs: 10, maxPending: 1, maxClaimed: 1, maxTainted: 1,
+    });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-b", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b" }));
+    assert.deepEqual(registry.stateCounts(), { pending: 1, runIndex: 1, claimed: 0, tainted: 1, globalTaint: false });
+    const second = await resolveHook(
+      hookFixture({ workspaceDir, runId: "run-b", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b" }),
+      registry,
+      sessionEntryFixture({ chatId: "chat-b" }),
+    );
+    assert.match(second.userPrincipal, /^user:v1:/);
+
+    current = 1010;
+    registry.pendingCount();
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-c" }));
+    const conflicting = dispatchFixture({ runId: "run-c", senderId: "99" });
+    registry.observeReplyDispatch(conflicting);
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-d", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b" }));
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-d", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b", senderId: "99" }));
+    assert.equal(registry.stateCounts().globalTaint, true);
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-e", sessionKey: "agent:a:telegram:direct:chat-c", chatId: "chat-c" }));
+    assert.equal(registry.pendingCount(), 0);
+    current = 1020;
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-e", sessionKey: "agent:a:telegram:direct:chat-c", chatId: "chat-c" }));
+    assert.equal(registry.pendingCount(), 1);
+  });
+
+  it("denies an out-of-order exact run and taints rather than skipping the FIFO head", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-fifo-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    const ambiguous = buildMemoryAccountTopology({ channels: { telegram: { accounts: { named: {} } } } });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-a", senderId: "42" }));
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-b", senderId: "99" }));
+    const outOfOrder = await resolveHook(
+      hookFixture({ workspaceDir, runId: "run-b", senderId: "99" }),
+      registry,
+      sessionEntryFixture(),
+      ambiguous,
+    );
+    assert.equal(outOfOrder.userPrincipal, "");
+    assert.equal(registry.pendingCount(), 0);
+  });
+
+  it("cross-checks every present dispatch and hook thread or identity duplicate", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-duplicates-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    const dispatch = dispatchFixture();
+    dispatch.ctx.OriginatingTo = "telegram:chat-b";
+    registry.observeReplyDispatch(dispatch);
+    assert.equal(registry.pendingCount(), 0);
+
+    registry.clear();
+    registry.observeReplyDispatch(dispatchFixture());
+    const hook = hookFixture({ workspaceDir });
+    hook.channelContext.sender.id = "99";
+    const denied = await resolveHook(hook, registry, sessionEntryFixture());
+    assert.equal(denied.userPrincipal, "");
+
+    registry.clear();
+    registry.observeReplyDispatch(dispatchFixture());
+    const malformedEntry = sessionEntryFixture();
+    malformedEntry.deliveryContext.accountId = { value: "default" };
+    const deniedMalformedEntry = await resolveHook(hookFixture({ workspaceDir }), registry, malformedEntry);
+    assert.equal(deniedMalformedEntry.userPrincipal, "");
+
+    for (const nestedKind of ["sender", "chat"]) {
+      registry.clear();
+      registry.observeReplyDispatch(dispatchFixture());
+      const missingNested = hookFixture({ workspaceDir });
+      if (nestedKind === "sender") {
+        delete missingNested.channelContext.senderId;
+        delete missingNested.channelContext.sender;
+      } else {
+        delete missingNested.channelContext.chatId;
+        delete missingNested.channelContext.chat;
+      }
+      assert.equal((await resolveHook(missingNested, registry, sessionEntryFixture())).userPrincipal, "");
+    }
+  });
+
+  it("requires explicit hook and entry thread proof and rejects malformed present entry targets", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-thread-proof-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const sessionKey = "agent:a:telegram:group:chat-a:topic:77";
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    const dispatch = dispatchFixture({ sessionKey, threadId: "77" });
+    dispatch.originatingTo = "telegram:group:chat-a:topic:77";
+    dispatch.ctx.OriginatingTo = "telegram:group:chat-a:topic:77";
+    registry.observeReplyDispatch(dispatch);
+    const missingHookThread = hookFixture({ workspaceDir, sessionKey });
+    delete missingHookThread.messageThreadId;
+    delete missingHookThread.channelContext.threadId;
+    const deniedMissing = await resolveHook(missingHookThread, registry, sessionEntryFixture({ threadId: "77" }));
+    assert.equal(deniedMissing.userPrincipal, "");
+
+    registry.clear();
+    registry.observeReplyDispatch(dispatch);
+    const malformed = sessionEntryFixture({ threadId: "77" });
+    malformed.origin.to = "slash:user";
+    const deniedMalformed = await resolveHook(
+      hookFixture({ workspaceDir, sessionKey, threadId: "77" }),
+      registry,
+      malformed,
+    );
+    assert.equal(deniedMalformed.userPrincipal, "");
+    registry.clear();
+    registry.observeReplyDispatch(dispatch);
+    const allowed = await resolveHook(
+      hookFixture({ workspaceDir, sessionKey, threadId: "77" }),
+      registry,
+      sessionEntryFixture({ threadId: "77" }),
+    );
+    assert.match(allowed.userPrincipal, /^user:v1:/);
+  });
+
+  it("evicts claimed runs deterministically and cleanup cannot borrow another ticket", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-claimed-cap-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000, maxClaimed: 1 });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
+    const first = await resolveHook(hookFixture({ workspaceDir, runId: "run-a" }), registry, sessionEntryFixture());
+    assert.match(first.userPrincipal, /^user:v1:/);
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-b", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b" }));
+    const second = await resolveHook(
+      hookFixture({ workspaceDir, runId: "run-b", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b" }),
+      registry,
+      sessionEntryFixture({ chatId: "chat-b" }),
+    );
+    assert.match(second.userPrincipal, /^user:v1:/);
+    assert.equal((await resolveHook(hookFixture({ workspaceDir, runId: "run-a" }), registry, sessionEntryFixture())).userPrincipal, "");
+    registry.clearRun("run-b");
+    assert.equal((await resolveHook(
+      hookFixture({ workspaceDir, runId: "run-b", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b" }),
+      registry,
+      sessionEntryFixture({ chatId: "chat-b" }),
+    )).userPrincipal, "");
+  });
+
+  it("clears run indexes with session taints and lets global overflow expire", () => {
+    let current = 1000;
+    const registry = createMemoryTurnRouteRegistry({
+      routingCapability,
+      now: () => current,
+      ttlMs: 10,
+      maxPending: 1,
+      maxTainted: 1,
+    });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-x" }));
+    registry.clearSession("agent:a:telegram:direct:chat-a");
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-x", senderId: "99" }));
+    assert.equal(registry.pendingCount(), 1, "clearSession must remove the stale run index");
+    current = 1010;
+    assert.equal(registry.pendingCount(), 0, "expiry is strict at the exact boundary");
+    current = 1020;
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-x", senderId: "99" }));
+    assert.equal(registry.pendingCount(), 1, "expired taint and run index must recover deterministically");
+    assert.throws(() => createMemoryTurnRouteRegistry({ routingCapability, maxPending: -1 }), /maxPending/);
   });
 });
