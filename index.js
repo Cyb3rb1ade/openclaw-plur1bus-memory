@@ -132,7 +132,7 @@ import { runProactiveCheck } from "./lib/jobs/proactive-check.js";
 import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
-import { applyImportanceBoost, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, mergeNamespaceRecallResults, computeUseAssociative } from "./lib/recall-pipeline.js";
+import { applyImportanceBoost, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, mergeNamespaceRecallResults, computeUseAssociative, emitRetrievalLedger } from "./lib/recall-pipeline.js";
 import {
   createRecallDecisionTrace,
   addTraceDecision,
@@ -191,7 +191,7 @@ import {
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
-import { safeDebug } from "./lib/safe-logging.js";
+import { safeDebug, trySafeWarn } from "./lib/safe-logging.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
 import { throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
@@ -692,10 +692,24 @@ async function runMergedNamespaceRecall(
       dedupJaccard: baseParams.dedupJaccard,
       trace,
     });
-    emitMergedRecallLedger(baseParams, merged.memories);
+    emitRetrievalLedger({
+      retrievalLogger: baseParams.retrievalLogger,
+      logger: baseParams.logger,
+      entry: {
+        agentId: baseParams.agentId,
+        workspaceKey: baseParams.workspaceKey,
+        query: baseParams.query,
+        resultsCount: merged.memories.length,
+        selectedIds: merged.memories.map((memory) => memory.entry.id),
+      },
+    });
     return merged;
   } catch (error) {
-    phaseTimer?.fail?.("namespace-recall", error);
+    try {
+      phaseTimer?.fail?.("namespace-recall", error);
+    } catch (phaseTimerError) {
+      trySafeWarn(baseParams.logger, "namespace-recall.phaseTimer", phaseTimerError);
+    }
     throw error;
   } finally {
     phaseTimer?.end("namespace-recall");
@@ -741,21 +755,6 @@ function createNamespaceChildRecallTrace(masterTrace, query) {
   });
 }
 
-function emitMergedRecallLedger(baseParams, memories) {
-  if (typeof baseParams.retrievalLogger !== "function") return;
-  try {
-    baseParams.retrievalLogger({
-      agentId: baseParams.agentId,
-      workspaceKey: baseParams.workspaceKey,
-      query: baseParams.query,
-      resultsCount: memories.length,
-      selectedIds: memories.map((memory) => memory.entry.id),
-    });
-  } catch (error) {
-    baseParams.logger?.warn?.(`recall-pipeline: retrievalLogger failed: ${String(error)}`);
-  }
-}
-
 // ============================================================================
 // MemoryDB — pro Agent eine Instanz
 // ============================================================================
@@ -768,6 +767,7 @@ const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fi
 const LANCEDB_READ_TIMEOUT_MS = 10_000;
 const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
 const INIT_LATE_HANDLE_KIND = Symbol("MemoryDB.initLateHandleKind");
+const MAX_BACKGROUND_POOL_LIFECYCLE_ERRORS = 50;
 
 function logMemoryDbDebug(logger, scope, error, dbPath) {
   try {
@@ -1858,6 +1858,8 @@ class AgentDbPool {
     this.baseSegment = baseSegment;
     this.baseDirectoryCapability = null;
     this.agentPathPins = new Map();
+    this.backgroundLifecycleErrors = [];
+    this.backgroundLifecycleErrorOverflow = 0;
     if (this.secureRouting && this.parentRouted) {
       try {
         this.baseDirectoryCapability = this.parentDirectoryCapability.openChild(
@@ -1874,7 +1876,17 @@ class AgentDbPool {
           await db.shutdown();
         } catch (error) {
           const contextual = this._contextualizeDbError(id, "eviction", error);
-          this.logger?.warn?.(`memory-lancedb-namespaced: ${contextual.message}`);
+          const loggingError = this._warnLifecycle(
+            id,
+            "eviction",
+            `memory-lancedb-namespaced: ${contextual.message}`,
+          );
+          if (loggingError) {
+            throw new AggregateError(
+              [contextual, loggingError],
+              `agent=${id} eviction and warning delivery failed`,
+            );
+          }
           throw contextual;
         }
       }
@@ -1894,6 +1906,37 @@ class AgentDbPool {
     contextual.agentId = agentId;
     contextual.phase = phase;
     return contextual;
+  }
+
+  _warnLifecycle(agentId, phase, message) {
+    try {
+      this.logger?.warn?.(message);
+      return null;
+    } catch (error) {
+      return this._contextualizeDbError(agentId, `${phase}-warning`, error);
+    }
+  }
+
+  _recordBackgroundLifecycleError(error) {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    if (this.backgroundLifecycleErrors.length < MAX_BACKGROUND_POOL_LIFECYCLE_ERRORS) {
+      this.backgroundLifecycleErrors.push(normalized);
+      return;
+    }
+    this.backgroundLifecycleErrorOverflow += 1;
+  }
+
+  _drainBackgroundLifecycleErrors() {
+    const errors = this.backgroundLifecycleErrors.splice(0, this.backgroundLifecycleErrors.length);
+    if (this.backgroundLifecycleErrorOverflow > 0) {
+      const overflow = new Error(
+        `agent DB pool background lifecycle failures omitted (${this.backgroundLifecycleErrorOverflow})`,
+      );
+      overflow.phase = "background-lifecycle-overflow";
+      errors.push(overflow);
+      this.backgroundLifecycleErrorOverflow = 0;
+    }
+    return errors;
   }
 
   _getOrCreateDb(id) {
@@ -2086,9 +2129,12 @@ class AgentDbPool {
       } catch (error) {
         const settlement = await waitForTimeoutSettlement(error);
         if (settlement.status === "rejected") {
-          this.logger?.warn?.(
+          const loggingError = this._warnLifecycle(
+            id,
+            "late-settlement",
             `memory-lancedb-namespaced: late DB operation settlement failed for agent=${id}: ${String(settlement.error)}`,
           );
+          if (loggingError) this._recordBackgroundLifecycleError(loggingError);
         }
       } finally {
         if (acquired) this.dbs.release(id);
@@ -2100,7 +2146,14 @@ class AgentDbPool {
       () => this.activeOperations.delete(leasePromise),
       (trackingError) => {
         this.activeOperations.delete(leasePromise);
-        this.logger?.warn?.(`memory-lancedb-namespaced: DB lease tracking failed for agent=${id}: ${String(trackingError)}`);
+        const contextual = this._contextualizeDbError(id, "lease-tracking", trackingError);
+        this._recordBackgroundLifecycleError(contextual);
+        const loggingError = this._warnLifecycle(
+          id,
+          "lease-tracking",
+          `memory-lancedb-namespaced: DB lease tracking failed for agent=${id}: ${String(trackingError)}`,
+        );
+        if (loggingError) this._recordBackgroundLifecycleError(loggingError);
       },
     );
     try {
@@ -2132,14 +2185,20 @@ class AgentDbPool {
         }
       }
       await Promise.allSettled([...this.activeOperations]);
+      errors.push(...this._drainBackgroundLifecycleErrors());
       for (const [agentId, db] of this.dbs.entries()) {
         if (!db || typeof db.shutdown !== "function") continue;
         try {
           await db.shutdown();
         } catch (error) {
           const contextual = this._contextualizeDbError(agentId, "shutdown", error);
-          this.logger?.warn?.(`memory-lancedb-namespaced: ${contextual.message}`);
           errors.push(contextual);
+          const loggingError = this._warnLifecycle(
+            agentId,
+            "shutdown",
+            `memory-lancedb-namespaced: ${contextual.message}`,
+          );
+          if (loggingError) errors.push(loggingError);
         }
       }
       try {
@@ -2174,15 +2233,20 @@ class AgentDbPool {
     if (this.clearPromise) return this.clearPromise;
     const clearPromise = (async () => {
       await Promise.allSettled([...this.activeOperations]);
-      const errors = [];
+      const errors = this._drainBackgroundLifecycleErrors();
       for (const [agentId, db] of this.dbs.entries()) {
         if (!db || typeof db.shutdown !== "function") continue;
         try {
           await db.shutdown();
         } catch (error) {
           const contextual = this._contextualizeDbError(agentId, "clear", error);
-          this.logger?.warn?.(`memory-lancedb-namespaced: ${contextual.message}`);
           errors.push(contextual);
+          const loggingError = this._warnLifecycle(
+            agentId,
+            "clear",
+            `memory-lancedb-namespaced: ${contextual.message}`,
+          );
+          if (loggingError) errors.push(loggingError);
         }
       }
       try {

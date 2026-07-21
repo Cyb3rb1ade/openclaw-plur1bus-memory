@@ -5,7 +5,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { mergeNamespaceRecallResults } from "../lib/recall-pipeline.js";
+import { emitRetrievalLedger, mergeNamespaceRecallResults } from "../lib/recall-pipeline.js";
 import {
   addTraceCandidate,
   addTraceDecision,
@@ -181,5 +181,30 @@ describe("mergeNamespaceRecallResults", () => {
     assert.deepEqual(merged.memories.map((item) => item.entry.id), ["duplicate", "tie-first", "tie-second"]);
     assert.equal(merged.memories[0].score, 0.9);
     assert.equal(merged.memories[0].namespace, "ns-second");
+  });
+});
+
+describe("emitRetrievalLedger", () => {
+  it("keeps callback and warning failures secondary to a successful recall result", () => {
+    const callbackError = new Error("injected retrieval ledger failure");
+    const loggerError = new Error("injected retrieval warning failure");
+    const selected = [memory("selected", 0.9, "selected memory")];
+
+    const outcome = emitRetrievalLedger({
+      retrievalLogger() { throw callbackError; },
+      logger: { warn() { throw loggerError; } },
+      entry: {
+        agentId: "agent-a",
+        workspaceKey: "workspace-a",
+        query: "recall query",
+        resultsCount: selected.length,
+        selectedIds: selected.map((item) => item.entry.id),
+      },
+    });
+
+    assert.strictEqual(outcome.ok, false);
+    assert.strictEqual(outcome.error, callbackError);
+    assert.strictEqual(outcome.loggingError, loggerError);
+    assert.deepEqual(selected.map((item) => item.entry.id), ["selected"]);
   });
 });

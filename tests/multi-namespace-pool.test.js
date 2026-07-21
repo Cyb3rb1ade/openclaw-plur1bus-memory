@@ -32,6 +32,13 @@ function forgedFrozenLayout(overrides = {}) {
   });
 }
 
+function errorTreeIncludes(error, expected) {
+  if (error === expected) return true;
+  if (error?.cause && errorTreeIncludes(error.cause, expected)) return true;
+  return error instanceof AggregateError
+    && error.errors.some((nested) => errorTreeIncludes(nested, expected));
+}
+
 // FakeAgentDbPool — no real LanceDB, just path-tracking
 class FakeAgentDbPool {
   static constructed = [];
@@ -256,6 +263,40 @@ describe("MultiNamespacePool", () => {
       return true;
     });
     assert.equal(pool._pools.size, 0, "pool state clears even when namespace shutdown fails");
+  });
+
+  it("finishes terminal cleanup and preserves child plus logger failures when shutdown logging throws", async () => {
+    const childError = new Error("injected child shutdown failure");
+    const loggerError = new Error("injected namespace logger failure");
+    class FailingAgentDbPool extends FakeAgentDbPool {
+      async shutdown() {
+        this.isShutdown = true;
+        throw childError;
+      }
+    }
+    const pool = new MultiNamespacePool(namedLayout({
+      activeWriteNamespace: "lancedb-new",
+      activeRecallNamespaces: ["lancedb-new"],
+      legacyReadOnlyNamespaces: ["lancedb-old"],
+      crossNamespaceRecall: true,
+    }), 384, FailingAgentDbPool, {
+      warn() { throw loggerError; },
+    });
+    pool.getReadDbs("agent-a");
+    const children = [...pool._pools.values()];
+    const baseCapability = pool._baseCapability;
+
+    await assert.rejects(pool.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, childError), "child shutdown failures remain observable");
+      assert.ok(errorTreeIncludes(error, loggerError), "logger failures remain observable");
+      return true;
+    });
+    assert.deepEqual(children.map((child) => child.isShutdown), [true, true], "every child shutdown is attempted");
+    assert.equal(pool._pools.size, 0, "terminal shutdown clears child references");
+    assert.equal(baseCapability.closed, true, "terminal shutdown closes the namespace-root capability");
+    assert.equal(pool._baseCapability, null);
+    await assert.doesNotReject(() => pool.shutdown(), "terminal retry remains an idempotent no-op");
   });
 
   it("rejects child creation and leased work after terminal shutdown", async () => {
