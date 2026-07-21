@@ -1071,7 +1071,14 @@ class MemoryDB {
     })();
     this.initPromise = generationPromise;
     try {
-      return await generationPromise;
+      const initialized = await generationPromise;
+      if (initialized === false && this.initPromise === generationPromise) {
+        // A read-only namespace may legitimately appear after this non-mutating
+        // probe. Keep concurrent callers coalesced for this generation, but do
+        // not turn an absent table into a process-lifetime negative cache.
+        this.initPromise = null;
+      }
+      return initialized;
     } catch (error) {
       if (this.initPromise === generationPromise) this.initPromise = null;
       throw error;
