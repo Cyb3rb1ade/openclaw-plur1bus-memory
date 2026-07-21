@@ -230,6 +230,40 @@ describe("trySafeWarn", () => {
     });
   });
 
+  it("observes a rejected native promise before reading a hostile own then getter", () => {
+    const probe = spawnSync(process.execPath, [
+      "--input-type=module",
+      "-e",
+      [
+        `import { captureThenableSettlement } from ${JSON.stringify(SAFE_LOGGING_URL)};`,
+        'const unhandled = [];',
+        'process.on("unhandledRejection", (error) => unhandled.push(error?.message));',
+        'const nativeError = new Error("poisoned native rejection");',
+        'const getterError = new Error("hostile then getter");',
+        'let getterReads = 0;',
+        'const rejected = Promise.reject(nativeError);',
+        'Object.defineProperty(rejected, "then", { get() { getterReads += 1; throw getterError; } });',
+        'const settlement = captureThenableSettlement(rejected);',
+        'const outcome = await Promise.race([settlement, new Promise((resolve) => setTimeout(() => resolve({ ok: "timeout" }), 50))]);',
+        'await new Promise((resolve) => setImmediate(resolve));',
+        'console.log(JSON.stringify({ ok: outcome.ok, error: outcome.error?.message, getterReads, unhandled }));',
+      ].join(" "),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: probeEnvironment(),
+      timeout: 1_000,
+    });
+
+    assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
+    assert.deepEqual(JSON.parse(probe.stdout.trim()), {
+      ok: false,
+      error: "poisoned native rejection",
+      getterReads: 0,
+      unhandled: [],
+    });
+  });
+
   it("reports a chain-depth limit separately from a real thenable cycle", async () => {
     let chain = "settled";
     for (let i = 0; i < 33; i++) {

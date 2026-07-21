@@ -444,6 +444,7 @@ describe("MemoryDB lifecycle and atomic updates", { concurrency: false }, () => 
 
     await assert.rejects(db.shutdown(), (error) => {
       assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, primaryError));
       assert.ok(errorTreeIncludes(error, loggerError));
       return true;
     });

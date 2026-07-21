@@ -9,6 +9,8 @@ import { emitRetrievalLedger, mergeNamespaceRecallResults } from "../lib/recall-
 import {
   addTraceCandidate,
   addTraceDecision,
+  addTraceGuard,
+  addTraceStoreDecision,
   createRecallDecisionTrace,
 } from "../lib/recall-decision-trace.js";
 
@@ -47,6 +49,43 @@ function traceFor(namespace, candidate) {
     reason: `selected by ${namespace}`,
     finalScore: candidate.score,
   });
+  return trace;
+}
+
+function saturatedTrace(namespace, count) {
+  const trace = createRecallDecisionTrace({
+    query: "saturated namespace merge",
+    maxCandidates: count,
+    maxDecisions: count,
+    maxGuards: count,
+    maxStoreDecisions: count,
+  });
+  for (let index = 0; index < count; index++) {
+    const memoryId = `${namespace}-${index}`;
+    addTraceCandidate(trace, {
+      id: memoryId,
+      source: "vector",
+      score: index / count,
+      summary: `candidate ${memoryId}`,
+    });
+    addTraceDecision(trace, {
+      memoryId,
+      action: "inclusion",
+      stage: "per-namespace",
+      reason: `selected ${memoryId}`,
+    });
+    addTraceGuard(trace, {
+      name: `guard-${memoryId}`,
+      passed: true,
+      memoryId,
+      reason: `allowed ${memoryId}`,
+    });
+    addTraceStoreDecision(trace, {
+      memoryId,
+      action: "accepted",
+      reason: `stored ${memoryId}`,
+    });
+  }
   return trace;
 }
 
@@ -181,6 +220,37 @@ describe("mergeNamespaceRecallResults", () => {
     assert.deepEqual(merged.memories.map((item) => item.entry.id), ["duplicate", "tie-first", "tie-second"]);
     assert.equal(merged.memories[0].score, 0.9);
     assert.equal(merged.memories[0].namespace, "ns-second");
+  });
+
+  it("keeps every child namespace represented when all master trace categories reach their caps", () => {
+    const cap = 4;
+    const master = createRecallDecisionTrace({
+      query: "saturated namespace merge",
+      maxCandidates: cap,
+      maxDecisions: cap,
+      maxGuards: cap,
+      maxStoreDecisions: cap,
+    });
+
+    const merged = mergeNamespaceRecallResults([
+      { namespace: "ns-a", canonical: [], memories: [], trace: saturatedTrace("ns-a", cap) },
+      { namespace: "ns-b", canonical: [], memories: [], trace: saturatedTrace("ns-b", cap) },
+    ], {
+      maxOut: 0,
+      canonicalMaxItems: 0,
+      trace: master,
+    });
+
+    const expectedNamespaces = ["ns-a", "ns-b", "ns-a", "ns-b"];
+    assert.deepEqual(merged.trace.candidates.map((entry) => entry.namespace), expectedNamespaces);
+    assert.deepEqual(merged.trace.decisions.map((entry) => entry.namespace), expectedNamespaces);
+    assert.deepEqual(merged.trace.guards.map((entry) => entry.namespace), expectedNamespaces);
+    assert.deepEqual(merged.trace.storeDecisions.map((entry) => entry.namespace), expectedNamespaces);
+    assert.deepEqual(
+      merged.trace.candidates.map((entry) => entry.id),
+      ["ns-a-2", "ns-b-2", "ns-a-3", "ns-b-3"],
+      "the capped merge retains the newest fair suffix from each child trace",
+    );
   });
 });
 
