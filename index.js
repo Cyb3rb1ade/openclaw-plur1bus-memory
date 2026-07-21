@@ -633,9 +633,16 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
  * @param {Object} baseParams
  * @param {Object|null|undefined} trace
  * @param {Object|null|undefined} phaseTimer
+ * @param {{strictReadErrors?: boolean}} [options]
  * @returns {Promise<{queryVector: Array|undefined, canonical: Array, memories: Array, trace: Object|undefined}>}
  */
-async function runMergedNamespaceRecall(readDbs, baseParams, trace, phaseTimer) {
+async function runMergedNamespaceRecall(
+  readDbs,
+  baseParams,
+  trace,
+  phaseTimer,
+  { strictReadErrors = false } = {},
+) {
   if (!Array.isArray(readDbs) || readDbs.length === 0) {
     return { queryVector: undefined, canonical: [], memories: [], trace };
   }
@@ -643,6 +650,7 @@ async function runMergedNamespaceRecall(readDbs, baseParams, trace, phaseTimer) 
     return runRecallPipeline({
       ...baseParams,
       dbTable: readDbs[0].db.table,
+      strictReadErrors: strictReadErrors || baseParams.strictReadErrors === true,
     });
   }
 
@@ -6236,6 +6244,7 @@ const plugin = {
                 _recallBaseParams,
                 trace,
                 phaseTimer,
+                { strictReadErrors: namespaceLayout.recallReadNamespaces.length > 1 },
               );
               if (ordered.length === 0 && canonicalHits.length === 0) {
                 return { content: [{ type: "text", text: "No relevant memories found." }] };
@@ -7100,6 +7109,7 @@ const plugin = {
             _autoRecallBaseParams,
             trace,
             timer,
+            { strictReadErrors: namespaceLayout.recallReadNamespaces.length > 1 },
           );
           trace = pipelineTrace || trace;
 
