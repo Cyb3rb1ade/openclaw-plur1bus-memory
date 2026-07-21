@@ -343,6 +343,116 @@ describe("multi-namespace registered recall", () => {
     await shutdownPromise;
   });
 
+  it("keeps strict read semantics after an absent configured legacy namespace", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-missing-legacy-timeout-"));
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-missing-legacy-workspace-"));
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    const originalInit = MemoryDB.prototype.init;
+    const rawSettlement = deferred();
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
+    MemoryDB.prototype.init = async function initMissingLegacyTimeoutFixture() {
+      if (this.dbPath.endsWith(join("legacy", AGENT_ID))) return false;
+      this.table = {
+        vectorSearch() {
+          return {
+            limit() { return this; },
+            async toArray() {
+              throw new TimeoutError(
+                "active read after absent legacy",
+                10,
+                rawSettlement.promise,
+              );
+            },
+          };
+        },
+      };
+      return true;
+    };
+    t.after(() => {
+      rawSettlement.resolve();
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      MemoryDB.prototype.init = originalInit;
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
+    });
+
+    const api = makeApi(baseDbPath);
+    api.pluginConfig.autoRecall = false;
+    api.pluginConfig.recall.canonicalFirst = false;
+    plugin.register(api);
+    const recall = api.toolFactory({
+      agentId: AGENT_ID,
+      workspaceDir,
+      workspaceKey: "namespace-workspace",
+      userId: "namespace-owner",
+    }).find((tool) => tool.name === "memory_recall");
+
+    const result = await recall.execute("namespace-missing-legacy-timeout", {
+      query: "strict active read",
+    });
+    assert.match(result.content[0].text, /memory recall failed.*active read after absent legacy timed out/i);
+    assert.equal(readRetrievalLedger(baseDbPath).length, 0, "the strict active failure emits no ledger");
+
+    let shutdownSettled = false;
+    const shutdownPromise = Promise.all(
+      (api.handlers.get("gateway_stop") || []).map((stop) => stop()),
+    ).then(() => { shutdownSettled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false, "the configured multi-namespace lease waits for raw settlement");
+    rawSettlement.resolve();
+    await shutdownPromise;
+  });
+
+  it("preserves fail-soft reads for a genuinely single configured namespace", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-single-timeout-"));
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-single-workspace-"));
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    const originalInit = MemoryDB.prototype.init;
+    const rawSettlement = deferred();
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
+    MemoryDB.prototype.init = async function initSingleNamespaceTimeoutFixture() {
+      this.table = {
+        vectorSearch() {
+          return {
+            limit() { return this; },
+            async toArray() {
+              throw new TimeoutError("single namespace compatibility read", 10, rawSettlement.promise);
+            },
+          };
+        },
+      };
+      return true;
+    };
+    t.after(() => {
+      rawSettlement.resolve();
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      MemoryDB.prototype.init = originalInit;
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
+    });
+
+    const api = makeApi(baseDbPath);
+    api.pluginConfig.autoRecall = false;
+    api.pluginConfig.recall.canonicalFirst = false;
+    api.pluginConfig.namespaces.legacyReadOnlyNamespaces = [];
+    api.pluginConfig.namespaces.crossNamespaceRecall = false;
+    plugin.register(api);
+    const recall = api.toolFactory({
+      agentId: AGENT_ID,
+      workspaceDir,
+      workspaceKey: "namespace-workspace",
+      userId: "namespace-owner",
+    }).find((tool) => tool.name === "memory_recall");
+
+    const result = await recall.execute("namespace-single-timeout", {
+      query: "single namespace compatibility",
+    });
+    assert.equal(result.content[0].text, "No relevant memories found.");
+
+    rawSettlement.resolve();
+    for (const stop of api.handlers.get("gateway_stop") || []) await stop();
+  });
+
   it("rejects a temporal anchor namespace timeout without partial output", async (t) => {
     const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-anchor-timeout-"));
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-anchor-workspace-"));
