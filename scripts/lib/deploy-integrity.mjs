@@ -69,6 +69,7 @@ export const DEPLOY_FILES = [
   "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",
   "lib/temporal-context.js",
+  "lib/temporal-filter.js",
   "lib/temporal-provenance.js",
   // ── multi-namespace + provider system (v6.7.0) ────────────────────────────
   "lib/multi-namespace-pool.js",
