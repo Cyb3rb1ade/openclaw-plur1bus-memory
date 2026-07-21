@@ -424,6 +424,34 @@ describe("MemoryDB lifecycle and atomic updates", { concurrency: false }, () => 
     assert.equal(db.isShutdown, true);
   });
 
+  it("observes an asynchronously rejecting lifecycle debug logger during shutdown", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-async-debug-logger-");
+    const dbPath = join(root, "agent-a");
+    const primaryError = new Error("injected active init failure");
+    const loggerError = new Error("injected async debug logger failure");
+    let capabilityCloseCalls = 0;
+    const db = new MemoryDB(dbPath, VECTOR_DIM, {
+      async debug() { throw loggerError; },
+    }, {
+      directoryCapability: {
+        path: dbPath,
+        assertOpen() {},
+        close() { capabilityCloseCalls++; },
+      },
+      secureDirectoryRequired: true,
+    });
+    db.initPromise = Promise.reject(primaryError);
+
+    await assert.rejects(db.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, loggerError));
+      return true;
+    });
+    await nextTurn();
+    assert.equal(capabilityCloseCalls, 1);
+    assert.equal(db.isShutdown, true);
+  });
+
   it("closes late openTable and connection handles only after raw settlement", async (t) => {
     const root = makeTempDir(t, "plur1bus-b12-open-table-timeout-");
     const dbPath = join(root, "agent-a");

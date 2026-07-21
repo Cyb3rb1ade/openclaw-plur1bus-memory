@@ -767,15 +767,10 @@ const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fi
 const LANCEDB_READ_TIMEOUT_MS = 10_000;
 const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
 const INIT_LATE_HANDLE_KIND = Symbol("MemoryDB.initLateHandleKind");
-const MAX_BACKGROUND_POOL_LIFECYCLE_ERRORS = 50;
+const MAX_BACKGROUND_LIFECYCLE_ERRORS = 50;
 
 function logMemoryDbDebug(logger, scope, error, dbPath) {
-  try {
-    safeDebug(logger, scope, error, { agent: basename(dbPath) });
-    return { ok: true };
-  } catch (loggingError) {
-    return { ok: false, error: loggingError };
-  }
+  return safeDebug(logger, scope, error, { agent: basename(dbPath) });
 }
 
 async function waitForTimeoutSettlement(error) {
@@ -861,6 +856,9 @@ class MemoryDB {
     this.initPromise = null;
     this.shutdownPromise = null;
     this.pendingInitSettlements = new Set();
+    this.pendingDebugSettlements = new Set();
+    this.backgroundDiagnosticErrors = [];
+    this.backgroundDiagnosticErrorOverflow = 0;
     this.initCleanupErrors = [];
     this.schemaFieldNames = null;
     this._writeCounter = 0;
@@ -882,10 +880,13 @@ class MemoryDB {
           await activeInit;
         } catch (error) {
           const logged = logMemoryDbDebug(this.logger, "MemoryDB.shutdown.activeInit", error, this.dbPath);
-          if (!logged.ok) errors.push(logged.error);
+          const loggingOutcome = await settleSafeWarning(logged);
+          if (!loggingOutcome.ok) errors.push(loggingOutcome.error);
         }
       }
       await this._drainPendingInitSettlements("shutdown");
+      await this._drainPendingDebugSettlements();
+      errors.push(...this._drainMemoryDbDiagnosticErrors());
       errors.push(...this.initCleanupErrors);
       this.initCleanupErrors = [];
       errors.push(...await this._closeHandles("shutdown"));
@@ -1034,7 +1035,7 @@ class MemoryDB {
     settlement.then(
       () => {},
       (settlementError) => {
-        logMemoryDbDebug(this.logger, "MemoryDB.init.lateSettlement", settlementError, this.dbPath);
+        this._trackMemoryDbDebug("MemoryDB.init.lateSettlement", settlementError);
       },
     );
     const record = { completion };
@@ -1044,11 +1045,55 @@ class MemoryDB {
         if (outcome.cleanupErrors.length === 0) this.pendingInitSettlements.delete(record);
       },
       (completionError) => {
-        logMemoryDbDebug(this.logger, "MemoryDB.init.cleanupCompletion", completionError, this.dbPath);
+        this._trackMemoryDbDebug("MemoryDB.init.cleanupCompletion", completionError);
       },
     );
     error.settlement = settlement;
     return true;
+  }
+
+  _trackMemoryDbDebug(scope, error) {
+    const outcome = logMemoryDbDebug(this.logger, scope, error, this.dbPath);
+    if (!outcome.ok) {
+      this._recordMemoryDbDiagnosticError(outcome.error);
+      return;
+    }
+    if (!outcome.pending) return;
+    let pending;
+    pending = (async () => {
+      try {
+        const settled = await settleSafeWarning(outcome);
+        if (!settled.ok) this._recordMemoryDbDiagnosticError(settled.error);
+      } catch (settlementError) {
+        this._recordMemoryDbDiagnosticError(settlementError);
+      } finally {
+        this.pendingDebugSettlements.delete(pending);
+      }
+    })();
+    this.pendingDebugSettlements.add(pending);
+  }
+
+  async _drainPendingDebugSettlements() {
+    await Promise.allSettled([...this.pendingDebugSettlements]);
+  }
+
+  _recordMemoryDbDiagnosticError(error) {
+    if (this.backgroundDiagnosticErrors.length < MAX_BACKGROUND_LIFECYCLE_ERRORS) {
+      this.backgroundDiagnosticErrors.push(error);
+      return;
+    }
+    this.backgroundDiagnosticErrorOverflow += 1;
+  }
+
+  _drainMemoryDbDiagnosticErrors() {
+    const errors = this.backgroundDiagnosticErrors.splice(0, this.backgroundDiagnosticErrors.length);
+    if (this.backgroundDiagnosticErrorOverflow > 0) {
+      errors.push(new Error(
+        `MemoryDB background diagnostic failures omitted (${this.backgroundDiagnosticErrorOverflow})`,
+      ));
+      this.backgroundDiagnosticErrorOverflow = 0;
+    }
+    return errors;
   }
 
   async _drainPendingInitSettlements(context) {
@@ -1212,6 +1257,7 @@ class MemoryDB {
     const generationPromise = (async () => {
       try {
         await this._drainPendingInitSettlements("retry");
+        await this._drainPendingDebugSettlements();
         if (this.initCleanupErrors.length > 0) {
           throw new AggregateError(
             [...this.initCleanupErrors],
@@ -1919,7 +1965,7 @@ class AgentDbPool {
 
   _recordBackgroundLifecycleError(error) {
     const normalized = this._contextualizeDbError("pool", "background-lifecycle", error);
-    if (this.backgroundLifecycleErrors.length < MAX_BACKGROUND_POOL_LIFECYCLE_ERRORS) {
+    if (this.backgroundLifecycleErrors.length < MAX_BACKGROUND_LIFECYCLE_ERRORS) {
       this.backgroundLifecycleErrors.push(normalized);
       return;
     }
@@ -2131,7 +2177,9 @@ class AgentDbPool {
         } catch (error) {
           const settlement = await waitForTimeoutSettlement(error);
           if (settlement.status === "rejected") {
-            const loggingError = await this._warnLifecycle(id, "late-settlement", settlement.error);
+            const lateError = this._contextualizeDbError(id, "late-settlement", settlement.error);
+            this._recordBackgroundLifecycleError(lateError);
+            const loggingError = await this._warnLifecycle(id, "late-settlement", lateError);
             if (loggingError) this._recordBackgroundLifecycleError(loggingError);
           }
         }

@@ -4,9 +4,18 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
+import { spawnSync } from "node:child_process";
 import { redactError, safeWarn, safeDebug, settleSafeWarning, trySafeWarn } from "../lib/safe-logging.js";
 import { fetchWithTimeout, fetchWithRetry } from "../lib/fetch-with-timeout.js";
 import { validateInput, validateCommandArgs, INPUT_LIMITS } from "../lib/input-limits.js";
+
+const SAFE_LOGGING_URL = new URL("../lib/safe-logging.js", import.meta.url).href;
+
+function probeEnvironment() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT"),
+  );
+}
 
 describe("redactError", () => {
   it("redacts Bearer tokens", () => {
@@ -40,6 +49,30 @@ describe("redactError", () => {
 
     assert.doesNotThrow(() => redactError(hostile));
     assert.deepEqual(redactError(hostile), { message: "non-standard error", stack: "" });
+  });
+
+  it("redacts supported OpenAI, password, secret, bearer, API-key, and Telegram credentials", () => {
+    const credentials = [
+      "sk-proj-AbCdEf0123456789+/=_-more",
+      "p@ss/word+with=punctuation",
+      "client-secret/value+with=punctuation",
+      "bearer/value+with=punctuation",
+      "api/value+with=punctuation",
+      "123456789:AAExampleTelegramBotToken_0123456789",
+    ];
+    const source = [
+      `openai=${credentials[0]}`,
+      `password=${credentials[1]}`,
+      `secret=${credentials[2]}`,
+      `Bearer ${credentials[3]}`,
+      `api_key=${credentials[4]}`,
+      `telegram=${credentials[5]}`,
+    ].join(" ");
+
+    const redacted = redactError(new Error(source)).message;
+
+    for (const credential of credentials) assert.ok(!redacted.includes(credential));
+    assert.ok(redacted.includes("[REDACTED]"));
   });
 });
 
@@ -84,6 +117,76 @@ describe("trySafeWarn", () => {
 
     assert.strictEqual(settled.ok, false);
     assert.match(settled.error.message, /cleanup deadline/);
+  });
+
+  it("rejects a self-resolving thenable without starving the cleanup deadline", () => {
+    const probe = spawnSync(process.execPath, [
+      "--input-type=module",
+      "-e",
+      [
+        `import { trySafeWarn, settleSafeWarning } from ${JSON.stringify(SAFE_LOGGING_URL)};`,
+        'const self = { then(resolve) { resolve(self); } };',
+        'const warning = trySafeWarn({ warn() { return self; } }, "cycle", new Error("primary"));',
+        'const outcome = await settleSafeWarning(warning, { timeoutMs: 20 });',
+        'console.log(JSON.stringify({ ok: outcome.ok, message: outcome.error?.message }));',
+      ].join(" "),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: probeEnvironment(),
+      timeout: 1_000,
+    });
+
+    assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr || "cycle probe timed out");
+    const outcome = JSON.parse(probe.stdout.trim());
+    assert.strictEqual(outcome.ok, false);
+    assert.match(outcome.message, /cycle/i);
+  });
+
+  it("observes async then-method failures and ignored rejecting return promises", () => {
+    const probe = spawnSync(process.execPath, [
+      "--input-type=module",
+      "-e",
+      [
+        `import { captureThenableSettlement } from ${JSON.stringify(SAFE_LOGGING_URL)};`,
+        'const unhandled = [];',
+        'process.on("unhandledRejection", (error) => unhandled.push(error?.message));',
+        'const asyncFailure = new Error("async then failed");',
+        'const ignoredFailure = new Error("ignored then return failed");',
+        'const first = captureThenableSettlement({ async then() { throw asyncFailure; } });',
+        'const second = captureThenableSettlement({ then(resolve) { resolve("ok"); return Promise.reject(ignoredFailure); } });',
+        'const firstOutcome = await Promise.race([first, new Promise((resolve) => setTimeout(() => resolve({ ok: "timeout" }), 50))]);',
+        'const secondOutcome = await second;',
+        'await new Promise((resolve) => setImmediate(resolve));',
+        'console.log(JSON.stringify({ firstOk: firstOutcome.ok, firstError: firstOutcome.error?.message, secondOk: secondOutcome.ok, unhandled }));',
+      ].join(" "),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: probeEnvironment(),
+      timeout: 1_000,
+    });
+
+    assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
+    assert.deepEqual(JSON.parse(probe.stdout.trim()), {
+      firstOk: false,
+      firstError: "async then failed",
+      secondOk: true,
+      unhandled: [],
+    });
+  });
+});
+
+describe("safeDebug", () => {
+  it("returns a non-rejecting settlement for an asynchronously failing debug logger", async () => {
+    const loggerError = new Error("async debug logger failed");
+    const outcome = safeDebug({
+      async debug() { throw loggerError; },
+    }, "test-debug", new Error("primary"));
+
+    assert.strictEqual(outcome.ok, true);
+    assert.strictEqual(outcome.pending, true);
+    assert.deepEqual(await outcome.settlement, { ok: false, error: loggerError });
   });
 });
 
