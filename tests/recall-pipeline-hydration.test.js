@@ -2,6 +2,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { hydrateGraphResults } from "../lib/recall-pipeline.js";
+import { TimeoutError } from "../lib/with-timeout.js";
 
 /**
  * Extracts the IDs targeted by a LanceDB-style where clause.
@@ -138,5 +139,53 @@ describe("hydrateGraphResults", () => {
   it("returns empty for empty results array", async () => {
     const out = await hydrateGraphResults(mockTable([{ id: "m1", text: "x" }]), [], console);
     assert.deepStrictEqual(out, []);
+  });
+
+  it("propagates an attached hydration read timeout in strict coordinated mode", async () => {
+    const rawSettlement = Promise.resolve([]);
+    const timeout = new TimeoutError("graph hydration read", 10, rawSettlement);
+    let markSiblingStarted;
+    let releaseSibling;
+    const siblingStarted = new Promise((resolve) => { markSiblingStarted = resolve; });
+    const siblingPending = new Promise((resolve) => { releaseSibling = resolve; });
+    const dbTable = {
+      query() {
+        return {
+          where(whereClause) {
+            return {
+              limit() {
+                return {
+                  async toArray() {
+                    if (/\bIN\b/.test(whereClause)) throw new Error("IN lookup unavailable");
+                    if (whereClause.includes("m2")) throw timeout;
+                    markSiblingStarted();
+                    await siblingPending;
+                    return [];
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const results = [
+      { entry: { id: "m2" }, score: 0.5, source: "graph", depth: 1 },
+      { entry: { id: "m3" }, score: 0.4, source: "graph", depth: 1 },
+    ];
+
+    let hydrationSettled = false;
+    const hydration = hydrateGraphResults(dbTable, results, console, { strictReadErrors: true })
+      .then(
+        () => { hydrationSettled = true; throw new Error("expected strict hydration failure"); },
+        (error) => { hydrationSettled = true; return error; },
+      );
+    await siblingStarted;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(hydrationSettled, false, "strict hydration waits for every batch read");
+    releaseSibling();
+    const error = await hydration;
+    assert.equal(error, timeout);
+    assert.equal(error.settlement, rawSettlement);
   });
 });

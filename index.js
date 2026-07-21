@@ -663,6 +663,7 @@ async function runMergedNamespaceRecall(readDbs, baseParams, trace, phaseTimer) 
         dbTable: db.table,
         phaseTimer: childTimer,
         decisionTrace: childTrace,
+        strictReadErrors: true,
         canonicalEnabled: index === 0 ? baseParams.canonicalEnabled : false,
         retrievalLogger: null,
       });

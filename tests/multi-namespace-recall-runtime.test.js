@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { TimeoutError } from "../lib/with-timeout.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID = "namespace-recall-agent";
@@ -264,5 +265,71 @@ describe("multi-namespace registered recall", () => {
     assert.match(result.content[0].text, /memory recall failed.*active namespace query failure/i);
     assert.equal(readRetrievalLedger(baseDbPath).length, 0, "a failed merged recall emits no partial ledger entry");
     for (const stop of api.handlers.get("gateway_stop") || []) await stop();
+  });
+
+  it("rejects a multi-namespace read timeout and retains leases through its raw settlement", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-timeout-"));
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-timeout-workspace-"));
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    const originalInit = MemoryDB.prototype.init;
+    const rawSettlement = deferred();
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
+    MemoryDB.prototype.init = async function initTimeoutFixture() {
+      const legacy = this.dbPath.endsWith(join("legacy", AGENT_ID));
+      this.table = {
+        vectorSearch() {
+          return {
+            limit() { return this; },
+            async toArray() {
+              if (!legacy) {
+                return [{
+                  id: "55555555-5555-4555-8555-555555555555",
+                  text: "Active namespace result must never escape a failed sibling.",
+                  summary: "active result",
+                  category: "fact",
+                  storedBy: AGENT_ID,
+                  workspaceKey: "namespace-workspace",
+                  _distance: 0,
+                }];
+              }
+              throw new TimeoutError("legacy namespace vector read", 10, rawSettlement.promise);
+            },
+          };
+        },
+      };
+      return true;
+    };
+    t.after(() => {
+      rawSettlement.resolve();
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      MemoryDB.prototype.init = originalInit;
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
+    });
+
+    const api = makeApi(baseDbPath);
+    api.pluginConfig.autoRecall = false;
+    api.pluginConfig.recall.canonicalFirst = false;
+    plugin.register(api);
+    const recall = api.toolFactory({
+      agentId: AGENT_ID,
+      workspaceDir,
+      workspaceKey: "namespace-workspace",
+      userId: "namespace-owner",
+    }).find((tool) => tool.name === "memory_recall");
+
+    const result = await recall.execute("namespace-read-timeout", { query: "timeout isolation" });
+    assert.match(result.content[0].text, /memory recall failed.*legacy namespace vector read timed out/i);
+    assert.doesNotMatch(result.content[0].text, /55555555-5555-4555-8555-555555555555/);
+    assert.equal(readRetrievalLedger(baseDbPath).length, 0, "a timed-out sibling emits no partial ledger");
+
+    let shutdownSettled = false;
+    const shutdownPromise = Promise.all(
+      (api.handlers.get("gateway_stop") || []).map((stop) => stop()),
+    ).then(() => { shutdownSettled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false, "shutdown waits for the timed-out raw namespace read");
+    rawSettlement.resolve();
+    await shutdownPromise;
   });
 });
