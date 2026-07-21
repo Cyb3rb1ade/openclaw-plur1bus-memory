@@ -287,3 +287,16 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
 - Both account counterexamples were RED 0/2 and GREEN 2/2. The combined
   focused cron/bootstrap gate passes 124/124 across 20 suites with no failures
   or skips.
+
+### B5 quality-review follow-up
+
+- Independent quality/security review: FAIL, Critical 0 / Important 2 /
+  Minor 1; every finding is now closed with a causal regression.
+- Cron validation rejects bare `W`/`L` modifiers and oversized field steps,
+  while preserving Croner-valid numeric/named last-weekday forms.
+- A proven Telegram root account can be selected explicitly as `default`;
+  missing non-root accounts remain denied. Root SecretRef object evidence is
+  structurally validated instead of accepting arbitrary objects.
+- Final focused cron/bootstrap/symlink gate: 126/126 across 20 suites, no
+  failures or skips. No PLUR1BUS handler, default-LLM route, API-key lookup, or
+  per-agent credential inheritance changed.

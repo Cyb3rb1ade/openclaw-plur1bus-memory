@@ -148,7 +148,15 @@ describe("selectEnabledFeatureCronSpecs", () => {
     }));
     assert.ok(validNamedFields.some((spec) => spec.feature === "skill-miner"));
 
-    for (const cron of ["- - - - -", "0 3 * * #", "0 3 * * 0/2"]) {
+    for (const cron of [
+      "- - - - -",
+      "0 3 * * #",
+      "0 3 * * 0/2",
+      "0 3 W * *",
+      "0 3 * * L",
+      "0 3 */999 * *",
+      "*/61 * * * * *",
+    ]) {
       const invalidCronerSyntax = selectEnabledFeatureCronSpecs(sourceConfig({
         skillMiner: { enabled: true, cron, timezone: "Europe/Berlin" },
       }));
@@ -175,6 +183,16 @@ describe("selectEnabledFeatureCronSpecs", () => {
       assert.ok(
         ascendingRange.some((spec) => spec.feature === "skill-miner"),
         `${cron} must remain eligible when its range ascends`,
+      );
+    }
+
+    for (const cron of ["0 3 * * 5L", "0 3 * * MONL", "*/60 * * * * *"]) {
+      const validCronerSyntax = selectEnabledFeatureCronSpecs(sourceConfig({
+        skillMiner: { enabled: true, cron, timezone: "Europe/Berlin" },
+      }));
+      assert.ok(
+        validCronerSyntax.some((spec) => spec.feature === "skill-miner"),
+        `${cron} must remain eligible when Croner accepts it`,
       );
     }
   });
@@ -958,6 +976,62 @@ describe("deriveDeliveryFromChannelConfig", () => {
       to: "55736530",
       accountId: "default",
     });
+  });
+
+  it("allows an explicit default binding only for a proven root account", () => {
+    const credentials = [
+      { botToken: "***" },
+      { botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" } },
+      { botToken: { source: "env", provider: "default", id: "__OPENCLAW_REDACTED__" } },
+      { tokenFile: "/run/secrets/telegram-token" },
+    ];
+
+    for (const credential of credentials) {
+      const cfg = {
+        bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+        channels: {
+          telegram: {
+            enabled: true,
+            defaultTo: "55736530",
+            ...credential,
+          },
+        },
+      };
+      assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", cfg), {
+        channel: "telegram",
+        to: "55736530",
+        accountId: "default",
+      });
+    }
+  });
+
+  it("rejects empty, partial, and malformed root SecretRef objects", () => {
+    const invalidSecretRefs = [
+      {},
+      { source: "env" },
+      { source: "env", provider: "default", id: "lowercase" },
+      { source: "file", provider: "default", id: "relative" },
+      { source: "exec", provider: "default", id: "../token" },
+      { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN", extra: true },
+    ];
+
+    for (const botToken of invalidSecretRefs) {
+      const cfg = {
+        bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken,
+            defaultTo: "55736530",
+            accounts: {
+              alpha: { enabled: true },
+              beta: { enabled: true },
+            },
+          },
+        },
+      };
+      assert.strictEqual(deriveDeliveryFromChannelConfig("main", cfg), null);
+    }
   });
 
   it("requires channel unanimity across every relevant non-ACP binding", () => {

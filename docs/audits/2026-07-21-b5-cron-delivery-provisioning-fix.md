@@ -121,3 +121,19 @@ their minimal fixes:
 The two account counterexamples passed 2/2 after the resolver change. The
 combined focused cron/bootstrap gate then passed 124/124 across 20 suites with
 no failures or skips.
+
+## Independent quality-review closure
+
+The independent B5 quality/security review reported Critical 0 / Important 2
+/ Minor 1. All three findings received causal regressions before correction:
+
+| Finding | RED | Closure |
+|---|---|---|
+| Q-I1 Remaining Croner grammar mismatches | Bare day-of-month `W`, bare day-of-week `L`, and oversized steps remained eligible, while valid `5L`/`MONL` forms were rejected. | Bare modifiers are rejected, step values are bounded by their field size, and Croner-compatible numeric/named last-weekday forms are accepted. Five- and six-field positive and negative controls pin the boundary. |
+| Q-I2 Explicit root account `default` was rejected | A binding with `accountId: "default"`, a proven root credential, no `accounts.default`, and a valid root `defaultTo` returned no route. | An explicit exact `default` binding may use the proven root account; every other missing explicit account remains fail-closed. String, `tokenFile`, canonical SecretRef, and redacted SecretRef evidence are covered. |
+| Q-M1 Any object counted as root credential evidence | Empty, partial, and malformed `botToken` objects could prove a root account in the exported resolver. | Object evidence must satisfy the supported three-field SecretRef contract and source-specific identifier validation; malformed objects remain ineligible without exposing secret values. |
+
+The final focused cron/bootstrap/symlink gate passes 126/126 across 20 suites
+with no failures or skips. The changes remain confined to cron planning,
+focused tests, and this evidence; no handler, model route, API-key lookup, or
+per-agent credential inheritance changed.
