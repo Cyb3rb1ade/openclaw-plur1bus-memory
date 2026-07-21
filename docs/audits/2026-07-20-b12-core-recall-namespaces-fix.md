@@ -6,8 +6,8 @@ Branch: `fix/high-mid-audit-findings`
 
 Planning/base commit: `a53e244d1d73e9e19681c17da4740a18d4401b5e`
 
-Implementation head: `6669a8ab12d3d271fdc72e905319fbc61c30e9b9`
-(`fix: contain folded authorization values`)
+Implementation head: `5cf2f305e362d4cdb3926889ab0caf87f0ce224c`
+(`fix: preserve hostile settlements and fair trace caps`)
 
 ## Disposition
 
@@ -84,11 +84,17 @@ b85f8f7 fix: contain asynchronous recall diagnostics
 643ad39 fix: keep lifecycle warnings payload free
 606c604 fix: redact complete authorization headers
 6669a8a fix: contain folded authorization values
+3470fcd docs: document B12 core namespace remediation
+d7acf12 test: isolate upgrade child process
+e8a1f12 fix: close b12 adversarial quality gaps
+85dfedd test: avoid nested installer pipe deadlocks
+5cf2f30 fix: preserve hostile settlements and fair trace caps
 ```
 
-The first documentation commit containing this file follows the reviewed
-implementation series above. A later documentation-only closure commit records
-the post-documentation reviews and serial evidence.
+Commit `3470fcd` introduced the first complete receipt. The later implementation
+and test-harness commits close findings from the post-documentation full reviews;
+this documentation-only closure records their final independent review and
+serial evidence.
 
 ## Changed files
 
@@ -593,10 +599,48 @@ Independent fix-only specification and quality/security reviews at `6669a8a`:
 both **PASS** (Critical 0 / Important 0 / Minor 0), each with 117/117 relevant
 tests.
 
-Fresh full post-documentation B12-Core specification and quality/security
-reviews: **PENDING**.
+The first full post-documentation specification review at `3470fcd` passed
+with Critical 0 / Important 0 / Minor 0. Its independent adversarial quality
+review failed with Critical 0 / Important 3 / Minor 0: a rejected native
+Promise with a hostile own `then` getter remained unobserved; shutdown omitted
+the primary active-init error when debug logging also failed; and saturated
+trace caps retained only the last namespace. Commit `e8a1f12` closes all three
+with causal RED/GREEN tests. Commits `d7acf12` and `85dfedd` isolate nested
+installer probes and replace synchronous stdin pipes with bounded argv/file
+inputs; the original two-file hang reproducer then passes.
 
-Authoritative serial suite after documentation: **PENDING**.
+The next full reviews at `85dfedd` found the final two Important edge cases.
+Later global merge decisions could displace the fair child-decision replay,
+and a Promise subclass with a throwing `Symbol.species` could fail before the
+intrinsic rejection handler was installed. Commit `5cf2f30` buffers decisions
+by `(phase, namespace)` and selects a deterministic newest fair suffix; the
+causal test retains `ns-a/ns-b × child/global`, other trace categories, exact
+summary counts, and immutable inputs. Native Promise observation now uses a
+brand-safe check plus synchronously restored constructor/species overrides,
+covering hostile own `then`, local and cross-realm subclasses, frozen
+instances, and pre-existing descriptors without an unhandled rejection.
+
+Final full B12-Core reviews over `a53e244d..5cf2f305`:
+
+- specification: product **PASS**, Critical 0 / Important 0; its only Minor was
+  this then-pending closure-evidence update. Reviewer gate: 404/404 tests;
+- quality/security: **PASS**, Critical 0 / Important 0 / Minor 0. Reviewer
+  gates: 413/413 plus 56/56 tests.
+
+Final focused owner gate at `5cf2f30`: 319/319 tests, 58 suites, no failures or
+skips, using normal process isolation outside the sandbox's known nested-spawn
+`EPERM` artifact. `npm run lint` and `git diff --check` pass.
+
+Authoritative exact serial command:
+
+```text
+node --test --test-concurrency=1 tests/*.test.js test/*.test.js
+tests 2970; suites 532; pass 2969; fail 0; skipped 1
+duration_ms 335439.875688; exit 0
+```
+
+The single skip is the repository's existing environment-dependent case; no
+B12 test was skipped.
 
 ## Bypass and scope review
 
@@ -625,11 +669,17 @@ Authoritative serial suite after documentation: **PENDING**.
   per-namespace dimensions or provider migrations are not implemented.
 - Read-only is enforced by the plugin's `MemoryDB` API and its production pool
   route; LanceDB does not provide a separate native read-only connection here.
+- JavaScript exposes no standard-compliant way to observe the hidden target of
+  a Promise proxy, or to bypass a fully frozen, non-configurable hostile
+  constructor/species path. The implementation closes every mutable native,
+  cross-realm, subclass, and frozen-instance path exercised by the independent
+  adversarial review; these non-observable objects remain an explicit runtime
+  boundary rather than a silent fallback claim.
 
 ## Boundary proof
 
-Before documentation closure, `git status --short --branch` showed only the
-five intended Task-4 documentation/progress files, and the separate checkout
-at `/root/openclaw-plur1bus-memory` remained clean on `main...origin/main`.
-No push, merge, tag, release, remote update, data migration, or destructive
-operation was performed.
+Before this documentation closure, the feature worktree was clean at
+`5cf2f305e362d4cdb3926889ab0caf87f0ce224c`. The separate checkout at
+`/root/openclaw-plur1bus-memory` remained clean on `main...origin/main` at
+`6dff096efe936f7ec3d0e11a8ba83bf08671ad4e`. No push, merge, tag, release,
+remote update, data migration, or destructive operation was performed.
