@@ -233,6 +233,7 @@ describe("DEPLOY_FILES coverage", () => {
   it("contains all v6.7.0 critical new runtime modules", () => {
     const v670Critical = [
       "lib/temporal-context.js",
+      "lib/temporal-filter.js",
       "lib/session-time.js",
       "lib/setup/feature-profiles.js",
       "lib/multi-namespace-pool.js",
