@@ -82,6 +82,12 @@ function installerDocument() {
   };
 }
 
+function childEnvironment() {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT"),
+  );
+}
+
 function assertInstallerPatchResult(actual, expectedEntry) {
   assert.deepStrictEqual(actual.plugins.entries["memory-lancedb-namespaced"], expectedEntry);
   assert.deepStrictEqual(actual.plugins.entries["memory-lancedb"], { enabled: true, config: { keep: true } });
@@ -254,6 +260,7 @@ describe("Upgrade-Simulation: installer preserves backend selection", () => {
         const run = spawnSync("node", ["--input-type=module"], {
           input: program,
           encoding: "utf8",
+          env: childEnvironment(),
         });
         assert.strictEqual(run.status, 0, run.stderr);
         assertInstallerPatchResult(JSON.parse(readFileSync(configPath, "utf8")), pluginEntry);
