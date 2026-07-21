@@ -14,11 +14,12 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { mkdirSync, writeFileSync, symlinkSync, rmSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import {
   safeUuid,
   safeUuidList,
   safeAgentId,
+  isPathInside,
   resolveInside,
   safeStatus,
   safeType,
@@ -133,6 +134,13 @@ describe("resolveInside", () => {
   it("allows new file in existing subdir", () => {
     const result = resolveInside(tmpDir, "subdir", "newfile.txt");
     assert.ok(result.includes("newfile.txt"));
+  });
+
+  it("uses platform path semantics for the capability fallback", () => {
+    const base = "C:\\memory\\legacy";
+    assert.strictEqual(isPathInside(base, "C:\\memory\\legacy\\agent-a", win32), true);
+    assert.strictEqual(isPathInside(base, "C:\\memory\\legacy-other\\agent-a", win32), false);
+    assert.strictEqual(isPathInside(base, "D:\\memory\\legacy\\agent-a", win32), false);
   });
 
   it("after hook", () => {
