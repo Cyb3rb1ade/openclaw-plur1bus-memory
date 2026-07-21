@@ -20,7 +20,11 @@ const SAFE_LOGGING_URL = new URL("../lib/safe-logging.js", import.meta.url).href
 
 function probeEnvironment() {
   return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT"),
+    Object.entries(process.env).filter(([key]) => (
+      key !== "NODE_TEST_CONTEXT"
+      && key !== "NODE_UNIQUE_ID"
+      && !key.startsWith("NODE_CHANNEL_")
+    )),
   );
 }
 
@@ -260,6 +264,96 @@ describe("trySafeWarn", () => {
       ok: false,
       error: "poisoned native rejection",
       getterReads: 0,
+      unhandled: [],
+    });
+  });
+
+  it("observes rejected promise subclasses without invoking hostile species constructors", () => {
+    const probe = spawnSync(process.execPath, [
+      "--input-type=module",
+      "-e",
+      [
+        'import vm from "node:vm";',
+        `import { captureThenableSettlement } from ${JSON.stringify(SAFE_LOGGING_URL)};`,
+        'const unhandled = [];',
+        'process.on("unhandledRejection", (error) => unhandled.push(error?.message));',
+        'const localError = new Error("local subclass rejection");',
+        'let localSpeciesReads = 0;',
+        'class LocalHostilePromise extends Promise { static get [Symbol.species]() { localSpeciesReads += 1; throw new Error("local hostile species"); } }',
+        'const localPromise = new LocalHostilePromise((_resolve, reject) => reject(localError));',
+        'const cross = vm.runInNewContext(`(() => { const original = new Error("cross-realm subclass rejection"); let speciesReads = 0; class CrossHostilePromise extends Promise { static get [Symbol.species]() { speciesReads += 1; throw new Error("cross-realm hostile species"); } } const promise = new CrossHostilePromise((_resolve, reject) => reject(original)); return { promise, original, getSpeciesReads: () => speciesReads }; })()`);',
+        'const localSettlement = captureThenableSettlement(localPromise);',
+        'const crossSettlement = captureThenableSettlement(cross.promise);',
+        'const [localOutcome, crossOutcome] = await Promise.all([localSettlement, crossSettlement]);',
+        'await new Promise((resolve) => setImmediate(resolve));',
+        'console.log(JSON.stringify({ localOk: localOutcome.ok, localIdentity: localOutcome.error === localError, crossOk: crossOutcome.ok, crossIdentity: crossOutcome.error === cross.original, localSpeciesReads, crossSpeciesReads: cross.getSpeciesReads(), localConstructorRestored: !Object.hasOwn(localPromise, "constructor"), crossConstructorRestored: !Object.hasOwn(cross.promise, "constructor"), unhandled }));',
+      ].join(" "),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: probeEnvironment(),
+      timeout: 1_000,
+    });
+
+    assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
+    assert.deepEqual(JSON.parse(probe.stdout.trim()), {
+      localOk: false,
+      localIdentity: true,
+      crossOk: false,
+      crossIdentity: true,
+      localSpeciesReads: 0,
+      crossSpeciesReads: 0,
+      localConstructorRestored: true,
+      crossConstructorRestored: true,
+      unhandled: [],
+    });
+  });
+
+  it("observes frozen promise subclasses and restores pre-existing constructor descriptors", () => {
+    const probe = spawnSync(process.execPath, [
+      "--input-type=module",
+      "-e",
+      [
+        `import { captureThenableSettlement } from ${JSON.stringify(SAFE_LOGGING_URL)};`,
+        'const unhandled = [];',
+        'process.on("unhandledRejection", (error) => unhandled.push(error?.message));',
+        'const frozenError = new Error("frozen subclass rejection");',
+        'let frozenSpeciesReads = 0;',
+        'class FrozenHostilePromise extends Promise { static get [Symbol.species]() { frozenSpeciesReads += 1; throw new Error("frozen hostile species"); } }',
+        'const frozenPromise = Object.freeze(new FrozenHostilePromise((_resolve, reject) => reject(frozenError)));',
+        'const frozenSpeciesBefore = Object.getOwnPropertyDescriptor(FrozenHostilePromise, Symbol.species);',
+        'const ownError = new Error("own constructor rejection");',
+        'let ownSpeciesReads = 0;',
+        'class OwnHostileConstructor extends Promise { static get [Symbol.species]() { ownSpeciesReads += 1; throw new Error("own hostile species"); } }',
+        'const ownPromise = Promise.reject(ownError);',
+        'Object.defineProperty(ownPromise, "constructor", { configurable: true, enumerable: true, value: OwnHostileConstructor, writable: false });',
+        'const ownConstructorBefore = Object.getOwnPropertyDescriptor(ownPromise, "constructor");',
+        'const frozenSettlement = captureThenableSettlement(frozenPromise);',
+        'const ownSettlement = captureThenableSettlement(ownPromise);',
+        'const [frozenOutcome, ownOutcome] = await Promise.all([frozenSettlement, ownSettlement]);',
+        'await new Promise((resolve) => setImmediate(resolve));',
+        'const frozenSpeciesAfter = Object.getOwnPropertyDescriptor(FrozenHostilePromise, Symbol.species);',
+        'const ownConstructorAfter = Object.getOwnPropertyDescriptor(ownPromise, "constructor");',
+        'console.log(JSON.stringify({ frozenOk: frozenOutcome.ok, frozenIdentity: frozenOutcome.error === frozenError, frozenSpeciesReads, frozenStillFrozen: Object.isFrozen(frozenPromise), frozenSpeciesRestored: frozenSpeciesAfter.get === frozenSpeciesBefore.get && frozenSpeciesAfter.configurable === frozenSpeciesBefore.configurable && frozenSpeciesAfter.enumerable === frozenSpeciesBefore.enumerable, ownOk: ownOutcome.ok, ownIdentity: ownOutcome.error === ownError, ownSpeciesReads, ownConstructorRestored: ownConstructorAfter.value === ownConstructorBefore.value && ownConstructorAfter.configurable === ownConstructorBefore.configurable && ownConstructorAfter.enumerable === ownConstructorBefore.enumerable && ownConstructorAfter.writable === ownConstructorBefore.writable, unhandled }));',
+      ].join(" "),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: probeEnvironment(),
+      timeout: 1_000,
+    });
+
+    assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
+    assert.deepEqual(JSON.parse(probe.stdout.trim()), {
+      frozenOk: false,
+      frozenIdentity: true,
+      frozenSpeciesReads: 0,
+      frozenStillFrozen: true,
+      frozenSpeciesRestored: true,
+      ownOk: false,
+      ownIdentity: true,
+      ownSpeciesReads: 0,
+      ownConstructorRestored: true,
       unhandled: [],
     });
   });

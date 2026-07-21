@@ -252,6 +252,87 @@ describe("mergeNamespaceRecallResults", () => {
       "the capped merge retains the newest fair suffix from each child trace",
     );
   });
+
+  it("fairly caps child and global decisions by namespace without disturbing other trace categories", () => {
+    const cap = 4;
+    const inputs = [
+      {
+        namespace: "ns-a",
+        canonical: [],
+        memories: [
+          memory("a-selected", 0.9, "selected from namespace a"),
+          memory("a-drop-1", 0.7, "first global drop from namespace a"),
+          memory("a-drop-2", 0.5, "newest global drop from namespace a"),
+        ],
+        trace: saturatedTrace("ns-a", cap),
+      },
+      {
+        namespace: "ns-b",
+        canonical: [],
+        memories: [
+          memory("b-selected", 0.8, "selected from namespace b"),
+          memory("b-drop-1", 0.6, "first global drop from namespace b"),
+          memory("b-drop-2", 0.4, "newest global drop from namespace b"),
+        ],
+        trace: saturatedTrace("ns-b", cap),
+      },
+    ];
+    const before = structuredClone(inputs);
+    const runMerge = () => mergeNamespaceRecallResults(inputs, {
+      maxOut: 2,
+      canonicalMaxItems: 0,
+      dedupEnabled: false,
+      trace: createRecallDecisionTrace({
+        query: "child and global saturation",
+        maxCandidates: cap,
+        maxDecisions: cap,
+        maxGuards: cap,
+        maxStoreDecisions: cap,
+      }),
+    });
+
+    const first = runMerge();
+    const second = runMerge();
+    const decisionIdentity = (entry) => ({
+      namespace: entry.namespace,
+      stage: entry.stage,
+      memoryId: entry.memoryId,
+    });
+    const expectedDecisions = [
+      { namespace: "ns-a", stage: "per-namespace", memoryId: "ns-a-3" },
+      { namespace: "ns-b", stage: "per-namespace", memoryId: "ns-b-3" },
+      { namespace: "ns-a", stage: "namespace-result-dedup", memoryId: "a-drop-2" },
+      { namespace: "ns-b", stage: "namespace-result-dedup", memoryId: "b-drop-2" },
+    ];
+
+    assert.equal(first.trace.decisions.length, cap);
+    assert.deepEqual(first.trace.decisions.map(decisionIdentity), expectedDecisions);
+    assert.deepEqual(second.trace.decisions.map(decisionIdentity), expectedDecisions);
+    assert.deepEqual(
+      first.trace.candidates.map((entry) => entry.namespace),
+      ["ns-a", "ns-b", "ns-a", "ns-b"],
+    );
+    assert.deepEqual(
+      first.trace.guards.map((entry) => entry.namespace),
+      ["ns-a", "ns-b", "ns-a", "ns-b"],
+    );
+    assert.deepEqual(
+      first.trace.storeDecisions.map((entry) => entry.namespace),
+      ["ns-a", "ns-b", "ns-a", "ns-b"],
+    );
+    assert.deepEqual(
+      {
+        totalCandidates: first.trace.summary.totalCandidates,
+        included: first.trace.summary.included,
+        deduped: first.trace.summary.deduped,
+        guardPass: first.trace.summary.guardPass,
+        storeAccepted: first.trace.summary.storeAccepted,
+      },
+      { totalCandidates: cap, included: 2, deduped: 2, guardPass: cap, storeAccepted: cap },
+      "summary counts describe the retained fair suffix",
+    );
+    assert.deepEqual(inputs, before, "fair trace selection must not mutate namespace inputs");
+  });
 });
 
 describe("emitRetrievalLedger", () => {
