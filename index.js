@@ -669,8 +669,8 @@ async function runMergedNamespaceRecall(readDbs, baseParams, trace, phaseTimer) 
       });
       return { namespace, result };
     }));
-    const failed = settled.find((result) => result.status === "rejected");
-    if (failed) throw failed.reason;
+    const failure = combineNamespaceRecallFailures(settled);
+    if (failure) throw failure;
 
     const namespaceResults = settled.map((result) => ({
       namespace: result.value.namespace,
@@ -691,6 +691,32 @@ async function runMergedNamespaceRecall(readDbs, baseParams, trace, phaseTimer) 
   } finally {
     phaseTimer?.end("namespace-recall");
   }
+}
+
+function combineNamespaceRecallFailures(settled) {
+  const failures = settled
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  if (failures.length === 0) return null;
+  const timeoutFailures = failures.filter((error) => (
+    error instanceof TimeoutError
+    && error.settlement
+    && typeof error.settlement.then === "function"
+  ));
+  if (timeoutFailures.length === 0) return failures[0];
+  const primary = timeoutFailures[0];
+  const settlements = [...new Set(timeoutFailures.map((error) => error.settlement))];
+  if (settlements.length > 1) {
+    primary.settlement = settleAllNamespaceReads(settlements);
+  }
+  return primary;
+}
+
+async function settleAllNamespaceReads(settlements) {
+  const outcomes = await Promise.allSettled(settlements);
+  const failed = outcomes.find((result) => result.status === "rejected");
+  if (failed) throw failed.reason;
+  return outcomes.map((result) => result.value);
 }
 
 function createNamespaceChildRecallTrace(masterTrace, query) {

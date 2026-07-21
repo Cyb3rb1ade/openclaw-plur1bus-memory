@@ -141,9 +141,15 @@ describe("hydrateGraphResults", () => {
     assert.deepStrictEqual(out, []);
   });
 
-  it("propagates an attached hydration read timeout in strict coordinated mode", async () => {
-    const rawSettlement = Promise.resolve([]);
-    const timeout = new TimeoutError("graph hydration read", 10, rawSettlement);
+  it("propagates every attached hydration timeout after all batch reads settle", async (t) => {
+    let releaseRawFirst;
+    let releaseRawSecond;
+    const rawFirst = new Promise((resolve) => { releaseRawFirst = resolve; });
+    const rawSecond = new Promise((resolve) => { releaseRawSecond = resolve; });
+    const timeouts = [
+      new TimeoutError("graph hydration read 1", 10, rawFirst),
+      new TimeoutError("graph hydration read 2", 10, rawSecond),
+    ];
     let markSiblingStarted;
     let releaseSibling;
     const siblingStarted = new Promise((resolve) => { markSiblingStarted = resolve; });
@@ -157,7 +163,8 @@ describe("hydrateGraphResults", () => {
                 return {
                   async toArray() {
                     if (/\bIN\b/.test(whereClause)) throw new Error("IN lookup unavailable");
-                    if (whereClause.includes("m2")) throw timeout;
+                    if (whereClause.includes("m2")) throw timeouts[0];
+                    if (whereClause.includes("m3")) throw timeouts[1];
                     markSiblingStarted();
                     await siblingPending;
                     return [];
@@ -172,7 +179,13 @@ describe("hydrateGraphResults", () => {
     const results = [
       { entry: { id: "m2" }, score: 0.5, source: "graph", depth: 1 },
       { entry: { id: "m3" }, score: 0.4, source: "graph", depth: 1 },
+      { entry: { id: "m4" }, score: 0.3, source: "graph", depth: 1 },
     ];
+    t.after(() => {
+      releaseSibling();
+      releaseRawFirst();
+      releaseRawSecond();
+    });
 
     let hydrationSettled = false;
     const hydration = hydrateGraphResults(dbTable, results, console, { strictReadErrors: true })
@@ -185,7 +198,14 @@ describe("hydrateGraphResults", () => {
     assert.equal(hydrationSettled, false, "strict hydration waits for every batch read");
     releaseSibling();
     const error = await hydration;
-    assert.equal(error, timeout);
-    assert.equal(error.settlement, rawSettlement);
+    assert.equal(error, timeouts[0]);
+
+    let rawReadsSettled = false;
+    const combinedSettlement = error.settlement.then(() => { rawReadsSettled = true; });
+    releaseRawFirst();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(rawReadsSettled, false, "combined settlement retains the second timed-out read");
+    releaseRawSecond();
+    await combinedSettlement;
   });
 });

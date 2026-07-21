@@ -272,16 +272,18 @@ describe("multi-namespace registered recall", () => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-timeout-workspace-"));
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalInit = MemoryDB.prototype.init;
-    const rawSettlement = deferred();
+    const rawSettlements = [deferred(), deferred()];
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
     MemoryDB.prototype.init = async function initTimeoutFixture() {
-      const legacy = this.dbPath.endsWith(join("legacy", AGENT_ID));
+      const legacyIndex = this.dbPath.endsWith(join("legacy-a", AGENT_ID))
+        ? 0
+        : (this.dbPath.endsWith(join("legacy-b", AGENT_ID)) ? 1 : -1);
       this.table = {
         vectorSearch() {
           return {
             limit() { return this; },
             async toArray() {
-              if (!legacy) {
+              if (legacyIndex === -1) {
                 return [{
                   id: "55555555-5555-4555-8555-555555555555",
                   text: "Active namespace result must never escape a failed sibling.",
@@ -292,7 +294,11 @@ describe("multi-namespace registered recall", () => {
                   _distance: 0,
                 }];
               }
-              throw new TimeoutError("legacy namespace vector read", 10, rawSettlement.promise);
+              throw new TimeoutError(
+                `legacy namespace ${legacyIndex + 1} vector read`,
+                10,
+                rawSettlements[legacyIndex].promise,
+              );
             },
           };
         },
@@ -300,7 +306,7 @@ describe("multi-namespace registered recall", () => {
       return true;
     };
     t.after(() => {
-      rawSettlement.resolve();
+      for (const settlement of rawSettlements) settlement.resolve();
       LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
       MemoryDB.prototype.init = originalInit;
       rmSync(baseDbPath, { recursive: true, force: true });
@@ -310,6 +316,7 @@ describe("multi-namespace registered recall", () => {
     const api = makeApi(baseDbPath);
     api.pluginConfig.autoRecall = false;
     api.pluginConfig.recall.canonicalFirst = false;
+    api.pluginConfig.namespaces.legacyReadOnlyNamespaces = ["legacy-a", "legacy-b"];
     plugin.register(api);
     const recall = api.toolFactory({
       agentId: AGENT_ID,
@@ -319,7 +326,7 @@ describe("multi-namespace registered recall", () => {
     }).find((tool) => tool.name === "memory_recall");
 
     const result = await recall.execute("namespace-read-timeout", { query: "timeout isolation" });
-    assert.match(result.content[0].text, /memory recall failed.*legacy namespace vector read timed out/i);
+    assert.match(result.content[0].text, /memory recall failed.*legacy namespace 1 vector read timed out/i);
     assert.doesNotMatch(result.content[0].text, /55555555-5555-4555-8555-555555555555/);
     assert.equal(readRetrievalLedger(baseDbPath).length, 0, "a timed-out sibling emits no partial ledger");
 
@@ -329,7 +336,10 @@ describe("multi-namespace registered recall", () => {
     ).then(() => { shutdownSettled = true; });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(shutdownSettled, false, "shutdown waits for the timed-out raw namespace read");
-    rawSettlement.resolve();
+    rawSettlements[0].resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false, "shutdown also waits for the second timed-out namespace read");
+    rawSettlements[1].resolve();
     await shutdownPromise;
   });
 });
