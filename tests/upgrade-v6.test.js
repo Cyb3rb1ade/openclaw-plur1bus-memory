@@ -84,7 +84,11 @@ function installerDocument() {
 
 function childEnvironment() {
   return Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT"),
+    Object.entries(process.env).filter(([key]) => (
+      key !== "NODE_TEST_CONTEXT"
+      && key !== "NODE_UNIQUE_ID"
+      && !key.startsWith("NODE_CHANNEL_")
+    )),
   );
 }
 
@@ -237,8 +241,17 @@ describe("Upgrade-Simulation: installer preserves backend selection", () => {
     for (const pluginEntry of installerPatchFixtures()) {
       const run = spawnSync(
         "jq",
-        ["--argjson", "plugin_config", JSON.stringify(pluginEntry), match[1]],
-        { input: JSON.stringify(installerDocument()), encoding: "utf8" },
+        [
+          "--null-input",
+          "--argjson", "document", JSON.stringify(installerDocument()),
+          "--argjson", "plugin_config", JSON.stringify(pluginEntry),
+          `$document | (${match[1]})`,
+        ],
+        {
+          encoding: "utf8",
+          env: childEnvironment(),
+          timeout: 5_000,
+        },
       );
       assert.strictEqual(run.status, 0, run.stderr);
       assertInstallerPatchResult(JSON.parse(run.stdout), pluginEntry);
@@ -252,15 +265,17 @@ describe("Upgrade-Simulation: installer preserves backend selection", () => {
     for (const pluginEntry of installerPatchFixtures()) {
       const dir = mkdtempSync(join(tmpdir(), "plur1bus-installer-remote-"));
       const configPath = join(dir, "openclaw.json");
+      const programPath = join(dir, "installer-patch.mjs");
       try {
         writeFileSync(configPath, `${JSON.stringify(installerDocument(), null, 2)}\n`);
         const program = match[1]
           .replaceAll("'${TARGET_CONFIG}'", JSON.stringify(configPath))
           .replace("${PLUGIN_CONFIG_ESCAPED}", JSON.stringify(pluginEntry));
-        const run = spawnSync("node", ["--input-type=module"], {
-          input: program,
+        writeFileSync(programPath, program);
+        const run = spawnSync(process.execPath, [programPath], {
           encoding: "utf8",
           env: childEnvironment(),
+          timeout: 5_000,
         });
         assert.strictEqual(run.status, 0, run.stderr);
         assertInstallerPatchResult(JSON.parse(readFileSync(configPath, "utf8")), pluginEntry);
