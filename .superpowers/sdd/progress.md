@@ -274,3 +274,16 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
   focused gate: 122/122 across 20 suites, no failures or skips.
 - Post-review serial adjacent config/default-LLM/deploy gate exited 0; lint,
   manifest JSON parsing, and diff checks pass.
+
+### B5 second specification-review follow-up
+
+- Independent re-review: FAIL, Critical 0 / Important 2 / Minor 0.
+- Closed descending Croner ranges across numeric, named-month, and named-day
+  fields while retaining ascending forms.
+- Closed omitted-account root-default ambiguity: routing fields alone no longer
+  invent `default`; a supported root `botToken`/`tokenFile` (including the
+  effective redacted `botToken: "***"` shape) proves the real root account even
+  alongside multiple named accounts. Explicit missing accounts remain denied.
+- Both account counterexamples were RED 0/2 and GREEN 2/2. The combined
+  focused cron/bootstrap gate passes 124/124 across 20 suites with no failures
+  or skips.
