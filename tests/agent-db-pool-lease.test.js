@@ -460,6 +460,7 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
 
     await assert.rejects(pool.shutdown(), (error) => {
       assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, lateError), "the late DB failure remains observable");
       assert.ok(errorTreeIncludes(error, loggerError), "the deferred logger failure remains observable");
       return true;
     });
@@ -470,7 +471,14 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   it("redacts late-settlement credentials before warning delivery", async (t) => {
     const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-late-redaction-"));
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
-    const secret = "sk-1234567890abcdefghijklmn";
+    const credentials = [
+      "sk-proj-AbCdEf0123456789+/=_-more",
+      "p@ss/word+with=punctuation",
+      "client-secret/value+with=punctuation",
+      "bearer/value+with=punctuation",
+      "api/value+with=punctuation",
+      "123456789:AAExampleTelegramBotToken_0123456789",
+    ];
     const warnings = [];
     const rawSettlement = deferred();
     const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
@@ -484,12 +492,22 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
     });
     await assert.rejects(operation, (error) => error === timeoutError);
     const [lease] = [...pool.activeOperations];
-    rawSettlement.reject(new Error(`late transport failed token=${secret}`));
+    const lateError = new Error([
+      `openai=${credentials[0]}`,
+      `password=${credentials[1]}`,
+      `secret=${credentials[2]}`,
+      `Bearer ${credentials[3]}`,
+      `api_key=${credentials[4]}`,
+      `telegram=${credentials[5]}`,
+    ].join(" "));
+    rawSettlement.reject(lateError);
     await lease;
 
     assert.ok(warnings.length > 0);
-    assert.ok(warnings.every((warning) => !String(warning).includes(secret)));
+    for (const credential of credentials) {
+      assert.ok(warnings.every((warning) => !String(warning).includes(credential)));
+    }
     assert.ok(warnings.some((warning) => String(warning).includes("[REDACTED]")));
-    await pool.shutdown();
+    await assert.rejects(pool.shutdown(), (error) => errorTreeIncludes(error, lateError));
   });
 });

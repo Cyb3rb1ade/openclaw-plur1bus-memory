@@ -246,4 +246,27 @@ describe("emitRetrievalLedger", () => {
     });
     assert.strictEqual(warningRejectionAttached, true);
   });
+
+  it("never copies callback query, memory, or credential text into warnings", () => {
+    const queryText = "PRIVATE-QUERY-7788";
+    const memoryText = "PRIVATE-MEMORY-9911";
+    const credential = "sk-proj-AbCdEf0123456789+/=_-more";
+    const callbackError = new Error(
+      `ledger failed query=${queryText} memory=${memoryText} credential=${credential}`,
+    );
+    const warnings = [];
+
+    const outcome = emitRetrievalLedger({
+      retrievalLogger() { throw callbackError; },
+      logger: { warn(message) { warnings.push(message); } },
+      entry: { agentId: "agent-a", resultsCount: 0, selectedIds: [] },
+    });
+
+    assert.strictEqual(outcome.error, callbackError, "the internal outcome retains the original cause");
+    assert.strictEqual(warnings.length, 1);
+    assert.ok(!warnings[0].includes(queryText));
+    assert.ok(!warnings[0].includes(memoryText));
+    assert.ok(!warnings[0].includes(credential));
+    assert.match(warnings[0], /retrieval callback failed/i);
+  });
 });
