@@ -191,7 +191,7 @@ import {
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
-import { safeDebug, trySafeWarn } from "./lib/safe-logging.js";
+import { redactError, safeDebug, settleSafeWarning, trySafeWarn } from "./lib/safe-logging.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
 import { throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
@@ -1876,11 +1876,7 @@ class AgentDbPool {
           await db.shutdown();
         } catch (error) {
           const contextual = this._contextualizeDbError(id, "eviction", error);
-          const loggingError = this._warnLifecycle(
-            id,
-            "eviction",
-            `memory-lancedb-namespaced: ${contextual.message}`,
-          );
+          const loggingError = await this._warnLifecycle(id, "eviction", contextual);
           if (loggingError) {
             throw new AggregateError(
               [contextual, loggingError],
@@ -1898,27 +1894,31 @@ class AgentDbPool {
   }
 
   _contextualizeDbError(agentId, phase, error) {
-    const cause = error instanceof Error ? error : new Error(String(error));
+    const safeMessage = redactError(error).message;
     const contextual = new Error(
-      `agent=${agentId} ${phase} failed: ${cause.message}`,
-      { cause },
+      `agent=${agentId} ${phase} failed: ${safeMessage}`,
+      { cause: error },
     );
     contextual.agentId = agentId;
     contextual.phase = phase;
     return contextual;
   }
 
-  _warnLifecycle(agentId, phase, message) {
-    try {
-      this.logger?.warn?.(message);
-      return null;
-    } catch (error) {
-      return this._contextualizeDbError(agentId, `${phase}-warning`, error);
-    }
+  async _warnLifecycle(agentId, phase, error) {
+    const warning = trySafeWarn(
+      this.logger,
+      `memory-lancedb-namespaced agent=${agentId} phase=${phase}`,
+      error,
+      { agentId, phase },
+    );
+    const outcome = await settleSafeWarning(warning);
+    return outcome.ok
+      ? null
+      : this._contextualizeDbError(agentId, `${phase}-warning`, outcome.error);
   }
 
   _recordBackgroundLifecycleError(error) {
-    const normalized = error instanceof Error ? error : new Error(String(error));
+    const normalized = this._contextualizeDbError("pool", "background-lifecycle", error);
     if (this.backgroundLifecycleErrors.length < MAX_BACKGROUND_POOL_LIFECYCLE_ERRORS) {
       this.backgroundLifecycleErrors.push(normalized);
       return;
@@ -2123,39 +2123,34 @@ class AgentDbPool {
       const db = this._getOrCreateDb(id);
       return fn(db);
     })();
-    const leasePromise = (async () => {
+    let leasePromise;
+    leasePromise = (async () => {
       try {
-        await callbackPromise;
-      } catch (error) {
-        const settlement = await waitForTimeoutSettlement(error);
-        if (settlement.status === "rejected") {
-          const loggingError = this._warnLifecycle(
-            id,
-            "late-settlement",
-            `memory-lancedb-namespaced: late DB operation settlement failed for agent=${id}: ${String(settlement.error)}`,
-          );
+        try {
+          await callbackPromise;
+        } catch (error) {
+          const settlement = await waitForTimeoutSettlement(error);
+          if (settlement.status === "rejected") {
+            const loggingError = await this._warnLifecycle(id, "late-settlement", settlement.error);
+            if (loggingError) this._recordBackgroundLifecycleError(loggingError);
+          }
+        }
+      } catch (trackingError) {
+        const contextual = this._contextualizeDbError(id, "lease-tracking", trackingError);
+        this._recordBackgroundLifecycleError(contextual);
+        try {
+          const loggingError = await this._warnLifecycle(id, "lease-tracking", trackingError);
           if (loggingError) this._recordBackgroundLifecycleError(loggingError);
+        } catch (containmentError) {
+          this._recordBackgroundLifecycleError(containmentError);
         }
       } finally {
         if (acquired) this.dbs.release(id);
+        this.activeOperations.delete(leasePromise);
       }
     })();
     this.activeOperations.add(leasePromise);
     startLease();
-    leasePromise.then(
-      () => this.activeOperations.delete(leasePromise),
-      (trackingError) => {
-        this.activeOperations.delete(leasePromise);
-        const contextual = this._contextualizeDbError(id, "lease-tracking", trackingError);
-        this._recordBackgroundLifecycleError(contextual);
-        const loggingError = this._warnLifecycle(
-          id,
-          "lease-tracking",
-          `memory-lancedb-namespaced: DB lease tracking failed for agent=${id}: ${String(trackingError)}`,
-        );
-        if (loggingError) this._recordBackgroundLifecycleError(loggingError);
-      },
-    );
     try {
       return await callbackPromise;
     } catch (error) {
@@ -2193,11 +2188,7 @@ class AgentDbPool {
         } catch (error) {
           const contextual = this._contextualizeDbError(agentId, "shutdown", error);
           errors.push(contextual);
-          const loggingError = this._warnLifecycle(
-            agentId,
-            "shutdown",
-            `memory-lancedb-namespaced: ${contextual.message}`,
-          );
+          const loggingError = await this._warnLifecycle(agentId, "shutdown", contextual);
           if (loggingError) errors.push(loggingError);
         }
       }
@@ -2241,11 +2232,7 @@ class AgentDbPool {
         } catch (error) {
           const contextual = this._contextualizeDbError(agentId, "clear", error);
           errors.push(contextual);
-          const loggingError = this._warnLifecycle(
-            agentId,
-            "clear",
-            `memory-lancedb-namespaced: ${contextual.message}`,
-          );
+          const loggingError = await this._warnLifecycle(agentId, "clear", contextual);
           if (loggingError) errors.push(loggingError);
         }
       }
