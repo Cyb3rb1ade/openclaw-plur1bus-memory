@@ -2179,7 +2179,11 @@ class AgentDbPool {
           if (settlement.status === "rejected") {
             const lateError = this._contextualizeDbError(id, "late-settlement", settlement.error);
             this._recordBackgroundLifecycleError(lateError);
-            const loggingError = await this._warnLifecycle(id, "late-settlement", lateError);
+            const loggingError = await this._warnLifecycle(
+              id,
+              "late-settlement",
+              new Error("late database operation failed"),
+            );
             if (loggingError) this._recordBackgroundLifecycleError(loggingError);
           }
         }
