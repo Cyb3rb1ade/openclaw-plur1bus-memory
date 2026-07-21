@@ -137,3 +137,10 @@ The final focused cron/bootstrap/symlink gate passes 126/126 across 20 suites
 with no failures or skips. The changes remain confined to cron planning,
 focused tests, and this evidence; no handler, model route, API-key lookup, or
 per-agent credential inheritance changed.
+
+The first quality re-review found one remaining Important false-positive:
+Croner's day-of-week domain permits aliases `0` and `7` but caps a step at
+`7`, while the generic domain-size calculation allowed `*/8`. Five- and
+six-field DOW `*/8` cases were RED and are now ineligible; `*/7` remains a
+positive control. The final focused count is updated by the verification gate
+recorded after this fix.

@@ -502,7 +502,8 @@ export async function runSetupFeatureCrons(options = {}) {
 // package is reached through a symlink.
 const IS_MAIN = (() => {
   try {
-    return process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+    return process.argv[1]
+      && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }
