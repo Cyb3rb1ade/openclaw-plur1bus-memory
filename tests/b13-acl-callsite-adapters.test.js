@@ -40,6 +40,25 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.equal(checkAccess(ctx, { scope: "user", ownerUserId: "42" }).allowed, false);
   });
 
+  it("requires one valid requester agent before authorizing every scope", () => {
+    const full = resolveMemoryRequestContext({
+      agentId: "agent-a",
+      workspaceId: "workspace-a",
+      channel: "telegram",
+      accountId: "one",
+      userId: "42",
+    }, { workspaceAliases: aliases });
+    const rows = [
+      { scope: "agent-private", agentId: "agent-a", storedBy: "agent-a" },
+      { scope: "workspace", workspaceId: "workspace-a", workspaceKey: "legacy-a" },
+      { scope: "user", ownerUserId: full.userPrincipal },
+    ];
+    for (const row of rows) {
+      assert.equal(checkAccess({ ...full, agentId: "" }, row).allowed, false);
+      assert.equal(checkAccess({ ...full, agentId: "../bad" }, row).allowed, false);
+    }
+  });
+
   it("canonicalizes legacy workspace aliases independently", () => {
     const ctx = resolveMemoryRequestContext({ agentId: "agent-a", workspaceId: "workspace-a" }, { workspaceAliases: aliases });
     assert.equal(checkAccess(ctx, { scope: "workspace", workspaceKey: "workspace-a" }).allowed, true);
@@ -67,7 +86,7 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.deepEqual(filterMemoriesByAcl(ctx, rows).map((row) => row.id), ["private", "workspace", "user"]);
   });
 
-  it("registers the passive identity bridge only for autoRecall and never message_received", (t) => {
+  it("registers the passive identity bridge only for autoRecall and never message_received", async (t) => {
     const makeApi = (autoRecall) => {
       const baseDbPath = mkdtempSync(join(tmpdir(), `plur1bus-b13-register-${autoRecall}-`));
       t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
@@ -103,6 +122,14 @@ describe("B13 strict ownership ACL adapters", () => {
     const dispatch = enabled.filter((hook) => hook.name === "reply_dispatch");
     assert.equal(dispatch.length, 1);
     assert.equal(dispatch[0].options.priority, Number.MIN_SAFE_INTEGER);
+    const sideEffects = { processed: 0, idle: 0, dispatched: 0 };
+    const result = await dispatch[0].handler({ ctx: {} }, {
+      recordProcessed() { sideEffects.processed++; },
+      markIdle() { sideEffects.idle++; },
+      dispatcher: { dispatch() { sideEffects.dispatched++; } },
+    });
+    assert.equal(result, undefined);
+    assert.deepEqual(sideEffects, { processed: 0, idle: 0, dispatched: 0 });
     assert.ok(enabled.some((hook) => hook.name === "before_prompt_build"));
     assert.ok(enabled.some((hook) => hook.name === "agent_end"));
     const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");

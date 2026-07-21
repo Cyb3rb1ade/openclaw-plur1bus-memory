@@ -76,6 +76,17 @@ describe("memory_store input validation", () => {
     };
   }
 
+  it("rejects a missing tool agent before exposing store or recall handlers", () => {
+    const api = makeMockApi(basePath);
+    plugin.register(api);
+    assert.throws(() => api._toolFactory({
+      workspaceDir,
+      messageChannel: "telegram",
+      agentAccountId: "primary",
+      requesterSenderId: "owner-user",
+    }), /agentId is required/);
+  });
+
   it("rejects text over the length limit and does not store it", async () => {
     const api = makeMockApi(basePath);
     plugin.register(api);
