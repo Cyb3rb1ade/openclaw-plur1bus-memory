@@ -58,7 +58,7 @@ PLUR1BUS model default or cross-feature inheritance.
 
 Base: `a53e244d1d73e9e19681c17da4740a18d4401b5e`
 
-Implementation head: `6669a8ab12d3d271fdc72e905319fbc61c30e9b9`
+Implementation head: `5cf2f305e362d4cdb3926889ab0caf87f0ce224c`
 
 ```text
 22ee72e docs: plan B12 core namespace remediation
@@ -87,6 +87,11 @@ b85f8f7 fix: contain asynchronous recall diagnostics
 643ad39 fix: keep lifecycle warnings payload free
 606c604 fix: redact complete authorization headers
 6669a8a fix: contain folded authorization values
+3470fcd docs: document B12 core namespace remediation
+d7acf12 test: isolate upgrade child process
+e8a1f12 fix: close b12 adversarial quality gaps
+85dfedd test: avoid nested installer pipe deadlocks
+5cf2f30 fix: preserve hostile settlements and fair trace caps
 ```
 
 Current evidence:
@@ -205,10 +210,30 @@ Current evidence:
   59 suites; the expanded gate is 210/210 across 34 suites. The final
   specification and adversarial fix-only reviews both pass 117/117 with
   Critical 0 / Important 0 / Minor 0.
-- The fresh full post-documentation specification and quality/security
-  re-reviews, authoritative serial suite, and closure commit are pending.
+- The first full post-documentation specification review passed, while its
+  adversarial quality review found Critical 0 / Important 3 / Minor 0:
+  hostile-own-`then` native rejections, lost primary shutdown errors, and
+  last-namespace-only saturated traces. Commit `e8a1f12` closes all three.
+  `d7acf12` and `85dfedd` remove the nested installer-probe stdin deadlocks;
+  the original two-file hang reproducer passes.
+- The next full reviews at `85dfedd` found Critical 0 / Important 2 / Minor 0
+  across them: post-replay global decisions could destroy namespace fairness,
+  and hostile Promise-subclass Species could throw before handler attachment.
+  Commit `5cf2f30` closes both with deterministic `(phase, namespace)` trace
+  buckets and brand-safe, reversibly neutralized native Promise observation.
+  Causal coverage includes local/cross-realm subclasses, frozen instances,
+  pre-existing descriptors, `unhandled=[]`, all four decision buckets, exact
+  summaries, and immutable inputs.
+- Final independent specification review over `a53e244d..5cf2f305`: product
+  Critical 0 / Important 0; its only Minor was the then-pending receipt/progress
+  update recorded here. Reviewer gate 404/404. Final quality/security review:
+  **PASS**, Critical 0 / Important 0 / Minor 0; gates 413/413 plus 56/56.
+- Final focused owner gate: 319/319 tests across 58 suites, no failures/skips;
+  lint and diff checks pass. Exact authoritative serial suite:
+  `node --test --test-concurrency=1 tests/*.test.js test/*.test.js` — 2970
+  tests, 2969 pass, 0 fail, 1 existing environment-dependent skip, exit 0,
+  335439.875688 ms.
 - Receipt: `docs/audits/2026-07-20-b12-core-recall-namespaces-fix.md`.
 
-FA-03 and FE-ADD-05 are implemented; closure is not claimed until the pending
-post-fix reviews and serial gate are recorded. FA-07 remains B12-P. Sharing and
+FA-03 and FE-ADD-05 are CLOSED for B12-Core. FA-07 remains B12-P. Sharing and
 cross-principal ACL behavior remain B13. Main and Remote remain untouched.
