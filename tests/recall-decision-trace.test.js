@@ -136,6 +136,14 @@ describe("addTraceCandidate", () => {
     assert.throws(() => addTraceCandidate(null, {}), TypeError);
     assert.throws(() => addTraceCandidate({}, null), TypeError);
   });
+
+  it("keeps only a valid namespace provenance label", () => {
+    const trace = createRecallDecisionTrace();
+    const valid = addTraceCandidate(trace, { id: "m1", namespace: "ns-good_1" });
+    const invalid = addTraceCandidate(trace, { id: "m2", namespace: "bad namespace" });
+    assert.equal(valid.namespace, "ns-good_1");
+    assert.equal(Object.hasOwn(invalid, "namespace"), false);
+  });
 });
 
 describe("addTraceDecision", () => {
@@ -171,6 +179,16 @@ describe("addTraceDecision", () => {
     assert.strictEqual(decision.scoreBreakdown.vectorScore, 0.9);
     assert.strictEqual(decision.scoreBreakdown.importanceBoost, 0.05);
   });
+
+  it("records sanitized namespace provenance on decisions", () => {
+    const trace = createRecallDecisionTrace();
+    const decision = addTraceDecision(trace, {
+      memoryId: "m1",
+      action: "inclusion",
+      namespace: "ns-a",
+    });
+    assert.equal(decision.namespace, "ns-a");
+  });
 });
 
 describe("addTraceGuard", () => {
@@ -187,6 +205,12 @@ describe("addTraceGuard", () => {
     assert.throws(() => addTraceGuard(null, {}), TypeError);
     assert.throws(() => addTraceGuard({}, null), TypeError);
   });
+
+  it("records sanitized namespace provenance on guards", () => {
+    const trace = createRecallDecisionTrace();
+    const guard = addTraceGuard(trace, { name: "acl", passed: true, namespace: "ns-a" });
+    assert.equal(guard.namespace, "ns-a");
+  });
 });
 
 describe("addTraceStoreDecision", () => {
@@ -197,6 +221,16 @@ describe("addTraceStoreDecision", () => {
     assert.strictEqual(trace.storeDecisions.length, 2);
     assert.strictEqual(trace.summary.storeAccepted, 1);
     assert.strictEqual(trace.summary.storeRejected, 1);
+  });
+
+  it("records sanitized namespace provenance on store decisions", () => {
+    const trace = createRecallDecisionTrace();
+    const decision = addTraceStoreDecision(trace, {
+      memoryId: "m1",
+      action: "stored",
+      namespace: "ns-a",
+    });
+    assert.equal(decision.namespace, "ns-a");
   });
 });
 
