@@ -53,3 +53,162 @@ semantic compression, candidate limits, and graph-index behavior. Every B12-P
 chat-LLM path must consume `lib/llm-router.js`, pass the current target
 `agentId`, preserve the base-recall fallback and timeout contracts, and add no
 PLUR1BUS model default or cross-feature inheritance.
+
+## B12-Core recall and namespaces
+
+Base: `a53e244d1d73e9e19681c17da4740a18d4401b5e`
+
+Implementation head: `6669a8ab12d3d271fdc72e905319fbc61c30e9b9`
+
+```text
+22ee72e docs: plan B12 core namespace remediation
+6d5eb68 feat: validate namespace configuration
+e512219 fix: preserve internal flat namespace routing
+a6066cf fix: contain namespace storage routes
+cd4b506 fix: revalidate namespace routes before use
+2389d76 fix: pin cached namespace routes
+7e390ce fix: pin namespace paths through database open
+3f92172 fix: bind database routes to directory capabilities
+9943226 fix: retry read-only namespace discovery
+6da068e fix: preserve legacy namespace path aliases
+74f8d5c fix: serialize agent DB cache clearing
+1f11321 fix: complete shutdown after cache clear failures
+390feb2 fix: harden read-only cleanup portability
+d72e05f fix: merge multi-namespace recall globally
+cbbee2f fix: retain namespace reads through timeout settlement
+e111ac6 fix: retain all namespace timeout settlements
+8a379bc fix: fail closed on namespace anchor reads
+95551d5 fix: deploy temporal recall helper
+7b8e855 fix: retain strict reads after legacy skip
+f66563e fix: settle timed-out database initialization
+73897d8 fix: keep recall cleanup terminal under logger failure
+b85f8f7 fix: contain asynchronous recall diagnostics
+4d93679 fix: harden hostile diagnostic settlements
+643ad39 fix: keep lifecycle warnings payload free
+606c604 fix: redact complete authorization headers
+6669a8a fix: contain folded authorization values
+```
+
+Current evidence:
+
+- Reconstructed Task-1 RED: 14/17 pass, 3 fail on `22ee72e`; missing public
+  schema/layout contract. Current tests GREEN.
+- Reconstructed initial Task-2 RED: 26/53 pass, 27 fail on `e512219`; missing
+  safe named routing/read-only behavior. Final Task-2 spec review PASS 146/146;
+  quality review PASS 136/136 with no Critical/Important finding.
+- Reconstructed Task-3 RED: 31/38 pass, 7 fail on `390feb2`; broken global
+  merge, duplicate canonical, first-trace-only and early sibling settlement.
+- Task-3 initial spec review PASS 61/61. Its quality review found one Important
+  timeout-settlement gap. RED 0/1 and GREEN 1/1 prove the fix; self-review then
+  retained every simultaneous namespace/hydration timeout settlement.
+- The first full B12 spec review found one Important temporal-anchor read gap
+  and one stale-receipt Minor. Reproduced RED 0/2, then GREEN 2/2 at `8a379bc`;
+  coordinated namespace recall now fails closed without a partial ledger while
+  the single-table temporal fallback remains compatible.
+- The repeat full review found one further Important deploy-closure gap: the
+  fixed temporal helper was not in `DEPLOY_FILES`. Reproduced RED 0/1, then
+  GREEN 1/1 at `95551d5`; the full deploy-integrity suite passes 21/21.
+- The next full re-review found one Important post-skip fallback: an absent
+  configured legacy table reduced the live reader list to one and disabled
+  strict reads. Reproduced RED 0/1, then GREEN 1/1 at `7b8e855`; a paired
+  preservation case confirms genuine single-namespace fail-soft behavior.
+- The first full quality/security review found one Important lifecycle gap:
+  every timed-out `MemoryDB.init()` operation could close known handles before
+  raw settlement, leak a late connection/table handle, or let writable schema
+  timeouts be swallowed. The initial six causal regressions produced 8/14 pass
+  and 6 fail. Commit `f66563e` adds one settlement barrier for every init
+  operation, exact-once late-handle cleanup, retry/shutdown/capability ordering,
+  bootstrap-sentinel recovery, observable cleanup/logger failures, and rejects
+  direct work while shutdown is in progress. The final lifecycle suite passes
+  20/20; independent fix spec review passes with no C/I/M and independent fix
+  quality review passes with no C/I finding.
+- The fresh full specification review at `f66563e` failed with one Important:
+  a throwing namespace-pool warning stopped terminal cleanup before child-map
+  clearing and root-capability close. The quality/security review confirmed the
+  same pattern in AgentDbPool shutdown/clear, eviction, and late-settlement
+  tracking, then found the related phase-timer and retrieval-ledger logging
+  paths could replace a primary timeout or a successful recall. The pool RED
+  was 32/37 with five causal failures; the phase/ledger RED was 10/14 with four
+  failures. Commit `73897d8` captures logger failures as secondary evidence,
+  preserves every primary error and attached raw settlement, completes all
+  cleanup, bounds deferred lifecycle errors, and makes ledger diagnostics
+  non-interfering. Its pool GREEN is 37/37; the logger/phase/ledger GREEN is
+  32/32. The unused-import Minor was removed.
+- Plan-defined final B12 focus at `73897d8`: 326/326 across 48 suites, no skip.
+  Expanded lifecycle/security/timeout gate: 219/219 across 39 suites, no skip.
+  `npm run lint` and `git diff --check` pass. Final Task-3
+  spec re-review PASS 62/62 plus 16/16 timeout/hydration/lease tests, with no
+  finding. Final Task-3 quality re-review also PASS with 70/70 and no finding.
+  The pre-lifecycle full B12 specification re-review passed at `7b8e855` with
+  no C/I/M finding; its reviewer gates passed 319/319 plus 70/70.
+- The fix-only specification review at `73897d8` passed, but its independent
+  adversarial quality/security review failed with Critical 0 / Important 2 /
+  Minor 0. Promise-rejecting logger/callback returns were unobserved, hostile
+  logger errors could still abort terminal cleanup through their `message`
+  getter, late-settlement warnings exposed raw credentials, and phase summaries
+  retained arbitrary error/query text. The new causal set was RED at 62/73 with
+  11 failures. Commit `b85f8f7` adds immediate non-rejecting thenable
+  observation, a bounded non-settling-warning deadline, hostile-value-safe
+  contextualization, redacted lifecycle warnings, payload-free phase failures,
+  and asynchronous ledger settlement. Its first GREEN was 73/73; the current
+  expanded lifecycle/security/timeout gate was 200/200 across 32 suites. A real
+  `Promise.reject` probe reported `unhandled=[]`; lint and diff checks passed.
+- The independent fix-only reviews at `b85f8f7` then both failed. The
+  specification review found Critical 0 / Important 2 / Minor 0: a late raw
+  DB error disappeared from the shutdown aggregate when warning delivery also
+  failed, and credential redaction did not cover `sk-proj`, `password`, or
+  `secret` forms. The adversarial quality/security review found Critical 0 /
+  Important 4 / Minor 0: native Promise assimilation could be defeated by a
+  self-cycle, an async `then`, or a rejecting ignored return; async MemoryDB
+  debug logging remained unobserved; retrieval-ledger warnings could copy
+  payloads; and the same late primary error was lost.
+- The second causal RED set was 55/63 with eight failures. Commit `4d93679`
+  replaces generic thenable assimilation with a bounded cycle-aware observer,
+  observes ignored native/foreign return settlements, tracks async MemoryDB
+  diagnostics through terminal shutdown, retains both late primary and
+  secondary logger failures, emits fixed payload-free ledger warnings, and
+  broadens credential redaction. The current plan-focus gate is 386/386 across
+  58 suites; the expanded lifecycle/security/timeout gate is 206/206 across 33
+  suites. A standalone five-path process probe reports
+  `{"pending":5,"settled":5,"failedSettlements":4,"unhandled":[]}`. Lint and
+  diff checks pass.
+- Independent fix-only reviews at `4d93679` both found the same remaining
+  Important: the late-settlement lifecycle warning could copy query/memory
+  text and left the value of `Authorization: Basic ...` visible; vendor-prefixed
+  keys such as `GOOGLE_API_KEY` also bypassed generic redaction. The quality
+  review additionally recorded one Minor for describing a depth-limit abort as
+  a cycle and noted a pre-existing direct-`safeWarn()` async rejection for the
+  later full review.
+- Two final causal RED phases were 34/36 for payload/Auth redaction and 23/25
+  for depth/direct-warning observation. Commit `643ad39` makes the late warning
+  a fixed payload-free classification while retaining the raw primary error in
+  bounded shutdown evidence, covers Authorization schemes and vendor-prefixed
+  credential keys, distinguishes cycle from depth exhaustion, and observes
+  direct async `safeWarn()` returns without changing their return value. The
+  current plan-focus gate is 388/388 across 59 suites; the expanded gate is
+  208/208 across 34 suites. The process probe reports `authRedacted:true`,
+  `directWarnObserved:true`, and `unhandled:[]`; lint and diff checks pass.
+- The independent fix-only specification review at `643ad39` passed with no
+  finding (115/115). The adversarial review found one remaining Important in
+  the generic helper: multi-part Digest, AWS4, or Negotiate Authorization
+  values could retain fields after a space or comma. The new causal case was
+  RED at 25/26. Commit `606c604` redacts the complete untrusted Authorization
+  header value to its line boundary while keeping vendor-key coverage
+  independent. The current plan-focus gate is 389/389 across 59 suites; the
+  expanded gate is 209/209 across 34 suites. Lint and diff checks pass.
+- The independent specification review at `606c604` passed with no finding
+  (116/116). Its quality review found one final Important CRLF boundary: `\s*`
+  could consume a normal following line while a folded Authorization
+  continuation leaked. The causal case was RED at 26/27. Commit `6669a8a`
+  restricts separator whitespace to SP/HTAB and explicitly consumes only
+  indented continuation lines. The current plan-focus gate is 390/390 across
+  59 suites; the expanded gate is 210/210 across 34 suites. The final
+  specification and adversarial fix-only reviews both pass 117/117 with
+  Critical 0 / Important 0 / Minor 0.
+- The fresh full post-documentation specification and quality/security
+  re-reviews, authoritative serial suite, and closure commit are pending.
+- Receipt: `docs/audits/2026-07-20-b12-core-recall-namespaces-fix.md`.
+
+FA-03 and FE-ADD-05 are implemented; closure is not claimed until the pending
+post-fix reviews and serial gate are recorded. FA-07 remains B12-P. Sharing and
+cross-principal ACL behavior remain B13. Main and Remote remain untouched.

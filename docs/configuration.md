@@ -32,6 +32,62 @@ liegen entsprechend unter `plugins.entries.memory-lancedb-namespaced.config.runt
 
 ---
 
+## Benannte Storage-Namespaces
+
+`namespaces` ist ein optionales, striktes Top-Level-Objekt unter der
+Plugin-Konfiguration. Ohne dieses Objekt bleibt das bestehende Flat-Layout
+unverändert: `{baseDbPath}/{agentId}`. Es werden dann weder Namespace-Pfade
+ergänzt noch bestehende Daten verschoben.
+
+| Key | Typ | Implizites Verhalten | Beschreibung |
+|-----|-----|----------------------|--------------|
+| `namespaces.activeWriteNamespace` | `string` | `lancedb-namespaced` innerhalb eines expliziten Objekts | Einziger Namespace für neue und verändernde DB-Operationen |
+| `namespaces.activeRecallNamespaces` | `string[]` | `[activeWriteNamespace]` | Aktive Recall-Namespaces; neue Writes gehen weiterhin ausschließlich in den Writer |
+| `namespaces.legacyReadOnlyNamespaces` | `string[]` | `[]` | Zusätzliche, strikt nicht mutierende Legacy-Quellen |
+| `namespaces.crossNamespaceRecall` | `boolean` | `false` | Nimmt Legacy-Quellen nur bei exakt `true` in Recall auf |
+
+Alle Namespace-IDs müssen `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` erfüllen.
+`activeRecallNamespaces` muss den Writer enthalten; aktive und
+Legacy-Read-only-Rollen müssen disjunkt sein. Doppelte Einträge werden stabil
+zusammengeführt. Ungültige, leere, überlappende oder mehrdeutige Layouts werden
+beim Laden der Plugin-Konfiguration abgelehnt.
+
+```json
+{
+  "baseDbPath": "~/.openclaw/memory",
+  "namespaces": {
+    "activeWriteNamespace": "lancedb-local",
+    "activeRecallNamespaces": ["lancedb-local"],
+    "legacyReadOnlyNamespaces": ["lancedb-namespaced"],
+    "crossNamespaceRecall": true
+  }
+}
+```
+
+Bei expliziter Konfiguration darf `baseDbPath` entweder der gemeinsame Root
+(`~/.openclaw/memory`) oder bereits das aktive Writer-Leaf
+(`~/.openclaw/memory/lancedb-local`) sein. Endet der Pfad stattdessen auf einem
+konfigurierten Nicht-Writer, wird das Layout als mehrdeutig abgelehnt.
+Aufgelöste Namespace- und Agent-Pfade bleiben kanonisch innerhalb ihres Roots;
+Symlink-Substitutionen und kanonische Pfadkollisionen schlagen fail-closed fehl.
+
+Legacy-Read-only-Tabellen werden nicht angelegt, migriert oder beschrieben.
+Eine tatsächlich fehlende Legacy-Tabelle wird übersprungen; andere Init- oder
+Query-Fehler brechen den gesamten öffentlichen Recall ab, ohne Teilergebnis.
+Alle beteiligten Tabellen müssen zur konfigurierten Embedding-Dimension passen.
+
+Multi-Namespace-Recall bedeutet ausschließlich: derselbe validierte `agentId`
+wird in mehreren benannten Storage-Namespaces gelesen. Wenn mehrere existente
+Tabellen teilnehmen, werden die Ergebnisse global und stabil nach Score
+sortiert, nach ID beziehungsweise normalisiertem
+Canonical-Heading+Text dedupliziert und gemeinsam durch das Tool-`limit`
+beziehungsweise `maxPromptMemories`, `canonicalMaxItems` und die bestehenden
+Trace-Caps begrenzt; ein einzelner Tabellenpfad bleibt direkt. Das ist kein
+Cross-Agent-, Cross-Workspace- oder Cross-User-Sharing; diese ACL- und
+Sharing-Verträge bleiben B13 vorbehalten.
+
+---
+
 ## Halbwertszeit (Typbasiert)
 
 | Key | Typ | Default | Beschreibung |

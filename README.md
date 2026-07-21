@@ -6,7 +6,7 @@ PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolate
 
 ## What it does
 
-Each agent gets its own LanceDB namespace under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
 ### New in v7.0.0 — Humanization: persona voice, afterthoughts, dream echoes
 
@@ -63,7 +63,7 @@ The index is written to `.plur1bus/code-index.json` and contains normalized file
 
 ### New in v6.7.x — Multi-Namespace, Temporal Continuity & Source Sync
 
-- **Multi-Namespace Pool** — Each agent gets its own isolated LanceDB namespace; cross-agent recall stays opt-in.
+- **Multi-Namespace Pool** — One validated agent can opt into recall across named LanceDB storage namespaces; this never selects another agent and is not cross-agent sharing.
 - **Temporal Continuity Context** — Auto-injected time-anchor block lets the agent orient itself after gaps or compactions without hallucinating dates.
 - **Conflict Summary Management** — Contradiction detector now emits structured conflict summaries; `/plur1bus obsidian conflicts build` renders them as Obsidian pages.
 - **`/plur1bus start` onboarding** — Read-only status and onboarding guidance for feature profiles and vault setup.
@@ -325,6 +325,41 @@ not PLUR1BUS defaults.
 ```
 
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
+
+### Named storage namespaces
+
+Omitting `namespaces` preserves the legacy-flat layout exactly:
+`{baseDbPath}/{agentId}`. Named routing is enabled only by supplying the strict
+object explicitly:
+
+```json
+{
+  "baseDbPath": "~/.openclaw/memory",
+  "namespaces": {
+    "activeWriteNamespace": "lancedb-local",
+    "activeRecallNamespaces": ["lancedb-local"],
+    "legacyReadOnlyNamespaces": ["lancedb-namespaced"],
+    "crossNamespaceRecall": true
+  }
+}
+```
+
+An explicit `baseDbPath` may be the named root, as above, or the active writer
+leaf (`~/.openclaw/memory/lancedb-local`); both forms resolve to the same
+layout. Namespace identifiers must match
+`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`. The writer must occur in active recall,
+and active namespaces must be disjoint from legacy read-only namespaces.
+Legacy namespaces participate only when `crossNamespaceRecall` is exactly
+`true`; they are opened without table creation, schema migration, or mutation.
+
+Every recalled table must use the configured embedding dimensions. Each table
+runs the existing recall pipeline. When multiple live tables participate,
+PLUR1BUS waits for all of them and performs one stable global score merge; the
+one-table path remains direct. Duplicate IDs and canonical
+heading/text are collapsed, canonical plus memory results share the configured
+output cap, and child decision traces are replayed through the existing trace
+caps. A namespace changes storage routing for the current agent only. Sharing
+between agents, workspaces, or users is separate ACL work owned by B13.
 
 ### OpenClaw chat-LLM routing
 

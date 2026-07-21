@@ -3,6 +3,44 @@
 This document describes the implemented primary recall pipeline and the two
 bounded additive boosters applied by its caller.
 
+## Namespace fan-out and global merge
+
+With no explicit `namespaces` object, recall keeps the legacy-flat
+`{baseDbPath}/{agentId}` route and invokes the pipeline once. With explicit
+named routing, every configured read table belongs to that same validated
+agent: active tables are read/write-capable, while opted-in legacy tables are
+opened read-only without creation or migration. A single live table retains the
+existing direct pipeline path. The fan-out and global merge apply when multiple
+live tables participate; strict error behavior is still derived from the
+configured layout, so an absent legacy table cannot weaken a later active read.
+
+```text
+validated agentId (multi-table named route)
+  -> configured same-agent namespace tables
+  -> one existing recall pipeline per table
+  -> wait for every pipeline to settle
+  -> one global canonical / memory / trace merge
+  -> one final retrieval-ledger entry
+```
+
+Canonical `KNOWLEDGE.md` search runs only in the first configured namespace
+pipeline because all pipelines use the same current workspace. The merge then
+stable-sorts memory candidates globally by score, keeps the higher-scoring copy
+of duplicate IDs, optionally applies the configured Jaccard deduplication,
+deduplicates canonical results by normalized heading plus text, and enforces
+`canonical.length + memories.length <= topN` (the public tool limit or
+`maxPromptMemories`). Namespace labels
+are attached to cloned result wrappers; ownership fields remain unchanged.
+Child decision traces are replayed through the existing capped helpers into one
+master trace, including namespace provenance and global dedup decisions.
+
+All namespace pipelines settle before success or failure is exposed. A missing
+legacy table is skipped, but another initialization or query failure rejects
+the public recall without another namespace's partial result or ledger entry.
+Every table must use the configured embedding dimensions. Named namespaces are
+storage routing for one agent, not cross-agent/workspace/user sharing; the
+latter remains part of B13 ACL remediation.
+
 ## Primary pipeline
 
 ```text
@@ -32,11 +70,11 @@ computed vector is cached after a successful provider result.
 LanceDB performs the initial ANN search using the configured candidate budget.
 This is the authoritative memory-card search path.
 
-### 3. Optional query refinement
+### 3. Query refinement seam
 
-When the first result set is weak and refinement is enabled, the pipeline may
-derive a refined query and perform the bounded refinement path. It does not
-replace or bypass the normal vector search.
+The pipeline contains a fail-soft refinement seam, but the supported runtime
+does not currently expose or enable it. Runtime wiring and its public option
+contract remain B12-P work; B12-Core does not alter initial vector recall.
 
 ### 4. Temporal filter
 
@@ -85,8 +123,9 @@ can be returned to the caller. A high score never bypasses authorization.
 ### 12. Finalization
 
 The pipeline applies final limits and prepares the selected result records for
-safe prompt rendering. There is no separate semantic prompt-compressor stage
-in this path.
+safe prompt rendering. In named multi-namespace mode this is the per-table
+result consumed by the global merge above. There is no separate semantic
+prompt-compressor stage in this path; that runtime feature remains B12-P.
 
 ## Additive caller stages
 
