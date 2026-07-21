@@ -144,3 +144,10 @@ Croner's day-of-week domain permits aliases `0` and `7` but caps a step at
 six-field DOW `*/8` cases were RED and are now ineligible; `*/7` remains a
 positive control. The final focused count is updated by the verification gate
 recorded after this fix.
+
+Final independent quality re-review at `b287e39` is **PASS**, Critical 0 /
+Important 0 / Minor 0. Its independent Croner 10.0.1 probes matched the
+planner for five- and six-field `*/8` rejection and `*/7` acceptance, all
+earlier Cron/account/SecretRef findings remained closed, and the symlinked
+main-entry regression passed. Reviewer evidence: 126/126 focused tests across
+20 suites, lint exit 0, and `git diff --check` exit 0.

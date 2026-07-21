@@ -303,3 +303,7 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
 - The first quality re-review found one remaining Important DOW step-boundary
   false-positive (`*/8` versus Croner's maximum `7`). Five- and six-field
   regressions now reject it while retaining `*/7`; no other route changed.
+- Final independent quality re-review at `b287e39`: **PASS**, Critical 0 /
+  Important 0 / Minor 0. Focused gate 126/126 across 20 suites; lint and diff
+  checks pass. B5 is closed without handler, default-LLM, API-key, per-agent
+  credential, Main, or Remote changes.
