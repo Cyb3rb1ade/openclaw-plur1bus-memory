@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { MemoryDB } from "../index.js";
+import { TimeoutError } from "../lib/with-timeout.js";
 
 const VECTOR_DIM = 3;
 
@@ -32,6 +33,14 @@ async function settle(promise) {
   }
 }
 
+async function settleCleanup(promise, label) {
+  try {
+    await promise;
+  } catch (error) {
+    console.warn(`[test-cleanup:${label}] ${error?.message || String(error)}`);
+  }
+}
+
 function makeTempDir(t, prefix) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -50,6 +59,32 @@ function makeEntry(id, overrides = {}) {
     storedBy: "b7-agent",
     ...overrides,
   };
+}
+
+function closeTrackingProxy(handle, onClose) {
+  const rawClose = typeof handle?.close === "function" ? handle.close.bind(handle) : null;
+  return new Proxy(handle, {
+    get(target, property) {
+      if (property === "close" && rawClose) {
+        return async () => {
+          onClose();
+          return rawClose();
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+async function nextTurn() {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+function errorTreeIncludes(error, expected) {
+  if (error === expected) return true;
+  return Array.isArray(error?.errors)
+    && error.errors.some((nested) => errorTreeIncludes(nested, expected));
 }
 
 describe("MemoryDB lifecycle and atomic updates", { concurrency: false }, () => {
@@ -164,7 +199,7 @@ describe("MemoryDB lifecycle and atomic updates", { concurrency: false }, () => 
       await Promise.allSettled([firstInit, retryInit].filter(Boolean));
       db._write = originalWrite;
       db.refreshSchemaFields = originalRefresh;
-      await db.shutdown().catch(() => {});
+      await settleCleanup(db.shutdown(), "failed-init-retry-shutdown");
     });
 
     let firstResult;
@@ -199,6 +234,691 @@ describe("MemoryDB lifecycle and atomic updates", { concurrency: false }, () => 
     await db.init();
     assert.ok(db.table, "same instance can create a new generation after raw cleanup settles");
     await db.shutdown();
+  });
+
+  it("closes a late connect handle once and blocks retry until its raw settlement", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-connect-timeout-");
+    const db = new MemoryDB(join(root, "agent-a"), VECTOR_DIM);
+    const release = deferred();
+    const rawResolved = deferred();
+    const originalWrite = db._write.bind(db);
+    let injected = false;
+    let lateConnection;
+    let lateCloseCalls = 0;
+    let firstInit;
+    let retryInit;
+
+    db._write = (promise, label) => {
+      if (!injected && label === "MemoryDB.connect") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async (connection) => {
+          lateConnection = closeTrackingProxy(connection, () => { lateCloseCalls++; });
+          rawResolved.resolve();
+          await release.promise;
+          return lateConnection;
+        });
+        return Promise.reject(new TimeoutError(label, 1, settlement));
+      }
+      return originalWrite(promise, label);
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await Promise.allSettled([firstInit, retryInit].filter(Boolean));
+      db._write = originalWrite;
+      if (lateConnection && lateCloseCalls === 0) {
+        await settleCleanup(lateConnection.close(), "late-connect-handle");
+      }
+      await settleCleanup(db.shutdown(), "late-connect-shutdown");
+    });
+
+    let firstResult;
+    firstInit = db.init().then(
+      () => { firstResult = { ok: true }; },
+      (error) => { firstResult = { ok: false, error }; },
+    );
+    await rawResolved.promise;
+    await nextTurn();
+    assert.equal(firstResult?.error?.code, "ETIMEOUT", "the caller still receives the timeout promptly");
+    assert.equal(lateCloseCalls, 0, "the late connection cannot close before its raw settlement");
+
+    let retrySettled = false;
+    retryInit = db.init().finally(() => { retrySettled = true; });
+    await nextTurn();
+    assert.equal(retrySettled, false, "retry must wait for the timed-out connect cleanup");
+
+    release.resolve();
+    await firstResult.error.settlement;
+    assert.equal(lateCloseCalls, 1, "the late connection is closed exactly once");
+    await retryInit;
+    assert.ok(db.table, "retry starts a fresh initialization only after late cleanup");
+    await db.shutdown();
+  });
+
+  it("keeps shutdown and its directory capability behind a timed-out tableNames read", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-table-names-timeout-");
+    const dbPath = join(root, "agent-a");
+    const release = deferred();
+    const rawResolved = deferred();
+    const originalRead = MemoryDB.prototype._read.bind(null);
+    const originalWrite = MemoryDB.prototype._write.bind(null);
+    let connectionCloseCalls = 0;
+    let capabilityCloseCalls = 0;
+    let injected = false;
+    let firstInit;
+    let shutdown;
+    const capability = {
+      path: dbPath,
+      assertOpen() {},
+      close() { capabilityCloseCalls++; },
+    };
+    const db = new MemoryDB(dbPath, VECTOR_DIM, null, {
+      directoryCapability: capability,
+      secureDirectoryRequired: true,
+    });
+
+    db._write = async (promise, label) => {
+      const value = await originalWrite(promise, label);
+      return label === "MemoryDB.connect"
+        ? closeTrackingProxy(value, () => { connectionCloseCalls++; })
+        : value;
+    };
+    db._read = (promise, label) => {
+      if (!injected && label === "MemoryDB.tableNames") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async (value) => {
+          rawResolved.resolve();
+          await release.promise;
+          return value;
+        });
+        return Promise.reject(new TimeoutError(label, 1, settlement));
+      }
+      return originalRead(promise, label);
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await Promise.allSettled([firstInit, shutdown].filter(Boolean));
+      await settleCleanup(db.shutdown(), "table-names-shutdown");
+    });
+
+    let timeoutError;
+    firstInit = db.init().catch((error) => { timeoutError = error; });
+    await rawResolved.promise;
+    await firstInit;
+    assert.equal(timeoutError?.code, "ETIMEOUT");
+    assert.equal(connectionCloseCalls, 0, "the connection stays open for its raw tableNames read");
+
+    let shutdownSettled = false;
+    shutdown = db.shutdown().finally(() => { shutdownSettled = true; });
+    await nextTurn();
+    assert.equal(shutdownSettled, false, "shutdown must wait for raw tableNames settlement");
+    assert.equal(capabilityCloseCalls, 0, "the directory capability stays held through raw settlement");
+
+    release.resolve();
+    await timeoutError.settlement;
+    await shutdown;
+    assert.equal(connectionCloseCalls, 1);
+    assert.equal(capabilityCloseCalls, 1);
+  });
+
+  it("continues timeout cleanup and capability close when lifecycle debug logging throws", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-throwing-debug-logger-");
+    const dbPath = join(root, "agent-a");
+    const release = deferred();
+    const timeoutInjected = deferred();
+    const loggerError = new Error("injected debug logger failure");
+    const originalRead = MemoryDB.prototype._read.bind(null);
+    const originalWrite = MemoryDB.prototype._write.bind(null);
+    let connectionCloseCalls = 0;
+    let capabilityCloseCalls = 0;
+    let injected = false;
+    const capability = {
+      path: dbPath,
+      assertOpen() {},
+      close() { capabilityCloseCalls++; },
+    };
+    const logger = { debug() { throw loggerError; } };
+    const db = new MemoryDB(dbPath, VECTOR_DIM, logger, {
+      directoryCapability: capability,
+      secureDirectoryRequired: true,
+    });
+
+    db._write = async (promise, label) => {
+      const value = await originalWrite(promise, label);
+      return label === "MemoryDB.connect"
+        ? closeTrackingProxy(value, () => { connectionCloseCalls++; })
+        : value;
+    };
+    db._read = (promise, label) => {
+      if (!injected && label === "MemoryDB.tableNames") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async (value) => {
+          await release.promise;
+          return value;
+        });
+        timeoutInjected.resolve();
+        return Promise.reject(new TimeoutError(label, 1, settlement));
+      }
+      return originalRead(promise, label);
+    };
+
+    t.after(() => release.resolve());
+
+    let timeoutError;
+    const init = db.init().catch((error) => { timeoutError = error; });
+    await timeoutInjected.promise;
+    let shutdownError;
+    const shutdown = db.shutdown().catch((error) => { shutdownError = error; });
+    await nextTurn();
+    assert.equal(capabilityCloseCalls, 0);
+    assert.equal(connectionCloseCalls, 0);
+
+    release.resolve();
+    await init;
+    await timeoutError.settlement;
+    await shutdown;
+    assert.ok(errorTreeIncludes(shutdownError, loggerError), "logger failure remains observable after cleanup");
+    assert.equal(connectionCloseCalls, 1, "raw operation handle closes despite the logger failure");
+    assert.equal(capabilityCloseCalls, 1, "capability closes after raw settlement despite the logger failure");
+    assert.equal(db.isShutdown, true);
+  });
+
+  it("closes late openTable and connection handles only after raw settlement", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-open-table-timeout-");
+    const dbPath = join(root, "agent-a");
+    const seed = new MemoryDB(dbPath, VECTOR_DIM);
+    await seed.init();
+    await seed.shutdown();
+
+    const db = new MemoryDB(dbPath, VECTOR_DIM);
+    const release = deferred();
+    const rawResolved = deferred();
+    const originalWrite = MemoryDB.prototype._write.bind(null);
+    let connectionCloseCalls = 0;
+    let tableCloseCalls = 0;
+    let injected = false;
+    let lateTable;
+    let firstInit;
+    let retryInit;
+
+    db._write = async (promise, label) => {
+      if (!injected && label === "MemoryDB.openTable") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async (table) => {
+          lateTable = closeTrackingProxy(table, () => { tableCloseCalls++; });
+          rawResolved.resolve();
+          await release.promise;
+          return lateTable;
+        });
+        throw new TimeoutError(label, 1, settlement);
+      }
+      const value = await originalWrite(promise, label);
+      return label === "MemoryDB.connect"
+        ? closeTrackingProxy(value, () => { connectionCloseCalls++; })
+        : value;
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await Promise.allSettled([firstInit, retryInit].filter(Boolean));
+      if (lateTable && tableCloseCalls === 0) {
+        await settleCleanup(lateTable.close(), "late-open-table-handle");
+      }
+      await settleCleanup(db.shutdown(), "late-open-table-shutdown");
+    });
+
+    let timeoutError;
+    firstInit = db.init().catch((error) => { timeoutError = error; });
+    await rawResolved.promise;
+    await firstInit;
+    assert.equal(timeoutError?.code, "ETIMEOUT");
+    assert.deepEqual(
+      { tableCloseCalls, connectionCloseCalls },
+      { tableCloseCalls: 0, connectionCloseCalls: 0 },
+      "neither handle may close while openTable is still settling",
+    );
+
+    let retrySettled = false;
+    retryInit = db.init().finally(() => { retrySettled = true; });
+    await nextTurn();
+    assert.equal(retrySettled, false);
+    release.resolve();
+    await timeoutError.settlement;
+    assert.deepEqual({ tableCloseCalls, connectionCloseCalls }, { tableCloseCalls: 1, connectionCloseCalls: 1 });
+    await retryInit;
+    await db.shutdown();
+  });
+
+  it("does not swallow or overtake a timed-out schema read during initialization", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-schema-timeout-");
+    const dbPath = join(root, "agent-a");
+    const seed = new MemoryDB(dbPath, VECTOR_DIM);
+    await seed.init();
+    await seed.shutdown();
+
+    const db = new MemoryDB(dbPath, VECTOR_DIM);
+    const release = deferred();
+    const rawResolved = deferred();
+    const originalRead = db._read.bind(db);
+    const labelsAfterTimeout = [];
+    let injected = false;
+    let firstInit;
+
+    db._read = (promise, label) => {
+      if (!injected && label === "MemoryDB.schema") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async (value) => {
+          rawResolved.resolve();
+          await release.promise;
+          return value;
+        });
+        return Promise.reject(new TimeoutError(label, 1, settlement));
+      }
+      if (injected) labelsAfterTimeout.push(label);
+      return originalRead(promise, label);
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await Promise.allSettled([firstInit].filter(Boolean));
+      db._read = originalRead;
+      await settleCleanup(db.shutdown(), "schema-timeout-shutdown");
+    });
+
+    let initResult;
+    firstInit = db.init().then(
+      () => { initResult = { ok: true }; },
+      (error) => { initResult = { ok: false, error }; },
+    );
+    await rawResolved.promise;
+    await nextTurn();
+    assert.equal(initResult?.error?.code, "ETIMEOUT", "schema timeout must fail the generation promptly");
+    assert.deepEqual(labelsAfterTimeout, [], "no later init read may overtake the raw schema settlement");
+
+    release.resolve();
+    await initResult.error.settlement;
+    db._read = originalRead;
+    await db.init();
+    await db.shutdown();
+  });
+
+  it("does not swallow or overtake a timed-out schema migration write", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-migration-timeout-");
+    const dbPath = join(root, "agent-a");
+    const lancedb = await import("@lancedb/lancedb");
+    const fixture = await lancedb.connect(dbPath);
+    const legacyTable = await fixture.createTable("memories", [{
+      id: "__legacy__",
+      text: "legacy",
+      vector: Array(VECTOR_DIM).fill(0),
+      importance: 0,
+      category: "other",
+      createdAt: 0,
+    }]);
+    await legacyTable.close();
+    await fixture.close();
+
+    const db = new MemoryDB(dbPath, VECTOR_DIM);
+    const release = deferred();
+    const rawResolved = deferred();
+    const originalWrite = db._write.bind(db);
+    const labelsAfterTimeout = [];
+    let injected = false;
+    let firstInit;
+
+    db._write = (promise, label) => {
+      if (!injected && label.startsWith("MemoryDB.addColumns:")) {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async (value) => {
+          rawResolved.resolve();
+          await release.promise;
+          return value;
+        });
+        return Promise.reject(new TimeoutError(label, 1, settlement));
+      }
+      if (injected) labelsAfterTimeout.push(label);
+      return originalWrite(promise, label);
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await Promise.allSettled([firstInit].filter(Boolean));
+      db._write = originalWrite;
+      await settleCleanup(db.shutdown(), "migration-timeout-shutdown");
+    });
+
+    let initResult;
+    firstInit = db.init().then(
+      () => { initResult = { ok: true }; },
+      (error) => { initResult = { ok: false, error }; },
+    );
+    await rawResolved.promise;
+    await nextTurn();
+    assert.equal(initResult?.error?.code, "ETIMEOUT", "migration timeout must fail the generation promptly");
+    assert.deepEqual(labelsAfterTimeout, [], "later migration writes may not overtake raw addColumns settlement");
+
+    release.resolve();
+    await initResult.error.settlement;
+    db._write = originalWrite;
+    await db.init();
+    await db.shutdown();
+  });
+
+  it("cleans a late-created table and its schema sentinel before retry", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-create-table-timeout-");
+    const dbPath = join(root, "agent-a");
+    const db = new MemoryDB(dbPath, VECTOR_DIM);
+    const release = deferred();
+    const rawResolved = deferred();
+    const originalWrite = MemoryDB.prototype._write.bind(null);
+    let connectionCloseCalls = 0;
+    let tableCloseCalls = 0;
+    let injected = false;
+    let lateTable;
+    let firstInit;
+    let retryInit;
+
+    db._write = async (promise, label) => {
+      if (!injected && label === "MemoryDB.createTable") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async (table) => {
+          lateTable = closeTrackingProxy(table, () => { tableCloseCalls++; });
+          rawResolved.resolve();
+          await release.promise;
+          return lateTable;
+        });
+        throw new TimeoutError(label, 1, settlement);
+      }
+      const value = await originalWrite(promise, label);
+      return label === "MemoryDB.connect"
+        ? closeTrackingProxy(value, () => { connectionCloseCalls++; })
+        : value;
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await Promise.allSettled([firstInit, retryInit].filter(Boolean));
+      if (lateTable && tableCloseCalls === 0) {
+        await settleCleanup(lateTable.close(), "late-created-table-handle");
+      }
+      await settleCleanup(db.shutdown(), "late-create-shutdown");
+    });
+
+    let timeoutError;
+    firstInit = db.init().catch((error) => { timeoutError = error; });
+    await rawResolved.promise;
+    await firstInit;
+    assert.equal(timeoutError?.code, "ETIMEOUT");
+    assert.deepEqual(
+      { tableCloseCalls, connectionCloseCalls },
+      { tableCloseCalls: 0, connectionCloseCalls: 0 },
+      "createTable cleanup must wait for the raw mutation",
+    );
+
+    let retrySettled = false;
+    retryInit = db.init().finally(() => { retrySettled = true; });
+    await nextTurn();
+    assert.equal(retrySettled, false);
+    release.resolve();
+    await timeoutError.settlement;
+    assert.deepEqual({ tableCloseCalls, connectionCloseCalls }, { tableCloseCalls: 1, connectionCloseCalls: 1 });
+    await retryInit;
+    assert.equal(await db.table.countRows(), 0, "late create cleanup must remove the schema sentinel");
+    await db.shutdown();
+  });
+
+  it("repairs a table when late createTable settlement rejects after mutation", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-create-table-late-reject-");
+    const dbPath = join(root, "agent-a");
+    const db = new MemoryDB(dbPath, VECTOR_DIM);
+    const release = deferred();
+    const rawMutated = deferred();
+    const lateCreateError = new Error("injected post-mutation create failure");
+    const originalWrite = MemoryDB.prototype._write.bind(null);
+    let injected = false;
+
+    db._write = async (promise, label) => {
+      if (!injected && label === "MemoryDB.createTable") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async () => {
+          rawMutated.resolve();
+          await release.promise;
+          throw lateCreateError;
+        });
+        throw new TimeoutError(label, 1, settlement);
+      }
+      return originalWrite(promise, label);
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await settleCleanup(db.shutdown(), "late-create-reject-shutdown");
+    });
+
+    let timeoutError;
+    await db.init().catch((error) => { timeoutError = error; });
+    await rawMutated.promise;
+    assert.equal(timeoutError?.code, "ETIMEOUT");
+    release.resolve();
+    await assert.rejects(timeoutError.settlement, (error) => error === lateCreateError);
+
+    await db.init();
+    assert.equal(await db.table.countRows(), 0, "late-rejection recovery removes the bootstrap sentinel");
+    await db.shutdown();
+  });
+
+  it("keeps a timed-out schema-row delete serialized through settlement and retry", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-schema-delete-timeout-");
+    const dbPath = join(root, "agent-a");
+    const db = new MemoryDB(dbPath, VECTOR_DIM);
+    const release = deferred();
+    const rawResolved = deferred();
+    const originalWrite = MemoryDB.prototype._write.bind(null);
+    let connectionCloseCalls = 0;
+    let tableCloseCalls = 0;
+    let injected = false;
+    let firstInit;
+    let retryInit;
+
+    db._write = async (promise, label) => {
+      if (!injected && label === "MemoryDB.deleteSchemaRow") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then(async (value) => {
+          rawResolved.resolve();
+          await release.promise;
+          return value;
+        });
+        throw new TimeoutError(label, 1, settlement);
+      }
+      const value = await originalWrite(promise, label);
+      if (label === "MemoryDB.connect") {
+        return closeTrackingProxy(value, () => { connectionCloseCalls++; });
+      }
+      if (label === "MemoryDB.createTable") {
+        return closeTrackingProxy(value, () => { tableCloseCalls++; });
+      }
+      return value;
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await Promise.allSettled([firstInit, retryInit].filter(Boolean));
+      await settleCleanup(db.shutdown(), "schema-delete-shutdown");
+    });
+
+    let timeoutError;
+    firstInit = db.init().catch((error) => { timeoutError = error; });
+    await rawResolved.promise;
+    await firstInit;
+    assert.equal(timeoutError?.code, "ETIMEOUT");
+    assert.deepEqual({ tableCloseCalls, connectionCloseCalls }, { tableCloseCalls: 0, connectionCloseCalls: 0 });
+
+    let retrySettled = false;
+    retryInit = db.init().finally(() => { retrySettled = true; });
+    await nextTurn();
+    assert.equal(retrySettled, false, "retry cannot overtake the raw schema-row deletion");
+    release.resolve();
+    await timeoutError.settlement;
+    assert.deepEqual({ tableCloseCalls, connectionCloseCalls }, { tableCloseCalls: 1, connectionCloseCalls: 1 });
+    await retryInit;
+    assert.equal(await db.table.countRows(), 0);
+    await db.shutdown();
+  });
+
+  it("serializes the final schema refresh timeout before handle cleanup", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-final-schema-timeout-");
+    const dbPath = join(root, "agent-a");
+    const seed = new MemoryDB(dbPath, VECTOR_DIM);
+    await seed.init();
+    await seed.shutdown();
+
+    const db = new MemoryDB(dbPath, VECTOR_DIM);
+    const release = deferred();
+    const rawResolved = deferred();
+    const originalRead = MemoryDB.prototype._read.bind(null);
+    const originalWrite = MemoryDB.prototype._write.bind(null);
+    let schemaCalls = 0;
+    let connectionCloseCalls = 0;
+    let tableCloseCalls = 0;
+    let firstInit;
+    let retryInit;
+
+    db._write = async (promise, label) => {
+      const value = await originalWrite(promise, label);
+      if (label === "MemoryDB.connect") {
+        return closeTrackingProxy(value, () => { connectionCloseCalls++; });
+      }
+      if (label === "MemoryDB.openTable") {
+        return closeTrackingProxy(value, () => { tableCloseCalls++; });
+      }
+      return value;
+    };
+    db._read = (promise, label) => {
+      if (label === "MemoryDB.schema" && ++schemaCalls === 2) {
+        const settlement = Promise.resolve(promise).then(async (value) => {
+          rawResolved.resolve();
+          await release.promise;
+          return value;
+        });
+        return Promise.reject(new TimeoutError(label, 1, settlement));
+      }
+      return originalRead(promise, label);
+    };
+
+    t.after(async () => {
+      release.resolve();
+      await Promise.allSettled([firstInit, retryInit].filter(Boolean));
+      await settleCleanup(db.shutdown(), "final-schema-shutdown");
+    });
+
+    let timeoutError;
+    firstInit = db.init().catch((error) => { timeoutError = error; });
+    await rawResolved.promise;
+    await firstInit;
+    assert.equal(timeoutError?.code, "ETIMEOUT");
+    assert.deepEqual({ tableCloseCalls, connectionCloseCalls }, { tableCloseCalls: 0, connectionCloseCalls: 0 });
+
+    let retrySettled = false;
+    retryInit = db.init().finally(() => { retrySettled = true; });
+    await nextTurn();
+    assert.equal(retrySettled, false);
+    release.resolve();
+    await timeoutError.settlement;
+    assert.deepEqual({ tableCloseCalls, connectionCloseCalls }, { tableCloseCalls: 1, connectionCloseCalls: 1 });
+    await retryInit;
+    await db.shutdown();
+  });
+
+  it("surfaces a late handle-close failure with agent context and still closes the capability", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-late-close-error-");
+    const dbPath = join(root, "agent-a");
+    const closeError = new Error("injected late connection close failure");
+    const originalWrite = MemoryDB.prototype._write.bind(null);
+    let rawConnection;
+    let capabilityCloseCalls = 0;
+    let injected = false;
+    const capability = {
+      path: dbPath,
+      assertOpen() {},
+      close() { capabilityCloseCalls++; },
+    };
+    const db = new MemoryDB(dbPath, VECTOR_DIM, null, {
+      directoryCapability: capability,
+      secureDirectoryRequired: true,
+    });
+
+    db._write = async (promise, label) => {
+      if (!injected && label === "MemoryDB.connect") {
+        injected = true;
+        const settlement = Promise.resolve(promise).then((connection) => {
+          rawConnection = connection;
+          return new Proxy(connection, {
+            get(target, property) {
+              if (property === "close") return async () => { throw closeError; };
+              const value = Reflect.get(target, property, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        });
+        throw new TimeoutError(label, 1, settlement);
+      }
+      return originalWrite(promise, label);
+    };
+
+    t.after(async () => {
+      if (rawConnection) {
+        try {
+          await rawConnection.close();
+        } catch (error) {
+          assert.fail(`raw fixture connection cleanup failed: ${error.message}`);
+        }
+      }
+      await settleCleanup(db.shutdown(), "late-close-error-shutdown");
+    });
+
+    let timeoutError;
+    await db.init().catch((error) => { timeoutError = error; });
+    assert.equal(timeoutError?.code, "ETIMEOUT");
+    await assert.rejects(timeoutError.settlement, (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, closeError));
+      assert.match(error.message, /agent-a/);
+      return true;
+    });
+    await assert.rejects(() => db.init(), (error) => {
+      assert.ok(errorTreeIncludes(error, closeError), "retry reports the retained cleanup failure");
+      assert.match(error.message, /agent-a/);
+      return true;
+    });
+    await assert.rejects(() => db.shutdown(), (error) => {
+      assert.ok(errorTreeIncludes(error, closeError), "shutdown reports the retained cleanup failure");
+      return true;
+    });
+    assert.equal(capabilityCloseCalls, 1, "terminal shutdown releases the directory capability after reporting cleanup");
+  });
+
+  it("removes a bootstrap schema sentinel left by an earlier writable initialization", async (t) => {
+    const root = makeTempDir(t, "plur1bus-b12-schema-sentinel-recovery-");
+    const dbPath = join(root, "agent-a");
+    const seed = new MemoryDB(dbPath, VECTOR_DIM);
+    await seed.init();
+    await seed.table.add([seed.normalizeEntryForTable({
+      id: "__schema__",
+      text: "",
+      summary: "",
+      vector: Array(VECTOR_DIM).fill(0),
+      importance: 0,
+      category: "other",
+      createdAt: 0,
+    })]);
+    assert.equal(await seed.table.countRows(), 1);
+    await seed.shutdown();
+
+    const recovered = new MemoryDB(dbPath, VECTOR_DIM);
+    await recovered.init();
+    assert.equal(await recovered.table.countRows(), 0, "writable init repairs a leftover bootstrap row idempotently");
+    await recovered.shutdown();
   });
 
   it("uses supported table.update without delete/add and preserves immutable and untouched fields", async (t) => {
@@ -356,6 +1076,11 @@ describe("MemoryDB lifecycle and atomic updates", { concurrency: false }, () => 
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(shutdownResult, undefined, "shutdown must not settle at an operational timeout boundary");
     assert.equal(db.isShutdown, false, "terminal state is set only after raw close settlement");
+    await assert.rejects(
+      () => db.init(),
+      /shutting down/i,
+      "a retained direct reference cannot start initialization during shutdown",
+    );
 
     closeGate.resolve();
     await shutdown;

@@ -191,6 +191,7 @@ import {
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
+import { safeDebug } from "./lib/safe-logging.js";
 import { safeWarnLlmFailure } from "./lib/llm-failure.js";
 import { throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
@@ -766,6 +767,16 @@ const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fi
 // Operation-level timeouts for LanceDB calls (P0 Performance-Audit K3).
 const LANCEDB_READ_TIMEOUT_MS = 10_000;
 const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
+const INIT_LATE_HANDLE_KIND = Symbol("MemoryDB.initLateHandleKind");
+
+function logMemoryDbDebug(logger, scope, error, dbPath) {
+  try {
+    safeDebug(logger, scope, error, { agent: basename(dbPath) });
+    return { ok: true };
+  } catch (loggingError) {
+    return { ok: false, error: loggingError };
+  }
+}
 
 async function waitForTimeoutSettlement(error) {
   let currentError = error;
@@ -849,6 +860,8 @@ class MemoryDB {
     this.table = null;
     this.initPromise = null;
     this.shutdownPromise = null;
+    this.pendingInitSettlements = new Set();
+    this.initCleanupErrors = [];
     this.schemaFieldNames = null;
     this._writeCounter = 0;
     this._reindexing = false;
@@ -862,7 +875,20 @@ class MemoryDB {
     if (this.isShutdown) return;
     this.isShuttingDown = true;
     const shutdownPromise = (async () => {
-      const errors = await this._closeHandles("shutdown");
+      const errors = [];
+      const activeInit = this.initPromise;
+      if (activeInit) {
+        try {
+          await activeInit;
+        } catch (error) {
+          const logged = logMemoryDbDebug(this.logger, "MemoryDB.shutdown.activeInit", error, this.dbPath);
+          if (!logged.ok) errors.push(logged.error);
+        }
+      }
+      await this._drainPendingInitSettlements("shutdown");
+      errors.push(...this.initCleanupErrors);
+      this.initCleanupErrors = [];
+      errors.push(...await this._closeHandles("shutdown"));
       try {
         this.directoryCapability?.close();
       } catch (error) {
@@ -875,7 +901,7 @@ class MemoryDB {
       if (errors.length > 0) {
         throw new AggregateError(
           errors,
-          `MemoryDB shutdown failed for ${this.dbPath} (${errors.length} close error${errors.length === 1 ? "" : "s"})`,
+          `MemoryDB shutdown failed for ${this.dbPath} (${errors.length} lifecycle error${errors.length === 1 ? "" : "s"})`,
         );
       }
     })();
@@ -886,6 +912,160 @@ class MemoryDB {
       this.isShuttingDown = false;
       if (this.shutdownPromise === shutdownPromise) this.shutdownPromise = null;
     }
+  }
+
+  async _acquireInitHandle(promise, label, kind, readOnly = this.readOnly) {
+    try {
+      return readOnly
+        ? await this._read(promise, label)
+        : await this._write(promise, label);
+    } catch (error) {
+      if (error instanceof TimeoutError && error.settlement) {
+        error[INIT_LATE_HANDLE_KIND] = kind;
+      }
+      throw error;
+    }
+  }
+
+  async _cleanupTimedOutInitHandles({
+    rawStatus,
+    rawValue,
+    lateHandleKind,
+    table,
+    db,
+  }) {
+    const errors = [];
+    const tables = new Set(table ? [table] : []);
+    const connections = new Set(db ? [db] : []);
+    let createdTable = null;
+
+    if (rawStatus === "fulfilled") {
+      if (lateHandleKind === "connection" && rawValue) connections.add(rawValue);
+      if (lateHandleKind === "table" && rawValue) tables.add(rawValue);
+      if (lateHandleKind === "created-table" && rawValue) {
+        createdTable = rawValue;
+        tables.add(rawValue);
+      }
+    }
+
+    if (lateHandleKind === "created-table") {
+      if (!createdTable && db) {
+        try {
+          const names = await db.tableNames();
+          if (names.includes(TABLE_NAME)) {
+            createdTable = await db.openTable(TABLE_NAME);
+            tables.add(createdTable);
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (createdTable) {
+        try {
+          await createdTable.delete('id = "__schema__"');
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+    }
+
+    for (const currentTable of tables) {
+      try {
+        if (typeof currentTable?.close === "function") await currentTable.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    for (const connection of connections) {
+      try {
+        if (typeof connection?.close === "function") await connection.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    return errors;
+  }
+
+  _deferTimedOutInitCleanup(error) {
+    if (!(error instanceof TimeoutError) || !error.settlement) return false;
+    const rawSettlement = error.settlement;
+    const lateHandleKind = error[INIT_LATE_HANDLE_KIND] || null;
+    const table = this.table;
+    const db = this.db;
+    this.table = null;
+    this.db = null;
+    this.schemaFieldNames = null;
+
+    const completion = (async () => {
+      let rawStatus = "fulfilled";
+      let rawValue;
+      let rawError;
+      try {
+        rawValue = await rawSettlement;
+      } catch (settlementError) {
+        rawStatus = "rejected";
+        rawError = settlementError;
+      }
+      const cleanupErrors = await this._cleanupTimedOutInitHandles({
+        rawStatus,
+        rawValue,
+        lateHandleKind,
+        table,
+        db,
+      });
+      return { rawStatus, rawValue, rawError, cleanupErrors };
+    })();
+    const settlement = completion.then((outcome) => {
+      if (outcome.rawError && outcome.cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [outcome.rawError, ...outcome.cleanupErrors],
+          `MemoryDB timed-out initialization and late cleanup failed for ${this.dbPath}`,
+        );
+      }
+      if (outcome.cleanupErrors.length > 0) {
+        throw new AggregateError(
+          outcome.cleanupErrors,
+          `MemoryDB timed-out initialization cleanup failed for ${this.dbPath}`,
+        );
+      }
+      if (outcome.rawError) throw outcome.rawError;
+      return outcome.rawValue;
+    });
+    settlement.then(
+      () => {},
+      (settlementError) => {
+        logMemoryDbDebug(this.logger, "MemoryDB.init.lateSettlement", settlementError, this.dbPath);
+      },
+    );
+    const record = { completion };
+    this.pendingInitSettlements.add(record);
+    completion.then(
+      (outcome) => {
+        if (outcome.cleanupErrors.length === 0) this.pendingInitSettlements.delete(record);
+      },
+      (completionError) => {
+        logMemoryDbDebug(this.logger, "MemoryDB.init.cleanupCompletion", completionError, this.dbPath);
+      },
+    );
+    error.settlement = settlement;
+    return true;
+  }
+
+  async _drainPendingInitSettlements(context) {
+    const records = [...this.pendingInitSettlements];
+    if (records.length === 0) return [];
+    const outcomes = await Promise.all(records.map((record) => record.completion));
+    for (const record of records) this.pendingInitSettlements.delete(record);
+    const cleanupErrors = outcomes.flatMap((outcome) => outcome.cleanupErrors);
+    if (cleanupErrors.length > 0) {
+      const aggregate = new AggregateError(
+        cleanupErrors,
+        `MemoryDB ${context} blocked by timed-out initialization cleanup for ${this.dbPath}`,
+      );
+      this.initCleanupErrors.push(aggregate);
+      return [aggregate];
+    }
+    return [];
   }
 
   async _closeHandles(_context) {
@@ -930,7 +1110,9 @@ class MemoryDB {
   }
 
   _assertTrustedPath() {
-    if (this.isShutdown) throw new Error(`MemoryDB is shutdown: ${this.dbPath}`);
+    if (this.isShuttingDown || this.isShutdown) {
+      throw new Error(`MemoryDB is ${this.isShutdown ? "shutdown" : "shutting down"}: ${this.dbPath}`);
+    }
     this.pathGuard?.();
     this.directoryCapability?.assertOpen();
   }
@@ -1029,6 +1211,13 @@ class MemoryDB {
     if (this.initPromise) return this.initPromise;
     const generationPromise = (async () => {
       try {
+        await this._drainPendingInitSettlements("retry");
+        if (this.initCleanupErrors.length > 0) {
+          throw new AggregateError(
+            [...this.initCleanupErrors],
+            `MemoryDB initialization blocked by prior cleanup failure for ${this.dbPath}`,
+          );
+        }
         this._assertTrustedPath();
         if (this.readOnly && this.secureDirectoryRequired && !this.directoryCapability) return false;
         if (this.readOnly && !this.secureDirectoryRequired && !existsSync(this.dbPath)) return false;
@@ -1036,17 +1225,21 @@ class MemoryDB {
         this._assertTrustedPath();
         this._beforeLancePathOperation("connect");
         const lancePath = this._lancePath();
-        this.db = this.readOnly
-          ? await this._read(lancedb.connect(lancePath), "MemoryDB.connect")
-          : await this._write(lancedb.connect(lancePath), "MemoryDB.connect");
+        this.db = await this._acquireInitHandle(
+          lancedb.connect(lancePath),
+          "MemoryDB.connect",
+          "connection",
+        );
       this._assertTrustedPath();
       const tables = await this._read(this.db.tableNames(), "MemoryDB.tableNames");
       if (tables.includes(TABLE_NAME)) {
         this._assertTrustedPath();
         this._beforeLancePathOperation("openTable");
-        this.table = this.readOnly
-          ? await this._read(this.db.openTable(TABLE_NAME), "MemoryDB.openTable")
-          : await this._write(this.db.openTable(TABLE_NAME), "MemoryDB.openTable");
+        this.table = await this._acquireInitHandle(
+          this.db.openTable(TABLE_NAME),
+          "MemoryDB.openTable",
+          "table",
+        );
         this._assertTrustedPath();
         if (this.readOnly) {
           await this.refreshSchemaFields();
@@ -1060,6 +1253,7 @@ class MemoryDB {
         try {
           schema = await this._read(this.table.schema(), "MemoryDB.schema");
         } catch (e) {
+          if (e instanceof TimeoutError) throw e;
           console.error(`[memory-lancedb-namespaced] schema read failed for ${this.dbPath}: ${e.message}`);
         }
 
@@ -1125,6 +1319,7 @@ class MemoryDB {
                 await this._write(this.table.addColumns([col]), `MemoryDB.addColumns:${col.name}`);
               }
             } catch (e) {
+              if (e instanceof TimeoutError) throw e;
               console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${e.message}`);
             }
           }
@@ -1141,7 +1336,7 @@ class MemoryDB {
       } else {
         this._assertTrustedPath();
         this._beforeLancePathOperation("createTable");
-        this.table = await this._write(this.db.createTable(TABLE_NAME, [
+        this.table = await this._acquireInitHandle(this.db.createTable(TABLE_NAME, [
           {
             id: "__schema__",
             type: "memory",
@@ -1190,12 +1385,17 @@ class MemoryDB {
             updatedAt: 0,
             workspaceKey: "",
           },
-        ]), "MemoryDB.createTable");
-        this._assertTrustedPath();
-        await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
+        ]), "MemoryDB.createTable", "created-table", false);
       }
+        if (!this.readOnly) {
+          this._assertTrustedPath();
+          // A prior process may have stopped after table creation but before
+          // deleting the bootstrap row. Recovery is safe and idempotent.
+          await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
+        }
         await this.refreshSchemaFields();
       } catch (error) {
+        if (this._deferTimedOutInitCleanup(error)) throw error;
         const cleanupErrors = await this._closeHandles("failed-init");
         if (cleanupErrors.length > 0) {
           throw new AggregateError(

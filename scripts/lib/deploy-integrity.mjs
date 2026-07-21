@@ -27,6 +27,7 @@ export const DEPLOY_FILES = [
   "lib/runtime-shutdown.js",
   "lib/recall-budget.js",
   "lib/with-timeout.js",
+  "lib/safe-logging.js",
   "lib/llm-call.js",
   "lib/llm-failure.js",
   "lib/llm-router.js",
