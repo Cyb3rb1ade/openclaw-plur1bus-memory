@@ -4,7 +4,7 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { redactError, safeWarn, safeDebug, trySafeWarn } from "../lib/safe-logging.js";
+import { redactError, safeWarn, safeDebug, settleSafeWarning, trySafeWarn } from "../lib/safe-logging.js";
 import { fetchWithTimeout, fetchWithRetry } from "../lib/fetch-with-timeout.js";
 import { validateInput, validateCommandArgs, INPUT_LIMITS } from "../lib/input-limits.js";
 
@@ -30,6 +30,17 @@ describe("redactError", () => {
     const r = redactError("simple string error");
     assert.strictEqual(r.message, "simple string error");
   });
+
+  it("does not invoke hostile error accessors or coercion hooks", () => {
+    const hostile = {
+      get message() { throw new Error("message getter must not run"); },
+      get stack() { throw new Error("stack getter must not run"); },
+      toString() { throw new Error("coercion must not run"); },
+    };
+
+    assert.doesNotThrow(() => redactError(hostile));
+    assert.deepEqual(redactError(hostile), { message: "non-standard error", stack: "" });
+  });
 });
 
 describe("trySafeWarn", () => {
@@ -41,6 +52,38 @@ describe("trySafeWarn", () => {
 
     assert.strictEqual(result.ok, false);
     assert.strictEqual(result.error, loggerError);
+  });
+
+  it("observes a rejecting logger thenable without changing synchronous control flow", async () => {
+    const loggerError = new Error("injected async warning transport failure");
+    let rejectionHandlerAttached = false;
+    const result = trySafeWarn({
+      warn() {
+        return {
+          then(_resolve, reject) {
+            rejectionHandlerAttached = true;
+            reject(loggerError);
+          },
+        };
+      },
+    }, "test-warning", new Error("original operation failed"));
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.pending, true);
+    assert.strictEqual(typeof result.settlement?.then, "function");
+    assert.strictEqual(rejectionHandlerAttached, true, "the rejection handler is attached before returning");
+    assert.deepEqual(await result.settlement, { ok: false, error: loggerError });
+  });
+
+  it("bounds a logger thenable that never settles", async () => {
+    const result = trySafeWarn({
+      warn() { return { then() {} }; },
+    }, "test-warning", new Error("original operation failed"));
+
+    const settled = await settleSafeWarning(result, { timeoutMs: 5 });
+
+    assert.strictEqual(settled.ok, false);
+    assert.match(settled.error.message, /cleanup deadline/);
   });
 });
 

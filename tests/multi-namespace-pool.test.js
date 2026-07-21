@@ -299,6 +299,85 @@ describe("MultiNamespacePool", () => {
     await assert.doesNotReject(() => pool.shutdown(), "terminal retry remains an idempotent no-op");
   });
 
+  it("finishes terminal cleanup when namespace logger errors have hostile accessors", async () => {
+    const childError = new Error("injected hostile namespace child failure");
+    const loggerError = new Error("hidden hostile namespace logger failure");
+    Object.defineProperty(loggerError, "message", {
+      configurable: true,
+      get() { throw new Error("poisoned namespace logger message getter"); },
+    });
+    class FailingAgentDbPool extends FakeAgentDbPool {
+      async shutdown() {
+        this.isShutdown = true;
+        throw childError;
+      }
+    }
+    const pool = new MultiNamespacePool(namedLayout({
+      activeWriteNamespace: "lancedb-new",
+      activeRecallNamespaces: ["lancedb-new"],
+      legacyReadOnlyNamespaces: ["lancedb-old"],
+      crossNamespaceRecall: true,
+    }), 384, FailingAgentDbPool, {
+      warn() { throw loggerError; },
+    });
+    pool.getReadDbs("agent-a");
+    const children = [...pool._pools.values()];
+    const baseCapability = pool._baseCapability;
+
+    await assert.rejects(pool.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, childError));
+      assert.ok(errorTreeIncludes(error, loggerError));
+      return true;
+    });
+    assert.deepEqual(children.map((child) => child.isShutdown), [true, true]);
+    assert.equal(pool._pools.size, 0);
+    assert.equal(baseCapability.closed, true);
+    assert.equal(pool._baseCapability, null);
+  });
+
+  it("observes rejecting namespace logger thenables and still closes the root", async () => {
+    const childError = new Error("injected async namespace child failure");
+    const loggerError = new Error("injected async namespace logger failure");
+    let rejectionHandlerAttached = false;
+    class FailingAgentDbPool extends FakeAgentDbPool {
+      async shutdown() {
+        this.isShutdown = true;
+        throw childError;
+      }
+    }
+    const pool = new MultiNamespacePool(namedLayout({
+      activeWriteNamespace: "lancedb-new",
+      activeRecallNamespaces: ["lancedb-new"],
+      legacyReadOnlyNamespaces: ["lancedb-old"],
+      crossNamespaceRecall: true,
+    }), 384, FailingAgentDbPool, {
+      warn() {
+        return {
+          then(_resolve, reject) {
+            rejectionHandlerAttached = true;
+            reject(loggerError);
+          },
+        };
+      },
+    });
+    pool.getReadDbs("agent-a");
+    const children = [...pool._pools.values()];
+    const baseCapability = pool._baseCapability;
+
+    await assert.rejects(pool.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, childError));
+      assert.ok(errorTreeIncludes(error, loggerError));
+      return true;
+    });
+    assert.equal(rejectionHandlerAttached, true);
+    assert.deepEqual(children.map((child) => child.isShutdown), [true, true]);
+    assert.equal(pool._pools.size, 0);
+    assert.equal(baseCapability.closed, true);
+    assert.equal(pool._baseCapability, null);
+  });
+
   it("rejects child creation and leased work after terminal shutdown", async () => {
     const pool = new MultiNamespacePool(namedLayout({ activeWriteNamespace: "lancedb-new" }), 384, FakeAgentDbPool);
 

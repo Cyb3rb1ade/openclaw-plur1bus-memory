@@ -207,4 +207,43 @@ describe("emitRetrievalLedger", () => {
     assert.strictEqual(outcome.loggingError, loggerError);
     assert.deepEqual(selected.map((item) => item.entry.id), ["selected"]);
   });
+
+  it("observes asynchronous callback and warning failures without rejecting", async () => {
+    const callbackError = new Error("injected async retrieval ledger failure");
+    const loggerError = new Error("injected async retrieval warning failure");
+    let callbackRejectionAttached = false;
+    let warningRejectionAttached = false;
+
+    const outcome = emitRetrievalLedger({
+      retrievalLogger() {
+        return {
+          then(_resolve, reject) {
+            callbackRejectionAttached = true;
+            reject(callbackError);
+          },
+        };
+      },
+      logger: {
+        warn() {
+          return {
+            then(_resolve, reject) {
+              warningRejectionAttached = true;
+              reject(loggerError);
+            },
+          };
+        },
+      },
+      entry: { agentId: "agent-a", resultsCount: 0, selectedIds: [] },
+    });
+
+    assert.strictEqual(outcome.ok, true);
+    assert.strictEqual(outcome.pending, true);
+    assert.strictEqual(callbackRejectionAttached, true);
+    assert.deepEqual(await outcome.settlement, {
+      ok: false,
+      error: callbackError,
+      loggingError: loggerError,
+    });
+    assert.strictEqual(warningRejectionAttached, true);
+  });
 });

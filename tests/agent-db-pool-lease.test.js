@@ -276,6 +276,101 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
     await assert.doesNotReject(() => pool.shutdown(), "terminal retry remains an idempotent no-op");
   });
 
+  it("finishes terminal cleanup when the thrown logger value has hostile accessors", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-shutdown-hostile-logger-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const firstCloseError = new Error("injected first hostile shutdown close failure");
+    const secondCloseError = new Error("injected second hostile shutdown close failure");
+    const loggerError = new Error("hidden hostile logger failure");
+    Object.defineProperty(loggerError, "message", {
+      configurable: true,
+      get() { throw new Error("poisoned logger message getter"); },
+    });
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      warn() { throw loggerError; },
+    });
+    const firstDb = pool.getDb("agent-hostile-a");
+    const secondDb = pool.getDb("agent-hostile-b");
+    const agentCapabilities = [firstDb.directoryCapability, secondDb.directoryCapability];
+    const baseCapability = pool.baseDirectoryCapability;
+    firstDb.table = { close: async () => { throw firstCloseError; } };
+    firstDb.db = { close: async () => {} };
+    secondDb.table = { close: async () => { throw secondCloseError; } };
+    secondDb.db = { close: async () => {} };
+
+    await assert.rejects(pool.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, firstCloseError));
+      assert.ok(errorTreeIncludes(error, secondCloseError));
+      assert.ok(errorTreeIncludes(error, loggerError));
+      return true;
+    });
+    assert.deepEqual(agentCapabilities.map((capability) => capability.closed), [true, true]);
+    assert.equal(baseCapability.closed, true);
+    assert.equal(pool.baseDirectoryCapability, null);
+    assert.equal(pool.dbs.entries().length, 0);
+  });
+
+  it("observes rejecting logger thenables while finishing terminal cleanup", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-shutdown-async-logger-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const closeError = new Error("injected async logger shutdown close failure");
+    const loggerError = new Error("injected async shutdown logger failure");
+    let rejectionHandlerAttached = false;
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      warn() {
+        return {
+          then(_resolve, reject) {
+            rejectionHandlerAttached = true;
+            reject(loggerError);
+          },
+        };
+      },
+    });
+    const db = pool.getDb("agent-async-logger");
+    const agentCapability = db.directoryCapability;
+    const baseCapability = pool.baseDirectoryCapability;
+    db.table = { close: async () => { throw closeError; } };
+    db.db = { close: async () => {} };
+
+    await assert.rejects(pool.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, closeError));
+      assert.ok(errorTreeIncludes(error, loggerError));
+      return true;
+    });
+    assert.equal(rejectionHandlerAttached, true);
+    assert.equal(agentCapability.closed, true);
+    assert.equal(baseCapability.closed, true);
+    assert.equal(pool.dbs.entries().length, 0);
+  });
+
+  it("bounds a non-settling logger and still completes terminal cleanup", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-shutdown-hung-logger-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const closeError = new Error("injected hung logger shutdown close failure");
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      warn() { return { then() {} }; },
+    });
+    const db = pool.getDb("agent-hung-logger");
+    const agentCapability = db.directoryCapability;
+    const baseCapability = pool.baseDirectoryCapability;
+    db.table = { close: async () => { throw closeError; } };
+    db.db = { close: async () => {} };
+
+    const startedAt = Date.now();
+    await assert.rejects(pool.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(errorTreeIncludes(error, closeError));
+      assert.ok(error.errors.some((nested) => /cleanup deadline/.test(nested.message)));
+      return true;
+    });
+    assert.ok(Date.now() - startedAt < 1_000, "logger timeout remains bounded");
+    assert.equal(agentCapability.closed, true);
+    assert.equal(baseCapability.closed, true);
+    assert.equal(pool.dbs.entries().length, 0);
+  });
+
   it("clears cached DBs and preserves DB plus logger failures when clear logging throws", async (t) => {
     const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-clear-logger-"));
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
@@ -370,5 +465,31 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
     });
     assert.equal(baseCapability.closed, true, "shutdown still closes the base capability");
     assert.equal(pool.dbs.entries().length, 0);
+  });
+
+  it("redacts late-settlement credentials before warning delivery", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-late-redaction-"));
+    t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+    const secret = "sk-1234567890abcdefghijklmn";
+    const warnings = [];
+    const rawSettlement = deferred();
+    const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
+      warn(message) { warnings.push(message); },
+    });
+    const timeoutError = new TimeoutError("MemoryDB.store", 15, rawSettlement.promise);
+
+    const operation = pool.withDb("agent-late-redaction", async (db) => {
+      db.shutdown = async () => { db.directoryCapability.close(); };
+      throw timeoutError;
+    });
+    await assert.rejects(operation, (error) => error === timeoutError);
+    const [lease] = [...pool.activeOperations];
+    rawSettlement.reject(new Error(`late transport failed token=${secret}`));
+    await lease;
+
+    assert.ok(warnings.length > 0);
+    assert.ok(warnings.every((warning) => !String(warning).includes(secret)));
+    assert.ok(warnings.some((warning) => String(warning).includes("[REDACTED]")));
+    await pool.shutdown();
   });
 });
