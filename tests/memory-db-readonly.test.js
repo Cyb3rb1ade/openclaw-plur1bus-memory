@@ -248,6 +248,36 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
+  it("does not close a lease that starts while clear is waiting", async (t) => {
+    const basePath = mkdtempSync(join(tmpdir(), "plur1bus-agent-pool-clear-lease-"));
+    t.after(() => rmSync(basePath, { recursive: true, force: true }));
+    const pool = new AgentDbPool(basePath, VECTOR_DIM);
+    let releaseFirst;
+    let markSecondStarted;
+    let releaseSecond;
+    const firstReleased = new Promise((resolve) => { releaseFirst = resolve; });
+    const secondStarted = new Promise((resolve) => { markSecondStarted = resolve; });
+    const secondReleased = new Promise((resolve) => { releaseSecond = resolve; });
+
+    const first = pool.withDb("agent-first", async () => firstReleased);
+    const clearing = pool.clear();
+    let secondDb = null;
+    const second = pool.withDb("agent-second", async (db) => {
+      secondDb = db;
+      markSecondStarted();
+      await secondReleased;
+    });
+
+    releaseFirst();
+    await first;
+    await clearing;
+    await secondStarted;
+    assert.equal(secondDb.isShutdown, false, "a post-clear lease must not be closed by the earlier clear");
+    releaseSecond();
+    await second;
+    await pool.shutdown();
+  });
+
   it("returns false without creating a missing agent path", async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-missing-"));
     const agentPath = join(root, "missing-agent");

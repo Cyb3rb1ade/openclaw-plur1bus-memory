@@ -1543,6 +1543,7 @@ class AgentDbPool {
       }
     });
     this.activeOperations = new Set();
+    this.clearPromise = null;
     this.shutdownPromise = null;
     this.isShutdown = false;
   }
@@ -1715,6 +1716,7 @@ class AgentDbPool {
   /** Compatibility accessor; production operations must prefer withDb(). */
   getDb(agentId) {
     if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
+    if (this.clearPromise) throw new Error("AgentDbPool is clearing; use withDb() after clear settles");
     const id = safeAgentId(agentId || "default");
     return this._getOrCreateDb(id);
   }
@@ -1728,6 +1730,8 @@ class AgentDbPool {
   async withDb(agentId, fn) {
     if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
     if (typeof fn !== "function") throw new TypeError("AgentDbPool.withDb requires a callback");
+    while (this.clearPromise) await this.clearPromise;
+    if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
     const id = safeAgentId(agentId || "default");
     let startLease;
     const startGate = new Promise((resolve) => { startLease = resolve; });
@@ -1781,6 +1785,7 @@ class AgentDbPool {
     if (this.isShutdown) return;
     this.isShutdown = true;
     const shutdownPromise = (async () => {
+      if (this.clearPromise) await this.clearPromise;
       await Promise.allSettled([...this.activeOperations]);
       const errors = [];
       for (const [agentId, db] of this.dbs.entries()) {
@@ -1821,27 +1826,37 @@ class AgentDbPool {
 
   /** Close cached DBs and release their directory capabilities while keeping the pool reusable. */
   async clear() {
-    await Promise.allSettled([...this.activeOperations]);
-    const errors = [];
-    for (const [agentId, db] of this.dbs.entries()) {
-      if (!db || typeof db.shutdown !== "function") continue;
-      try {
-        await db.shutdown();
-      } catch (error) {
-        const contextual = this._contextualizeDbError(agentId, "clear", error);
-        this.logger?.warn?.(`memory-lancedb-namespaced: ${contextual.message}`);
-        errors.push(contextual);
+    if (this.isShutdown) return this.shutdownPromise;
+    if (this.clearPromise) return this.clearPromise;
+    const clearPromise = (async () => {
+      await Promise.allSettled([...this.activeOperations]);
+      const errors = [];
+      for (const [agentId, db] of this.dbs.entries()) {
+        if (!db || typeof db.shutdown !== "function") continue;
+        try {
+          await db.shutdown();
+        } catch (error) {
+          const contextual = this._contextualizeDbError(agentId, "clear", error);
+          this.logger?.warn?.(`memory-lancedb-namespaced: ${contextual.message}`);
+          errors.push(contextual);
+        }
       }
-    }
+      try {
+        await this.dbs.awaitPendingEvictions();
+      } catch (error) {
+        if (error instanceof AggregateError) errors.push(...error.errors);
+        else errors.push(error);
+      }
+      this.dbs.clear();
+      if (errors.length > 0) {
+        throw new AggregateError(errors, `agent DB pool clear failures (${errors.length})`);
+      }
+    })();
+    this.clearPromise = clearPromise;
     try {
-      await this.dbs.awaitPendingEvictions();
-    } catch (error) {
-      if (error instanceof AggregateError) errors.push(...error.errors);
-      else errors.push(error);
-    }
-    this.dbs.clear();
-    if (errors.length > 0) {
-      throw new AggregateError(errors, `agent DB pool clear failures (${errors.length})`);
+      return await clearPromise;
+    } finally {
+      if (this.clearPromise === clearPromise) this.clearPromise = null;
     }
   }
 }
