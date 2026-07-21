@@ -106,3 +106,18 @@ Post-review focused gate: 122/122 across 20 suites, with no failures or skips.
 The serial adjacent configuration, runtime-config, default-LLM contract/caller,
 default-LLM runtime, and deploy-integrity gate exited 0. Lint, manifest JSON
 parsing, and the diff whitespace check also passed.
+
+## Second specification re-review closure
+
+The next independent B5 specification re-review reported Critical 0 /
+Important 2 / Minor 0. Both findings received isolated RED reproductions before
+their minimal fixes:
+
+| Finding | RED | Closure |
+|---|---|---|
+| I1 Descending Croner ranges passed validation | `5-1 3 * * *`, `0 3 * DEC-JAN *`, and `0 3 * * FRI-MON` were accepted. | Numeric and named range endpoints are resolved in their field domain and must be ascending; ascending numeric/month/day controls remain eligible. |
+| I2 Omitted Telegram accounts could invent or miss the root default | Routing-only `{ enabled, defaultTo }` invented `accountId: "default"`, while a redacted root `botToken: "***"` plus multiple named accounts was rejected. | Resolution now follows explicit valid `defaultAccount`, `accounts.default`, one sole named account, then a root account proven by supported root credential fields (`botToken`/`tokenFile`). Explicit missing accounts remain fail-closed. |
+
+The two account counterexamples passed 2/2 after the resolver change. The
+combined focused cron/bootstrap gate then passed 124/124 across 20 suites with
+no failures or skips.

@@ -157,6 +157,26 @@ describe("selectEnabledFeatureCronSpecs", () => {
         `${cron} must be ineligible when Croner rejects it`,
       );
     }
+
+    for (const cron of ["5-1 3 * * *", "0 3 * DEC-JAN *", "0 3 * * FRI-MON"]) {
+      const reversedRange = selectEnabledFeatureCronSpecs(sourceConfig({
+        skillMiner: { enabled: true, cron, timezone: "Europe/Berlin" },
+      }));
+      assert.ok(
+        !reversedRange.some((spec) => spec.feature === "skill-miner"),
+        `${cron} must be ineligible when its range is reversed`,
+      );
+    }
+
+    for (const cron of ["1-5 3 * * *", "0 3 * JAN-DEC *", "0 3 * * MON-FRI"]) {
+      const ascendingRange = selectEnabledFeatureCronSpecs(sourceConfig({
+        skillMiner: { enabled: true, cron, timezone: "Europe/Berlin" },
+      }));
+      assert.ok(
+        ascendingRange.some((spec) => spec.feature === "skill-miner"),
+        `${cron} must remain eligible when its range ascends`,
+      );
+    }
   });
 });
 
@@ -887,6 +907,56 @@ describe("deriveDeliveryFromChannelConfig", () => {
       channel: "telegram",
       to: "-100900",
       accountId: "primary",
+    });
+  });
+
+  it("does not invent a root default account from routing fields alone", () => {
+    const cfg = {
+      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+      channels: {
+        telegram: {
+          enabled: true,
+          defaultTo: "55736530",
+        },
+      },
+    };
+
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", cfg), null);
+  });
+
+  it("uses a proven redacted root account even when multiple named accounts exist", () => {
+    const cfg = {
+      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+      channels: {
+        telegram: {
+          enabled: true,
+          botToken: "***",
+          defaultTo: "55736530",
+          accounts: {
+            alpha: { enabled: true },
+            beta: { enabled: true },
+          },
+        },
+      },
+    };
+
+    assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", cfg), {
+      channel: "telegram",
+      to: "55736530",
+      accountId: "default",
+    });
+    assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", {
+      ...cfg,
+      channels: {
+        telegram: {
+          ...cfg.channels.telegram,
+          defaultAccount: "default",
+        },
+      },
+    }), {
+      channel: "telegram",
+      to: "55736530",
+      accountId: "default",
     });
   });
 
