@@ -6,12 +6,28 @@ import {
   deriveAgentDelivery,
   deriveDeliveryFromChannelConfig,
   selectAgentsForCronSetup,
+  selectEnabledFeatureCronSpecs,
   staggerPersonaEvolveSchedule,
 } from "../lib/setup/feature-cron-plan.js";
 
+const LEGACY_TWO_FEATURE_CRONS = REQUIRED_FEATURE_CRONS.filter(
+  (spec) => spec.feature === "persona-evolve" || spec.feature === "afterthought",
+);
+
 describe("REQUIRED_FEATURE_CRONS", () => {
-  it("declares persona-evolve (weekly, no delivery) and afterthought (every 30m, needs delivery)", () => {
-    assert.strictEqual(REQUIRED_FEATURE_CRONS.length, 2);
+  it("declares every explicitly provisionable feature job", () => {
+    assert.deepStrictEqual(
+      REQUIRED_FEATURE_CRONS.map((spec) => spec.feature),
+      [
+        "persona-evolve",
+        "afterthought",
+        "consolidate-daily",
+        "classify-recent",
+        "rem-dream",
+        "skill-miner",
+        "discover-semantic-links",
+      ],
+    );
     const personaEvolve = REQUIRED_FEATURE_CRONS.find((s) => s.name.includes("persona-evolve"));
     const afterthought = REQUIRED_FEATURE_CRONS.find((s) => s.name.includes("afterthought"));
     assert.ok(personaEvolve, "persona-evolve spec present");
@@ -31,6 +47,106 @@ describe("REQUIRED_FEATURE_CRONS", () => {
     assert.match(afterthought.message, /text/);
     assert.match(afterthought.message, /skipped/i);
     assert.match(afterthought.message, /NOTHING|nothing/);
+  });
+});
+
+describe("selectEnabledFeatureCronSpecs", () => {
+  const sourceConfig = (pluginConfig, entry = {}) => ({
+    plugins: {
+      entries: {
+        "memory-lancedb-namespaced": { ...entry, config: pluginConfig },
+      },
+    },
+  });
+
+  it("provisions no job from missing or runtime-defaulted feature values", () => {
+    assert.deepStrictEqual(selectEnabledFeatureCronSpecs({}), []);
+    assert.deepStrictEqual(selectEnabledFeatureCronSpecs(sourceConfig({})), []);
+    assert.deepStrictEqual(
+      selectEnabledFeatureCronSpecs(sourceConfig({
+        personaVoice: { enabled: false },
+        afterthought: { enabled: false },
+        criticalPush: { enabled: false },
+      })),
+      [],
+    );
+  });
+
+  it("selects all seven jobs only from their explicit owning gates", () => {
+    const selected = selectEnabledFeatureCronSpecs(sourceConfig({
+      personaVoice: { enabled: true },
+      afterthought: { enabled: true },
+      dailyConsolidation: { enabled: true },
+      criticalPush: { enabled: true },
+      merging: { enabled: true },
+      skillMiner: { enabled: true },
+      obsidianBridge: {
+        enabled: true,
+        graphLinks: { semanticDiscovery: { enabled: true } },
+      },
+    }));
+    assert.deepStrictEqual(selected.map((spec) => spec.feature), REQUIRED_FEATURE_CRONS.map((spec) => spec.feature));
+  });
+
+  it("honors dependency gates and top-level plugin disable", () => {
+    assert.deepStrictEqual(
+      selectEnabledFeatureCronSpecs(sourceConfig({ personaVoice: { enabled: true } })).map((spec) => spec.feature),
+      [],
+    );
+    assert.deepStrictEqual(
+      selectEnabledFeatureCronSpecs(sourceConfig({ afterthought: { enabled: true } })).map((spec) => spec.feature),
+      [],
+    );
+    assert.deepStrictEqual(
+      selectEnabledFeatureCronSpecs(sourceConfig({
+        afterthought: { enabled: true },
+        merging: { enabled: true },
+      })).map((spec) => spec.feature),
+      ["afterthought", "rem-dream"],
+    );
+    assert.deepStrictEqual(
+      selectEnabledFeatureCronSpecs(sourceConfig({ criticalPush: { enabled: true } }, { enabled: false })),
+      [],
+    );
+  });
+
+  it("uses the raw skill-miner schedule and fails closed on explicit invalid values", () => {
+    const custom = selectEnabledFeatureCronSpecs(sourceConfig({
+      skillMiner: { enabled: true, cron: "7 6 * * 2", timezone: null },
+    })).find((spec) => spec.feature === "skill-miner");
+    assert.deepStrictEqual(custom.schedule, { kind: "cron", expr: "7 6 * * 2" });
+    assert.strictEqual(custom.timezone, null);
+
+    const invalidCron = selectEnabledFeatureCronSpecs(sourceConfig({
+      skillMiner: { enabled: true, cron: "not a cron", timezone: "Europe/Berlin" },
+    }));
+    assert.ok(!invalidCron.some((spec) => spec.feature === "skill-miner"));
+    const invalidTimezone = selectEnabledFeatureCronSpecs(sourceConfig({
+      skillMiner: { enabled: true, cron: "0 3 * * 0", timezone: "Not/AZone" },
+    }));
+    assert.ok(!invalidTimezone.some((spec) => spec.feature === "skill-miner"));
+
+    const outOfRangeCron = selectEnabledFeatureCronSpecs(sourceConfig({
+      skillMiner: { enabled: true, cron: "99 99 * * *", timezone: "Europe/Berlin" },
+    }));
+    assert.ok(!outOfRangeCron.some((spec) => spec.feature === "skill-miner"));
+    const invalidNamedMinute = selectEnabledFeatureCronSpecs(sourceConfig({
+      skillMiner: { enabled: true, cron: "FOO 3 * * *", timezone: "Europe/Berlin" },
+    }));
+    assert.ok(!invalidNamedMinute.some((spec) => spec.feature === "skill-miner"));
+
+    const validStepCron = selectEnabledFeatureCronSpecs(sourceConfig({
+      skillMiner: { enabled: true, cron: "0 */24 * * *", timezone: "Europe/Berlin" },
+    }));
+    assert.ok(validStepCron.some((spec) => spec.feature === "skill-miner"));
+    const invalidNamedMonth = selectEnabledFeatureCronSpecs(sourceConfig({
+      skillMiner: { enabled: true, cron: "0 3 * BANANA MON", timezone: "Europe/Berlin" },
+    }));
+    assert.ok(!invalidNamedMonth.some((spec) => spec.feature === "skill-miner"));
+    const validNamedFields = selectEnabledFeatureCronSpecs(sourceConfig({
+      skillMiner: { enabled: true, cron: "0 3 * JAN MON", timezone: "Europe/Berlin" },
+    }));
+    assert.ok(validNamedFields.some((spec) => spec.feature === "skill-miner"));
   });
 });
 
@@ -57,9 +173,9 @@ describe("planFeatureCrons", () => {
     assert.strictEqual(plan.skip.length, 0);
   });
 
-  it("is idempotent: skips a job matching by name (case-insensitive substring)", () => {
-    const existing = [{ name: "PLUR1BUS Persona-Evolve (weekly)", payload: { message: "whatever" } }];
-    const plan = planFeatureCrons(existing, specs);
+  it("is idempotent for an exact owned legacy name", () => {
+    const existing = [{ agentId: "main", name: "plur1bus persona-evolve", payload: { message: "whatever" } }];
+    const plan = planFeatureCrons(existing, specs, { agent: "main" });
     assert.strictEqual(plan.create.length, 1);
     assert.strictEqual(plan.create[0].name, afterthoughtSpec.name);
     assert.strictEqual(plan.skip.length, 1);
@@ -67,9 +183,9 @@ describe("planFeatureCrons", () => {
     assert.match(plan.skip[0].reason, /already|exist/i);
   });
 
-  it("is idempotent: skips a job matching by payload message containing the internal command", () => {
-    const existing = [{ name: "my-custom-afterthought-job", payload: { message: "/plur1bus internal afterthought" } }];
-    const plan = planFeatureCrons(existing, specs);
+  it("is idempotent for an exact owned first command line", () => {
+    const existing = [{ agentId: "main", name: "my-custom-afterthought-job", payload: { message: "/plur1bus internal afterthought\ncustom" } }];
+    const plan = planFeatureCrons(existing, specs, { agent: "main" });
     assert.strictEqual(plan.create.length, 1);
     assert.strictEqual(plan.create[0].name, personaSpec.name);
     assert.strictEqual(plan.skip.length, 1);
@@ -89,13 +205,15 @@ describe("planFeatureCrons", () => {
     assert.match(plan.create[0].hint, /cron edit/);
     assert.match(plan.create[0].hint, /--agent/);
     assert.match(plan.create[0].hint, /--account/);
+    assert.match(plan.create[0].hint, /--channel telegram/);
+    assert.match(plan.create[0].hint, /--to <chatId>/);
   });
 
-  it("plans a needsDelivery spec as enabled when agent is given", () => {
+  it("does not mistake an execution agent for a concrete delivery target", () => {
     const plan = planFeatureCrons([], [afterthoughtSpec], { agent: "main" });
-    assert.strictEqual(plan.create[0].enabled, true);
+    assert.strictEqual(plan.create[0].enabled, false);
     assert.strictEqual(plan.create[0].agent, "main");
-    assert.strictEqual(plan.create[0].hint, undefined);
+    assert.match(plan.create[0].hint, /cron edit/);
   });
 
   it("plans a needsDelivery spec as disabled with a hint when only account is given (no agent) — --account alone never yields a concrete --to, so --announce would resolve to the runtime 'last'-chat fallback and could silently mis-deliver", () => {
@@ -126,11 +244,28 @@ describe("planFeatureCrons", () => {
     assert.strictEqual(plan.skip.length, 0);
   });
 
-  it("still matches a decorated job name via word-boundary prefix", () => {
-    const existing = [{ name: "PLUR1BUS Persona-Evolve (weekly)", payload: { message: "whatever" } }];
-    const plan = planFeatureCrons(existing, specs);
-    assert.strictEqual(plan.create.length, 1);
-    assert.strictEqual(plan.create[0].name, afterthoughtSpec.name);
+  it("does not match a decorated legacy name", () => {
+    const existing = [{ agentId: "main", name: "plur1bus persona-evolve (weekly)", payload: { message: "whatever" } }];
+    const plan = planFeatureCrons(existing, specs, { agent: "main" });
+    assert.strictEqual(plan.create.length, 2);
+    assert.deepStrictEqual(plan.skip, []);
+  });
+
+  it("never claims a legacy job without exact target-agent ownership", () => {
+    const cases = [
+      { opts: {}, job: { name: afterthoughtSpec.name, agentId: "main", payload: { message: afterthoughtSpec.command } } },
+      { opts: { agent: "main" }, job: { name: afterthoughtSpec.name, payload: { message: afterthoughtSpec.command } } },
+      { opts: { agent: "main" }, job: { name: afterthoughtSpec.name, agentId: "Main", payload: { message: afterthoughtSpec.command } } },
+      { opts: { agent: "main" }, job: { name: `${afterthoughtSpec.name} custom`, agentId: "main", payload: { message: "custom" } } },
+      { opts: { agent: "main" }, job: { name: "custom", agentId: "main", payload: { message: `prefix ${afterthoughtSpec.command}` } } },
+    ];
+
+    for (const { opts, job } of cases) {
+      const plan = planFeatureCrons([job], [afterthoughtSpec], opts);
+      assert.strictEqual(plan.create.length, 1);
+      assert.deepStrictEqual(plan.skip, []);
+      assert.deepStrictEqual(plan.update, []);
+    }
   });
 });
 
@@ -181,16 +316,16 @@ describe("deriveAgentDelivery", () => {
     assert.deepStrictEqual(result, { channel: "telegram", to: "55736530", accountId: "default" });
   });
 
-  it("omits accountId when candidates disagree on it but agree on channel+to", () => {
+  it("fails closed when candidates disagree on accountId despite agreeing on channel+to", () => {
     const jobs = [
       { agentId: "main", name: "plur1bus-morning-review-main", delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
       { agentId: "main", name: "plur1bus-evening-review-main", delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "default" } },
     ];
     const result = deriveAgentDelivery("main", jobs);
-    assert.deepStrictEqual(result, { channel: "telegram", to: "55736530" });
+    assert.strictEqual(result, null);
   });
 
-  it("returns null on conflicting targets within the preferred pool", () => {
+  it("returns null on conflicting targets among PLUR1BUS jobs", () => {
     const jobs = [
       { agentId: "heisenberg", name: "plur1bus-morning-review-heisenberg", delivery: { mode: "announce", channel: "telegram", to: "2048378590" } },
       { agentId: "heisenberg", name: "plur1bus-evening-review-heisenberg", delivery: { mode: "announce", channel: "telegram", to: "9999999" } },
@@ -198,7 +333,7 @@ describe("deriveAgentDelivery", () => {
     assert.strictEqual(deriveAgentDelivery("heisenberg", jobs), null);
   });
 
-  it("returns null on conflicting targets among unrelated jobs (no plur1bus jobs to prefer)", () => {
+  it("returns null on conflicting targets among unrelated jobs", () => {
     const jobs = [
       { agentId: "heisenberg", name: "some-cron", delivery: { mode: "announce", channel: "telegram", to: "2048378590" } },
       { agentId: "heisenberg", name: "other-cron", delivery: { mode: "announce", channel: "telegram", to: "9999999" } },
@@ -206,13 +341,12 @@ describe("deriveAgentDelivery", () => {
     assert.strictEqual(deriveAgentDelivery("heisenberg", jobs), null);
   });
 
-  it("prefers plur1bus-prefixed jobs over unrelated jobs when both exist", () => {
+  it("requires unanimity across PLUR1BUS and unrelated safe delivery candidates", () => {
     const jobs = [
       { agentId: "bernhardine", name: "Erik BZ Check", delivery: { mode: "announce", channel: "telegram", to: "1111111" } },
       { agentId: "bernhardine", name: "plur1bus-morning-review-bernhardine", delivery: { mode: "announce", channel: "telegram", to: "1211667028" } },
     ];
-    const result = deriveAgentDelivery("bernhardine", jobs);
-    assert.deepStrictEqual(result, { channel: "telegram", to: "1211667028" });
+    assert.strictEqual(deriveAgentDelivery("bernhardine", jobs), null);
   });
 
   it("ignores jobs belonging to other agents", () => {
@@ -248,6 +382,22 @@ describe("deriveAgentDelivery", () => {
     const jobs = [{ agentId: "main", name: "plur1bus-a", delivery: { mode: "announce", channel: "telegram", to: "55736530" } }];
     const result = deriveAgentDelivery("main", jobs);
     assert.deepStrictEqual(result, { channel: "telegram", to: "55736530" });
+  });
+
+  it("rejects unsafe modes, channels, wildcard targets, and placeholders", () => {
+    const job = (delivery) => ({ agentId: "main", name: "plur1bus seed", delivery });
+    assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "none", channel: "telegram", to: "12345" })]), null);
+    assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "announce", channel: "last", to: "12345" })]), null);
+    assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "announce", channel: "telegram", to: "*" })]), null);
+    assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "announce", channel: "telegram", to: "${CHAT_ID}" })]), null);
+    assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "announce", channel: "slack", to: "C12345" })]), null);
+    assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "announce", channel: "slack", to: "***" })]), null);
+    assert.strictEqual(deriveAgentDelivery("main", [job({
+      mode: "announce",
+      channel: "telegram",
+      to: "55736530",
+      accountId: "***",
+    })]), null);
   });
 });
 
@@ -328,7 +478,7 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
   ];
 
   it("plans 4 jobs (2 specs x 2 agents) when no existing jobs match", () => {
-    const plan = planFeatureCrons([], REQUIRED_FEATURE_CRONS, { agents: twoAgents });
+    const plan = planFeatureCrons([], LEGACY_TWO_FEATURE_CRONS, { agents: twoAgents });
     assert.strictEqual(plan.create.length, 4);
     assert.strictEqual(plan.skip.length, 0);
     const names = plan.create.map((j) => j.name).sort();
@@ -341,7 +491,7 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
   });
 
   it("uses per-agent --agent target and staggers persona-evolve deterministically", () => {
-    const plan = planFeatureCrons([], REQUIRED_FEATURE_CRONS, { agents: twoAgents });
+    const plan = planFeatureCrons([], LEGACY_TWO_FEATURE_CRONS, { agents: twoAgents });
     const mainPersona = plan.create.find((j) => j.name === "plur1bus persona-evolve main");
     const bernhardinePersona = plan.create.find((j) => j.name === "plur1bus persona-evolve bernhardine");
     assert.strictEqual(mainPersona.agent, "main");
@@ -352,7 +502,7 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
   });
 
   it("plans persona-evolve enabled, no delivery flags", () => {
-    const plan = planFeatureCrons([], REQUIRED_FEATURE_CRONS, { agents: twoAgents });
+    const plan = planFeatureCrons([], LEGACY_TWO_FEATURE_CRONS, { agents: twoAgents });
     const mainPersona = plan.create.find((j) => j.name === "plur1bus persona-evolve main");
     assert.strictEqual(mainPersona.enabled, true);
     assert.strictEqual(mainPersona.delivery, null);
@@ -366,7 +516,7 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
         delivery: { mode: "announce", channel: "telegram", to: "55736530", accountId: "telegram-main" },
       },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents: twoAgents });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents: twoAgents });
     const mainAfterthought = plan.create.find((j) => j.name === "plur1bus afterthought main");
     assert.strictEqual(mainAfterthought.enabled, true);
     assert.deepStrictEqual(mainAfterthought.delivery, {
@@ -385,8 +535,8 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
   });
 
   it("legacy exact-name job satisfies only the default agent's spec", () => {
-    const existing = [{ name: "plur1bus persona-evolve", payload: { message: "/plur1bus internal persona-evolve" } }];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents: twoAgents });
+    const existing = [{ name: "plur1bus persona-evolve", agentId: "main", payload: { message: "/plur1bus internal persona-evolve" } }];
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents: twoAgents });
 
     const mainSkip = plan.skip.find((s) => s.spec.agentId === "main" && s.spec.name.includes("persona-evolve"));
     assert.ok(mainSkip, "main's persona-evolve must be skipped");
@@ -401,8 +551,14 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
   });
 
   it("per-agent idempotency: an existing 'plur1bus afterthought bernhardine' job skips only bernhardine", () => {
-    const existing = [{ name: "plur1bus afterthought bernhardine", payload: { message: "/plur1bus internal afterthought" } }];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents: twoAgents });
+    const existing = [{
+      name: "plur1bus afterthought bernhardine",
+      agentId: "bernhardine",
+      payload: { message: "/plur1bus internal afterthought" },
+      delivery: { mode: "none" },
+      enabled: false,
+    }];
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents: twoAgents });
 
     const bernhardineSkip = plan.skip.find((s) => s.spec.name === "plur1bus afterthought bernhardine");
     assert.ok(bernhardineSkip);
@@ -415,16 +571,110 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
 
   it("no bare-substring false positive: a job merely named 'plur1bus' matches no per-agent spec", () => {
     const existing = [{ name: "plur1bus", payload: { message: "unrelated" } }];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents: twoAgents });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents: twoAgents });
     assert.strictEqual(plan.create.length, 4);
     assert.strictEqual(plan.skip.length, 0);
   });
 
   it("respects the given agents list as-is (subagent exclusion is the caller's job)", () => {
     const withSubagent = [...twoAgents, { id: "researcher", isDefault: false }];
-    const plan = planFeatureCrons([], REQUIRED_FEATURE_CRONS, { agents: withSubagent });
+    const plan = planFeatureCrons([], LEGACY_TWO_FEATURE_CRONS, { agents: withSubagent });
     // planFeatureCrons does not filter by bindings itself -- 3 agents x 2 specs = 6.
     assert.strictEqual(plan.create.length, 6);
+  });
+
+  it("only recognizes an existing job owned by the exact target agent", () => {
+    const impostors = [
+      {
+        id: "wrong-agent",
+        name: "plur1bus afterthought main",
+        agentId: "other",
+        payload: { message: "/plur1bus internal afterthought" },
+      },
+      {
+        id: "missing-agent",
+        name: "plur1bus persona-evolve main",
+        payload: { message: "/plur1bus internal persona-evolve" },
+      },
+    ];
+    const plan = planFeatureCrons(impostors, LEGACY_TWO_FEATURE_CRONS, { agents: [{ id: "main", isDefault: true }] });
+    assert.deepStrictEqual(plan.skip, []);
+    assert.deepStrictEqual(plan.update, []);
+    assert.strictEqual(plan.create.length, 2);
+  });
+
+  it("matches only the canonical name or an exact first command line", () => {
+    const laterCommand = {
+      id: "later",
+      name: "plur1bus afterthought main custom",
+      agentId: "main",
+      payload: { message: "preface\n/plur1bus internal afterthought" },
+    };
+    const laterPlan = planFeatureCrons([laterCommand], [LEGACY_TWO_FEATURE_CRONS[1]], {
+      agents: [{ id: "main", isDefault: true }],
+    });
+    assert.strictEqual(laterPlan.create.length, 1);
+    assert.deepStrictEqual(laterPlan.update, []);
+
+    const exactFirstLine = {
+      id: "exact",
+      name: "operator custom name",
+      agentId: "main",
+      enabled: false,
+      payload: { message: "/plur1bus internal afterthought\ncustom contract" },
+      delivery: { mode: "none" },
+    };
+    const exactPlan = planFeatureCrons([exactFirstLine], [LEGACY_TWO_FEATURE_CRONS[1]], {
+      agents: [{ id: "main", isDefault: true }],
+    });
+    assert.strictEqual(exactPlan.create.length, 0);
+    assert.strictEqual(exactPlan.skip.length, 1);
+  });
+
+  it("treats agent ownership, canonical names, and first command lines as case-sensitive", () => {
+    const spec = LEGACY_TWO_FEATURE_CRONS[1];
+    const impostors = [
+      {
+        id: "agent-case",
+        name: "plur1bus afterthought main",
+        agentId: "Main",
+        payload: { message: "/plur1bus internal afterthought" },
+      },
+      {
+        id: "name-case",
+        name: "PLUR1BUS AFTERTHOUGHT MAIN",
+        agentId: "main",
+        payload: { message: "operator prompt" },
+      },
+      {
+        id: "command-case",
+        name: "operator prompt",
+        agentId: "main",
+        payload: { message: "/PLUR1BUS INTERNAL AFTERTHOUGHT" },
+      },
+    ];
+
+    for (const existing of impostors) {
+      const plan = planFeatureCrons([existing], [spec], {
+        agents: [{ id: "main", isDefault: true }],
+      });
+      assert.strictEqual(plan.create.length, 1, `${existing.id} must not claim main's job`);
+      assert.deepStrictEqual(plan.skip, []);
+      assert.deepStrictEqual(plan.update, []);
+    }
+
+    assert.strictEqual(deriveAgentDelivery("main", [{
+      agentId: "Main",
+      name: "case-collision",
+      delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+    }]), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", {
+      bindings: [{
+        agentId: "Main",
+        match: { channel: "telegram", accountId: "default", peer: { kind: "direct", id: "55736530" } },
+      }],
+      channels: { telegram: { accounts: { default: { enabled: true } } } },
+    }), null);
   });
 });
 
@@ -438,9 +688,9 @@ describe("Message-Contract-Migration bestehender Jobs", () => {
 
   it("plant ein Message-Update für einen existierenden Job mit altem 'output NOTHING'-Contract", () => {
     const existing = [
-      { id: "job-1", name: "plur1bus afterthought main", agentId: "main", payload: { message: OLD_CONTRACT } },
+      { id: "job-1", name: "plur1bus afterthought main", agentId: "main", payload: { message: OLD_CONTRACT }, delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     assert.ok(Array.isArray(plan.update), "plan.update existiert");
     assert.strictEqual(plan.update.length, 1);
     assert.strictEqual(plan.update[0].id, "job-1");
@@ -453,9 +703,9 @@ describe("Message-Contract-Migration bestehender Jobs", () => {
   it("erhält Nutzer-Anpassungen rund um den alten Contract-Satz", () => {
     const custom = `MEIN PREFIX\n${OLD_CONTRACT}\nMEIN SUFFIX`;
     const existing = [
-      { id: "job-2", name: "plur1bus afterthought main", agentId: "main", payload: { message: custom } },
+      { id: "job-2", name: "plur1bus afterthought main", agentId: "main", payload: { message: custom }, delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     assert.strictEqual(plan.update.length, 1);
     assert.match(plan.update[0].message, /^MEIN PREFIX\n/);
     assert.match(plan.update[0].message, /\nMEIN SUFFIX$/);
@@ -464,23 +714,23 @@ describe("Message-Contract-Migration bestehender Jobs", () => {
 
   it("plant KEIN Update für Jobs ohne alten Contract-Satz (custom oder bereits migriert)", () => {
     const existing = [
-      { id: "job-3", name: "plur1bus afterthought main", agentId: "main", payload: { message: "mein eigener prompt ohne contract" } },
+      { id: "job-3", name: "plur1bus afterthought main", agentId: "main", payload: { message: "mein eigener prompt ohne contract" }, delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
       { id: "job-4", name: "plur1bus persona-evolve main", agentId: "main", payload: { message: "/plur1bus internal persona-evolve" } },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     assert.strictEqual(plan.update.length, 0);
   });
 
   it("migriert auch im Legacy-Single-Agent-Modus", () => {
-    const existing = [{ id: "job-5", name: "plur1bus afterthought", payload: { message: OLD_CONTRACT } }];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, {});
+    const existing = [{ id: "job-5", name: "plur1bus afterthought", agentId: "main", payload: { message: OLD_CONTRACT } }];
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agent: "main" });
     assert.strictEqual(plan.update.length, 1);
     assert.strictEqual(plan.update[0].id, "job-5");
   });
 
   it("Jobs ohne id werden nicht zum Update geplant (cron edit braucht die id)", () => {
     const existing = [{ name: "plur1bus afterthought main", agentId: "main", payload: { message: OLD_CONTRACT } }];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     assert.strictEqual(plan.update.length, 0);
   });
 });
@@ -495,15 +745,15 @@ describe("deriveDeliveryFromChannelConfig", () => {
     channels: {
       telegram: {
         accounts: {
-          default: { enabled: true, allowFrom: [55736530] },
-          bernhardine: { enabled: true, allowFrom: ["1211667028"] },
-          ambiguous: { enabled: true, allowFrom: [1, 2] },
+          default: { enabled: true, defaultTo: 55736530, allowFrom: ["*"] },
+          bernhardine: { enabled: true, defaultTo: "1211667028" },
+          ambiguous: { enabled: true },
         },
       },
     },
   };
 
-  it("leitet das Ziel aus Binding + allowFrom ab (Zahl wird zu String)", () => {
+  it("leitet das Ziel aus dem expliziten defaultTo ab (Zahl wird zu String)", () => {
     assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", config), {
       channel: "telegram",
       to: "55736530",
@@ -516,7 +766,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
     });
   });
 
-  it("gibt null zurück bei mehrdeutigem allowFrom, fehlendem Binding oder fehlender Config", () => {
+  it("gibt null zurück bei fehlendem defaultTo, fehlendem Binding oder fehlender Config", () => {
     const cfg = {
       bindings: [{ agentId: "x", match: { channel: "telegram", accountId: "ambiguous" } }],
       channels: config.channels,
@@ -540,7 +790,7 @@ describe("deriveDeliveryFromChannelConfig", () => {
 
   it("planFeatureCrons nutzt die Config als Fallback, wenn keine Cron-Ableitung möglich ist", () => {
     const agents = [{ id: "main", isDefault: true }];
-    const plan = planFeatureCrons([], REQUIRED_FEATURE_CRONS, { agents, channelConfig: config });
+    const plan = planFeatureCrons([], LEGACY_TWO_FEATURE_CRONS, { agents, channelConfig: config });
     const afterthought = plan.create.find((c) => c.name === "plur1bus afterthought main");
     assert.ok(afterthought);
     assert.strictEqual(afterthought.enabled, true);
@@ -556,9 +806,171 @@ describe("deriveDeliveryFromChannelConfig", () => {
         delivery: { mode: "announce", channel: "telegram", to: "99999", accountId: "acct" },
       },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents, channelConfig: config });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents, channelConfig: config });
     const afterthought = plan.create.find((c) => c.name === "plur1bus afterthought main");
     assert.strictEqual(afterthought.delivery.to, "99999");
+  });
+
+  it("uses a concrete group peer instead of redirecting to an allowFrom sender", () => {
+    const cfg = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            accountId: "default",
+            peer: { kind: "group", id: "-100123" },
+          },
+        },
+      ],
+      channels: {
+        telegram: {
+          accounts: {
+            default: { enabled: true, allowFrom: [55736530] },
+          },
+        },
+      },
+    };
+
+    assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", cfg), {
+      channel: "telegram",
+      to: "-100123",
+      accountId: "default",
+    });
+  });
+
+  it("resolves an omitted binding account through defaultAccount and inherited defaultTo", () => {
+    const cfg = {
+      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+      channels: {
+        telegram: {
+          defaultAccount: "primary",
+          defaultTo: "-100900",
+          accounts: { primary: { enabled: true } },
+        },
+      },
+    };
+
+    assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", cfg), {
+      channel: "telegram",
+      to: "-100900",
+      accountId: "primary",
+    });
+  });
+
+  it("rejects invalid explicit default accounts and explicitly missing named accounts", () => {
+    const invalidDefaultAccount = {
+      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+      channels: {
+        telegram: {
+          defaultAccount: "*",
+          defaultTo: "55736530",
+          accounts: { primary: { enabled: true } },
+        },
+      },
+    };
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", invalidDefaultAccount), null);
+
+    const missingNamedAccount = {
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "missing" } }],
+      channels: { telegram: { defaultTo: "55736530", accounts: {} } },
+    };
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", missingNamedAccount), null);
+  });
+
+  it("never turns sender allowlists or wildcards into outbound targets", () => {
+    const configWith = (account) => ({
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+      channels: { telegram: { accounts: { default: account } } },
+    });
+
+    assert.strictEqual(
+      deriveDeliveryFromChannelConfig("main", configWith({ enabled: true, allowFrom: [55736530] })),
+      null,
+    );
+    assert.strictEqual(
+      deriveDeliveryFromChannelConfig("main", configWith({ enabled: true, defaultTo: "*" })),
+      null,
+    );
+  });
+
+  it("rejects delivery sentinels exposed only after Telegram target prefixes are stripped", () => {
+    const configWithPeer = (id) => ({
+      bindings: [{
+        agentId: "main",
+        match: {
+          channel: "telegram",
+          accountId: "default",
+          peer: { kind: "group", id },
+        },
+      }],
+      channels: { telegram: { accounts: { default: { enabled: true } } } },
+    });
+
+    for (const target of ["telegram:*", "tg:last", "group:default", "telegram:group:null"]) {
+      assert.strictEqual(
+        deriveDeliveryFromChannelConfig("main", configWithPeer(target)),
+        null,
+        `${target} must remain ineligible after prefix normalization`,
+      );
+    }
+  });
+
+  it("rejects zero Telegram peer identifiers", () => {
+    const configWithPeer = (kind, id) => ({
+      bindings: [{
+        agentId: "main",
+        match: { channel: "telegram", accountId: "default", peer: { kind, id } },
+      }],
+      channels: { telegram: { accounts: { default: { enabled: true } } } },
+    });
+
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", configWithPeer("direct", "0")), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", configWithPeer("group", "-0")), null);
+  });
+
+  it("fails closed for conflicting peers, mixed peer kinds, disabled accounts, and placeholders", () => {
+    const runtimeConfig = (bindings, telegram) => ({ bindings, channels: { telegram } });
+    const binding = (peer, accountId = "default") => ({
+      agentId: "main",
+      match: { channel: "telegram", accountId, ...(peer ? { peer } : {}) },
+    });
+    const baseTelegram = { accounts: { default: { enabled: true, defaultTo: "55736530" } } };
+
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
+      binding({ kind: "group", id: "-1001" }),
+      binding({ kind: "group", id: "-1002" }),
+    ], baseTelegram)), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
+      binding({ kind: "direct", id: "55736530" }),
+      binding({ kind: "group", id: "-1001" }),
+    ], baseTelegram)), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
+      binding(null),
+    ], { accounts: { default: { enabled: false, defaultTo: "55736530" } } })), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
+      binding({ kind: "group", id: "${GROUP_ID}" }),
+    ], baseTelegram)), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", runtimeConfig([
+      binding({ kind: "group", id: "12345" }),
+    ], baseTelegram)), null);
+  });
+
+  it("lets an account defaultTo override the inherited root target", () => {
+    const cfg = {
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "primary" } }],
+      channels: {
+        telegram: {
+          defaultTo: "111111",
+          accounts: { primary: { defaultTo: "222222" } },
+        },
+      },
+    };
+    assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", cfg), {
+      channel: "telegram",
+      to: "222222",
+      accountId: "primary",
+    });
   });
 });
 
@@ -577,7 +989,7 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
         delivery: { mode: "announce", channel: "last" },
       },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     const mig = plan.update.find((u) => u.id === "job-p1");
     assert.ok(mig, "delivery migration must be planned");
     assert.strictEqual(mig.noDeliver, true);
@@ -585,7 +997,7 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
     assert.ok(plan.skip.some((s) => s.existingJob?.id === "job-p1"));
   });
 
-  it("fasst Jobs mit korrektem explizitem Delivery-Ziel NICHT an", () => {
+  it("removes delivery from non-delivery jobs but leaves a safe delivery job untouched", () => {
     const existing = [
       {
         id: "job-p2",
@@ -602,8 +1014,8 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
         delivery: { mode: "announce", channel: "telegram", to: "55736530" },
       },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
-    assert.strictEqual(plan.update.length, 0);
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
+    assert.deepStrictEqual(plan.update, [{ id: "job-p2", name: "plur1bus persona-evolve main", noDeliver: true }]);
   });
 
   it("fasst Jobs mit delivery mode none nicht an (bereits korrekt)", () => {
@@ -616,13 +1028,11 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
         delivery: { mode: "none" },
       },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     assert.strictEqual(plan.update.length, 0);
   });
 
-  it("migriert einen delivery-bedürftigen Job (afterthought) mit announce->last NICHT auf --no-deliver", () => {
-    // afterthought braucht Delivery — das falsche "last" abschalten würde den
-    // Job stumm schalten; hier soll deriveAgentDelivery/Operator-Edit greifen.
+  it("disables an owned delivery job whose target is the unsafe last-chat fallback", () => {
     const existing = [
       {
         id: "job-a2",
@@ -632,7 +1042,12 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
         delivery: { mode: "announce", channel: "last" },
       },
     ];
-    const plan = planFeatureCrons(existing, REQUIRED_FEATURE_CRONS, { agents });
-    assert.ok(!plan.update.some((u) => u.noDeliver), "needsDelivery jobs must not be silenced");
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
+    assert.deepStrictEqual(plan.update, [{
+      id: "job-a2",
+      name: "plur1bus afterthought main",
+      noDeliver: true,
+      disable: true,
+    }]);
   });
 });

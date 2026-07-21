@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * setup-feature-crons.mjs — idempotent, best-effort setup of the PLUR1BUS
- * feature crons (persona-evolve, afterthought) for the current OpenClaw
+ * explicitly enabled PLUR1BUS feature crons for the current OpenClaw
  * installation.
  *
  * Runs entirely as the invoking user via the `openclaw` CLI (which talks to
@@ -18,21 +18,61 @@
  *   node scripts/setup-feature-crons.mjs [--dry-run] [--agent <id>] [--account <acct>] [--json]
  */
 
-import { planFeatureCrons, REQUIRED_FEATURE_CRONS, selectAgentsForCronSetup } from "../lib/setup/feature-cron-plan.js";
+import {
+  planFeatureCrons,
+  REQUIRED_FEATURE_CRONS,
+  selectAgentsForCronSetup,
+  selectEnabledFeatureCronSpecs,
+} from "../lib/setup/feature-cron-plan.js";
 import { openclaw } from "./lib/openclaw-cli.mjs";
+import { validateInput } from "../lib/input-limits.js";
+import { safeAgentId } from "../lib/sql-safety.js";
 import { fileURLToPath } from "node:url";
-import { realpathSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
 
 function parseArgs(argv) {
-  const opts = { dryRun: false, agent: null, account: null, json: false };
+  const opts = { dryRun: false, agent: null, account: null, json: false, inputError: false };
+  const readValue = (index) => {
+    const value = argv[index + 1];
+    if (typeof value !== "string" || value.length === 0 || value.startsWith("--")) {
+      opts.inputError = true;
+      return { value: null, nextIndex: index };
+    }
+    return { value, nextIndex: index + 1 };
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") opts.dryRun = true;
-    else if (a === "--agent") opts.agent = argv[++i] ?? null;
-    else if (a === "--account") opts.account = argv[++i] ?? null;
+    else if (a === "--agent") {
+      const parsed = readValue(i);
+      opts.agent = parsed.value;
+      i = parsed.nextIndex;
+    } else if (a === "--account") {
+      const parsed = readValue(i);
+      opts.account = parsed.value;
+      i = parsed.nextIndex;
+    }
     else if (a === "--json") opts.json = true;
+  }
+  if (opts.agent !== null) {
+    try {
+      opts.agent = safeAgentId(opts.agent);
+    } catch (_error) {
+      opts.inputError = true;
+    }
+  }
+  if (opts.account !== null) {
+    const validation = validateInput(opts.account, {
+      maxLength: 128,
+      name: "account ID",
+      required: true,
+      allowedPattern: /^[A-Za-z0-9_.:@-]+$/,
+    });
+    const unsafeAccount = ["last", "none", "null", "undefined", "auto", "__openclaw_redacted__"]
+      .includes(opts.account.toLowerCase());
+    if (!validation.ok || unsafeAccount) {
+      opts.inputError = true;
+    }
   }
   return opts;
 }
@@ -43,31 +83,29 @@ function scheduleArgs(schedule) {
   return [];
 }
 
-function buildAddArgs(job) {
+/**
+ * Build one fail-closed `cron add` invocation from a validated planner job.
+ *
+ * @param {object} job
+ * @returns {string[]}
+ */
+export function buildAddArgs(job) {
   const args = ["cron", "add", "--name", job.name, "--message", job.message, ...scheduleArgs(job.schedule)];
   args.push("--session", "isolated");
+  if (job.schedule?.kind === "cron" && typeof job.timezone === "string" && job.timezone.length > 0) {
+    args.push("--tz", job.timezone);
+  }
+  if (job.description) args.push("--description", job.description);
   if (job.agent) args.push("--agent", job.agent);
-  // job.delivery is set whenever a live delivery target was derived (either
-  // automatically from the agent's other crons — see deriveAgentDelivery —
-  // or explicitly passed in). When present it's the authoritative source
-  // for announce/channel/to/account; only the legacy explicit-operator
-  // `--agent`/`--account` flow (no derivable delivery object) falls back to
-  // the guessed --announce, and even there only for enabled jobs.
   if (job.delivery) {
     args.push("--announce");
     if (job.delivery.channel) args.push("--channel", job.delivery.channel);
     if (job.delivery.to) args.push("--to", job.delivery.to);
     if (job.delivery.accountId) args.push("--account", job.delivery.accountId);
   } else {
-    if (job.account) args.push("--account", job.account);
-    if (job.needsDelivery && job.agent && job.enabled) {
-      args.push("--announce");
-    } else {
-      // No delivery target planned: pin delivery off. Without a flag,
-      // `openclaw cron add` defaults to announce -> channel "last", which
-      // fail-closes for isolated cron sessions (no "last active chat").
-      args.push("--no-deliver");
-    }
+    // Missing validated delivery always pins delivery off. Without this flag,
+    // `openclaw cron add` defaults to announce -> channel "last".
+    args.push("--no-deliver");
   }
   if (!job.enabled) args.push("--disabled");
   args.push("--json");
@@ -87,43 +125,65 @@ function countPendingCreates(plan) {
   return failedCreates + disabledDeliveryCreates;
 }
 
-function buildJsonResult({ reason, message, dryRun = false, plan = null, results = null, lastPlanCreateCount = 0 }) {
+function buildJsonResult({ reason, message, configError = null, dryRun = false, plan = null, results = null, lastPlanCreateCount = 0 }) {
   return {
     ok: false,
     dryRun,
     skipped: true,
     reason,
     ...(message ? { message } : {}),
+    ...(configError ? { configError } : {}),
     ...(plan ? { plan } : {}),
     ...(results ? { results } : {}),
     lastPlanCreateCount,
   };
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Load OpenClaw's redacted effective configuration snapshot through the
+ * gateway. The gateway owns JSON5, include/env, path and default resolution.
+ * Returned errors are deliberately metadata-only so configuration material can
+ * never be reflected into install or chat output.
+ *
+ * @param {(args: string[], timeout?: number) => object} openclawImpl
+ * @returns {{ok: true, sourceConfig: object, runtimeConfig: object} | {ok: false, error: {code: string, status?: number}}}
+ */
+export function loadFeatureCronConfig(openclawImpl = openclaw) {
+  let result;
+  try {
+    result = openclawImpl(["gateway", "call", "config.get", "--json"], 15000);
+  } catch (_error) {
+    return { ok: false, error: { code: "config-call-failed" } };
+  }
+  if (!result?.ok) {
+    const status = Number.isInteger(result?.status) ? result.status : undefined;
+    return { ok: false, error: { code: "config-call-failed", ...(status === undefined ? {} : { status }) } };
+  }
+
+  let snapshot;
+  try {
+    snapshot = JSON.parse(result.stdout);
+  } catch (_error) {
+    return { ok: false, error: { code: "config-json-invalid" } };
+  }
+  if (!isPlainObject(snapshot)) return { ok: false, error: { code: "config-snapshot-shape-invalid" } };
+  if (snapshot.valid !== true) return { ok: false, error: { code: "config-snapshot-invalid" } };
+  if (!isPlainObject(snapshot.sourceConfig) || !isPlainObject(snapshot.runtimeConfig)) {
+    return { ok: false, error: { code: "config-snapshot-shape-invalid" } };
+  }
+  return { ok: true, sourceConfig: snapshot.sourceConfig, runtimeConfig: snapshot.runtimeConfig };
+}
+
 /**
  * Discover bound agents via `openclaw agents list --json` and reduce them
- * to the set that gets feature crons (see selectAgentsForCronSetup). On any
- * failure (CLI missing, non-zero exit, unparseable JSON, empty result) this
- * returns null — the caller falls back to the pre-multi-agent single
- * default-agent behavior, per the never-fail-an-install contract.
+ * to the set that gets feature crons (see selectAgentsForCronSetup).
  *
  * @returns {Array<{id: string, isDefault: boolean}> | null}
  */
-/**
- * Best-effort read of the OpenClaw config (openclaw.json) for the channel-
- * config delivery fallback (see deriveDeliveryFromChannelConfig). Never
- * throws; returns null when unreadable — the planner then simply has no
- * config fallback.
- */
-function loadChannelConfig() {
-  try {
-    const home = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
-    return JSON.parse(readFileSync(join(home, "openclaw.json"), "utf8"));
-  } catch {
-    return null;
-  }
-}
-
 function discoverAgents(openclawImpl = openclaw) {
   const r = openclawImpl(["agents", "list", "--json"], 15000);
   if (!r.ok) return null;
@@ -155,7 +215,6 @@ export async function runSetupFeatureCrons(options = {}) {
     argv = process.argv.slice(2),
     openclawImpl = openclaw,
     stdout = process.stdout,
-    loadChannelConfigImpl = loadChannelConfig,
   } = options;
   const opts = parseArgs(argv);
   const pendingByDefault = REQUIRED_FEATURE_CRONS.length;
@@ -181,6 +240,82 @@ export async function runSetupFeatureCrons(options = {}) {
       return 0;
     }
 
+    if (opts.inputError) {
+      if (opts.json) {
+        writeOutput(
+          stdout,
+          JSON.stringify(
+            buildJsonResult({
+              reason: "invalid-arguments",
+              message: "invalid or missing --agent/--account value; no cron jobs changed",
+              lastPlanCreateCount: pendingByDefault,
+            }),
+            null,
+            2,
+          ),
+        );
+      } else {
+        writeOutput(stdout, "[setup-feature-crons] invalid or missing --agent/--account value — no cron jobs changed.");
+      }
+      return 0;
+    }
+
+    const configLoad = loadFeatureCronConfig(openclawImpl);
+    if (!configLoad.ok) {
+      if (opts.json) {
+        writeOutput(
+          stdout,
+          JSON.stringify(
+            buildJsonResult({
+              reason: "config-load-failed",
+              message: "OpenClaw configuration snapshot unavailable or invalid",
+              configError: configLoad.error,
+              lastPlanCreateCount: pendingByDefault,
+            }),
+            null,
+            2,
+          ),
+        );
+      } else {
+        writeOutput(
+          stdout,
+          `[setup-feature-crons] OpenClaw configuration snapshot unavailable or invalid (${configLoad.error.code}) — no cron jobs changed.`,
+        );
+      }
+      return 0;
+    }
+
+    const enabledSpecs = selectEnabledFeatureCronSpecs(configLoad.sourceConfig);
+    if (opts.account && !opts.agent) {
+      if (opts.json) {
+        writeOutput(
+          stdout,
+          JSON.stringify(
+            buildJsonResult({
+              reason: "agent-required",
+              message: "--account requires --agent; no cron jobs changed",
+              lastPlanCreateCount: enabledSpecs.length,
+            }),
+            null,
+            2,
+          ),
+        );
+      } else {
+        writeOutput(stdout, "[setup-feature-crons] --account requires --agent — no cron jobs changed.");
+      }
+      return 0;
+    }
+
+    if (enabledSpecs.length === 0) {
+      const emptyPlan = { create: [], skip: [], update: [] };
+      if (opts.json) {
+        writeOutput(stdout, JSON.stringify({ dryRun: opts.dryRun, plan: emptyPlan, lastPlanCreateCount: 0 }, null, 2));
+      } else {
+        writeOutput(stdout, "[setup-feature-crons] no explicitly enabled feature owns a cron job — nothing to do.");
+      }
+      return 0;
+    }
+
     // --all ist Pflicht: ohne das Flag blendet die CLI disabled Jobs aus —
     // genau der delivery-sichere disabled-Default würde sonst bei jedem
     // Lauf erneut angelegt und stapelt Duplikate.
@@ -192,8 +327,8 @@ export async function runSetupFeatureCrons(options = {}) {
           JSON.stringify(
             buildJsonResult({
               reason: "cron-list-failed",
-              message: list.stderr?.trim() || "`openclaw cron list --json` failed",
-              lastPlanCreateCount: pendingByDefault,
+              message: "cron list unavailable",
+              lastPlanCreateCount: enabledSpecs.length,
             }),
             null,
             2,
@@ -201,7 +336,6 @@ export async function runSetupFeatureCrons(options = {}) {
         );
       } else {
         writeOutput(stdout, "[setup-feature-crons] `openclaw cron list --json` failed — skipping (best-effort, safe to ignore during install).");
-        if (list.stderr) writeOutput(stdout, `  ${list.stderr.trim()}`);
       }
       return 0;
     }
@@ -217,38 +351,48 @@ export async function runSetupFeatureCrons(options = {}) {
           JSON.stringify(
             buildJsonResult({
               reason: "cron-list-parse-failed",
-              message: err.message,
-              lastPlanCreateCount: pendingByDefault,
+              message: "cron list response was not valid JSON",
+              lastPlanCreateCount: enabledSpecs.length,
             }),
             null,
             2,
           ),
         );
       } else {
-        writeOutput(stdout, `[setup-feature-crons] could not parse cron list JSON — skipping (${err.message}).`);
+        writeOutput(stdout, "[setup-feature-crons] could not parse cron list JSON — skipping.");
       }
       return 0;
     }
 
-    // Explicit --agent/--account always wins: single-agent mode, current
-    // (pre-multi-agent) semantics — an operator who names an agent knows
-    // exactly what they want, discovery would only get in the way.
     let plan;
-    if (opts.agent || opts.account) {
-      plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agent: opts.agent, account: opts.account });
+    if (opts.agent) {
+      plan = planFeatureCrons(existingJobs, enabledSpecs, {
+        agents: [{ id: opts.agent, isDefault: true }],
+        account: opts.account,
+        channelConfig: configLoad.runtimeConfig,
+      });
     } else {
       const agents = discoverAgents(openclawImpl);
       if (agents) {
-        plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agents, channelConfig: loadChannelConfigImpl() });
+        plan = planFeatureCrons(existingJobs, enabledSpecs, { agents, channelConfig: configLoad.runtimeConfig });
       } else {
-        if (!opts.json) {
+        if (opts.json) {
           writeOutput(
             stdout,
-            "[setup-feature-crons] agent discovery unavailable (`openclaw agents list --json` failed, unparseable, or no bound agents) — " +
-              "falling back to single-agent mode (no --agent/--account, delivery-gated crons created disabled).",
+            JSON.stringify(
+              buildJsonResult({
+                reason: "agent-discovery-failed",
+                message: "bound-agent discovery unavailable; no cron jobs changed",
+                lastPlanCreateCount: enabledSpecs.length,
+              }),
+              null,
+              2,
+            ),
           );
+        } else {
+          writeOutput(stdout, "[setup-feature-crons] bound-agent discovery unavailable — no cron jobs changed.");
         }
-        plan = planFeatureCrons(existingJobs, REQUIRED_FEATURE_CRONS, { agent: opts.agent, account: opts.account });
+        return 0;
       }
     }
 
@@ -307,6 +451,7 @@ export async function runSetupFeatureCrons(options = {}) {
     for (const u of updates) {
       const editArgs = ["cron", "edit", u.id];
       if (typeof u.message === "string") editArgs.push("--message", u.message);
+      if (u.disable) editArgs.push("--disable");
       if (u.noDeliver) editArgs.push("--no-deliver");
       const r = openclawImpl(editArgs, 15000);
       results.push({ job: u.name, action: "update", ok: r.ok, stderr: r.ok ? undefined : r.stderr?.trim() });
@@ -336,7 +481,7 @@ export async function runSetupFeatureCrons(options = {}) {
         JSON.stringify(
           buildJsonResult({
             reason: "unexpected-error",
-            message: err.message,
+            message: "unexpected setup failure",
             lastPlanCreateCount: pendingByDefault,
           }),
           null,
@@ -344,7 +489,7 @@ export async function runSetupFeatureCrons(options = {}) {
         ),
       );
     } else {
-      writeOutput(stdout, `[setup-feature-crons] unexpected error — skipping (best-effort): ${err.message}`);
+      writeOutput(stdout, "[setup-feature-crons] unexpected error — skipping (best-effort).");
     }
     return 0;
   }

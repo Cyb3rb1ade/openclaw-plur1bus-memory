@@ -13,7 +13,7 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
 - **Persona voice with auto-applied evolution** — each agent gets a seeded idiolect as a managed workspace block; the weekly `persona-evolve` job now applies refinements directly (bounded: 12-bullet cap, seed-end boundary) instead of the old propose/accept flow.
 - **Afterthoughts & dream echoes** — delayed follow-ups after open-ended conversations and nightly-dream surfacing on first daily contact, both budgeted by a shared adaptive proactive governor.
 - **Recall confidence hedging & style directives** — uncertain recall is phrased as uncertain; mood, opinion, ask-back, and timezone-aware time-of-day directives shape replies.
-- **Multi-agent feature-cron automation** — bound agents automatically get `persona-evolve`/`afterthought` cron pairs via postinstall, `/plur1bus setup crons`, doctor hint, or deferred gateway-start bootstrap.
+- **Fail-closed feature-cron automation** — bound agents receive only the jobs owned by explicitly enabled raw feature gates; delivery is provisioned only from validated effective routing.
 - **Telegram reaction rules (managed block)** — AGENTS.md files with reaction guidance get the fixed Telegram reaction set plus current-`message_id` targeting rules patched in automatically.
 - **Afterthought `NO_REPLY` contract** — skip runs reply with OpenClaw's silent token; existing crons are migrated automatically.
 
@@ -25,7 +25,7 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
 
 ### New in v6.9.x — Runtime fixes, cron provisioning, and emotional dynamics
 
-- **REM-Dream cron provisioning** — New installs now provision the `rem-dream` cron job correctly instead of shipping the handler without a scheduler binding.
+- **REM-Dream cron provisioning** — New installs provision `rem-dream` when `merging.enabled: true` is explicitly authored, instead of shipping an enabled handler without a scheduler binding.
 - **`/state` command fix** — The top-level status command no longer crashes on an out-of-scope `ctx` reference.
 - **Emotion config-schema sync** — The strict schema now accepts the documented emotional-dynamics keys used by 6.9.x configs.
 - **Generic temperament defaults** — Shipped defaults no longer bake in agent-specific personalities; per-agent temperament belongs in user config.
@@ -209,11 +209,23 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 
 When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run `/plur1bus internal afterthought` and deliver the result — if the JSON has a `text` field, send exactly that text as the message; if `skipped` is `true`, reply with exactly `NO_REPLY` (OpenClaw's silent-reply token — the gateway suppresses delivery of token-only replies, which is far more reliable than asking the model to output nothing).
 
-Setting this cron up (plus the weekly `persona-evolve` cron) is automatic on multi-agent installations — see below.
+Setting this cron up is automatic when its raw feature gates are explicitly enabled — see below.
 
 #### Multi-agent feature-cron automation
 
-`node scripts/setup-feature-crons.mjs` discovers every **bound** agent on the installation via `openclaw agents list --json` and plans a `persona-evolve` + `afterthought` cron pair for each one — zero manual follow-up needed after adding a new agent, even with dozens of subagents configured. The script is idempotent and exit-0 no matter what (missing CLI, unreachable gateway, partial failures — all best-effort, all safe to re-run), so it can run from any of these channels:
+`node scripts/setup-feature-crons.mjs` loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to seven jobs per agent. It fails closed without reading or mutating cron state when the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. It never falls back to local config files or alternate raw/resolved fields.
+
+The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
+
+- `persona-evolve`: `personaVoice.enabled && skillMiner.enabled`; Sunday 04:15 local time, staggered five minutes per agent; no delivery.
+- `afterthought`: `afterthought.enabled && (skillMiner.enabled || merging.enabled)`; every 30 minutes; safe announce delivery with the `NO_REPLY` contract.
+- `consolidate-daily`: `dailyConsolidation.enabled`; daily 03:00 local time; no delivery.
+- `classify-recent`: `criticalPush.enabled`; every 30 minutes; safe announce delivery of approved pushes or `NO_REPLY`.
+- `rem-dream`: `merging.enabled`; daily 01:15 in `Europe/Berlin`; no delivery.
+- `skill-miner`: `skillMiner.enabled`; raw validated cron/timezone, defaulting to Sunday 03:00 in `Europe/Berlin` (`timezone: null` means local time).
+- `discover-semantic-links`: `obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled`; daily 02:00 in `Europe/Berlin`; no delivery.
+
+Every job runs with `--agent <agentId> --session isolated`. Provisioning does not set model, fallback, token, auth, API, or other credential overrides, so OpenClaw's default LLM and per-agent credentials remain authoritative. The script remains idempotent and exit-0 for install safety, so it can run from any of these channels:
 
 - **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`).
 - **Gateway startup (deferred bootstrap)** — a `gateway_start` handler in `index.js` schedules a one-off, non-blocking run 90 seconds after every gateway start (long enough for the `openclaw` CLI to be able to talk to the now-running gateway). This is the channel that actually covers the *documented* install path (`git clone` + `rsync` into `~/.openclaw/extensions/...`, which never runs `npm install`) as well as ClawHub installs, whose lifecycle hooks aren't guaranteed to run `npm` either — so it's the one channel that's install-method-agnostic. Throttled to at most once per ~20h (tracked via the same marker file the doctor/status hint reads, `.feature-crons-setup.json` under `baseDbPath`) so a gateway that restarts frequently doesn't repeatedly re-spawn the setup script; a plugin version bump forces an earlier re-run. Disable with `"featureCronSetup": { "auto": false }` in the plugin config.
@@ -223,10 +235,9 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 - **Bound-agent rule**: only agents with `bindings > 0` (i.e. an actual chat channel routes to them) get feature crons. Subagents (`bindings === 0` — researchers, deep-divers, and other internal-use-only agents) are deliberately excluded; they have no chat to receive an automatic persona evolution or an afterthought delivery, and running these jobs against them would be pure compute waste.
 - **One agent per workspace**: PLUR1BUS state for these jobs (persona voice, proactive-governor budget, afterthought dedup state, …) is keyed by workspace directory, not agent id. If two bound agents share a workspace, only one gets the crons (tiebreak: `isDefault` first, then most bindings, then alphabetically-first id) to avoid two crons double-firing against the same state files.
-- **Per-agent job names**: `plur1bus persona-evolve <agentId>` and `plur1bus afterthought <agentId>`, each running with `--agent <agentId>`. `persona-evolve` schedules are staggered 5 minutes apart per agent (starting Sunday 04:15) so N agents' weekly evolution jobs don't all fire at the same instant.
-- **Delivery derivation for `afterthought`**: the setup script looks at each agent's *other* existing crons for a delivery target (`delivery.mode !== "none"` with a `to`), preferring jobs already named `plur1bus …`. If every candidate target agrees on channel + destination, the new `afterthought` cron is created **enabled**, delivering to that same target. If targets conflict, or the agent has no delivery-capable crons yet, it's created **disabled** with a hint showing the exact `openclaw cron edit`/`enable` commands to wire delivery manually — it never guesses or delivers to nobody.
-- **Legacy installs**: a pre-multi-agent, non-suffixed `plur1bus persona-evolve` / `plur1bus afterthought` job (from an earlier version of this plugin) is treated as already satisfying the default agent's spec — it's left alone, not duplicated, when you upgrade.
-- **Fallback**: if `openclaw agents list --json` fails, is unparseable, or yields no bound agents, the script falls back to the previous single-default-agent behavior (prints a note) — the exit-0, never-fail-an-install contract holds either way. Passing `--agent <id>`/`--account <acct>` explicitly always forces single-agent mode, same semantics as before.
+- **Per-agent identity**: all seven canonical names use `plur1bus <feature> <agentId>`. An existing job is owned only by an exact, case-sensitive agent id plus either its exact canonical name or exact first command line; missing or different agents are untouched.
+- **Safe delivery**: outbound targets never come from `allowFrom`. Delivery-required jobs use only a conservatively validated Telegram binding `match.peer.id` or effective account/root `defaultTo`; unsupported providers, wildcard, placeholder, redaction, zero-id, disabled-account, missing-account, mixed-account, and conflicting target/channel/account states are rejected. All safe existing delivery candidates must agree. A job without a validated target is created disabled with `--no-deliver`; an unsafe owned delivery job is disabled and stripped of delivery. Non-delivery jobs always use `--no-deliver`.
+- **Agent discovery/input failure**: if `openclaw agents list --json` fails, is unparseable, or yields no bound agents, no cron is mutated. Passing a validated `--agent <id>` forces one explicit agent; missing, option-like, or invalid `--agent`/`--account` values fail closed, and `--account` without `--agent` is rejected.
 
 ## Installation
 
