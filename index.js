@@ -879,6 +879,7 @@ class MemoryDB {
         try {
           await activeInit;
         } catch (error) {
+          errors.push(error);
           const logged = logMemoryDbDebug(this.logger, "MemoryDB.shutdown.activeInit", error, this.dbPath);
           const loggingOutcome = await settleSafeWarning(logged);
           if (!loggingOutcome.ok) errors.push(loggingOutcome.error);
