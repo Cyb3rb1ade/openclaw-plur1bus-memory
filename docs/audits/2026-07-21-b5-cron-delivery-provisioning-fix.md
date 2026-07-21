@@ -86,3 +86,23 @@ configuration loader failure or when all raw gates are off.
 The add/edit commands contain no `--model`, fallback, auth, token, API-key, or
 credential override. OpenClaw's configured default LLM and per-agent
 credentials therefore remain in force.
+
+## Post-implementation specification review closure
+
+The first independent B5 specification review reported Critical 0 / Important
+7. All seven findings were reproduced before correction and are closed:
+
+| Finding | Closure |
+|---|---|
+| I1 Croner-invalid schedules passed the eligibility filter | Conservative field grammar now rejects empty ranges, bare modifiers, literal steps, invalid names, and out-of-range values while retaining documented wildcard/range steps and JAN–DEC/SUN–SAT forms. |
+| I2 Runtime routing ignored non-Telegram bindings and treated explicit empty accounts as omitted | Every relevant non-ACP binding must agree on channel; only an absent own `accountId` property inherits the effective default. |
+| I3 Existing delivery mode comparison was normalized | Existing seeds require exact case-sensitive `mode === "announce"`. |
+| I4 Only the first owned job was processed | Multi-agent and legacy planning enumerate every exact owned match; every unsafe duplicate is migrated even when a safe duplicate satisfies idempotency. |
+| I5 Missing delivery mode on non-delivery jobs was treated as correct | Only missing delivery or exact `mode: "none"` is retained; every other delivery value is removed. |
+| I6 Bare `t.me/<handle>` was rejected | The same conservative Telegram handle/path validator now accepts bare, http(s), and optional-www t.me forms while rejecting sentinels and extra paths. |
+| I7 Manifest documentation omitted concrete ownership gates | `featureCronSetup.description` now lists all seven owner gates, the `rem-dream` merging gate, and peer/defaultTo-not-allowFrom delivery policy; a manifest regression test pins it. |
+
+Post-review focused gate: 122/122 across 20 suites, with no failures or skips.
+The serial adjacent configuration, runtime-config, default-LLM contract/caller,
+default-LLM runtime, and deploy-integrity gate exited 0. Lint, manifest JSON
+parsing, and the diff whitespace check also passed.

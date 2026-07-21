@@ -262,3 +262,15 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
 - Final focused cron gate: 116/116. Adjacent configuration/default-LLM
   contract gate: 45/45. Serial deploy/symlink/default-LLM runtime gate exited
   0. Lint, manifest JSON parsing, and diff checks pass.
+
+### B5 specification-review follow-up
+
+- Initial independent B5 specification review: FAIL, Critical 0 / Important 7.
+- Closed Croner grammar gaps, cross-provider binding ambiguity, explicit-empty
+  account inheritance, normalized announce modes, first-match-only duplicate
+  cleanup, missing-mode non-delivery cleanup, bare `t.me` normalization, and
+  incomplete manifest ownership/delivery documentation.
+- Every finding received a causal RED before its minimal fix. Post-review
+  focused gate: 122/122 across 20 suites, no failures or skips.
+- Post-review serial adjacent config/default-LLM/deploy gate exited 0; lint,
+  manifest JSON parsing, and diff checks pass.

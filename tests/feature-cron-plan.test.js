@@ -147,6 +147,16 @@ describe("selectEnabledFeatureCronSpecs", () => {
       skillMiner: { enabled: true, cron: "0 3 * JAN MON", timezone: "Europe/Berlin" },
     }));
     assert.ok(validNamedFields.some((spec) => spec.feature === "skill-miner"));
+
+    for (const cron of ["- - - - -", "0 3 * * #", "0 3 * * 0/2"]) {
+      const invalidCronerSyntax = selectEnabledFeatureCronSpecs(sourceConfig({
+        skillMiner: { enabled: true, cron, timezone: "Europe/Berlin" },
+      }));
+      assert.ok(
+        !invalidCronerSyntax.some((spec) => spec.feature === "skill-miner"),
+        `${cron} must be ineligible when Croner rejects it`,
+      );
+    }
   });
 });
 
@@ -387,6 +397,8 @@ describe("deriveAgentDelivery", () => {
   it("rejects unsafe modes, channels, wildcard targets, and placeholders", () => {
     const job = (delivery) => ({ agentId: "main", name: "plur1bus seed", delivery });
     assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "none", channel: "telegram", to: "12345" })]), null);
+    assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "ANNOUNCE", channel: "telegram", to: "12345" })]), null);
+    assert.strictEqual(deriveAgentDelivery("main", [job({ mode: " announce ", channel: "telegram", to: "12345" })]), null);
     assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "announce", channel: "last", to: "12345" })]), null);
     assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "announce", channel: "telegram", to: "*" })]), null);
     assert.strictEqual(deriveAgentDelivery("main", [job({ mode: "announce", channel: "telegram", to: "${CHAT_ID}" })]), null);
@@ -738,7 +750,6 @@ describe("Message-Contract-Migration bestehender Jobs", () => {
 describe("deriveDeliveryFromChannelConfig", () => {
   const config = {
     bindings: [
-      { agentId: "main", match: { channel: "discord", accountId: "default" } },
       { agentId: "main", match: { channel: "telegram", accountId: "default" } },
       { agentId: "bernhardine", match: { channel: "telegram", accountId: "bernhardine" } },
     ],
@@ -839,6 +850,27 @@ describe("deriveDeliveryFromChannelConfig", () => {
     });
   });
 
+  it("accepts a bare t.me handle path but rejects sentinels and extra path segments", () => {
+    const configWithPeer = (id) => ({
+      bindings: [{
+        agentId: "main",
+        match: {
+          channel: "telegram",
+          accountId: "default",
+          peer: { kind: "group", id },
+        },
+      }],
+      channels: { telegram: { accounts: { default: { enabled: true } } } },
+    });
+    assert.deepStrictEqual(deriveDeliveryFromChannelConfig("main", configWithPeer("t.me/validname")), {
+      channel: "telegram",
+      to: "@validname",
+      accountId: "default",
+    });
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", configWithPeer("t.me/default")), null);
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", configWithPeer("t.me/validname/extra")), null);
+  });
+
   it("resolves an omitted binding account through defaultAccount and inherited defaultTo", () => {
     const cfg = {
       bindings: [{ agentId: "main", match: { channel: "telegram" } }],
@@ -856,6 +888,37 @@ describe("deriveDeliveryFromChannelConfig", () => {
       to: "-100900",
       accountId: "primary",
     });
+  });
+
+  it("requires channel unanimity across every relevant non-ACP binding", () => {
+    const mixedChannels = {
+      ...config,
+      bindings: [
+        { agentId: "main", match: { channel: "discord", accountId: "default" } },
+        { agentId: "main", match: { channel: "telegram", accountId: "default" } },
+      ],
+    };
+    assert.strictEqual(deriveDeliveryFromChannelConfig("main", mixedChannels), null);
+  });
+
+  it("inherits an account only when match.accountId is truly omitted", () => {
+    for (const accountId of ["", null, undefined, "   ", "*"]) {
+      const cfg = {
+        bindings: [{ agentId: "main", match: { channel: "telegram", accountId } }],
+        channels: {
+          telegram: {
+            defaultAccount: "default",
+            defaultTo: "55736530",
+            accounts: { default: { enabled: true } },
+          },
+        },
+      };
+      assert.strictEqual(
+        deriveDeliveryFromChannelConfig("main", cfg),
+        null,
+        `explicit accountId ${String(accountId)} must not inherit`,
+      );
+    }
   });
 
   it("rejects invalid explicit default accounts and explicitly missing named accounts", () => {
@@ -1032,6 +1095,22 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
     assert.strictEqual(plan.update.length, 0);
   });
 
+  it("removes every non-none delivery object from non-delivery jobs, including a missing mode", () => {
+    const existing = [{
+      id: "job-p-missing-mode",
+      name: "plur1bus persona-evolve main",
+      agentId: "main",
+      payload: { message: "/plur1bus internal persona-evolve" },
+      delivery: { channel: "telegram", to: "55736530" },
+    }];
+    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
+    assert.deepStrictEqual(plan.update, [{
+      id: "job-p-missing-mode",
+      name: "plur1bus persona-evolve main",
+      noDeliver: true,
+    }]);
+  });
+
   it("disables an owned delivery job whose target is the unsafe last-chat fallback", () => {
     const existing = [
       {
@@ -1046,6 +1125,47 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
     assert.deepStrictEqual(plan.update, [{
       id: "job-a2",
       name: "plur1bus afterthought main",
+      noDeliver: true,
+      disable: true,
+    }]);
+  });
+
+  it("migrates every unsafe owned duplicate even when another owned job is safe", () => {
+    const existing = [
+      {
+        id: "job-safe",
+        name: "plur1bus afterthought main",
+        agentId: "main",
+        enabled: true,
+        payload: { message: "/plur1bus internal afterthought" },
+        delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+      },
+      {
+        id: "job-unsafe-duplicate",
+        name: "operator afterthought duplicate",
+        agentId: "main",
+        enabled: true,
+        payload: { message: "/plur1bus internal afterthought\ncustom contract" },
+        delivery: { mode: "announce", channel: "last" },
+      },
+    ];
+    const plan = planFeatureCrons(existing, [LEGACY_TWO_FEATURE_CRONS[1]], { agents });
+    assert.strictEqual(plan.create.length, 0);
+    assert.deepStrictEqual(plan.update, [{
+      id: "job-unsafe-duplicate",
+      name: "operator afterthought duplicate",
+      noDeliver: true,
+      disable: true,
+    }]);
+
+    const legacyExisting = existing.map((job, index) => ({
+      ...job,
+      name: index === 0 ? "plur1bus afterthought" : job.name,
+    }));
+    const legacyPlan = planFeatureCrons(legacyExisting, [LEGACY_TWO_FEATURE_CRONS[1]], { agent: "main" });
+    assert.deepStrictEqual(legacyPlan.update, [{
+      id: "job-unsafe-duplicate",
+      name: "operator afterthought duplicate",
       noDeliver: true,
       disable: true,
     }]);
