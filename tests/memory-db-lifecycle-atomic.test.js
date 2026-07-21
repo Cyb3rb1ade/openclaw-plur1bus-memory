@@ -88,6 +88,52 @@ function errorTreeIncludes(error, expected) {
 }
 
 describe("MemoryDB lifecycle and atomic updates", { concurrency: false }, () => {
+  for (const failedField of ["agentId", "workspaceId"]) {
+    it(`rejects and retries an interrupted ${failedField} ownership migration`, async () => {
+      const fields = [{ name: "text", type: "Utf8" }];
+      let injected = false;
+      let schemaReads = 0;
+      const table = {
+        async schema() {
+          schemaReads++;
+          return { fields: fields.map((field) => ({ ...field })) };
+        },
+        async addColumns(columns) {
+          const column = columns[0];
+          if (!injected && column.name === failedField) {
+            injected = true;
+            throw new Error(`injected ${failedField} migration failure`);
+          }
+          if (!fields.some((field) => field.name === column.name)) {
+            fields.push({ name: column.name, type: column.type || "Utf8" });
+          }
+        },
+        async delete() {},
+        async close() {},
+      };
+      const connection = {
+        async tableNames() { return ["memories"]; },
+        async openTable() { return table; },
+        async close() {},
+      };
+      const db = new MemoryDB(`/tmp/plur1bus-b13-${failedField}-fixture`, VECTOR_DIM, null, {
+        lancedbProvider: async () => ({ connect: async () => connection }),
+      });
+
+      await assert.rejects(() => db.init(), new RegExp(`injected ${failedField} migration failure`));
+      assert.equal(db.initPromise, null);
+      assert.equal(db.table, null);
+      assert.equal(db.db, null);
+      assert.equal(db.schemaFieldNames, null);
+
+      await db.init();
+      assert.ok(schemaReads >= 3, "retry must re-read and finally verify the authoritative schema");
+      assert.ok(db.schemaFieldNames.has("agentId"));
+      assert.ok(db.schemaFieldNames.has("workspaceId"));
+      await db.shutdown();
+    });
+  }
+
   it("cleans a failed initialization generation and retries on the same instance", async (t) => {
     const root = makeTempDir(t, "plur1bus-b7-init-retry-");
     const blockedParent = join(root, "blocked-parent");

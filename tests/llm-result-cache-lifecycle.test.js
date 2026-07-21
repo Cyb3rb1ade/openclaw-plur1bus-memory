@@ -12,6 +12,7 @@ function makeDependencies(overrides = {}) {
   return {
     memoryDbAdapter: { shutdown: async () => {} },
     pool: { shutdown: async () => {} },
+    clearTurnRoutes: async () => {},
     flushMetrics: async () => {},
     llmResultCache: { close: async () => {} },
     ...overrides,
@@ -77,15 +78,17 @@ describe("LLM result cache lifecycle", () => {
     registerGatewayShutdown(harness.api, {
       memoryDbAdapter: { shutdown: failing("adapter") },
       pool: { shutdown: failing("pool") },
+      clearTurnRoutes: failing("routes"),
       flushMetrics: failing("metrics"),
       llmResultCache: { close: failing("cache") },
     });
     await harness.getRegistration().handler();
 
-    assert.deepStrictEqual(calls, ["adapter", "pool", "metrics", "cache"]);
+    assert.deepStrictEqual(calls, ["adapter", "pool", "routes", "metrics", "cache"]);
     assert.deepStrictEqual(warnings, [
       "memory-lancedb-namespaced: adapter shutdown failed: adapter broke",
       "memory-lancedb-namespaced: pool shutdown failed: pool broke",
+      "memory-lancedb-namespaced: turn route shutdown failed: routes broke",
       "metrics flush failed: metrics broke",
       "memory-lancedb-namespaced: LLM result cache shutdown failed: cache broke",
     ]);
@@ -93,6 +96,6 @@ describe("LLM result cache lifecycle", () => {
 
   it("wires the real plugin dependencies into the shutdown boundary", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
-    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool,\s*flushMetrics,\s*llmResultCache,?\s*\}\);/s);
+    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,?\s*\}\);/s);
   });
 });

@@ -123,6 +123,16 @@ import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-st
 import { safeUpdate } from "./lib/safe-update.js";
 import { runWikiCommand } from "./lib/wiki-command.js";
 import { checkAccess } from "./lib/acl-middleware.js";
+import {
+  buildMemoryAccountTopology,
+  buildMemoryWorkspaceAliases,
+  createHostRoutingLoader,
+  createMemoryTurnRouteRegistry,
+  resolveHostCommandMemoryContext,
+  resolveHostHookMemoryContext,
+  resolveMemoryRequestContext,
+  resolveToolMemoryRequestContext,
+} from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
@@ -820,7 +830,7 @@ class MemoryDB {
    * @param {string} dbPath LanceDB agent path.
    * @param {number} vectorDim Vector dimension.
    * @param {object} [logger] Optional logger.
-   * @param {{readOnly?: boolean, pathGuard?: (() => void), directoryCapability?: object|null, secureDirectoryRequired?: boolean, beforeLanceOperation?: ((operation: string, capability: object|null) => void)}} [options] Non-mutating mode and trusted directory routing.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void), directoryCapability?: object|null, secureDirectoryRequired?: boolean, beforeLanceOperation?: ((operation: string, capability: object|null) => void), lancedbProvider?: (() => Promise<object>|object)}} [options] Non-mutating mode, trusted directory routing, and an injectable DB provider for lifecycle tests.
    */
   constructor(dbPath, vectorDim, logger = null, {
     readOnly = false,
@@ -828,6 +838,7 @@ class MemoryDB {
     directoryCapability = null,
     secureDirectoryRequired = false,
     beforeLanceOperation = null,
+    lancedbProvider = null,
   } = {}) {
     if (pathGuard !== null && typeof pathGuard !== "function") {
       throw new TypeError("MemoryDB pathGuard must be a function");
@@ -843,6 +854,9 @@ class MemoryDB {
     if (beforeLanceOperation !== null && typeof beforeLanceOperation !== "function") {
       throw new TypeError("MemoryDB beforeLanceOperation must be a function");
     }
+    if (lancedbProvider !== null && typeof lancedbProvider !== "function") {
+      throw new TypeError("MemoryDB lancedbProvider must be a function");
+    }
     this.dbPath = dbPath;
     this.vectorDim = vectorDim;
     this.logger = logger;
@@ -851,6 +865,7 @@ class MemoryDB {
     this.directoryCapability = directoryCapability;
     this.secureDirectoryRequired = secureDirectoryRequired === true;
     this.beforeLanceOperation = beforeLanceOperation;
+    this.lancedbProvider = lancedbProvider;
     this.db = null;
     this.table = null;
     this.initPromise = null;
@@ -1179,7 +1194,18 @@ class MemoryDB {
     this._assertTrustedPath();
     if (!this.table) return;
     const schema = await this._read(this.table.schema(), "MemoryDB.schema");
-    this.schemaFieldNames = new Set((schema.fields || []).map(f => f.name));
+    const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+    const textField = fields.find((field) => field.name === "text");
+    if (!textField?.type) {
+      throw new Error(`MemoryDB ownership schema verification failed: authoritative text field missing for ${this.dbPath}`);
+    }
+    for (const fieldName of ["agentId", "workspaceId"]) {
+      const field = fields.find((candidate) => candidate.name === fieldName);
+      if (!field || String(field.type) !== String(textField.type)) {
+        throw new Error(`MemoryDB ownership schema verification failed: ${fieldName} must match text DataType for ${this.dbPath}`);
+      }
+    }
+    this.schemaFieldNames = new Set(fields.map(f => f.name));
   }
 
   normalizeEntryForTable(entry) {
@@ -1199,6 +1225,7 @@ class MemoryDB {
     if (normalized.origin == null) normalized.origin = "dm";
     if (normalized.mergedFrom == null) normalized.mergedFrom = "[]";
     if (normalized.expiresAt == null) normalized.expiresAt = 0;
+    if (normalized.agentId == null) normalized.agentId = "";
     if (normalized.storedBy == null) normalized.storedBy = "";
     if (normalized.sourceTurnId == null) normalized.sourceTurnId = "";
     if (normalized.sourceMessageRole == null) normalized.sourceMessageRole = "";
@@ -1232,6 +1259,7 @@ class MemoryDB {
     if (normalized.status == null) normalized.status = "active";
     if (normalized.versionCreatedAt == null) normalized.versionCreatedAt = 0;
     if (normalized.updatedAt == null) normalized.updatedAt = 0;
+    if (normalized.workspaceId == null) normalized.workspaceId = "";
     if (normalized.workspaceKey == null) normalized.workspaceKey = "";
     if (normalized.memoryKind == null) normalized.memoryKind = "memory";
     if (normalized.reminderStatus == null) normalized.reminderStatus = "";
@@ -1268,7 +1296,7 @@ class MemoryDB {
         this._assertTrustedPath();
         if (this.readOnly && this.secureDirectoryRequired && !this.directoryCapability) return false;
         if (this.readOnly && !this.secureDirectoryRequired && !existsSync(this.dbPath)) return false;
-        const lancedb = await getLanceDB();
+        const lancedb = this.lancedbProvider ? await this.lancedbProvider() : await getLanceDB();
         this._assertTrustedPath();
         this._beforeLancePathOperation("connect");
         const lancePath = this._lancePath();
@@ -1296,20 +1324,19 @@ class MemoryDB {
         // Statt eines großen try/catch: Schema einmal lesen, dann pro Spalte
         // einzeln migrieren. So verhindert ein Fehler bei einer Spalte nicht
         // die Migration der übrigen.
-        let schema;
-        try {
-          schema = await this._read(this.table.schema(), "MemoryDB.schema");
-        } catch (e) {
-          if (e instanceof TimeoutError) throw e;
-          console.error(`[memory-lancedb-namespaced] schema read failed for ${this.dbPath}: ${e.message}`);
-        }
+        const schema = await this._read(this.table.schema(), "MemoryDB.schema");
 
         if (schema) {
+          const textField = schema.fields?.find((field) => field.name === "text");
+          if (!textField?.type) {
+            throw new Error(`MemoryDB ownership migration failed: authoritative text field missing for ${this.dbPath}`);
+          }
           const allColumns = [
             { name: 'summary', valueSql: "''" },
             { name: 'origin', valueSql: "'dm'" },
             { name: 'mergedFrom', valueSql: "'[]'" },
             { name: 'expiresAt', valueSql: '0' },
+            { name: 'agentId', type: textField.type, valueSql: "''", securityCritical: true },
             { name: 'storedBy', valueSql: "''" },
             { name: 'sourceTurnId', valueSql: "''" },
             { name: 'sourceMessageRole', valueSql: "''" },
@@ -1356,15 +1383,20 @@ class MemoryDB {
             { name: 'dispatchCount', valueSql: '0' },
             { name: 'lastDispatchAttemptAt', valueSql: '0' },
             { name: 'nextDispatchAttemptAt', valueSql: '0' },
+            { name: 'workspaceId', type: textField.type, valueSql: "''", securityCritical: true },
             { name: 'workspaceKey', valueSql: "''" },
           ];
 
           for (const col of allColumns) {
+            const hasCol = schema.fields.some(f => f.name === col.name);
+            if (hasCol) continue;
+            if (col.securityCritical) {
+              const { securityCritical: _securityCritical, ...column } = col;
+              await this._write(this.table.addColumns([column]), `MemoryDB.addColumns:${col.name}`);
+              continue;
+            }
             try {
-              const hasCol = schema.fields.some(f => f.name === col.name);
-              if (!hasCol) {
-                await this._write(this.table.addColumns([col]), `MemoryDB.addColumns:${col.name}`);
-              }
+              await this._write(this.table.addColumns([col]), `MemoryDB.addColumns:${col.name}`);
             } catch (e) {
               if (e instanceof TimeoutError) throw e;
               console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${e.message}`);
@@ -1397,6 +1429,7 @@ class MemoryDB {
             createdAt: 0,
             mergedFrom: "[]",
             expiresAt: 0,
+            agentId: "",
             storedBy: "",
             sourceTurnId: "",
             sourceMessageRole: "",
@@ -1430,6 +1463,7 @@ class MemoryDB {
             status: "active",
             versionCreatedAt: 0,
             updatedAt: 0,
+            workspaceId: "",
             workspaceKey: "",
           },
         ]), "MemoryDB.createTable", "created-table", false);
@@ -1652,7 +1686,9 @@ class MemoryDB {
           id: r.id,
           text: r.text,
           importance: r.importance ?? 0.5,
+          agentId: r.agentId || "",
           storedBy: r.storedBy || "",
+          workspaceId: r.workspaceId || "",
           workspaceKey: r.workspaceKey || "",
           scope: r.scope || "agent-private",
           ownerUserId: r.ownerUserId || "",
@@ -3566,6 +3602,37 @@ const plugin = {
     const neoEmbeddingDrainImpact = neoEmbeddingDrainCfg.impact || "low";
     const neoEmbeddingDrainMaxItems = Math.max(1, Number(neoEmbeddingDrainCfg.maxItems || 250));
     const neoWorkspaceAliases = buildNeoWorkspaceAliases({ obsidianBridge: obsidianBridgeCfg, neo: neoCfg });
+    const memoryWorkspaceAliases = buildMemoryWorkspaceAliases(cfg, neoWorkspaceAliases);
+    let hostMemoryConfig = {};
+    try {
+      hostMemoryConfig = typeof api.runtime?.config?.current === "function" ? api.runtime.config.current() : (api.runtime?.config || {});
+    } catch (error) {
+      api.logger?.warn?.(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
+    }
+    const memoryAccountTopology = buildMemoryAccountTopology(hostMemoryConfig);
+    const hostRoutingLoader = createHostRoutingLoader({ logger: api.logger });
+    const turnRouteState = autoRecall ? { initPromise: null, registry: null } : null;
+    const getMemoryTurnRoutes = autoRecall ? async () => {
+      if (turnRouteState.registry) return turnRouteState.registry;
+      if (!turnRouteState.initPromise) {
+        turnRouteState.initPromise = (async () => {
+          try {
+            const routingCapability = await hostRoutingLoader();
+            turnRouteState.registry = createMemoryTurnRouteRegistry({ routingCapability, logger: api.logger });
+            return turnRouteState.registry;
+          } catch (error) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: turn route registry unavailable: ${String(error)}`);
+            return null;
+          }
+        })();
+      }
+      return turnRouteState.initPromise;
+    } : null;
+    const clearInitializedTurnRoutes = autoRecall ? async () => {
+      if (!turnRouteState.initPromise) return;
+      const turnRoutes = await turnRouteState.initPromise;
+      turnRoutes?.clear();
+    } : null;
     const neoWorkerRuntime = neoEnabled
       ? createNeoWorkerRuntime({ logger: api.logger })
       : null;
@@ -3704,19 +3771,28 @@ const plugin = {
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
 
-    function normalizeOwnerUserId(userId) {
-      return String(userId || "").trim();
-    }
-
-    function resolveStoreScopeAccess(ctxLike = {}, rawScope) {
+    function resolveStoreScopeAccess(memoryCtx, rawScope) {
       const scope = MEMORY_SCOPES.includes(rawScope) ? rawScope : "agent-private";
-      const { userId } = resolveIdentity(ctxLike);
-      const requestUserId = normalizeOwnerUserId(userId);
-      const ownerUserId = scope === "user" ? requestUserId : "";
-      if (scope === "user" && !ownerUserId) {
+      if (!memoryCtx?.agentId) return { ok: false, error: "memory context requires an agent" };
+      if (scope === "user" && !memoryCtx.userPrincipal) {
         return { ok: false, error: "user scope requires an authenticated user" };
       }
-      return { ok: true, scope, ownerUserId, requestUserId };
+      if (scope === "workspace" && !memoryCtx.workspaceIdentity) {
+        return { ok: false, error: "workspace scope requires a bound workspace" };
+      }
+      const workspaceIdentity = scope === "workspace" ? memoryCtx.workspaceIdentity : "";
+      return {
+        ok: true,
+        scope,
+        ownerUserId: scope === "user" ? memoryCtx.userPrincipal : "",
+        ownershipFields: Object.freeze({
+          agentId: memoryCtx.agentId,
+          storedBy: memoryCtx.agentId,
+          workspaceId: workspaceIdentity,
+          workspaceKey: workspaceIdentity,
+          ownerUserId: scope === "user" ? memoryCtx.userPrincipal : "",
+        }),
+      };
     }
 
     function candidateVisibleForStore(candidate, accessCtx) {
@@ -3811,7 +3887,9 @@ const plugin = {
       if (!entry || entry.id !== replacementId || entry.text !== expectedEntry.text) return false;
       if (entry.status && entry.status !== "active") return false;
       const stableFields = [
+        "agentId",
         "storedBy",
+        "workspaceId",
         "workspaceKey",
         "scope",
         "ownerUserId",
@@ -3977,10 +4055,20 @@ const plugin = {
     }
 
     async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
-      const storeAgentId = storeCtx.agentId || "default";
-      const storeWorkspaceKey = storeCtx.workspaceKey || workspaceKeyFromContext(storeCtx, {
+      const memoryCtx = storeCtx.memoryCtx || resolveToolMemoryRequestContext({
+        agentId: storeCtx.agentId,
         workspaceDir: storeCtx.workspaceDir,
-      });
+        sessionKey: storeCtx.sessionKey,
+        messageChannel: storeCtx.messageChannel,
+        agentAccountId: storeCtx.agentAccountId,
+        requesterSenderId: storeCtx.requesterSenderId,
+        deliveryContext: storeCtx.deliveryContext,
+      }, { workspaceAliases: memoryWorkspaceAliases });
+      const storeAgentId = memoryCtx.agentId;
+      const scopeAccess = resolveStoreScopeAccess(memoryCtx, params.scope);
+      if (!scopeAccess.ok) return { error: scopeAccess.error };
+      const { scope, ownerUserId, ownershipFields } = scopeAccess;
+      const storeWorkspaceKey = ownershipFields.workspaceKey;
       // v6.2.1 — Input-Validierung für Memory-Text (P0-Fix)
       const textValidation = validateMemoryText(params.text);
       if (!textValidation.ok) {
@@ -4015,12 +4103,7 @@ const plugin = {
           reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
         });
         const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
-        const scopeAccess = resolveStoreScopeAccess(storeCtx, params.scope);
-        if (!scopeAccess.ok) {
-          return { error: scopeAccess.error };
-        }
-        const { scope, ownerUserId, requestUserId } = scopeAccess;
-        const storeAccessCtx = { agentId: storeAgentId, workspaceId: storeWorkspaceKey, userId: requestUserId };
+        const storeAccessCtx = memoryCtx;
         const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
         const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
 
@@ -4101,7 +4184,7 @@ const plugin = {
                 }
                 const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
-                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
+                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]), expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
                 return { mergedEntry, mergeResult, mergedImportance };
               },
             });
@@ -4127,7 +4210,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -4158,7 +4241,11 @@ const plugin = {
       const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
         logger: api.logger,
         memoryStore: async ({ workspace, payload }) => {
-          const result = await storeMemoryFromToolParams({ agentId: workspace.agentId, workspaceDir: workspace.path }, payload);
+          const memoryCtx = resolveMemoryRequestContext({
+            agentId: workspace.agentId,
+            workspaceDir: workspace.path,
+          }, { workspaceAliases: memoryWorkspaceAliases });
+          const result = await storeMemoryFromToolParams({ memoryCtx, workspaceDir: memoryCtx.workspaceDir }, payload);
           const text = result?.content?.[0]?.text || "";
           if (text.startsWith("Memory store failed")) throw new Error(text);
           return result;
@@ -4323,6 +4410,7 @@ const plugin = {
             const commandStore = getNeoStore({ workspaceDir: commandCtx.workspaceDir, workspaceKey: commandCtx.workspaceKey, agentId: commandCtx.agentId || "command" });
 
             if (actionKey === "obsidian" || obsidianActionNames.has(actionKey)) {
+              const obsidianMemoryCtx = await resolveRegisteredMemoryContext(commandCtx);
               let runtimeConfig = null;
               try {
                 if (typeof api.runtime?.config?.current === "function") {
@@ -4350,11 +4438,9 @@ const plugin = {
                 ],
                 findRecord: (recordId) => findNeoRecord(commandStore, recordId),
                 memoryStore: async ({ payload }) => {
-                  const { userId } = resolveIdentity(commandCtx);
                   const result = await storeMemoryFromToolParams({
-                    agentId: commandCtx.agentId || "command",
-                    workspaceDir: commandCtx.workspaceDir,
-                    userId,
+                    memoryCtx: obsidianMemoryCtx,
+                    workspaceDir: obsidianMemoryCtx.workspaceDir,
                     callContext: {
                       runtimeLlm: commandCtx?.runtimeContext?.llm,
                     },
@@ -5314,14 +5400,16 @@ const plugin = {
         };
         // Sucht das Pending per Nonce(-Präfix) für das erwartete Kommando und
         // validiert es (user/chat/expiry) via validateConfirmation (löscht es).
-        const completePending = (commandCtx, expectedCommand, token) => {
-          const { userId, chatId } = resolveIdentity(commandCtx);
+        const completePending = (memoryCtx, expectedCommand, token) => {
           let pending = null;
           for (const v of confirmationStore.values()) {
             if (v.command === expectedCommand && (v.nonce === token || v.nonce.startsWith(token))) { pending = v; break; }
           }
           if (!pending) return { error: "not_found_or_expired" };
-          const result = validateConfirmation(pending.callbackData, confirmationStore, { userId, chatId });
+          const result = validateConfirmation(pending.callbackData, confirmationStore, {
+            userId: memoryCtx.userId,
+            chatId: memoryCtx.conversationPrincipal,
+          });
           if (!result.valid) return { error: result.reason || "invalid" };
           return { pending };
         };
@@ -5431,9 +5519,19 @@ const plugin = {
           logger: api.logger,
         });
 
+        const resolveRegisteredMemoryContext = (commandCtx, options = {}) => resolveHostCommandMemoryContext(commandCtx, {
+          resolveAgentWorkspaceDir: (config, agentId) => api.runtime.agent.resolveAgentWorkspaceDir(config, agentId),
+          workspaceAliases: memoryWorkspaceAliases,
+          routingLoader: hostRoutingLoader,
+          requireConversation: options.requireConversation !== false,
+          requireWorkspace: options.requireWorkspace === true,
+          requireUser: options.requireUser === true,
+        });
+
         registerGatewayShutdown(api, {
           memoryDbAdapter,
           pool,
+          clearTurnRoutes: clearInitializedTurnRoutes,
           flushMetrics,
           llmResultCache,
         });
@@ -5443,21 +5541,16 @@ const plugin = {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
             const input = (commandCtx.args || "").trim();
-            const agentId = commandCtx.agentId || "default";
+            const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
               runtimeLlm: commandCtx?.runtimeContext?.llm,
             });
             const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const parsed = parseMemoryQuery(normalized.canonicalText);
-            const { userId } = resolveIdentity(commandCtx);
-            const items = await queryMemory(memoryDbAdapter, agentId, parsed, {
-              agentId,
-              workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-              userId,
-              workspaceDir: commandCtx.workspaceDir,
-            });
+            const items = await queryMemory(memoryDbAdapter, agentId, parsed, memoryCtx);
             if (parsed.explain) {
               const explanations = explainResults(items.map((r) => ({ entry: r, score: r.score ?? 0 })), parsed.topic);
               items.forEach((item, i) => {
@@ -5478,8 +5571,9 @@ const plugin = {
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const denied = checkAuth(commandCtx, { destructive: true });
             if (denied) return denied;
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
             const args = (commandCtx.args || "").trim();
-            const agentId = commandCtx.agentId || "default";
+            const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
               runtimeLlm: commandCtx?.runtimeContext?.llm,
             });
@@ -5487,20 +5581,14 @@ const plugin = {
             // Completion: /forget confirm <token>
             const token = parseConfirmArg(args);
             if (token) {
-              const { pending, error } = completePending(commandCtx, "forget", token);
+              const { pending, error } = completePending(memoryCtx, "forget", token);
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
-              const { userId } = resolveIdentity(commandCtx);
               const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, {
                 lang,
                 tone,
                 workspaceDir: commandCtx.workspaceDir,
                 logger: api.logger,
-                ctx: {
-                  agentId,
-                  workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-                  userId,
-                  workspaceDir: commandCtx.workspaceDir,
-                },
+                ctx: memoryCtx,
               });
               if (!result.ok) return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: result.error } }) };
               return { text: t("plur1bus.forget_done", { lang, tone, vars: { id: pending.targetId } }) };
@@ -5510,14 +5598,8 @@ const plugin = {
             if (!args) return { text: t("plur1bus.forget_usage", { lang, tone }) };
             const normalized = await normalizeCommandInput({ kind: "forget-intent", text: args, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
-            const { userId: requestUserId } = resolveIdentity(commandCtx);
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, normalized.canonicalText, {
-              ctx: {
-                agentId,
-                workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-                userId: requestUserId,
-                workspaceDir: commandCtx.workspaceDir,
-              },
+              ctx: memoryCtx,
             });
             if (candidates.none) {
               return { text: t("plur1bus.forget_not_found", { lang, tone, vars: { query: normalized.canonicalText } }) };
@@ -5527,8 +5609,7 @@ const plugin = {
               return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
             const card = candidates.card;
-            const { userId, chatId } = resolveIdentity(commandCtx);
-            const confirm = createConfirmation({ userId, chatId, command: "forget", targetId: card.id });
+            const confirm = createConfirmation({ userId: memoryCtx.userId, chatId: memoryCtx.conversationPrincipal, command: "forget", targetId: card.id });
             confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
             return { text: t("plur1bus.forget_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
@@ -5544,8 +5625,9 @@ const plugin = {
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const denied = checkAuth(commandCtx, { destructive: true });
             if (denied) return denied;
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
             const args = (commandCtx.args || "").trim();
-            const agentId = commandCtx.agentId || "default";
+            const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
               runtimeLlm: commandCtx?.runtimeContext?.llm,
             });
@@ -5553,24 +5635,18 @@ const plugin = {
             // Completion: /correct confirm <token>
             const token = parseConfirmArg(args);
             if (token) {
-              const { pending, error } = completePending(commandCtx, "correct", token);
+              const { pending, error } = completePending(memoryCtx, "correct", token);
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
               const newText = pending.payload?.newText || "";
               if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
               const validated = validateCorrectionText(newText);
               if (!validated.ok) return { text: `❌ ${validated.error}` };
-              const { userId } = resolveIdentity(commandCtx);
               const result = await correctCard(memoryDbAdapter, agentId, pending.targetId, newText, {
                 lang,
                 tone,
                 workspaceDir: commandCtx.workspaceDir,
                 logger: api.logger,
-                ctx: {
-                  agentId,
-                  workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-                  userId,
-                  workspaceDir: commandCtx.workspaceDir,
-                },
+                ctx: memoryCtx,
                 updateMemory: async ({ id, newContent }) => {
                   return pool.withDb(agentId, async (rawDb) => {
                     await rawDb.init();
@@ -5627,14 +5703,8 @@ const plugin = {
             if (newNorm.error) return { text: `❌ ${newNorm.error}` };
             const validatedCanonicalCorrection = validateCorrectionText(newNorm.canonicalText);
             if (!validatedCanonicalCorrection.ok) return { text: `❌ ${validatedCanonicalCorrection.error}` };
-            const { userId: requestUserId } = resolveIdentity(commandCtx);
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, oldNorm.canonicalText, {
-              ctx: {
-                agentId,
-                workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-                userId: requestUserId,
-                workspaceDir: commandCtx.workspaceDir,
-              },
+              ctx: memoryCtx,
             });
             if (candidates.none) {
               return { text: t("plur1bus.correct_not_found", { lang, tone, vars: { query: oldNorm.canonicalText } }) };
@@ -5644,8 +5714,7 @@ const plugin = {
               return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
             const card = candidates.card;
-            const { userId, chatId } = resolveIdentity(commandCtx);
-            const confirm = createConfirmation({ userId, chatId, command: "correct", targetId: card.id });
+            const confirm = createConfirmation({ userId: memoryCtx.userId, chatId: memoryCtx.conversationPrincipal, command: "correct", targetId: card.id });
             confirm.payload = { newText: newNorm.canonicalText, oldText: oldNorm.canonicalText };
             confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
             return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
@@ -5712,8 +5781,9 @@ const plugin = {
           description: "PLUR1BUS — Wiki durchsuchen, hinzufügen, löschen",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
-          handler: (ctx) => {
-            const wikiAgentId = ctx?.agentId || "default";
+          handler: async (ctx) => {
+            const memoryCtx = await resolveRegisteredMemoryContext(ctx);
+            const wikiAgentId = memoryCtx.agentId;
             const sessionRuntime = ctx?.runtimeContext?.llm;
             return runWikiCommand(ctx, {
               pool,
@@ -5722,6 +5792,8 @@ const plugin = {
               callLlm,
               cfg,
               api,
+              memoryCtx,
+              workspaceAliases: memoryWorkspaceAliases,
               llmCfg: mergingEnabled ? withLlmCallContext(
                 wikiLlmCfg,
                 typeof sessionRuntime?.complete === "function" ? undefined : wikiAgentId,
@@ -6444,7 +6516,8 @@ const plugin = {
     // ========================================================================
 
     api.registerTool((ctx) => {
-      const agentId = ctx.agentId;
+      const memoryCtx = resolveToolMemoryRequestContext(ctx, { workspaceAliases: memoryWorkspaceAliases });
+      const agentId = memoryCtx.agentId;
       const modelDestructiveToolsAllowed = () => (cfg.security?.allowModelDestructiveMemoryOps !== false);
       const blockModelDestructiveTool = (toolName) => ({
         content: [{
@@ -6532,6 +6605,7 @@ const plugin = {
                 },
                 workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
                 agentId,
+                memoryCtx,
                 decisionTrace: trace,
                 retrievalLogger: (ledgerInfo) => {
                   try {
@@ -6613,7 +6687,6 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
-              return await pool.withWriteDb(agentId, async (db) => {
               // Keep the agent-facing store path aligned with storeMemoryFromToolParams:
               // reject invalid text before embedding or writing it.
               const textValidation = validateMemoryText(params.text);
@@ -6623,6 +6696,15 @@ const plugin = {
                   details: { action: "rejected", reason: "invalid_text" },
                 };
               }
+              const scopeAccess = resolveStoreScopeAccess(memoryCtx, params.scope);
+              if (!scopeAccess.ok) {
+                return {
+                  content: [{ type: "text", text: `Memory store rejected: ${scopeAccess.error}` }],
+                  details: { action: "rejected", reason: "missing_scope_owner" },
+                };
+              }
+              const { scope, ownerUserId, ownershipFields } = scopeAccess;
+              return await pool.withWriteDb(agentId, async (db) => {
               const trace = createRecallDecisionTrace({
                 query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
                 mode: "store",
@@ -6630,9 +6712,7 @@ const plugin = {
                 maxCandidates: traceCfg.maxCandidates ?? 50,
               });
               const vector = await embeddings.embed(params.text, { agentId });
-              const workspaceKey = ctx.workspaceKey || workspaceKeyFromContext(ctx, {
-                workspaceDir: ctx.workspaceDir,
-              });
+              const workspaceKey = ownershipFields.workspaceKey;
               const categoryResult = params.category
                 ? { category: params.category, reason: "caller-provided" }
                 : categorizeMemoryWithReason(params.text);
@@ -6653,15 +6733,7 @@ const plugin = {
                 reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
               });
               const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
-              const scopeAccess = resolveStoreScopeAccess(ctx, params.scope);
-              if (!scopeAccess.ok) {
-                return {
-                  content: [{ type: "text", text: `Memory store rejected: ${scopeAccess.error}` }],
-                  details: { action: "rejected", reason: "missing_user_scope_owner" },
-                };
-              }
-              const { scope, ownerUserId, requestUserId } = scopeAccess;
-              const storeAccessCtx = { agentId, workspaceId: workspaceKey, userId: requestUserId };
+              const storeAccessCtx = memoryCtx;
               const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
               const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
 
@@ -6742,7 +6814,7 @@ const plugin = {
                       const mergedEntry = applyDynamicsDefaults({
                         id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
                         importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]),
-                        expiresAt, storedBy: agentId, workspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId,
+                        expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
                         emotionalValence: serializeEmotionalValence(mergedEmotion),
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
@@ -6778,8 +6850,8 @@ const plugin = {
               const moodContext = emotionalPool.snapshot(agentId);
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
-                createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId, workspaceKey,
-                sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId,
+                createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields,
+                sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
                 emotionalValence: serializeEmotionalValence(emotion),
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
@@ -7168,6 +7240,19 @@ const plugin = {
     }
 
     if (autoRecall) {
+      api.on("reply_dispatch", async (event) => {
+        const turnRoutes = await getMemoryTurnRoutes();
+        turnRoutes?.observeReplyDispatch(event);
+        return undefined;
+      }, { priority: Number.MIN_SAFE_INTEGER });
+
+      api.on("agent_end", async (event, ctx) => {
+        if (!turnRouteState.initPromise) return;
+        const turnRoutes = await turnRouteState.initPromise;
+        const runId = ctx?.runId ?? event?.runId;
+        if (runId !== undefined && runId !== null) turnRoutes?.clearRun(runId);
+      });
+
       api.on("before_prompt_build", async (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
@@ -7190,6 +7275,30 @@ const plugin = {
         if (skipInternalRecall) {
           return runMinimalBeforePromptMaintenance(event, ctx, { neoEnabled, gcEnabled });
         }
+        const routingCapability = await hostRoutingLoader();
+        const turnRoutes = await getMemoryTurnRoutes();
+        const memoryCtx = turnRoutes
+          ? await resolveHostHookMemoryContext({
+              ...ctx,
+              runId: ctx?.runId ?? event?.runId,
+              sessionKey: ctx?.sessionKey ?? event?.sessionKey,
+              sessionId: ctx?.sessionId ?? event?.sessionId,
+            }, {
+              getSessionEntry: ({ agentId, sessionKey, readConsistency }) => api.runtime.agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
+              workspaceAliases: memoryWorkspaceAliases,
+              accountTopology: memoryAccountTopology,
+              turnRoutes,
+              routingCapability,
+              logger: api.logger,
+            })
+          : resolveMemoryRequestContext({
+              agentId: ctx?.agentId,
+              workspaceDir: ctx?.workspaceDir,
+              channel: ctx?.messageProvider,
+              chatId: ctx?.chatId,
+              sessionKey: ctx?.sessionKey ?? event?.sessionKey,
+              sessionId: ctx?.sessionId ?? event?.sessionId,
+            }, { workspaceAliases: memoryWorkspaceAliases });
         let neoContext = "";
         if (neoEnabled) {
           try {
@@ -7224,7 +7333,7 @@ const plugin = {
         const startNoticeContext = pendingStartNotice
           ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
           : "";
-        const agentId = ctx?.agentId;
+        const agentId = memoryCtx.agentId;
         return pool.withWriteDb(agentId, (db) => pool.withReadDbs(agentId, async (readDbs) => {
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
@@ -7397,6 +7506,7 @@ const plugin = {
             } : {},
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             agentId,
+            memoryCtx,
             decisionTrace: trace,
             retrievalLogger: (ledgerInfo) => {
               try {
