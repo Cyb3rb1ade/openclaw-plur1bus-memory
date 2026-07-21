@@ -108,6 +108,26 @@ describe("redactError", () => {
       for (const secret of secrets) assert.ok(!redacted.includes(secret));
     }
   });
+
+  it("redacts folded Authorization continuations without consuming normal following lines", () => {
+    const normalFollow = redactError(new Error(
+      "Authorization:\r\nX-Follow: keep",
+    )).message;
+    assert.strictEqual(normalFollow, "[REDACTED]\r\nX-Follow: keep");
+
+    const whitespaceOnly = redactError(new Error(
+      "Authorization:   \n\nX-Follow: keep",
+    )).message;
+    assert.strictEqual(whitespaceOnly, "[REDACTED]\n\nX-Follow: keep");
+
+    const folded = redactError(new Error(
+      "Authorization: Digest username=foo,\r\n response=deadbeef, nonce=secret\r\n\topaque=private\r\nX-Follow: keep",
+    )).message;
+    assert.strictEqual(folded, "[REDACTED]\r\nX-Follow: keep");
+    for (const secret of ["username=foo", "response=deadbeef", "nonce=secret", "opaque=private"]) {
+      assert.ok(!folded.includes(secret));
+    }
+  });
 });
 
 describe("trySafeWarn", () => {
