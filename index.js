@@ -132,7 +132,7 @@ import { runProactiveCheck } from "./lib/jobs/proactive-check.js";
 import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
-import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, computeUseAssociative } from "./lib/recall-pipeline.js";
+import { applyImportanceBoost, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, mergeNamespaceRecallResults, computeUseAssociative } from "./lib/recall-pipeline.js";
 import {
   createRecallDecisionTrace,
   addTraceDecision,
@@ -623,6 +623,101 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
     if (result && result.length > 20) return result;
     throw new Error("empty summarizer response");
   };
+}
+
+/**
+ * Runs one existing recall pipeline per leased namespace and merges only after
+ * every child settled, so a failed namespace cannot expose partial results.
+ *
+ * @param {{namespace?: string|null, db: MemoryDB}[]} readDbs
+ * @param {Object} baseParams
+ * @param {Object|null|undefined} trace
+ * @param {Object|null|undefined} phaseTimer
+ * @returns {Promise<{queryVector: Array|undefined, canonical: Array, memories: Array, trace: Object|undefined}>}
+ */
+async function runMergedNamespaceRecall(readDbs, baseParams, trace, phaseTimer) {
+  if (!Array.isArray(readDbs) || readDbs.length === 0) {
+    return { queryVector: undefined, canonical: [], memories: [], trace };
+  }
+  if (readDbs.length === 1) {
+    return runRecallPipeline({
+      ...baseParams,
+      dbTable: readDbs[0].db.table,
+    });
+  }
+
+  const timerConfig = phaseTimer?.summary?.() || {};
+  phaseTimer?.start("namespace-recall");
+  try {
+    const settled = await Promise.allSettled(readDbs.map(async ({ namespace, db }, index) => {
+      const childTrace = trace
+        ? createNamespaceChildRecallTrace(trace, baseParams.query)
+        : undefined;
+      const childTimer = createRecallPhaseTimer({
+        softBudgetMs: timerConfig.softBudgetMs,
+        hardTimeoutMs: timerConfig.hardTimeoutMs,
+        logger: baseParams.logger,
+      });
+      const result = await runRecallPipeline({
+        ...baseParams,
+        dbTable: db.table,
+        phaseTimer: childTimer,
+        decisionTrace: childTrace,
+        canonicalEnabled: index === 0 ? baseParams.canonicalEnabled : false,
+        retrievalLogger: null,
+      });
+      return { namespace, result };
+    }));
+    const failed = settled.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+
+    const namespaceResults = settled.map((result) => ({
+      namespace: result.value.namespace,
+      ...result.value.result,
+    }));
+    const merged = mergeNamespaceRecallResults(namespaceResults, {
+      maxOut: baseParams.topN,
+      canonicalMaxItems: baseParams.canonicalMaxItems,
+      dedupEnabled: baseParams.dedupEnabled,
+      dedupJaccard: baseParams.dedupJaccard,
+      trace,
+    });
+    emitMergedRecallLedger(baseParams, merged.memories);
+    return merged;
+  } catch (error) {
+    phaseTimer?.fail?.("namespace-recall", error);
+    throw error;
+  } finally {
+    phaseTimer?.end("namespace-recall");
+  }
+}
+
+function createNamespaceChildRecallTrace(masterTrace, query) {
+  const config = masterTrace?.config || {};
+  return createRecallDecisionTrace({
+    query,
+    maxTextPreviewChars: config.maxTextPreviewChars,
+    maxCandidates: config.maxCandidates,
+    maxDecisions: config.maxDecisions,
+    maxGuards: config.maxGuards,
+    maxStoreDecisions: config.maxStoreDecisions,
+    config,
+  });
+}
+
+function emitMergedRecallLedger(baseParams, memories) {
+  if (typeof baseParams.retrievalLogger !== "function") return;
+  try {
+    baseParams.retrievalLogger({
+      agentId: baseParams.agentId,
+      workspaceKey: baseParams.workspaceKey,
+      query: baseParams.query,
+      resultsCount: memories.length,
+      selectedIds: memories.map((memory) => memory.entry.id),
+    });
+  } catch (error) {
+    baseParams.logger?.warn?.(`recall-pipeline: retrievalLogger failed: ${String(error)}`);
+  }
 }
 
 // ============================================================================
@@ -6109,23 +6204,12 @@ const plugin = {
                   } catch (_e) { dbg(_e); }
                 },
               };
-              let canonicalHits, ordered, returnedTrace;
-              if (readDbs.length === 1) {
-                ({ canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
-                  ..._recallBaseParams,
-                  dbTable: readDbs[0].db.table,
-                }));
-              } else {
-                const nsResults = await Promise.all(
-                  readDbs.map(({ db: nsDb }) => runRecallPipeline({
-                    ..._recallBaseParams,
-                    dbTable: nsDb.table,
-                  }))
-                );
-                canonicalHits = nsResults.flatMap(r => r.canonical || []);
-                returnedTrace = nsResults[0]?.trace;
-                ordered = dedupResults(nsResults.flatMap(r => r.memories || []), dedupJaccard);
-              }
+              const { canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runMergedNamespaceRecall(
+                readDbs,
+                _recallBaseParams,
+                trace,
+                phaseTimer,
+              );
               if (ordered.length === 0 && canonicalHits.length === 0) {
                 return { content: [{ type: "text", text: "No relevant memories found." }] };
               }
@@ -6984,23 +7068,12 @@ const plugin = {
               } catch (_e) { dbg(_e); }
             },
           };
-          let canonicalHits, ordered, pipelineTrace;
-          if (readDbs.length === 1) {
-            ({ canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runRecallPipeline({
-              ..._autoRecallBaseParams,
-              dbTable: readDbs[0].db.table,
-            }));
-          } else {
-            const nsResults = await Promise.all(
-              readDbs.map(({ db: nsDb }) => runRecallPipeline({
-                ..._autoRecallBaseParams,
-                dbTable: nsDb.table,
-              }))
-            );
-            canonicalHits = nsResults.flatMap(r => r.canonical || []);
-            pipelineTrace = nsResults[0]?.trace;
-            ordered = dedupResults(nsResults.flatMap(r => r.memories || []), dedupJaccard);
-          }
+          const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runMergedNamespaceRecall(
+            readDbs,
+            _autoRecallBaseParams,
+            trace,
+            timer,
+          );
           trace = pipelineTrace || trace;
 
           api.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
