@@ -5,7 +5,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { spawnSync } from "node:child_process";
-import { redactError, safeWarn, safeDebug, settleSafeWarning, trySafeWarn } from "../lib/safe-logging.js";
+import {
+  captureThenableSettlement,
+  redactError,
+  safeWarn,
+  safeDebug,
+  settleSafeWarning,
+  trySafeWarn,
+} from "../lib/safe-logging.js";
 import { fetchWithTimeout, fetchWithRetry } from "../lib/fetch-with-timeout.js";
 import { validateInput, validateCommandArgs, INPUT_LIMITS } from "../lib/input-limits.js";
 
@@ -59,6 +66,8 @@ describe("redactError", () => {
       "bearer/value+with=punctuation",
       "api/value+with=punctuation",
       "123456789:AAExampleTelegramBotToken_0123456789",
+      "dXNlcjpwYXNzd29yZA==",
+      "google/value+with=punctuation",
     ];
     const source = [
       `openai=${credentials[0]}`,
@@ -67,6 +76,8 @@ describe("redactError", () => {
       `Bearer ${credentials[3]}`,
       `api_key=${credentials[4]}`,
       `telegram=${credentials[5]}`,
+      `Authorization: Basic ${credentials[6]}`,
+      `GOOGLE_API_KEY=${credentials[7]}`,
     ].join(" ");
 
     const redacted = redactError(new Error(source)).message;
@@ -174,6 +185,46 @@ describe("trySafeWarn", () => {
       secondOk: true,
       unhandled: [],
     });
+  });
+
+  it("reports a chain-depth limit separately from a real thenable cycle", async () => {
+    let chain = "settled";
+    for (let i = 0; i < 33; i++) {
+      const nested = chain;
+      chain = { then(resolve) { resolve(nested); } };
+    }
+
+    const outcome = await captureThenableSettlement(chain);
+
+    assert.strictEqual(outcome.ok, false);
+    assert.match(outcome.error.message, /depth/i);
+    assert.doesNotMatch(outcome.error.message, /cycle/i);
+  });
+});
+
+describe("safeWarn", () => {
+  it("observes an asynchronously rejecting logger when called directly", () => {
+    const probe = spawnSync(process.execPath, [
+      "--input-type=module",
+      "-e",
+      [
+        `import { safeWarn } from ${JSON.stringify(SAFE_LOGGING_URL)};`,
+        'const unhandled = [];',
+        'process.on("unhandledRejection", (error) => unhandled.push(error?.message));',
+        'const loggerError = new Error("direct async warn failed");',
+        'safeWarn({ async warn() { throw loggerError; } }, "direct", new Error("primary"));',
+        'await new Promise((resolve) => setImmediate(resolve));',
+        'console.log(JSON.stringify({ unhandled }));',
+      ].join(" "),
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: probeEnvironment(),
+      timeout: 1_000,
+    });
+
+    assert.strictEqual(probe.status, 0, probe.error?.message || probe.stderr);
+    assert.deepEqual(JSON.parse(probe.stdout.trim()), { unhandled: [] });
   });
 });
 

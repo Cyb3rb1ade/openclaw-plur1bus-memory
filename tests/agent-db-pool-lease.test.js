@@ -478,7 +478,10 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       "bearer/value+with=punctuation",
       "api/value+with=punctuation",
       "123456789:AAExampleTelegramBotToken_0123456789",
+      "dXNlcjpwYXNzd29yZA==",
+      "google/value+with=punctuation",
     ];
+    const privatePayload = "PRIVATE-QUERY-AND-MEMORY-7788";
     const warnings = [];
     const rawSettlement = deferred();
     const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
@@ -499,6 +502,9 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       `Bearer ${credentials[3]}`,
       `api_key=${credentials[4]}`,
       `telegram=${credentials[5]}`,
+      `Authorization: Basic ${credentials[6]}`,
+      `GOOGLE_API_KEY=${credentials[7]}`,
+      `query=${privatePayload}`,
     ].join(" "));
     rawSettlement.reject(lateError);
     await lease;
@@ -507,7 +513,8 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
     for (const credential of credentials) {
       assert.ok(warnings.every((warning) => !String(warning).includes(credential)));
     }
-    assert.ok(warnings.some((warning) => String(warning).includes("[REDACTED]")));
+    assert.ok(warnings.every((warning) => !String(warning).includes(privatePayload)));
+    assert.ok(warnings.some((warning) => String(warning).includes("late database operation failed")));
     await assert.rejects(pool.shutdown(), (error) => errorTreeIncludes(error, lateError));
   });
 });
