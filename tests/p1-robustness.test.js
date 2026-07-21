@@ -76,14 +76,37 @@ describe("redactError", () => {
       `Bearer ${credentials[3]}`,
       `api_key=${credentials[4]}`,
       `telegram=${credentials[5]}`,
-      `Authorization: Basic ${credentials[6]}`,
       `GOOGLE_API_KEY=${credentials[7]}`,
+      `Authorization: Basic ${credentials[6]}`,
     ].join(" ");
 
     const redacted = redactError(new Error(source)).message;
 
     for (const credential of credentials) assert.ok(!redacted.includes(credential));
     assert.ok(redacted.includes("[REDACTED]"));
+  });
+
+  it("redacts complete multi-part Authorization header values", () => {
+    const cases = [
+      {
+        source: "Authorization=Digest username=foo,response=deadbeef,nonce=secret-nonce",
+        secrets: ["username=foo", "response=deadbeef", "nonce=secret-nonce"],
+      },
+      {
+        source: "Authorization: AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/20260721/eu-central-1/service/aws4_request, SignedHeaders=host, Signature=deadbeef",
+        secrets: ["AKIAEXAMPLE", "SignedHeaders=host", "Signature=deadbeef"],
+      },
+      {
+        source: "Authorization: Negotiate YIIFakeMultiPartToken== trailing-private-fragment",
+        secrets: ["YIIFakeMultiPartToken==", "trailing-private-fragment"],
+      },
+    ];
+
+    for (const { source, secrets } of cases) {
+      const redacted = redactError(new Error(source)).message;
+      assert.strictEqual(redacted, "[REDACTED]");
+      for (const secret of secrets) assert.ok(!redacted.includes(secret));
+    }
   });
 });
 
