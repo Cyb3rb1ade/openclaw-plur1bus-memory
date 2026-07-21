@@ -237,6 +237,37 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await fixture.close();
   });
 
+  it("rechecks a cached secure read-only directory after a table appears", async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-late-table-"));
+    const basePath = join(root, "legacy");
+    const agentPath = join(basePath, "agent-a");
+    mkdirSync(agentPath, { recursive: true });
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const pool = new AgentDbPool(basePath, VECTOR_DIM, null, { readOnly: true });
+    const db = pool.getDb("agent-a");
+    const before = snapshotTree(agentPath);
+
+    const first = db.init();
+    const coalescedGeneration = db.initPromise;
+    const second = db.init();
+    assert.equal(db.initPromise, coalescedGeneration, "concurrent negative init calls share one generation");
+    assert.deepEqual(await Promise.all([first, second]), [false, false]);
+    assert.deepEqual(snapshotTree(agentPath), before, "negative read-only init remains fully non-mutating");
+
+    const fixture = await lancedb.connect(agentPath);
+    const table = await fixture.createTable("memories", [{
+      id: "late-table-row", text: "late table", vector: [0.1, 0.2, 0.3], importance: 0.8,
+    }], { mode: "overwrite" });
+    await table.close();
+    await fixture.close();
+
+    const cached = pool.getDb("agent-a");
+    assert.equal(cached, db, "the existing capability-owning DB remains cached");
+    assert.equal(await cached.init(), true);
+    assert.deepEqual((await cached.table.query().toArray()).map(({ id }) => id), ["late-table-row"]);
+    await pool.shutdown();
+  });
+
   it("rejects every mutation entrypoint before invoking an underlying table mutation", async () => {
     const counters = { add: 0, delete: 0, update: 0, createIndex: 0, query: 0 };
     const db = new MemoryDB("/unused/read-only", VECTOR_DIM, null, { readOnly: true });
