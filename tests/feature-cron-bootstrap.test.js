@@ -16,6 +16,28 @@ const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
 const { parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap } = pluginModule;
 
+describe("featureCronSetup manifest documentation", () => {
+  it("names every owner gate and the fail-closed delivery source contract", () => {
+    const manifestPath = path.join(import.meta.dirname, "..", "openclaw.plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const description = manifest.configSchema.properties.featureCronSetup.description;
+
+    for (const required of [
+      "personaVoice.enabled && skillMiner.enabled",
+      "afterthought.enabled && (skillMiner.enabled || merging.enabled)",
+      "dailyConsolidation.enabled",
+      "criticalPush.enabled",
+      "rem-dream: merging.enabled",
+      "skillMiner.enabled",
+      "obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled",
+      "peer.id/defaultTo",
+      "never allowFrom",
+    ]) {
+      assert.ok(description.includes(required), `manifest description must include ${required}`);
+    }
+  });
+});
+
 function fakeChild({ stdout = "", closeCode = 0, emitError = false }) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
