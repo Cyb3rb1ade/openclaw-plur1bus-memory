@@ -1844,7 +1844,7 @@
       "featureCronSetup": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Controls the gateway_start deferred bootstrap that runs scripts/setup-feature-crons.mjs (persona-evolve, afterthought) — covers install channels that never run npm (rsync/git-clone installs, ClawHub).",
+        "description": "Controls the gateway_start deferred bootstrap for the seven explicitly gated feature crons. Raw sourceConfig owns feature gates/schedules; effective runtimeConfig owns bindings/accounts/delivery. Provisioning fails closed on unsafe delivery and never overrides model or agent credentials.",
         "properties": {
           "auto": {
             "type": "boolean",

@@ -10,7 +10,7 @@ import {
   shouldRunCronBootstrap,
   featureCronsHintFromMarker,
 } from "../lib/setup/feature-cron-bootstrap.js";
-import { runSetupFeatureCrons } from "../scripts/setup-feature-crons.mjs";
+import { buildAddArgs, runSetupFeatureCrons } from "../scripts/setup-feature-crons.mjs";
 
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
@@ -143,8 +143,25 @@ function createWritableBuffer() {
 async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
   const stdout = createWritableBuffer();
   const stderr = createWritableBuffer();
-  // Hermetic: never read the host's real openclaw.json in tests.
-  const exitCode = await runSetupFeatureCrons({ argv, openclawImpl, stdout: stdout.stream, stderr: stderr.stream, loadChannelConfigImpl: () => null });
+  const wrappedOpenClaw = (args, timeout) => {
+    if (args.join(" ") === "gateway call config.get --json") {
+      return {
+        ok: true,
+        stdout: JSON.stringify(validCronConfigSnapshot({
+          pluginConfig: {
+            personaVoice: { enabled: true },
+            afterthought: { enabled: true },
+            skillMiner: { enabled: true },
+          },
+          runtimeConfig: {},
+        })),
+        stderr: "",
+        status: 0,
+      };
+    }
+    return openclawImpl(args, timeout);
+  };
+  const exitCode = await runSetupFeatureCrons({ argv, openclawImpl: wrappedOpenClaw, stdout: stdout.stream, stderr: stderr.stream });
   const text = stdout.read().trim();
   return {
     exitCode,
@@ -154,47 +171,326 @@ async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
   };
 }
 
+function validCronConfigSnapshot({ pluginConfig = {}, runtimeConfig = {} } = {}) {
+  return {
+    valid: true,
+    sourceConfig: {
+      plugins: {
+        entries: {
+          "memory-lancedb-namespaced": { config: pluginConfig },
+        },
+      },
+    },
+    runtimeConfig,
+  };
+}
+
+describe("buildAddArgs delivery boundary", () => {
+  it("pins delivery off when the plan has no validated delivery object", () => {
+    const args = buildAddArgs({
+      name: "plur1bus afterthought main",
+      message: "/plur1bus internal afterthought",
+      schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
+      needsDelivery: true,
+      enabled: true,
+      agent: "main",
+      account: "legacy-account",
+      delivery: null,
+    });
+
+    assert.ok(args.includes("--no-deliver"));
+    assert.ok(!args.includes("--announce"));
+    assert.ok(!args.includes("--account"));
+    for (const forbidden of ["--model", "--fallbacks", "--token", "--auth", "--api-key", "--apiKey"]) {
+      assert.ok(!args.includes(forbidden));
+    }
+  });
+});
+
+async function runJsonSetupDirect(openclawImpl, argv = ["--json"]) {
+  const stdout = createWritableBuffer();
+  const stderr = createWritableBuffer();
+  const exitCode = await runSetupFeatureCrons({ argv, openclawImpl, stdout: stdout.stream, stderr: stderr.stream });
+  const output = stdout.read().trim();
+  return { exitCode, stdout: output, stderr: stderr.read(), parsed: JSON.parse(output) };
+}
+
+describe("runSetupFeatureCrons effective config snapshot", () => {
+  it("loads exactly one redacted config snapshot before planning and separates source gates from runtime routing", async () => {
+    const calls = [];
+    const cronAdds = [];
+    const snapshot = validCronConfigSnapshot({
+      pluginConfig: { dailyConsolidation: { enabled: true } },
+      runtimeConfig: {
+        bindings: [{ agentId: "main", match: { channel: "telegram", peer: { kind: "group", id: "-100123" } } }],
+        channels: { telegram: { defaultAccount: "default", accounts: { default: { enabled: true } } } },
+      },
+    });
+    const result = await runJsonSetupDirect((args, timeout) => {
+      calls.push({ args, timeout });
+      if (args[0] === "--version") return { ok: true, stdout: "ok", stderr: "", status: 0 };
+      if (args.join(" ") === "gateway call config.get --json") {
+        return { ok: true, stdout: JSON.stringify(snapshot), stderr: "", status: 0 };
+      }
+      if (args[0] === "cron" && args[1] === "list") return { ok: true, stdout: '{"jobs":[]}', stderr: "", status: 0 };
+      if (args[0] === "agents" && args[1] === "list") {
+        return { ok: true, stdout: '{"agents":[{"id":"main","bindings":1,"isDefault":true,"workspace":"/ws/main"}]}', stderr: "", status: 0 };
+      }
+      if (args[0] === "cron" && args[1] === "add") {
+        cronAdds.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    const configCalls = calls.filter(({ args }) => args.join(" ") === "gateway call config.get --json");
+    assert.strictEqual(configCalls.length, 1);
+    assert.strictEqual(configCalls[0].timeout, 15000);
+    assert.strictEqual(cronAdds.length, 1);
+    assert.ok(cronAdds[0].includes("plur1bus consolidate-daily main"));
+  });
+
+  it("fails closed and never reflects loader secrets for every invalid snapshot class", async () => {
+    const secret = "SECRET_CANARY_B5";
+    const failures = [
+      { ok: false, stdout: secret, stderr: secret, status: 9, error: new Error(secret) },
+      { ok: true, stdout: `{${secret}`, stderr: secret, status: 0 },
+      { ok: true, stdout: JSON.stringify({ valid: false, issues: [{ message: secret }] }), stderr: secret, status: 0 },
+      { ok: true, stdout: JSON.stringify({ valid: true, sourceConfig: [], runtimeConfig: { secret } }), stderr: secret, status: 0 },
+    ];
+
+    for (const configResult of failures) {
+      const mutations = [];
+      const result = await runJsonSetupDirect((args) => {
+        if (args[0] === "--version") return { ok: true, stdout: "ok", stderr: "", status: 0 };
+        if (args.join(" ") === "gateway call config.get --json") return configResult;
+        if (args[0] === "cron") mutations.push(args);
+        return { ok: false, stdout: secret, stderr: secret, status: 1 };
+      });
+      assert.strictEqual(result.exitCode, 0);
+      assert.strictEqual(result.parsed.reason, "config-load-failed");
+      assert.deepStrictEqual(mutations, []);
+      assert.ok(!result.stdout.includes(secret));
+      assert.ok(!result.stderr.includes(secret));
+    }
+  });
+
+  it("creates the exact seven per-agent jobs without model, auth, token, or API overrides", async () => {
+    const cronAdds = [];
+    const snapshot = validCronConfigSnapshot({
+      pluginConfig: {
+        personaVoice: { enabled: true },
+        afterthought: { enabled: true },
+        dailyConsolidation: { enabled: true },
+        criticalPush: { enabled: true },
+        merging: { enabled: true },
+        skillMiner: { enabled: true, cron: "7 6 * * 2", timezone: null },
+        obsidianBridge: {
+          enabled: true,
+          graphLinks: { semanticDiscovery: { enabled: true } },
+        },
+      },
+      runtimeConfig: {
+        bindings: [{
+          agentId: "main",
+          match: { channel: "telegram", accountId: "primary", peer: { kind: "group", id: "-100123" } },
+        }],
+        channels: { telegram: { accounts: { primary: { enabled: true, allowFrom: ["99999"] } } } },
+      },
+    });
+    const result = await runJsonSetupDirect((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok", stderr: "", status: 0 };
+      if (args.join(" ") === "gateway call config.get --json") return { ok: true, stdout: JSON.stringify(snapshot), stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") return { ok: true, stdout: '{"jobs":[]}', stderr: "", status: 0 };
+      if (args[0] === "agents" && args[1] === "list") {
+        return { ok: true, stdout: '{"agents":[{"id":"main","bindings":1,"isDefault":true,"workspace":"/ws/main"}]}', stderr: "", status: 0 };
+      }
+      if (args[0] === "cron" && args[1] === "add") {
+        cronAdds.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    assert.strictEqual(cronAdds.length, 7);
+    const byName = new Map(cronAdds.map((args) => [args[args.indexOf("--name") + 1], args]));
+    assert.deepStrictEqual([...byName.keys()], [
+      "plur1bus persona-evolve main",
+      "plur1bus afterthought main",
+      "plur1bus consolidate-daily main",
+      "plur1bus classify-recent main",
+      "plur1bus rem-dream main",
+      "plur1bus skill-miner main",
+      "plur1bus discover-semantic-links main",
+    ]);
+    for (const args of cronAdds) {
+      assert.deepStrictEqual(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2), ["--agent", "main"]);
+      assert.deepStrictEqual(args.slice(args.indexOf("--session"), args.indexOf("--session") + 2), ["--session", "isolated"]);
+      for (const forbidden of ["--model", "--fallbacks", "--token", "--auth", "--api-key", "--apiKey"]) {
+        assert.ok(!args.includes(forbidden), `${byName.get(args)?.[0] || "job"} must not carry ${forbidden}`);
+      }
+    }
+
+    const schedule = (name, flag) => {
+      const args = byName.get(name);
+      return args[args.indexOf(flag) + 1];
+    };
+    assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * 0");
+    assert.strictEqual(schedule("plur1bus afterthought main", "--every"), "1800s");
+    assert.strictEqual(schedule("plur1bus consolidate-daily main", "--cron"), "0 3 * * *");
+    assert.strictEqual(schedule("plur1bus classify-recent main", "--every"), "1800s");
+    assert.strictEqual(schedule("plur1bus rem-dream main", "--cron"), "15 1 * * *");
+    assert.strictEqual(schedule("plur1bus rem-dream main", "--tz"), "Europe/Berlin");
+    assert.strictEqual(schedule("plur1bus skill-miner main", "--cron"), "7 6 * * 2");
+    assert.ok(!byName.get("plur1bus skill-miner main").includes("--tz"));
+    assert.strictEqual(schedule("plur1bus discover-semantic-links main", "--cron"), "0 2 * * *");
+    assert.strictEqual(schedule("plur1bus discover-semantic-links main", "--tz"), "Europe/Berlin");
+
+    for (const name of ["plur1bus afterthought main", "plur1bus classify-recent main"]) {
+      const args = byName.get(name);
+      assert.ok(args.includes("--announce"));
+      assert.deepStrictEqual(args.slice(args.indexOf("--to"), args.indexOf("--to") + 2), ["--to", "-100123"]);
+      assert.deepStrictEqual(args.slice(args.indexOf("--account"), args.indexOf("--account") + 2), ["--account", "primary"]);
+      assert.match(args[args.indexOf("--message") + 1], /NO_REPLY/);
+    }
+    for (const [name, args] of byName) {
+      if (name.includes("afterthought") || name.includes("classify-recent")) continue;
+      assert.ok(args.includes("--no-deliver"));
+      assert.ok(!args.includes("--announce"));
+    }
+  });
+
+  it("never provisions from feature flags that exist only in runtimeConfig", async () => {
+    const unexpected = [];
+    const runtimeOnlyFeatures = {
+      plugins: {
+        entries: {
+          "memory-lancedb-namespaced": {
+            config: {
+              personaVoice: { enabled: true },
+              afterthought: { enabled: true },
+              dailyConsolidation: { enabled: true },
+              criticalPush: { enabled: true },
+              merging: { enabled: true },
+              skillMiner: { enabled: true },
+              obsidianBridge: {
+                enabled: true,
+                graphLinks: { semanticDiscovery: { enabled: true } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const result = await runJsonSetupDirect((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok", stderr: "", status: 0 };
+      if (args.join(" ") === "gateway call config.get --json") {
+        return {
+          ok: true,
+          stdout: JSON.stringify(validCronConfigSnapshot({ runtimeConfig: runtimeOnlyFeatures })),
+          stderr: "",
+          status: 0,
+        };
+      }
+      unexpected.push(args);
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+    assert.strictEqual(result.exitCode, 0);
+    assert.deepStrictEqual(unexpected, []);
+    assert.deepStrictEqual(result.parsed.plan, { create: [], skip: [], update: [] });
+  });
+
+  it("rejects --account without --agent before any cron read or mutation", async () => {
+    const unexpected = [];
+    const result = await runJsonSetupDirect((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok", stderr: "", status: 0 };
+      if (args.join(" ") === "gateway call config.get --json") {
+        return {
+          ok: true,
+          stdout: JSON.stringify(validCronConfigSnapshot({ pluginConfig: { criticalPush: { enabled: true } } })),
+          stderr: "",
+          status: 0,
+        };
+      }
+      unexpected.push(args);
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    }, ["--json", "--account", "primary"]);
+    assert.strictEqual(result.parsed.reason, "agent-required");
+    assert.deepStrictEqual(unexpected, []);
+  });
+
+  it("rejects missing, option-like, or invalid explicit agent/account values without cron access", async () => {
+    const invalidArgv = [
+      ["--json", "--agent"],
+      ["--json", "--agent", "--account", "primary"],
+      ["--json", "--agent", "../main"],
+      ["--json", "--account"],
+      ["--json", "--agent", "main", "--account", "--dry-run"],
+      ["--json", "--agent", "main", "--account", "__OPENCLAW_REDACTED__"],
+    ];
+
+    for (const argv of invalidArgv) {
+      const calls = [];
+      const result = await runJsonSetupDirect((args) => {
+        calls.push(args);
+        if (args[0] === "--version") return { ok: true, stdout: "ok", stderr: "", status: 0 };
+        return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+      }, argv);
+      assert.strictEqual(result.parsed.reason, "invalid-arguments");
+      assert.deepStrictEqual(calls, [["--version"]]);
+    }
+  });
+});
+
 describe("runSetupFeatureCrons --json", () => {
   it("prints one JSON object and exit 0 when the CLI is unavailable", async () => {
     const result = await runJsonSetupWith(() => ({ ok: false, stdout: "", stderr: "missing", status: 1 }));
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 7);
     assert.strictEqual(result.parsed.reason, "cli-unavailable");
   });
 
   it("prints one JSON object and exit 0 when cron list fails", async () => {
     const calls = [];
+    const secret = "CRON_LIST_SECRET_B5";
     const result = await runJsonSetupWith((args) => {
       calls.push(args);
       if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
-      if (args[0] === "cron" && args[1] === "list") return { ok: false, stdout: "", stderr: "list failed", status: 1 };
+      if (args[0] === "cron" && args[1] === "list") return { ok: false, stdout: secret, stderr: secret, status: 1 };
       return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
     });
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 3);
     assert.strictEqual(result.parsed.reason, "cron-list-failed");
     assert.strictEqual(calls.length, 2);
+    assert.ok(!result.stdout.includes(secret));
   });
 
   it("prints one JSON object and exit 0 when cron list JSON is unparseable", async () => {
+    const secret = "CRON_PARSE_SECRET_B5";
     const result = await runJsonSetupWith((args) => {
       if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
-      if (args[0] === "cron" && args[1] === "list") return { ok: true, stdout: "{not-json", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") return { ok: true, stdout: `{${secret}`, stderr: "", status: 0 };
       return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
     });
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 3);
     assert.strictEqual(result.parsed.reason, "cron-list-parse-failed");
+    assert.ok(!result.stdout.includes(secret));
   });
 
   it("prints one JSON object and exit 0 on unexpected top-level errors", async () => {
+    const secret = "UNEXPECTED_SECRET_B5";
     const result = await runJsonSetupWith(() => {
-      throw new Error("boom");
+      throw new Error(secret);
     });
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(result.parsed.lastPlanCreateCount, 2);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, 7);
     assert.strictEqual(result.parsed.reason, "unexpected-error");
-    assert.match(result.parsed.message, /boom/);
+    assert.strictEqual(result.parsed.message, "unexpected setup failure");
+    assert.ok(!result.stdout.includes(secret));
   });
 
   it("does not emit announce args for automatic disabled afterthought jobs without delivery", async () => {
@@ -401,7 +697,48 @@ describe("runSetupFeatureCrons --json", () => {
     assert.ok(!noDeliverEdit.includes("--message"), "delivery-only migration must not touch the message");
   });
 
-  it("preserves legacy explicit --agent setup by emitting --announce for enabled afterthought jobs", async () => {
+  it("disables and removes delivery from an owned delivery job with an unsafe target", async () => {
+    const cronEdits = [];
+    const result = await runJsonSetupWith((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
+      if (args[0] === "cron" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            jobs: [{
+              id: "job-a2",
+              name: "plur1bus afterthought main",
+              agentId: "main",
+              enabled: true,
+              payload: { message: "/plur1bus internal afterthought" },
+              delivery: { mode: "announce", channel: "last" },
+            }],
+          }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "agents" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({ agents: [{ id: "main", bindings: 1, isDefault: true, workspace: "/ws/main" }] }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && args[1] === "edit") {
+        cronEdits.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      if (args[0] === "cron" && args[1] === "add") return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    assert.deepStrictEqual(cronEdits, [["cron", "edit", "job-a2", "--disable", "--no-deliver"]]);
+  });
+
+  it("keeps explicit --agent afterthought disabled without a concrete delivery target", async () => {
     const cronAdds = [];
     const result = await runJsonSetupWith((args) => {
       if (args[0] === "--version") return { ok: true, stdout: "ok\n", stderr: "", status: 0 };
@@ -414,9 +751,11 @@ describe("runSetupFeatureCrons --json", () => {
     }, ["--json", "--agent", "main"]);
 
     assert.strictEqual(result.exitCode, 0);
-    const afterthoughtAdd = cronAdds.find((args) => args.includes("--name") && args.includes("plur1bus afterthought"));
-    assert.ok(afterthoughtAdd, "legacy explicit-agent afterthought cron add call must be present");
-    assert.ok(afterthoughtAdd.includes("--announce"), "legacy explicit-agent afterthought should still announce");
+    const afterthoughtAdd = cronAdds.find((args) => args.includes("--name") && args.includes("plur1bus afterthought main"));
+    assert.ok(afterthoughtAdd, "explicit-agent afterthought cron add call must be present");
+    assert.ok(afterthoughtAdd.includes("--disabled"));
+    assert.ok(afterthoughtAdd.includes("--no-deliver"));
+    assert.ok(!afterthoughtAdd.includes("--announce"));
   });
 });
 
@@ -532,6 +871,7 @@ describe("runSetupFeatureCrons Message-Contract-Migration", () => {
             jobs: [
               { id: "at-main", agentId: "main", name: "plur1bus afterthought main", payload: { message: OLD_CONTRACT } },
               { id: "pe-main", agentId: "main", name: "plur1bus persona-evolve main", payload: { message: "/plur1bus internal persona-evolve" } },
+              { id: "sm-main", agentId: "main", name: "plur1bus skill-miner main", payload: { message: "/plur1bus internal skill-miner" }, delivery: { mode: "none" } },
             ],
           }),
           stderr: "",

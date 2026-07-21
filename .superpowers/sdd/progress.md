@@ -237,3 +237,28 @@ Current evidence:
 
 FA-03 and FE-ADD-05 are CLOSED for B12-Core. FA-07 remains B12-P. Sharing and
 cross-principal ACL behavior remain B13. Main and Remote remain untouched.
+
+## 2026-07-21 — B5 cron/delivery provisioning remediation
+
+- Closed BUG-04, BUG-05, and the cron-provisioning portion of FA-08.
+- `setup-feature-crons.mjs` now consumes exactly one valid `config.get`
+  snapshot. `sourceConfig` owns only explicit feature gates/raw skill-miner
+  schedule; `runtimeConfig` owns only effective agents/accounts/delivery.
+- Exactly seven explicitly gated jobs are supported. Every job keeps the
+  OpenClaw default model and per-agent credentials and runs in an isolated
+  exact-agent session.
+- Delivery never uses `allowFrom`; peer/defaultTo routes, accounts, existing
+  deliveries, ownership, placeholders, redaction markers, and Telegram ids are
+  validated fail-closed. Conflicts disable delivery instead of guessing.
+- Missing, option-like, invalid, or redacted manual agent/account arguments
+  stop before config or cron access; legacy bare-name planning also requires
+  exact target-agent ownership.
+- Added causal RED/GREEN coverage for prefix-normalized sentinels, defensive
+  add args, unsafe-job disable/no-deliver edits, runtime-only flags, Telegram
+  zero ids, Croner steps/ranges, candidate unanimity, case-sensitive ownership,
+  safe hints, account defaults, and OpenClaw `***` redaction.
+- Receipt:
+  `docs/audits/2026-07-21-b5-cron-delivery-provisioning-fix.md`.
+- Final focused cron gate: 116/116. Adjacent configuration/default-LLM
+  contract gate: 45/45. Serial deploy/symlink/default-LLM runtime gate exited
+  0. Lint, manifest JSON parsing, and diff checks pass.
