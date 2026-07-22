@@ -10,7 +10,23 @@ const OTHER_ALLOWED_USER = "other-allowed-user";
 const CHAT_ID = "owner-chat";
 const WORKSPACE_KEY = "workspace-a";
 
-function makeApi(baseDbPath) {
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
+function makeApi(baseDbPath, workspaceDir) {
   const commands = [];
   const shutdownHandlers = [];
   const noop = () => {};
@@ -31,6 +47,11 @@ function makeApi(baseDbPath) {
       },
     },
     logger: { info: noop, warn: noop, error: noop, debug: noop },
+    runtime: {
+      agent: {
+        async resolveAgentWorkspaceDir() { return workspaceDir; },
+      },
+    },
     resolvePath: (value) => value,
     registerCommand(command) { commands.push(command); },
     registerTool(factory) { this._toolFactory = factory; },
@@ -43,15 +64,22 @@ function makeApi(baseDbPath) {
   };
 }
 
-function commandContext(workspaceDir, agentId, args, overrides = {}) {
+function commandContext(_workspaceDir, agentId, args, {
+  senderId = OWNER,
+  routeChatId = CHAT_ID,
+  ...overrides
+} = {}) {
   return {
     args,
     agentId,
-    workspaceDir,
-    workspaceKey: WORKSPACE_KEY,
-    userId: OWNER,
-    chatId: CHAT_ID,
-    chatType: "private",
+    senderId,
+    channel: "telegram",
+    accountId: "default",
+    sessionKey: `agent:${agentId}:main`,
+    from: `telegram:${routeChatId}`,
+    to: `telegram:${routeChatId}`,
+    config: {},
+    getCurrentConversationBinding: () => null,
     ...overrides,
   };
 }
@@ -106,8 +134,8 @@ describe("registered memory command reachability", () => {
   });
 
   function registerApi() {
-    const registeredApi = makeApi(baseDbPath);
-    plugin.register(registeredApi);
+    const registeredApi = makeApi(baseDbPath, workspaceDir);
+    plugin.register(registeredApi, { importRouting: async () => routingCapability });
     registeredApis.push(registeredApi);
     return registeredApi;
   }
@@ -137,6 +165,15 @@ describe("registered memory command reachability", () => {
     return command.handler(ctx);
   }
 
+  it("validates the narrow routing importer registration seam before setup", () => {
+    const rejectedApi = makeApi(baseDbPath, workspaceDir);
+    assert.throws(
+      () => plugin.register(rejectedApi, { importRouting: routingCapability }),
+      /importRouting must be a function/,
+    );
+    assert.equal(rejectedApi._commands.length, 0);
+  });
+
   it("keeps registered /memory recall working", async () => {
     const agentId = "b1-memory";
     await store(agentId, "B1 positive memory control");
@@ -152,14 +189,14 @@ describe("registered memory command reachability", () => {
     const memoryId = await store(agentId, "B1 forget reachability target");
     const baseCtx = commandContext(workspaceDir, agentId, "B1 forget reachability target");
 
-    const denied = await run("forget", { ...baseCtx, userId: "not-allowed" });
+    const denied = await run("forget", { ...baseCtx, senderId: "not-allowed" });
     assert.match(denied.text, /allowed list/i);
 
     const initiated = await run("forget", baseCtx);
     assert.doesNotMatch(initiated.text, /summarizer is not defined|failed/i);
     const token = confirmationToken(initiated.text, "forget");
 
-    const wrongUser = await run("forget", { ...baseCtx, args: `confirm ${token}`, userId: OTHER_ALLOWED_USER });
+    const wrongUser = await run("forget", { ...baseCtx, args: `confirm ${token}`, senderId: OTHER_ALLOWED_USER });
     assert.match(wrongUser.text, /security\.wrong_user/);
 
     const completed = await run("forget", { ...baseCtx, args: `confirm ${token}` });
@@ -194,7 +231,7 @@ describe("registered memory command reachability", () => {
 
     const wrongUser = await run(
       "correct",
-      { ...baseCtx, args: `confirm ${token}`, userId: OTHER_ALLOWED_USER },
+      { ...baseCtx, args: `confirm ${token}`, senderId: OTHER_ALLOWED_USER },
       commandApi,
     );
     assert.match(wrongUser.text, /security\.wrong_user/);

@@ -12,6 +12,22 @@ import { extractEpisodesFromTurns } from "../lib/episodes.js";
 const repoSource = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const VECTOR_DIM = 384;
 
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
 function makeVector() {
   return Array(VECTOR_DIM).fill(0.1);
 }
@@ -26,6 +42,7 @@ function createApi(baseDbPath, configOverrides, runtimeLlm) {
   const hooks = new Map();
   const services = [];
   const logs = [];
+  const sessionEntries = new Map();
   return {
     pluginConfig: {
       baseDbPath,
@@ -44,7 +61,15 @@ function createApi(baseDbPath, configOverrides, runtimeLlm) {
       info(...args) { logs.push(["info", ...args]); },
       warn(...args) { logs.push(["warn", ...args]); },
     },
-    runtime: runtimeLlm ? { llm: runtimeLlm } : {},
+    runtime: {
+      ...(runtimeLlm ? { llm: runtimeLlm } : {}),
+      agent: {
+        async resolveAgentWorkspaceDir() { return baseDbPath; },
+        session: {
+          async getSessionEntry({ sessionKey }) { return sessionEntries.get(sessionKey) || null; },
+        },
+      },
+    },
     resolvePath: (value) => value,
     registerCommand(command) { commands.push(command); },
     registerTool(factory) { toolFactories.push(factory); },
@@ -56,12 +81,81 @@ function createApi(baseDbPath, configOverrides, runtimeLlm) {
     _commands: commands,
     _toolFactories: toolFactories,
     _logs: logs,
+    _setSessionEntry(sessionKey, entry) { sessionEntries.set(sessionKey, entry); },
     async _emit(name, event, ctx) {
       return Promise.all((hooks.get(name) || []).map((handler) => handler(event, ctx)));
     },
     async _shutdown() {
       await Promise.all((hooks.get("gateway_stop") || []).map((handler) => handler({}, {})));
       await Promise.all(services.map((service) => service?.stop?.()));
+    },
+  };
+}
+
+function officialCommandContext({ agentId, args, runtimeContext, senderId = "owner", chatId = "chat-a" }) {
+  return {
+    args,
+    agentId,
+    senderId,
+    channel: "telegram",
+    accountId: "default",
+    sessionKey: `agent:${agentId}:main`,
+    from: `telegram:${chatId}`,
+    to: `telegram:${chatId}`,
+    config: {},
+    getCurrentConversationBinding: () => null,
+    ...(runtimeContext ? { runtimeContext } : {}),
+  };
+}
+
+async function observeOfficialTurn(api, { agentId, workspaceDir, runId, prompt, senderId = "42", chatId = "chat-a" }) {
+  const sessionKey = `agent:${agentId}:main`;
+  const sessionId = `session-${runId}`;
+  const target = `telegram:${chatId}`;
+  api._setSessionEntry(sessionKey, {
+    sessionId,
+    deliveryContext: { channel: "telegram", accountId: "default", to: target },
+    origin: { provider: "telegram", accountId: "default", to: target },
+    lastChannel: "telegram",
+    lastAccountId: "default",
+    lastTo: target,
+  });
+  await api._emit("reply_dispatch", {
+    runId,
+    sessionKey,
+    originatingChannel: "telegram",
+    originatingTo: target,
+    originatingAccountId: "default",
+    ctx: {
+      AgentId: agentId,
+      SessionKey: sessionKey,
+      AccountId: "default",
+      SenderId: senderId,
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      ChatId: chatId,
+      OriginatingTo: target,
+      CommandBody: prompt,
+    },
+  }, {});
+  return {
+    event: {
+      runId,
+      sessionKey,
+      sessionId,
+      prompt,
+      messages: [{ role: "user", content: prompt }],
+    },
+    ctx: {
+      runId,
+      agentId,
+      sessionKey,
+      sessionId,
+      workspaceDir,
+      messageProvider: "telegram",
+      senderId,
+      chatId,
+      channelContext: { sender: { id: senderId }, chat: { id: chatId } },
     },
   };
 }
@@ -150,7 +244,7 @@ test("long /memory query uses its session runtime and recall-query owner route",
     },
   });
   t.after(() => api._shutdown());
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
   const memoryCommand = api._commands.find((command) => command.name === "memory");
   assert.ok(memoryCommand);
   const sessionRuntime = {
@@ -160,13 +254,11 @@ test("long /memory query uses its session runtime and recall-query owner route",
     },
   };
 
-  const response = await memoryCommand.handler({
+  const response = await memoryCommand.handler(officialCommandContext({
     args: "search topic. ".repeat(600),
     agentId: "query-session-agent",
-    workspaceDir: baseDbPath,
-    workspaceKey: "query-session-workspace",
     runtimeContext: { llm: sessionRuntime },
-  });
+  }));
 
   assert.equal(globalCalls.length, 0);
   assert.equal(sessionCalls.length, 1, JSON.stringify(response));
@@ -176,31 +268,26 @@ test("long /memory query uses its session runtime and recall-query owner route",
 
   const memoryAlias = api._commands.find((command) => command.name === "plur1bus_memory");
   assert.ok(memoryAlias);
-  await memoryAlias.handler({
+  await memoryAlias.handler(officialCommandContext({
     args: "alias search topic. ".repeat(400),
     agentId: "query-session-agent",
-    workspaceDir: baseDbPath,
-    workspaceKey: "query-session-workspace",
     runtimeContext: { llm: sessionRuntime },
-  });
+  }));
   assert.equal(sessionCalls.length, 2);
   assert.equal(sessionCalls[1].purpose, "recall-query-summary");
   assert.equal(Object.hasOwn(sessionCalls[1], "agentId"), false);
 
-  const tooLarge = await memoryCommand.handler({
+  const tooLarge = await memoryCommand.handler(officialCommandContext({
     args: "x".repeat(100_001),
     agentId: "query-session-agent",
-    workspaceDir: baseDbPath,
-    workspaceKey: "query-session-workspace",
     runtimeContext: { llm: { async complete() { throw new Error("must not run"); } } },
-  });
+  }));
   assert.match(tooLarge.text, /100.?000/);
-  const aliasTooLarge = await memoryAlias.handler({
+  const aliasTooLarge = await memoryAlias.handler(officialCommandContext({
     args: "x".repeat(100_001),
     agentId: "query-session-agent",
-    workspaceDir: baseDbPath,
     runtimeContext: { llm: sessionRuntime },
-  });
+  }));
   assert.match(aliasTooLarge.text, /100.?000/);
   assert.equal(sessionCalls.length, 2);
 });
@@ -220,16 +307,14 @@ test("exact-limit punctuation-free /memory input stays usable with merging disab
     },
   });
   t.after(() => api._shutdown());
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
   const memoryCommand = api._commands.find((command) => command.name === "memory");
   assert.ok(memoryCommand);
 
-  const response = await memoryCommand.handler({
+  const response = await memoryCommand.handler(officialCommandContext({
     args: "x".repeat(100_000),
     agentId: "bounded-query-agent",
-    workspaceDir: baseDbPath,
-    workspaceKey: "bounded-query-workspace",
-  });
+  }));
 
   assert.equal(runtimeCalls.length, 0);
   assert.doesNotMatch(response.text, /100.?000|maximum length|too large/i);
@@ -381,7 +466,7 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
     },
   });
   t.after(() => api._shutdown());
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const toolContext = {
     agentId: "tool-query-agent",
@@ -394,16 +479,14 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
   await recallTool.execute("tool-call", { query: "tool recall topic. ".repeat(1_400), limit: 2 });
 
   const autoAgent = "auto-query-agent";
-  await api._emit("before_prompt_build", {
-    prompt: "auto recall topic. ".repeat(1_400),
-    messages: [{ role: "user", content: "auto recall topic" }],
-    sessionKey: `agent:${autoAgent}:main`,
-  }, {
+  const autoPrompt = "auto recall topic. ".repeat(1_400);
+  const autoTurn = await observeOfficialTurn(api, {
     agentId: autoAgent,
     workspaceDir: baseDbPath,
-    workspaceKey: "auto-query-workspace",
-    sessionKey: `agent:${autoAgent}:main`,
+    runId: "run-auto-query",
+    prompt: autoPrompt,
   });
+  await api._emit("before_prompt_build", autoTurn.event, autoTurn.ctx);
 
   const summaryCalls = runtimeCalls.filter((call) => call.purpose === "recall-query-summary");
   assert.equal(summaryCalls.length, 2);
@@ -430,33 +513,28 @@ test("/correct bounds an oversized canonical replacement before candidate lookup
     },
   });
   t.after(() => api._shutdown());
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
   const speakerCommand = api._commands.find((command) => command.name === "speaker");
   const genericTooLarge = await speakerCommand.handler({ args: "x".repeat(4_001) });
   assert.match(genericTooLarge.text, /maximum length of 4000/i);
   const correctCommand = api._commands.find((command) => command.name === "correct");
   const longCorrectionArgs = `${"old correction target. ".repeat(350)} -> ${"new replacement detail. ".repeat(350)}`;
-  const denied = await correctCommand.handler({
+  const denied = await correctCommand.handler(officialCommandContext({
     args: longCorrectionArgs,
     agentId: "correction-agent",
-    workspaceDir: baseDbPath,
-    userId: "intruder",
+    senderId: "intruder",
     chatId: "private-chat",
-    chatType: "private",
     runtimeContext: { llm: api.runtime.llm },
-  });
+  }));
   assert.match(denied.text, /allowed|unauthorized/i);
   assert.equal(runtimeCalls, 0);
-  const response = await correctCommand.handler({
+  const response = await correctCommand.handler(officialCommandContext({
     args: longCorrectionArgs,
     agentId: "correction-agent",
-    workspaceDir: baseDbPath,
-    workspaceKey: "correction-workspace",
-    userId: "owner",
+    senderId: "owner",
     chatId: "private-chat",
-    chatType: "private",
     runtimeContext: { llm: api.runtime.llm },
-  });
+  }));
 
   assert.equal(runtimeCalls, 2);
   assert.doesNotMatch(response.text, /correction text exceeds maximum length of 4000/i);
@@ -512,7 +590,7 @@ test("capture scheduler abort reaches summary and Emotion without late durable w
       },
     });
     t.after(() => api._shutdown());
-    pluginModule.default.register(api);
+    pluginModule.default.register(api, { importRouting: async () => routingCapability });
     const emitted = api._emit("agent_end", {
       success: true,
       turnId: `turn-${scenario}`,
@@ -618,15 +696,17 @@ test("recall commit barriers block writes when the runtime ignores abort and suc
       },
     });
     t.after(() => api._shutdown());
-    pluginModule.default.register(api);
+    pluginModule.default.register(api, { importRouting: async () => routingCapability });
     const prompt = scenario === "continuity-overlay"
       ? "Since then the project now follows a different roadmap."
       : "This project decision feels unexpectedly joyful and important.";
-    const emitted = api._emit("before_prompt_build", {
+    const turn = await observeOfficialTurn(api, {
+      agentId,
+      workspaceDir: baseDbPath,
+      runId: `run-${scenario}`,
       prompt,
-      messages: [{ role: "user", content: prompt }],
-      sessionKey: `agent:${agentId}:main`,
-    }, { agentId, workspaceDir: baseDbPath, workspaceKey: "recall-abort-workspace", sessionKey: `agent:${agentId}:main` });
+    });
+    const emitted = api._emit("before_prompt_build", turn.event, turn.ctx);
 
     const didStart = await Promise.race([
       started.then(() => true),
