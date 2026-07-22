@@ -1199,10 +1199,12 @@ class MemoryDB {
     if (!textField?.type) {
       throw new Error(`MemoryDB ownership schema verification failed: authoritative text field missing for ${this.dbPath}`);
     }
-    for (const fieldName of ["agentId", "workspaceId"]) {
-      const field = fields.find((candidate) => candidate.name === fieldName);
-      if (!field || String(field.type) !== String(textField.type)) {
-        throw new Error(`MemoryDB ownership schema verification failed: ${fieldName} must match text DataType for ${this.dbPath}`);
+    if (!this.readOnly) {
+      for (const fieldName of ["agentId", "workspaceId"]) {
+        const field = fields.find((candidate) => candidate.name === fieldName);
+        if (!field || String(field.type) !== String(textField.type)) {
+          throw new Error(`MemoryDB ownership schema verification failed: ${fieldName} must match text DataType for ${this.dbPath}`);
+        }
       }
     }
     this.schemaFieldNames = new Set(fields.map(f => f.name));
