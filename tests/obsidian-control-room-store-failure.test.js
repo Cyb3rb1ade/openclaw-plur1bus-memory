@@ -17,6 +17,22 @@ const WORKSPACE_KEY = "control-room-workspace";
 const OWNER_USER_ID = "control-room-owner";
 const OWNER_CHAT_ID = "control-room-chat";
 
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
 function makeApi(baseDbPath, vaultPath) {
   const commands = [];
   const shutdownHandlers = [];
@@ -37,6 +53,11 @@ function makeApi(baseDbPath, vaultPath) {
       },
     },
     logger: { info: noop, warn: noop, error: noop, debug: noop },
+    runtime: {
+      agent: {
+        async resolveAgentWorkspaceDir(config) { return config?.workspaceDir || baseDbPath; },
+      },
+    },
     resolvePath: (value) => value,
     registerCommand(command) { commands.push(command); },
     registerTool: noop,
@@ -96,7 +117,7 @@ describe("registered Obsidian Control-Room memory apply", () => {
     updateReviewBundleItems(obsidianConfig, bundleId, "approve", "all", { agentId: AGENT_ID });
 
     api = makeApi(baseDbPath, vaultPath);
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
   });
 
   afterEach(async () => {
@@ -116,6 +137,14 @@ describe("registered Obsidian Control-Room memory apply", () => {
       agentId: AGENT_ID,
       workspaceDir,
       workspaceKey: WORKSPACE_KEY,
+      senderId: OWNER_USER_ID,
+      channel: "telegram",
+      accountId: "default",
+      sessionKey: `agent:${AGENT_ID}:main`,
+      from: `telegram:${OWNER_CHAT_ID}`,
+      to: `telegram:${OWNER_CHAT_ID}`,
+      config: { workspaceDir },
+      getCurrentConversationBinding: () => null,
       userId: OWNER_USER_ID,
       chatId: OWNER_CHAT_ID,
       chatType: "private",

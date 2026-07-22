@@ -15,6 +15,22 @@ import { TimeoutError } from "../lib/with-timeout.js";
 const VECTOR_DIM = 384;
 const AGENT_ID = "namespace-recall-agent";
 
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
 function vector() {
   return Array(VECTOR_DIM).fill(0.1);
 }
@@ -153,7 +169,7 @@ describe("multi-namespace registered recall", () => {
     );
 
     const api = makeApi(baseDbPath);
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const context = {
       agentId: AGENT_ID,
       workspaceDir,
@@ -243,7 +259,7 @@ describe("multi-namespace registered recall", () => {
 
     const api = makeApi(baseDbPath);
     api.pluginConfig.autoRecall = false;
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const recall = api.toolFactory({
       agentId: AGENT_ID,
       workspaceDir,
@@ -317,7 +333,7 @@ describe("multi-namespace registered recall", () => {
     api.pluginConfig.autoRecall = false;
     api.pluginConfig.recall.canonicalFirst = false;
     api.pluginConfig.namespaces.legacyReadOnlyNamespaces = ["legacy-a", "legacy-b"];
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     api.logger.warn = () => { throw new Error("injected namespace phase logger failure"); };
     const recall = api.toolFactory({
       agentId: AGENT_ID,
@@ -381,7 +397,7 @@ describe("multi-namespace registered recall", () => {
     const api = makeApi(baseDbPath);
     api.pluginConfig.autoRecall = false;
     api.pluginConfig.recall.canonicalFirst = false;
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const recall = api.toolFactory({
       agentId: AGENT_ID,
       workspaceDir,
@@ -438,7 +454,7 @@ describe("multi-namespace registered recall", () => {
     api.pluginConfig.recall.canonicalFirst = false;
     api.pluginConfig.namespaces.legacyReadOnlyNamespaces = [];
     api.pluginConfig.namespaces.crossNamespaceRecall = false;
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const recall = api.toolFactory({
       agentId: AGENT_ID,
       workspaceDir,
@@ -510,7 +526,7 @@ describe("multi-namespace registered recall", () => {
     const api = makeApi(baseDbPath);
     api.pluginConfig.autoRecall = false;
     api.pluginConfig.recall.canonicalFirst = false;
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const recall = api.toolFactory({
       agentId: AGENT_ID,
       workspaceDir,

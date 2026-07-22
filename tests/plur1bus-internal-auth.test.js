@@ -6,6 +6,22 @@ import { join } from "node:path";
 
 import plugin from "../index.js";
 
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
 function makeApi(baseDbPath, configOverrides = {}) {
   const commands = [];
   const noop = () => {};
@@ -21,6 +37,11 @@ function makeApi(baseDbPath, configOverrides = {}) {
       ...configOverrides,
     },
     logger: { info: noop, warn: noop, error: noop, debug: noop },
+    runtime: {
+      agent: {
+        async resolveAgentWorkspaceDir() { return baseDbPath; },
+      },
+    },
     resolvePath: (p) => p,
     registerCommand(command) {
       commands.push(command);
@@ -37,7 +58,7 @@ async function withPlugin(fn) {
   const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-internal-auth-ws-"));
   try {
     const api = makeApi(baseDbPath);
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const command = api._commands.find((item) => item.name === "plur1bus");
     assert.ok(command, "plur1bus command should be registered");
     return await fn({ command, workspaceDir });
@@ -50,7 +71,13 @@ async function withPlugin(fn) {
 const groupCtx = {
   workspaceKey: "ws",
   agentId: "agent-a",
+  senderId: "u1",
   channel: "telegram",
+  accountId: "default",
+  sessionKey: "agent:agent-a:telegram:group:g1",
+  from: "telegram:group:g1",
+  to: "telegram:group:g1",
+  getCurrentConversationBinding: () => null,
   chatType: "group",
   userId: "u1",
   chatId: "g1",
