@@ -7,11 +7,12 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { runRecallPipeline, dedupResults } from "../lib/recall-pipeline.js";
+import { runRecallPipeline as runRecallPipelineRaw, dedupResults } from "../lib/recall-pipeline.js";
 import { distanceToScore } from "../lib/score.js";
+import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
 import {
   makeEmbeddings,
-  makeRow,
+  makeRow as makeHarnessRow,
   mockTable,
   expectOrderedIds,
   expectTraceSummary,
@@ -22,6 +23,20 @@ import {
 
 function silence() {
   return { warn() {}, info() {} };
+}
+
+function makeRow(options) {
+  const row = makeHarnessRow(options);
+  const ownerAgentId = row.agentId || "agent-a";
+  return {
+    ...row,
+    agentId: ownerAgentId,
+    storedBy: options.storedBy ?? ownerAgentId,
+  };
+}
+
+function runRecallPipeline(options) {
+  return runRecallPipelineRaw({ agentId: "agent-a", ...options });
 }
 
 describe("Golden-Set: runRecallPipeline ranking", () => {
@@ -231,6 +246,54 @@ describe("Golden-Set: runRecallPipeline budget / tiers", () => {
       cleanupDir(workspaceDir);
     }
   });
+
+  it("passes the initial frozen agent context by identity to canonical cache-miss embeddings", async () => {
+    let workspaceDir;
+    try {
+      workspaceDir = makeKnowledgeDirSync([{
+        heading: "Canonical context",
+        text: "Canonical cache miss content long enough to become an embedded knowledge section.",
+      }]);
+      class ContextRecordingEmbeddings {
+        constructor() {
+          this.calls = [];
+        }
+
+        async embedQuery(text, context) {
+          this.calls.push(["query", text, context]);
+          return [1, 0, 0, 0];
+        }
+
+        async embed(text, context) {
+          this.calls.push(["canonical", text, context]);
+          return [1, 0, 0, 0];
+        }
+      }
+      const embeddings = new ContextRecordingEmbeddings();
+
+      const result = await runRecallPipeline({
+        query: "canonical context",
+        dbTable: mockTable([]),
+        embeddings,
+        workspaceDir,
+        canonicalEnabled: true,
+        canonicalMinScore: -1,
+        canonicalMaxItems: 1,
+        associativeEnabled: false,
+        logger: silence(),
+      });
+
+      assert.equal(result.canonical.length, 1);
+      assert.deepEqual(embeddings.calls.map(([kind]) => kind), ["query", "canonical"]);
+      const queryContext = embeddings.calls[0][2];
+      const canonicalContext = embeddings.calls[1][2];
+      assert.equal(canonicalContext, queryContext, "canonical embedding must reuse the exact request context object");
+      assert.deepEqual(canonicalContext, { agentId: "agent-a" });
+      assert.ok(Object.isFrozen(canonicalContext));
+    } finally {
+      cleanupDir(workspaceDir);
+    }
+  });
 });
 
 describe("Golden-Set: runRecallPipeline reranker", () => {
@@ -311,8 +374,304 @@ describe("Golden-Set: runRecallPipeline ACL", () => {
       logger: silence(),
     });
     expectOrderedIds(result.memories, ["own"]);
-    const foreignDecision = result.trace.decisions.find(d => d.memoryId === "foreign" && d.stage === "acl");
+    const foreignDecision = result.trace.decisions.find(d => d.memoryId === "foreign" && d.stage === "initial-acl");
     assert.ok(foreignDecision, "expected ACL rejection decision");
+  });
+
+  it("never sends a foreign workspace candidate to the reranker and preserves ownership aliases", async () => {
+    const workspaceIdentity = "workspace:v1:ws-a";
+    const ownerCtx = resolveMemoryRequestContext({
+      agentId: "agent-a",
+      workspaceId: workspaceIdentity,
+      channel: "telegram",
+      accountId: "default",
+      userId: "owner",
+    });
+    const ownershipAliases = {
+      sourceMemoryId: "source-own",
+      sourceAgentId: "source-agent",
+      shareIdempotencyKey: "share-own",
+      shareProvenance: JSON.stringify({ source: "fixture" }),
+    };
+    const rows = [
+      {
+        ...makeRow({ id: "own", text: "allowed workspace", distance: 0.1 }),
+        scope: "workspace",
+        workspaceId: workspaceIdentity,
+        workspaceKey: workspaceIdentity,
+        ...ownershipAliases,
+      },
+      {
+        ...makeRow({ id: "user-own", text: "allowed user", distance: 0.2 }),
+        scope: "user",
+        ownerUserId: ownerCtx.userPrincipal,
+      },
+      {
+        ...makeRow({ id: "foreign", text: "secret-b", distance: 0.05 }),
+        scope: "workspace",
+        workspaceId: "workspace:v1:ws-b",
+        workspaceKey: "workspace:v1:ws-b",
+      },
+    ];
+    const seenDocs = [];
+    const result = await runRecallPipeline({
+      query: "acl",
+      dbTable: mockTable(rows),
+      embeddings: makeEmbeddings(),
+      reranker: {
+        async rerank(_query, docs) {
+          seenDocs.push(...docs);
+          return docs.map((_, index) => ({ index }));
+        },
+      },
+      agentId: "agent-a",
+      workspaceId: workspaceIdentity,
+      userPrincipal: ownerCtx.userPrincipal,
+      topN: 5,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      dedupEnabled: false,
+      logger: silence(),
+    });
+
+    assert.deepEqual(seenDocs, ["allowed workspace", "allowed user"]);
+    assert.deepEqual(result.memories.map((item) => item.entry.id), ["own", "user-own"]);
+    assert.deepEqual(
+      Object.fromEntries(Object.keys(ownershipAliases).map((key) => [key, result.memories[0].entry[key]])),
+      ownershipAliases,
+    );
+  });
+
+  it("authorizes refined rows before merge and preserves request-bound embedding context", async () => {
+    const workspaceIdentity = "workspace:v1:ws-a";
+    const ownerCtx = resolveMemoryRequestContext({
+      agentId: "agent-a",
+      workspaceId: workspaceIdentity,
+      channel: "telegram",
+      accountId: "default",
+      userId: "owner",
+    });
+    const ownershipAliases = {
+      sourceMemoryId: "source-refined",
+      sourceAgentId: "source-agent",
+      shareIdempotencyKey: "share-refined",
+      shareProvenance: JSON.stringify({ source: "refined-fixture" }),
+    };
+    const refinedRows = [
+      {
+        ...makeRow({ id: "refined-own", text: "allowed refined", distance: 0.1 }),
+        scope: "workspace",
+        workspaceId: workspaceIdentity,
+        workspaceKey: workspaceIdentity,
+        ...ownershipAliases,
+      },
+      {
+        ...makeRow({ id: "refined-user", text: "allowed refined user", distance: 0.2 }),
+        scope: "user",
+        ownerUserId: ownerCtx.userPrincipal,
+      },
+      {
+        ...makeRow({ id: "refined-foreign", text: "refined secret-b", distance: 0.05 }),
+        scope: "workspace",
+        workspaceId: "workspace:v1:ws-b",
+        workspaceKey: "workspace:v1:ws-b",
+      },
+    ];
+    const embeddingCalls = [];
+    const embeddings = {
+      dim: 2,
+      async embedQuery(text, context) {
+        embeddingCalls.push([text, context]);
+        return embeddingCalls.length === 1 ? [1, 0] : [0, 1];
+      },
+    };
+    const table = {
+      vectorSearch(vector) {
+        const rows = vector[0] === 1 ? [] : refinedRows;
+        return { limit() { return { async toArray() { return rows; } }; } };
+      },
+      query() {
+        return { where() { return this; }, limit() { return this; }, async toArray() { return refinedRows; } };
+      },
+    };
+    const seenDocs = [];
+    const result = await runRecallPipeline({
+      query: "acl",
+      dbTable: table,
+      embeddings,
+      reranker: {
+        async rerank(_query, docs) {
+          seenDocs.push(...docs);
+          return docs.map((_, index) => ({ index }));
+        },
+      },
+      agentId: "agent-a",
+      workspaceId: workspaceIdentity,
+      userPrincipal: ownerCtx.userPrincipal,
+      memoryCtx: ownerCtx,
+      queryRefinerEnabled: true,
+      topN: 5,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      dedupEnabled: false,
+      decisionTrace: true,
+      logger: silence(),
+    });
+
+    assert.deepEqual(seenDocs, ["allowed refined", "allowed refined user"]);
+    assert.deepEqual(result.memories.map((item) => item.entry.id), ["refined-own", "refined-user"]);
+    assert.deepEqual(embeddingCalls, [
+      ["acl", { agentId: "agent-a" }],
+      ["acl", { agentId: "agent-a" }],
+    ]);
+    assert.ok(Object.isFrozen(embeddingCalls[0][1]), "embedding context must be immutable");
+    assert.deepEqual(
+      Object.fromEntries(Object.keys(ownershipAliases).map((key) => [key, result.memories[0].entry[key]])),
+      ownershipAliases,
+    );
+    assert.ok(
+      result.trace.decisions.some((entry) => entry.memoryId === "refined-foreign" && entry.stage === "refined-acl"),
+      "foreign refined rows must be traced before merge/provider construction",
+    );
+  });
+
+  it("fails closed before initial reranking when canonical request context is absent", async () => {
+    const rows = [
+      {
+        ...makeRow({ id: "foreign-a", text: "workspace-b secret one", distance: 0.1 }),
+        scope: "workspace",
+        workspaceId: "workspace:v1:ws-b",
+        workspaceKey: "workspace:v1:ws-b",
+      },
+      {
+        ...makeRow({ id: "foreign-b", text: "workspace-b secret two", distance: 0.2 }),
+        scope: "workspace",
+        workspaceId: "workspace:v1:ws-b",
+        workspaceKey: "workspace:v1:ws-b",
+      },
+    ];
+    const seenDocs = [];
+
+    const result = await runRecallPipelineRaw({
+      query: "acl",
+      dbTable: mockTable(rows),
+      embeddings: makeEmbeddings(),
+      reranker: {
+        async rerank(_query, docs) {
+          seenDocs.push(...docs);
+          return docs.map((_, index) => ({ index }));
+        },
+      },
+      topN: 5,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      dedupEnabled: false,
+      decisionTrace: true,
+      logger: silence(),
+    });
+
+    assert.deepEqual(seenDocs, []);
+    assert.deepEqual(result.memories, []);
+    assert.ok(result.trace.decisions.some((entry) => (
+      entry.memoryId === "foreign-a"
+      && entry.stage === "initial-acl"
+      && entry.reason === "acl.request.missing_agent"
+    )));
+  });
+
+  it("fails closed before refined merge and reranking when canonical request context is absent", async () => {
+    const refinedRows = [
+      {
+        ...makeRow({ id: "refined-foreign-a", text: "refined workspace-b secret one", distance: 0.1 }),
+        scope: "workspace",
+        workspaceId: "workspace:v1:ws-b",
+        workspaceKey: "workspace:v1:ws-b",
+      },
+      {
+        ...makeRow({ id: "refined-foreign-b", text: "refined workspace-b secret two", distance: 0.2 }),
+        scope: "workspace",
+        workspaceId: "workspace:v1:ws-b",
+        workspaceKey: "workspace:v1:ws-b",
+      },
+    ];
+    let searchCount = 0;
+    const table = {
+      vectorSearch() {
+        const rows = searchCount++ === 0 ? [] : refinedRows;
+        return { limit() { return { async toArray() { return rows; } }; } };
+      },
+      query() {
+        return { where() { return this; }, limit() { return this; }, async toArray() { return refinedRows; } };
+      },
+    };
+    const seenDocs = [];
+
+    const result = await runRecallPipelineRaw({
+      query: "acl",
+      dbTable: table,
+      embeddings: makeEmbeddings(),
+      reranker: {
+        async rerank(_query, docs) {
+          seenDocs.push(...docs);
+          return docs.map((_, index) => ({ index }));
+        },
+      },
+      queryRefinerEnabled: true,
+      topN: 5,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      dedupEnabled: false,
+      decisionTrace: true,
+      logger: silence(),
+    });
+
+    assert.deepEqual(seenDocs, []);
+    assert.deepEqual(result.memories, []);
+    assert.ok(result.trace.decisions.some((entry) => (
+      entry.memoryId === "refined-foreign-a"
+      && entry.stage === "refined-acl"
+      && entry.reason === "acl.request.missing_agent"
+    )));
+  });
+});
+
+describe("Golden-Set: runRecallPipeline temporal embedding context", () => {
+  it("passes the same frozen agent context to initial and temporal-anchor embeddings", async () => {
+    const createdAt = 1_750_000_000_000;
+    const rows = [makeRow({ id: "anchor", text: "docker setup", distance: 0.1, createdAt })];
+    const embeddingCalls = [];
+    const embeddings = {
+      async embedQuery(text, context) {
+        embeddingCalls.push(["query", text, context]);
+        return [1, 0];
+      },
+      async embed(text, context) {
+        embeddingCalls.push(["anchor", text, context]);
+        return [1, 0];
+      },
+    };
+
+    await runRecallPipeline({
+      query: "what happened after the docker setup",
+      dbTable: mockTable(rows),
+      embeddings,
+      topN: 5,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      logger: silence(),
+    });
+
+    assert.deepEqual(embeddingCalls, [
+      ["query", "what happened after the docker setup", { agentId: "agent-a" }],
+      ["anchor", "docker setup", { agentId: "agent-a" }],
+    ]);
+    assert.equal(embeddingCalls[0][2], embeddingCalls[1][2]);
+    assert.ok(Object.isFrozen(embeddingCalls[1][2]));
   });
 });
 

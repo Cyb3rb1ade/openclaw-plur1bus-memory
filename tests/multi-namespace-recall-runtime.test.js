@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import plugin, { MemoryDB } from "../index.js";
+import { createNeoStore } from "../lib/neo-arch.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 
@@ -280,6 +281,87 @@ describe("multi-namespace registered recall", () => {
     const result = await resultPromise;
     assert.match(result.content[0].text, /memory recall failed.*active namespace query failure/i);
     assert.equal(readRetrievalLedger(baseDbPath).length, 0, "a failed merged recall emits no partial ledger entry");
+    for (const stop of api.handlers.get("gateway_stop") || []) await stop();
+  });
+
+  it("rejects a merged namespace recall when strict graph endpoint authorization cannot read", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-graph-read-"));
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-graph-workspace-"));
+    const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+    const originalInit = MemoryDB.prototype.init;
+    const seedId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const neighborId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const makeRow = (id, text) => ({
+      id,
+      text,
+      summary: text,
+      vector: vector(),
+      category: "fact",
+      status: "active",
+      scope: "agent-private",
+      agentId: AGENT_ID,
+      storedBy: AGENT_ID,
+      workspaceKey: "namespace-workspace",
+      _distance: 0,
+    });
+    const seed = makeRow(seedId, "strict graph seed");
+    const neighbor = makeRow(neighborId, "strict graph neighbor");
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => vector();
+    MemoryDB.prototype.init = async function initGraphReadFixture() {
+      const active = this.dbPath.endsWith(join("active", AGENT_ID));
+      this.table = {
+        vectorSearch() {
+          return { limit() { return this; }, async toArray() { return [seed]; } };
+        },
+        query() {
+          return {
+            where() {
+              return {
+                limit() { return this; },
+                async toArray() {
+                  if (active) throw new Error("injected strict graph endpoint read failure");
+                  return [seed, neighbor];
+                },
+              };
+            },
+          };
+        },
+      };
+      return true;
+    };
+    createNeoStore(join(baseDbPath, "_neo"), "namespace-workspace").appendGraphEdges([{
+      source: seedId,
+      target: neighborId,
+      type: "semantic",
+      strength: 0.9,
+      directed: false,
+    }]);
+    t.after(() => {
+      LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+      MemoryDB.prototype.init = originalInit;
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
+    });
+
+    const api = makeApi(baseDbPath);
+    api.pluginConfig.autoRecall = false;
+    api.pluginConfig.recall.canonicalFirst = false;
+    plugin.register(api, { importRouting: async () => routingCapability });
+    const recall = api.toolFactory({
+      agentId: AGENT_ID,
+      workspaceDir,
+      workspaceKey: "namespace-workspace",
+      userId: "namespace-owner",
+    }).find((tool) => tool.name === "memory_recall");
+
+    const result = await recall.execute("namespace-graph-read-failure", {
+      query: "strict graph endpoint",
+    });
+
+    assert.match(result.content[0].text, /memory recall failed.*strict graph endpoint read failure/i);
+    assert.doesNotMatch(result.content[0].text, new RegExp(seedId));
+    assert.doesNotMatch(result.content[0].text, new RegExp(neighborId));
+    assert.equal(readRetrievalLedger(baseDbPath).length, 0, "failed merged graph recall emits no partial ledger");
     for (const stop of api.handlers.get("gateway_stop") || []) await stop();
   });
 

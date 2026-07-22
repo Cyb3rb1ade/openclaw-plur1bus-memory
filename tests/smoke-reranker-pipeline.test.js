@@ -3,7 +3,11 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { runRecallPipeline } from "../lib/recall-pipeline.js";
+import { runRecallPipeline as runRecallPipelineRaw } from "../lib/recall-pipeline.js";
+
+function runRecallPipeline(options) {
+  return runRecallPipelineRaw({ agentId: "agent-a", ...options });
+}
 
 describe("reranker-pipeline", () => {
   const makeDbTable = (rows) => ({
@@ -21,9 +25,9 @@ describe("reranker-pipeline", () => {
   };
 
   const rows = [
-    { id: "a", text: "alpha", _distance: 0.1, importance: 0.8 },
-    { id: "b", text: "beta", _distance: 0.2, importance: 0.5 },
-    { id: "c", text: "gamma", _distance: 0.3, importance: 0.3 },
+    { id: "a", text: "alpha", _distance: 0.1, importance: 0.8, scope: "agent-private", agentId: "agent-a", storedBy: "agent-a" },
+    { id: "b", text: "beta", _distance: 0.2, importance: 0.5, scope: "agent-private", agentId: "agent-a", storedBy: "agent-a" },
+    { id: "c", text: "gamma", _distance: 0.3, importance: 0.3, scope: "agent-private", agentId: "agent-a", storedBy: "agent-a" },
   ];
 
   it("falls back to unreranked on reranker error when fallbackOnError=true", async () => {

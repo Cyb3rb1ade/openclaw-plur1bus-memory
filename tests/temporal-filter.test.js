@@ -30,6 +30,8 @@ describe("applyTemporalFilter", () => {
 describe("temporalRangeFromAnchor", () => {
   it("resolves a normal anchor query", async () => {
     const createdAt = 1750000000000;
+    const embeddingContext = Object.freeze({ agentId: "agent-a" });
+    const embeddingCalls = [];
     const dbTable = {
       vectorSearch: () => ({
         limit: () => ({
@@ -38,13 +40,18 @@ describe("temporalRangeFromAnchor", () => {
       }),
     };
     const embeddings = {
-      embed: async () => [0.1, 0.2, 0.3],
+      async embed(text, context) {
+        embeddingCalls.push([text, context]);
+        return [0.1, 0.2, 0.3];
+      },
     };
-    const range = await temporalRangeFromAnchor("docker setup", dbTable, embeddings);
+    const range = await temporalRangeFromAnchor("docker setup", dbTable, embeddings, { embeddingContext });
     assert.ok(range);
     assert.strictEqual(range.type, "range");
     assert.strictEqual(range.from, createdAt);
     assert.strictEqual(range.to, createdAt + 48 * 3600_000);
+    assert.deepEqual(embeddingCalls, [["docker setup", { agentId: "agent-a" }]]);
+    assert.equal(embeddingCalls[0][1], embeddingContext);
   });
 
   it("returns null when vectorSearch hangs past the timeout", async () => {
@@ -75,8 +82,15 @@ describe("temporalRangeFromAnchor", () => {
         throw new Error("embedding down");
       },
     };
-    const range = await temporalRangeFromAnchor("docker setup", dbTable, embeddings);
+    const diagnostics = [];
+    const range = await temporalRangeFromAnchor("docker setup", dbTable, embeddings, {
+      logger: {
+        debug(message) { diagnostics.push(message); },
+      },
+    });
     assert.strictEqual(range, null);
+    assert.equal(diagnostics.length, 1);
+    assert.match(diagnostics[0], /temporal-filter\.anchor.*embedding down/);
   });
 
   it("propagates an attached anchor-read timeout only in strict mode", async () => {
