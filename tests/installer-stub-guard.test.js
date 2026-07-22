@@ -45,7 +45,7 @@ afterEach(() => {
 
 describe("smokeTestExports", () => {
   it("passes when every expected export is present and the right kind", async () => {
-    const filePath = join(dir, "lib", "neo-arch.js");
+    const filePath = join(dir, "lib", "neo-arch.mjs");
     writeFileSync(
       filePath,
       'export function buildNeoWorkspaceAliases() { return {}; }\nexport function isInjectedContextText() { return false; }\n',
@@ -60,7 +60,7 @@ describe("smokeTestExports", () => {
   });
 
   it("fails when an expected export is missing", async () => {
-    const filePath = join(dir, "lib", "neo-arch.js");
+    const filePath = join(dir, "lib", "neo-arch.mjs");
     writeFileSync(filePath, "export function somethingElse() {}\n");
 
     const report = await smokeTestExports([
@@ -72,7 +72,7 @@ describe("smokeTestExports", () => {
   });
 
   it("fails (not throws) when the module cannot be imported at all", async () => {
-    const filePath = join(dir, "lib", "broken-syntax.js");
+    const filePath = join(dir, "lib", "broken-syntax.mjs");
     writeFileSync(filePath, "export function oops( {\n");
 
     const report = await smokeTestExports([
@@ -84,7 +84,7 @@ describe("smokeTestExports", () => {
   });
 
   it("reports a broken re-export stub as a smoke-test failure, not just missing-export", async () => {
-    const filePath = join(dir, "lib", "neo-arch.js");
+    const filePath = join(dir, "lib", "neo-arch.mjs");
     writeFileSync(filePath, 'export * from "../../lib/neo-arch.js";\n');
 
     const report = await smokeTestExports([
