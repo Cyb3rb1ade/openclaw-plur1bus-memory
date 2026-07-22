@@ -53,6 +53,7 @@ export const DEPLOY_FILES = [
   "lib/memory-fact-quality.js",
   "lib/memory-graph.js",
   "lib/memory-merge-safety.js",
+  "lib/memory-request-context.js",
   "lib/memory-text-contradiction.js",
   "lib/recall-decision-trace.js",
   "lib/recall-phase-timer.js",

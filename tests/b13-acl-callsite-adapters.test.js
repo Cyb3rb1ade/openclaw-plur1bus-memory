@@ -87,6 +87,38 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.equal(validateOwnershipTuple({ workspaceId: "workspace-a", workspaceKey: "workspace-b" }, aliases).ok, false);
   });
 
+  it("authorizes bound legacy rows through storedBy and workspaceKey fallbacks", () => {
+    const ctx = resolveMemoryRequestContext({
+      agentId: "agent-a",
+      workspaceId: "workspace-a",
+    }, { workspaceAliases: aliases });
+
+    assert.deepEqual(checkAccess(ctx, {
+      scope: "agent-private",
+      storedBy: "agent-a",
+    }), { allowed: true });
+    assert.deepEqual(checkAccess(ctx, {
+      scope: "workspace",
+      workspaceKey: "legacy-a",
+    }), { allowed: true });
+  });
+
+  it("denies unbound legacy rows instead of inferring requester ownership", () => {
+    const ctx = resolveMemoryRequestContext({
+      agentId: "agent-a",
+      workspaceId: "workspace-a",
+    }, { workspaceAliases: aliases });
+
+    assert.deepEqual(checkAccess(ctx, {
+      scope: "agent-private",
+      storedBy: "",
+    }), { allowed: false, reason: "acl.agent_private.missing_owner" });
+    assert.deepEqual(checkAccess(ctx, {
+      scope: "workspace",
+      workspaceKey: "",
+    }), { allowed: false, reason: "acl.workspace.missing_workspace" });
+  });
+
   it("applies the request workspace grammar and suffix limits to stored ACL bindings", () => {
     const maxKey = `workspace:v1:${"k".repeat(128)}`;
     const maxDir = `workspace-dir:v1:${"d".repeat(1024)}`;
