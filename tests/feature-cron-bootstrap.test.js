@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import * as pluginModule from "../index.js";
 import {
   shouldRunCronBootstrap,
@@ -14,11 +15,12 @@ import { buildAddArgs, runSetupFeatureCrons } from "../scripts/setup-feature-cro
 
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const { parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap } = pluginModule;
 
 describe("featureCronSetup manifest documentation", () => {
   it("names every owner gate and the fail-closed delivery source contract", () => {
-    const manifestPath = path.join(import.meta.dirname, "..", "openclaw.plugin.json");
+    const manifestPath = path.join(TEST_DIR, "..", "openclaw.plugin.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     const description = manifest.configSchema.properties.featureCronSetup.description;
 
