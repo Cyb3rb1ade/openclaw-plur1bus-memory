@@ -1,6 +1,6 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -88,6 +88,14 @@ function confirmationToken(text, command) {
   const match = String(text).match(new RegExp(`/${command} confirm ([0-9a-f-]+)`, "i"));
   assert.ok(match, `expected /${command} confirmation token, got: ${text}`);
   return match[1];
+}
+
+function destructiveOpEntries(workspaceDir) {
+  const logPath = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
+  return readFileSync(logPath, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
 }
 
 describe("registered memory command reachability", () => {
@@ -202,6 +210,9 @@ describe("registered memory command reachability", () => {
     const completed = await run("forget", { ...baseCtx, args: `confirm ${token}` });
     assert.match(completed.text, new RegExp(memoryId));
     assert.match(completed.text, /deleted|archiviert/i);
+    assert.ok(destructiveOpEntries(workspaceDir).some((entry) => (
+      entry.event === "memory.deleted" && entry.memoryId === memoryId
+    )));
 
     const archiveDir = join(openclawHome, ".openclaw", "memory", "_archive", agentId);
     assert.ok(readdirSync(archiveDir).some((name) => name.endsWith(`-${memoryId}.json`)));
@@ -239,6 +250,9 @@ describe("registered memory command reachability", () => {
     const completed = await run("correct", { ...baseCtx, args: `confirm ${token}` }, commandApi);
     assert.match(completed.text, new RegExp(memoryId));
     assert.match(completed.text, /updated|aktualisiert/i);
+    assert.ok(destructiveOpEntries(workspaceDir).some((entry) => (
+      entry.event === "memory.updated" && entry.memoryId === memoryId
+    )));
 
     const archiveDir = join(openclawHome, ".openclaw", "memory", "_archive", agentId);
     assert.ok(readdirSync(archiveDir).some((name) => name.endsWith(`-${memoryId}.json`)));
