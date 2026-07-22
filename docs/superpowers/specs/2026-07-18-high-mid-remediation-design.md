@@ -1,8 +1,8 @@
 # High- and Medium-Finding Remediation Design
 
-**Date:** 2026-07-18  
-**Target:** `plur1bus/main` at `6dff096efe936f7ec3d0e11a8ba83bf08671ad4e`  
-**Integration branch:** `fix/high-mid-audit-findings`  
+**Date:** 2026-07-18
+**Target:** `plur1bus/main` at `6dff096efe936f7ec3d0e11a8ba83bf08671ad4e`
+**Integration branch:** `fix/high-mid-audit-findings`
 **Status:** Approved in chat, including the Share scope model and opportunistic-low rule
 
 ## Goal
