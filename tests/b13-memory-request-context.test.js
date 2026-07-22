@@ -11,6 +11,7 @@ import {
   buildMemoryWorkspaceAliases,
   createHostRoutingLoader,
   createMemoryTurnRouteRegistry,
+  normalizeAndFreezeWorkspaceAliases,
   resolveHostCommandMemoryContext,
   resolveHostHookMemoryContext,
   resolveMemoryRequestContext,
@@ -19,6 +20,7 @@ import {
   userPoolKey,
   workspacePoolKey,
 } from "../lib/memory-request-context.js";
+import { buildNeoWorkspaceAliases } from "../lib/neo-arch.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -89,11 +91,8 @@ function hookFixture({
     chatId,
     ...(threadId ? { messageThreadId: threadId } : {}),
     channelContext: {
-      senderId,
       sender: { id: senderId },
-      chatId,
       chat: { id: chatId },
-      ...(threadId ? { threadId } : {}),
     },
   };
 }
@@ -274,6 +273,65 @@ describe("B13 canonical memory request context", () => {
     }
   });
 
+  it("accepts official provider-relative Discord user and channel delivery targets", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-discord-relative-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    for (const fixture of [
+      { provider: "discord", sessionKey: "agent:a:discord:channel:chan-a", target: "channel:chan-a", chatId: "chan-a" },
+      { provider: "discord", sessionKey: "agent:a:discord:direct:user-a", target: "user:user-a", chatId: "user-a" },
+    ]) {
+      const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+      registry.observeReplyDispatch({
+        runId: "run-a",
+        sessionKey: fixture.sessionKey,
+        originatingChannel: fixture.provider,
+        originatingTo: fixture.target,
+        originatingAccountId: "default",
+        ctx: {
+          AgentId: "a", SessionKey: fixture.sessionKey, AccountId: "default", SenderId: "42",
+          Provider: fixture.provider, ChatId: fixture.chatId, OriginatingTo: fixture.target,
+          CommandBody: "ordinary message",
+        },
+      });
+      assert.equal(registry.pendingCount(), 1, fixture.target);
+      const hook = hookFixture({ workspaceDir, sessionKey: fixture.sessionKey, chatId: fixture.chatId });
+      hook.messageProvider = fixture.provider;
+      const entry = sessionEntryFixture({ chatId: fixture.chatId });
+      entry.deliveryContext = { channel: fixture.provider, accountId: "default", to: fixture.target };
+      entry.origin = { provider: fixture.provider, accountId: "default", to: fixture.target };
+      entry.lastChannel = fixture.provider;
+      entry.lastTo = fixture.target;
+      const resolved = await resolveHostHookMemoryContext(hook, {
+        routingCapability,
+        turnRoutes: registry,
+        accountTopology: buildMemoryAccountTopology({ channels: { [fixture.provider]: {} } }),
+        getSessionEntry: () => entry,
+      });
+      assert.match(resolved.userPrincipal, /^user:v1:/, fixture.target);
+    }
+  });
+
+  it("rejects unknown one-part agent session routes", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-closed-session-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    for (const sessionKey of [
+      "agent:a:evil",
+      "agent:a:direct:user-a:extra",
+      "agent:a:discord:channel:chan-a:extra",
+      "agent:a:discord:primary:direct:user-a:extra",
+    ]) {
+      await assert.rejects(() => resolveHostCommandMemoryContext({
+        senderId: "42", channel: "telegram", accountId: "default", agentId: "a",
+        sessionKey, from: "telegram:42", to: "telegram:42",
+        getCurrentConversationBinding: () => null,
+      }, {
+        resolveAgentWorkspaceDir: async () => workspaceDir,
+        routingLoader: async () => routingCapability,
+        requireConversation: true,
+      }), /session route|grammar/);
+    }
+  });
+
   it("rejects malformed, foreign, extra, and conflicting command route aliases", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-route-deny-"));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
@@ -442,6 +500,87 @@ describe("B13 canonical memory request context", () => {
     assert.deepEqual(equal.aliases, [{ alias: "same", workspaceKey: "workspace:v1:target-a" }]);
   });
 
+  it("keeps maximum-length canonical workspace targets idempotent", () => {
+    const maxKey = "x".repeat(INPUT_LIMITS.AGENT_ID);
+    const canonical = `workspace:v1:${maxKey}`;
+    const once = normalizeAndFreezeWorkspaceAliases({
+      paths: [],
+      aliases: [{ alias: "maximum", workspaceKey: maxKey }],
+    });
+    assert.deepEqual(normalizeAndFreezeWorkspaceAliases(once), once);
+    assert.equal(once.aliases[0].workspaceKey, canonical);
+    assert.equal(resolveMemoryRequestContext({ agentId: "a", workspaceKey: "maximum" }, {
+      workspaceAliases: once,
+    }).workspaceIdentity, canonical);
+    assert.equal(resolveMemoryRequestContext({ agentId: "a", workspaceId: canonical }).workspaceIdentity, canonical);
+
+    const canonicalOnce = normalizeAndFreezeWorkspaceAliases({
+      paths: [],
+      aliases: [{ alias: "canonical", workspaceKey: canonical }],
+    });
+    assert.deepEqual(normalizeAndFreezeWorkspaceAliases(canonicalOnce), canonicalOnce);
+    const canonicalDir = "workspace-dir:v1:/tmp/plur1bus-b13-canonical-dir";
+    const dirOnce = normalizeAndFreezeWorkspaceAliases({
+      paths: [],
+      aliases: [{ alias: "directory", workspaceKey: canonicalDir }],
+    });
+    assert.deepEqual(normalizeAndFreezeWorkspaceAliases(dirOnce), dirOnce);
+
+    for (const workspaceKey of [
+      "x".repeat(INPUT_LIMITS.AGENT_ID + 1),
+      `workspace:v1:${"x".repeat(INPUT_LIMITS.AGENT_ID + 1)}`,
+      "workspace:v1:",
+      "workspace:v1:workspace:v1:nested",
+      "workspace:v2:unknown",
+    ]) {
+      assert.throws(() => normalizeAndFreezeWorkspaceAliases({
+        paths: [], aliases: [{ alias: "invalid", workspaceKey }],
+      }));
+    }
+  });
+
+  it("rejects aliases that collide under exact Neo lookup normalization", () => {
+    const conflicting = {
+      workspaceAliases: [
+        { alias: "FOO", workspaceKey: "target-a" },
+        { alias: "foo", workspaceKey: "target-b" },
+      ],
+    };
+    assert.throws(() => buildMemoryWorkspaceAliases(
+      conflicting,
+      buildNeoWorkspaceAliases(conflicting),
+    ), /conflicting workspace alias declaration/);
+
+    for (const aliases of [
+      [
+        { alias: "foo bar", workspaceKey: "target-a" },
+        { alias: "foo_bar", workspaceKey: "target-b" },
+      ],
+      [
+        { alias: `${"z".repeat(120)}a`, workspaceKey: "target-a" },
+        { alias: `${"z".repeat(120)}b`, workspaceKey: "target-b" },
+      ],
+    ]) {
+      const cfg = { workspaceAliases: aliases };
+      assert.throws(() => buildMemoryWorkspaceAliases(cfg, buildNeoWorkspaceAliases(cfg)),
+        /conflicting workspace alias declaration/);
+    }
+
+    const equal = {
+      workspaceAliases: [
+        { alias: "FOO", workspaceKey: "target-a" },
+        { alias: "foo", workspaceKey: "target-a" },
+      ],
+    };
+    const once = buildMemoryWorkspaceAliases(equal, buildNeoWorkspaceAliases(equal));
+    assert.deepEqual(normalizeAndFreezeWorkspaceAliases(once), once);
+    for (const workspaceKey of ["FOO", "FoO", "foo"]) {
+      assert.equal(resolveMemoryRequestContext({ agentId: "a", workspaceKey }, {
+        workspaceAliases: once,
+      }).workspaceIdentity, "workspace:v1:target-a");
+    }
+  });
+
   it("rejects conflicting raw workspace path basenames before Neo can collapse them", (t) => {
     const rootA = mkdtempSync(join(tmpdir(), "plur1bus-b13-alias-a-"));
     const rootB = mkdtempSync(join(tmpdir(), "plur1bus-b13-alias-b-"));
@@ -465,6 +604,31 @@ describe("B13 canonical memory request context", () => {
       paths: [],
       aliases: [{ alias: "shared", workspaceKey: "target-b" }],
     }), /conflicting workspace alias declaration/);
+  });
+
+  it("rejects exact workspace path duplicates with different targets", (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-path-conflict-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const conflicting = {
+      neo: {
+        workspaces: [
+          { workspaceKey: "target-a", path: workspaceDir },
+          { workspaceKey: "target-b", path: workspaceDir },
+        ],
+      },
+    };
+    assert.throws(() => buildMemoryWorkspaceAliases(conflicting, buildNeoWorkspaceAliases(conflicting)),
+      /conflicting workspace path declaration/);
+    const equal = {
+      neo: {
+        workspaces: [
+          { workspaceKey: "target-a", path: workspaceDir },
+          { workspaceKey: "target-a", path: workspaceDir },
+        ],
+      },
+    };
+    const once = buildMemoryWorkspaceAliases(equal, buildNeoWorkspaceAliases(equal));
+    assert.deepEqual(normalizeAndFreezeWorkspaceAliases(once), once);
   });
 
   it("joins a real reply_dispatch ticket to the latest prompt session without retaining text", async (t) => {
@@ -554,7 +718,7 @@ describe("B13 canonical memory request context", () => {
     const removals = [
       [["sessionKey"]], [["ctx", "SessionKey"]], [["originatingChannel"]], [["ctx", "Provider"], ["ctx", "OriginatingChannel"]],
       [["originatingAccountId"]], [["ctx", "AccountId"]], [["originatingTo"]], [["ctx", "OriginatingTo"]],
-      [["ctx", "ChatId"]], [["ctx", "SenderId"]],
+      [["ctx", "SenderId"]],
     ];
     for (const paths of removals) {
       const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
@@ -566,6 +730,14 @@ describe("B13 canonical memory request context", () => {
       registry.observeReplyDispatch(event);
       assert.equal(registry.pendingCount(), 0, paths.map((path) => path.join(".")).join("+"));
     }
+  });
+
+  it("derives an absent optional dispatch ChatId from exact route proofs", () => {
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    const event = dispatchFixture();
+    delete event.ctx.ChatId;
+    registry.observeReplyDispatch(event);
+    assert.equal(registry.pendingCount(), 1);
   });
 
   it("re-verifies immutable claimed tickets on same-run retries", async (t) => {
@@ -777,19 +949,6 @@ describe("B13 canonical memory request context", () => {
     const deniedMalformedEntry = await resolveHook(hookFixture({ workspaceDir }), registry, malformedEntry);
     assert.equal(deniedMalformedEntry.userPrincipal, "");
 
-    for (const nestedKind of ["sender", "chat"]) {
-      registry.clear();
-      registry.observeReplyDispatch(dispatchFixture());
-      const missingNested = hookFixture({ workspaceDir });
-      if (nestedKind === "sender") {
-        delete missingNested.channelContext.senderId;
-        delete missingNested.channelContext.sender;
-      } else {
-        delete missingNested.channelContext.chatId;
-        delete missingNested.channelContext.chat;
-      }
-      assert.equal((await resolveHook(missingNested, registry, sessionEntryFixture())).userPrincipal, "");
-    }
   });
 
   it("requires explicit hook and entry thread proof and rejects malformed present entry targets", async (t) => {
@@ -848,6 +1007,57 @@ describe("B13 canonical memory request context", () => {
       registry,
       sessionEntryFixture({ chatId: "chat-b" }),
     )).userPrincipal, "");
+  });
+
+  it("expires and evicts only the claimed retry while fresh same-session turns recover", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-claimed-recovery-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    let current = 1000;
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => current, ttlMs: 10, maxClaimed: 1 });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
+    assert.match((await resolveHook(hookFixture({ workspaceDir, runId: "run-a" }), registry, sessionEntryFixture())).userPrincipal, /^user:v1:/);
+    current = 1010;
+    registry.observeReplyDispatch(dispatchFixture({ runId: "", senderId: "99" }));
+    assert.equal((await resolveHook(hookFixture({ workspaceDir, runId: "run-a", senderId: "99" }), registry, sessionEntryFixture())).userPrincipal, "", "expired run cannot borrow a fresh FIFO ticket");
+    const fresh = await resolveHook(hookFixture({ workspaceDir, runId: "run-b", senderId: "99" }), registry, sessionEntryFixture());
+    assert.match(fresh.userPrincipal, /^user:v1:/, "fresh turn must survive claimed retry expiry");
+    assert.equal(registry.stateCounts().tainted, 0);
+
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-c" }));
+    assert.match((await resolveHook(hookFixture({ workspaceDir, runId: "run-c" }), registry, sessionEntryFixture())).userPrincipal, /^user:v1:/);
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-d", senderId: "77" }));
+    assert.match((await resolveHook(hookFixture({ workspaceDir, runId: "run-d", senderId: "77" }), registry, sessionEntryFixture())).userPrincipal, /^user:v1:/);
+    assert.equal(registry.stateCounts().tainted, 0, "claimed cap eviction must not taint the session");
+  });
+
+  it("accepts official prompt hooks without optional channelContext duplicates", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-optional-channel-context-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    for (const channelContext of [undefined, {}]) {
+      const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+      registry.observeReplyDispatch(dispatchFixture());
+      const hook = hookFixture({ workspaceDir });
+      if (channelContext === undefined) delete hook.channelContext;
+      else hook.channelContext = channelContext;
+      const resolved = await resolveHook(hook, registry, sessionEntryFixture());
+      assert.match(resolved.userPrincipal, /^user:v1:/);
+    }
+  });
+
+  it("ignores non-host flat channelContext identity and thread fields", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-official-channel-context-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    const dispatch = dispatchFixture();
+    dispatch.ctx.ChannelContext = { senderId: "99", chatId: "chat-b" };
+    registry.observeReplyDispatch(dispatch);
+    assert.equal(registry.pendingCount(), 1, "dispatch must ignore non-host flat ChannelContext fields");
+    const hook = hookFixture({ workspaceDir });
+    hook.channelContext.senderId = "99";
+    hook.channelContext.chatId = "chat-b";
+    hook.channelContext.threadId = "77";
+    const resolved = await resolveHook(hook, registry, sessionEntryFixture());
+    assert.match(resolved.userPrincipal, /^user:v1:/);
   });
 
   it("clears run indexes with session taints and lets global overflow expire", () => {
