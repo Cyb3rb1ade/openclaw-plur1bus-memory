@@ -9,6 +9,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { Float64, Utf8 } from 'apache-arrow';
 import { MemoryDB } from '../index.js';
 
 test('MemoryDB.normalizeEntryForTable filtert unbekannte Felder', () => {
@@ -50,9 +51,11 @@ test('MemoryDB.refreshSchemaFields liest Felder aus table.schema()', async () =>
     async schema() {
       return {
         fields: [
-          { name: 'id' },
-          { name: 'text' },
-          { name: 'summary' },
+          { name: 'id', type: new Utf8() },
+          { name: 'text', type: new Utf8() },
+          { name: 'summary', type: new Utf8() },
+          { name: 'agentId', type: new Utf8() },
+          { name: 'workspaceId', type: new Utf8() },
         ],
       };
     },
@@ -65,6 +68,38 @@ test('MemoryDB.refreshSchemaFields liest Felder aus table.schema()', async () =>
   assert.ok(db.schemaFieldNames.has('text'));
   assert.ok(db.schemaFieldNames.has('summary'));
   assert.strictEqual(db.schemaFieldNames.has('nonexistent'), false);
+});
+
+test('MemoryDB.refreshSchemaFields lehnt fehlende oder typfalsche Ownership-Spalten ab', async () => {
+  const cases = [
+    {
+      name: 'missing-agentId',
+      fields: [
+        { name: 'text', type: new Utf8() },
+        { name: 'workspaceId', type: new Utf8() },
+      ],
+      expected: /agentId must match text DataType/,
+    },
+    {
+      name: 'wrong-workspaceId-type',
+      fields: [
+        { name: 'text', type: new Utf8() },
+        { name: 'agentId', type: new Utf8() },
+        { name: 'workspaceId', type: new Float64() },
+      ],
+      expected: /workspaceId must match text DataType/,
+    },
+  ];
+
+  for (const fixture of cases) {
+    const db = new MemoryDB(`/tmp/fake-${fixture.name}`, 128);
+    db.table = {
+      async schema() { return { fields: fixture.fields }; },
+    };
+
+    await assert.rejects(() => db.refreshSchemaFields(), fixture.expected);
+    assert.strictEqual(db.schemaFieldNames, null);
+  }
 });
 
 test('MemoryDB Migration: einzelner addColumns-Fehler blockiert nicht nachfolgende Spalten', async () => {
