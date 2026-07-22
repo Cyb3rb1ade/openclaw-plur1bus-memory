@@ -80,13 +80,13 @@ function makeCtx(args, extra = {}) {
   };
 }
 
-function makeDeps(db, { callLlm, archiveDir } = {}) {
+function makeDeps(db, { callLlm, archiveDir, cfg } = {}) {
   return {
     pool: { getDb: () => db },
     embeddings: { embed: async () => new Float32Array(4).fill(0.1) },
     reranker: null,
     callLlm: callLlm ?? (async () => "synthesized answer"),
-    cfg: { security: { allowedUserIds: ["test-user-42"] } },
+    cfg: cfg ?? { security: { allowedUserIds: ["test-user-42"] } },
     api: { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } },
     llmCfg: { model: "test-model", maxTokens: 400 },
     archiveDir,
@@ -117,6 +117,57 @@ describe("wiki-command smoke", () => {
     assert.strictEqual(stored[0].workspaceKey, "workspace:v1:workspace-1", "canonical workspaceKey must be persisted for wiki entries");
     assert.strictEqual(stored[0].workspaceId, "workspace:v1:workspace-1");
     assert.strictEqual(stored[0].agentId, "test-agent");
+  });
+
+  it("authorizes Wiki writes only from the supplied frozen memory context", async () => {
+    const stored = [];
+    let dbLeases = 0;
+    let embeds = 0;
+    const db = makeDb({ storeSpy: async (entry) => { stored.push(entry); } });
+    const memoryCtx = resolveMemoryRequestContext({
+      agentId: "test-agent",
+      workspaceId: "workspace-1",
+      channel: "telegram",
+      accountId: "primary",
+      userId: "owner-user",
+      chatId: "owner-chat",
+      chatKind: "private",
+    });
+    const deps = makeDeps(db, {
+      archiveDir,
+      cfg: { security: { allowedUserIds: ["owner-user"], allowedChatIds: ["owner-chat"] } },
+    });
+    deps.pool = {
+      getDb() {
+        dbLeases++;
+        return db;
+      },
+    };
+    deps.embeddings = {
+      async embed() {
+        embeds++;
+        return new Float32Array(4).fill(0.1);
+      },
+    };
+    const rawCtx = makeCtx("add Frozen owner: canonical route wins", {
+      userId: "attacker",
+      chatId: "attacker-chat",
+      chatType: "group",
+    });
+    const allowed = await runWikiCommand(rawCtx, { ...deps, memoryCtx });
+    assert.equal(stored.length, 1, allowed.text);
+    assert.equal(dbLeases, 1);
+    assert.equal(embeds, 1);
+
+    const deniedCtx = Object.freeze({ ...memoryCtx, chatKind: "group" });
+    const deniedDeps = makeDeps(db, { archiveDir, cfg: {} });
+    deniedDeps.pool = { getDb() { throw new Error("DB lease must not happen before auth"); } };
+    deniedDeps.embeddings = { async embed() { throw new Error("provider must not run before auth"); } };
+    const denied = await runWikiCommand(makeCtx("add Denied: no side effects"), {
+      ...deniedDeps,
+      memoryCtx: deniedCtx,
+    });
+    assert.match(denied.text, /not authorized|nicht autorisiert/i);
   });
 
   it("wikiDelete removes a wiki entry by query", async () => {
