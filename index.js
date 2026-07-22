@@ -5603,7 +5603,7 @@ const plugin = {
               const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, {
                 lang,
                 tone,
-                workspaceDir: commandCtx.workspaceDir,
+                workspaceDir: memoryCtx.workspaceDir,
                 logger: api.logger,
                 ctx: memoryCtx,
               });
@@ -5661,7 +5661,7 @@ const plugin = {
               const result = await correctCard(memoryDbAdapter, agentId, pending.targetId, newText, {
                 lang,
                 tone,
-                workspaceDir: commandCtx.workspaceDir,
+                workspaceDir: memoryCtx.workspaceDir,
                 logger: api.logger,
                 ctx: memoryCtx,
                 updateMemory: async ({ id, newContent }) => {
