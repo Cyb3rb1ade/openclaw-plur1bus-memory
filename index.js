@@ -3264,7 +3264,14 @@ const plugin = {
   description: "Per-agent isolated LanceDB memory",
   kind: "extension",
 
-  register(api) {
+  register(api, registrationDependencies = {}) {
+    if (!registrationDependencies || typeof registrationDependencies !== "object" || Array.isArray(registrationDependencies)) {
+      throw new TypeError("plugin registration dependencies must be an object");
+    }
+    const { importRouting } = registrationDependencies;
+    if (importRouting !== undefined && typeof importRouting !== "function") {
+      throw new TypeError("importRouting must be a function");
+    }
     const rawPluginConfig = api.pluginConfig || {};
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
@@ -3610,7 +3617,10 @@ const plugin = {
       api.logger?.warn?.(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
     }
     const memoryAccountTopology = buildMemoryAccountTopology(hostMemoryConfig);
-    const hostRoutingLoader = createHostRoutingLoader({ logger: api.logger });
+    const hostRoutingLoader = createHostRoutingLoader({
+      logger: api.logger,
+      ...(importRouting ? { importRouting } : {}),
+    });
     const turnRouteState = autoRecall ? { initPromise: null, registry: null } : null;
     const getMemoryTurnRoutes = autoRecall ? async () => {
       if (turnRouteState.registry) return turnRouteState.registry;
