@@ -7,6 +7,22 @@ import { join } from "node:path";
 import plugin from "../index.js";
 import { writePlur1busStartNotice } from "../lib/setup/feature-profiles.js";
 
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
 function makeApi(baseDbPath, configOverrides = {}) {
   const commands = [];
   const noop = () => {};
@@ -22,6 +38,11 @@ function makeApi(baseDbPath, configOverrides = {}) {
       ...configOverrides,
     },
     logger: { info: noop, warn: noop, error: noop, debug: noop },
+    runtime: {
+      agent: {
+        async resolveAgentWorkspaceDir(config) { return config?.workspaceDir || baseDbPath; },
+      },
+    },
     resolvePath: (p) => p,
     registerCommand(command) {
       commands.push(command);
@@ -42,7 +63,7 @@ describe("/plur1bus start", () => {
     try {
       writePlur1busStartNotice(openclawHome);
       const api = makeApi(baseDbPath);
-      plugin.register(api);
+      plugin.register(api, { importRouting: async () => routingCapability });
 
       const command = api._commands.find((item) => item.name === "plur1bus_start");
       assert.ok(command, "plur1bus_start command should be registered");
@@ -66,7 +87,7 @@ describe("/plur1bus start", () => {
     const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-start-db-"));
     try {
       const api = makeApi(baseDbPath, { neo: { enabled: false } });
-      plugin.register(api);
+      plugin.register(api, { importRouting: async () => routingCapability });
 
       const names = new Set(api._commands.map((item) => item.name));
       assert.ok(names.has("plur1bus_start"), "plur1bus_start should remain available");
@@ -90,12 +111,20 @@ describe("/plur1bus start", () => {
     writeFileSync(configPath, original);
     try {
       const api = makeApi(baseDbPath, { security: { allowedUserIds: ["owner"] } });
-      plugin.register(api);
+      plugin.register(api, { importRouting: async () => routingCapability });
       const command = api._commands.find((item) => item.name === "plur1bus");
       const result = await command.handler({
         args: "setup",
         workspaceDir: baseDbPath,
         agentId: "agent-a",
+        senderId: "owner",
+        channel: "telegram",
+        accountId: "default",
+        sessionKey: "agent:agent-a:main",
+        from: "telegram:private-chat",
+        to: "telegram:private-chat",
+        config: { workspaceDir: baseDbPath },
+        getCurrentConversationBinding: () => null,
         userId: "owner",
         chatId: "private-chat",
         chatType: "private",
@@ -136,11 +165,19 @@ describe("/plur1bus start", () => {
     };
     try {
       const api = makeApi(baseDbPath, { security: { allowedUserIds: ["owner"] } });
-      plugin.register(api);
+      plugin.register(api, { importRouting: async () => routingCapability });
       const command = api._commands.find((item) => item.name === "plur1bus");
       const context = {
         workspaceDir: baseDbPath,
         agentId: "agent-a",
+        senderId: "owner",
+        channel: "telegram",
+        accountId: "default",
+        sessionKey: "agent:agent-a:main",
+        from: "telegram:private-chat",
+        to: "telegram:private-chat",
+        config: { workspaceDir: baseDbPath },
+        getCurrentConversationBinding: () => null,
         userId: "owner",
         chatId: "private-chat",
         chatType: "private",

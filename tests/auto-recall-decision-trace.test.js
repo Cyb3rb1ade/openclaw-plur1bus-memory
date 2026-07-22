@@ -16,6 +16,22 @@ import {
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
 describe("auto-recall-decision-trace", () => {
   const baseCfg = {
     enabled: true,
@@ -200,7 +216,7 @@ describe("auto-recall decision trace integration", () => {
     };
 
     const api = makeMockApi(basePath, traceEnabled, includeInPrompt);
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
 
     const hook = api._hooks["before_prompt_build"];
     assert.ok(hook, "before_prompt_build hook should be registered");
