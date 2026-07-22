@@ -15,6 +15,22 @@ import { safeProfile } from "../lib/setup/feature-profiles.js";
 
 const VECTOR_DIM = 384;
 
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
 function makeVector(offset = 0) {
   const vector = Array(VECTOR_DIM).fill(0.1);
   vector[0] = 0.1 + offset;
@@ -54,7 +70,12 @@ function createApi(baseDbPath, configOverrides = {}, runtimeLlm = null) {
       ...configOverrides,
     },
     logger,
-    runtime: runtimeLlm ? { llm: runtimeLlm } : {},
+    runtime: {
+      ...(runtimeLlm ? { llm: runtimeLlm } : {}),
+      agent: {
+        async resolveAgentWorkspaceDir(config) { return config?.workspaceDir || baseDbPath; },
+      },
+    },
     resolvePath: (value) => value,
     registerCommand(command) {
       commands.push(command);
@@ -165,7 +186,9 @@ test("registration resolves enabled core routes without making an LLM call", asy
     emotion: { tier: "t3", t3: { enabled: true } },
   }, runtimeLlm);
 
-  assert.doesNotThrow(() => pluginModule.default.register(api));
+  assert.doesNotThrow(() => pluginModule.default.register(api, {
+    importRouting: async () => routingCapability,
+  }));
   assert.equal(calls.length, 0);
   assert.doesNotMatch(JSON.stringify(api.logger.calls), /model is empty; disabling/i);
 });
@@ -194,7 +217,7 @@ test("global memory_store merge uses the target agent OpenClaw default", async (
     merging: { enabled: true, autoApply: true },
     emotion: { t3: { enabled: false } },
   }, runtimeLlm);
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -258,7 +281,7 @@ test("Obsidian command merge uses its session-bound runtime without agentId", as
       };
     },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
   const sessionRuntime = {
     async complete(params) {
       sessionCalls.push(params);
@@ -271,6 +294,14 @@ test("Obsidian command merge uses its session-bound runtime without agentId", as
     agentId,
     workspaceDir,
     workspaceKey,
+    senderId: "command-owner",
+    channel: "telegram",
+    accountId: "default",
+    sessionKey: `agent:${agentId}:main`,
+    from: "telegram:command-private",
+    to: "telegram:command-private",
+    config: { workspaceDir },
+    getCurrentConversationBinding: () => null,
     runtimeContext: { llm: sessionRuntime },
     message: {
       from: { id: "command-owner" },
@@ -314,7 +345,7 @@ test("a merging feature model is a native override only for the merging call", a
     merging: { enabled: true, autoApply: true, model: "native/merging-override" },
     emotion: { t3: { enabled: false } },
   }, runtimeLlm);
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -358,7 +389,7 @@ test("a complete feature-local direct override bypasses the OpenClaw runtime", a
       return { text: "unexpected", provider: "native", model: "native", usage: {} };
     },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -398,7 +429,7 @@ test("feature-local direct transport without a model is unavailable and makes no
       return { text: "unexpected", provider: "native", model: "native", usage: {} };
     },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -425,7 +456,7 @@ test("a missing OpenClaw runtime makes native merging fail soft", async (t) => {
     merging: { enabled: true, autoApply: true },
     emotion: { t3: { enabled: false } },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -471,7 +502,7 @@ test("an unresolved feature-local credential makes no native or direct request",
       return { text: "unexpected", provider: "native", model: "native", usage: {} };
     },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -517,7 +548,7 @@ test("critical classifier command prefers its session-bound runtime and does not
     criticalPush: { enabled: true },
     emotion: { t3: { enabled: false } },
   }, globalRuntime);
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const result = await findCommand(api).handler({
     args: "internal classify-recent",
@@ -550,7 +581,7 @@ test("Critical Push leaves cards unclassified when no native runtime is availabl
     criticalPush: { enabled: true },
     emotion: { t3: { enabled: false } },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const result = await findCommand(api).handler({
     args: "internal classify-recent",
@@ -590,7 +621,7 @@ test("Critical Push direct override works without a host runtime", async (t) => 
     },
     emotion: { t3: { enabled: false } },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const result = await findCommand(api).handler({
     args: "internal classify-recent",
@@ -626,7 +657,7 @@ test("Critical Push policy rejection leaves cards unclassified and diagnostics s
       throw new Error(secret);
     },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const result = await findCommand(api).handler({
     args: "internal classify-recent",
@@ -665,7 +696,7 @@ test("Schicht 1.5 uses only its own config and the global target agent", async (
     schicht15: { enabled: true },
     emotion: { t3: { enabled: false } },
   }, runtimeLlm);
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const knowledgeTool = createTools(api, { agentId, workspaceDir, workspaceKey: "workspace-schicht" })
     .find((tool) => tool.name === "knowledge_update");
@@ -694,7 +725,7 @@ test("Schicht 1.5 sanitizes provider failures in responses and logs", async (t) 
       throw new Error(secret);
     },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const knowledgeTool = createTools(api, { agentId, workspaceDir, workspaceKey: "workspace-schicht-error" })
     .find((tool) => tool.name === "knowledge_update");
@@ -728,7 +759,7 @@ test("Skill Miner uses its feature-local native default through the command runt
       return { text: "{}", provider: "global", model: "global-model", agentId, usage: {} };
     },
   });
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
   const sessionRuntime = {
     async complete(params) {
       sessionCalls.push(params);
@@ -799,7 +830,7 @@ test("Emotion Tier 3 uses its own native-default route with global agent scope",
     merging: { enabled: true, model: "foreign/merging-model", autoApply: false },
     emotion: { tier: "t3", t3: { enabled: true } },
   }, runtimeLlm);
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -822,7 +853,7 @@ test("Emotion Tier 3 provider gate defers when the native runtime is missing", a
     emotion: { tier: "t3", t3: { enabled: true } },
   });
 
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const logs = JSON.stringify(api.logger.calls);
   assert.match(logs, /emotion tier-3 deferred/i);
@@ -839,7 +870,7 @@ test("Emotion Tier 3 provider gate defers an ambiguous partial direct override",
     },
   });
 
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const logs = JSON.stringify(api.logger.calls);
   assert.match(logs, /ambiguous-partial-override/i);
@@ -861,7 +892,7 @@ test("Emotion Tier 3 provider gate accepts a complete direct override without na
     },
   });
 
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const logs = JSON.stringify(api.logger.calls);
   assert.match(logs, /emotion tier-3 enabled \(route: direct-override\)/i);
@@ -879,7 +910,7 @@ test("Emotion Tier 3 preserves onlyWhenProviderAvailable:false fail-soft routing
     },
   });
 
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   assert.equal(getEmotionConfig().t3.enabled, true);
   assert.equal(typeof getEmotionConfig().t3.callLlm, "function");
@@ -906,7 +937,7 @@ test("host policy denial is attempted once and never retried without the target 
     merging: { enabled: true, autoApply: true },
     emotion: { t3: { enabled: false } },
   }, runtimeLlm);
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -944,7 +975,7 @@ test("native model policy denial is attempted once without a fallback model", as
     merging: { enabled: true, autoApply: true, model: "blocked/primary-override" },
     emotion: { t3: { enabled: false } },
   }, runtimeLlm);
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const storeTool = createTools(api, { agentId, workspaceDir })
     .find((tool) => tool.name === "memory_store");
@@ -979,7 +1010,7 @@ test("the real Safe profile makes no core or generic enhancement chat call", asy
     embedding: { provider: "local-transformers", local: { dimensions: VECTOR_DIM } },
     featureCronSetup: { ...profile.featureCronSetup, auto: false },
   }, runtimeLlm);
-  pluginModule.default.register(api);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
   const agentId = "safe-agent";
   const tools = createTools(api, { agentId, workspaceDir });

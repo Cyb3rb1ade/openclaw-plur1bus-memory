@@ -7,6 +7,22 @@ import { join } from "node:path";
 import plugin, * as pluginModule from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
 function makeApi(pluginConfig) {
   const calls = {
     resolvePath: 0,
@@ -95,7 +111,7 @@ describe("runtime config contract", () => {
     });
 
     const api = makeApi(pluginConfig);
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const tools = api.toolFactory({
       agentId: "route-agent",
       workspaceDir,
@@ -162,7 +178,7 @@ describe("runtime config contract", () => {
       merging: { enabled: false },
       namespaces: { activeWriteNamespace: "ns-write" },
     }));
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const tools = api.toolFactory({
       agentId: "route-agent", workspaceDir: parent, workspaceKey: "missing-root", userId: "owner",
     });
@@ -218,7 +234,7 @@ describe("runtime config contract", () => {
         crossNamespaceRecall: true,
       },
     }));
-    plugin.register(api);
+    plugin.register(api, { importRouting: async () => routingCapability });
     const hook = api.handlers.get("before_prompt_build")?.at(-1);
     assert.equal(typeof hook, "function");
     const result = await hook(
@@ -294,7 +310,7 @@ describe("runtime config contract", () => {
       },
     }));
     try {
-      assert.throws(() => plugin.register(api), (error) => {
+      assert.throws(() => plugin.register(api, { importRouting: async () => routingCapability }), (error) => {
         assert.equal(error?.configPath, "plugins.entries.memory-lancedb-namespaced.config.namespaces");
         assert.match(error.message, /non-writer|ambiguous/i);
         return true;
@@ -312,7 +328,7 @@ describe("runtime config contract", () => {
       namespaces: { activeWriteNamespace: "../escape" },
     }));
     try {
-      assert.throws(() => plugin.register(api), (error) => {
+      assert.throws(() => plugin.register(api, { importRouting: async () => routingCapability }), (error) => {
         assert.equal(error?.configPath, "plugins.entries.memory-lancedb-namespaced.config.namespaces.activeWriteNamespace");
         return true;
       });
@@ -331,7 +347,7 @@ describe("runtime config contract", () => {
     }));
     try {
       assert.throws(
-        () => plugin.register(api),
+        () => plugin.register(api, { importRouting: async () => routingCapability }),
         (error) => {
           assert.equal(error?.code, "INVALID_PLUGIN_CONFIG");
           assert.equal(
@@ -361,7 +377,7 @@ describe("runtime config contract", () => {
       const afterthought = timezone === undefined ? {} : { timezone };
       const api = makeApi(minimalConfig(baseDbPath, { afterthought }));
       try {
-        assert.doesNotThrow(() => plugin.register(api));
+        assert.doesNotThrow(() => plugin.register(api, { importRouting: async () => routingCapability }));
         assert.ok(api.calls.resolvePath > 0);
         assert.ok(api.calls.registerCommand > 0);
       } finally {
@@ -389,7 +405,7 @@ describe("runtime config contract", () => {
       },
     };
     try {
-      assert.doesNotThrow(() => plugin.register(api));
+      assert.doesNotThrow(() => plugin.register(api, { importRouting: async () => routingCapability }));
       assert.equal(llmCalls, 0);
       assert.doesNotMatch(JSON.stringify(api.logs), /model is empty; disabling/i);
     } finally {
@@ -404,7 +420,7 @@ describe("runtime config contract", () => {
       merging: { enabled: false },
     }));
     try {
-      assert.doesNotThrow(() => plugin.register(api));
+      assert.doesNotThrow(() => plugin.register(api, { importRouting: async () => routingCapability }));
       const logs = JSON.stringify(api.logs);
       assert.match(logs, /merging\.enabled and an available LLM route/i);
       assert.doesNotMatch(logs, /config\.merging\.model|set merging\.model/i);
@@ -427,7 +443,7 @@ describe("runtime config contract", () => {
       },
     }));
     try {
-      assert.doesNotThrow(() => plugin.register(api));
+      assert.doesNotThrow(() => plugin.register(api, { importRouting: async () => routingCapability }));
       const logs = JSON.stringify(api.logs);
       assert.match(logs, /direct-credential-unavailable/);
       assert.doesNotMatch(logs, new RegExp(missingEnv));
