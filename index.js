@@ -134,7 +134,7 @@ import {
   resolveToolMemoryRequestContext,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog } from "./lib/sql-safety.js";
-import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
+import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
 import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
@@ -4458,7 +4458,7 @@ const plugin = {
             // (delivery.mode=none).
             if (actionKey === "internal") {
               if (!isCronCommandContext(commandCtx)) {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
               }
               const subKey = (sub || "").toLowerCase();
@@ -4812,7 +4812,7 @@ const plugin = {
               if (!presetName) {
                 return { text: renderTemperamentOverview({ agentId: temperamentAgentId, temperamentsCfg: cfg.emotion?.temperaments || {}, lang }) };
               }
-              const denied = checkAuth(commandCtx, { destructive: true });
+              const denied = await checkAuth(commandCtx, { destructive: true });
               if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
@@ -4863,7 +4863,7 @@ const plugin = {
                   : `🎤 Persona voice (${personaAgentId}):\n${parsed?.managedBlock || "(empty)"}` };
               }
               if (personaSub === "regenerate") {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (hasPersonaVoice(commandCtx.workspaceDir)) {
                   return { text: de
@@ -4901,7 +4901,7 @@ const plugin = {
                 // Proposal-Sektion aus einer Version vor Auto-Apply. Neue
                 // wöchentliche Evolutionen werden inzwischen direkt im
                 // Managed Block angewendet und brauchen kein accept mehr.
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 const result = acceptPersonaProposal(commandCtx.workspaceDir);
                 if (!result.accepted) {
@@ -4919,7 +4919,7 @@ const plugin = {
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
-              const denied = checkAuth(commandCtx, { destructive: true });
+              const denied = await checkAuth(commandCtx, { destructive: true });
               if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
@@ -5073,14 +5073,14 @@ const plugin = {
                 return { text: showProposal(workspaceDir, id, { lang, tone }).text };
               }
               if (subKey === "approve") {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_approve_usage", { lang, tone }) };
                 const result = approveProposal(workspaceDir, id, { agentId: commandCtx.agentId, workspaceKey: commandCtx.workspaceKey, lang, tone });
                 return { text: result.text };
               }
               if (subKey === "reject") {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
                 const result = rejectProposal(workspaceDir, id, { lang, tone });
@@ -5094,7 +5094,7 @@ const plugin = {
               const reminderAgent = commandCtx.agentId || "default";
               const reminderWsKey = commandCtx.workspaceKey || commandCtx.workspaceDir || "default";
               if (subKey === "cancel" || subKey === "delete") {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (!id) return { text: t("reminder.cancel_usage", { lang, tone }) };
                 return pool.withDb(reminderAgent, async (rdb) => {
@@ -5154,7 +5154,7 @@ const plugin = {
             if (action === "neo" && sub === "workspaces" && tokens[2] === "migrate") {
               const dryRun = tokens.includes("--dry-run");
               if (!dryRun) {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
               }
               const backupDir = commandOption(tokens, "--backup-dir", commandOption(tokens, "--backup", ""));
@@ -5180,7 +5180,7 @@ const plugin = {
               const subKey = sub.toLowerCase();
               if (["overlays", "overlay", "disable-overlay", "contradictions", "supersede-overlay", "doctor"].includes(subKey)) {
                 if (subKey === "disable-overlay" || subKey === "supersede-overlay") {
-                  const denied = checkAuth(commandCtx, { destructive: true });
+                  const denied = await checkAuth(commandCtx, { destructive: true });
                   if (denied) return denied;
                 }
                 const extraArgs = ["supersede-overlay", "doctor"].includes(subKey) ? tokens.slice(3) : [];
@@ -5217,7 +5217,7 @@ const plugin = {
                 return { text: `Usage: /plur1bus memory ${sub} <id>` };
               }
               if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
               }
               const record = findNeoRecord(commandStore, id);
@@ -5243,7 +5243,7 @@ const plugin = {
             }
             if (action === "behavior") {
               if (["promote", "demote", "prune"].includes(sub)) {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
               }
               const cards = commandStore.readBehaviorCards(500);
@@ -5370,24 +5370,24 @@ const plugin = {
           return raw.split(/\s+/)[0];
         };
 
-        // Operator-Opt-out für Config-mutierende Chat-Commands. Das Plugin-SDK
-        // liefert dem Command-Handler keine Sender-Identität, daher ist echte
-        // Per-User-Autorisierung nicht möglich. In geteilten Channels kann der
-        // Operator hiermit /enable, /disable und /plur1bus setup für
-        // alle sperren (default: erlaubt — kein Verhaltensbruch).
+        // Operator opt-out for config-mutating chat commands. Host route facts
+        // are resolved separately below; this switch remains an additional
+        // deployment-level block for shared channels.
         const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
 
         const confirmationStore = new Map();
 
-        const checkAuth = (commandCtx, opts = {}) => {
-          // Identität aus dem Kontext robust auflösen (verschiedene Feldnamen je
-          // Channel/OpenClaw-Version), damit Auth + Confirmation greifen.
-          const identity = resolveIdentity(commandCtx);
-          const auth = isAuthorized({ ...commandCtx, ...identity }, cfg, opts);
+        const checkMemoryAuth = (memoryCtx, commandCtx, opts = {}) => {
+          const auth = isAuthorized(memoryCtx, cfg, { ...opts, chatKind: memoryCtx.chatKind });
           if (!auth.authorized) {
             return { text: t(`plur1bus.${auth.reason || "unauthorized"}`, resolveCommandLocale(commandCtx)) };
           }
           return null;
+        };
+
+        const checkAuth = async (commandCtx, opts = {}, suppliedMemoryCtx = null) => {
+          const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
+          return checkMemoryAuth(memoryCtx, commandCtx, opts);
         };
 
         // Text-basierter Confirm-Abschluss. Das OpenClaw-SDK liefert keine
@@ -5426,11 +5426,11 @@ const plugin = {
           return null;
         };
 
-        const runFeatureToggle = (commandCtx, enable) => {
+        const runFeatureToggle = async (commandCtx, enable) => {
           const deniedLen = checkArgsLength(commandCtx);
           if (deniedLen) return deniedLen;
           const { lang, tone } = resolveCommandLocale(commandCtx);
-          const denied = checkAuth(commandCtx, { destructive: true });
+          const denied = await checkAuth(commandCtx, { destructive: true });
           if (denied) return denied;
           if (chatConfigCommandsBlocked()) return { text: t("plur1bus.config_blocked", { lang, tone }) };
           const featureName = parseFeatureArg(commandCtx);
@@ -5471,7 +5471,7 @@ const plugin = {
           description: "PLUR1BUS — Speaker naming. /speaker list | name <label> <name> | proposals | confirm <label> | reject <label> | clear <label>",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
-          handler: (commandCtx) => {
+          handler: async (commandCtx) => {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang } = resolveCommandLocale(commandCtx);
@@ -5479,17 +5479,24 @@ const plugin = {
             const sub = (commandCtx.args || "").trim().split(/\s+/)[0]?.toLowerCase() || "list";
             const rest = (commandCtx.args || "").trim().slice(sub.length).trim();
             const subCtx = { ...commandCtx, args: rest };
+            let speakerAuth = () => null;
+            if (["name", "confirm", "reject", "clear"].includes(sub)) {
+              const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+              const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
+              if (denied) return denied;
+              speakerAuth = (ctx, opts) => checkMemoryAuth(memoryCtx, ctx, opts);
+            }
             switch (sub) {
               case "name":
-                return runSpeakerNameCommand(subCtx, agentId, checkAuth, { lang });
+                return runSpeakerNameCommand(subCtx, agentId, speakerAuth, { lang });
               case "proposals":
                 return runSpeakerProposalsCommand(agentId, { lang });
               case "confirm":
-                return runSpeakerConfirmCommand(subCtx, agentId, checkAuth, { lang });
+                return runSpeakerConfirmCommand(subCtx, agentId, speakerAuth, { lang });
               case "reject":
-                return runSpeakerRejectCommand(subCtx, agentId, checkAuth, { lang });
+                return runSpeakerRejectCommand(subCtx, agentId, speakerAuth, { lang });
               case "clear":
-                return runSpeakerClearCommand(subCtx, agentId, checkAuth, { lang });
+                return runSpeakerClearCommand(subCtx, agentId, speakerAuth, { lang });
               case "list":
               default:
                 return runSpeakerListCommand(agentId, { lang });
@@ -5569,9 +5576,9 @@ const plugin = {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const denied = checkAuth(commandCtx, { destructive: true });
-            if (denied) return denied;
             const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
+            if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
@@ -5623,9 +5630,9 @@ const plugin = {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const denied = checkAuth(commandCtx, { destructive: true });
-            if (denied) return denied;
             const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
+            if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
@@ -5724,12 +5731,12 @@ const plugin = {
           }
         };
 
-        const runMemoryFeedbackCommand = (commandCtx) => {
+        const runMemoryFeedbackCommand = async (commandCtx) => {
           try {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const denied = checkAuth(commandCtx, { destructive: true });
+            const denied = await checkAuth(commandCtx, { destructive: true });
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const parsed = parseMemoryFeedback(args);

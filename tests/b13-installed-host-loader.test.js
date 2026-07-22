@@ -28,6 +28,7 @@ it("loads reply_dispatch routing through the real installed OpenClaw plugin load
   const projectRoot = resolve(import.meta.dirname, "..");
   const pluginId = "memory-lancedb-namespaced";
   const config = {
+    agents: { list: [{ id: "smoke", workspace: projectRoot }] },
     plugins: {
       allow: [pluginId],
       load: { paths: [projectRoot] },
@@ -87,6 +88,86 @@ it("loads reply_dispatch routing through the real installed OpenClaw plugin load
 
     const renderedLogs = logs.flatMap((entry) => entry.slice(1)).map(String).join("\n");
     assert.doesNotMatch(renderedLogs, /turn route registry unavailable|memory-request-context\.routing|invalid_dispatch_identity/i);
+
+    const commandCtx = {
+      args: "",
+      agentId: "smoke",
+      senderId: "42",
+      channel: "telegram",
+      accountId: "default",
+      sessionKey: "agent:smoke:main",
+      from: "telegram:chat-a",
+      to: "telegram:chat-a",
+      config,
+      getCurrentConversationBinding: () => null,
+    };
+    for (const [name, args] of [["forget", ""], ["correct", ""], ["wiki", "add"], ["wiki", "delete"]]) {
+      const registered = registry.commands.find((entry) => entry.pluginId === pluginId && entry.command?.name === name);
+      assert.ok(registered, `${name} must be registered by the installed host loader`);
+      const result = await registered.command.handler({
+        ...commandCtx,
+        args,
+        // Official route fields remain authoritative over synthetic legacy aliases.
+        userId: "attacker",
+        chatId: "attacker-chat",
+        chatType: "group",
+      });
+      assert.match(result.text, name === "wiki" ? /\/wiki/i : /Usage|Verwendung|Syntax/i, `${name}: ${result.text}`);
+      assert.doesNotMatch(result.text, /not configured|allowed list|nicht autorisiert/i, `${name}: ${result.text}`);
+    }
+
+    const forget = registry.commands.find((entry) => entry.pluginId === pluginId && entry.command?.name === "forget");
+    const deniedGroup = await forget.command.handler({
+      ...commandCtx,
+      sessionKey: "agent:smoke:telegram:group:chat-a",
+      from: "telegram:group:chat-a",
+      to: "telegram:group:chat-a",
+    });
+    assert.match(deniedGroup.text, /not configured|allowed list|nicht autorisiert/i);
+
+    loader.clearPluginLoaderCache();
+    loader.clearPluginRegistryLoadCache();
+    loader.clearActivatedPluginRuntimeState();
+    const allowlistConfig = {
+      ...config,
+      plugins: {
+        ...config.plugins,
+        entries: {
+          [pluginId]: {
+            ...config.plugins.entries[pluginId],
+            config: {
+              ...config.plugins.entries[pluginId].config,
+              security: { allowedUserIds: ["42"], allowedChatIds: ["chat-a"] },
+            },
+          },
+        },
+      },
+    };
+    const allowlistRegistry = loader.loadOpenClawPlugins({
+      config: allowlistConfig,
+      activationSourceConfig: allowlistConfig,
+      workspaceDir: projectRoot,
+      onlyPluginIds: [pluginId],
+      cache: false,
+      activate: false,
+      throwOnLoadError: true,
+      logger,
+    });
+    const allowlistForget = allowlistRegistry.commands.find(
+      (entry) => entry.pluginId === pluginId && entry.command?.name === "forget",
+    );
+    const allowed = await allowlistForget.command.handler({ ...commandCtx, config: allowlistConfig });
+    assert.match(allowed.text, /Usage|Verwendung|Syntax/i);
+    const wrongChat = await allowlistForget.command.handler({
+      ...commandCtx,
+      args: "must-not-reach-memory-query",
+      sessionKey: "agent:smoke:telegram:direct:chat-b",
+      from: "telegram:chat-b",
+      to: "telegram:chat-b",
+      config: allowlistConfig,
+    });
+    assert.match(wrongChat.text, /chat.*allowed|allowed.*chat|nicht autorisiert/i);
+    assert.doesNotMatch(wrongChat.text, /must-not-reach-memory-query/);
   } finally {
     loader.clearPluginLoaderCache();
     loader.clearPluginRegistryLoadCache();

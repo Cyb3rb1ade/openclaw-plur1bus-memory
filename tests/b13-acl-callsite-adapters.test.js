@@ -11,7 +11,27 @@ import {
   resolveOwnershipBindings,
   validateOwnershipTuple,
 } from "../lib/acl-middleware.js";
-import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
+import {
+  resolveHostCommandMemoryContext,
+  resolveMemoryRequestContext,
+} from "../lib/memory-request-context.js";
+import { isAuthorized } from "../lib/security.js";
+
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
 
 const aliases = Object.freeze({
   paths: Object.freeze([]),
@@ -65,6 +85,107 @@ describe("B13 strict ownership ACL adapters", () => {
     assert.equal(checkAccess(ctx, { scope: "workspace", workspaceId: "workspace-a", workspaceKey: "legacy-a" }).allowed, true);
     assert.deepEqual(resolveOwnershipBindings({ workspaceKey: "unmapped" }, aliases).workspaceIdentity, "workspace:v1:unmapped");
     assert.equal(validateOwnershipTuple({ workspaceId: "workspace-a", workspaceKey: "workspace-b" }, aliases).ok, false);
+  });
+
+  it("applies the request workspace grammar and suffix limits to stored ACL bindings", () => {
+    const maxKey = `workspace:v1:${"k".repeat(128)}`;
+    const maxDir = `workspace-dir:v1:${"d".repeat(1024)}`;
+    for (const workspaceIdentity of [maxKey, maxDir]) {
+      const ctx = resolveMemoryRequestContext({ agentId: "agent-a", workspaceId: workspaceIdentity });
+      assert.equal(checkAccess(ctx, {
+        scope: "workspace",
+        workspaceId: workspaceIdentity,
+        workspaceKey: workspaceIdentity,
+      }).allowed, true);
+    }
+    const ctx = { agentId: "agent-a", workspaceIdentity: maxKey, workspaceAliases: aliases };
+    for (const invalid of [
+      "workspace:v1:workspace:v1:nested",
+      "workspace:v1:workspace-dir:v1:nested",
+      "workspace-dir:v1:workspace:v1:nested",
+      "workspace-dir:v1:workspace-dir:v1:nested",
+      `workspace:v1:${"k".repeat(129)}`,
+      `workspace-dir:v1:${"d".repeat(1025)}`,
+      "workspace:v1:",
+      "workspace-dir:v1:",
+      "workspace:v2:value",
+      "workspace-dir:v2:value",
+    ]) {
+      const result = checkAccess(ctx, { scope: "workspace", workspaceId: invalid, workspaceKey: invalid });
+      assert.equal(result.allowed, false, invalid);
+      assert.equal(result.reason, "acl.workspace.invalid_binding", invalid);
+    }
+    for (const invalid of [{}, false, true, 0, NaN, Infinity]) {
+      assert.equal(validateOwnershipTuple({ workspaceId: invalid }, aliases).ok, false, String(invalid));
+    }
+    const canonicalKey = "workspace:v1:x";
+    const remappingAliases = Object.freeze({
+      paths: Object.freeze([]),
+      aliases: Object.freeze([{ alias: canonicalKey, workspaceKey: "other" }]),
+    });
+    assert.equal(resolveMemoryRequestContext({ agentId: "agent-a", workspaceId: canonicalKey }, {
+      workspaceAliases: remappingAliases,
+    }).workspaceIdentity, canonicalKey, "canonical principals must bypass legacy aliases");
+  });
+
+  it("authorizes registered destructive commands from the frozen official host context", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-command-auth-ws-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const officialCtx = {
+      args: "",
+      agentId: "agent-a",
+      senderId: "owner-user",
+      channel: "telegram",
+      accountId: "default",
+      sessionKey: "agent:agent-a:main",
+      from: "telegram:owner-chat",
+      to: "telegram:owner-chat",
+      getCurrentConversationBinding: () => null,
+    };
+    const resolve = (ctx) => resolveHostCommandMemoryContext(ctx, {
+      resolveAgentWorkspaceDir: async () => workspaceDir,
+      routingLoader: async () => routingCapability,
+      requireConversation: true,
+    });
+    const memoryCtx = await resolve(officialCtx);
+    assert.equal(Object.isFrozen(memoryCtx), true);
+    assert.deepEqual({ userId: memoryCtx.userId, chatId: memoryCtx.chatId, chatKind: memoryCtx.chatKind }, {
+      userId: "owner-user", chatId: "owner-chat", chatKind: "private",
+    });
+    assert.equal(isAuthorized(memoryCtx, {}, { destructive: true, chatKind: memoryCtx.chatKind }).authorized, true);
+    assert.equal(isAuthorized(memoryCtx, {
+      security: { allowedUserIds: ["owner-user"], allowedChatIds: ["owner-chat"] },
+    }, { destructive: true, chatKind: memoryCtx.chatKind }).authorized, true);
+    assert.equal(isAuthorized(memoryCtx, {
+      security: { allowedUserIds: ["owner-user"], allowedChatIds: ["other-chat"] },
+    }, { destructive: true, chatKind: memoryCtx.chatKind }).authorized, false);
+
+    const adversarial = await resolve({ ...officialCtx, userId: "attacker", chatId: "attacker-chat", chatType: "group" });
+    assert.deepEqual({ userId: adversarial.userId, chatId: adversarial.chatId, chatKind: adversarial.chatKind }, {
+      userId: "owner-user", chatId: "owner-chat", chatKind: "private",
+    });
+    const group = await resolve({
+      ...officialCtx,
+      sessionKey: "agent:agent-a:telegram:group:owner-chat",
+      from: "telegram:group:owner-chat",
+      to: "telegram:group:owner-chat",
+    });
+    assert.equal(isAuthorized(group, {}, { destructive: true, chatKind: group.chatKind }).authorized, false);
+
+    let workspaceReads = 0;
+    await assert.rejects(() => resolveHostCommandMemoryContext({ ...officialCtx, agentId: undefined }, {
+      resolveAgentWorkspaceDir: async () => { workspaceReads++; return workspaceDir; },
+      routingLoader: async () => routingCapability,
+      requireConversation: true,
+    }), /agentId is required/);
+    assert.equal(workspaceReads, 0);
+
+    const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    assert.match(indexSource, /const auth = isAuthorized\(memoryCtx, cfg, \{ \.\.\.opts, chatKind: memoryCtx\.chatKind \}\)/);
+    assert.doesNotMatch(indexSource, /const denied = checkAuth\(/);
+    assert.match(indexSource, /const denied = await checkAuth\(commandCtx, \{ destructive: true \}\)/);
+    assert.equal([...indexSource.matchAll(/const denied = await checkAuth\(commandCtx, \{ destructive: true \}\)/g)].length, 14);
+    assert.match(indexSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\);\s+const denied = checkMemoryAuth\(memoryCtx, commandCtx, \{ destructive: true \}\)/);
   });
 
   it("rejects malformed snapshots and unknown/internal scopes", () => {

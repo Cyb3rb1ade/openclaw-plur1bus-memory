@@ -886,7 +886,7 @@ describe("B13 canonical memory request context", () => {
     });
     registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
     registry.observeReplyDispatch(dispatchFixture({ runId: "run-b", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b" }));
-    assert.deepEqual(registry.stateCounts(), { pending: 1, runIndex: 1, claimed: 0, tainted: 1, globalTaint: false });
+    assert.deepEqual(registry.stateCounts(), { pending: 1, runIndex: 1, claimed: 0, retired: 0, tainted: 1, globalTaint: false });
     const second = await resolveHook(
       hookFixture({ workspaceDir, runId: "run-b", sessionKey: "agent:a:telegram:direct:chat-b", chatId: "chat-b" }),
       registry,
@@ -951,6 +951,37 @@ describe("B13 canonical memory request context", () => {
 
   });
 
+  it("rejects every present empty SessionEntry provider or account alias", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-empty-entry-alias-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const aliases = [
+      ["deliveryContext", "channel"],
+      ["origin", "provider"],
+      [null, "lastChannel"],
+      ["deliveryContext", "accountId"],
+      ["origin", "accountId"],
+      [null, "lastAccountId"],
+    ];
+    for (const [container, field] of aliases) {
+      for (const empty of ["", "   "]) {
+        const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+        registry.observeReplyDispatch(dispatchFixture());
+        const entry = sessionEntryFixture();
+        if (container) entry[container][field] = empty;
+        else entry[field] = empty;
+        const denied = await resolveHook(hookFixture({ workspaceDir }), registry, entry);
+        assert.equal(denied.userPrincipal, "", `${container ? `${container}.` : ""}${field}=${JSON.stringify(empty)}`);
+      }
+    }
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => 1000 });
+    registry.observeReplyDispatch(dispatchFixture());
+    const optional = sessionEntryFixture();
+    delete optional.deliveryContext.channel;
+    optional.origin.accountId = undefined;
+    const allowed = await resolveHook(hookFixture({ workspaceDir }), registry, optional);
+    assert.match(allowed.userPrincipal, /^user:v1:/, "truly absent optional aliases stay optional");
+  });
+
   it("requires explicit hook and entry thread proof and rejects malformed present entry targets", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-thread-proof-"));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
@@ -1013,7 +1044,7 @@ describe("B13 canonical memory request context", () => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-claimed-recovery-"));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     let current = 1000;
-    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => current, ttlMs: 10, maxClaimed: 1 });
+    const registry = createMemoryTurnRouteRegistry({ routingCapability, now: () => current, ttlMs: 10, maxClaimed: 2 });
     registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
     assert.match((await resolveHook(hookFixture({ workspaceDir, runId: "run-a" }), registry, sessionEntryFixture())).userPrincipal, /^user:v1:/);
     current = 1010;
@@ -1025,9 +1056,98 @@ describe("B13 canonical memory request context", () => {
 
     registry.observeReplyDispatch(dispatchFixture({ runId: "run-c" }));
     assert.match((await resolveHook(hookFixture({ workspaceDir, runId: "run-c" }), registry, sessionEntryFixture())).userPrincipal, /^user:v1:/);
+    current = 1020;
     registry.observeReplyDispatch(dispatchFixture({ runId: "run-d", senderId: "77" }));
     assert.match((await resolveHook(hookFixture({ workspaceDir, runId: "run-d", senderId: "77" }), registry, sessionEntryFixture())).userPrincipal, /^user:v1:/);
     assert.equal(registry.stateCounts().tainted, 0, "claimed cap eviction must not taint the session");
+  });
+
+  it("fails closed when A/B/C claimed-run retirement overflows its bounded tombstones", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-retired-overflow-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    let current = 1000;
+    const registry = createMemoryTurnRouteRegistry({
+      routingCapability,
+      now: () => current,
+      ttlMs: 10,
+      maxClaimed: 1,
+    });
+    const route = async (runId, chatId) => {
+      const sessionKey = `agent:a:telegram:direct:${chatId}`;
+      registry.observeReplyDispatch(dispatchFixture({ runId, sessionKey, chatId }));
+      return resolveHook(
+        hookFixture({ workspaceDir, runId, sessionKey, chatId }),
+        registry,
+        sessionEntryFixture({ chatId }),
+      );
+    };
+
+    assert.match((await route("run-a", "chat-a")).userPrincipal, /^user:v1:/);
+    assert.match((await route("run-b", "chat-b")).userPrincipal, /^user:v1:/);
+    assert.equal((await route("run-c", "chat-c")).userPrincipal, "", "the claim that overflows live tombstones is denied atomically");
+    assert.deepEqual(registry.stateCounts(), {
+      pending: 0,
+      runIndex: 0,
+      claimed: 0,
+      retired: 0,
+      tainted: 0,
+      globalTaint: true,
+    });
+
+    const replay = await route("run-a", "chat-a");
+    assert.equal(replay.userPrincipal, "", "an evicted replay must not re-enter while overflow protection is live");
+    assert.equal(registry.pendingCount(), 0);
+
+    current = 1010;
+    const recovered = await route("run-d", "chat-d");
+    assert.match(recovered.userPrincipal, /^user:v1:/, "fresh turns recover at the strict TTL boundary");
+    const counts = registry.stateCounts();
+    assert.ok(counts.claimed <= 1);
+    assert.ok(counts.retired <= 1);
+    assert.equal(counts.globalTaint, false);
+  });
+
+  it("does not repopulate bounded tombstones after prune-triggered retirement overflow", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-prune-overflow-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    let current = 1000;
+    const registry = createMemoryTurnRouteRegistry({
+      routingCapability,
+      now: () => current,
+      ttlMs: 10,
+      maxClaimed: 1,
+    });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-a" }));
+    assert.match((await resolveHook(hookFixture({ workspaceDir, runId: "run-a" }), registry, sessionEntryFixture())).userPrincipal, /^user:v1:/);
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-b", senderId: "99" }));
+
+    current = 1005;
+    assert.match((await resolveHook(
+      hookFixture({ workspaceDir, runId: "run-b", senderId: "99" }),
+      registry,
+      sessionEntryFixture(),
+    )).userPrincipal, /^user:v1:/);
+    assert.equal(registry.stateCounts().retired, 1);
+
+    current = 1010;
+    assert.deepEqual(registry.stateCounts(), {
+      pending: 0,
+      runIndex: 0,
+      claimed: 0,
+      retired: 0,
+      tainted: 0,
+      globalTaint: true,
+    });
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-c", senderId: "77" }));
+    assert.equal(registry.pendingCount(), 0);
+
+    current = 1020;
+    registry.observeReplyDispatch(dispatchFixture({ runId: "run-c", senderId: "77" }));
+    assert.match((await resolveHook(
+      hookFixture({ workspaceDir, runId: "run-c", senderId: "77" }),
+      registry,
+      sessionEntryFixture(),
+    )).userPrincipal, /^user:v1:/);
   });
 
   it("accepts official prompt hooks without optional channelContext duplicates", async (t) => {
