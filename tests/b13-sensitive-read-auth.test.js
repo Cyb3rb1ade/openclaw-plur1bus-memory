@@ -59,7 +59,7 @@ const intruder = {
 };
 
 const directReads = [["memory", "project"], ["state", ""], ["wiki", "project"], ["speaker", "list"], ["speaker", "proposals"]];
-const plur1busReads = ["start", "temperament", "persona", "skills review", "skills list", "skills show proposal-id", "reminders list", "reminders show reminder-id", "curation", "memory origin record-id", "memory explain record-id", "memory overlays", "recall why record-id", "origin trace record-id", "behavior show", "behavior candidates", "behavior explain record-id", "embeddings", "dreaming", "status", "doctor", "state"];
+const plur1busReads = ["start", "temperament", "persona", "skills review", "skills list", "skills show proposal-id", "reminders list", "reminders show reminder-id", "curation", "memory origin record-id", "memory explain record-id", "memory overlays", "memory overlay", "memory contradictions", "memory doctor", "recall why record-id", "origin trace record-id", "behavior show", "behavior candidates", "behavior explain record-id", "embeddings", "dreaming", "status", "doctor", "state"];
 
 const ACTION_FIXTURES = [
   ["public-help", ""], ["public-help", "help"], ["public-help", "unknown"],
@@ -70,7 +70,7 @@ const ACTION_FIXTURES = [
   ["sensitive-read", "reminders list"], ["sensitive-read", "reminders show reminder-id"], ["sensitive-read", "reminders help"],
   ["sensitive-read", "status"], ["sensitive-read", "doctor"], ["sensitive-read", "state"],
   ["sensitive-read", "curation"], ["sensitive-read", "curation conflicts"], ["sensitive-read", "curation stale"], ["sensitive-read", "curation promoted"],
-  ["sensitive-read", "memory origin record-id"], ["sensitive-read", "memory explain record-id"], ["sensitive-read", "memory overlays"],
+  ["sensitive-read", "memory origin record-id"], ["sensitive-read", "memory explain record-id"], ["sensitive-read", "memory overlays"], ["sensitive-read", "memory overlay"], ["sensitive-read", "memory contradictions"], ["sensitive-read", "memory doctor"],
   ["sensitive-read", "recall why record-id"], ["sensitive-read", "origin trace record-id"],
   ["sensitive-read", "behavior show"], ["sensitive-read", "behavior candidates"], ["sensitive-read", "behavior explain record-id"],
   ["sensitive-read", "embeddings"], ["sensitive-read", "dreaming"], ["sensitive-read", "neo workspaces migrate --dry-run"],
