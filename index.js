@@ -4820,12 +4820,15 @@ const plugin = {
                     })
                   : false,
                 semanticConfirmationStore: confirmationStore,
-                loadSemanticRecords: async () => pool.withDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
-                  await semanticDb.init();
+                confirmationStore,
+                loadSemanticRecords: async () => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
+                  const initialized = await semanticDb.init();
+                  if (initialized === false) return [];
                   return semanticDb.scanActive();
                 }),
-                searchSemanticNeighbors: async (source) => pool.withDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
-                  await semanticDb.init();
+                searchSemanticNeighbors: async (source) => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
+                  const initialized = await semanticDb.init();
+                  if (initialized === false) return [];
                   return semanticDb.search(
                     source.vector,
                     obsidianBridgeCfg?.graphLinks?.semanticDiscovery?.topK || 20,
