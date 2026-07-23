@@ -12,6 +12,7 @@ function makeDependencies(overrides = {}) {
   return {
     memoryDbAdapter: { shutdown: async () => {} },
     pool: { shutdown: async () => {} },
+    sharedMemoryPool: { shutdown: async () => {} },
     clearTurnRoutes: async () => {},
     flushMetrics: async () => {},
     llmResultCache: { close: async () => {} },
@@ -66,7 +67,7 @@ describe("LLM result cache lifecycle", () => {
     assert.strictEqual(shutdownSettled, true);
   });
 
-  it("isolates every shutdown failure and continues through cache close", async () => {
+  it("isolates every shutdown failure and continues through shared pool and cache close", async () => {
     const calls = [];
     const warnings = [];
     const failing = (name) => async () => {
@@ -78,16 +79,18 @@ describe("LLM result cache lifecycle", () => {
     registerGatewayShutdown(harness.api, {
       memoryDbAdapter: { shutdown: failing("adapter") },
       pool: { shutdown: failing("pool") },
+      sharedMemoryPool: { shutdown: failing("shared") },
       clearTurnRoutes: failing("routes"),
       flushMetrics: failing("metrics"),
       llmResultCache: { close: failing("cache") },
     });
     await harness.getRegistration().handler();
 
-    assert.deepStrictEqual(calls, ["adapter", "pool", "routes", "metrics", "cache"]);
+    assert.deepStrictEqual(calls, ["adapter", "pool", "shared", "routes", "metrics", "cache"]);
     assert.deepStrictEqual(warnings, [
       "memory-lancedb-namespaced: adapter shutdown failed: adapter broke",
       "memory-lancedb-namespaced: pool shutdown failed: pool broke",
+      "memory-lancedb-namespaced: shared pool shutdown failed: shared broke",
       "memory-lancedb-namespaced: turn route shutdown failed: routes broke",
       "metrics flush failed: metrics broke",
       "memory-lancedb-namespaced: LLM result cache shutdown failed: cache broke",
@@ -96,6 +99,6 @@ describe("LLM result cache lifecycle", () => {
 
   it("wires the real plugin dependencies into the shutdown boundary", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
-    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,?\s*\}\);/s);
+    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool,\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,?\s*\}\);/s);
   });
 });
