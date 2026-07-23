@@ -3264,6 +3264,101 @@ function makeReactionsCapabilityChecker(api) {
   };
 }
 
+/**
+ * Parse a text confirmation command without accepting shortened nonce prefixes.
+ * @param {unknown} args Raw command arguments.
+ * @returns {{requested: boolean, nonce: string, error?: string}} Parsed confirmation intent.
+ */
+export function parseConfirmationCommand(args) {
+  const input = String(args || "").trim();
+  if (!/^confirm(?:\s|:|$)/i.test(input)) {
+    return { requested: false, nonce: "" };
+  }
+  const match = input.match(/^confirm(?:\s+|:)([0-9a-fA-F-]+)$/i);
+  if (!match) return { requested: true, nonce: "", error: "invalid_format" };
+  try {
+    return { requested: true, nonce: safeUuid(match[1]) };
+  } catch {
+    return { requested: true, nonce: "", error: "invalid_format" };
+  }
+}
+
+/**
+ * Resolve the exact explicit identity tuple used for confirmation creation and completion.
+ * @param {object} memoryCtx Canonical Task 1 memory request context.
+ * @returns {{userId: string|undefined, chatId: string}} Confirmation identity binding.
+ */
+export function resolveConfirmationIdentity(memoryCtx) {
+  const confirmationChatId = memoryCtx?.conversationPrincipal || memoryCtx?.chatId || "";
+  if (!confirmationChatId) throw new Error("memory confirmation requires a verified conversation");
+  return {
+    userId: memoryCtx?.userId,
+    chatId: confirmationChatId,
+  };
+}
+
+/**
+ * Store a pending confirmation under its exact nonce and nonce+target keys.
+ * @param {Map<string, object>} confirmationStore Pending confirmation records.
+ * @param {Map<string, string>} confirmationIndex Exact nonce-to-record-key index.
+ * @param {object} pending Confirmation returned by createConfirmation().
+ * @returns {object} The stored confirmation.
+ */
+export function rememberPendingConfirmation(confirmationStore, confirmationIndex, pending) {
+  const nonce = safeUuid(pending?.nonce);
+  const targetId = safeUuid(pending?.targetId);
+  const key = `${nonce}:${targetId}`;
+  confirmationStore.set(key, pending);
+  confirmationIndex.set(nonce, key);
+  return pending;
+}
+
+/**
+ * Redeem one exact pending confirmation without scanning or consuming mismatches.
+ * @param {object} options Completion inputs.
+ * @param {Map<string, object>} options.confirmationStore Pending confirmation records.
+ * @param {Map<string, string>} options.confirmationIndex Exact nonce-to-record-key index.
+ * @param {string} options.expectedCommand Required command name.
+ * @param {object} options.memoryCtx Canonical Task 1 memory request context.
+ * @param {string} options.nonce Complete canonical UUID nonce.
+ * @returns {{pending?: object, error?: string}} Completion result.
+ */
+export function completePendingConfirmation({
+  confirmationStore,
+  confirmationIndex,
+  expectedCommand,
+  memoryCtx,
+  nonce,
+}) {
+  try {
+    safeUuid(nonce);
+  } catch {
+    return { error: "invalid_format" };
+  }
+  const key = confirmationIndex.get(nonce);
+  if (!key) return { error: "not_found_or_expired" };
+  const pending = confirmationStore.get(key);
+  if (
+    !pending
+    || pending.nonce !== nonce
+    || pending.command !== expectedCommand
+    || key !== `${nonce}:${pending.targetId}`
+  ) {
+    return { error: "not_found_or_expired" };
+  }
+  const result = validateConfirmation(
+    pending.callbackData,
+    confirmationStore,
+    resolveConfirmationIdentity(memoryCtx),
+  );
+  if (!result.valid) {
+    if (!confirmationStore.has(key)) confirmationIndex.delete(nonce);
+    return { error: result.reason || "invalid" };
+  }
+  confirmationIndex.delete(nonce);
+  return { pending };
+}
+
 const plugin = {
   id: "memory-lancedb-namespaced",
   name: "Memory (LanceDB, per-Agent)",
@@ -5392,6 +5487,7 @@ const plugin = {
         const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
 
         const confirmationStore = new Map();
+        const confirmationIndex = new Map();
 
         const checkMemoryAuth = (memoryCtx, commandCtx, opts = {}) => {
           const auth = isAuthorized(memoryCtx, cfg, { ...opts, chatKind: memoryCtx.chatKind });
@@ -5404,30 +5500,6 @@ const plugin = {
         const checkAuth = async (commandCtx, opts = {}, suppliedMemoryCtx = null) => {
           const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
           return checkMemoryAuth(memoryCtx, commandCtx, opts);
-        };
-
-        // Text-basierter Confirm-Abschluss. Das OpenClaw-SDK liefert keine
-        // Button-/Callback-Events an Plugins (siehe OPENCLAW_SDK_COMPAT_AUDIT),
-        // daher wird die Bestätigung als Folge-Command zugestellt:
-        // `/forget confirm <token>` bzw. `/correct confirm <token>`.
-        const parseConfirmArg = (args) => {
-          const m = String(args || "").trim().match(/^confirm[:\s]+([0-9a-fA-F-]{6,})$/i);
-          return m ? m[1] : null;
-        };
-        // Sucht das Pending per Nonce(-Präfix) für das erwartete Kommando und
-        // validiert es (user/chat/expiry) via validateConfirmation (löscht es).
-        const completePending = (memoryCtx, expectedCommand, token) => {
-          let pending = null;
-          for (const v of confirmationStore.values()) {
-            if (v.command === expectedCommand && (v.nonce === token || v.nonce.startsWith(token))) { pending = v; break; }
-          }
-          if (!pending) return { error: "not_found_or_expired" };
-          const result = validateConfirmation(pending.callbackData, confirmationStore, {
-            userId: memoryCtx.userId,
-            chatId: memoryCtx.conversationPrincipal,
-          });
-          if (!result.valid) return { error: result.reason || "invalid" };
-          return { pending };
         };
 
         const checkArgsLength = (commandCtx) => {
@@ -5602,9 +5674,18 @@ const plugin = {
             });
 
             // Completion: /forget confirm <token>
-            const token = parseConfirmArg(args);
-            if (token) {
-              const { pending, error } = completePending(memoryCtx, "forget", token);
+            const confirmation = parseConfirmationCommand(args);
+            if (confirmation.requested) {
+              if (!confirmation.nonce) {
+                return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: confirmation.error || "invalid_format" } }) };
+              }
+              const { pending, error } = completePendingConfirmation({
+                confirmationStore,
+                confirmationIndex,
+                expectedCommand: "forget",
+                memoryCtx,
+                nonce: confirmation.nonce,
+              });
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
               const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, {
                 lang,
@@ -5632,8 +5713,14 @@ const plugin = {
               return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
             const card = candidates.card;
-            const confirm = createConfirmation({ userId: memoryCtx.userId, chatId: memoryCtx.conversationPrincipal, command: "forget", targetId: card.id });
-            confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
+            const confirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+            const confirm = createConfirmation({
+              userId: confirmationIdentity.userId,
+              chatId: confirmationIdentity.chatId,
+              command: "forget",
+              targetId: card.id,
+            });
+            rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
             return { text: t("plur1bus.forget_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
             const { lang, tone } = resolveCommandLocale(commandCtx);
@@ -5656,9 +5743,18 @@ const plugin = {
             });
 
             // Completion: /correct confirm <token>
-            const token = parseConfirmArg(args);
-            if (token) {
-              const { pending, error } = completePending(memoryCtx, "correct", token);
+            const confirmation = parseConfirmationCommand(args);
+            if (confirmation.requested) {
+              if (!confirmation.nonce) {
+                return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: confirmation.error || "invalid_format" } }) };
+              }
+              const { pending, error } = completePendingConfirmation({
+                confirmationStore,
+                confirmationIndex,
+                expectedCommand: "correct",
+                memoryCtx,
+                nonce: confirmation.nonce,
+              });
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
               const newText = pending.payload?.newText || "";
               if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
@@ -5686,7 +5782,12 @@ const plugin = {
                           : `User correction via /correct`,
                         confidence: 1,
                       },
-                      { neoStore, logger: api.logger, skipDriftGate: true },
+                      {
+                        neoStore,
+                        logger: api.logger,
+                        skipDriftGate: true,
+                        workspaceAliases: memoryCtx.workspaceAliases,
+                      },
                     );
                     // newId === id on idempotent skip; reinforcement still valid
                     try {
@@ -5737,9 +5838,15 @@ const plugin = {
               return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
             const card = candidates.card;
-            const confirm = createConfirmation({ userId: memoryCtx.userId, chatId: memoryCtx.conversationPrincipal, command: "correct", targetId: card.id });
+            const confirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+            const confirm = createConfirmation({
+              userId: confirmationIdentity.userId,
+              chatId: confirmationIdentity.chatId,
+              command: "correct",
+              targetId: card.id,
+            });
             confirm.payload = { newText: newNorm.canonicalText, oldText: oldNorm.canonicalText };
-            confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
+            rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
             return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
             const { lang, tone } = resolveCommandLocale(commandCtx);
