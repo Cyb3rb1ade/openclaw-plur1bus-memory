@@ -5,7 +5,7 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { generateSummary, compressMemoriesForPrompt } from "../lib/text-utils.js";
+import { generateSummary, compressMemoriesForPrompt, compressMemorySlotsForPrompt } from "../lib/text-utils.js";
 
 describe("P2 generateSummary", () => {
   it("gibt kurzen Text unverändert zurück", () => {
@@ -86,6 +86,14 @@ describe("P2 generateSummary", () => {
 describe("P2 compressMemoriesForPrompt", () => {
   it("gibt leeren String für leere Memories zurück", () => {
     assert.strictEqual(compressMemoriesForPrompt([], 100), "");
+  });
+
+  it("drops zero-allocation slots when the token budget is below memory count", () => {
+    const memories = ["alpha", "bravo", "charlie"].map((text, index) => ({
+      entry: { id: index, text, summary: text, category: "fact", memoryClass: "standard" },
+    }));
+    assert.deepStrictEqual(compressMemorySlotsForPrompt(memories, 1), ["", "", ""]);
+    assert.strictEqual(compressMemoriesForPrompt(memories, 1), "");
   });
 
   it("hält Tokenbudget ein", () => {
