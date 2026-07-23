@@ -3297,6 +3297,39 @@ export function resolveConfirmationIdentity(memoryCtx) {
   };
 }
 
+const MAX_PENDING_CONFIRMATIONS = 1024;
+
+/**
+ * Remove one pending confirmation and its matching nonce index atomically.
+ * @param {Map<string, object>} confirmationStore Pending confirmation records.
+ * @param {Map<string, string>} confirmationIndex Exact nonce-to-record-key index.
+ * @param {string} key Confirmation record key.
+ * @param {object} [pending] Confirmation record when already read.
+ */
+function deletePendingConfirmation(confirmationStore, confirmationIndex, key, pending = confirmationStore.get(key)) {
+  confirmationStore.delete(key);
+  const nonce = pending?.nonce;
+  if (nonce && confirmationIndex.get(nonce) === key) confirmationIndex.delete(nonce);
+}
+
+/**
+ * Remove expired confirmation records before insertion or lookup.
+ * @param {Map<string, object>} confirmationStore Pending confirmation records.
+ * @param {Map<string, string>} confirmationIndex Exact nonce-to-record-key index.
+ * @returns {Set<string>} Nonces removed because they had expired.
+ */
+function sweepExpiredPendingConfirmations(confirmationStore, confirmationIndex) {
+  const expiredNonces = new Set();
+  const now = Date.now();
+  for (const [key, pending] of confirmationStore) {
+    if (Number(pending?.expiresAt) <= now) {
+      if (pending?.nonce) expiredNonces.add(pending.nonce);
+      deletePendingConfirmation(confirmationStore, confirmationIndex, key, pending);
+    }
+  }
+  return expiredNonces;
+}
+
 /**
  * Store a pending confirmation under its exact nonce and nonce+target keys.
  * @param {Map<string, object>} confirmationStore Pending confirmation records.
@@ -3308,6 +3341,16 @@ export function rememberPendingConfirmation(confirmationStore, confirmationIndex
   const nonce = safeUuid(pending?.nonce);
   const targetId = safeUuid(pending?.targetId);
   const key = `${nonce}:${targetId}`;
+  sweepExpiredPendingConfirmations(confirmationStore, confirmationIndex);
+  const previousKey = confirmationIndex.get(nonce);
+  if (previousKey && previousKey !== key) {
+    deletePendingConfirmation(confirmationStore, confirmationIndex, previousKey);
+  }
+  while (confirmationStore.size >= MAX_PENDING_CONFIRMATIONS) {
+    const oldest = confirmationStore.entries().next().value;
+    if (!oldest) break;
+    deletePendingConfirmation(confirmationStore, confirmationIndex, oldest[0], oldest[1]);
+  }
   confirmationStore.set(key, pending);
   confirmationIndex.set(nonce, key);
   return pending;
@@ -3335,6 +3378,8 @@ export function completePendingConfirmation({
   } catch {
     return { error: "invalid_format" };
   }
+  const expiredNonces = sweepExpiredPendingConfirmations(confirmationStore, confirmationIndex);
+  if (expiredNonces.has(nonce)) return { error: "security.expired" };
   const key = confirmationIndex.get(nonce);
   if (!key) return { error: "not_found_or_expired" };
   const pending = confirmationStore.get(key);
@@ -3355,7 +3400,7 @@ export function completePendingConfirmation({
     if (!confirmationStore.has(key)) confirmationIndex.delete(nonce);
     return { error: result.reason || "invalid" };
   }
-  confirmationIndex.delete(nonce);
+  deletePendingConfirmation(confirmationStore, confirmationIndex, key, pending);
   return { pending };
 }
 
