@@ -164,6 +164,37 @@ describe("MultiNamespacePool", () => {
     assert.equal(pool._pools.get("lancedb-new").active.has("agent-a"), false);
   });
 
+  it("leases a separate read-only pool rooted at exactly the active writer route", async () => {
+    const pool = new MultiNamespacePool(namedLayout({
+      activeWriteNamespace: "active",
+      activeRecallNamespaces: ["active", "other"],
+      legacyReadOnlyNamespaces: ["legacy"],
+      crossNamespaceRecall: true,
+    }), 384, FakeAgentDbPool);
+    const path = await pool.withAuthoritativeReadDb("agent-a", async (db) => db.dbPath);
+    assert.equal(path, join(TMP_BASE, "active", "agent-a"));
+    const readers = FakeAgentDbPool.constructed.filter((child) =>
+      child.basePath === join(TMP_BASE, "active") && child.options?.readOnly === true);
+    assert.equal(readers.length, 1);
+    assert.equal(pool._pools.has("other"), false);
+    assert.equal(pool._pools.has("legacy"), false);
+    await pool.shutdown();
+    assert.equal(readers[0].isShutdown, true);
+  });
+
+  it("authoritative read routing is stable for legacy-flat layouts", async () => {
+    const base = join(TMP_BASE, "authoritative-flat");
+    mkdirSync(base, { recursive: true });
+    const pool = new MultiNamespacePool(legacyLayout(base), 384, FakeAgentDbPool);
+    const descriptor = pool.authoritativeRouteDescriptor("agent-a");
+    assert.deepEqual(descriptor, { mode: "legacy-flat", namespace: null, path: base });
+    const dbPath = await pool.withAuthoritativeReadDb("agent-a", async (db) => db.dbPath);
+    assert.equal(dbPath, join(base, "agent-a"));
+    const reader = FakeAgentDbPool.constructed.find((child) =>
+      child.basePath === base && child.options?.readOnly === true);
+    assert.ok(reader);
+  });
+
   it("withReadDbs preserves configured order and holds every namespace lease", async () => {
     const nsCfg = {
       activeWriteNamespace: "lancedb-new",
@@ -449,6 +480,7 @@ describe("MultiNamespacePool", () => {
       assert.throws(() => pool.getReadDbs(agentId), /invalid agent/i);
       assert.throws(() => pool.getDb(agentId), /invalid agent/i);
       await assert.rejects(() => pool.withWriteDb(agentId, async () => {}), /invalid agent/i);
+      await assert.rejects(() => pool.withAuthoritativeReadDb(agentId, async () => {}), /invalid agent/i);
       await assert.rejects(() => pool.withReadDbs(agentId, async () => {}), /invalid agent/i);
       await assert.rejects(() => pool.withDb(agentId, async () => {}), /invalid agent/i);
     }
