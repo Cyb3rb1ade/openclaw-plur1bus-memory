@@ -378,3 +378,15 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
 - Final Task 5 gate: required three-file suite passes with 70 tests and no
   failures; adjacent ACL/status/speaker/default-LLM/internal checks and diff
   checks pass. All known Critical/Important Task 5 findings are closed.
+
+## 2026-07-23 — B13 Task 11 documentation and focused verification
+
+- Added the operator-facing shared-pool command, strict principal/route,
+  migration cursor/bounds/abort, and conservative auto-recall hook contracts to
+  `README.md` and `docs/configuration.md`.
+- The receipt `docs/audits/2026-07-21-b13-acl-wiki-share-fix.md` binds
+  SEC-01/02/03/04/05/08/12/16, FA-04, and FE-ADD-04 to implementation commits,
+  causal regressions, historical proofs, positive paths, and call-site review.
+- Documentation TDD started RED because `/share <id> --user` was absent; final
+  focused B13 verification is recorded in the receipt. No repository-wide gate,
+  push, merge, Main, or Remote action belongs to this task.
