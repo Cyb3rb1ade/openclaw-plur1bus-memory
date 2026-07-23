@@ -261,7 +261,90 @@ describe("forget/correct confirmation completion", () => {
       });
       assert.equal(expired.error, "security.expired");
       assert.equal(confirmationStore.has(`${nonceB}:${targetB}`), false, `${command}: expiry must consume only the expired nonce`);
+      assert.equal(confirmationIndex.has(nonceB), false, `${command}: expiry lookup must clear the nonce index too`);
+      assert.equal(confirmationStore.size, confirmationIndex.size, `${command}: expiry lookup must retain atomic map sizes`);
     }
+  });
+
+  it("prunes expired pending confirmations from both indexes before insertion and lookup", async () => {
+    requireConfirmationHelpers();
+    const memoryCtx = await officialMemoryContext();
+    const identity = pluginModule.resolveConfirmationIdentity(memoryCtx);
+    const confirmationStore = new Map();
+    const confirmationIndex = new Map();
+    const expired = {
+      nonce: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      ...identity,
+      command: "forget",
+      targetId: "eeeeeeee-1111-1111-1111-111111111111",
+      expiresAt: Date.now() - 1,
+      callbackData: "forget:confirm:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee:eeeeeeee-1111-1111-1111-111111111111",
+    };
+    pluginModule.rememberPendingConfirmation(confirmationStore, confirmationIndex, expired);
+
+    const live = {
+      nonce: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      ...identity,
+      command: "forget",
+      targetId: "ffffffff-1111-1111-1111-111111111111",
+      expiresAt: Date.now() + 60_000,
+      callbackData: "forget:confirm:ffffffff-ffff-4fff-8fff-ffffffffffff:ffffffff-1111-1111-1111-111111111111",
+    };
+    pluginModule.rememberPendingConfirmation(confirmationStore, confirmationIndex, live);
+
+    assert.equal(confirmationStore.has(`${expired.nonce}:${expired.targetId}`), false);
+    assert.equal(confirmationIndex.has(expired.nonce), false);
+    assert.equal(confirmationStore.size, confirmationIndex.size);
+
+    const exact = pluginModule.completePendingConfirmation({
+      confirmationStore,
+      confirmationIndex,
+      expectedCommand: "forget",
+      memoryCtx,
+      nonce: live.nonce,
+    });
+    assert.equal(exact.pending, live, "later exact redemption must remain intact");
+    assert.equal(confirmationStore.size, confirmationIndex.size);
+  });
+
+  it("caps pending confirmations at 1024 and evicts the oldest record atomically", async () => {
+    requireConfirmationHelpers();
+    const memoryCtx = await officialMemoryContext();
+    const identity = pluginModule.resolveConfirmationIdentity(memoryCtx);
+    const confirmationStore = new Map();
+    const confirmationIndex = new Map();
+    const pending = Array.from({ length: 1025 }, (_, index) => {
+      const suffix = index.toString(16).padStart(12, "0");
+      const nonce = `00000000-0000-4000-8000-${suffix}`;
+      const targetId = `00000000-0000-4000-8001-${suffix}`;
+      return {
+        nonce,
+        ...identity,
+        command: "forget",
+        targetId,
+        expiresAt: Date.now() + 60_000,
+        callbackData: `forget:confirm:${nonce}:${targetId}`,
+      };
+    });
+
+    for (const entry of pending) {
+      pluginModule.rememberPendingConfirmation(confirmationStore, confirmationIndex, entry);
+    }
+
+    assert.equal(confirmationStore.size, 1024);
+    assert.equal(confirmationIndex.size, 1024);
+    assert.equal(confirmationStore.has(`${pending[0].nonce}:${pending[0].targetId}`), false);
+    assert.equal(confirmationIndex.has(pending[0].nonce), false);
+
+    const exact = pluginModule.completePendingConfirmation({
+      confirmationStore,
+      confirmationIndex,
+      expectedCommand: "forget",
+      memoryCtx,
+      nonce: pending[1].nonce,
+    });
+    assert.equal(exact.pending, pending[1], "eviction must not corrupt later exact redemption");
+    assert.equal(confirmationStore.size, confirmationIndex.size);
   });
 
   it("binds create and completion to canonical host user and conversation context", async () => {
