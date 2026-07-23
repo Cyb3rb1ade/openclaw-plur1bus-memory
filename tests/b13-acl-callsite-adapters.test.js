@@ -306,7 +306,7 @@ describe("B13 strict ownership ACL adapters", () => {
     const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
     assert.match(indexSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
     assert.match(indexSource, /const storeAccessCtx = memoryCtx/);
-    assert.match(indexSource, /memoryCtx,\s*decisionTrace:/);
+    assert.match(indexSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
     assert.doesNotMatch(indexSource, /checkAccess\(\{\s*agentId,\s*workspaceId/);
   });
 });
