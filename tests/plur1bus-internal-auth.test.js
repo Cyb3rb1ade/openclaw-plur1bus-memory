@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import plugin from "../index.js";
+import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
+import { sanitizePathPart } from "../lib/neo-arch.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -54,12 +56,12 @@ function makeApi(baseDbPath, configOverrides = {}) {
   };
 }
 
-async function withPlugin(fn) {
+async function withPlugin(fn, registrationDependencies = {}) {
   const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-internal-auth-db-"));
   const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-internal-auth-ws-"));
   try {
     const api = makeApi(baseDbPath);
-    plugin.register(api, { importRouting: async () => routingCapability });
+    plugin.register(api, { importRouting: async () => routingCapability, ...registrationDependencies });
     const command = api._commands.find((item) => item.name === "plur1bus");
     assert.ok(command, "plur1bus command should be registered");
     return await fn({ command, workspaceDir, baseDbPath });
@@ -135,6 +137,7 @@ describe("/plur1bus internal auth gate", () => {
   });
 
   it("routes verified cron jobs through the runtime workspace, never the raw chat workspace key", async () => {
+    const neoStores = [];
     await withPlugin(async ({ command, workspaceDir, baseDbPath }) => {
       const result = await command.handler({
         args: "internal gc-run",
@@ -144,9 +147,17 @@ describe("/plur1bus internal auth gate", () => {
         channel: "cron",
       });
       assert.match(result.text, /"job": "gc-run"/);
+      const expectedKey = resolveMemoryRequestContext({
+        agentId: "agent-a",
+        workspaceDir: baseDbPath,
+        channel: "cron",
+        accountId: "cron",
+      }).workspaceIdentity;
+      assert.deepEqual(neoStores, [{ purpose: "general", workspaceKey: sanitizePathPart(expectedKey) }]);
+      assert.notEqual(neoStores[0].workspaceKey, "attacker-workspace");
       const workspaceRoot = join(baseDbPath, "_neo", "workspaces");
       assert.equal(existsSync(join(workspaceRoot, "attacker-workspace")), false);
-    });
+    }, { commandRuntimeHooks: { onNeoStore: (effect) => neoStores.push(effect) } });
   });
 });
 

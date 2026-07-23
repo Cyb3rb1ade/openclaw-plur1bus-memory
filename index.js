@@ -3414,10 +3414,23 @@ const plugin = {
     if (!registrationDependencies || typeof registrationDependencies !== "object" || Array.isArray(registrationDependencies)) {
       throw new TypeError("plugin registration dependencies must be an object");
     }
-    const { importRouting } = registrationDependencies;
+    const { importRouting, commandRuntimeHooks = null, handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand } = registrationDependencies;
     if (importRouting !== undefined && typeof importRouting !== "function") {
       throw new TypeError("importRouting must be a function");
     }
+    if (commandRuntimeHooks !== null && (typeof commandRuntimeHooks !== "object" || Array.isArray(commandRuntimeHooks))) {
+      throw new TypeError("commandRuntimeHooks must be an object when provided");
+    }
+    if (registeredObsidianCommandHandler !== handleObsidianBridgeCommand && typeof registeredObsidianCommandHandler !== "function") {
+      throw new TypeError("handleObsidianBridgeCommand must be a function when provided");
+    }
+    const emitCommandRuntimeHook = (name, value) => {
+      const hook = commandRuntimeHooks?.[name];
+      if (hook !== undefined && typeof hook !== "function") {
+        throw new TypeError(`commandRuntimeHooks.${name} must be a function when provided`);
+      }
+      return hook?.(value);
+    };
     const rawPluginConfig = api.pluginConfig || {};
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
@@ -3822,7 +3835,11 @@ const plugin = {
       }
       return workspaceKey;
     };
-    const getNeoStore = (ctx = {}, event = {}) => createNeoStore(neoRoot, rememberNeoWorkspace(ctx, event));
+    const getNeoStore = (ctx = {}, event = {}, purpose = "general") => {
+      const workspaceKey = rememberNeoWorkspace(ctx, event);
+      emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
+      return createNeoStore(neoRoot, workspaceKey);
+    };
     const snapshotNeoContent = (content) => {
       if (typeof content === "string") return content;
       if (!Array.isArray(content)) return "";
@@ -3874,6 +3891,24 @@ const plugin = {
     };
 
     const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
+    if (commandRuntimeHooks) {
+      const withDb = pool.withDb.bind(pool);
+      pool.withDb = async (agentId, operation, ...args) => withDb(agentId, async (db, ...operationArgs) => {
+        emitCommandRuntimeHook("onPoolAcquire", { agentId });
+        const init = db.init?.bind(db);
+        if (init) {
+          db.init = async (...initArgs) => {
+            emitCommandRuntimeHook("onDbInit", { agentId });
+            return init(...initArgs);
+          };
+        }
+        try {
+          return await operation(db, ...operationArgs);
+        } finally {
+          if (init) db.init = init;
+        }
+      }, ...args);
+    }
     const emotionalPool = createEmotionalStatePool({
       temperaments: emotionCfg.temperaments || {},
       moodInfluence: emotionMoodInfluence,
@@ -3912,6 +3947,16 @@ const plugin = {
           cacheBasePath: baseDbPath,
           logger: api.logger,
         });
+    if (commandRuntimeHooks) {
+      for (const method of ["embed", "embedQuery", "embedPassage", "embedBatch"]) {
+        if (typeof embeddings[method] !== "function") continue;
+        const original = embeddings[method].bind(embeddings);
+        embeddings[method] = async (...args) => {
+          emitCommandRuntimeHook("onEmbed", { method });
+          return original(...args);
+        };
+      }
+    }
 
     // Reranker (optional — provider-aware since v3.1)
     // Cohere reranker — lokaler Fallback nur wenn fallbackProvider="local-transformers" explizit gesetzt
@@ -4526,6 +4571,7 @@ const plugin = {
       }
 
       const resolveCommandLocale = (commandCtx) => {
+        emitCommandRuntimeHook("onLocale", { commandCtx });
         const messages = commandCtx?.messages || [];
         const lang = resolveLocale({ ctx: commandCtx, messages, fallback: "en" });
         const toneHint = commandCtx?.workspaceDir ? readSoulToneCached(commandCtx.workspaceDir) : null;
@@ -4597,12 +4643,16 @@ const plugin = {
         const knownPlur1busActions = new Set([
           ...SENSITIVE_READ_ACTIONS, "setup", "enable", "disable", "forget", "correct", "internal", "neo",
         ]);
+        const callCommandLlm = async (messages, llmCfg) => {
+          emitCommandRuntimeHook("onLlmCallContext", llmCfg?.callContext);
+          return callLlm(messages, llmCfg);
+        };
         const runPlur1busCommand = async (commandCtx, prefixTokens = []) => {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const tokens = [...prefixTokens, ...parsePlur1busArgs(commandCtx)];
-            if (tokens.length === 0) return plur1busHelp("quick", resolveCommandLocale(commandCtx));
-            if (tokens[0]?.toLowerCase() === "help") return plur1busHelp(tokens[1]?.toLowerCase() === "advanced" ? "advanced" : "quick", resolveCommandLocale(commandCtx));
+            if (tokens.length === 0) return plur1busHelp("quick", resolveDenialLocale(commandCtx));
+            if (tokens[0]?.toLowerCase() === "help") return plur1busHelp(tokens[1]?.toLowerCase() === "advanced" ? "advanced" : "quick", resolveDenialLocale(commandCtx));
             const action = tokens[0] || "status";
             const actionKey = action.toLowerCase();
             const sub = tokens[1] || "";
@@ -4615,7 +4665,7 @@ const plugin = {
                 workspaceDir: commandCtx.workspaceDir,
                 workspaceKey: commandCtx.workspaceKey,
                 agentId: commandCtx.agentId || "command",
-              });
+              }, {}, "obsidian");
               const obsidianMemoryCtx = await resolveRegisteredMemoryContext(commandCtx);
               let runtimeConfig = null;
               try {
@@ -4628,7 +4678,7 @@ const plugin = {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
               const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
               const obsidianTokens = actionKey === "obsidian" ? tokens.slice(1) : tokens;
-              return handleObsidianBridgeCommand(obsidianTokens, {
+              return registeredObsidianCommandHandler(obsidianTokens, {
                 config: obsidianBridgeCfg,
                 configPath: openclawConfigPath,
                 openclawConfig: commandCtx.openclawConfig || commandCtx.config || runtimeConfig,
@@ -4659,18 +4709,18 @@ const plugin = {
               });
             }
             if (!knownPlur1busActions.has(actionKey)) {
-              return plur1busHelp("quick", resolveCommandLocale(commandCtx));
+              return plur1busHelp("quick", resolveDenialLocale(commandCtx));
             }
             const subKey = sub.toLowerCase();
             if (actionKey === "skills" && !["review", "list", "show", "approve", "reject"].includes(subKey)) {
-              const { lang, tone } = resolveCommandLocale(commandCtx);
+              const { lang, tone } = resolveDenialLocale(commandCtx);
               return { text: subKey ? t("plur1bus.skills_unknown", { lang, tone, vars: { sub: subKey } }) : t("plur1bus.skills_help", { lang, tone }) };
             }
             if (actionKey === "neo" && !(subKey === "workspaces" && tokens[2] === "migrate")) {
-              return plur1busHelp("quick", resolveCommandLocale(commandCtx));
+              return plur1busHelp("quick", resolveDenialLocale(commandCtx));
             }
             if ((actionKey === "recall" && subKey !== "why") || (actionKey === "origin" && subKey !== "trace")) {
-              return plur1busHelp("quick", resolveCommandLocale(commandCtx));
+              return plur1busHelp("quick", resolveDenialLocale(commandCtx));
             }
             if ((actionKey === "persona" && !["", "regenerate", "accept"].includes(subKey))
               || (actionKey === "behavior" && !["show", "candidates", "explain", "promote", "demote", "prune"].includes(subKey))
@@ -4899,7 +4949,7 @@ const plugin = {
                     "afterthought",
                     { runtimeLlm: sessionRuntime },
                   ),
-                  callLlm,
+                  callLlm: callCommandLlm,
                   timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
                   logger: api.logger,
                 });
@@ -4924,7 +4974,7 @@ const plugin = {
                     "persona-voice",
                     { runtimeLlm: sessionRuntime },
                   ),
-                  callLlm,
+                  callLlm: callCommandLlm,
                 });
                 api.logger?.info?.(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "persona-evolve", ...result });
@@ -5126,7 +5176,7 @@ const plugin = {
                     "persona-voice",
                     { runtimeLlm: sessionRuntime },
                   ),
-                  callLlm,
+                  callLlm: callCommandLlm,
                 });
                 if (!seed) {
                   return { text: de ? "❌ Persona-Seed-Generierung fehlgeschlagen." : "❌ Persona seed generation failed." };
