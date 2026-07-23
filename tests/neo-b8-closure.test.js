@@ -1,8 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 
 import {
   createNeoStore,
@@ -13,6 +14,51 @@ import { createNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
 
 function root() {
   return mkdtempSync(join(tmpdir(), "plur1bus-neo-b8-"));
+}
+
+function startMutationWorker(moduleUrl, workerData) {
+  const worker = new Worker(`
+    const { parentPort, workerData } = require("node:worker_threads");
+    (async () => {
+      const { createNeoStore } = await import(workerData.moduleUrl);
+      const store = createNeoStore(workerData.stateRoot, workerData.workspaceKey);
+      parentPort.postMessage({ type: "attempting" });
+      if (workerData.mutation === "candidate") {
+        store.appendCandidates([workerData.record]);
+      } else {
+        store.markRunCompleted(workerData.runKey, workerData.meta);
+      }
+      parentPort.postMessage({ type: "done" });
+    })().catch((error) => {
+      parentPort.postMessage({ type: "error", error: error?.stack || String(error) });
+    });
+  `, { eval: true, workerData: { moduleUrl, ...workerData } });
+  let resolveAttempting;
+  let resolveDone;
+  let rejectAttempting;
+  let rejectDone;
+  const attempting = new Promise((resolve, reject) => {
+    resolveAttempting = resolve;
+    rejectAttempting = reject;
+  });
+  const done = new Promise((resolve, reject) => {
+    resolveDone = resolve;
+    rejectDone = reject;
+  });
+  worker.on("message", (message) => {
+    if (message?.type === "attempting") resolveAttempting();
+    if (message?.type === "done") resolveDone();
+    if (message?.type === "error") {
+      const error = new Error(message.error);
+      rejectAttempting(error);
+      rejectDone(error);
+    }
+  });
+  worker.on("error", (error) => {
+    rejectAttempting(error);
+    rejectDone(error);
+  });
+  return { worker, attempting, done };
 }
 
 describe("Neo B8 closure", () => {
@@ -41,6 +87,120 @@ describe("Neo B8 closure", () => {
     assert.equal(slash.readCandidates(10).some((record) => record.id === "legacy"), true);
     const ambiguous = migrateNeoWorkspaces(stateRoot, { mappings: [{ legacyKey: "tenant_a", workspaceKey: "tenant/a" }, { legacyKey: "tenant_a", workspaceKey: "tenant:a" }] });
     assert.equal(ambiguous.ok, false);
+  });
+
+  it("serializes migration snapshots with normal JSONL and JSON state writers", { timeout: 10_000 }, async () => {
+    const stateRoot = root();
+    const workspaceKey = "migration-race";
+    const legacyKey = "migration_race";
+    const legacy = join(stateRoot, "workspaces", legacyKey);
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "memory-candidates.jsonl"), `${JSON.stringify({
+      id: "legacy-candidate",
+      workspaceKey,
+      statement: "legacy candidate",
+    })}\n`);
+    writeFileSync(join(legacy, "run-state.json"), JSON.stringify({
+      completed: { legacyRun: { source: "legacy" } },
+    }));
+
+    const moduleUrl = new URL("../lib/neo-arch.js", import.meta.url).href;
+    const canonical = createNeoStore(stateRoot, workspaceKey);
+    const gates = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+    const migrationWorker = new Worker(`
+      const { parentPort, workerData } = require("node:worker_threads");
+      (async () => {
+        const { migrateNeoWorkspaces } = await import(workerData.moduleUrl);
+        const gates = new Int32Array(workerData.gates);
+        const gateByFile = new Map([
+          ["memory-candidates.jsonl", 0],
+          ["run-state.json", 1],
+        ]);
+        const result = migrateNeoWorkspaces(workerData.stateRoot, {
+          dryRun: false,
+          requireBackup: false,
+          mappings: [{ legacyKey: workerData.legacyKey, workspaceKey: workerData.workspaceKey }],
+          onMigrationTargetRead({ file }) {
+            const gate = gateByFile.get(file);
+            if (gate === undefined) return;
+            Atomics.store(gates, gate, 1);
+            parentPort.postMessage({ type: "target-read", file });
+            Atomics.wait(gates, gate, 1);
+          },
+        });
+        parentPort.postMessage({ type: "done", result });
+      })().catch((error) => {
+        parentPort.postMessage({ type: "error", error: error?.stack || String(error) });
+      });
+    `, {
+      eval: true,
+      workerData: { moduleUrl, stateRoot, workspaceKey, legacyKey, gates },
+    });
+    const targetReads = new Map();
+    let resolveMigration;
+    let rejectMigration;
+    const migrationDone = new Promise((resolve, reject) => {
+      resolveMigration = resolve;
+      rejectMigration = reject;
+    });
+    const targetRead = (file) => {
+      if (!targetReads.has(file)) {
+        let resolveRead;
+        const promise = new Promise((resolve) => { resolveRead = resolve; });
+        targetReads.set(file, { promise, resolve: resolveRead });
+      }
+      return targetReads.get(file);
+    };
+    targetRead("memory-candidates.jsonl");
+    targetRead("run-state.json");
+    migrationWorker.on("message", (message) => {
+      if (message?.type === "target-read") targetRead(message.file).resolve();
+      if (message?.type === "done") resolveMigration(message.result);
+      if (message?.type === "error") rejectMigration(new Error(message.error));
+    });
+    migrationWorker.on("error", rejectMigration);
+
+    await targetRead("memory-candidates.jsonl").promise;
+    const candidateWriter = startMutationWorker(moduleUrl, {
+      stateRoot,
+      workspaceKey,
+      mutation: "candidate",
+      record: { id: "live-candidate", workspaceKey, statement: "live candidate" },
+    });
+    await candidateWriter.attempting;
+    const lockPath = join(canonical.paths.workspaceDir, ".neo-write.lock");
+    if (!existsSync(lockPath)) await candidateWriter.done;
+    Atomics.store(new Int32Array(gates), 0, 2);
+    Atomics.notify(new Int32Array(gates), 0);
+
+    await targetRead("run-state.json").promise;
+    const stateWriter = startMutationWorker(moduleUrl, {
+      stateRoot,
+      workspaceKey,
+      mutation: "state",
+      runKey: "liveRun",
+      meta: { source: "normal-writer" },
+    });
+    await stateWriter.attempting;
+    if (!existsSync(lockPath)) await stateWriter.done;
+    Atomics.store(new Int32Array(gates), 1, 2);
+    Atomics.notify(new Int32Array(gates), 1);
+
+    const [migration] = await Promise.all([
+      migrationDone,
+      candidateWriter.done,
+      stateWriter.done,
+    ]);
+    assert.equal(migration.ok, true);
+    const candidateIds = readFileSync(canonical.paths.candidates, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).id)
+      .sort();
+    assert.deepStrictEqual(candidateIds, ["legacy-candidate", "live-candidate"]);
+    const runState = JSON.parse(readFileSync(canonical.paths.runs, "utf8"));
+    assert.equal(runState.completed.legacyRun.source, "legacy");
+    assert.equal(runState.completed.liveRun.source, "normal-writer");
   });
 
   it("persists a finite vector before reporting a fresh embedding and recalls lexical divergence semantically", async () => {
