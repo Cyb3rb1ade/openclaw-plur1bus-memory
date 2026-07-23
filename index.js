@@ -4662,6 +4662,12 @@ const plugin = {
             if ((actionKey === "recall" && subKey !== "why") || (actionKey === "origin" && subKey !== "trace")) {
               return plur1busHelp("quick", resolveCommandLocale(commandCtx));
             }
+            if ((actionKey === "persona" && !["", "regenerate", "accept"].includes(subKey))
+              || (actionKey === "behavior" && !["show", "candidates", "explain", "promote", "demote", "prune"].includes(subKey))
+              || ((actionKey === "reminder" || actionKey === "reminders") && !["", "list", "show", "help", "cancel", "delete"].includes(subKey))
+              || (actionKey === "curation" && !["", "conflicts", "stale", "promoted"].includes(subKey))) {
+              return plur1busHelp("quick", resolveDenialLocale(commandCtx));
+            }
             const cronInternal = actionKey === "internal" && isCronCommandContext(commandCtx);
             const memoryCtx = cronInternal ? null : await resolveRegisteredMemoryContext(commandCtx);
             if (actionKey === "internal") {
@@ -4677,8 +4683,8 @@ const plugin = {
               if (denied) return denied;
             }
             const commandStore = getNeoStore({
-              workspaceDir: memoryCtx?.workspaceDir || commandCtx.workspaceDir,
-              workspaceKey: memoryCtx?.workspaceKey || commandCtx.workspaceKey,
+              workspaceDir: memoryCtx?.workspaceDir || "",
+              workspaceKey: memoryCtx?.workspaceIdentity || "",
               agentId: memoryCtx?.agentId || commandCtx.agentId || "command",
             });
             // ── Phase 5+6: silent cron-internal jobs ──────────────────────
@@ -5583,11 +5589,11 @@ const plugin = {
               llmResultCache: llmResultCache.getMetrics(agentId),
               // Command-Handler kennen nur commandCtx — ein Hook-`ctx` existiert
               // in diesem Scope nicht (ReferenceError "ctx is not defined").
-              workspaceDir: commandCtx?.workspaceDir,
+              workspaceDir: memoryCtx.workspaceDir,
             });
             return { text: renderStatus(data, { lang, tone }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.status_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
@@ -5779,7 +5785,7 @@ const plugin = {
             }
             return { text: formatMemoryResults(items, parsed, { lang, tone, showIds: true }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.memory_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
@@ -5848,7 +5854,7 @@ const plugin = {
             rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
             return { text: t("plur1bus.forget_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
@@ -5974,7 +5980,7 @@ const plugin = {
             rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
             return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
@@ -5983,23 +5989,23 @@ const plugin = {
           try {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
-            const { lang, tone } = resolveCommandLocale(commandCtx);
             const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
             const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
             if (denied) return denied;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
             const args = (commandCtx.args || "").trim();
             const parsed = parseMemoryFeedback(args);
             if (!parsed) {
               return { text: t("plur1bus.mf_usage", { lang, tone }) };
             }
-            const workspaceDir = commandCtx.workspaceDir || null;
+            const workspaceDir = memoryCtx.workspaceDir || null;
             if (!workspaceDir) {
               return { text: t("plur1bus.mf_no_workspace", { lang, tone }) };
             }
             recordFeedback(workspaceDir, "", parsed.memoryId, parsed.feedback, {});
             return { text: t("plur1bus.mf_done", { lang, tone, vars: { id: parsed.memoryId, feedback: parsed.feedback } }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.mf_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
