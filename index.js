@@ -37,7 +37,7 @@ import { performance } from "node:perf_hooks";
 // Shared modules (v1.9.0) — zentrale Logik für Plugin und Cron-Scripts
 import { distanceToScore } from "./lib/score.js";
 import { flushMetrics } from "./lib/metrics.js";
-import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary, compressMemoriesForPrompt } from "./lib/text-utils.js";
+import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary, compressMemorySlotsForPrompt } from "./lib/text-utils.js";
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "./lib/memory-fact-quality.js";
 import {
@@ -704,15 +704,6 @@ async function runMergedNamespaceRecall(
       : providerEmbeddings.embed(text, { agentId: baseParams.agentId }),
     embed: (text) => providerEmbeddings.embed(text, { agentId: baseParams.agentId }),
   });
-  if (readDbs.length === 1 && readDbs[0].sourceKind === "private") {
-    return runRecallPipeline({
-      ...baseParams,
-      embeddings: requestEmbeddings,
-      dbTable: readDbs[0].db.table,
-      strictReadErrors: strictReadErrors || baseParams.strictReadErrors === true,
-    });
-  }
-
   const timerConfig = phaseTimer?.summary?.() || {};
   phaseTimer?.start("namespace-recall");
   try {
@@ -727,13 +718,16 @@ async function runMergedNamespaceRecall(
         hardTimeoutMs: timerConfig.hardTimeoutMs,
         logger: baseParams.logger,
       });
+      const childStrictReadErrors = readDbs.length === 1
+        ? (strictReadErrors || baseParams.strictReadErrors === true)
+        : optional !== true;
       const result = await runRecallPipeline({
         ...baseParams,
         embeddings: requestEmbeddings,
         dbTable: db.table,
         phaseTimer: childTimer,
         decisionTrace: childTrace,
-        strictReadErrors: optional !== true,
+        strictReadErrors: childStrictReadErrors,
         canonicalEnabled: index === canonicalSourceIndex ? baseParams.canonicalEnabled : false,
         retrievalLogger: null,
         deferFinalCap: true,
@@ -8538,7 +8532,7 @@ const plugin = {
               1,
               1000,
             );
-            const compressed = compressMemoriesForPrompt(
+            const compressedSlots = compressMemorySlotsForPrompt(
               allPromptItems.map((item) => ({
                 entry: {
                   id: item.id,
@@ -8549,8 +8543,10 @@ const plugin = {
                 },
               })),
               tokenBudget,
-            ).split("\n");
-            promptItems = allPromptItems.map((item, index) => ({ ...item, display: compressed[index] || item.display }));
+            );
+            promptItems = allPromptItems.flatMap((item, index) => (
+              compressedSlots[index] ? [{ ...item, display: compressedSlots[index] }] : []
+            ));
             promptSemanticLensItems = [];
           }
           const memoriesContext = formatRelevantMemoriesContext(promptItems, {
