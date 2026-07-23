@@ -95,15 +95,15 @@ authority for that outstanding review evidence.
 - A subsequent exact serial invocation passed all B13-specific suites shown in
   the TAP output, including migration (17 cases), request context (44), provider
   ACL (5), sensitive reads (11), share runtime/store/pool/recall, and docs.
-  It still reports `tests/command-reachability.test.js` and
+  It initially reported `tests/command-reachability.test.js` and
   `tests/llm-result-cache-lifecycle.test.js` as failed child files. The latter
-  is green alone after `b9cad92`; `command-reachability` is an environment
-  issue outside the Task 11 docs scope: the supported Node 20.9 reproduction
-  reports that optional `@huggingface/transformers` cannot parse `with` import
-  attributes, so its local-transformers query path returns the dependency error
-  instead of its reachability assertions. Node 24 runs the first recall but
-  does not surface child assertion detail in this runner. No product change was
-  made for that non-B13 dependency/runtime mismatch.
+  was green alone after `b9cad92`. Direct execution exposed two Task 9
+  reachability regressions hidden by the child-file summary: the harness stubbed
+  passage embeddings but not the newly preserved query-purpose embedding, and
+  a reused read-only LanceDB handle retained its pre-`/forget` version. The
+  harness now stubs both purposes, and `/memory` rejoins the latest table
+  version before each query. Command reachability and the adjacent
+  shared-recall/lifecycle/confirmation gates are green.
 - `npm run lint` exited 0, `git diff --check` was empty, and manifest parsing
   printed `manifest-json-ok`.
 - SEC-01 original proof exited nonzero at assertion `0 !== 1`; SEC-02 original
@@ -117,8 +117,7 @@ authority for that outstanding review evidence.
   `workspace_shared` appears only in the legacy migration/shared adapters and
   existing Neo/Obsidian adapters; model/key/endpoint/header matches are
   existing index-level provider configuration and `withLlmCallContext` routes,
-  with no B13-added branch. Remaining uncertainty is the separate
-  local-transformers import-attribute compatibility issue noted above.
+  with no B13-added branch.
 
 Repository-wide tests are intentionally excluded from this task; the owner
 performs that later final audit.

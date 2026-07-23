@@ -108,6 +108,7 @@ describe("registered memory command reachability", () => {
   let previousOpenclawHome;
   let plugin;
   let localProvider;
+  let originalEmbedQuery;
   let originalEmbedPassage;
 
   before(async () => {
@@ -123,7 +124,9 @@ describe("registered memory command reachability", () => {
     ]);
     plugin = pluginModule.default;
     localProvider = providerModule.LocalTransformersEmbeddingProvider;
+    originalEmbedQuery = localProvider.prototype.embedQuery;
     originalEmbedPassage = localProvider.prototype.embedPassage;
+    localProvider.prototype.embedQuery = async () => Array(VECTOR_DIM).fill(0.125);
     localProvider.prototype.embedPassage = async () => Array(VECTOR_DIM).fill(0.125);
 
     api = registerApi();
@@ -131,7 +134,8 @@ describe("registered memory command reachability", () => {
 
   after(async () => {
     for (const registeredApi of registeredApis) await shutdownApi(registeredApi);
-    if (localProvider && originalEmbedPassage) {
+    if (localProvider && originalEmbedQuery && originalEmbedPassage) {
+      localProvider.prototype.embedQuery = originalEmbedQuery;
       localProvider.prototype.embedPassage = originalEmbedPassage;
     }
     if (previousOpenclawHome === undefined) delete process.env.OPENCLAW_HOME;

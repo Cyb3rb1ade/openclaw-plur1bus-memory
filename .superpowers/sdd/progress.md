@@ -390,3 +390,6 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
 - Documentation TDD started RED because `/share <id> --user` was absent; final
   focused B13 verification is recorded in the receipt. No repository-wide gate,
   push, merge, Main, or Remote action belongs to this task.
+- The remaining command-reachability failure was traced to an unstubbed
+  query-purpose embedding plus a stale read-only LanceDB table version after
+  `/forget`; both are covered by the final focused command/shared-recall gate.
