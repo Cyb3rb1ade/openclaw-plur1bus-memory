@@ -6055,11 +6055,19 @@ const plugin = {
         const runShareCommand = async (commandCtx) => {
           const { lang, tone } = resolveCommandLocale(commandCtx);
           const fail = (key, vars = {}) => ({ text: t(key, { lang, tone, vars }) });
+          const sourceDenied = (error) => /^(?:share\.(?:card_not_found|source_not_live|source_scope_denied|source_owner_conflict|source_changed)|access denied:)/.test(String(error || ""));
           try {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const raw = String(commandCtx?.args || "").trim();
-            const confirmation = parseConfirmationCommand(raw);
+            // Share deliberately accepts only its documented space-separated form;
+            // other commands retain their existing confirmation grammar.
+            const requestedConfirmation = /^confirm(?:\s|:|$)/i.test(raw);
+            const confirmationMatch = raw.match(/^confirm\s+([0-9a-fA-F-]+)$/i);
+            let confirmation = { requested: requestedConfirmation, nonce: "", error: "invalid_format" };
+            if (confirmationMatch) {
+              try { confirmation = { requested: true, nonce: safeUuid(confirmationMatch[1]) }; } catch {}
+            }
             if (confirmation.requested) {
               if (!confirmation.nonce) return fail("plur1bus.confirm_failed", { reason: confirmation.error || "invalid_format" });
               // First bind the redeeming request to its host-authenticated context.
@@ -6082,7 +6090,7 @@ const plugin = {
               const result = await shareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
                 targetScope, allowSensitiveShare: true, ctx: memoryCtx, logger: api.logger,
               });
-              if (!result.ok) return fail(result.error?.startsWith("share.card_not_found") ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+              if (!result.ok) return fail(sourceDenied(result.error) ? "plur1bus.share_not_found" : "plur1bus.share_failed");
               return fail("plur1bus.share_done", { id: result.sharedId });
             }
 
@@ -6109,7 +6117,7 @@ const plugin = {
               rememberPendingConfirmation(confirmationStore, confirmationIndex, pending);
               return fail("plur1bus.share_confirm_text", { token: pending.nonce });
             }
-            return fail(result.error?.startsWith("share.card_not_found") ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+            return fail(sourceDenied(result.error) ? "plur1bus.share_not_found" : "plur1bus.share_failed");
           } catch (error) {
             return fail("plur1bus.share_failed");
           }

@@ -286,6 +286,12 @@ describe("registered memory command reachability", () => {
     const initiated = await run("share", { ...baseCtx, args: `${memoryId} --user` });
     const token = confirmationToken(initiated.text, "share");
     assert.match(token, /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i);
+    const colonSyntax = await run("share", { ...baseCtx, args: `confirm:${token}` });
+    assert.match(colonSyntax.text, /usage|failed|fehlgeschlagen/i);
+    assert.doesNotMatch(colonSyntax.text, /shared|geteilt/i);
+    const extraSyntax = await run("share", { ...baseCtx, args: `confirm ${token} extra` });
+    assert.match(extraSyntax.text, /usage|failed|fehlgeschlagen/i);
+    assert.doesNotMatch(extraSyntax.text, /shared|geteilt/i);
     const wrongUser = await run("share", { ...baseCtx, args: `confirm ${token}`, senderId: OTHER_ALLOWED_USER });
     assert.match(wrongUser.text, /failed|fehlgeschlagen/i);
     const shortened = await run("share", { ...baseCtx, args: `confirm ${token.slice(0, 6)}` });
