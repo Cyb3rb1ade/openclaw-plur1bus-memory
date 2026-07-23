@@ -4553,6 +4553,16 @@ const plugin = {
           const origin = String(commandCtx?.origin || commandCtx?.source || commandCtx?.kind || "").toLowerCase();
           return channel === "cron" || origin === "cron";
         };
+        const resolveCronMemoryContext = async (commandCtx) => {
+          const agentId = safeAgentId(commandCtx?.agentId || "default");
+          const workspaceDir = await api.runtime.agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
+          return resolveMemoryRequestContext({
+            agentId,
+            workspaceDir,
+            channel: "cron",
+            accountId: "cron",
+          }, { workspaceAliases: memoryWorkspaceAliases });
+        };
         // Chat command dispatch is deliberately deny-by-classification: a new
         // action must be added to one of these predicates before it may acquire
         // a store or other memory-bearing dependency.
@@ -4669,7 +4679,9 @@ const plugin = {
               return plur1busHelp("quick", resolveDenialLocale(commandCtx));
             }
             const cronInternal = actionKey === "internal" && isCronCommandContext(commandCtx);
-            const memoryCtx = cronInternal ? null : await resolveRegisteredMemoryContext(commandCtx);
+            const memoryCtx = cronInternal
+              ? await resolveCronMemoryContext(commandCtx)
+              : await resolveRegisteredMemoryContext(commandCtx);
             if (actionKey === "internal") {
               if (!isCronCommandContext(commandCtx)) {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);

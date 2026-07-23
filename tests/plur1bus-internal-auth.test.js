@@ -62,7 +62,7 @@ async function withPlugin(fn) {
     plugin.register(api, { importRouting: async () => routingCapability });
     const command = api._commands.find((item) => item.name === "plur1bus");
     assert.ok(command, "plur1bus command should be registered");
-    return await fn({ command, workspaceDir });
+    return await fn({ command, workspaceDir, baseDbPath });
   } finally {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
@@ -107,7 +107,7 @@ function writeSkillProposal(workspaceDir, id = "proposal-1") {
 
 describe("/plur1bus internal auth gate", () => {
   it("blocks internal jobs from group chats without an ACL", async () => {
-    await withPlugin(async ({ command, workspaceDir }) => {
+    await withPlugin(async ({ command, workspaceDir, baseDbPath }) => {
       const result = await command.handler({
         args: "internal gc-run",
         workspaceDir,
@@ -120,7 +120,7 @@ describe("/plur1bus internal auth gate", () => {
   });
 
   it("keeps OpenClaw cron delivery authorized for internal jobs", async () => {
-    await withPlugin(async ({ command, workspaceDir }) => {
+    await withPlugin(async ({ command, workspaceDir, baseDbPath }) => {
       const result = await command.handler({
         args: "internal gc-run",
         workspaceDir,
@@ -131,6 +131,21 @@ describe("/plur1bus internal auth gate", () => {
 
       assert.match(result.text, /"job": "gc-run"/);
       assert.match(result.text, /"reason": "gc_disabled"/);
+    });
+  });
+
+  it("routes verified cron jobs through the runtime workspace, never the raw chat workspace key", async () => {
+    await withPlugin(async ({ command, workspaceDir, baseDbPath }) => {
+      const result = await command.handler({
+        args: "internal gc-run",
+        workspaceDir,
+        workspaceKey: "attacker-workspace",
+        agentId: "agent-a",
+        channel: "cron",
+      });
+      assert.match(result.text, /"job": "gc-run"/);
+      const workspaceRoot = join(baseDbPath, "_neo", "workspaces");
+      assert.equal(existsSync(join(workspaceRoot, "attacker-workspace")), false);
     });
   });
 });

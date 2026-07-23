@@ -156,4 +156,41 @@ describe("B13 sensitive command-read authorization matrix", () => {
     assert.match(store, /workspaceKey: memoryCtx\?\.workspaceIdentity \|\| ""/);
     assert.doesNotMatch(store, /commandCtx\.workspace(Key|Dir)/);
   });
+
+  it("executes public, sensitive, destructive, cron, and B14 action fixtures through registered commands", async () => {
+    const { baseDbPath, commands } = register();
+    const command = commands.find((item) => item.name === "plur1bus");
+    const runtimeLlm = { async complete() { throw new Error("LLM must not run"); } };
+    const fixtures = [
+      ["public-help", "reminders bogus", intruder, false],
+      ["sensitive-read", "reminders list", intruder, true],
+      ["destructive", "skills approve missing", intruder, true],
+      ["internal-cron", "internal gc-run", { agentId: "agent-a", channel: "cron" }, false],
+      ["B14-obsidian", "dashboards", intruder, false],
+    ];
+    try {
+      for (const [classification, args, ctx, denied] of fixtures) {
+        const result = await command.handler({ ...ctx, args, runtimeContext: { llm: runtimeLlm } });
+        if (denied) assert.match(result.text, /allowedUserIds|Not authorized/, classification);
+        else assert.doesNotMatch(result.text, /allowedUserIds|Not authorized/, classification);
+      }
+    } finally {
+      rmSync(baseDbPath, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps denied and public paths away from the supplied runtime LLM capability", async () => {
+    const { baseDbPath, commands } = register();
+    let calls = 0;
+    const runtimeLlm = { async complete() { calls++; return "unexpected"; } };
+    try {
+      const command = commands.find((item) => item.name === "plur1bus");
+      for (const args of ["memory origin record-id", "reminders bogus", "persona bogus", "behavior bogus"]) {
+        await command.handler({ ...intruder, args, runtimeContext: { llm: runtimeLlm } });
+      }
+      assert.equal(calls, 0);
+    } finally {
+      rmSync(baseDbPath, { recursive: true, force: true });
+    }
+  });
 });
