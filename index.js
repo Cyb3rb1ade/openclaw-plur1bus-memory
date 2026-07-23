@@ -121,7 +121,11 @@ import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "./lib/setup/config-c
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
-import { checkWikiAuth, runWikiCommand } from "./lib/wiki-command.js";
+import {
+  checkWikiAuth,
+  parseWikiCommandInput,
+  runWikiCommand,
+} from "./lib/wiki-command.js";
 import { checkAccess } from "./lib/acl-middleware.js";
 import {
   buildMemoryAccountTopology,
@@ -5801,44 +5805,22 @@ const plugin = {
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: async (ctx) => {
-            const validation = validateCommandArgs(ctx?.args);
-            if (!validation.ok) {
+            const parsed = parseWikiCommandInput(ctx?.args);
+            if (!parsed.ready) {
               const { lang, tone } = resolveCommandLocale(ctx);
               return {
-                text: t("wiki.input_error", {
+                text: t(parsed.responseKey, {
                   lang,
                   tone,
-                  vars: { error: validation.error },
+                  vars: parsed.responseVars,
                 }),
               };
-            }
-            const args = validation.value.trim();
-            if (!args) {
-              const { lang, tone } = resolveCommandLocale(ctx);
-              return { text: t("wiki.usage", { lang, tone }) };
-            }
-            const inputTokens = args.split(/\s+/);
-            const subCmd = inputTokens[0]?.toLowerCase();
-            if (inputTokens.length === 1 && subCmd === "add") {
-              const { lang, tone } = resolveCommandLocale(ctx);
-              return { text: t("wiki.add_usage", { lang, tone }) };
-            }
-            if (
-              inputTokens.length === 1
-              && (subCmd === "delete" || subCmd === "löschen" || subCmd === "loeschen")
-            ) {
-              const { lang, tone } = resolveCommandLocale(ctx);
-              return { text: t("wiki.usage", { lang, tone }) };
             }
 
             const memoryCtx = await resolveRegisteredMemoryContext(ctx);
             const requestNow = Date.now();
-            const destructive = subCmd === "add"
-              || subCmd === "delete"
-              || subCmd === "löschen"
-              || subCmd === "loeschen";
             const denied = checkWikiAuth(memoryCtx, cfg, {
-              destructive,
+              destructive: parsed.destructive,
               chatKind: memoryCtx.chatKind,
               localeCtx: ctx,
             });
@@ -5846,7 +5828,7 @@ const plugin = {
 
             const wikiAgentId = memoryCtx.agentId;
             const sessionRuntime = ctx?.runtimeContext?.llm;
-            return runWikiCommand({ ...ctx, args }, {
+            return runWikiCommand({ ...ctx, args: parsed.args }, {
               pool,
               embeddings,
               reranker,

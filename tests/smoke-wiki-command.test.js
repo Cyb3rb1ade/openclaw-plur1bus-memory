@@ -177,6 +177,47 @@ function makeDeps(db, {
   };
 }
 
+function makeNoDataDeps(events, commandCtx) {
+  const db = {
+    async init() {
+      events.push("init");
+    },
+  };
+  const pool = {};
+  Object.defineProperty(pool, "withDb", {
+    get() {
+      events.push("pool");
+      return async (_agentId, fn) => {
+        events.push("lease");
+        return fn(db);
+      };
+    },
+  });
+  return {
+    pool,
+    embeddings: {
+      async embed() {
+        events.push("provider");
+        return new Float32Array(4).fill(0.1);
+      },
+      async embedQuery() {
+        events.push("provider");
+        return new Float32Array(4).fill(0.1);
+      },
+    },
+    reranker: null,
+    callLlm: async () => {
+      events.push("runtime");
+      return "must not run";
+    },
+    cfg: { security: { allowedUserIds: [OWNER_USER] } },
+    api: { logger: { debug() {}, info() {}, warn() {}, error() {} } },
+    llmCfg: { model: "test-model", maxTokens: 400 },
+    ctx: memoryContextFor(commandCtx),
+    now: REQUEST_NOW,
+  };
+}
+
 function memoryContextFor(commandCtx) {
   return resolveMemoryRequestContext(commandCtx);
 }
@@ -379,6 +420,35 @@ describe("wiki-command smoke", () => {
     rmSync(archiveDir, { recursive: true, force: true });
   });
 
+  it("returns localized usage for missing or null direct args without data work", async () => {
+    for (const args of [undefined, null]) {
+      const events = [];
+      const commandCtx = makeCtx(args);
+      const result = await runWikiCommand(commandCtx, makeNoDataDeps(events, commandCtx));
+
+      assert.match(result.text, /Wiki commands|Wiki-Befehle/);
+      assert.deepEqual(events, []);
+    }
+  });
+
+  it("rejects malformed direct add and UUID grammar before pool, lease, init, or provider work", async () => {
+    const cases = [
+      ["add no-colon", /\/wiki add/i],
+      ["add : body", /\/wiki add/i],
+      ["add term:", /\/wiki add/i],
+      ["delete id:not-a-uuid", /No entry found|Kein Eintrag/],
+    ];
+
+    for (const [args, expected] of cases) {
+      const events = [];
+      const commandCtx = makeCtx(args);
+      const result = await runWikiCommand(commandCtx, makeNoDataDeps(events, commandCtx));
+
+      assert.match(result.text, expected);
+      assert.deepEqual(events, [], args);
+    }
+  });
+
   it("wikiAdd stores entry with memoryKind: 'wiki'", async () => {
     const stored = [];
     const db = makeDb({ storeSpy: async (entry) => { stored.push(entry); } });
@@ -444,7 +514,11 @@ describe("wiki-command smoke", () => {
 
   it("wikiDelete removes a wiki entry by query", async () => {
     const deleted = [];
-    const memoryCtx = memoryContextFor(makeCtx(""));
+    const commandCtx = makeCtx("delete Kimi", {
+      workspaceDir: archiveDir,
+      workspaceId: undefined,
+    });
+    const memoryCtx = memoryContextFor(commandCtx);
     const wikiRows = [
       workspaceWiki(memoryCtx, {
         id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -457,7 +531,11 @@ describe("wiki-command smoke", () => {
       wikiRows,
       deleteSpy: async (sql) => { deleted.push(sql); },
     });
-    const result = await runWikiCommand(makeCtx("delete Kimi"), makeDeps(db, { archiveDir }));
+    const result = await runWikiCommand(commandCtx, makeDeps(db, {
+      archiveDir,
+      ctx: memoryCtx,
+      workspaceDir: archiveDir,
+    }));
     assert.ok(deleted.length > 0, `delete should have been called, result: ${result.text}`);
     assert.ok(deleted[0].includes("aaaaaaaa"), "should delete the wiki entry by its UUID");
   });
@@ -584,7 +662,11 @@ describe("wiki-command smoke", () => {
 
   it("wikiDelete filters out higher-ranking normal memory — only deletes wiki entry", async () => {
     const deleted = [];
-    const memoryCtx = memoryContextFor(makeCtx(""));
+    const commandCtx = makeCtx("delete Kimi", {
+      workspaceDir: archiveDir,
+      workspaceId: undefined,
+    });
+    const memoryCtx = memoryContextFor(commandCtx);
     // Normal memory ranks higher (lower _distance = higher score)
     // Both appear in overfetch; only wiki entry should be deleted
     const allRows = [
@@ -607,7 +689,11 @@ describe("wiki-command smoke", () => {
       supportsWhere: false,
       deleteSpy: async (sql) => { deleted.push(sql); },
     });
-    const result = await runWikiCommand(makeCtx("delete Kimi"), makeDeps(db, { archiveDir }));
+    const result = await runWikiCommand(commandCtx, makeDeps(db, {
+      archiveDir,
+      ctx: memoryCtx,
+      workspaceDir: archiveDir,
+    }));
     assert.ok(deleted.length > 0, `should have deleted something, result: ${result.text}`);
     assert.ok(deleted.every(sql => sql.includes("ffff")), "must only delete the wiki entry (fff...)");
     assert.ok(!deleted.some(sql => sql.includes("eeee")), "must NOT delete the normal memory (eee...)");
@@ -747,7 +833,72 @@ describe("wiki-command smoke", () => {
       assert.match(clause, /expiresAt IS NULL/);
       assert.match(clause, /expiresAt = 0/);
       assert.match(clause, new RegExp(`expiresAt > ${REQUEST_NOW}`));
+      assert.match(clause, /scope = 'workspace'/);
+      assert.match(clause, /workspaceId = 'workspace:v1:workspace-1'/);
+      assert.match(clause, /workspaceKey = 'workspace:v1:workspace-1'/);
     }
+  });
+
+  it("filters higher-ranked foreign SQL candidates before the final search top-k", async () => {
+    const ctx = memoryContextFor(makeCtx("bounded search"));
+    const prompts = [];
+    const foreignRows = Array.from({ length: 8 }, (_unused, index) => foreignWorkspaceWiki(ctx, {
+      id: `${String(index + 1).padStart(8, "0")}-2222-4222-8222-222222222222`,
+      _distance: (index + 1) / 100,
+      text: `foreign ranked secret ${index + 1}`,
+      summary: `foreign ranked secret ${index + 1}`,
+    }));
+    const own = workspaceWiki(ctx, {
+      _distance: 0.2,
+      text: "own bounded search result",
+      summary: "own bounded search result",
+    });
+    const db = makeDb({ wikiRows: [...foreignRows, own] });
+
+    const result = await runDirect("bounded search", db, {
+      ctx,
+      archiveDir,
+      callLlm: async (messages) => {
+        prompts.push(messages[0].content);
+        return "own bounded answer";
+      },
+    });
+
+    assert.match(result.text, /own bounded answer/);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /own bounded search result/);
+    assert.doesNotMatch(prompts[0], /foreign ranked secret/);
+  });
+
+  it("filters higher-ranked foreign fallback candidates before the final search top-k", async () => {
+    const ctx = memoryContextFor(makeCtx("bounded fallback"));
+    const foreignRows = Array.from({ length: 8 }, (_unused, index) => foreignWorkspaceWiki(ctx, {
+      id: `${String(index + 1).padStart(8, "0")}-2444-4244-8244-222222222222`,
+      _distance: (index + 1) / 100,
+      text: `foreign fallback secret ${index + 1}`,
+      summary: `foreign fallback secret ${index + 1}`,
+    }));
+    const own = workspaceWiki(ctx, {
+      _distance: 0.2,
+      text: "own bounded fallback result",
+      summary: "own bounded fallback result",
+    });
+    const db = makeDb({
+      wikiRows: [...foreignRows, own],
+      supportsWhere: false,
+    });
+
+    const result = await runDirect("bounded fallback", db, {
+      ctx,
+      archiveDir,
+      callLlm: async (messages) => {
+        assert.match(messages[0].content, /own bounded fallback result/);
+        assert.doesNotMatch(messages[0].content, /foreign fallback secret/);
+        return "own bounded fallback answer";
+      },
+    });
+
+    assert.match(result.text, /own bounded fallback answer/);
   });
 
   it("filters ACL and lifecycle before constructing LLM input", async () => {
@@ -946,6 +1097,63 @@ describe("wiki-command smoke", () => {
     assert.equal(reads, 0);
   });
 
+  it("fails closed before UUID archive or delete when the canonical audit workspace is missing", async (t) => {
+    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-missing-audit-archive-"));
+    t.after(() => {
+      rmSync(localArchiveDir, { recursive: true, force: true });
+    });
+    const ctx = memoryContextFor(makeCtx(""));
+    let deletes = 0;
+    const db = makeDb({
+      getByIdFn: async () => workspaceWiki(ctx),
+      deleteSpy: async () => { deletes++; },
+    });
+
+    const result = await runDirect(`delete id:${OWNER_WIKI_ID}`, db, {
+      ctx,
+      archiveDir: localArchiveDir,
+    });
+
+    assert.match(result.text, /audit|protokoll|not deleted|nicht gelöscht/i);
+    assert.doesNotMatch(result.text, /^🗑/);
+    assert.equal(deletes, 0);
+    assert.deepEqual(readdirSync(localArchiveDir), []);
+  });
+
+  it("fails closed before query archive or delete when the supplied audit workspace is not canonical", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-canonical-ws-"));
+    const otherWorkspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-other-ws-"));
+    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-invalid-archive-"));
+    t.after(() => {
+      rmSync(workspaceDir, { recursive: true, force: true });
+      rmSync(otherWorkspaceDir, { recursive: true, force: true });
+      rmSync(localArchiveDir, { recursive: true, force: true });
+    });
+    const commandCtx = makeCtx("", { workspaceDir, workspaceId: undefined });
+    const ctx = memoryContextFor(commandCtx);
+    let deletes = 0;
+    const db = makeDb({
+      wikiRows: [workspaceWiki(ctx)],
+      deleteSpy: async () => { deletes++; },
+    });
+
+    const result = await runDirect("delete project", db, {
+      ctx,
+      archiveDir: localArchiveDir,
+      workspaceDir: otherWorkspaceDir,
+      commandCtx: { workspaceDir, workspaceId: undefined },
+    });
+
+    assert.match(result.text, /audit|protokoll|not deleted|nicht gelöscht/i);
+    assert.doesNotMatch(result.text, /^🗑/);
+    assert.equal(deletes, 0);
+    assert.deepEqual(readdirSync(localArchiveDir), []);
+    assert.equal(
+      readJsonl(join(otherWorkspaceDir, ".adaptive-learning", "destructive-ops.jsonl")).length,
+      0,
+    );
+  });
+
   it("archives first, awaits UUID delete, then writes exactly one destructive audit entry", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-audit-ws-"));
     const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-audit-archive-"));
@@ -1021,7 +1229,11 @@ describe("wiki-command smoke", () => {
   });
 
   it("filters query matches before ambiguity text or mutation", async () => {
-    const ctx = memoryContextFor(makeCtx("delete project"));
+    const commandCtx = makeCtx("delete project", {
+      workspaceDir: archiveDir,
+      workspaceId: undefined,
+    });
+    const ctx = memoryContextFor(commandCtx);
     const deleteCalls = [];
     const db = makeDb({
       wikiRows: [
@@ -1031,7 +1243,11 @@ describe("wiki-command smoke", () => {
       deleteSpy: async (sql) => deleteCalls.push(sql),
     });
 
-    const result = await runDirect("delete project", db, { ctx, archiveDir });
+    const result = await runDirect("delete project", db, {
+      ctx,
+      archiveDir,
+      commandCtx: { workspaceDir: archiveDir, workspaceId: undefined },
+    });
 
     assert.doesNotMatch(result.text, new RegExp(`foreign title|${FOREIGN_WIKI_ID}`));
     assert.equal(deleteCalls.length, 1);
@@ -1082,6 +1298,47 @@ describe("wiki-command smoke", () => {
     assert.equal(deletes, 0);
   });
 
+  it("filters higher-ranked foreign candidates before query-delete top-k", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-delete-topk-ws-"));
+    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-delete-topk-archive-"));
+    t.after(() => {
+      rmSync(workspaceDir, { recursive: true, force: true });
+      rmSync(localArchiveDir, { recursive: true, force: true });
+    });
+    const commandCtx = makeCtx("", { workspaceDir, workspaceId: undefined });
+    const ctx = memoryContextFor(commandCtx);
+    const foreignRows = Array.from({ length: 5 }, (_unused, index) => foreignWorkspaceWiki(ctx, {
+      id: `${String(index + 1).padStart(8, "0")}-3333-4333-8333-333333333333`,
+      _distance: (index + 1) / 100,
+      text: `foreign delete secret ${index + 1}`,
+      summary: `foreign delete secret ${index + 1}`,
+    }));
+    const own = workspaceWiki(ctx, {
+      _distance: 0.2,
+      text: "own bounded delete result",
+      summary: "own bounded delete result",
+    });
+    const deletes = [];
+    const db = makeDb({
+      wikiRows: [...foreignRows, own],
+      deleteSpy: async (sql) => deletes.push(sql),
+    });
+
+    const result = await runDirect("delete bounded", db, {
+      ctx,
+      archiveDir: localArchiveDir,
+      commandCtx: { workspaceDir, workspaceId: undefined },
+    });
+
+    assert.match(result.text, /deleted|gelöscht/i);
+    assert.doesNotMatch(result.text, /foreign delete secret/);
+    assert.deepEqual(deletes, [`id = "${own.id}"`]);
+    const audit = readJsonl(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"));
+    assert.equal(audit.length, 1);
+    assert.equal(audit[0].memoryId, own.id);
+    assert.equal(audit[0].via, "query");
+  });
+
   it("uses query embedding purpose and audits one successful query delete after settlement", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-query-audit-ws-"));
     const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-query-audit-archive-"));
@@ -1128,7 +1385,11 @@ describe("wiki-command smoke", () => {
   });
 
   it("logs getById failure safely before using the table fallback", async () => {
-    const ctx = memoryContextFor(makeCtx(""));
+    const commandCtx = makeCtx("", {
+      workspaceDir: archiveDir,
+      workspaceId: undefined,
+    });
+    const ctx = memoryContextFor(commandCtx);
     const debugCalls = [];
     const deleted = [];
     const db = makeDb({
@@ -1142,6 +1403,7 @@ describe("wiki-command smoke", () => {
     const result = await runDirect(`delete id:${OWNER_WIKI_ID}`, db, {
       ctx,
       archiveDir,
+      commandCtx: { workspaceDir: archiveDir, workspaceId: undefined },
       logger: {
         debug(...args) { debugCalls.push(args); },
         info() {},
@@ -1182,6 +1444,60 @@ describe("wiki-command smoke", () => {
     assert.equal(stored.length, 1);
     assert.ok(debugCalls.length >= 1);
     assert.doesNotMatch(JSON.stringify(debugCalls), /duplicate-secret/);
+  });
+
+  it("registered handler returns usage for missing or null args without route, runtime, DB, or provider work", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-null-ws-"));
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-null-db-"));
+    t.after(() => {
+      rmSync(workspaceDir, { recursive: true, force: true });
+      rmSync(baseDbPath, { recursive: true, force: true });
+    });
+    const events = [];
+    const { handler } = registerWikiHarness(t, { workspaceDir, baseDbPath, events });
+    const runtimeContext = {};
+    Object.defineProperty(runtimeContext, "llm", {
+      get() {
+        events.push("runtime");
+        return null;
+      },
+    });
+
+    for (const args of [undefined, null]) {
+      const result = await handler(officialCommandContext(args, { runtimeContext }));
+      assert.match(result.text, /Wiki commands|Wiki-Befehle/);
+      assert.deepEqual(events, [], String(args));
+    }
+  });
+
+  it("registered handler rejects malformed add and UUID grammar before route, runtime, DB, or provider work", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-grammar-ws-"));
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-grammar-db-"));
+    t.after(() => {
+      rmSync(workspaceDir, { recursive: true, force: true });
+      rmSync(baseDbPath, { recursive: true, force: true });
+    });
+    const events = [];
+    const { handler } = registerWikiHarness(t, { workspaceDir, baseDbPath, events });
+    const runtimeContext = {};
+    Object.defineProperty(runtimeContext, "llm", {
+      get() {
+        events.push("runtime");
+        return null;
+      },
+    });
+    const cases = [
+      ["add no-colon", /\/wiki add/i],
+      ["add : body", /\/wiki add/i],
+      ["add term:", /\/wiki add/i],
+      ["delete id:not-a-uuid", /No entry found|Kein Eintrag/],
+    ];
+
+    for (const [args, expected] of cases) {
+      const result = await handler(officialCommandContext(args, { runtimeContext }));
+      assert.match(result.text, expected);
+      assert.deepEqual(events, [], args);
+    }
   });
 
   it("registered handler returns usage and invalid-input errors without route, DB, or provider work", async (t) => {
