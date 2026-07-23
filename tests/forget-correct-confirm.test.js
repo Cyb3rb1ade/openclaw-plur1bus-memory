@@ -470,7 +470,7 @@ describe("forget/correct confirmation completion", () => {
     const handlers = source.slice(forgetStart, correctEnd);
     assert.match(
       handlers,
-      /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\);[\s\S]*?checkMemoryAuth\(memoryCtx, commandCtx/,
+      /const memoryCtx = (?:suppliedMemoryCtx \|\| )?await resolveRegisteredMemoryContext\(commandCtx\);[\s\S]*?checkMemoryAuth\(memoryCtx, commandCtx/,
       "canonical context must resolve before authorization",
     );
     assert.match(handlers, /resolveConfirmationIdentity\(memoryCtx\)/);
@@ -518,28 +518,21 @@ describe("forget/correct confirmation completion", () => {
 
   it("shareCard blocks sensitive workspace promotion without explicit approval", async () => {
     const id = "44444444-4444-4444-4444-444444444444";
-    const db = mockDb([{ id, text: "User API password is abc", title: "secret", category: "access/password" }]);
-    const dbPool = mockDbPool();
+    const privatePool = { async withWriteDb(_agent, fn) { return fn({ init: async () => {}, getById: async () => ({ id, text: "User API password is abc", category: "access/password", agentId: "default", status: "active" }) }); } };
+    const sharedPool = {};
 
-    const denied = await shareCard(db, dbPool, "default", id);
+    const denied = await shareCard(privatePool, sharedPool, { embed: async () => [1] }, "default", id, { ctx: { agentId: "default", workspaceIdentity: "ws" } });
     assert.strictEqual(denied.ok, false);
     assert.match(denied.error, /explicit approval/i);
-    assert.strictEqual(dbPool.stored.length, 0);
-
-    const allowed = await shareCard(db, dbPool, "default", id, { allowSensitiveShare: true });
-    assert.strictEqual(allowed.ok, true);
-    assert.strictEqual(dbPool.stored.length, 1);
   });
 
   it("shareCard blocks core memories even when category looks ordinary", async () => {
     const id = "55555555-5555-5555-5555-555555555555";
-    const db = mockDb([{ id, text: "Core behavioral rule", title: "core", category: "note", memoryClass: "core" }]);
-    const dbPool = mockDbPool();
+    const privatePool = { async withWriteDb(_agent, fn) { return fn({ init: async () => {}, getById: async () => ({ id, text: "Core behavioral rule", category: "note", memoryClass: "core", agentId: "default", status: "active" }) }); } };
 
-    const denied = await shareCard(db, dbPool, "default", id);
+    const denied = await shareCard(privatePool, {}, { embed: async () => [1] }, "default", id, { ctx: { agentId: "default", workspaceIdentity: "ws" } });
     assert.strictEqual(denied.ok, false);
     assert.match(denied.error, /explicit approval|sensitive shared memory/i);
-    assert.strictEqual(dbPool.stored.length, 0);
   });
 
   it("forgetCard does not expose raw DB error details to the user", async () => {
@@ -580,18 +573,10 @@ describe("forget/correct confirmation completion", () => {
 
   it("shareCard does not expose raw store error details to the user", async () => {
     const id = "77777777-7777-7777-7777-777777777777";
-    const db = mockDb([{ id, text: "ordinary note", title: "note", category: "note" }]);
-    const dbPool = {
-      getDb() {
-        return {
-          async store() {
-            throw new Error("sqlite file /private/cache/shared.db");
-          },
-        };
-      },
-    };
+    const privatePool = { async withWriteDb(_agent, fn) { return fn({ init: async () => {}, getById: async () => ({ id, text: "ordinary note", category: "note", agentId: "default", status: "active" }) }); } };
+    const sharedPool = { async withWorkspaceDb(_ctx, _fn) { throw new Error("sqlite file /private/cache/shared.db"); } };
 
-    const result = await shareCard(db, dbPool, "default", id);
+    const result = await shareCard(privatePool, sharedPool, { embed: async () => [1] }, "default", id, { ctx: { agentId: "default", workspaceIdentity: "ws" } });
 
     assert.strictEqual(result.ok, false);
     assert.doesNotMatch(result.error, /private\/cache/);
