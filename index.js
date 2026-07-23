@@ -53,6 +53,8 @@ import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.j
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
 import { loadLinkIndex } from "./lib/obsidian/link-index.js";
 import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
+import { mutationAllowed, parseObsidianCommandPlan } from "./lib/obsidian-mutation-policy.js";
+import { isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
 import { renderStatus } from "./lib/telegram-commands/status.js";
 import { collectStatusData } from "./lib/telegram-commands/status-data.js";
 import {
@@ -142,6 +144,7 @@ import {
   resolveHostHookMemoryContext,
   resolveMemoryRequestContext,
   resolveToolMemoryRequestContext,
+  normalizeWorkspaceTarget,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
@@ -420,11 +423,15 @@ function addSemanticDiscoveryStats(total, result = {}) {
   return total;
 }
 
-async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defaultAgentId }) {
+async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defaultAgentId, mutationPolicy }) {
   const discoveryCfg = semVaultCfg?.graphLinks?.semanticDiscovery || {};
   const batchSize = Math.max(1, Math.min(Number(discoveryCfg.batchSize || 500), 5000));
   let remaining = Math.max(1, Number(discoveryCfg.maxPerRun || 500));
   const total = semanticDiscoveryStats();
+  if (!mutationAllowed(mutationPolicy, "semantic_index_write")
+    || !mutationAllowed(mutationPolicy, "vault_write")) {
+    return { ...total, blocked: true, reason: "bound_confirmation_required" };
+  }
 
   const scanBatches = typeof db.scanActiveBatches === "function"
     ? db.scanActiveBatches({ batchSize })
@@ -432,13 +439,15 @@ async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defa
 
   for await (const lancedbRecords of scanBatches) {
     if (!Array.isArray(lancedbRecords) || lancedbRecords.length === 0) continue;
-    await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger });
+    await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger, mutationPolicy });
     const result = await discoverSemanticLinks(semVaultCfg, lancedbRecords, {
       db,
       pool,
       logger,
       defaultAgentId,
       maxPerRun: remaining,
+      mutationPolicy,
+      confirm: true,
     });
     addSemanticDiscoveryStats(total, result);
     const consumed = (result.processed || 0) + (result.skipped || 0) + (result.unchanged || 0) + (result.errors || 0);
@@ -4518,6 +4527,29 @@ const plugin = {
     if (obsidianBridgeEnabled) {
       const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
         logger: api.logger,
+        mutationPolicyForWorkspace: (workspace) => {
+          const workspaceIdentity = normalizeWorkspaceTarget(
+            workspace.workspaceId,
+            "Obsidian service workspace",
+          );
+          const memoryCtx = {
+            agentId: workspace.agentId,
+            workspaceIdentity,
+            workspaceId: workspaceIdentity,
+          };
+          return parseObsidianCommandPlan(["dashboards", "build"], {
+            memoryCtx,
+            baseDbPath,
+            mode: obsidianBridgeCfg.mode,
+            dryRun: obsidianBridgeCfg.dryRun,
+            allowWrite: obsidianBridgeCfg.allowWrite,
+            vaultConfirmed: isOwnedVaultConfirmed({
+              baseDbPath,
+              memoryCtx,
+              vaultPath: workspace.path,
+            }),
+          }).mutationPolicy;
+        },
         memoryStore: async ({ workspace, payload }) => {
           const memoryCtx = resolveMemoryRequestContext({
             agentId: workspace.agentId,
@@ -4745,12 +4777,18 @@ const plugin = {
             // Obsidian is an explicit B14 boundary. Its command-specific
             // authorization remains delegated unchanged to its own handler.
             if (actionKey === "obsidian" || obsidianActionNames.has(actionKey)) {
-              const commandStore = getNeoStore({
-                workspaceDir: commandCtx.workspaceDir,
-                workspaceKey: commandCtx.workspaceKey,
-                agentId: commandCtx.agentId || "command",
-              }, {}, "obsidian");
               const obsidianMemoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+              let commandStore = null;
+              const getObsidianCommandStore = () => {
+                if (!commandStore) {
+                  commandStore = getNeoStore({
+                    workspaceDir: commandCtx.workspaceDir,
+                    workspaceKey: commandCtx.workspaceKey,
+                    agentId: commandCtx.agentId || "command",
+                  }, {}, "obsidian");
+                }
+                return commandStore;
+              };
               let runtimeConfig = null;
               try {
                 if (typeof api.runtime?.config?.current === "function") {
@@ -4762,6 +4800,7 @@ const plugin = {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
               const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
               const obsidianTokens = actionKey === "obsidian" ? tokens.slice(1) : tokens;
+              const requestedVaultPath = obsidianBridgeCfg?.vaultPath || obsidianBridgeCfg?.vault || commandCtx.workspaceDir || "";
               return registeredObsidianCommandHandler(obsidianTokens, {
                 config: obsidianBridgeCfg,
                 configPath: openclawConfigPath,
@@ -4771,12 +4810,40 @@ const plugin = {
                 commandCtx,
                 workspaceDir: commandCtx.workspaceDir,
                 pluginConfig: cfg,
-                commandStore,
-                records: [
-                  ...commandStore.readCandidates(500, neoRequester(commandCtx, {})).map((record) => ({ ...record, type: "memory_candidate", id: record.id, summary: record.statement || record.summary || record.text || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
-                  ...commandStore.readBehaviorCards(200, neoRequester(commandCtx, {})).map((record) => ({ ...record, type: "source", id: record.id, summary: record.statement || record.summary || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
-                ],
-                findRecord: (recordId) => findNeoRecord(commandStore, recordId, neoRequester(commandCtx, {})),
+                memoryCtx: obsidianMemoryCtx,
+                baseDbPath,
+                vaultConfirmed: requestedVaultPath
+                  ? isOwnedVaultConfirmed({
+                      baseDbPath,
+                      memoryCtx: obsidianMemoryCtx,
+                      vaultPath: requestedVaultPath,
+                    })
+                  : false,
+                semanticConfirmationStore: confirmationStore,
+                loadSemanticRecords: async () => pool.withDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
+                  await semanticDb.init();
+                  return semanticDb.scanActive();
+                }),
+                searchSemanticNeighbors: async (source) => pool.withDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
+                  await semanticDb.init();
+                  return semanticDb.search(
+                    source.vector,
+                    obsidianBridgeCfg?.graphLinks?.semanticDiscovery?.topK || 20,
+                    obsidianBridgeCfg?.graphLinks?.semanticDiscovery?.threshold || 0.78,
+                  );
+                }),
+                loadRecords: async () => {
+                  const store = getObsidianCommandStore();
+                  return [
+                    ...store.readCandidates(500, neoRequester(commandCtx, {})).map((record) => ({ ...record, type: "memory_candidate", id: record.id, summary: record.statement || record.summary || record.text || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
+                    ...store.readBehaviorCards(200, neoRequester(commandCtx, {})).map((record) => ({ ...record, type: "source", id: record.id, summary: record.statement || record.summary || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
+                  ];
+                },
+                findRecord: (recordId) => findNeoRecord(
+                  getObsidianCommandStore(),
+                  recordId,
+                  neoRequester(commandCtx, {}),
+                ),
                 memoryStore: async ({ payload }) => {
                   const result = await storeMemoryFromToolParams({
                     memoryCtx: obsidianMemoryCtx,

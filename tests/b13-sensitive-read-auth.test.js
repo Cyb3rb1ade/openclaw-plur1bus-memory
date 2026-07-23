@@ -57,6 +57,16 @@ const intruder = {
   to: "telegram:group:group-a",
   getCurrentConversationBinding: () => null,
 };
+const owner = {
+  ...intruder,
+  senderId: "owner",
+  userId: "owner",
+  chatId: "owner-dm",
+  chatType: "private",
+  sessionKey: "agent:agent-a:telegram:direct:owner-dm",
+  from: "telegram:direct:owner-dm",
+  to: "telegram:direct:owner-dm",
+};
 
 const directReads = [["memory", "project"], ["state", ""], ["wiki", "project"], ["speaker", "list"], ["speaker", "proposals"]];
 const plur1busReads = ["start", "temperament", "persona", "skills review", "skills list", "skills show proposal-id", "reminders list", "reminders show reminder-id", "curation", "memory origin record-id", "memory explain record-id", "memory overlays", "memory overlay", "memory contradictions", "memory doctor", "recall why record-id", "origin trace record-id", "behavior show", "behavior candidates", "behavior explain record-id", "embeddings", "dreaming", "status", "doctor", "state"];
@@ -155,7 +165,6 @@ describe("B13 sensitive command-read authorization matrix", () => {
 
   it("keeps allowlisted direct and /plur1bus reads available", async () => {
     const { baseDbPath, commands } = register();
-    const owner = { ...intruder, senderId: "owner", userId: "owner", chatId: "owner-dm", chatType: "private", sessionKey: "agent:agent-a:telegram:direct:owner-dm", from: "telegram:direct:owner-dm", to: "telegram:direct:owner-dm" };
     try {
       for (const [name, args] of [["memory", "project"], ["wiki", "project"], ["speaker", "list"]]) {
         const result = await commands.find((item) => item.name === name).handler({ ...owner, args });
@@ -206,7 +215,11 @@ describe("B13 sensitive command-read authorization matrix", () => {
     const runtimeLlm = { async complete() { throw new Error("LLM must not run"); } };
     try {
       for (const [classification, args] of ACTION_FIXTURES) {
-        const ctx = classification === "internal-cron" ? { agentId: "agent-a", channel: "cron" } : intruder;
+        const ctx = classification === "internal-cron"
+          ? { agentId: "agent-a", channel: "cron" }
+          : classification === "B14-obsidian"
+            ? owner
+            : intruder;
         const before = { neo: effects.neo.length, pool: effects.pool, dbInit: effects.dbInit, embed: effects.embed, locale: effects.locale, llm: effects.llm.length };
         const result = await command.handler({ ...ctx, args, runtimeContext: { llm: runtimeLlm } });
         if (classification === "sensitive-read" || classification === "destructive") {
@@ -235,16 +248,16 @@ describe("B13 sensitive command-read authorization matrix", () => {
     }
   });
 
-  it("delegates B14 aliases to the Obsidian handler without constructing the general store", async () => {
+  it("delegates B14 aliases without eagerly constructing either Neo store", async () => {
     const effects = [];
     const { baseDbPath, commands } = register({
       commandRuntimeHooks: { onNeoStore: (effect) => effects.push(effect) },
       handleObsidianBridgeCommand: async () => ({ text: "B14 registered handler reached" }),
     });
     try {
-      const result = await commands.find((item) => item.name === "plur1bus").handler({ ...intruder, args: "obsidian help" });
+      const result = await commands.find((item) => item.name === "plur1bus").handler({ ...owner, args: "obsidian help" });
       assert.equal(result.text, "B14 registered handler reached");
-      assert.deepEqual(effects.map((effect) => effect.purpose), ["obsidian"]);
+      assert.deepEqual(effects, []);
     } finally {
       rmSync(baseDbPath, { recursive: true, force: true });
     }

@@ -21,6 +21,18 @@ import {
   readMemoryMirrorRecords,
   runSemanticLinkIndexBatch,
 } from "../lib/obsidian/semantic-link-discoverer.js";
+import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
+
+function semanticPolicy(vault, agentId = "main", workspaceIdentity = "workspace:v1:main") {
+  return parseObsidianCommandPlan(["semantic-discovery", "confirm"], {
+    memoryCtx: { agentId, workspaceIdentity },
+    baseDbPath: vault,
+    mode: "apply",
+    allowWrite: true,
+    vaultConfirmed: true,
+    actionConfirmed: true,
+  }).mutationPolicy;
+}
 
 describe("link-index: computeContentHash", () => {
   it("returns deterministic sha256 string", () => {
@@ -144,7 +156,7 @@ describe("link-index: loadLinkIndex / saveLinkIndex", () => {
         },
       },
     };
-    saveLinkIndex(vault, original);
+    saveLinkIndex(vault, original, { mutationPolicy: semanticPolicy(vault) });
     const loaded = loadLinkIndex(vault);
     assert.strictEqual(loaded.version, "1");
     assert.deepStrictEqual(loaded.entries["rec-001"].similar, ["rec-002"]);
@@ -153,7 +165,7 @@ describe("link-index: loadLinkIndex / saveLinkIndex", () => {
 
   it("saveLinkIndex writes atomically to .plur1bus/ subfolder", () => {
     const vault = makeVault();
-    saveLinkIndex(vault, { version: "1", entries: {} });
+    saveLinkIndex(vault, { version: "1", entries: {} }, { mutationPolicy: semanticPolicy(vault) });
     assert.ok(existsSync(join(vault, ".plur1bus", "link-index.json")));
   });
 });
@@ -222,7 +234,7 @@ describe("discoverSemanticLinks", () => {
     });
 
     assert.strictEqual(result.blocked, true);
-    assert.strictEqual(result.reason, "confirm_required");
+    assert.strictEqual(result.reason, "bound_confirmation_required");
     assert.strictEqual(result.indexUpdated, false);
     assert.strictEqual(existsSync(join(vault, ".plur1bus", "link-index.json")), false);
   });
@@ -236,7 +248,7 @@ describe("discoverSemanticLinks", () => {
       { id: idB, vector: [0.2], text: "bye", summary: "later" },
     ];
     const pool = makePool([idB]);
-    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true });
+    const result = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true, mutationPolicy: semanticPolicy(vault) });
     assert.ok(result.processed >= 1);
     assert.strictEqual(result.indexUpdated, true);
     const idx = loadLinkIndex(vault);
@@ -254,8 +266,8 @@ describe("discoverSemanticLinks", () => {
     const idA = "aaaaaaaa-0000-0000-0000-000000000001";
     const records = [{ id: idA, vector: [0.1], text: "hello", summary: "world" }];
     const pool = makePool(["aaaaaaaa-0000-0000-0000-000000000002"]);
-    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true });
-    const second = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true });
+    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true, mutationPolicy: semanticPolicy(vault) });
+    const second = await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true, mutationPolicy: semanticPolicy(vault) });
     assert.strictEqual(second.unchanged, 1);
     assert.strictEqual(second.processed, 0);
     assert.strictEqual(second.indexUpdated, false);
@@ -282,7 +294,7 @@ describe("discoverSemanticLinks", () => {
     const records = [{ id: selfId, vector: [0.1], text: "t", summary: "" }];
     // search returns self + other
     const pool = makePool([selfId, "aaaaaaaa-0000-0000-0000-000000000002"]);
-    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true });
+    await discoverSemanticLinks(baseConfig(vault), records, { pool, defaultAgentId: "main", confirm: true, mutationPolicy: semanticPolicy(vault) });
     const idx = loadLinkIndex(vault);
     assert.ok(!idx.entries[selfId]?.similar.includes(selfId));
   });
@@ -582,6 +594,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       },
       {
         confirm: true,
+        mutationPolicy: semanticPolicy(vault),
         sidecarRecords: [
           { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
           { id: "mem-b", vector: [0.99, 0.01], agent_id: "main", workspace_id: "main" },
@@ -614,6 +627,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
     };
     const options = {
       confirm: true,
+      mutationPolicy: semanticPolicy(vault),
       sidecarRecords: [
         { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
         { id: "mem-b", vector: [0.99, 0.01], agent_id: "main", workspace_id: "main" },
@@ -641,6 +655,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       },
       {
         confirm: true,
+        mutationPolicy: semanticPolicy(vault),
         sidecarRecords: [
           { id: "mem-main", vector: [1, 0], agent_id: "main", workspace_id: "main" },
           { id: "mem-other", vector: [0.9, 0.1], agent_id: "other", workspace_id: "other" },
@@ -667,6 +682,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       },
       {
         confirm: true,
+        mutationPolicy: semanticPolicy(vault),
         sidecarRecords: [
           { id: "mem-good", vector: [1, 0], agent_id: "main", workspace_id: "main" },
           { id: "mem-provenance", vector: [0.8, 0.2], agent_id: "main", workspace_id: "main" },
@@ -692,6 +708,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       },
       {
         confirm: true,
+        mutationPolicy: semanticPolicy(vault),
         sidecarRecords: [],
       },
     );
@@ -715,6 +732,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       },
       {
         confirm: true,
+        mutationPolicy: semanticPolicy(vault),
         loadLanceDbRows: async () => [
           {
             id: "mem-no-loader",
@@ -747,6 +765,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       },
       {
         confirm: true,
+        mutationPolicy: semanticPolicy(vault),
         manifestDir,
         sidecarRecords: [
           { id: "mem-a", vector: [1, 0], agent_id: "main", workspace_id: "main" },
@@ -764,7 +783,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
     assert.strictEqual(manifest.entriesTotal, 2);
   });
 
-  it("runs a resumable semantic-link batch and writes only checkpoint in dry-run", async () => {
+  it("keeps dry-run resumable semantic-link batches entirely in memory", async () => {
     const vault = makeMirrorVault();
     writeMirror(vault, "mem-a", {}, "Alpha.");
     writeMirror(vault, "mem-b", {}, "Beta.");
@@ -796,7 +815,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
     assert.strictEqual(first.nextOffset, 2);
     assert.strictEqual(first.concurrency, 2);
     assert.strictEqual(first.complete, false);
-    assert.strictEqual(existsSync(checkpointPath), true);
+    assert.strictEqual(existsSync(checkpointPath), false);
     assert.strictEqual(existsSync(join(vault, ".plur1bus", "link-index.json")), false);
 
     const second = await runSemanticLinkIndexBatch({
@@ -814,8 +833,8 @@ describe("semantic-link dry-run from memory mirrors", () => {
       searchSimilar: async () => [{ id: "mem-a", score: 0.96 }],
     });
 
-    assert.strictEqual(second.offset, 2);
-    assert.strictEqual(second.processed, 1);
+    assert.strictEqual(second.offset, 0);
+    assert.strictEqual(second.processed, 3);
     assert.strictEqual(second.complete, true);
     assert.strictEqual(Object.keys(second.entries).sort().join(","), "mem-a,mem-b,mem-c");
   });
@@ -834,6 +853,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       workspaceKey: "main",
     }, {
       confirm: true,
+      mutationPolicy: semanticPolicy(vault),
       checkpointPath,
       manifestDir,
       limit: 1,
@@ -855,6 +875,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       workspaceKey: "main",
     }, {
       confirm: true,
+      mutationPolicy: semanticPolicy(vault),
       checkpointPath,
       manifestDir,
       sidecarRecords: [
@@ -877,6 +898,7 @@ describe("semantic-link dry-run from memory mirrors", () => {
       workspaceKey: "main",
     }, {
       confirm: true,
+      mutationPolicy: semanticPolicy(vault),
       checkpointPath,
       manifestDir,
       sidecarRecords: [
