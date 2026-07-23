@@ -260,6 +260,7 @@ import {
   sessionKeyFrom,
 } from "./lib/reply-outcome-tracking.js";
 import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
+import { SharedMemoryPool } from "./lib/shared-memory-pool.js";
 import { resolveNamespaceLayout } from "./lib/namespace-config.js";
 import {
   extractMediaOutputIds,
@@ -1900,7 +1901,7 @@ function deriveExpectedCanonicalTarget(path) {
 }
 
 /** Per-agent MemoryDB cache with callback-scoped operation leases. */
-class AgentDbPool {
+export class AgentDbPool {
   /**
    * @param {string} basePath Validated namespace base path.
    * @param {number} vectorDim Vector dimension.
@@ -3891,6 +3892,7 @@ const plugin = {
     };
 
     const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
+    const sharedMemoryPool = new SharedMemoryPool(namespaceLayout.baseDir, vectorDim, AgentDbPool, api.logger);
     if (commandRuntimeHooks) {
       const withDb = pool.withDb.bind(pool);
       pool.withDb = async (agentId, operation, ...args) => withDb(agentId, async (db, ...operationArgs) => {
@@ -5817,6 +5819,7 @@ const plugin = {
         registerGatewayShutdown(api, {
           memoryDbAdapter,
           pool,
+          sharedMemoryPool,
           clearTurnRoutes: clearInitializedTurnRoutes,
           flushMetrics,
           llmResultCache,
@@ -8593,5 +8596,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, AgentDbPool, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
 export default plugin;
