@@ -307,3 +307,26 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
   Important 0 / Minor 0. Focused gate 126/126 across 20 suites; lint and diff
   checks pass. B5 is closed without handler, default-LLM, API-key, per-agent
   credential, Main, or Remote changes.
+
+## 2026-07-23 — B13 Task 2 recall/provider ACL boundary
+
+- Commit `6d2a33e` (`fix: authorize recall before graph and providers`) preserves
+  complete ownership/provenance across initial, refined, and hydrated recall
+  rows and enforces the frozen canonical ACL context before graph traversal,
+  embeddings, reranking, and every soft-budget return.
+- Graph authorization inspects at most 400 ordered edges and 200 endpoint IDs.
+  Endpoint reads use bounded 100-ID chunks, a shared deadline, strict
+  multi-namespace error propagation, and an explicit
+  `ERR_UNSUPPORTED_IN_QUERY` compatibility signal; free-text error inference is
+  intentionally absent.
+- Initial, refined, graph-relevance, temporal-anchor, and canonical cache-miss
+  embeddings receive the request-bound frozen agent context. Model selection,
+  API-key/endpoint/header routing, provider fallback, and per-agent credential
+  behavior remain unchanged.
+- Historical disclosure proofs stop at their obsolete disclosure assumptions.
+  Final focused and directly affected gate: 113/113, no failures or skips.
+- Independent specification review: **PASS**, Critical 0 / Important 0 /
+  Minor 0. Independent quality review: **PASS**, Critical 0 / Important 0 /
+  Minor 0.
+- Work remains local on `fix/high-mid-audit-findings-continuation`; Main,
+  `fix/high-mid-audit-findings`, PR #85, and Remote remain untouched.
