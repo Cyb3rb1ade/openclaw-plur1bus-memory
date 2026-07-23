@@ -22,8 +22,24 @@ import {
   resolveGraphConfig,
   collectTier1Links,
   collectTier2Links,
-  writeGraphLinks,
+  writeGraphLinks as writeGraphLinksSink,
 } from "../lib/obsidian/graph-link-writer.js";
+import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
+
+function writeGraphLinks(rawConfig, records, options = {}) {
+  const mutationPolicy = parseObsidianCommandPlan(["links", "suggest"], {
+    memoryCtx: {
+      agentId: rawConfig.agentId || "main",
+      workspaceIdentity: `workspace:v1:${rawConfig.workspaceKey || rawConfig.workspaceId || "main"}`,
+    },
+    baseDbPath: rawConfig.vaultPath,
+    mode: "apply",
+    allowWrite: true,
+    vaultConfirmed: true,
+    actionConfirmed: true,
+  }).mutationPolicy;
+  return writeGraphLinksSink(rawConfig, records, { ...options, mutationPolicy });
+}
 
 describe("graph-link-writer: helpers", () => {
   it("formatLinkTarget constructs vault-relative wikilink path", () => {

@@ -5,15 +5,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { writeDiscoveredObsidianWorkspaces } from "../lib/obsidian-bridge.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 describe("writeDiscoveredObsidianWorkspaces — malformed config", () => {
   it("throws a clear error (not a raw SyntaxError) when the OpenClaw config is invalid JSON", () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-discover-"));
     const configPath = join(dir, "openclaw.json");
     writeFileSync(configPath, "{ this is not valid json", "utf8");
+    const mutationPolicy = confirmedObsidianPolicy({
+      baseDbPath: dir,
+      command: ["discover", "workspaces", "--write"],
+    });
 
     assert.throws(
-      () => writeDiscoveredObsidianWorkspaces(configPath, [], { backupDir: dir }),
+      () => writeDiscoveredObsidianWorkspaces(configPath, [], { backupDir: dir, mutationPolicy }),
       (err) => {
         // Must name the config and signal it is malformed — a bare
         // "Unexpected token ... in JSON" leaks the parser internals and

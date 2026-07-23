@@ -33,6 +33,7 @@ import {
 } from "../lib/obsidian-control-room.js";
 import { resolveInside } from "../lib/sql-safety.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 describe("obsidian-smoke-p5", () => {
   function makeWorkspace(dir) {
@@ -61,6 +62,7 @@ describe("obsidian-smoke-p5", () => {
   it("bidirectional sync: obsidian → candidates + pluri1bus → frontmatter update", async () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-bidi-"));
     const ws = makeWorkspace(dir);
+    const mutationPolicy = confirmedObsidianPolicy({ baseDbPath: dir });
     confirmVaultPath(ws);
 
     // Obsidian-Seite: einfache Markdown-Datei (noch kein memory_card)
@@ -94,6 +96,7 @@ describe("obsidian-smoke-p5", () => {
       auditLog: true,
       applyApproved: true,
       approvedPaths: "all",
+      mutationPolicy,
       memoryStore: async () => ({ details: { id: "mem-bidi-01" } }),
     });
 
@@ -114,6 +117,7 @@ describe("obsidian-smoke-p5", () => {
   it("generates conflict review when a synced decision changes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-conflict-"));
     const ws = makeWorkspace(dir);
+    const mutationPolicy = confirmedObsidianPolicy({ baseDbPath: dir });
     confirmVaultPath(ws);
 
     mkdirSync(join(dir, "decisions"), { recursive: true });
@@ -140,6 +144,7 @@ describe("obsidian-smoke-p5", () => {
       auditLog: true,
       applyApproved: true,
       approvedPaths: "all",
+      mutationPolicy,
       memoryStore: async () => ({ details: { id: "mem-dec-01" } }),
     });
 
@@ -167,6 +172,7 @@ describe("obsidian-smoke-p5", () => {
       auditLog: true,
       applyApproved: true,
       approvedPaths: "all",
+      mutationPolicy,
       memoryStore: async () => ({ details: { id: "mem-dec-02" } }),
     });
 
@@ -194,6 +200,7 @@ describe("obsidian-smoke-p5", () => {
   it("creates backup before apply with manifest and audit log", async () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-backup-"));
     const ws = makeWorkspace(dir);
+    const mutationPolicy = confirmedObsidianPolicy({ baseDbPath: dir });
     confirmVaultPath(ws);
 
     mkdirSync(join(dir, "memory", "cards"), { recursive: true });
@@ -221,6 +228,7 @@ describe("obsidian-smoke-p5", () => {
       auditLog: true,
       applyApproved: true,
       approvedPaths: "all",
+      mutationPolicy,
       memoryStore: async () => ({ details: { id: "mem-backup-01" } }),
     });
 
