@@ -241,6 +241,8 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
+PLUR1BUS requires Node.js 22.5 or newer.
+
 Drop into an OpenClaw extensions folder and restart the gateway:
 
 ```bash
@@ -414,7 +416,7 @@ The six runtime settings are `llmResultCacheEnabled` (default `true`), `llmResul
 
 Operational notes:
 
-- Persistence requires Node ≥ 22.5 for the built-in `node:sqlite` module; on older Node versions the cache transparently falls back to memory-only.
+- Persistence uses the built-in `node:sqlite` module available throughout the supported Node.js runtime range; if SQLite initialization is unavailable, the cache falls back to memory-only.
 - Persistence stores LLM response text as plaintext (directory `0o700`, file `0o600` under the memory database path). Responses may contain condensed memory content — enable persistence only where that is acceptable.
 - Integrated call sites send `temperature: 0` for determinism, and `llm-call.js` now actually forwards `temperature` to the provider (previously the setting was silently ignored). Existing configs that set `temperature` therefore change their effective provider behavior.
 
