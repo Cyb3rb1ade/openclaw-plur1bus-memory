@@ -171,6 +171,7 @@ describe("multi-namespace registered recall", () => {
 
     const api = makeApi(baseDbPath);
     plugin.register(api, { importRouting: async () => routingCapability });
+    assert.equal(api.handlers.get("reply_dispatch")?.length, 1, "shared recall reuses the one Task 1 route observer");
     const context = {
       agentId: AGENT_ID,
       workspaceDir,

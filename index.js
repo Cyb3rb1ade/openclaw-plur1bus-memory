@@ -66,9 +66,10 @@ import {
 import {
   parseQuery as parseMemoryQuery,
   formatResults as formatMemoryResults,
-  queryMemory,
+  queryMemoryAcrossAccessPools,
   parseMemoryFeedback,
 } from "./lib/telegram-commands/memory-query.js";
+import { withAccessReadDbs } from "./lib/shared-memory.js";
 import { recordFeedback } from "./lib/feedback-log.js";
 import {
   parseCorrection,
@@ -663,9 +664,17 @@ async function runMergedNamespaceRecall(
   if (!Array.isArray(readDbs) || readDbs.length === 0) {
     return { queryVector: undefined, canonical: [], memories: [], trace };
   }
-  if (readDbs.length === 1) {
+  const providerEmbeddings = baseParams.embeddings;
+  const requestEmbeddings = Object.freeze({
+    embedQuery: (text) => typeof providerEmbeddings.embedQuery === "function"
+      ? providerEmbeddings.embedQuery(text, { agentId: baseParams.agentId })
+      : providerEmbeddings.embed(text, { agentId: baseParams.agentId }),
+    embed: (text) => providerEmbeddings.embed(text, { agentId: baseParams.agentId }),
+  });
+  if (readDbs.length === 1 && readDbs[0].sourceKind === "private") {
     return runRecallPipeline({
       ...baseParams,
+      embeddings: requestEmbeddings,
       dbTable: readDbs[0].db.table,
       strictReadErrors: strictReadErrors || baseParams.strictReadErrors === true,
     });
@@ -674,7 +683,9 @@ async function runMergedNamespaceRecall(
   const timerConfig = phaseTimer?.summary?.() || {};
   phaseTimer?.start("namespace-recall");
   try {
-    const settled = await Promise.allSettled(readDbs.map(async ({ namespace, db }, index) => {
+    const requestNow = Date.now();
+    const canonicalSourceIndex = readDbs.findIndex((source) => source.sourceKind === "private");
+    const settled = await Promise.allSettled(readDbs.map(async ({ namespace, sourceKind, optional, db }, index) => {
       const childTrace = trace
         ? createNamespaceChildRecallTrace(trace, baseParams.query)
         : undefined;
@@ -685,22 +696,36 @@ async function runMergedNamespaceRecall(
       });
       const result = await runRecallPipeline({
         ...baseParams,
+        embeddings: requestEmbeddings,
         dbTable: db.table,
         phaseTimer: childTimer,
         decisionTrace: childTrace,
-        strictReadErrors: true,
-        canonicalEnabled: index === 0 ? baseParams.canonicalEnabled : false,
+        strictReadErrors: optional !== true,
+        canonicalEnabled: index === canonicalSourceIndex ? baseParams.canonicalEnabled : false,
         retrievalLogger: null,
+        deferFinalCap: true,
+        candidateHardLimit: 100,
+        now: requestNow,
       });
-      return { namespace, result };
+      return { namespace, sourceKind, optional, result };
     }));
-    const failure = combineNamespaceRecallFailures(settled);
+    const requiredSettled = settled.filter((result, index) => readDbs[index].optional !== true);
+    const failure = combineNamespaceRecallFailures(requiredSettled);
     if (failure) throw failure;
 
-    const namespaceResults = settled.map((result) => ({
-      namespace: result.value.namespace,
-      ...result.value.result,
-    }));
+    const namespaceResults = [];
+    for (let index = 0; index < settled.length; index++) {
+      const result = settled[index];
+      if (result.status === "rejected") {
+        trySafeWarn(baseParams.logger, `namespace-recall.${readDbs[index].namespace}`, result.reason);
+        continue;
+      }
+      namespaceResults.push({
+        namespace: result.value.namespace,
+        sourceKind: result.value.sourceKind,
+        ...result.value.result,
+      });
+    }
     const merged = mergeNamespaceRecallResults(namespaceResults, {
       maxOut: baseParams.topN,
       canonicalMaxItems: baseParams.canonicalMaxItems,
@@ -5850,7 +5875,14 @@ const plugin = {
             const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const parsed = parseMemoryQuery(normalized.canonicalText);
-            const items = await queryMemory(memoryDbAdapter, agentId, parsed, memoryCtx);
+            const items = await queryMemoryAcrossAccessPools({
+              privatePool: pool,
+              sharedPool: sharedMemoryPool,
+              embeddings,
+              agent: agentId,
+              parsed,
+              ctx: { ...memoryCtx, logger: api.logger },
+            });
             if (parsed.explain) {
               const explanations = explainResults(items.map((r) => ({ entry: r, score: r.score ?? 0 })), parsed.topic);
               items.forEach((item, i) => {
@@ -6991,7 +7023,12 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
-              return await pool.withReadDbs(agentId, async (readDbs) => {
+              return await withAccessReadDbs(
+                pool,
+                sharedMemoryPool,
+                agentId,
+                { ...memoryCtx, logger: api.logger },
+                async (readDbs) => {
               const limit = params.limit || maxPromptMemories;
               const assocCfg = cfg?.continuityEngine?.associativeRecall || {};
               const initializedReadDbs = [];
@@ -7784,7 +7821,12 @@ const plugin = {
           ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
           : "";
         const agentId = memoryCtx.agentId;
-        return pool.withWriteDb(agentId, (db) => pool.withReadDbs(agentId, async (readDbs) => {
+        return pool.withWriteDb(agentId, (db) => withAccessReadDbs(
+          pool,
+          sharedMemoryPool,
+          agentId,
+          { ...memoryCtx, logger: api.logger },
+          async (readDbs) => {
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
           pool.withWriteDb(agentId, (maintenanceDb) => maintenanceDb.purgeExpiredThrottled(api.logger))
