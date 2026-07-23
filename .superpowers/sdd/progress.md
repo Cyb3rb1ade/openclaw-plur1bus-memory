@@ -347,3 +347,19 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
   LLM cases. Independent specification and quality re-reviews both pass with
   Critical 0 / Important 0.
 - Main, `fix/high-mid-audit-findings`, PR #85, and Remote remain untouched.
+
+## 2026-07-23 — B13 Task 4 safe-update ownership and confirmations
+
+- Commits `3053573` and `72c374c` validate the stored ownership tuple before
+  idempotency or writes, preserve all ownership aliases verbatim, and keep
+  store-before-supersede durability.
+- `/forget` and `/correct` use the canonical host request tuple for both
+  confirmation creation and completion. Only complete UUID nonces with exact
+  command/target/identity bindings redeem; prefixes and mismatches do not
+  consume live confirmations.
+- Pending confirmations are expiry-swept atomically across both maps and capped
+  at 1,024 entries. Final affected gate: 157/157.
+- Independent specification and quality re-reviews pass with Critical 0 /
+  Important 0. Minor: re-registering the identical nonce+target at full
+  capacity can evict one unrelated oldest entry; production handlers generate
+  fresh random UUID nonces.
