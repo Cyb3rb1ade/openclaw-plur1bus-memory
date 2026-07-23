@@ -2763,8 +2763,8 @@ function parseFeatureCronBootstrapLastPlanCreateCount(stdout) {
   }
 }
 
-function findNeoRecord(store, id) {
-  return findLatestNeoRecord(store, id);
+function findNeoRecord(store, id, requester = {}) {
+  return findLatestNeoRecord(store, id, requester);
 }
 
 function summarizeNeoStore(store) {
@@ -3879,6 +3879,11 @@ const plugin = {
       emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
       return createNeoStore(neoRoot, workspaceKey);
     };
+    const neoRequester = (ctx = {}, event = {}) => ({
+      requesterAgentId: [ctx?.agentId, event?.agentId].find(value => typeof value === "string" && value.trim()) || "",
+      requesterWorkspaceKey: rememberNeoWorkspace(ctx, event),
+      requesterOwnerId: [ctx?.ownerId, event?.ownerId, ctx?.userId, event?.userId].find(value => typeof value === "string" && value.trim()) || "",
+    });
     const snapshotNeoContent = (content) => {
       if (typeof content === "string") return content;
       if (!Array.isArray(content)) return "";
@@ -4552,17 +4557,18 @@ const plugin = {
       if (neoEnabled && typeof api.registerMemoryCorpusSupplement === "function") {
         api.registerMemoryCorpusSupplement({
           async search(params) {
-            const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey });
+            const requester = neoRequester({ agentId: params?.agentId, ownerId: params?.ownerId || params?.userId }, { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey });
+            const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey });
             const workspaceKey = workspaceKeyFromContext({}, {
-              event: { agentSessionKey: params?.agentSessionKey },
+              event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
               runtime: api.runtime,
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
-            const items = [...store.readCandidates(500), ...store.readBehaviorCards(200)];
-            const lanes = routeNeoRecall(items, params?.query || "", { maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
+            const items = [...store.readCandidates(500, requester), ...store.readBehaviorCards(200, requester)];
+            const lanes = routeNeoRecall(items, params?.query || "", { ...requester, maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
             return Object.entries(lanes)
               .flatMap(([lane, rows]) => rows.map(row => ({ lane, row })))
               .sort((a, b) => b.row.score - a.row.score)
@@ -4582,17 +4588,18 @@ const plugin = {
               }));
           },
           async get(params) {
+            const requester = neoRequester({ agentId: params?.agentId, ownerId: params?.ownerId || params?.userId }, { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey });
             const workspaceKey = workspaceKeyFromContext({}, {
-              event: { agentSessionKey: params?.agentSessionKey },
+              event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
               runtime: api.runtime,
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
-            const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey });
+            const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey });
             const id = String(params?.lookup || "").split("/").pop();
-            const record = findNeoRecord(store, id);
+            const record = findNeoRecord(store, id, requester);
             if (!record) return null;
             return {
               corpus: "plur1bus",
@@ -4732,10 +4739,10 @@ const plugin = {
                 pluginConfig: cfg,
                 commandStore,
                 records: [
-                  ...commandStore.readCandidates(500).map((record) => ({ ...record, type: "memory_candidate", id: record.id, summary: record.statement || record.summary || record.text || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
-                  ...commandStore.readBehaviorCards(200).map((record) => ({ ...record, type: "source", id: record.id, summary: record.statement || record.summary || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
+                  ...commandStore.readCandidates(500, neoRequester(commandCtx, {})).map((record) => ({ ...record, type: "memory_candidate", id: record.id, summary: record.statement || record.summary || record.text || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
+                  ...commandStore.readBehaviorCards(200, neoRequester(commandCtx, {})).map((record) => ({ ...record, type: "source", id: record.id, summary: record.statement || record.summary || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
                 ],
-                findRecord: (recordId) => findNeoRecord(commandStore, recordId),
+                findRecord: (recordId) => findNeoRecord(commandStore, recordId, neoRequester(commandCtx, {})),
                 memoryStore: async ({ payload }) => {
                   const result = await storeMemoryFromToolParams({
                     memoryCtx: obsidianMemoryCtx,
@@ -5540,8 +5547,8 @@ const plugin = {
               }));
             }
             if (action === "curation") {
-              const candidates = commandStore.readCandidates(500);
-              const behavior = commandStore.readBehaviorCards(200);
+              const candidates = commandStore.readCandidates(500, neoRequester(commandCtx, {}));
+              const behavior = commandStore.readBehaviorCards(200, neoRequester(commandCtx, {}));
               const records = [...candidates, ...behavior];
               const filtered = sub === "conflicts" ? records.filter(r => r.status === "conflict")
                 : sub === "stale" ? records.filter(r => r.embeddingStatus === "stale")
@@ -5594,7 +5601,7 @@ const plugin = {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
               }
-              const record = findNeoRecord(commandStore, id);
+              const record = findNeoRecord(commandStore, id, neoRequester(commandCtx, {}));
               if (!record) return { text: `No PLUR1BUS neo record found for ${id}` };
               if (sub === "origin" || sub === "explain") return formatJsonCommandResult(record);
               if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
@@ -5606,12 +5613,12 @@ const plugin = {
               }
             }
             if (action === "recall" && sub === "why") {
-              const record = findNeoRecord(commandStore, id);
+              const record = findNeoRecord(commandStore, id, neoRequester(commandCtx, {}));
               if (!record) return { text: `No PLUR1BUS neo record found for ${id}` };
               return formatJsonCommandResult({ id, category: record.category, status: record.status, origin: record.origin, salience: record.salience, confidence: record.confidence });
             }
             if (action === "origin" && sub === "trace") {
-              const record = findNeoRecord(commandStore, id);
+              const record = findNeoRecord(commandStore, id, neoRequester(commandCtx, {}));
               if (!record) return { text: `No PLUR1BUS neo record found for ${id}` };
               return formatJsonCommandResult({ id, sourceTurnIds: record.sourceTurnIds || record.origin?.sourceTurnIds || [], sourceMemoryIds: record.origin?.sourceMemoryIds || [], sourceToolCallIds: record.origin?.sourceToolCallIds || [], origin: record.origin });
             }
@@ -5620,7 +5627,7 @@ const plugin = {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
               }
-              const cards = commandStore.readBehaviorCards(500);
+              const cards = commandStore.readBehaviorCards(500, neoRequester(commandCtx, {}));
               if (sub === "show") return formatJsonCommandResult(cards.filter(c => c.status === "active" || c.status === "promoted"));
               if (sub === "candidates") return formatJsonCommandResult(cards.filter(c => c.status === "candidate"));
               const card = cards.find(c => c.id === id);
@@ -7862,15 +7869,16 @@ const plugin = {
           try {
             const injectionKey = markNeoRecallInjection(event, ctx);
             const neoStore = getNeoStore(ctx, event);
+            const requester = neoRequester(ctx, event);
             neoStore.recordHook("before_prompt_build", {
               agentId: ctx?.agentId || "default",
               promptLength: event?.prompt?.length || 0,
               runner: event?.runner || event?.provider || "",
             });
             if (injectionKey !== null && event?.prompt && event.prompt.length >= 5) {
-              const neoItems = [...neoStore.readCandidates(500), ...neoStore.readBehaviorCards(200)];
+              const neoItems = [...neoStore.readCandidates(500, requester), ...neoStore.readBehaviorCards(200, requester)];
               neoContext = formatNeoRecallContext(
-                routeNeoRecall(neoItems, event.prompt, { maxPerLane: 2, minScore: 0.08 }),
+                routeNeoRecall(neoItems, event.prompt, { ...requester, maxPerLane: 2, minScore: 0.08 }),
                 { idempotencyKey: injectionKey || undefined },
               );
             }

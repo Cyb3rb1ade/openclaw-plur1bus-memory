@@ -82,7 +82,8 @@ describe("neo-arch constants & helpers", () => {
       category: "project_fact",
       status: "active",
       statement: "Wiki-Ingest Task for Winston NotebookLM architecture technical constraints workspace facts recent turns",
-      origin: { trustLevel: "tool_observed" },
+      workspaceKey: "workspace-facts",
+      origin: { trustLevel: "tool_observed", scope: "workspace_shared" },
       salience: 0.9,
       recency: 0.9,
     };
@@ -91,6 +92,7 @@ describe("neo-arch constants & helpers", () => {
       lanes: ["recent_turns", "workspace_facts", "architecture_decisions", "technical_constraints"],
       maxPerLane: 2,
       minScore: 0.08,
+      requesterWorkspaceKey: "workspace-facts",
     });
     const out = formatNeoRecallContext(lanes, { idempotencyKey: "regression" });
 
@@ -173,11 +175,12 @@ describe("neo-arch file I/O", () => {
     assert.equal(readJsonl(store.paths.embeddings).length, 1, "immediate pending replay should be deduped");
 
     assert.equal(typeof store.drainEmbeddingQueue, "function");
-    const result = store.drainEmbeddingQueue({ impact: "low", maxItems: 10 });
+    const result = store.drainEmbeddingQueue({ impact: "low", maxItems: 10, embedder: () => [0.25, 0.75], dimensions: 2 });
 
     assert.equal(result.processed, 1);
     assert.equal(result.pending, 0);
     assert.equal(store.readCandidates(10).at(-1).embeddingStatus, "fresh");
+    assert.deepStrictEqual(store.readCandidates(10).at(-1).embedding, [0.25, 0.75]);
     assert.ok(
       readFileSync(store.paths.embeddings, "utf8").includes('"status":"done"'),
       "queue entry should be rewritten as done",
@@ -260,7 +263,7 @@ describe("neo-arch file I/O", () => {
     const ctx = { agentId: "bernhardine" };
 
     captureNeoFromAgentEnd(event, ctx, store);
-    const firstDrain = store.drainEmbeddingQueue({ impact: "low", maxItems: 50 });
+    const firstDrain = store.drainEmbeddingQueue({ impact: "low", maxItems: 50, embedder: () => [1, 0], dimensions: 2 });
     assert.ok(firstDrain.processed > 0, "test should process queue entries");
     const queueAfterDrain = readJsonl(store.paths.embeddings);
     assert.ok(latestById(queueAfterDrain).every((entry) => entry.status === "done"), "all initial latest entries should be done");
