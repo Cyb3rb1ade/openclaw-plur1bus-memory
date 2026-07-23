@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeRecordNote } from "../lib/obsidian/record-writer.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 function makeConfig(tmp) {
   return {
@@ -17,6 +18,12 @@ test("unchanged managed block does not rewrite the file", () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-record-writer-"));
   try {
     const cfg = makeConfig(tmp);
+    const options = {
+      mutationPolicy: confirmedObsidianPolicy({
+        baseDbPath: tmp,
+        command: ["records", "rebuild"],
+      }),
+    };
     const record = {
       plur1bus_id: "rec-1",
       plur1bus_type: "review_item",
@@ -28,7 +35,7 @@ test("unchanged managed block does not rewrite the file", () => {
     };
 
     // Erstes Schreiben erzeugt die Datei.
-    const first = writeRecordNote(cfg, record);
+    const first = writeRecordNote(cfg, record, options);
     assert.strictEqual(first.ok, true);
     assert.strictEqual(first.changed, true);
 
@@ -40,7 +47,7 @@ test("unchanged managed block does not rewrite the file", () => {
     while (Date.now() - start < 15) { /* busy wait for mtime granularity */ }
 
     // Zweites Schreiben mit identischem Inhalt sollte überspringen.
-    const second = writeRecordNote(cfg, record);
+    const second = writeRecordNote(cfg, record, options);
     assert.strictEqual(second.ok, true);
     assert.strictEqual(second.changed, false);
 
@@ -55,6 +62,12 @@ test("changed managed block still rewrites the file", () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-record-writer-"));
   try {
     const cfg = makeConfig(tmp);
+    const options = {
+      mutationPolicy: confirmedObsidianPolicy({
+        baseDbPath: tmp,
+        command: ["records", "rebuild"],
+      }),
+    };
     const record = {
       plur1bus_id: "rec-2",
       plur1bus_type: "review_item",
@@ -65,7 +78,7 @@ test("changed managed block still rewrites the file", () => {
       scope: "dashboard_only",
     };
 
-    const first = writeRecordNote(cfg, record);
+    const first = writeRecordNote(cfg, record, options);
     assert.strictEqual(first.changed, true);
 
     const path = join(tmp, "plur1bus", "records", "review-items", "rec-2.md");
@@ -75,7 +88,7 @@ test("changed managed block still rewrites the file", () => {
     while (Date.now() - start < 15) { /* busy wait */ }
 
     record.summary = "Updated summary";
-    const second = writeRecordNote(cfg, record);
+    const second = writeRecordNote(cfg, record, options);
     assert.strictEqual(second.ok, true);
     assert.strictEqual(second.changed, true);
 
@@ -92,6 +105,12 @@ test("existing file content remains identical on unchanged rewrite", () => {
   const tmp = mkdtempSync(join(tmpdir(), "plur1bus-record-writer-"));
   try {
     const cfg = makeConfig(tmp);
+    const options = {
+      mutationPolicy: confirmedObsidianPolicy({
+        baseDbPath: tmp,
+        command: ["records", "rebuild"],
+      }),
+    };
     const record = {
       plur1bus_id: "rec-3",
       plur1bus_type: "review_item",
@@ -102,11 +121,11 @@ test("existing file content remains identical on unchanged rewrite", () => {
       scope: "dashboard_only",
     };
 
-    writeRecordNote(cfg, record);
+    writeRecordNote(cfg, record, options);
     const path = join(tmp, "plur1bus", "records", "review-items", "rec-3.md");
     const before = readFileSync(path, "utf8");
 
-    writeRecordNote(cfg, record);
+    writeRecordNote(cfg, record, options);
     const after = readFileSync(path, "utf8");
 
     assert.strictEqual(before, after, "file content must remain identical");

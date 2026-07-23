@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,11 +8,15 @@ import OpenAI from "openai";
 import { getEmotionConfig } from "../lib/emotion.js";
 
 import {
+  handleObsidianBridgeCommand,
   prepareReviewBundle,
   updateReviewBundleItems,
 } from "../lib/obsidian-control-room.js";
+import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
+import { recordOwnedVaultConfirmation } from "../lib/obsidian-vault-authority.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { safeProfile } from "../lib/setup/feature-profiles.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 const VECTOR_DIM = 384;
 
@@ -239,16 +244,43 @@ test("Obsidian command merge uses its session-bound runtime without agentId", as
   installEmbeddingStub(t);
   const agentId = "command-merge-agent";
   const workspaceKey = "workspace-command-merge";
-  const bundleId = `rb-command-merge-${Date.now()}`;
+  const bundleId = `rb-${randomUUID()}`;
   const globalCalls = [];
   const sessionCalls = [];
+  const obsidianContexts = [];
   const secret = "sk-live-command-secret prompt=private x-api-key=hidden header=secret";
-  const obsidianConfig = { enabled: false, vaultPath: workspaceDir };
+  const obsidianConfig = {
+    enabled: false,
+    vaultPath: workspaceDir,
+    mode: "apply",
+    allowWrite: true,
+    dryRun: false,
+  };
+  const memoryCtx = resolveMemoryRequestContext({
+    agentId,
+    workspaceDir,
+    channel: "telegram",
+    accountId: "default",
+  });
+  recordOwnedVaultConfirmation({
+    baseDbPath,
+    memoryCtx,
+    vaultPath: workspaceDir,
+    confirmationValidated: true,
+    confirmationNonce: randomUUID(),
+  });
+  const preparePolicy = confirmedObsidianPolicy({
+    baseDbPath,
+    agentId,
+    workspaceIdentity: memoryCtx.workspaceIdentity,
+    command: ["review", "prepare"],
+  });
   const prepared = await prepareReviewBundle(obsidianConfig, {
     agentId,
-    workspaceKey,
+    workspaceKey: memoryCtx.workspaceIdentity,
     workspaceDir,
     bundleId,
+    mutationPolicy: preparePolicy,
     proposals: [{
       type: "memory_promotion",
       risk: "low",
@@ -260,7 +292,16 @@ test("Obsidian command merge uses its session-bound runtime without agentId", as
     }],
   });
   assert.equal(prepared.items.length, 1);
-  updateReviewBundleItems(obsidianConfig, bundleId, "approve", "all", { agentId });
+  updateReviewBundleItems(obsidianConfig, bundleId, "approve", "all", {
+    agentId,
+    workspaceKey: memoryCtx.workspaceIdentity,
+    mutationPolicy: confirmedObsidianPolicy({
+      baseDbPath,
+      agentId,
+      workspaceIdentity: memoryCtx.workspaceIdentity,
+      command: ["review", "approve"],
+    }),
+  });
 
   const pluginModule = await loadFreshPlugin();
   await seedMemory(pluginModule, baseDbPath, agentId);
@@ -281,7 +322,13 @@ test("Obsidian command merge uses its session-bound runtime without agentId", as
       };
     },
   });
-  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  pluginModule.default.register(api, {
+    importRouting: async () => routingCapability,
+    handleObsidianBridgeCommand: async (tokens, context) => {
+      obsidianContexts.push(context);
+      return handleObsidianBridgeCommand(tokens, context);
+    },
+  });
   const sessionRuntime = {
     async complete(params) {
       sessionCalls.push(params);
@@ -309,6 +356,10 @@ test("Obsidian command merge uses its session-bound runtime without agentId", as
     },
   });
 
+  assert.equal(obsidianContexts.length, 1);
+  assert.equal(obsidianContexts[0].config.mode, "apply");
+  assert.equal(obsidianContexts[0].config.allowWrite, true);
+  assert.equal(obsidianContexts[0].vaultConfirmed, true);
   assert.match(result.text, /Applied: 1/);
   assert.equal(globalCalls.length, 0);
   assert.equal(sessionCalls.length, 1);
