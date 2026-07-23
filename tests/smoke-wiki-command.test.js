@@ -1184,6 +1184,36 @@ describe("wiki-command smoke", () => {
     assert.equal(readJsonl(join(auditDir, "destructive-ops.jsonl")).length, 0);
   });
 
+  it("fails closed before archive or delete when the audit parent is a broken symlink", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-parent-link-ws-"));
+    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-parent-link-archive-"));
+    const auditDir = join(workspaceDir, ".adaptive-learning");
+    symlinkSync("missing-audit-parent", auditDir);
+    t.after(() => {
+      rmSync(workspaceDir, { recursive: true, force: true });
+      rmSync(localArchiveDir, { recursive: true, force: true });
+    });
+    const commandCtx = makeCtx("", { workspaceDir, workspaceId: undefined });
+    const ctx = memoryContextFor(commandCtx);
+    let deletes = 0;
+    const db = makeDb({
+      getByIdFn: async () => workspaceWiki(ctx),
+      deleteSpy: async () => { deletes++; },
+    });
+
+    const result = await runDirect(`delete id:${OWNER_WIKI_ID}`, db, {
+      ctx,
+      archiveDir: localArchiveDir,
+      commandCtx: { workspaceDir, workspaceId: undefined },
+    });
+
+    assert.match(result.text, /audit|protokoll|not deleted|nicht gelöscht/i);
+    assert.doesNotMatch(result.text, /^🗑/);
+    assert.equal(deletes, 0);
+    assert.deepEqual(readdirSync(localArchiveDir), []);
+    assert.equal(existsSync(join(workspaceDir, "missing-audit-parent")), false);
+  });
+
   it("fails closed before archive or delete when the existing audit target is a directory", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-dir-ws-"));
     const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-dir-archive-"));
