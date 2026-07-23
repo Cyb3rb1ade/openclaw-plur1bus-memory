@@ -156,7 +156,7 @@ describe("neo-arch file I/O", () => {
     assert.strictEqual(read.counters.foo, 1, "counter should persist");
   });
 
-  it("drains pending low-impact embedding queue entries", () => {
+  it("drains pending low-impact embedding queue entries", async () => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-drain-"));
     const store = createNeoStore(root, "workspace-test");
     const candidate = {
@@ -175,7 +175,7 @@ describe("neo-arch file I/O", () => {
     assert.equal(readJsonl(store.paths.embeddings).length, 1, "immediate pending replay should be deduped");
 
     assert.equal(typeof store.drainEmbeddingQueue, "function");
-    const result = store.drainEmbeddingQueue({ impact: "low", maxItems: 10, embedder: () => [0.25, 0.75], dimensions: 2 });
+    const result = await store.drainEmbeddingQueue({ impact: "low", maxItems: 10, embedder: () => [0.25, 0.75], dimensions: 2 });
 
     assert.equal(result.processed, 1);
     assert.equal(result.pending, 0);
@@ -242,7 +242,7 @@ describe("neo-arch file I/O", () => {
     );
   });
 
-  it("does not enqueue duplicate capture records when replayed after drain", () => {
+  it("does not enqueue duplicate capture records when replayed after drain", async () => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-neo-capture-drain-"));
     const workspaceKey = "workspace-capture-drain";
     const store = createNeoStore(root, workspaceKey);
@@ -263,7 +263,7 @@ describe("neo-arch file I/O", () => {
     const ctx = { agentId: "bernhardine" };
 
     captureNeoFromAgentEnd(event, ctx, store);
-    const firstDrain = store.drainEmbeddingQueue({ impact: "low", maxItems: 50, embedder: () => [1, 0], dimensions: 2 });
+    const firstDrain = await store.drainEmbeddingQueue({ impact: "low", maxItems: 50, embedder: () => [1, 0], dimensions: 2 });
     assert.ok(firstDrain.processed > 0, "test should process queue entries");
     const queueAfterDrain = readJsonl(store.paths.embeddings);
     assert.ok(latestById(queueAfterDrain).every((entry) => entry.status === "done"), "all initial latest entries should be done");

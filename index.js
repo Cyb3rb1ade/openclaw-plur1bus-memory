@@ -3881,7 +3881,9 @@ const plugin = {
     };
     const neoRequester = (ctx = {}, event = {}) => ({
       requesterAgentId: [ctx?.agentId, event?.agentId].find(value => typeof value === "string" && value.trim()) || "",
-      requesterWorkspaceKey: rememberNeoWorkspace(ctx, event),
+      // ACL binding may not inherit routing defaults; an omitted trusted binding fails closed.
+      requesterWorkspaceKey: [ctx?.workspaceKey, event?.workspaceKey, ctx?.workspaceId, event?.workspaceId]
+        .find(value => typeof value === "string" && value.trim()) || "",
       requesterOwnerId: [ctx?.ownerId, event?.ownerId, ctx?.userId, event?.userId].find(value => typeof value === "string" && value.trim()) || "",
     });
     const snapshotNeoContent = (content) => {
@@ -4568,7 +4570,10 @@ const plugin = {
               workspaceAliases: neoWorkspaceAliases,
             });
             const items = [...store.readCandidates(500, requester), ...store.readBehaviorCards(200, requester)];
-            const lanes = routeNeoRecall(items, params?.query || "", { ...requester, maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
+            let queryVector = null;
+            try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(params?.query || "", { agentId: requester.requesterAgentId }) : embeddings.embed(params?.query || "", { agentId: requester.requesterAgentId })); }
+            catch (error) { api.logger?.debug?.(`plur1bus-neo: corpus query embedding unavailable: ${String(error)}`); }
+            const lanes = routeNeoRecall(items, params?.query || "", { ...requester, queryVector, maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
             return Object.entries(lanes)
               .flatMap(([lane, rows]) => rows.map(row => ({ lane, row })))
               .sort((a, b) => b.row.score - a.row.score)
@@ -6431,7 +6436,8 @@ const plugin = {
                 rootDir: neoRoot,
                 defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
                 workspaceAliases: neoWorkspaceAliases,
-                embeddingDrainEnabled: neoEmbeddingAutoDrainEnabled,
+                // Provider instances and credentials remain on the main thread.
+                embeddingDrainEnabled: false,
                 embeddingDrainImpact: neoEmbeddingDrainImpact,
                 embeddingDrainMaxItems: neoEmbeddingDrainMaxItems,
                 signal,
@@ -6439,7 +6445,14 @@ const plugin = {
               if (neoResult?.capture) {
                 api.logger.info(`plur1bus-neo: worker captured turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${background ? " (background)" : ""}`);
               }
-              const drain = neoResult?.drain;
+              const drain = neoEmbeddingAutoDrainEnabled
+                ? await neoStore.drainEmbeddingQueue({
+                    impact: neoEmbeddingDrainImpact,
+                    maxItems: neoEmbeddingDrainMaxItems,
+                    dimensions: vectorDim,
+                    embedder: (text) => embeddings.embed(text, { agentId }),
+                  })
+                : neoResult?.drain;
               if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
                 api.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}`);
               }
@@ -7877,8 +7890,11 @@ const plugin = {
             });
             if (injectionKey !== null && event?.prompt && event.prompt.length >= 5) {
               const neoItems = [...neoStore.readCandidates(500, requester), ...neoStore.readBehaviorCards(200, requester)];
+              let queryVector = null;
+              try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId })); }
+              catch (error) { api.logger?.debug?.(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
               neoContext = formatNeoRecallContext(
-                routeNeoRecall(neoItems, event.prompt, { ...requester, maxPerLane: 2, minScore: 0.08 }),
+                routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 }),
                 { idempotencyKey: injectionKey || undefined },
               );
             }
