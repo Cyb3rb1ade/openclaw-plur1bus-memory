@@ -29,6 +29,41 @@ function sourceRecord(agentId, workspaceKey) {
   };
 }
 
+function authorizedCommandContext(vault, agentId) {
+  const workspaceIdentity = `workspace:v1:${agentId}`;
+  return {
+    config: {
+      vaultPath: vault,
+      reviewRoot: "plur1bus",
+      mode: "apply",
+      allowWrite: true,
+    },
+    baseDbPath: vault,
+    memoryCtx: {
+      agentId,
+      workspaceIdentity,
+      workspaceId: workspaceIdentity,
+      userId: "owner",
+      conversationPrincipal: "conversation:v1:private-chat",
+      chatId: "private-chat",
+      chatKind: "private",
+    },
+    commandCtx: {
+      agentId,
+      userId: "owner",
+      senderId: "owner",
+      chatId: "private-chat",
+      chatType: "private",
+      chatKind: "private",
+    },
+    pluginConfig: {
+      baseDbPath: vault,
+      security: { allowedUserIds: ["owner"] },
+    },
+    vaultConfirmed: true,
+  };
+}
+
 function runAllowed(agentId, workspaceKey) {
   const vault = makeVault();
   return runEveningDeepReview(
@@ -121,22 +156,20 @@ describe("evening deep review guardrails", () => {
     assert.deepStrictEqual(index.records.map((record) => record.plur1bus_id), ["decision-real"]);
   });
 
-  it("command evening-review requires explicit command context", async () => {
+  it("command evening-review authenticates before reading review data", async () => {
     const result = await handleObsidianBridgeCommand(["evening-review"], {
       config: { vaultPath: makeVault(), reviewRoot: "plur1bus" },
       records: [sourceRecord("main", "main")],
       items: [],
     });
 
-    const payload = JSON.parse(result.text);
-    assert.strictEqual(payload.ok, false);
-    assert.match(result.text, /missing_evening_review_context/);
+    assert.match(result.text, /whitelist not configured|allowedUserIds/i);
   });
 
   it("command evening-review maps a known cron agent to its workspace", async () => {
+    const vault = makeVault();
     const result = await handleObsidianBridgeCommand(["evening-review"], {
-      config: { vaultPath: makeVault(), reviewRoot: "plur1bus" },
-      agentId: "bernhardine",
+      ...authorizedCommandContext(vault, "bernhardine"),
       records: [sourceRecord("bernhardine", "bernhardine")],
       items: [],
     });
