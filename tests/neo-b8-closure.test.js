@@ -9,6 +9,7 @@ import {
   createNeoStore,
   migrateNeoWorkspaces,
   routeNeoRecall,
+  workspaceKeyFromContext,
 } from "../lib/neo-arch.js";
 import { createNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
 
@@ -87,6 +88,133 @@ describe("Neo B8 closure", () => {
     assert.equal(slash.readCandidates(10).some((record) => record.id === "legacy"), true);
     const ambiguous = migrateNeoWorkspaces(stateRoot, { mappings: [{ legacyKey: "tenant_a", workspaceKey: "tenant/a" }, { legacyKey: "tenant_a", workspaceKey: "tenant:a" }] });
     assert.equal(ambiguous.ok, false);
+  });
+
+  it("preserves workspace identity beyond the readable path prefix", () => {
+    const sharedPrefix = "workspace-".padEnd(240, "x");
+    const firstKey = `${sharedPrefix}-first`;
+    const secondKey = `${sharedPrefix}-second`;
+    const firstRouted = workspaceKeyFromContext({ workspaceKey: firstKey });
+    const secondRouted = workspaceKeyFromContext({ workspaceKey: secondKey });
+    assert.equal(firstRouted, firstKey);
+    assert.equal(secondRouted, secondKey);
+    const stateRoot = root();
+    assert.notEqual(
+      createNeoStore(stateRoot, firstRouted).paths.workspaceDir,
+      createNeoStore(stateRoot, secondRouted).paths.workspaceDir,
+    );
+  });
+
+  it("migrates an explicit same-name legacy mapping into canonical storage", () => {
+    const stateRoot = root();
+    const legacy = join(stateRoot, "workspaces", "foo");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "memory-candidates.jsonl"), `${JSON.stringify({
+      id: "same-name-legacy",
+      workspaceKey: "foo",
+      statement: "same-name legacy record",
+    })}\n`);
+    const canonical = createNeoStore(stateRoot, "foo");
+    assert.notEqual(canonical.paths.workspaceDir, legacy);
+    const migration = migrateNeoWorkspaces(stateRoot, {
+      dryRun: false,
+      requireBackup: false,
+      mappings: [{ legacyKey: "foo", workspaceKey: "foo" }],
+    });
+    assert.equal(migration.ok, true);
+    assert.equal(migration.mappings.length, 1);
+    assert.deepStrictEqual(canonical.readCandidates(10).map((record) => record.id), ["same-name-legacy"]);
+  });
+
+  it("merges nested JSON state without overwriting canonical collisions", () => {
+    const stateRoot = root();
+    const workspaceKey = "nested-state";
+    const legacyKey = "nested_state";
+    const legacy = join(stateRoot, "workspaces", legacyKey);
+    const canonical = createNeoStore(stateRoot, workspaceKey);
+    mkdirSync(legacy, { recursive: true });
+    mkdirSync(canonical.paths.workspaceDir, { recursive: true });
+
+    writeFileSync(join(legacy, "run-state.json"), JSON.stringify({
+      completed: {
+        legacyRun: { source: "legacy" },
+        sharedRun: { source: "legacy", legacyDetail: true },
+      },
+    }));
+    writeFileSync(canonical.paths.runs, JSON.stringify({
+      completed: {
+        canonicalRun: { source: "canonical" },
+        sharedRun: { source: "canonical", canonicalDetail: true },
+      },
+    }));
+    writeFileSync(join(legacy, "hook-state.json"), JSON.stringify({
+      legacyHook: { count: 1 },
+      sharedHook: { count: 1, legacyWatermark: "legacy", mode: "legacy" },
+    }));
+    writeFileSync(canonical.paths.hooks, JSON.stringify({
+      canonicalHook: { count: 2 },
+      sharedHook: { count: 3, canonicalWatermark: "canonical", mode: "canonical" },
+    }));
+    writeFileSync(join(legacy, "record-index.json"), JSON.stringify({
+      version: 1,
+      ids: {
+        turns: ["shared-turn", "legacy-turn"],
+        candidateContent: ["legacy-content"],
+      },
+      embeddingQueue: {
+        statuses: { legacyEmbedding: "done", sharedEmbedding: "pending" },
+      },
+    }));
+    writeFileSync(canonical.paths.index, JSON.stringify({
+      version: 2,
+      ids: {
+        turns: ["canonical-turn", "shared-turn"],
+        candidateContent: ["canonical-content"],
+      },
+      embeddingQueue: {
+        statuses: { canonicalEmbedding: "done", sharedEmbedding: "done" },
+      },
+    }));
+
+    const migration = migrateNeoWorkspaces(stateRoot, {
+      dryRun: false,
+      requireBackup: false,
+      mappings: [{ legacyKey, workspaceKey }],
+    });
+    assert.equal(migration.ok, true);
+
+    const runState = JSON.parse(readFileSync(canonical.paths.runs, "utf8"));
+    assert.deepStrictEqual(runState.completed, {
+      legacyRun: { source: "legacy" },
+      canonicalRun: { source: "canonical" },
+      sharedRun: {
+        source: "canonical",
+        legacyDetail: true,
+        canonicalDetail: true,
+      },
+    });
+
+    const hooks = JSON.parse(readFileSync(canonical.paths.hooks, "utf8"));
+    assert.deepStrictEqual(hooks, {
+      legacyHook: { count: 1 },
+      canonicalHook: { count: 2 },
+      sharedHook: {
+        count: 3,
+        legacyWatermark: "legacy",
+        mode: "canonical",
+        canonicalWatermark: "canonical",
+      },
+    });
+
+    const index = JSON.parse(readFileSync(canonical.paths.index, "utf8"));
+    assert.equal(index.version, 2);
+    assert.deepStrictEqual(index.ids.turns, ["canonical-turn", "shared-turn", "legacy-turn"]);
+    assert.deepStrictEqual(index.ids.candidateContent, ["canonical-content", "legacy-content"]);
+    assert.deepStrictEqual(index.embeddingQueue.statuses, {
+      legacyEmbedding: "done",
+      sharedEmbedding: "done",
+      canonicalEmbedding: "done",
+    });
   });
 
   it("serializes migration snapshots with normal JSONL and JSON state writers", { timeout: 10_000 }, async () => {
