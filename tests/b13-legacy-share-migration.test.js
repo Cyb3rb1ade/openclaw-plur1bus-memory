@@ -92,6 +92,7 @@ function fixture(sourceRows, {
   version = 7,
   onEmbed = null,
   now = () => 1_000,
+  schemaRequiresCheckout = false,
 } = {}) {
   const operationOrder = [];
   const sourceUpdateCalls = [];
@@ -100,6 +101,9 @@ function fixture(sourceRows, {
   let readLeases = 0;
   let writeLeases = 0;
   let targetLeases = 0;
+  let activeReadLeases = 0;
+  let activeWriteLeases = 0;
+  let activeTargetLeases = 0;
   let addColumns = 0;
   const fields = [...new Set([
     "id", "text", "summary", "scope", "status", "agentId", "storedBy",
@@ -107,11 +111,16 @@ function fixture(sourceRows, {
     "expiresAt", "legacyShareMigrationMarker",
     ...sourceRows.flatMap((source) => Object.keys(source)),
   ])].map((name) => ({ name, type: { name: "utf8" } }));
+  const currentOnlyFields = fields.filter((field) => field.name !== "status");
+  let checkedOut = false;
   const pinnedTable = {
-    async schema() { return { fields }; },
+    async schema() {
+      return { fields: schemaRequiresCheckout && !checkedOut ? currentOnlyFields : fields };
+    },
     async version() { return version; },
     async checkout(requested) {
       assert.equal(requested, version);
+      checkedOut = true;
       return pinnedTable;
     },
     query() { return queryFor(sourceRows, selectedEvents, version); },
@@ -195,8 +204,19 @@ function fixture(sourceRows, {
     targetRows,
     selectedEvents,
     get counts() {
-      return { readLeases, writeLeases, targetLeases, addColumns };
+      return {
+        readLeases,
+        writeLeases,
+        targetLeases,
+        activeReadLeases,
+        activeWriteLeases,
+        activeTargetLeases,
+        addColumns,
+      };
     },
+    readDb,
+    writerDb,
+    targetDb,
     privatePool: {
       authoritativeRouteDescriptor(agentId) {
         assert.equal(agentId, "agent-a");
@@ -204,20 +224,35 @@ function fixture(sourceRows, {
       },
       async withAuthoritativeReadDb(agentId, fn) {
         readLeases += 1;
+        activeReadLeases += 1;
         assert.equal(agentId, "agent-a");
-        return fn(readDb);
+        try {
+          return await fn(readDb);
+        } finally {
+          activeReadLeases -= 1;
+        }
       },
       async withWriteDb(agentId, fn) {
         writeLeases += 1;
+        activeWriteLeases += 1;
         assert.equal(agentId, "agent-a");
-        return fn(writerDb);
+        try {
+          return await fn(writerDb);
+        } finally {
+          activeWriteLeases -= 1;
+        }
       },
     },
     sharedPool: {
       async withWorkspaceDb(ctx, fn) {
         targetLeases += 1;
+        activeTargetLeases += 1;
         assert.equal(ctx.workspaceIdentity, "workspace:v1:workspace-a");
-        return fn(targetDb);
+        try {
+          return await fn(targetDb);
+        } finally {
+          activeTargetLeases -= 1;
+        }
       },
     },
     embeddings: {
@@ -396,6 +431,34 @@ describe("legacy workspace_shared migration", () => {
     }), /mode|restart without a cursor/i);
   });
 
+  it("checks out the pinned version before inspecting its schema on resume", async () => {
+    const sourceRows = [
+      row("11111111-1111-4111-8111-111111111111"),
+      row("22222222-2222-4222-8222-222222222222"),
+    ];
+    const first = fixture(sourceRows);
+    const firstResult = await migrateLegacySharedRows({
+      ...first,
+      agentId: "agent-a",
+      workspaceAliases: aliases(),
+      apply: false,
+      reportDir: reportRoot(),
+      maxRows: 1,
+    });
+    const resumed = fixture(sourceRows, { schemaRequiresCheckout: true });
+    const result = await migrateLegacySharedRows({
+      ...resumed,
+      agentId: "agent-a",
+      workspaceAliases: aliases(),
+      apply: false,
+      reportDir: reportRoot(),
+      maxRows: 1,
+      continuationToken: firstResult.continuationToken,
+    });
+    assert.equal(result.planned, 1);
+    assert.equal(result.nextOffset, 2);
+  });
+
   it("stops before aggregate byte/provider/time bounds without consuming the current row", async () => {
     const sourceRows = [
       row("11111111-1111-4111-8111-111111111111", { text: "1234", summary: "" }),
@@ -471,6 +534,70 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(afterFixture.targetRows.length, 0);
     assert.equal(afterFixture.sourceUpdateCalls.length, 0);
     assert.equal(result.terminallyConsumedRows, 0);
+  });
+
+  it("bounds every hanging migration DB phase and leaves the current offset resumable", async () => {
+    const lateFailures = [];
+    const onUnhandled = (error) => lateFailures.push(error);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      for (const phase of ["current-read", "target-init", "target-store", "target-readback", "marker-update"]) {
+        const sourceRows = [row()];
+        const f = fixture(sourceRows);
+        const lateReject = () => new Promise((_, reject) => {
+          setTimeout(() => reject(new Error(`late ${phase}`)), 500);
+        });
+        if (phase === "current-read") f.writerDb.getById = lateReject;
+        if (phase === "target-init") f.targetDb.init = lateReject;
+        if (phase === "target-store") f.targetDb.store = lateReject;
+        if (phase === "target-readback") {
+          let queryCount = 0;
+          f.targetDb.table.query = () => ({
+            where() {
+              queryCount += 1;
+              return {
+                limit() {
+                  return {
+                    async toArray() {
+                      if (queryCount === 1) return [];
+                      return lateReject();
+                    },
+                  };
+                },
+              };
+            },
+          });
+        }
+        if (phase === "marker-update") f.writerDb.update = lateReject;
+
+        const startedAt = Date.now();
+        const result = await migrateLegacySharedRows({
+          ...f,
+          agentId: "agent-a",
+          workspaceAliases: aliases(),
+          apply: true,
+          reportDir: reportRoot(),
+          maxElapsedMs: 20,
+        });
+        assert.ok(Date.now() - startedAt < 400, `${phase} exceeded the migration deadline`);
+        assert.equal(result.incomplete, true, phase);
+        assert.equal(result.nextOffset, 0, phase);
+        assert.ok(result.continuationToken, phase);
+        assert.equal(f.sourceUpdateCalls.length, 0, `${phase} must not claim a completed marker`);
+        assert.equal(f.counts.activeReadLeases, 0, phase);
+        assert.equal(f.counts.activeWriteLeases, 0, phase);
+        assert.equal(f.counts.activeTargetLeases, 0, phase);
+        if (phase === "marker-update") {
+          assert.equal(result.stoppedOperation, "source-marker-update");
+          assert.equal(result.uncertainSourceMarkerWrites, 1,
+            "a started marker update is reported as uncertain, never as cancelled");
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 550));
+      assert.deepEqual(lateFailures, []);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });
 
