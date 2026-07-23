@@ -17,7 +17,7 @@ const routingCapability = Object.freeze({
   normalizeMessageChannel(value) { return typeof value === "string" ? value.toLowerCase() : undefined; },
 });
 
-function register() {
+function register({ commandRuntimeHooks, handleObsidianBridgeCommand, config = {} } = {}) {
   const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b13-read-auth-"));
   const commands = [];
   const noop = () => {};
@@ -30,6 +30,7 @@ function register() {
       neo: { enabled: true },
       obsidianBridge: { enabled: false },
       security: { allowedUserIds: ["owner"] },
+      ...config,
     },
     logger: { info: noop, warn: noop, error: noop, debug: noop },
     runtime: { agent: { async resolveAgentWorkspaceDir() { return baseDbPath; } } },
@@ -38,7 +39,7 @@ function register() {
     registerTool: noop,
     registerService: noop,
     on: noop,
-  }, { importRouting: async () => routingCapability });
+  }, { importRouting: async () => routingCapability, commandRuntimeHooks, handleObsidianBridgeCommand });
   return { baseDbPath, commands };
 }
 
@@ -59,6 +60,29 @@ const intruder = {
 
 const directReads = [["memory", "project"], ["state", ""], ["wiki", "project"], ["speaker", "list"], ["speaker", "proposals"]];
 const plur1busReads = ["start", "temperament", "persona", "skills review", "skills list", "skills show proposal-id", "reminders list", "reminders show reminder-id", "curation", "memory origin record-id", "memory explain record-id", "memory overlays", "recall why record-id", "origin trace record-id", "behavior show", "behavior candidates", "behavior explain record-id", "embeddings", "dreaming", "status", "doctor", "state"];
+
+const ACTION_FIXTURES = [
+  ["public-help", ""], ["public-help", "help"], ["public-help", "unknown"],
+  ["public-help", "skills bogus"], ["public-help", "neo bogus"], ["public-help", "recall bogus"], ["public-help", "origin bogus"], ["public-help", "persona bogus"], ["public-help", "behavior bogus"], ["public-help", "reminders bogus"], ["public-help", "curation bogus"],
+  ["sensitive-read", "start"], ["sensitive-read", "temperament"], ["sensitive-read", "persona"],
+  ["sensitive-read", "skills review"], ["sensitive-read", "skills list"], ["sensitive-read", "skills show proposal-id"],
+  ["sensitive-read", "reminder list"], ["sensitive-read", "reminder show reminder-id"], ["sensitive-read", "reminder help"],
+  ["sensitive-read", "reminders list"], ["sensitive-read", "reminders show reminder-id"], ["sensitive-read", "reminders help"],
+  ["sensitive-read", "status"], ["sensitive-read", "doctor"], ["sensitive-read", "state"],
+  ["sensitive-read", "curation"], ["sensitive-read", "curation conflicts"], ["sensitive-read", "curation stale"], ["sensitive-read", "curation promoted"],
+  ["sensitive-read", "memory origin record-id"], ["sensitive-read", "memory explain record-id"], ["sensitive-read", "memory overlays"],
+  ["sensitive-read", "recall why record-id"], ["sensitive-read", "origin trace record-id"],
+  ["sensitive-read", "behavior show"], ["sensitive-read", "behavior candidates"], ["sensitive-read", "behavior explain record-id"],
+  ["sensitive-read", "embeddings"], ["sensitive-read", "dreaming"], ["sensitive-read", "neo workspaces migrate --dry-run"],
+  ["destructive", "setup safe"], ["destructive", "enable"], ["destructive", "disable"], ["destructive", "forget record-id"], ["destructive", "correct record-id text"],
+  ["destructive", "temperament calm"], ["destructive", "persona regenerate"], ["destructive", "persona accept"],
+  ["destructive", "skills approve proposal-id"], ["destructive", "skills reject proposal-id"],
+  ["destructive", "reminder cancel reminder-id"], ["destructive", "reminders delete reminder-id"],
+  ["destructive", "memory promote record-id"], ["destructive", "memory demote record-id"], ["destructive", "memory prune record-id"], ["destructive", "memory tombstone record-id"], ["destructive", "memory disable-overlay record-id"], ["destructive", "memory supersede-overlay record-id"],
+  ["destructive", "behavior promote record-id"], ["destructive", "behavior demote record-id"], ["destructive", "behavior prune record-id"], ["destructive", "neo workspaces migrate"],
+  ["internal-cron", "internal gc-run"],
+  ["B14-obsidian", "obsidian help"], ["B14-obsidian", "conflicts"], ["B14-obsidian", "cron"], ["B14-obsidian", "dashboards"], ["B14-obsidian", "evening"], ["B14-obsidian", "evening-review"], ["B14-obsidian", "morning"], ["B14-obsidian", "morning-review"], ["B14-obsidian", "review"],
+];
 
 describe("B13 sensitive command-read authorization matrix", () => {
   it("classifies every non-Obsidian dispatched action explicitly", () => {
@@ -102,7 +126,15 @@ describe("B13 sensitive command-read authorization matrix", () => {
   });
 
   it("denies every data-bearing direct and /plur1bus read before dispatch", async () => {
-    const { baseDbPath, commands } = register();
+    const effects = { neo: 0, pool: 0, dbInit: 0, embed: 0, locale: 0, llm: 0 };
+    const { baseDbPath, commands } = register({ commandRuntimeHooks: {
+      onNeoStore: () => { effects.neo++; },
+      onPoolAcquire: () => { effects.pool++; },
+      onDbInit: () => { effects.dbInit++; },
+      onEmbed: () => { effects.embed++; },
+      onLocale: () => { effects.locale++; },
+      onLlmCallContext: () => { effects.llm++; },
+    } });
     try {
       for (const [name, args] of directReads) {
         const command = commands.find((item) => item.name === name);
@@ -115,6 +147,7 @@ describe("B13 sensitive command-read authorization matrix", () => {
         const result = await command.handler({ ...intruder, args });
         assert.match(result.text, /allowedUserIds|Not authorized/, `/plur1bus ${args}`);
       }
+      assert.deepEqual(effects, { neo: 0, pool: 0, dbInit: 0, embed: 0, locale: 0, llm: 0 });
     } finally {
       rmSync(baseDbPath, { recursive: true, force: true });
     }
@@ -157,25 +190,83 @@ describe("B13 sensitive command-read authorization matrix", () => {
     assert.doesNotMatch(store, /commandCtx\.workspace(Key|Dir)/);
   });
 
-  it("executes public, sensitive, destructive, cron, and B14 action fixtures through registered commands", async () => {
-    const { baseDbPath, commands } = register();
+  it("executes every dispatcher action/subcommand fixture in exactly one class", async () => {
+    const effects = { neo: [], pool: 0, dbInit: 0, embed: 0, locale: 0, llm: [] };
+    const { baseDbPath, commands } = register({
+      commandRuntimeHooks: {
+        onNeoStore: (effect) => effects.neo.push(effect),
+        onPoolAcquire: () => { effects.pool++; },
+        onDbInit: () => { effects.dbInit++; },
+        onEmbed: () => { effects.embed++; },
+        onLocale: () => { effects.locale++; },
+        onLlmCallContext: (context) => effects.llm.push(context),
+      },
+    });
     const command = commands.find((item) => item.name === "plur1bus");
     const runtimeLlm = { async complete() { throw new Error("LLM must not run"); } };
-    const fixtures = [
-      ["public-help", "reminders bogus", intruder, false],
-      ["sensitive-read", "reminders list", intruder, true],
-      ["destructive", "skills approve missing", intruder, true],
-      ["internal-cron", "internal gc-run", { agentId: "agent-a", channel: "cron" }, false],
-      ["B14-obsidian", "dashboards", intruder, false],
-    ];
     try {
-      for (const [classification, args, ctx, denied] of fixtures) {
+      for (const [classification, args] of ACTION_FIXTURES) {
+        const ctx = classification === "internal-cron" ? { agentId: "agent-a", channel: "cron" } : intruder;
+        const before = { neo: effects.neo.length, pool: effects.pool, dbInit: effects.dbInit, embed: effects.embed, locale: effects.locale, llm: effects.llm.length };
         const result = await command.handler({ ...ctx, args, runtimeContext: { llm: runtimeLlm } });
-        if (denied) assert.match(result.text, /allowedUserIds|Not authorized/, classification);
-        else assert.doesNotMatch(result.text, /allowedUserIds|Not authorized/, classification);
+        if (classification === "sensitive-read" || classification === "destructive") {
+          assert.match(result.text, /allowedUserIds|Not authorized/, args);
+        } else {
+          assert.doesNotMatch(result.text, /allowedUserIds|Not authorized/, args);
+        }
+        const delta = {
+          neo: effects.neo.slice(before.neo), pool: effects.pool - before.pool, dbInit: effects.dbInit - before.dbInit,
+          embed: effects.embed - before.embed, locale: effects.locale - before.locale, llm: effects.llm.length - before.llm,
+        };
+        if (classification === "public-help" || classification === "sensitive-read" || classification === "destructive") {
+          assert.deepEqual(delta, { neo: [], pool: 0, dbInit: 0, embed: 0, locale: 0, llm: 0 }, `${args} must do no data-bearing work`);
+        }
+        if (classification === "B14-obsidian") {
+          assert.ok(delta.neo.every((effect) => effect.purpose === "obsidian"), `${args} must not construct the general store`);
+        }
       }
+      assert.ok(ACTION_FIXTURES.some(([classification, args]) => classification === "public-help" && args), "public help must include non-empty input");
+      assert.equal(effects.pool, 0, "denied/public dispatch must not acquire a DB pool");
+      assert.equal(effects.dbInit, 0, "denied/public dispatch must not initialize a DB");
+      assert.equal(effects.embed, 0, "denied/public dispatch must not embed");
+      assert.equal(effects.llm.length, 0, "denied/public dispatch must not call an LLM");
     } finally {
       rmSync(baseDbPath, { recursive: true, force: true });
+    }
+  });
+
+  it("delegates B14 aliases to the Obsidian handler without constructing the general store", async () => {
+    const effects = [];
+    const { baseDbPath, commands } = register({
+      commandRuntimeHooks: { onNeoStore: (effect) => effects.push(effect) },
+      handleObsidianBridgeCommand: async () => ({ text: "B14 registered handler reached" }),
+    });
+    try {
+      const result = await commands.find((item) => item.name === "plur1bus").handler({ ...intruder, args: "obsidian help" });
+      assert.equal(result.text, "B14 registered handler reached");
+      assert.deepEqual(effects.map((effect) => effect.purpose), ["obsidian"]);
+    } finally {
+      rmSync(baseDbPath, { recursive: true, force: true });
+    }
+  });
+
+  it("passes the exact registered runtime LLM only to its downstream call context", async () => {
+    const contexts = [];
+    const { baseDbPath, commands } = register({
+      config: { merging: { enabled: true } },
+      commandRuntimeHooks: { onLlmCallContext: (context) => contexts.push(context) },
+    });
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-runtime-llm-"));
+    const runtimeLlm = { async complete() { return "- concise\n- helpful\n- warm"; } };
+    const owner = { ...intruder, senderId: "owner", userId: "owner", chatId: "owner-dm", chatType: "private" };
+    try {
+      const result = await commands.find((item) => item.name === "plur1bus").handler({ ...owner, args: "persona regenerate", workspaceDir, runtimeContext: { llm: runtimeLlm } });
+      assert.match(result.text, /Persona profile generated|Persona-Profil erzeugt/);
+      assert.equal(contexts.length, 1);
+      assert.equal(contexts[0].runtimeLlm, runtimeLlm);
+    } finally {
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(workspaceDir, { recursive: true, force: true });
     }
   });
 
