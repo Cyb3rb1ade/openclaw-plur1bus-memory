@@ -49,7 +49,7 @@
     "postinstall": "node scripts/setup-feature-crons.mjs || true"
   },
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.5.0"
   },
   "repository": {
     "type": "git",
