@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
 import plugin from "../index.js";
 
@@ -61,11 +62,43 @@ const plur1busReads = ["start", "temperament", "persona status", "skills review"
 
 describe("B13 sensitive command-read authorization matrix", () => {
   it("classifies every non-Obsidian dispatched action explicitly", () => {
-    const source = String(plugin.register);
-    assert.ok(source, "plugin registration remains inspectable");
-    const sensitive = new Set(["behavior", "curation", "doctor", "dreaming", "embeddings", "memory", "origin", "persona", "recall", "reminder", "reminders", "skills", "start", "state", "status", "temperament"]);
-    const destructive = new Set(["setup", "enable", "disable", "forget", "correct", "internal"]);
-    for (const action of [...sensitive, ...destructive]) assert.notEqual(action, "obsidian");
+    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const observed = new Set([...source.matchAll(/if \(action(?:Key)? === "([a-z-]+)"/g)].map((match) => match[1]));
+    const classes = {
+      "public-help": new Set(),
+      "sensitive-read": new Set(["behavior", "curation", "doctor", "dreaming", "embeddings", "memory", "origin", "persona", "recall", "reminder", "reminders", "skills", "start", "state", "status", "temperament", "neo"]),
+      destructive: new Set(["setup", "enable", "disable", "forget", "correct"]),
+      "internal-cron": new Set(["internal"]),
+      "B14-obsidian": new Set(["obsidian", "conflicts", "cron", "dashboards", "evening", "evening-review", "morning", "morning-review", "review"]),
+    };
+    for (const action of observed) {
+      const matches = Object.values(classes).filter((actions) => actions.has(action));
+      assert.equal(matches.length, 1, `${action} must have exactly one dispatch class`);
+    }
+    assert.ok(observed.size > 15, "test must inspect the real dispatcher, not an independent literal list");
+  });
+
+  it("keeps public help and B14 delegation ahead of the general Neo store", () => {
+    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const dispatcher = source.indexOf("const runPlur1busCommand");
+    const generalStoreAt = source.indexOf("const commandStore = getNeoStore({", source.indexOf("const cronInternal", dispatcher));
+    assert.ok(source.indexOf('actionKey === "obsidian"', dispatcher) < generalStoreAt);
+    assert.ok(source.indexOf("handleObsidianBridgeCommand", dispatcher) < generalStoreAt);
+    assert.ok(source.indexOf('actionKey === "skills" && !["review"', dispatcher) < generalStoreAt);
+    assert.ok(source.indexOf('actionKey === "neo" && !(subKey === "workspaces"', dispatcher) < generalStoreAt);
+  });
+
+  it("authorizes direct handlers before I/O locale resolution and preserves runtime LLM identity", () => {
+    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    for (const marker of ["const runStatusCommand", "handler: async (commandCtx) => {\n            const deniedLen = checkArgsLength(commandCtx);", "const runMemoryCommand"]) {
+      const start = source.indexOf(marker);
+      const end = source.indexOf("\n        };", start);
+      const handler = source.slice(start, end);
+      assert.ok(handler.indexOf("resolveRegisteredMemoryContext") < handler.indexOf("resolveCommandLocale"), marker);
+      assert.ok(handler.indexOf("checkAuth(memoryCtx") < handler.indexOf("resolveCommandLocale"), marker);
+    }
+    assert.doesNotMatch(source, /memoryCtx:\s*\{[^}]*runtimeContext\.llm/s);
+    assert.doesNotMatch(source, /isAuthorized\([^,]+,\s*cfg,\s*\{[^}]*runtimeLlm/);
   });
 
   it("denies every data-bearing direct and /plur1bus read before dispatch", async () => {

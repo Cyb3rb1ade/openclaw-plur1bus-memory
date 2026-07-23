@@ -18,11 +18,11 @@ const openclawConfig = {
 describe("/state command", () => {
   it("uses commandCtx.agentId for distinctive per-agent cache metrics", () => {
     const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-    const handlerStart = source.indexOf("const runStatusCommand = async (commandCtx) => {");
+    const handlerStart = source.indexOf("const runStatusCommand = async (commandCtx, suppliedMemoryCtx = null) => {");
     const handlerEnd = source.indexOf("const parseFeatureArg", handlerStart);
     const handlerSource = source.slice(handlerStart, handlerEnd);
     assert.ok(handlerStart >= 0 && handlerEnd > handlerStart, "status handler source must be found");
-    assert.match(handlerSource, /const agentId = commandCtx\?\.agentId \|\| "default";/);
+    assert.match(handlerSource, /const agentId = memoryCtx\.agentId;/);
     assert.match(handlerSource, /llmResultCache: llmResultCache\.getMetrics\(agentId\)/);
     assert.doesNotMatch(handlerSource, /getMetrics\(ctx/);
 
