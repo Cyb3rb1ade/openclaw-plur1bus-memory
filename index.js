@@ -4562,6 +4562,7 @@ const plugin = {
           "state", "status", "temperament",
         ]);
         const isSensitiveChatRead = (actionKey, subKey) => {
+          if (actionKey === "neo") return subKey === "workspaces";
           if (!SENSITIVE_READ_ACTIONS.has(actionKey)) return false;
           if (actionKey === "skills") return ["review", "list", "show"].includes(subKey);
           if (actionKey === "reminder" || actionKey === "reminders") return ["", "list", "show", "help"].includes(subKey);
@@ -4651,6 +4652,16 @@ const plugin = {
               return plur1busHelp("quick", resolveCommandLocale(commandCtx));
             }
             const subKey = sub.toLowerCase();
+            if (actionKey === "skills" && !["review", "list", "show", "approve", "reject"].includes(subKey)) {
+              const { lang, tone } = resolveCommandLocale(commandCtx);
+              return { text: subKey ? t("plur1bus.skills_unknown", { lang, tone, vars: { sub: subKey } }) : t("plur1bus.skills_help", { lang, tone }) };
+            }
+            if (actionKey === "neo" && !(subKey === "workspaces" && tokens[2] === "migrate")) {
+              return plur1busHelp("quick", resolveCommandLocale(commandCtx));
+            }
+            if ((actionKey === "recall" && subKey !== "why") || (actionKey === "origin" && subKey !== "trace")) {
+              return plur1busHelp("quick", resolveCommandLocale(commandCtx));
+            }
             const cronInternal = actionKey === "internal" && isCronCommandContext(commandCtx);
             const memoryCtx = cronInternal ? null : await resolveRegisteredMemoryContext(commandCtx);
             if (actionKey === "internal") {
@@ -5497,19 +5508,19 @@ const plugin = {
               return runStatusCommand(commandCtx, memoryCtx);
             }
             if (actionKey === "enable") {
-              return runFeatureToggle(commandCtx, true);
+              return runFeatureToggle(commandCtx, true, memoryCtx);
             }
             if (actionKey === "disable") {
-              return runFeatureToggle(commandCtx, false);
+              return runFeatureToggle(commandCtx, false, memoryCtx);
             }
             if (actionKey === "memory") {
               return runMemoryCommand(commandCtx, memoryCtx);
             }
             if (actionKey === "forget") {
-              return runForgetCommand(commandCtx);
+              return runForgetCommand(commandCtx, memoryCtx);
             }
             if (actionKey === "correct") {
-              return runCorrectCommand(commandCtx);
+              return runCorrectCommand(commandCtx, memoryCtx);
             }
             return plur1busHelp("quick", resolveCommandLocale(commandCtx));
           };
@@ -5548,13 +5559,13 @@ const plugin = {
         // Diese Commands lesen die vollqualifizierte openclaw.json (mit
         // ".config." Schicht) und sind bewusst von den /plur1bus_*
         // Wartungs-Commands getrennt.
-        const runStatusCommand = async (commandCtx) => {
+        const runStatusCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
-            const agentId = commandCtx?.agentId || "default";
-            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
             const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
             if (denied) return denied;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const agentId = memoryCtx.agentId;
             const mood = emotionalPool.describe(agentId);
             let cardCount = null;
             try {
@@ -5595,10 +5606,14 @@ const plugin = {
         const confirmationStore = new Map();
         const confirmationIndex = new Map();
 
+        const resolveDenialLocale = (commandCtx) => ({
+          lang: resolveLocale({ ctx: commandCtx, messages: commandCtx?.messages || [], fallback: "en" }),
+          tone: pickTone(null),
+        });
         const checkMemoryAuth = (memoryCtx, commandCtx, opts = {}) => {
           const auth = isAuthorized(memoryCtx, cfg, { ...opts, chatKind: memoryCtx.chatKind });
           if (!auth.authorized) {
-            return { text: t(`plur1bus.${auth.reason || "unauthorized"}`, resolveCommandLocale(commandCtx)) };
+            return { text: t(`plur1bus.${auth.reason || "unauthorized"}`, resolveDenialLocale(commandCtx)) };
           }
           return null;
         };
@@ -5619,13 +5634,13 @@ const plugin = {
           return null;
         };
 
-        const runFeatureToggle = async (commandCtx, enable) => {
+        const runFeatureToggle = async (commandCtx, enable, suppliedMemoryCtx = null) => {
           const deniedLen = checkArgsLength(commandCtx);
           if (deniedLen) return deniedLen;
-          const { lang, tone } = resolveCommandLocale(commandCtx);
-          const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+          const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
           const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
           if (denied) return denied;
+          const { lang, tone } = resolveCommandLocale(commandCtx);
           if (chatConfigCommandsBlocked()) return { text: t("plur1bus.config_blocked", { lang, tone }) };
           const featureName = parseFeatureArg(commandCtx);
           if (!featureName) return { text: renderFeatureList({ lang, tone }) };
@@ -5668,17 +5683,16 @@ const plugin = {
           handler: async (commandCtx) => {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
-            const { lang } = resolveCommandLocale(commandCtx);
             const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
             const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
             if (denied) return denied;
+            const { lang } = resolveCommandLocale(commandCtx);
             const agentId = memoryCtx.agentId;
             const sub = (commandCtx.args || "").trim().split(/\s+/)[0]?.toLowerCase() || "list";
             const rest = (commandCtx.args || "").trim().slice(sub.length).trim();
             const subCtx = { ...commandCtx, args: rest };
             let speakerAuth = () => null;
             if (["name", "confirm", "reject", "clear"].includes(sub)) {
-              const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
               const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
               if (denied) return denied;
               speakerAuth = (ctx, opts) => checkMemoryAuth(memoryCtx, ctx, opts);
@@ -5744,10 +5758,10 @@ const plugin = {
           try {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
-            const { lang, tone } = resolveCommandLocale(commandCtx);
             const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
             const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
             if (denied) return denied;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
             const input = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
@@ -5770,14 +5784,14 @@ const plugin = {
           }
         };
 
-        const runForgetCommand = async (commandCtx) => {
+        const runForgetCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
-            const { lang, tone } = resolveCommandLocale(commandCtx);
-            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
             const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
             if (denied) return denied;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
             const args = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
@@ -5839,14 +5853,14 @@ const plugin = {
           }
         };
 
-        const runCorrectCommand = async (commandCtx) => {
+        const runCorrectCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
-            const { lang, tone } = resolveCommandLocale(commandCtx);
-            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
             const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
             if (denied) return denied;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
             const args = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {

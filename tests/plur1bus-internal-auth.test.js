@@ -178,7 +178,7 @@ describe("/plur1bus mutating command auth gates", () => {
     });
   });
 
-  it("blocks neo workspace migrations from group chats unless dry-run", async () => {
+  it("blocks neo workspace migrations from group chats including dry-run", async () => {
     await withPlugin(async ({ command, workspaceDir }) => {
       const blocked = await command.handler({
         args: "neo workspaces migrate",
@@ -193,7 +193,7 @@ describe("/plur1bus mutating command auth gates", () => {
         workspaceDir,
         ...groupCtx,
       });
-      assert.doesNotMatch(dryRun.text, /allowedUserIds/);
+      assertBlocked(dryRun);
     });
   });
 
