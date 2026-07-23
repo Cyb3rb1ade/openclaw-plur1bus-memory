@@ -58,7 +58,7 @@ const intruder = {
 };
 
 const directReads = [["memory", "project"], ["state", ""], ["wiki", "project"], ["speaker", "list"], ["speaker", "proposals"]];
-const plur1busReads = ["start", "temperament", "persona status", "skills review", "skills list", "skills show proposal-id", "reminders list", "reminders show reminder-id", "curation", "memory origin record-id", "memory explain record-id", "memory overlays", "recall why record-id", "origin trace record-id", "behavior show", "behavior candidates", "behavior explain record-id", "embeddings", "dreaming", "status", "doctor", "state"];
+const plur1busReads = ["start", "temperament", "persona", "skills review", "skills list", "skills show proposal-id", "reminders list", "reminders show reminder-id", "curation", "memory origin record-id", "memory explain record-id", "memory overlays", "recall why record-id", "origin trace record-id", "behavior show", "behavior candidates", "behavior explain record-id", "embeddings", "dreaming", "status", "doctor", "state"];
 
 describe("B13 sensitive command-read authorization matrix", () => {
   it("classifies every non-Obsidian dispatched action explicitly", () => {
@@ -133,5 +133,27 @@ describe("B13 sensitive command-read authorization matrix", () => {
     } finally {
       rmSync(baseDbPath, { recursive: true, force: true });
     }
+  });
+
+  it("keeps every recognized unknown subcommand public without invoking a data branch", async () => {
+    const { baseDbPath, commands } = register();
+    try {
+      const command = commands.find((item) => item.name === "plur1bus");
+      for (const args of ["persona bogus", "behavior bogus", "reminders bogus", "reminder bogus", "skills bogus", "neo bogus", "recall bogus", "origin bogus", "curation bogus"]) {
+        const result = await command.handler({ ...intruder, args });
+        assert.doesNotMatch(result.text, /allowedUserIds|Not authorized/, args);
+      }
+    } finally {
+      rmSync(baseDbPath, { recursive: true, force: true });
+    }
+  });
+
+  it("uses only canonical workspace fields for the general Neo store", () => {
+    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const start = source.indexOf("const commandStore = getNeoStore({", source.indexOf("const cronInternal"));
+    const store = source.slice(start, source.indexOf("});", start) + 3);
+    assert.match(store, /workspaceDir: memoryCtx\?\.workspaceDir \|\| ""/);
+    assert.match(store, /workspaceKey: memoryCtx\?\.workspaceIdentity \|\| ""/);
+    assert.doesNotMatch(store, /commandCtx\.workspace(Key|Dir)/);
   });
 });
