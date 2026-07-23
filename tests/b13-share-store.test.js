@@ -47,4 +47,24 @@ describe("B13 shared-copy storage", () => {
     assert.equal(result.ok, true); assert.equal(rows[0].scope, "user"); assert.equal(rows[0].agentId, "agent-a");
     assert.equal(rows[0].workspaceId, ""); assert.equal(rows[0].workspaceKey, ""); assert.equal(rows[0].ownerUserId, "user-a");
   });
+
+  it("aborts before target lease when the authoritative source changes after embedding", async () => {
+    const before = { ...source, text: "before edit" };
+    const after = { ...source, text: "after edit" };
+    let reads = 0; let embedded = 0; let targetLeases = 0;
+    const privatePool = { async withWriteDb(_agent, fn) { return fn({ init: async () => {}, getById: async () => (++reads === 1 ? before : after) }); } };
+    const sharedPool = { async withWorkspaceDb() { targetLeases++; throw new Error("must not lease target"); } };
+    const result = await shareCard(privatePool, sharedPool, { embed: async () => { embedded++; return [0.25, 0.5, 0.75, 1]; } }, "agent-a", source.id, { targetScope: "workspace", ctx: { agentId: "agent-a", workspaceIdentity: "workspace-a" } });
+    assert.equal(result.ok, false); assert.equal(result.error, "share.source_changed");
+    assert.equal(embedded, 1); assert.equal(targetLeases, 0);
+  });
+
+  it("rejects conflicting source ownership aliases before embedding", async () => {
+    let embedded = 0; let targetLeases = 0;
+    const privatePool = { async withWriteDb(_agent, fn) { return fn({ init: async () => {}, getById: async () => ({ ...source, agentId: "agent-b", storedBy: "agent-a" }) }); } };
+    const sharedPool = { async withWorkspaceDb() { targetLeases++; } };
+    const result = await shareCard(privatePool, sharedPool, { embed: async () => { embedded++; return [0.25, 0.5, 0.75, 1]; } }, "agent-a", source.id, { targetScope: "workspace", ctx: { agentId: "agent-a", workspaceIdentity: "workspace-a" } });
+    assert.equal(result.ok, false); assert.equal(result.error, "share.source_owner_conflict");
+    assert.equal(embedded, 0); assert.equal(targetLeases, 0);
+  });
 });
