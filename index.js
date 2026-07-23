@@ -3416,7 +3416,12 @@ const plugin = {
     if (!registrationDependencies || typeof registrationDependencies !== "object" || Array.isArray(registrationDependencies)) {
       throw new TypeError("plugin registration dependencies must be an object");
     }
-    const { importRouting, commandRuntimeHooks = null, handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand } = registrationDependencies;
+    const {
+      importRouting,
+      commandRuntimeHooks = null,
+      handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand,
+      shareCard: registeredShareCard = shareCard,
+    } = registrationDependencies;
     if (importRouting !== undefined && typeof importRouting !== "function") {
       throw new TypeError("importRouting must be a function");
     }
@@ -3425,6 +3430,9 @@ const plugin = {
     }
     if (registeredObsidianCommandHandler !== handleObsidianBridgeCommand && typeof registeredObsidianCommandHandler !== "function") {
       throw new TypeError("handleObsidianBridgeCommand must be a function when provided");
+    }
+    if (typeof registeredShareCard !== "function") {
+      throw new TypeError("shareCard must be a function when provided");
     }
     const emitCommandRuntimeHook = (name, value) => {
       const hook = commandRuntimeHooks?.[name];
@@ -6074,6 +6082,12 @@ const plugin = {
               let memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
               let denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
+              const confirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+              emitCommandRuntimeHook("onShareConfirmationIdentity", {
+                phase: "complete",
+                identity: confirmationIdentity,
+                rawChatId: memoryCtx.chatId,
+              });
               const completed = completePendingConfirmation({
                 confirmationStore, confirmationIndex, expectedCommand: "share", memoryCtx, nonce: confirmation.nonce,
               });
@@ -6087,7 +6101,7 @@ const plugin = {
               });
               denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
-              const result = await shareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
+              const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
                 targetScope, allowSensitiveShare: true, ctx: memoryCtx, logger: api.logger,
               });
               if (!result.ok) return fail(sourceDenied(result.error) ? "plur1bus.share_not_found" : "plur1bus.share_failed");
@@ -6104,13 +6118,18 @@ const plugin = {
             });
             const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
             if (denied) return denied;
-            const result = await shareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
+            const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
               targetScope, ctx: memoryCtx, logger: api.logger,
             });
             if (result.ok) return fail("plur1bus.share_done", { id: result.sharedId });
             if (result.error?.startsWith("share.explicit approval required")) {
               const identity = resolveConfirmationIdentity(memoryCtx);
               if (!identity.userId) return fail("plur1bus.share_user_required");
+              emitCommandRuntimeHook("onShareConfirmationIdentity", {
+                phase: "create",
+                identity,
+                rawChatId: memoryCtx.chatId,
+              });
               const pending = createConfirmation({ userId: identity.userId, chatId: identity.chatId, command: "share", targetId: sourceId });
               // Never retain source content in a command confirmation.
               pending.payload = { targetScope, sourceId };
