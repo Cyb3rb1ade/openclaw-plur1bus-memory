@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, existsSync, readFileSync, readdirSync, rmSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeMemoryNotes } from "../lib/obsidian/memory-note-writer.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 let tmpDir;
 
@@ -14,6 +15,14 @@ function makeVault() {
 const baseConfig = (vault) => ({
   vaultPath: vault,
   reviewRoot: "plur1bus",
+});
+
+const writeOptions = (vault, overrides = {}) => ({
+  mutationPolicy: confirmedObsidianPolicy({
+    baseDbPath: vault,
+    command: ["dashboards", "build"],
+  }),
+  ...overrides,
 });
 
 function makeRecord(overrides = {}) {
@@ -34,7 +43,7 @@ describe("writeMemoryNotes", () => {
   it("writes new note with correct frontmatter and body", () => {
     const vault = makeVault();
     const records = [makeRecord()];
-    const result = writeMemoryNotes(baseConfig(vault), records, {});
+    const result = writeMemoryNotes(baseConfig(vault), records, writeOptions(vault));
 
     assert.strictEqual(result.written, 1);
     assert.strictEqual(result.errors, 0);
@@ -54,10 +63,10 @@ describe("writeMemoryNotes", () => {
     const vault = makeVault();
     const records = [makeRecord()];
 
-    const first = writeMemoryNotes(baseConfig(vault), records, {});
+    const first = writeMemoryNotes(baseConfig(vault), records, writeOptions(vault));
     assert.strictEqual(first.written, 1);
 
-    const second = writeMemoryNotes(baseConfig(vault), records, {});
+    const second = writeMemoryNotes(baseConfig(vault), records, writeOptions(vault));
     assert.strictEqual(second.written, 0);
     assert.strictEqual(second.skipped, 1);
   });
@@ -68,8 +77,8 @@ describe("writeMemoryNotes", () => {
     const v1 = [makeRecord({ id, text: "original text", summary: "v1" })];
     const v2 = [makeRecord({ id, text: "updated text", summary: "v2" })];
 
-    writeMemoryNotes(baseConfig(vault), v1, {});
-    const result = writeMemoryNotes(baseConfig(vault), v2, {});
+    writeMemoryNotes(baseConfig(vault), v1, writeOptions(vault));
+    const result = writeMemoryNotes(baseConfig(vault), v2, writeOptions(vault));
 
     assert.strictEqual(result.written, 1);
 
@@ -91,7 +100,7 @@ describe("writeMemoryNotes", () => {
       vector: [0.1],
     }));
 
-    const result = writeMemoryNotes(baseConfig(vault), records, { maxPerRun: 3 });
+    const result = writeMemoryNotes(baseConfig(vault), records, writeOptions(vault, { maxPerRun: 3 }));
     assert.strictEqual(result.written, 3);
 
     const files = readdirSync(join(vault, "plur1bus", "memories"));
@@ -103,7 +112,7 @@ describe("writeMemoryNotes", () => {
     const vault = makeVault();
     const records = [makeRecord()];
 
-    const result = writeMemoryNotes(baseConfig(vault), records, { dryRun: true });
+    const result = writeMemoryNotes(baseConfig(vault), records, writeOptions(vault, { dryRun: true }));
     assert.strictEqual(result.written, 0);
 
     const notePath = join(vault, "plur1bus", "memories", "aaaaaaaa-0000-0000-0000-000000000001.md");
@@ -123,7 +132,7 @@ describe("writeMemoryNotes", () => {
       status: "active",
       vector: [0.1],
     };
-    await writeMemoryNotes(baseConfig(tmpDir), [record], {});
+    await writeMemoryNotes(baseConfig(tmpDir), [record], writeOptions(tmpDir));
     const content = readFileSync(join(tmpDir, "plur1bus", "memories", `${record.id}.md`), "utf8");
     assert.ok(!/^status: injected$/m.test(content), "injected YAML key should not appear as a standalone line");
     assert.ok(content.includes("line one"), "summary text should still appear");

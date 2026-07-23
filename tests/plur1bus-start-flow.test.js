@@ -68,7 +68,21 @@ describe("/plur1bus start", () => {
       const command = api._commands.find((item) => item.name === "plur1bus_start");
       assert.ok(command, "plur1bus_start command should be registered");
 
-      const result = await command.handler({ args: "", workspaceDir: baseDbPath, agentId: "agent-a" });
+      const result = await command.handler({
+        args: "",
+        workspaceDir: baseDbPath,
+        agentId: "agent-a",
+        channel: "telegram",
+        accountId: "default",
+        sessionKey: "agent:agent-a:main",
+        from: "telegram:private-chat",
+        to: "telegram:private-chat",
+        config: { workspaceDir: baseDbPath },
+        getCurrentConversationBinding: () => null,
+        userId: "owner",
+        chatId: "private-chat",
+        chatType: "private",
+      });
       assert.match(result.text, /PLUR1BUS — Make your agent yours/);
       assert.match(result.text, /Active: \d+\s+Disabled: \d+\s+New\/missing: \d+/);
       assert.match(result.text, /Temporal Continuity Context/);

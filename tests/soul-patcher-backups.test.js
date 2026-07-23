@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { patchSoulMd } from "../lib/install/soul-patcher.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 function backupNames(dir) {
   return readdirSync(dir).filter((name) => name.startsWith("SOUL.MD.bak-plur1bus-soul-"));
@@ -20,7 +21,11 @@ describe("soul patcher backups", () => {
         writeFileSync(`${target}.bak-plur1bus-soul-${1000 + i}`, `old backup ${i}`, "utf8");
       }
 
-      const result = patchSoulMd(target, { maxBackups: 2 });
+      const mutationPolicy = confirmedObsidianPolicy({
+        baseDbPath: dir,
+        command: ["soul", "patch"],
+      });
+      const result = patchSoulMd(target, { maxBackups: 2, mutationPolicy });
 
       assert.strictEqual(result.ok, true);
       assert.ok(backupNames(dir).length <= 2, `expected <=2 backups, got ${backupNames(dir).length}`);

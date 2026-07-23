@@ -6,7 +6,6 @@ import { join } from "node:path";
 
 import plugin from "../index.js";
 import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
-import { sanitizePathPart } from "../lib/neo-arch.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -153,7 +152,7 @@ describe("/plur1bus internal auth gate", () => {
         channel: "cron",
         accountId: "cron",
       }).workspaceIdentity;
-      assert.deepEqual(neoStores, [{ purpose: "general", workspaceKey: sanitizePathPart(expectedKey) }]);
+      assert.deepEqual(neoStores, [{ purpose: "general", workspaceKey: expectedKey }]);
       assert.notEqual(neoStores[0].workspaceKey, "attacker-workspace");
       const workspaceRoot = join(baseDbPath, "_neo", "workspaces");
       assert.equal(existsSync(join(workspaceRoot, "attacker-workspace")), false);
