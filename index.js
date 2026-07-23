@@ -4935,6 +4935,7 @@ const plugin = {
                       workspaceAliases: neoWorkspaceAliases,
                     }),
                     agentId: internalAgent,
+                    requestContext: memoryCtx,
                     logger: api.logger,
                     maxMemories: isLocalProvider ? 1000 : 5000,
                     topK: isLocalProvider ? 10 : 20,
@@ -8525,7 +8526,20 @@ const plugin = {
               if (echoCooldownOk) {
                 const { loadFreshDreamEcho, formatDreamEchoContext } = await import("./lib/dream-echo.js");
                 const { loadGovernorState, saveGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend, withGovernorLock } = await import("./lib/proactive-governor.js");
-                const echo = loadFreshDreamEcho(ctx.workspaceDir, { now: nowMs });
+                let echoRequestContext = null;
+                try {
+                  echoRequestContext = resolveMemoryRequestContext({
+                    agentId: ctx?.agentId || "default",
+                    workspaceDir: ctx.workspaceDir,
+                    userId: ctx?.userId ?? ctx?.senderId,
+                    channel: ctx?.channel ?? ctx?.messageProvider,
+                    accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
+                    chatId: ctx?.chatId,
+                  }, { workspaceAliases: memoryWorkspaceAliases });
+                } catch (err) {
+                  api.logger?.debug?.(`plur1bus dream echo context unavailable: ${err?.message || "invalid context"}`);
+                }
+                const echo = loadFreshDreamEcho(ctx.workspaceDir, { now: nowMs, requestContext: echoRequestContext });
                 if (echo) {
                   // Advisory cross-process lock (closes the lost-update window
                   // with lib/afterthought.js's runAfterthoughtJob, which may run

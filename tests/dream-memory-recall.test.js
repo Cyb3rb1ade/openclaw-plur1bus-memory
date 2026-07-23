@@ -74,12 +74,17 @@ describe("Feedback-Spiralen-Guards", () => {
 
   it("REM-Kandidatenladung filtert Traum-Memories aus (keine Traum-aus-Traum-Rekursion)", async () => {
     const now = Date.now();
+    const context = {
+      agentId: "dream-agent",
+      workspaceIdentity: "workspace:v1:dream-workspace",
+      workspaceAliases: { paths: [], aliases: [] },
+    };
     const rows = [
-      { id: "m1", text: "echte Erinnerung", vector: [0.1], createdAt: now, status: "active", memoryClass: "standard" },
-      { id: "d1", text: "geträumter Flur", vector: [0.2], createdAt: now, status: "active", memoryClass: "dream" },
+      { id: "m1", text: "echte Erinnerung", vector: [0.1], createdAt: now, status: "active", memoryClass: "standard", scope: "agent-private", agentId: "dream-agent" },
+      { id: "d1", text: "geträumter Flur", vector: [0.2], createdAt: now, status: "active", memoryClass: "dream", scope: "agent-private", agentId: "dream-agent" },
     ];
     const db = { table: { query: () => ({ where: () => ({ limit: () => ({ toArray: async () => rows }) }) }) } };
-    const memories = await loadCandidateMemories(db, { weekStartMs: now - 1000 });
+    const memories = await loadCandidateMemories(db, { weekStartMs: now - 1000, requestContext: context });
     assert.deepStrictEqual(memories.map((m) => m.id), ["m1"]);
   });
 });
