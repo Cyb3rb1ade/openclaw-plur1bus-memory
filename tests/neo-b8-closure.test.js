@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   createNeoStore,
+  migrateNeoWorkspaces,
   routeNeoRecall,
 } from "../lib/neo-arch.js";
 import { createNeoWorkerRuntime } from "../lib/neo-worker-runtime.js";
@@ -26,7 +27,7 @@ describe("Neo B8 closure", () => {
     assert.deepStrictEqual(routeNeoRecall(rows, "needle", { lanes: ["workspace_facts"], maxPerLane: 10 }).workspace_facts, []);
   });
 
-  it("uses collision-resistant storage while reading mapped legacy data", () => {
+  it("uses collision-resistant storage after an explicit legacy migration", () => {
     const stateRoot = root();
     const legacy = join(stateRoot, "workspaces", "tenant_a");
     mkdirSync(legacy, { recursive: true });
@@ -34,24 +35,41 @@ describe("Neo B8 closure", () => {
     const slash = createNeoStore(stateRoot, "tenant/a");
     const underscore = createNeoStore(stateRoot, "tenant_a");
     assert.notEqual(slash.paths.workspaceDir, underscore.paths.workspaceDir);
+    assert.equal(slash.readCandidates(10).length, 0);
+    const migration = migrateNeoWorkspaces(stateRoot, { dryRun: false, requireBackup: false, mappings: [{ legacyKey: "tenant_a", workspaceKey: "tenant/a" }] });
+    assert.equal(migration.ok, true);
     assert.equal(slash.readCandidates(10).some((record) => record.id === "legacy"), true);
+    const ambiguous = migrateNeoWorkspaces(stateRoot, { mappings: [{ legacyKey: "tenant_a", workspaceKey: "tenant/a" }, { legacyKey: "tenant_a", workspaceKey: "tenant:a" }] });
+    assert.equal(ambiguous.ok, false);
   });
 
-  it("persists a finite vector before reporting a fresh embedding and recalls lexical divergence semantically", () => {
+  it("persists a finite vector before reporting a fresh embedding and recalls lexical divergence semantically", async () => {
     const store = createNeoStore(root(), "vectors");
     const candidate = { id: "vector-1", workspaceKey: "vectors", agentId: "agent-a", statement: "feline companion", sourceTurnIds: ["turn-1"], status: "active", embeddingStatus: "pending", origin: { scope: "agent_private", trustLevel: "user_asserted" } };
     store.appendCandidates([candidate]);
     store.appendEmbeddingQueue([candidate]);
-    const deferred = store.drainEmbeddingQueue({ impact: "low" });
+    const deferred = await store.drainEmbeddingQueue({ impact: "low" });
     assert.equal(deferred.processed, 0);
     assert.notEqual(store.readCandidates(10).at(-1).embeddingStatus, "fresh");
-    const drained = store.drainEmbeddingQueue({ impact: "low", embedder: () => [0, 1], dimensions: 2 });
+    const drained = await store.drainEmbeddingQueue({ impact: "low", embedder: () => [0, 1], dimensions: 2 });
     assert.equal(drained.processed, 1);
     const fresh = store.readCandidates(10).at(-1);
     assert.deepStrictEqual(fresh.embedding, [0, 1]);
     assert.equal(fresh.embeddingStatus, "fresh");
     const recalled = routeNeoRecall([fresh], "cat", { requesterAgentId: "agent-a", requesterWorkspaceKey: "vectors", queryVector: [0, 1], lanes: ["workspace_facts"], minScore: 0.6 });
     assert.equal(recalled.workspace_facts[0].item.id, "vector-1");
+  });
+
+  it("awaits a production-style async embedder before making a divergent query recallable", async () => {
+    const store = createNeoStore(root(), "runtime-vectors");
+    const candidate = { id: "runtime-vector", workspaceKey: "runtime-vectors", agentId: "agent-a", statement: "canine companion", sourceTurnIds: ["turn-1"], status: "active", embeddingStatus: "pending", origin: { scope: "agent_private", trustLevel: "untrusted" } };
+    store.appendCandidates([candidate]);
+    store.appendEmbeddingQueue([candidate]);
+    const drained = await store.drainEmbeddingQueue({ impact: "low", dimensions: 2, embedder: async () => [1, 0] });
+    assert.equal(drained.processed, 1);
+    const stored = store.readCandidates(10).at(-1);
+    assert.deepStrictEqual(stored.embedding, [1, 0]);
+    assert.equal(routeNeoRecall([stored], "dog", { requesterAgentId: "agent-a", requesterWorkspaceKey: "runtime-vectors", queryVector: [1, 0], lanes: ["workspace_facts"], minScore: 0.6 }).workspace_facts[0].item.id, "runtime-vector");
   });
 
   it("rejects new work deterministically once worker admission is full", async () => {
