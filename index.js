@@ -79,6 +79,7 @@ import {
   renderForgetResult,
   renderCorrectResult,
   archiveCard,
+  shareCard,
 } from "./lib/telegram-commands/memory-edit.js";
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
@@ -6050,6 +6051,70 @@ const plugin = {
           }
         };
 
+        /** Share a private memory into the bound workspace or user pool. */
+        const runShareCommand = async (commandCtx) => {
+          const { lang, tone } = resolveCommandLocale(commandCtx);
+          const fail = (key, vars = {}) => ({ text: t(key, { lang, tone, vars }) });
+          try {
+            const deniedLen = checkArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
+            const raw = String(commandCtx?.args || "").trim();
+            const confirmation = parseConfirmationCommand(raw);
+            if (confirmation.requested) {
+              if (!confirmation.nonce) return fail("plur1bus.confirm_failed", { reason: confirmation.error || "invalid_format" });
+              // First bind the redeeming request to its host-authenticated context.
+              let memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+              let denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+              const completed = completePendingConfirmation({
+                confirmationStore, confirmationIndex, expectedCommand: "share", memoryCtx, nonce: confirmation.nonce,
+              });
+              if (completed.error) return fail("plur1bus.confirm_failed", { reason: completed.error });
+              const targetScope = completed.pending.payload?.targetScope;
+              const sourceId = completed.pending.payload?.sourceId;
+              if (!['workspace', 'user'].includes(targetScope) || !safeUuid(sourceId)) return fail("plur1bus.confirm_failed", { reason: "invalid_payload" });
+              // Re-resolve and re-authorize after redemption before touching the source writer.
+              memoryCtx = await resolveRegisteredMemoryContext(commandCtx, {
+                requireWorkspace: targetScope === "workspace", requireUser: targetScope === "user",
+              });
+              denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+              const result = await shareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
+                targetScope, allowSensitiveShare: true, ctx: memoryCtx, logger: api.logger,
+              });
+              if (!result.ok) return fail(result.error?.startsWith("share.card_not_found") ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+              return fail("plur1bus.share_done", { id: result.sharedId });
+            }
+
+            const parts = raw.split(/\s+/).filter(Boolean);
+            if (parts.length < 1 || parts.length > 2 || (parts.length === 2 && parts[1] !== "--user")) return fail("plur1bus.share_usage");
+            let sourceId;
+            try { sourceId = safeUuid(parts[0]); } catch { return fail("plur1bus.share_usage"); }
+            const targetScope = parts[1] === "--user" ? "user" : "workspace";
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx, {
+              requireWorkspace: targetScope === "workspace", requireUser: targetScope === "user",
+            });
+            const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
+            const result = await shareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
+              targetScope, ctx: memoryCtx, logger: api.logger,
+            });
+            if (result.ok) return fail("plur1bus.share_done", { id: result.sharedId });
+            if (result.error?.startsWith("share.explicit approval required")) {
+              const identity = resolveConfirmationIdentity(memoryCtx);
+              if (!identity.userId) return fail("plur1bus.share_user_required");
+              const pending = createConfirmation({ userId: identity.userId, chatId: identity.chatId, command: "share", targetId: sourceId });
+              // Never retain source content in a command confirmation.
+              pending.payload = { targetScope, sourceId };
+              rememberPendingConfirmation(confirmationStore, confirmationIndex, pending);
+              return fail("plur1bus.share_confirm_text", { token: pending.nonce });
+            }
+            return fail(result.error?.startsWith("share.card_not_found") ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+          } catch (error) {
+            return fail("plur1bus.share_failed");
+          }
+        };
+
         const runMemoryFeedbackCommand = async (commandCtx) => {
           try {
             const deniedLen = checkArgsLength(commandCtx);
@@ -6103,6 +6168,15 @@ const plugin = {
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runCorrectCommand,
         });
+        for (const name of ["share", "teile"]) {
+          api.registerCommand({
+            name,
+            description: "PLUR1BUS — share a memory to the workspace or authenticated user pool",
+            acceptsArgs: true,
+            channels: ["telegram", "discord", "slack", "mattermost"],
+            handler: runShareCommand,
+          });
+        }
         api.registerCommand({
           name: "wiki",
           description: "PLUR1BUS — Wiki durchsuchen, hinzufügen, löschen",
