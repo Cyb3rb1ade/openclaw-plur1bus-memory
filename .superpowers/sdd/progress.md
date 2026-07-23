@@ -363,3 +363,18 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
   Important 0. Minor: re-registering the identical nonce+target at full
   capacity can evict one unrelated oldest entry; production handlers generate
   fresh random UUID nonces.
+
+## 2026-07-23 — B13 Task 5 sensitive command dispatch
+
+- Commits `2d14f60`, `9818ca2`, `ea128f5`, `569bca8`, `ca7ed52`, and `9d45fba`
+  authorize data-bearing chat reads before store, DB, embedding, LLM, and
+  file-backed locale work.
+- Public help and unknown subcommands return without data work; verified
+  internal cron jobs retain canonical runtime workspace routing; Obsidian
+  remains the explicit B14 delegation boundary.
+- The registered-command matrix covers every current action/subcommand class,
+  including all memory audit branches, and observes zero work for denied/public
+  paths, exact runtime-LLM identity, and B14 delegation.
+- Final Task 5 gate: required three-file suite passes with 70 tests and no
+  failures; adjacent ACL/status/speaker/default-LLM/internal checks and diff
+  checks pass. All known Critical/Important Task 5 findings are closed.
