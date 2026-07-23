@@ -247,7 +247,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { buildRemPartition, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
 import {
   buildEdgesForSession,
@@ -4918,6 +4918,17 @@ const plugin = {
                   { runtimeLlm: sessionRuntime },
                 );
                 const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
+                let remAclPartition;
+                try {
+                  remAclPartition = buildRemPartition(
+                    memoryCtx.userPrincipal
+                      ? { scope: "user", agentId: memoryCtx.agentId, workspaceIdentity: "", ownerUserId: memoryCtx.userPrincipal }
+                      : { scope: "workspace", agentId: memoryCtx.agentId, workspaceIdentity: memoryCtx.workspaceIdentity, ownerUserId: "" },
+                    memoryCtx,
+                  );
+                } catch {
+                  return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "acl_partition_missing" });
+                }
                 const result = await pool.withDb(internalAgent, async (db) => {
                   await db.init();
                   return runRemDream({
@@ -4936,6 +4947,7 @@ const plugin = {
                     }),
                     agentId: internalAgent,
                     requestContext: memoryCtx,
+                    aclPartition: remAclPartition,
                     logger: api.logger,
                     maxMemories: isLocalProvider ? 1000 : 5000,
                     topK: isLocalProvider ? 10 : 20,
@@ -6815,6 +6827,25 @@ const plugin = {
                       } catch (_) { /* try next */ }
                     }
                   }
+                  let lightRequestContext = null;
+                  try {
+                    lightRequestContext = resolveMemoryRequestContext({
+                      agentId,
+                      workspaceDir: ctx?.workspaceDir,
+                      workspaceKey: ctx?.workspaceKey,
+                      userId: ctx?.userId ?? ctx?.senderId,
+                      channel: ctx?.channel ?? ctx?.messageProvider,
+                      accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
+                      chatId: ctx?.chatId,
+                    }, { workspaceAliases: memoryWorkspaceAliases });
+                  } catch (_) {
+                    lightRequestContext = null;
+                  }
+                  const lightAclBindings = lightRequestContext
+                    ? (lightRequestContext.userPrincipal
+                      ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
+                      : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
+                    : null;
                   lightDream({
                     turns: normalizedTurns,
                     neoStore,
@@ -6852,6 +6883,8 @@ const plugin = {
                     personaSeedCfg: (cfg.personaVoice?.enabled ?? true) !== false
                       ? { agentId, lang: cfg.language || "de", identityText: personaIdentityText }
                       : null,
+                    requestContext: lightRequestContext,
+                    aclBindings: lightAclBindings,
                     signal,
                   }).then((dreamResult) => {
                     throwIfAborted(signal, "light dream commit aborted");

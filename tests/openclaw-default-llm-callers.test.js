@@ -412,6 +412,9 @@ test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors
       workspaceIdentity: "workspace:v1:rem-workspace",
       workspaceAliases: { paths: [], aliases: [] },
     },
+    aclPartition: {
+      scope: "workspace", agentId: "rem-agent", workspaceIdentity: "workspace:v1:rem-workspace", ownerUserId: "",
+    },
     force: true,
     narrativeCfg: { enabled: true, storeAsMemory: false },
     workspaceDir,
