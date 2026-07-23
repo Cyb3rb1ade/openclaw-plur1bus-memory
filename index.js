@@ -70,6 +70,10 @@ import {
   parseMemoryFeedback,
 } from "./lib/telegram-commands/memory-query.js";
 import { withAccessReadDbs } from "./lib/shared-memory.js";
+import {
+  migrateLegacySharedRows,
+  parseLegacyMigrationArgs,
+} from "./lib/shared-memory-migration.js";
 import { recordFeedback } from "./lib/feedback-log.js";
 import {
   parseCorrection,
@@ -3927,6 +3931,7 @@ const plugin = {
 
     const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
     const sharedMemoryPool = new SharedMemoryPool(namespaceLayout.baseDir, vectorDim, AgentDbPool, api.logger);
+    const legacyMigrationShutdown = new AbortController();
     if (commandRuntimeHooks) {
       const withDb = pool.withDb.bind(pool);
       pool.withDb = async (agentId, operation, ...args) => withDb(agentId, async (db, ...operationArgs) => {
@@ -4664,6 +4669,7 @@ const plugin = {
         };
         const isDestructiveAction = (actionKey, subKey, tokens) => (
           actionKey === "setup"
+          || actionKey === "migrate-legacy-shared"
           || actionKey === "enable"
           || actionKey === "disable"
           || actionKey === "forget"
@@ -4677,7 +4683,8 @@ const plugin = {
           || (actionKey === "neo" && subKey === "workspaces" && tokens[2] === "migrate" && !tokens.includes("--dry-run"))
         );
         const knownPlur1busActions = new Set([
-          ...SENSITIVE_READ_ACTIONS, "setup", "enable", "disable", "forget", "correct", "internal", "neo",
+          ...SENSITIVE_READ_ACTIONS, "setup", "enable", "disable", "forget", "correct",
+          "internal", "migrate-legacy-shared", "neo",
         ]);
         const callCommandLlm = async (messages, llmCfg) => {
           emitCommandRuntimeHook("onLlmCallContext", llmCfg?.callContext);
@@ -4763,6 +4770,31 @@ const plugin = {
               || ((actionKey === "reminder" || actionKey === "reminders") && !["", "list", "show", "help", "cancel", "delete"].includes(subKey))
               || (actionKey === "curation" && !["", "conflicts", "stale", "promoted"].includes(subKey))) {
               return plur1busHelp("quick", resolveDenialLocale(commandCtx));
+            }
+            if (actionKey === "migrate-legacy-shared") {
+              const resolvedCtx = await resolveRegisteredMemoryContext(commandCtx, {
+                requireWorkspace: true,
+              });
+              const denied = await checkAuth(
+                resolvedCtx,
+                { destructive: true, chatKind: resolvedCtx.chatKind },
+                commandCtx,
+              );
+              if (denied) return denied;
+              const options = parseLegacyMigrationArgs(tokens.slice(1));
+              return formatJsonCommandResult(await migrateLegacySharedRows({
+                privatePool: pool,
+                sharedPool: sharedMemoryPool,
+                embeddings,
+                agentId: resolvedCtx.agentId,
+                workspaceAliases: resolvedCtx.workspaceAliases,
+                apply: options.apply,
+                reportDir: resolvedCtx.workspaceDir,
+                reportName: options.reportName,
+                continuationToken: options.continuationToken,
+                signal: commandCtx.abortSignal || legacyMigrationShutdown.signal,
+                logger: api.logger,
+              }));
             }
             const cronInternal = actionKey === "internal" && isCronCommandContext(commandCtx);
             const memoryCtx = cronInternal
@@ -5852,7 +5884,12 @@ const plugin = {
 
         registerGatewayShutdown(api, {
           memoryDbAdapter,
-          pool,
+          pool: {
+            shutdown: async () => {
+              legacyMigrationShutdown.abort();
+              await pool.shutdown();
+            },
+          },
           sharedMemoryPool,
           clearTurnRoutes: clearInitializedTurnRoutes,
           flushMetrics,

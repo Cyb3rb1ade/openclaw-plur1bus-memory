@@ -162,6 +162,45 @@ describe("/plur1bus internal auth gate", () => {
 });
 
 describe("/plur1bus mutating command auth gates", () => {
+  it("classifies legacy shared migration as operator-destructive and never grants cron bypass", async () => {
+    await withPlugin(async ({ command, workspaceDir }) => {
+      for (const context of [
+        { ...groupCtx, args: "migrate-legacy-shared" },
+        { ...groupCtx, origin: "cron", args: "migrate-legacy-shared --apply" },
+      ]) {
+        const result = await command.handler({ workspaceDir, ...context });
+        assertBlocked(result);
+      }
+      assert.equal(existsSync(join(workspaceDir, ".plur1bus", "migrations")), false);
+    });
+  });
+
+  it("runs an authorized dry-run through the official host-shaped command context", async () => {
+    await withPlugin(async ({ command, baseDbPath }) => {
+      const result = await command.handler({
+        args: "migrate-legacy-shared --report official-host.json",
+        senderId: "owner",
+        userId: "owner",
+        channel: "telegram",
+        accountId: "default",
+        agentId: "agent-a",
+        sessionKey: "agent:agent-a:telegram:direct:chat-a",
+        from: "telegram:chat-a",
+        to: "telegram:chat-a",
+        getCurrentConversationBinding: () => null,
+        chatType: "private",
+      });
+      assert.match(result.text, /"planned": 0/);
+      assert.match(result.text, /"incomplete": false/);
+      assert.equal(
+        existsSync(join(baseDbPath, ".plur1bus", "migrations", "official-host.json")),
+        true,
+      );
+      assert.equal(existsSync(join(baseDbPath, "agent-a")), false,
+        "missing authoritative table must not be bootstrapped by dry-run");
+    });
+  });
+
   it("blocks skill approval from group chats and leaves proposals unchanged", async () => {
     await withPlugin(async ({ command, workspaceDir }) => {
       writeSkillProposal(workspaceDir);

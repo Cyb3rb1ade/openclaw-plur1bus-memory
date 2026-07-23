@@ -451,6 +451,24 @@ it never poisons results by marking everything `fakt`.
 - `workspace` shares by workspace.
 - `user` is owner-bound: der aufrufende `userId` wird gespeichert und bei Sichtbarkeit/Mutation geprüft.
 
+Legacy rows that used the old `workspace_shared` scope remain in their
+authoritative private table until an operator explicitly migrates them. Start
+with the non-mutating audit:
+
+```text
+/plur1bus migrate-legacy-shared
+```
+
+Use `--report <name.json>` for a fixed private report name, and resume a bounded
+dry run with the opaque `--cursor <token>` returned by the previous run. After
+reviewing the report, run `--apply` without a dry-run cursor; apply re-reads each
+source row, writes and verifies an idempotent workspace copy, and only then
+marks the legacy source. The command never deletes or re-scopes the source row.
+It is operator-destructive, so it requires the same user authorization as
+`/forget`; cron identity does not bypass that gate. Reports are no-clobber
+`0600` JSON files below `.plur1bus/migrations/` and exclude memory content,
+vectors, evidence, and provenance.
+
 **`security.allowModelDestructiveMemoryOps`** (default `true`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state. Set this flag to `false` if you want a hard opt-out for model-driven destructive memory writes.
 
 ### Feature profiles
