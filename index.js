@@ -4553,6 +4553,39 @@ const plugin = {
           const origin = String(commandCtx?.origin || commandCtx?.source || commandCtx?.kind || "").toLowerCase();
           return channel === "cron" || origin === "cron";
         };
+        // Chat command dispatch is deliberately deny-by-classification: a new
+        // action must be added to one of these predicates before it may acquire
+        // a store or other memory-bearing dependency.
+        const SENSITIVE_READ_ACTIONS = new Set([
+          "behavior", "curation", "doctor", "dreaming", "embeddings", "memory",
+          "origin", "persona", "recall", "reminder", "reminders", "skills", "start",
+          "state", "status", "temperament",
+        ]);
+        const isSensitiveChatRead = (actionKey, subKey) => {
+          if (!SENSITIVE_READ_ACTIONS.has(actionKey)) return false;
+          if (actionKey === "skills") return ["review", "list", "show"].includes(subKey);
+          if (actionKey === "reminder" || actionKey === "reminders") return ["", "list", "show", "help"].includes(subKey);
+          if (actionKey === "memory") return !["promote", "demote", "prune", "tombstone", "disable-overlay", "supersede-overlay"].includes(subKey);
+          if (actionKey === "behavior") return !["promote", "demote", "prune"].includes(subKey);
+          return true;
+        };
+        const isDestructiveAction = (actionKey, subKey, tokens) => (
+          actionKey === "setup"
+          || actionKey === "enable"
+          || actionKey === "disable"
+          || actionKey === "forget"
+          || actionKey === "correct"
+          || (actionKey === "temperament" && Boolean(subKey))
+          || (actionKey === "persona" && ["regenerate", "accept"].includes(subKey))
+          || (actionKey === "skills" && ["approve", "reject"].includes(subKey))
+          || ((actionKey === "reminder" || actionKey === "reminders") && ["cancel", "delete"].includes(subKey))
+          || (actionKey === "memory" && ["promote", "demote", "prune", "tombstone", "disable-overlay", "supersede-overlay"].includes(subKey))
+          || (actionKey === "behavior" && ["promote", "demote", "prune"].includes(subKey))
+          || (actionKey === "neo" && subKey === "workspaces" && tokens[2] === "migrate" && !tokens.includes("--dry-run"))
+        );
+        const knownPlur1busActions = new Set([
+          ...SENSITIVE_READ_ACTIONS, "setup", "enable", "disable", "forget", "correct", "internal", "neo",
+        ]);
         const runPlur1busCommand = async (commandCtx, prefixTokens = []) => {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
@@ -4563,9 +4596,15 @@ const plugin = {
             const actionKey = action.toLowerCase();
             const sub = tokens[1] || "";
             const id = tokens[2] || "";
-            const commandStore = getNeoStore({ workspaceDir: commandCtx.workspaceDir, workspaceKey: commandCtx.workspaceKey, agentId: commandCtx.agentId || "command" });
 
+            // Obsidian is an explicit B14 boundary. Its command-specific
+            // authorization remains delegated unchanged to its own handler.
             if (actionKey === "obsidian" || obsidianActionNames.has(actionKey)) {
+              const commandStore = getNeoStore({
+                workspaceDir: commandCtx.workspaceDir,
+                workspaceKey: commandCtx.workspaceKey,
+                agentId: commandCtx.agentId || "command",
+              });
               const obsidianMemoryCtx = await resolveRegisteredMemoryContext(commandCtx);
               let runtimeConfig = null;
               try {
@@ -4608,15 +4647,34 @@ const plugin = {
                 },
               });
             }
+            if (!knownPlur1busActions.has(actionKey)) {
+              return plur1busHelp("quick", resolveCommandLocale(commandCtx));
+            }
+            const subKey = sub.toLowerCase();
+            const cronInternal = actionKey === "internal" && isCronCommandContext(commandCtx);
+            const memoryCtx = cronInternal ? null : await resolveRegisteredMemoryContext(commandCtx);
+            if (actionKey === "internal") {
+              if (!isCronCommandContext(commandCtx)) {
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+                if (denied) return denied;
+              }
+            } else if (isDestructiveAction(actionKey, subKey, tokens)) {
+              const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+            } else if (isSensitiveChatRead(actionKey, subKey)) {
+              const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+            }
+            const commandStore = getNeoStore({
+              workspaceDir: memoryCtx?.workspaceDir || commandCtx.workspaceDir,
+              workspaceKey: memoryCtx?.workspaceKey || commandCtx.workspaceKey,
+              agentId: memoryCtx?.agentId || commandCtx.agentId || "command",
+            });
             // ── Phase 5+6: silent cron-internal jobs ──────────────────────
             // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale|rem-dream>
             // Wird ausschliesslich aus den OpenClaw-managed Cron-Jobs gefeuert
             // (delivery.mode=none).
             if (actionKey === "internal") {
-              if (!isCronCommandContext(commandCtx)) {
-                const denied = await checkAuth(commandCtx, { destructive: true });
-                if (denied) return denied;
-              }
               const subKey = (sub || "").toLowerCase();
               const internalAgent = commandCtx.agentId || "default";
               if (subKey === "consolidate-daily") {
@@ -4968,7 +5026,7 @@ const plugin = {
               if (!presetName) {
                 return { text: renderTemperamentOverview({ agentId: temperamentAgentId, temperamentsCfg: cfg.emotion?.temperaments || {}, lang }) };
               }
-              const denied = await checkAuth(commandCtx, { destructive: true });
+              const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
@@ -5019,7 +5077,7 @@ const plugin = {
                   : `🎤 Persona voice (${personaAgentId}):\n${parsed?.managedBlock || "(empty)"}` };
               }
               if (personaSub === "regenerate") {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (hasPersonaVoice(commandCtx.workspaceDir)) {
                   return { text: de
@@ -5057,7 +5115,7 @@ const plugin = {
                 // Proposal-Sektion aus einer Version vor Auto-Apply. Neue
                 // wöchentliche Evolutionen werden inzwischen direkt im
                 // Managed Block angewendet und brauchen kein accept mehr.
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 const result = acceptPersonaProposal(commandCtx.workspaceDir);
                 if (!result.accepted) {
@@ -5075,7 +5133,7 @@ const plugin = {
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
-              const denied = await checkAuth(commandCtx, { destructive: true });
+              const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
@@ -5229,14 +5287,14 @@ const plugin = {
                 return { text: showProposal(workspaceDir, id, { lang, tone }).text };
               }
               if (subKey === "approve") {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_approve_usage", { lang, tone }) };
                 const result = approveProposal(workspaceDir, id, { agentId: commandCtx.agentId, workspaceKey: commandCtx.workspaceKey, lang, tone });
                 return { text: result.text };
               }
               if (subKey === "reject") {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
                 const result = rejectProposal(workspaceDir, id, { lang, tone });
@@ -5250,7 +5308,7 @@ const plugin = {
               const reminderAgent = commandCtx.agentId || "default";
               const reminderWsKey = commandCtx.workspaceKey || commandCtx.workspaceDir || "default";
               if (subKey === "cancel" || subKey === "delete") {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("reminder.cancel_usage", { lang, tone }) };
                 return pool.withDb(reminderAgent, async (rdb) => {
@@ -5310,7 +5368,7 @@ const plugin = {
             if (action === "neo" && sub === "workspaces" && tokens[2] === "migrate") {
               const dryRun = tokens.includes("--dry-run");
               if (!dryRun) {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
               }
               const backupDir = commandOption(tokens, "--backup-dir", commandOption(tokens, "--backup", ""));
@@ -5336,7 +5394,7 @@ const plugin = {
               const subKey = sub.toLowerCase();
               if (["overlays", "overlay", "disable-overlay", "contradictions", "supersede-overlay", "doctor"].includes(subKey)) {
                 if (subKey === "disable-overlay" || subKey === "supersede-overlay") {
-                  const denied = await checkAuth(commandCtx, { destructive: true });
+                  const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                   if (denied) return denied;
                 }
                 const extraArgs = ["supersede-overlay", "doctor"].includes(subKey) ? tokens.slice(3) : [];
@@ -5373,7 +5431,7 @@ const plugin = {
                 return { text: `Usage: /plur1bus memory ${sub} <id>` };
               }
               if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
               }
               const record = findNeoRecord(commandStore, id);
@@ -5399,7 +5457,7 @@ const plugin = {
             }
             if (action === "behavior") {
               if (["promote", "demote", "prune"].includes(sub)) {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
               }
               const cards = commandStore.readBehaviorCards(500);
@@ -5436,7 +5494,7 @@ const plugin = {
               });
             }
             if (actionKey === "state") {
-              return runStatusCommand(commandCtx);
+              return runStatusCommand(commandCtx, memoryCtx);
             }
             if (actionKey === "enable") {
               return runFeatureToggle(commandCtx, true);
@@ -5445,7 +5503,7 @@ const plugin = {
               return runFeatureToggle(commandCtx, false);
             }
             if (actionKey === "memory") {
-              return runMemoryCommand(commandCtx);
+              return runMemoryCommand(commandCtx, memoryCtx);
             }
             if (actionKey === "forget") {
               return runForgetCommand(commandCtx);
@@ -5494,6 +5552,9 @@ const plugin = {
           try {
             const { lang, tone } = resolveCommandLocale(commandCtx);
             const agentId = commandCtx?.agentId || "default";
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
             const mood = emotionalPool.describe(agentId);
             let cardCount = null;
             try {
@@ -5542,9 +5603,8 @@ const plugin = {
           return null;
         };
 
-        const checkAuth = async (commandCtx, opts = {}, suppliedMemoryCtx = null) => {
-          const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
-          return checkMemoryAuth(memoryCtx, commandCtx, opts);
+        const checkAuth = async (memoryCtx, opts = {}, localeCtx = null) => {
+          return checkMemoryAuth(memoryCtx, localeCtx, opts);
         };
 
         const checkArgsLength = (commandCtx) => {
@@ -5563,7 +5623,8 @@ const plugin = {
           const deniedLen = checkArgsLength(commandCtx);
           if (deniedLen) return deniedLen;
           const { lang, tone } = resolveCommandLocale(commandCtx);
-          const denied = await checkAuth(commandCtx, { destructive: true });
+          const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+          const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
           if (denied) return denied;
           if (chatConfigCommandsBlocked()) return { text: t("plur1bus.config_blocked", { lang, tone }) };
           const featureName = parseFeatureArg(commandCtx);
@@ -5608,7 +5669,10 @@ const plugin = {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang } = resolveCommandLocale(commandCtx);
-            const agentId = commandCtx?.agentId || "default";
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
+            const agentId = memoryCtx.agentId;
             const sub = (commandCtx.args || "").trim().split(/\s+/)[0]?.toLowerCase() || "list";
             const rest = (commandCtx.args || "").trim().slice(sub.length).trim();
             const subCtx = { ...commandCtx, args: rest };
@@ -5676,12 +5740,14 @@ const plugin = {
           llmResultCache,
         });
 
-        const runMemoryCommand = async (commandCtx) => {
+        const runMemoryCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
+            const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
             const input = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
@@ -5904,7 +5970,8 @@ const plugin = {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const denied = await checkAuth(commandCtx, { destructive: true });
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const parsed = parseMemoryFeedback(args);
