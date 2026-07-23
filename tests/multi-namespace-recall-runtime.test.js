@@ -43,7 +43,10 @@ function deferred() {
 }
 
 function readRetrievalLedger(baseDbPath) {
-  const path = join(baseDbPath, "_neo", "workspaces", "namespace-workspace", "retrieval-ledger.jsonl");
+  const path = createNeoStore(
+    join(baseDbPath, "_neo"),
+    "namespace-workspace",
+  ).paths.retrievalLedger;
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }

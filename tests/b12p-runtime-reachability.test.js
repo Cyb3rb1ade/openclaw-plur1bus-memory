@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { manifestConfigDefaults, validatePluginConfig } from "../lib/setup/config-contract.js";
 import { runRecallPipeline } from "../lib/recall-pipeline.js";
+import { createNeoStore } from "../lib/neo-arch.js";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 
@@ -106,7 +107,10 @@ function makeRuntimeApi(baseDbPath, semanticCompression, recallOverrides = {}) {
 }
 
 function readRuntimeLedger(baseDbPath) {
-  const path = join(baseDbPath, "_neo", "workspaces", "b12p-runtime-workspace", "retrieval-ledger.jsonl");
+  const path = createNeoStore(
+    join(baseDbPath, "_neo"),
+    "b12p-runtime-workspace",
+  ).paths.retrievalLedger;
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
