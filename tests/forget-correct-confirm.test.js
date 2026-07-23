@@ -11,12 +11,16 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createConfirmation, validateConfirmation, resolveIdentity, isAuthorized, resolveChatKind } from "../lib/security.js";
 import { forgetCard, correctCard, shareCard } from "../lib/telegram-commands/memory-edit.js";
+import { checkAccess } from "../lib/acl-middleware.js";
+import { resolveHostCommandMemoryContext } from "../lib/memory-request-context.js";
+import { safeUpdate } from "../lib/safe-update.js";
+import * as pluginModule from "../index.js";
 
 const archiveDir = mkdtempSync(join(tmpdir(), "p1b-confirm-"));
 
@@ -42,6 +46,79 @@ function mockDbPool() {
       };
     },
   };
+}
+
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return value || "";
+  },
+  normalizeMessageChannel(value) {
+    return value;
+  },
+});
+
+async function officialMemoryContext({
+  accountId = "account-a",
+  chatId = "chat-a",
+  senderId = "user-a",
+  sessionId = "session-a",
+  threadId = "thread-a",
+  workspaceDir = archiveDir,
+  workspaceKey = "workspace:v1:ws-a",
+} = {}) {
+  const peerKind = threadId ? "group" : "direct";
+  const target = threadId
+    ? `telegram:group:${chatId}:topic:${threadId}`
+    : `telegram:direct:${chatId}`;
+  const sessionRoute = threadId
+    ? `telegram:group:${chatId}:topic:${threadId}`
+    : `telegram:${accountId}:direct:${chatId}`;
+  const workspaceAliases = {
+    paths: [{ path: workspaceDir, workspaceKey }],
+    aliases: [],
+  };
+  return resolveHostCommandMemoryContext({
+    agentId: "agent-a",
+    accountId,
+    channel: "telegram",
+    from: target,
+    messageThreadId: threadId,
+    senderId,
+    sessionId,
+    sessionKey: `agent:agent-a:${sessionRoute}`,
+    threadParentId: threadId ? chatId : "",
+    getCurrentConversationBinding: async () => ({
+      channel: "telegram",
+      accountId,
+      conversationId: threadId || chatId,
+      parentConversationId: chatId,
+      threadId,
+      peerKind,
+    }),
+  }, {
+    requireConversation: true,
+    resolveAgentWorkspaceDir: async () => workspaceDir,
+    routingLoader: async () => routingCapability,
+    workspaceAliases,
+  });
+}
+
+function requireConfirmationHelpers() {
+  for (const name of [
+    "completePendingConfirmation",
+    "parseConfirmationCommand",
+    "rememberPendingConfirmation",
+    "resolveConfirmationIdentity",
+  ]) {
+    assert.equal(typeof pluginModule[name], "function", `${name} must be exported`);
+  }
 }
 
 describe("forget/correct confirmation completion", () => {
@@ -94,6 +171,229 @@ describe("forget/correct confirmation completion", () => {
     });
     assert.strictEqual(res.ok, true);
     assert.deepStrictEqual(applied, { id, newContent: "new text" }, "safe-reconsolidation hook must run with the new text");
+  });
+
+  it("uses complete UUID nonces and exact nonce+target lookup for forget, correct, and later share", async () => {
+    requireConfirmationHelpers();
+    const memoryCtx = await officialMemoryContext();
+    const identity = pluginModule.resolveConfirmationIdentity(memoryCtx);
+    const targetA = "aaaaaaaa-1111-1111-1111-111111111111";
+    const targetB = "bbbbbbbb-2222-2222-2222-222222222222";
+
+    for (const command of ["forget", "correct", "share"]) {
+      const confirmationStore = new Map();
+      const confirmationIndex = new Map();
+      const nonceA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+      const nonceB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2";
+      const pendingA = {
+        nonce: nonceA,
+        ...identity,
+        command,
+        targetId: targetA,
+        expiresAt: Date.now() + 60_000,
+        callbackData: `${command}:confirm:${nonceA}:${targetA}`,
+      };
+      const pendingB = {
+        nonce: nonceB,
+        ...identity,
+        command,
+        targetId: targetB,
+        expiresAt: Date.now() + 60_000,
+        callbackData: `${command}:confirm:${nonceB}:${targetB}`,
+      };
+      pluginModule.rememberPendingConfirmation(confirmationStore, confirmationIndex, pendingA);
+      pluginModule.rememberPendingConfirmation(confirmationStore, confirmationIndex, pendingB);
+
+      const short = pluginModule.parseConfirmationCommand(`confirm ${nonceA.slice(0, 8)}`);
+      assert.equal(short.requested, true);
+      assert.equal(short.nonce, "");
+      assert.equal(confirmationStore.size, 2, `${command}: shortened prefix must not consume`);
+
+      const altered = `${nonceA.slice(0, -1)}3`;
+      const alteredResult = pluginModule.completePendingConfirmation({
+        confirmationIndex,
+        confirmationStore,
+        expectedCommand: command,
+        memoryCtx,
+        nonce: altered,
+      });
+      assert.equal(alteredResult.error, "not_found_or_expired");
+      assert.equal(confirmationStore.size, 2, `${command}: altered suffix must not consume`);
+
+      confirmationIndex.set(nonceA, `${nonceA}:${targetB}`);
+      const wrongTarget = pluginModule.completePendingConfirmation({
+        confirmationIndex,
+        confirmationStore,
+        expectedCommand: command,
+        memoryCtx,
+        nonce: nonceA,
+      });
+      assert.equal(wrongTarget.error, "not_found_or_expired");
+      assert.equal(confirmationStore.has(`${nonceA}:${targetA}`), true, `${command}: another target must not consume`);
+      confirmationIndex.set(nonceA, `${nonceA}:${targetA}`);
+
+      const exact = pluginModule.completePendingConfirmation({
+        confirmationIndex,
+        confirmationStore,
+        expectedCommand: command,
+        memoryCtx,
+        nonce: nonceA,
+      });
+      assert.equal(exact.pending, pendingA);
+      assert.equal(confirmationStore.has(`${nonceA}:${targetA}`), false, `${command}: exact redemption is one-time`);
+      const replay = pluginModule.completePendingConfirmation({
+        confirmationIndex,
+        confirmationStore,
+        expectedCommand: command,
+        memoryCtx,
+        nonce: nonceA,
+      });
+      assert.equal(replay.error, "not_found_or_expired");
+      assert.equal(confirmationStore.has(`${nonceB}:${targetB}`), true, `${command}: ambiguous shared prefix must retain the other nonce`);
+
+      pendingB.expiresAt = Date.now() - 1;
+      const expired = pluginModule.completePendingConfirmation({
+        confirmationIndex,
+        confirmationStore,
+        expectedCommand: command,
+        memoryCtx,
+        nonce: nonceB,
+      });
+      assert.equal(expired.error, "security.expired");
+      assert.equal(confirmationStore.has(`${nonceB}:${targetB}`), false, `${command}: expiry must consume only the expired nonce`);
+    }
+  });
+
+  it("binds create and completion to canonical host user and conversation context", async () => {
+    requireConfirmationHelpers();
+    const ownerCtx = await officialMemoryContext();
+    const identity = pluginModule.resolveConfirmationIdentity(ownerCtx);
+    assert.deepStrictEqual(identity, {
+      userId: ownerCtx.userId,
+      chatId: ownerCtx.conversationPrincipal,
+    });
+
+    const confirmationStore = new Map();
+    const confirmationIndex = new Map();
+    const pending = createConfirmation({
+      ...identity,
+      command: "forget",
+      targetId: "cccccccc-3333-3333-3333-333333333333",
+    });
+    pluginModule.rememberPendingConfirmation(confirmationStore, confirmationIndex, pending);
+
+    const mismatches = [
+      await officialMemoryContext({ threadId: "thread-b" }),
+      await officialMemoryContext({ accountId: "account-b" }),
+      await officialMemoryContext({ sessionId: "session-b" }),
+      await officialMemoryContext({ senderId: "user-b" }),
+      await officialMemoryContext({ chatId: "chat-b" }),
+    ];
+    for (const mismatchCtx of mismatches) {
+      const result = pluginModule.completePendingConfirmation({
+        confirmationIndex,
+        confirmationStore,
+        expectedCommand: "forget",
+        memoryCtx: mismatchCtx,
+        nonce: pending.nonce,
+      });
+      assert.ok(result.error, "cross-context redemption must fail");
+      assert.equal(confirmationStore.has(`${pending.nonce}:${pending.targetId}`), true, "failed redemption must not consume");
+    }
+
+    const matching = pluginModule.completePendingConfirmation({
+      confirmationIndex,
+      confirmationStore,
+      expectedCommand: "forget",
+      memoryCtx: ownerCtx,
+      nonce: pending.nonce,
+    });
+    assert.equal(matching.pending, pending);
+  });
+
+  it("/correct preserves canonical workspace ownership and replacement visibility", async () => {
+    const ownerCtx = await officialMemoryContext();
+    const otherWorkspace = mkdtempSync(join(tmpdir(), "p1b-correct-other-"));
+    const otherWorkspaceCtx = await officialMemoryContext({
+      workspaceDir: otherWorkspace,
+      workspaceKey: "workspace:v1:ws-b",
+    });
+    const id = "dddddddd-4444-4444-4444-444444444444";
+    const oldRow = {
+      id,
+      text: "old workspace fact",
+      summary: "old workspace fact",
+      vector: [1, 0],
+      status: "active",
+      versionNumber: 1,
+      scope: "workspace",
+      agentId: "agent-a",
+      storedBy: "agent-a",
+      workspaceId: "workspace:v1:ws-a",
+      workspaceKey: "workspace:v1:ws-a",
+      ownerUserId: "",
+    };
+    const adapterDb = mockDb([oldRow]);
+    const rawRows = new Map([[id, oldRow]]);
+    const order = [];
+    let replacement;
+    const rawDb = {
+      async getById(memoryId) {
+        return rawRows.get(memoryId) || null;
+      },
+      async store(entry) {
+        order.push("store");
+        replacement = entry;
+        rawRows.set(entry.id, entry);
+      },
+      async update(memoryId, patch) {
+        order.push("supersede");
+        rawRows.set(memoryId, { ...rawRows.get(memoryId), ...patch });
+      },
+    };
+
+    const result = await correctCard(adapterDb, "agent-a", id, "new workspace fact", {
+      archiveDir,
+      ctx: ownerCtx,
+      updateMemory: async ({ id: memoryId, newContent, archivePath }) => {
+        assert.equal(existsSync(archivePath), true, "archive must exist before correction update");
+        await safeUpdate(rawDb, memoryId, {
+          text: newContent,
+          summary: newContent,
+          vector: [1, 0],
+        }, {
+          updateSource: "telegram:/correct",
+          updateEvidence: "confirmed correction",
+          confidence: 1,
+        }, {
+          workspaceAliases: ownerCtx.workspaceAliases,
+          skipDriftGate: true,
+        });
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepStrictEqual(order, ["store", "supersede"]);
+    assert.equal(replacement.workspaceId, "workspace:v1:ws-a");
+    assert.equal(replacement.workspaceKey, "workspace:v1:ws-a");
+    assert.equal(checkAccess(ownerCtx, replacement).allowed, true);
+    assert.equal(checkAccess(otherWorkspaceCtx, replacement).allowed, false);
+  });
+
+  it("registered handlers use canonical confirmation helpers without identity fallback or prefix scans", () => {
+    const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const forgetStart = source.indexOf("const runForgetCommand");
+    const correctEnd = source.indexOf("const runMemoryFeedbackCommand", forgetStart);
+    const handlers = source.slice(forgetStart, correctEnd);
+    assert.match(
+      handlers,
+      /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\);[\s\S]*?checkMemoryAuth\(memoryCtx, commandCtx/,
+      "canonical context must resolve before authorization",
+    );
+    assert.match(handlers, /resolveConfirmationIdentity\(memoryCtx\)/);
+    assert.match(handlers, /completePendingConfirmation\(/);
+    assert.doesNotMatch(handlers, /resolveIdentity\(/);
+    assert.doesNotMatch(handlers, /nonce\.startsWith\(token\)/);
   });
 
   it("resolveIdentity tolerates alternate field names, nesting, and missing identity", () => {
