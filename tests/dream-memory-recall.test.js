@@ -10,7 +10,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { formatRelevantMemoriesContext } from "../lib/relevant-memory-context.js";
 import { lightDream } from "../lib/dreaming/light-dream.js";
-import { loadCandidateMemories } from "../lib/dreaming/rem-dream.js";
+import { buildRemPartition, loadCandidateMemories } from "../lib/dreaming/rem-dream.js";
 import { resolveHalfLifeDays } from "../lib/memory-dynamics.js";
 
 describe("Recall-Kennzeichnung für Träume", () => {
@@ -84,7 +84,11 @@ describe("Feedback-Spiralen-Guards", () => {
       { id: "d1", text: "geträumter Flur", vector: [0.2], createdAt: now, status: "active", memoryClass: "dream", scope: "agent-private", agentId: "dream-agent" },
     ];
     const db = { table: { query: () => ({ where: () => ({ limit: () => ({ toArray: async () => rows }) }) }) } };
-    const memories = await loadCandidateMemories(db, { weekStartMs: now - 1000, requestContext: context });
+    const memories = await loadCandidateMemories(db, {
+      weekStartMs: now - 1000,
+      requestContext: context,
+      aclPartition: buildRemPartition({ scope: "agent-private", agentId: "dream-agent", workspaceIdentity: "", ownerUserId: "" }, context),
+    });
     assert.deepStrictEqual(memories.map((m) => m.id), ["m1"]);
   });
 });

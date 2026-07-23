@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { buildSparseNeighborGraph, loadCandidateMemories, runRemDream, writeRemDreamToVault } from "../lib/dreaming/rem-dream.js";
+import { buildRemPartition, buildSparseNeighborGraph, loadCandidateMemories, runRemDream, writeRemDreamToVault } from "../lib/dreaming/rem-dream.js";
 import { appendDreamEcho, loadFreshDreamEcho } from "../lib/dream-echo.js";
+import { lightDream } from "../lib/dreaming/light-dream.js";
 
 const NOW = Date.now();
 const REQUEST_CONTEXT = Object.freeze({
@@ -14,6 +15,9 @@ const REQUEST_CONTEXT = Object.freeze({
   userPrincipal: "user:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   workspaceAliases: Object.freeze({ paths: Object.freeze([]), aliases: Object.freeze([]) }),
 });
+const WORKSPACE_PARTITION = buildRemPartition({
+  scope: "workspace", agentId: "agent-a", workspaceIdentity: "workspace:v1:workspace-a", ownerUserId: "",
+}, REQUEST_CONTEXT);
 
 function row(id, text, overrides = {}) {
   return {
@@ -54,9 +58,48 @@ test("REM candidate loading excludes foreign workspace and owner rows before pro
   const candidates = await loadCandidateMemories(dbFor(rows), {
     weekStartMs: NOW - 1_000,
     requestContext: REQUEST_CONTEXT,
+    aclPartition: WORKSPACE_PARTITION,
   });
 
   assert.deepEqual(candidates.map((candidate) => candidate.id), ["a1"]);
+});
+
+test("REM selects exactly one normalized ACL partition even when workspace and user rows are both accessible", async () => {
+  const partition = buildRemPartition({
+    scope: "workspace", agentId: "agent-a", workspaceIdentity: "workspace:v1:workspace-a", ownerUserId: "",
+  }, REQUEST_CONTEXT);
+  const rows = [
+    row("w1", "workspace material"),
+    row("u1", "owner material", { scope: "user", workspaceKey: "", ownerUserId: REQUEST_CONTEXT.userPrincipal }),
+  ];
+  const candidates = await loadCandidateMemories(dbFor(rows), {
+    weekStartMs: NOW - 1_000, requestContext: REQUEST_CONTEXT, aclPartition: partition,
+  });
+  assert.deepEqual(candidates.map((candidate) => candidate.id), ["w1"]);
+});
+
+test("REM owner partitions have distinct run, completion, lock, and vault identities", async (t) => {
+  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-rem-partitions-"));
+  t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+  const ownerA = buildRemPartition({ scope: "user", agentId: "agent-a", workspaceIdentity: "", ownerUserId: REQUEST_CONTEXT.userPrincipal }, REQUEST_CONTEXT);
+  const ownerBContext = { ...REQUEST_CONTEXT, userPrincipal: "user:v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
+  const ownerB = buildRemPartition({ scope: "user", agentId: "agent-a", workspaceIdentity: "", ownerUserId: ownerBContext.userPrincipal }, ownerBContext);
+  assert.notEqual(ownerA.key, ownerB.key);
+
+  const reportA = { weekOf: "2026-W01", patternsFound: 0, new: 0, stronger: 0, weaker: 0, disappeared: 0, aclPartition: ownerA };
+  const reportB = { ...reportA, aclPartition: ownerB };
+  const outputA = writeRemDreamToVault(reportA, [], workspaceDir);
+  const outputB = writeRemDreamToVault(reportB, [], workspaceDir);
+  assert.notEqual(outputA.path, outputB.path);
+  assert.match(readFileSync(outputA.path, "utf8"), new RegExp(`owner_user_id: ${REQUEST_CONTEXT.userPrincipal}`));
+  assert.match(readFileSync(outputB.path, "utf8"), new RegExp(`owner_user_id: ${ownerBContext.userPrincipal}`));
+
+  const completionKeys = [];
+  const completionStore = { hasCompletedRun(key) { completionKeys.push(key); return false; }, readPatterns: () => [], appendPatterns() {}, markRunCompleted() {} };
+  await runRemDream({ db: dbFor([]), callLlm: async () => "{}", neoStore: completionStore, workspaceKey: "workspace-a", agentId: "agent-a", requestContext: REQUEST_CONTEXT, aclPartition: ownerA, force: false });
+  await runRemDream({ db: dbFor([]), callLlm: async () => "{}", neoStore: completionStore, workspaceKey: "workspace-a", agentId: "agent-a", requestContext: ownerBContext, aclPartition: ownerB, force: false });
+  assert.equal(completionKeys.length, 2);
+  assert.notEqual(completionKeys[0], completionKeys[1]);
 });
 
 test("REM graph construction ignores a foreign vector neighbor before it can form an edge", async () => {
@@ -84,6 +127,7 @@ test("REM denies a missing owner context before any provider receives user-scope
     workspaceKey: "workspace-a",
     agentId: "agent-a",
     requestContext: { ...REQUEST_CONTEXT, userPrincipal: "" },
+    aclPartition: WORKSPACE_PARTITION,
     force: true,
   });
 
@@ -115,6 +159,7 @@ test("REM keeps the selected user ownership binding on its persisted dream memor
     workspaceKey: "workspace-a",
     agentId: "agent-a",
     requestContext: REQUEST_CONTEXT,
+    aclPartition: buildRemPartition({ scope: "user", agentId: "agent-a", workspaceIdentity: "", ownerUserId: REQUEST_CONTEXT.userPrincipal }, REQUEST_CONTEXT),
     embeddings: { embed: async () => [1, 0] },
     narrativeCfg: { enabled: true },
     force: true,
@@ -140,11 +185,33 @@ test("a protected REM echo is not loaded without its matching owner context", (t
   assert.equal(loadFreshDreamEcho(workspaceDir, { now: NOW, requestContext: REQUEST_CONTEXT })?.sentence, "Private owner dream echo.");
 });
 
+test("legacy or unbound dream echoes fail closed", (t) => {
+  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-unbound-echo-"));
+  t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+  appendDreamEcho(workspaceDir, { sentence: "legacy echo", createdAt: NOW });
+  assert.equal(loadFreshDreamEcho(workspaceDir, { now: NOW, requestContext: REQUEST_CONTEXT }), null);
+});
+
+test("light dreaming writes only a validated bound echo", async (t) => {
+  const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-light-bound-"));
+  t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+  const aclBindings = { scope: "workspace", agentId: "agent-a", workspaceIdentity: "workspace:v1:workspace-a", ownerUserId: "" };
+  await lightDream({
+    turns: ["one", "two", "three"].map((content) => ({ role: "user", content, agentId: "agent-a" })),
+    neoStore: { readReactions: () => [], appendDreams() {}, appendBehaviorCards() {} },
+    db: { search: async () => [] }, embeddings: { embed: async () => [1, 0] },
+    insightLlmCfg: {}, narrativeLlmCfg: {}, echoLlmCfg: {},
+    callLlm: async () => JSON.stringify(["bound light insight"]),
+    narrativeCfg: { enabled: true, storeAsMemory: false }, workspaceDir, aclBindings, requestContext: REQUEST_CONTEXT,
+  });
+  assert.equal(loadFreshDreamEcho(workspaceDir, { requestContext: REQUEST_CONTEXT })?.aclBindings?.scope, "workspace");
+});
+
 test("REM vault output retains the ownership binding for protected evidence", (t) => {
   const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-rem-vault-"));
   t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
   const aclBindings = { scope: "user", agentId: "agent-a", workspaceIdentity: "", ownerUserId: REQUEST_CONTEXT.userPrincipal };
-  const output = writeRemDreamToVault({ weekOf: "2026-W01", patternsFound: 1, new: 1, stronger: 0, weaker: 0, disappeared: 0 }, [{
+  const output = writeRemDreamToVault({ weekOf: "2026-W01", patternsFound: 1, new: 1, stronger: 0, weaker: 0, disappeared: 0, aclPartition: { ...aclBindings, key: "owner-partition" } }, [{
     patternName: "Owner pattern", trend: "neu", evidenceQuotes: ["owner-only evidence"], aclBindings,
   }], workspaceDir);
 
