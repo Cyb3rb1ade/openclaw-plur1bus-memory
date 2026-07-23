@@ -273,16 +273,12 @@ describe("Code-Fallbacks stimmen mit Schema-Defaults überein", () => {
     assert.strictEqual(parseFloat(m[1]), 5);
   });
 
-  it("index.js: maxPromptMemories fallback = 12", () => {
-    const m = indexSrc.match(/const\s+maxPromptMemories\s*=\s*recallCfg\.maxPromptMemories\s*\?\?\s*([0-9.]+)/);
-    assert.ok(m, "maxPromptMemories fallback nicht gefunden");
-    assert.strictEqual(parseFloat(m[1]), 12);
+  it("index.js: maxPromptMemories is bounded with fallback 12", () => {
+    assert.match(indexSrc, /const\s+maxPromptMemories\s*=\s*normalizeBoundedRecallInteger\(recallCfg\.maxPromptMemories,\s*12,\s*1,\s*100\)/);
   });
 
-  it("index.js: candidateTopK fallback = 40", () => {
-    const m = indexSrc.match(/const\s+candidateTopK\s*=\s*recallCfg\.candidateTopK\s*\?\?\s*([0-9.]+)/);
-    assert.ok(m, "candidateTopK fallback nicht gefunden");
-    assert.strictEqual(parseFloat(m[1]), 40);
+  it("index.js: candidateTopK is bounded with fallback 40", () => {
+    assert.match(indexSrc, /const\s+candidateTopK\s*=\s*normalizeBoundedRecallInteger\(recallCfg\.candidateTopK,\s*40,\s*1,\s*100\)/);
   });
 
   it("index.js: importanceBoost fallback = 0.3", () => {
