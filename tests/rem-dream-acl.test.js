@@ -145,7 +145,7 @@ test("REM keeps the selected user ownership binding on its persisted dream memor
   const stored = [];
   let call = 0;
 
-  await runRemDream({
+  const result = await runRemDream({
     db: { ...dbFor(rows), store: async (memory) => stored.push(memory) },
     callLlm: async () => {
       call += 1;
@@ -170,6 +170,7 @@ test("REM keeps the selected user ownership binding on its persisted dream memor
   assert.equal(stored[0].ownerUserId, REQUEST_CONTEXT.userPrincipal);
   assert.equal(stored[0].workspaceKey, "");
   assert.equal(stored[0].agentId, "agent-a");
+  assert.equal(result.trends[0].workspaceKey, "");
 });
 
 test("a protected REM echo is not loaded without its matching owner context", (t) => {
