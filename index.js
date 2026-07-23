@@ -37,7 +37,7 @@ import { performance } from "node:perf_hooks";
 // Shared modules (v1.9.0) — zentrale Logik für Plugin und Cron-Scripts
 import { distanceToScore } from "./lib/score.js";
 import { flushMetrics } from "./lib/metrics.js";
-import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary } from "./lib/text-utils.js";
+import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary, compressMemoriesForPrompt } from "./lib/text-utils.js";
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "./lib/memory-fact-quality.js";
 import {
@@ -153,6 +153,7 @@ import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
 import { applyImportanceBoost, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, mergeNamespaceRecallResults, computeUseAssociative, emitRetrievalLedger } from "./lib/recall-pipeline.js";
+import { applyRecallBudget, resolveRecallBudget } from "./lib/recall-budget.js";
 import {
   createRecallDecisionTrace,
   addTraceDecision,
@@ -647,6 +648,34 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
   };
 }
 
+function normalizeBoundedRecallInteger(value, fallback, minimum, maximum) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.floor(value)));
+}
+
+function resolveRuntimeRecallBudget(query, ceiling, adaptiveBudget) {
+  const cap = normalizeBoundedRecallInteger(ceiling, 12, 1, 100);
+  if (adaptiveBudget?.enabled !== true) return cap;
+  const tokenBudgetPct = Number.isFinite(adaptiveBudget.tokenBudgetPct)
+    ? Math.min(1, Math.max(0, adaptiveBudget.tokenBudgetPct))
+    : 0.3;
+  const resolved = resolveRecallBudget({
+    promptLength: String(query || "").length,
+    hasProjectSignals: /\b(project|plan|milestone|roadmap|deadline)\b/i.test(String(query || "")),
+    maxPromptMemories: cap,
+    tokenBudgetPct,
+  });
+  return Math.min(cap, Math.max(1, Math.floor(resolved.budget)));
+}
+
+function applyMergedRecallBudget(merged, budget) {
+  const effectiveBudget = normalizeBoundedRecallInteger(budget, 12, 1, 100);
+  const canonical = Array.isArray(merged.canonical) ? merged.canonical.slice(0, effectiveBudget) : [];
+  const remainingBudget = Math.max(0, effectiveBudget - canonical.length);
+  const memories = applyRecallBudget(merged.memories || [], { budget: remainingBudget }).selected;
+  return { ...merged, canonical, memories };
+}
+
 /**
  * Runs one existing recall pipeline per leased namespace and merges only after
  * every child settled, so a failed namespace cannot expose partial results.
@@ -730,13 +759,16 @@ async function runMergedNamespaceRecall(
         ...result.value.result,
       });
     }
-    const merged = mergeNamespaceRecallResults(namespaceResults, {
+    let merged = mergeNamespaceRecallResults(namespaceResults, {
       maxOut: baseParams.topN,
       canonicalMaxItems: baseParams.canonicalMaxItems,
       dedupEnabled: baseParams.dedupEnabled,
       dedupJaccard: baseParams.dedupJaccard,
       trace,
     });
+    if (baseParams.adaptiveBudget?.enabled === true) {
+      merged = applyMergedRecallBudget(merged, baseParams.budget);
+    }
     emitRetrievalLedger({
       retrievalLogger: baseParams.retrievalLogger,
       logger: baseParams.logger,
@@ -3567,8 +3599,11 @@ const plugin = {
     const canonicalEnabled = recallCfg.canonicalFirst   !== false; // default on
     const canonicalMinScore = recallCfg.canonicalMinScore ?? 0.30;
     const canonicalMaxItems = recallCfg.canonicalMaxItems ?? 5;
-    const maxPromptMemories = recallCfg.maxPromptMemories ?? 12;
-    const candidateTopK     = recallCfg.candidateTopK     ?? 40;
+    const maxPromptMemories = normalizeBoundedRecallInteger(recallCfg.maxPromptMemories, 12, 1, 100);
+    const candidateTopK     = normalizeBoundedRecallInteger(recallCfg.candidateTopK, 40, 1, 100);
+    const queryRefinerEnabled = recallCfg.queryRefinement?.enabled === true;
+    const adaptiveBudgetCfg = recallCfg.adaptiveBudget || {};
+    const semanticCompressionCfg = recallCfg.semanticCompression || {};
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
     const softBudgetMs      = recallCfg.softBudgetMs      ?? 35_000;
     const softBudgetFallback = recallCfg.softBudgetFallback !== false;
@@ -7120,7 +7155,8 @@ const plugin = {
                 agentId,
                 { ...memoryCtx, logger: api.logger },
                 async (readDbs) => {
-              const limit = params.limit || maxPromptMemories;
+              const limit = normalizeBoundedRecallInteger(params.limit, maxPromptMemories, 1, 100);
+              const recallBudget = resolveRuntimeRecallBudget(params.query, limit, adaptiveBudgetCfg);
               const assocCfg = cfg?.continuityEngine?.associativeRecall || {};
               const initializedReadDbs = [];
               for (const entry of readDbs) {
@@ -7155,7 +7191,8 @@ const plugin = {
                 embeddings,
                 workspaceDir: ctx?.workspaceDir,
                 topN: limit,
-                budget: limit,
+                budget: recallBudget,
+                adaptiveBudget: adaptiveBudgetCfg,
                 recallMinScore,
                 importanceBoost,
                 dedupEnabled,
@@ -7165,6 +7202,7 @@ const plugin = {
                 canonicalMaxItems,
                 reranker,
                 rerankCandidates,
+                candidateTopK,
                 rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
                 rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
                 summaryMaxWords,
@@ -7180,10 +7218,12 @@ const plugin = {
                 associativeEnabled: true,
                 graphConfig: {
                   graphHydrationRelevanceThreshold: assocCfg.graphHydrationRelevanceThreshold ?? 0.25,
+                  graphIndex: { enabled: assocCfg.graphIndex?.enabled !== false },
                 },
                 workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
                 agentId,
                 memoryCtx,
+                queryRefinerEnabled,
                 decisionTrace: trace,
                 retrievalLogger: (ledgerInfo) => {
                   try {
@@ -8061,7 +8101,8 @@ const plugin = {
             embeddings,
             workspaceDir: ctx?.workspaceDir,
             topN: maxPromptMemories,
-            budget: maxPromptMemories,
+            budget: resolveRuntimeRecallBudget(event.prompt, maxPromptMemories, adaptiveBudgetCfg),
+            adaptiveBudget: adaptiveBudgetCfg,
             recallMinScore: autoRecallMinScore,
             importanceBoost,
             dedupEnabled,
@@ -8071,6 +8112,7 @@ const plugin = {
             canonicalMaxItems,
             reranker,
             rerankCandidates,
+            candidateTopK,
             rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
             rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
             summaryMaxWords,
@@ -8090,10 +8132,12 @@ const plugin = {
               maxAssociatedResults: assocCfg.maxAssociatedResults ?? 40,
               minCumulativeRelevance: assocCfg.minCumulativeRelevance ?? 0.2,
               graphHydrationRelevanceThreshold: assocCfg.graphHydrationRelevanceThreshold ?? 0.25,
+              graphIndex: { enabled: assocCfg.graphIndex?.enabled !== false },
             } : {},
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             agentId,
             memoryCtx,
+            queryRefinerEnabled,
             decisionTrace: trace,
             retrievalLogger: (ledgerInfo) => {
               try {
@@ -8203,10 +8247,11 @@ const plugin = {
 
             if (patternCfg.enabled === true) {
               try {
+                const patternRecords = getNeoStore(ctx, event).readPatterns(100);
                 matchedPattern = await findBestPattern({
                   recentMemoryIds: ordered.map(r => r.entry.id),
                   threshold: patternCfg.patternThreshold ?? 0.7,
-                  patternRecords: [], // safe fallback; no pattern store yet in root
+                  patternRecords: Array.isArray(patternRecords) ? patternRecords : [],
                 });
                 if (tasteEnabled) {
                   const emotionalState = emotionalPool.get(agentId);
@@ -8483,11 +8528,36 @@ const plugin = {
             }
           } catch (_) { framedItems = associativeItems; }
 
-          const memoriesContext = formatRelevantMemoriesContext(framedItems, {
+          let promptItems = framedItems;
+          let promptSemanticLensItems = semanticLensItems;
+          if (semanticCompressionCfg.enabled === true) {
+            const allPromptItems = [...framedItems, ...semanticLensItems];
+            const tokenBudget = normalizeBoundedRecallInteger(
+              semanticCompressionCfg.tokenBudget,
+              240,
+              1,
+              1000,
+            );
+            const compressed = compressMemoriesForPrompt(
+              allPromptItems.map((item) => ({
+                entry: {
+                  id: item.id,
+                  text: item.display || "",
+                  summary: item.display || "",
+                  category: item.category,
+                  memoryClass: item.memoryClass,
+                },
+              })),
+              tokenBudget,
+            ).split("\n");
+            promptItems = allPromptItems.map((item, index) => ({ ...item, display: compressed[index] || item.display }));
+            promptSemanticLensItems = [];
+          }
+          const memoriesContext = formatRelevantMemoriesContext(promptItems, {
             fadedThreshold: resolveFadedThreshold(recallCfg),
             overlays,
             matchedPattern,
-            semanticLensMemories: semanticLensItems,
+            semanticLensMemories: promptSemanticLensItems,
             decisionTrace: traceEnabled ? trace : null,
             traceOptions: {
               includeInPrompt: traceInPrompt,
