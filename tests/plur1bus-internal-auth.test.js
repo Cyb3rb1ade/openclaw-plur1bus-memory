@@ -34,6 +34,7 @@ function makeApi(baseDbPath, configOverrides = {}) {
       neo: { enabled: true },
       obsidianBridge: { enabled: false },
       gc: { enabled: false },
+      security: { allowedUserIds: ["owner"] },
       ...configOverrides,
     },
     logger: { info: noop, warn: noop, error: noop, debug: noop },
@@ -151,7 +152,7 @@ describe("/plur1bus mutating command auth gates", () => {
     });
   });
 
-  it("keeps read-only skill review available in group chats", async () => {
+  it("blocks read-only skill review from group chats", async () => {
     await withPlugin(async ({ command, workspaceDir }) => {
       writeSkillProposal(workspaceDir);
 
@@ -161,8 +162,7 @@ describe("/plur1bus mutating command auth gates", () => {
         ...groupCtx,
       });
 
-      assert.doesNotMatch(result.text, /allowedUserIds/);
-      assert.match(result.text, /proposal-1|Danger Skill/);
+      assertBlocked(result);
     });
   });
 
