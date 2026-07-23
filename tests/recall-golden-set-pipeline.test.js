@@ -155,6 +155,30 @@ describe("Golden-Set: dedupResults boundary", () => {
 });
 
 describe("Golden-Set: runRecallPipeline budget / tiers", () => {
+  it("defers only the final display cap while retaining the physical candidate hard bound", async () => {
+    const rows = [
+      makeRow({ id: "deferred-a", text: "candidate a", distance: 0.1 }),
+      makeRow({ id: "deferred-b", text: "candidate b", distance: 0.2 }),
+      makeRow({ id: "deferred-c", text: "candidate c", distance: 0.3 }),
+    ];
+    const result = await runRecallPipeline({
+      query: "candidates",
+      dbTable: mockTable(rows),
+      embeddings: makeEmbeddings(),
+      topN: 1,
+      budget: 1,
+      deferFinalCap: true,
+      candidateHardLimit: 2,
+      recallMinScore: 0,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      dedupEnabled: true,
+      logger: silence(),
+    });
+    expectOrderedIds(result.memories, ["deferred-a", "deferred-b"]);
+  });
+
   it("enforces tier priority core > project > episodic in vector results", async () => {
     const rows = [
       makeRow({ id: "episodic", text: "episodic memory", category: "fact", distance: 0.1 }),
