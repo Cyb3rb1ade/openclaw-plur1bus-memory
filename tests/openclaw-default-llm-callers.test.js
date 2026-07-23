@@ -375,6 +375,9 @@ test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors
     createdAt: now,
     sourceTimestamp: now,
     status: "active",
+    scope: "workspace",
+    workspaceKey: "workspace:v1:rem-workspace",
+    agentId: "rem-agent",
   }));
   const features = [];
   const callLlm = async (_messages, cfg) => {
@@ -404,6 +407,11 @@ test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors
     },
     workspaceKey: "rem-workspace",
     agentId: "rem-agent",
+    requestContext: {
+      agentId: "rem-agent",
+      workspaceIdentity: "workspace:v1:rem-workspace",
+      workspaceAliases: { paths: [], aliases: [] },
+    },
     force: true,
     narrativeCfg: { enabled: true, storeAsMemory: false },
     workspaceDir,
