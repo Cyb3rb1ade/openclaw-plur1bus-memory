@@ -297,6 +297,11 @@ test("long /memory query uses its session runtime and recall-query owner route",
 test("exact-limit punctuation-free /memory input stays usable with merging disabled", async (t) => {
   const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-bounded-query-fallback-"));
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+  LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => makeVector();
+  t.after(() => {
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+  });
   const runtimeCalls = [];
   const pluginModule = await loadFreshPlugin();
   const api = createApi(baseDbPath, {
