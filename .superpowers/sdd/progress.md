@@ -330,3 +330,20 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
   Minor 0.
 - Work remains local on `fix/high-mid-audit-findings-continuation`; Main,
   `fix/high-mid-audit-findings`, PR #85, and Remote remain untouched.
+
+## 2026-07-23 — B13 Task 3 Wiki visibility and destructive audit
+
+- Commits `e238596`, `ca8fbc2`, `b74782f`, `2a34054`, and `12df055` close
+  Wiki lifecycle, object-ACL, non-enumeration, handler-validation, bounded
+  post-ACL selection, and destructive-audit path findings.
+- Invalid or missing arguments stop before routing, runtime LLM, pool, lease,
+  DB initialization, or provider work. Add/search/delete preserve canonical
+  ownership and agent-scoped embedding purpose.
+- Delete remains archive-first, awaits DB deletion, then writes exactly one
+  audit record. Canonical audit parent and target paths reject files,
+  directories in the wrong position, non-writable nodes, and symlinks before
+  mutation; true missing paths remain creatable.
+- Final focused gates: 51/51 Wiki cases and 29/29 handler/auth/adapter/default-
+  LLM cases. Independent specification and quality re-reviews both pass with
+  Critical 0 / Important 0.
+- Main, `fix/high-mid-audit-findings`, PR #85, and Remote remain untouched.
