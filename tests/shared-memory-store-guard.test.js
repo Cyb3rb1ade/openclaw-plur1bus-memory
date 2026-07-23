@@ -14,10 +14,10 @@ const source = { id: "11111111-1111-4111-8111-111111111111", agentId: "agent-1",
 describe("storeSharedMemory safety guard", () => {
   it("rejects core and neverForget memories without explicit sensitive approval", async () => {
     for (const extra of [{ memoryClass: "core" }, { neverForget: 1 }]) {
-      await assert.rejects(() => storeSharedMemory(db(), { ...source, ...extra }, { workspaceIdentity: "ws" }, { targetScope: "workspace", vector: [1, 2] }), /sensitive shared memory requires explicit approval/);
+      await assert.rejects(() => storeSharedMemory(db(), { ...source, ...extra }, { workspaceIdentity: "ws" }, { targetScope: "workspace", sourceAgentId: "agent-1", vector: [1, 2] }), /sensitive shared memory requires explicit approval/);
     }
   });
   it("rejects sensitive category and type independently", async () => {
-    await assert.rejects(() => storeSharedMemory(db(), { ...source, category: "note", type: "password" }, { workspaceIdentity: "ws" }, { targetScope: "workspace", vector: [1, 2] }), /sensitive shared memory requires explicit approval/);
+    await assert.rejects(() => storeSharedMemory(db(), { ...source, category: "note", type: "password" }, { workspaceIdentity: "ws" }, { targetScope: "workspace", sourceAgentId: "agent-1", vector: [1, 2] }), /sensitive shared memory requires explicit approval/);
   });
 });
