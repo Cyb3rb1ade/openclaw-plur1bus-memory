@@ -7,6 +7,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.2] — 2026-07-24 — Re-release
+
+Identical in content to 7.1.1. The 7.1.1 ClawHub registry release got stuck in an
+inconsistent server-side state (created but never listed); registry versions are
+immutable, so this re-release carries the same fixes under a fresh version.
+
 ## [7.1.1] — 2026-07-24 — Hotfix
 
 ### Fixed
