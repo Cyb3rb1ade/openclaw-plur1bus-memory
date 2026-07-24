@@ -1,7 +1,7 @@
-# Known Issues — v6.8.12
+# Known Issues — v7.1.0
 
-> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-06-30 (v6.8.12)
-> Release: v6.8.12 Current Baseline
+> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-07-24 (v7.1.0)
+> Release: v7.1.0 Current Baseline
 
 ---
 
@@ -21,7 +21,21 @@
 
 ---
 
-## 3. Over-Exports in neo-arch.js / obsidian-*.js
+## 3. Reranker-Scoring-Qualität
+
+**Beschreibung:** Ein bereits vor v7.1.0 bestehender Scoring-Fehler kann die
+Qualität bzw. Reihenfolge einzelner Reranker-Ergebnisse beeinträchtigen.
+
+**Impact:** Recall bleibt funktionsfähig und fällt bei Provider-Fehlern oder
+Timeouts auf die ungerankte Reihenfolge zurück. Das Problem betrifft die
+Ranking-Qualität, nicht die ACL-, Speicher- oder Installationssicherheit.
+
+**Status:** Offen — separat zu analysieren und zu beheben. Nicht durch v7.1.0
+eingeführt.
+
+---
+
+## 4. Over-Exports in neo-arch.js / obsidian-*.js
 
 **Beschreibung:** Mehr als 60 überflüssige Exports in `lib/neo-arch.js` und `lib/obsidian-*.js` führen zu Bundler-Warnungen und vergrößern die API-Oberfläche unnötig.
 
@@ -31,7 +45,7 @@
 
 ---
 
-## 4. ~~atomic-json.js: Reentrancy-Deadlock bei nested Updates~~ — ✅ Behoben
+## 5. ~~atomic-json.js: Reentrancy-Deadlock bei nested Updates~~ — ✅ Behoben
 
 **Beschreibung (original):** Verschachtelte `atomicJsonUpdate`-Aufrufe auf derselben Datei konnten zu einem Deadlock führen.
 
@@ -39,7 +53,7 @@
 
 ---
 
-## 5. ~~Scope-Owner-Bindung für `scope: "user"`~~ — ✅ Behoben
+## 6. ~~Scope-Owner-Bindung für `scope: "user"`~~ — ✅ Behoben
 
 **Beschreibung (original):** `user`-Scope-Records wurden teils wie private Inhalte behandelt, ohne den owner-bound Kontext explizit durch Authentifizierung/`userId` zu erzwingen.
 
@@ -53,6 +67,7 @@
 |-------|---------|--------|------------|
 | Embedding-Cache nicht hot-verdrahtet | Mittel | ✅ Behoben | v6.2.1 |
 | metricsDebounceMs hartcodiert | Niedrig | ✅ Behoben | v6.2.x |
+| Reranker-Scoring-Qualität | Mittel | Offen | — |
 | 60+ Over-Exports | Niedrig | Offen | — |
 | atomic-json Reentrancy-Deadlock | Niedrig-Mittel | ✅ Behoben | v6.x |
 | user-scope owner-bound Zugriff | Niedrig-Mittel | ✅ Behoben | v6.8.11 |
