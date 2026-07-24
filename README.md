@@ -2,20 +2,23 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**Current version: 7.0.0** — Publishes the humanization line through the GitHub tag `v7.0.0`; the package metadata and manifest are aligned to `7.0.0`. See [CHANGELOG](CHANGELOG.md) for full history.
+**PLUR1BUS 7.1.0 - Not just an agent. Yours.**
+
+Current version: **7.1.0** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.1.0`. See the [changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
-### New in v7.0.0 — Humanization: persona voice, afterthoughts, dream echoes
+### New in v7.1.0 — audited ownership, recall, and operations
 
-- **Persona voice with auto-applied evolution** — each agent gets a seeded idiolect as a managed workspace block; the weekly `persona-evolve` job now applies refinements directly (bounded: 12-bullet cap, seed-end boundary) instead of the old propose/accept flow.
-- **Afterthoughts & dream echoes** — delayed follow-ups after open-ended conversations and nightly-dream surfacing on first daily contact, both budgeted by a shared adaptive proactive governor.
-- **Recall confidence hedging & style directives** — uncertain recall is phrased as uncertain; mood, opinion, ask-back, and timezone-aware time-of-day directives shape replies.
-- **Fail-closed feature-cron automation** — bound agents receive only the jobs owned by explicitly enabled raw feature gates; delivery is provisioned only from validated effective routing.
-- **Telegram reaction rules (managed block)** — AGENTS.md files with reaction guidance get the fixed Telegram reaction set plus current-`message_id` targeting rules patched in automatically.
-- **Afterthought `NO_REPLY` contract** — skip runs reply with OpenClaw's silent token; existing crons are migrated automatically.
+- **Complete high/medium audit remediation (B1–B15)** — durable memory writes, timeout settlement, cancellation barriers, diagnostics, installer paths, operational maintenance, Obsidian mutations, and background jobs were hardened and regression-tested.
+- **Strict memory ownership** — private, workspace, and user data use canonical agent/workspace/user request contexts. Sharing is explicit, confirmation-bound, owner-bound, and isolated in separate storage pools; unbound or conflicting rows fail closed.
+- **Recall and namespace closure** — B12 Core and B12-P add secure read-only legacy access, globally bounded multi-namespace recall, adaptive budgets, compression, decision traces, and strict graph/provider authorization.
+- **OpenClaw owns the LLM choice** — PLUR1BUS feature routes inherit the effective target agent model unless a feature has a complete explicit direct-provider override. Hard-coded chat-model defaults were removed.
+- **Exact LLM result cache** — deterministic internal transforms can reuse validated, bounded, agent-scoped results without leaking prompts or credentials.
+- **Dependency and runtime baseline** — patched transitive dependencies and `sharp@0.35.3` close the dependency audit; PLUR1BUS now requires Node.js 22.5 or newer.
+- **Release verification** — the release baseline contains 3,260 tests (3,259 passed, 0 failed, 1 skipped) and `npm audit` reports 0 vulnerabilities.
 
 ### New in v6.9.10 — Maintenance progress and dedupe hardening
 
@@ -243,7 +246,33 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 PLUR1BUS requires Node.js 22.5 or newer.
 
-Drop into an OpenClaw extensions folder and restart the gateway:
+Install the immutable GitHub Release package:
+
+```bash
+openclaw plugins install \
+  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.1.0/cyb3rb1ade-plur1bus-memory-7.1.0.tgz
+```
+
+Or install the exact ClawHub release:
+
+```bash
+openclaw plugins install \
+  clawhub:@cyb3rb1ade/plur1bus-memory@7.1.0 \
+  --acknowledge-clawhub-risk
+```
+
+GitHub Packages requires an authenticated GitHub npm registry. After
+authenticating `@cyb3rb1ade` for `https://npm.pkg.github.com`, install and pin
+the exact package:
+
+```bash
+npm login --scope=@cyb3rb1ade --auth-type=legacy \
+  --registry=https://npm.pkg.github.com
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.1.0 --pin
+```
+
+For a source checkout, clone into the OpenClaw extensions folder and restart
+the gateway:
 
 ```bash
 git clone https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git \
@@ -251,12 +280,6 @@ git clone https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git \
 cd ~/.openclaw/extensions/memory-lancedb-namespaced
 npm install --omit=dev
 systemctl --user restart openclaw-gateway
-```
-
-Or, once published to npm:
-
-```bash
-npm install -g @cyb3rb1ade/plur1bus-memory
 ```
 
 Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
