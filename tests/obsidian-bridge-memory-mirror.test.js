@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createObsidianBridgeService } from "../lib/obsidian-bridge.js";
+import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 
 function makeVault(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -28,13 +29,32 @@ function memoryFile(vault, id) {
   return join(vault, "plur1bus", "memories", `${id}.md`);
 }
 
+function createTestService(config, options = {}) {
+  return createObsidianBridgeService(config, {
+    ...options,
+    mutationPolicyForWorkspace(workspace) {
+      return parseObsidianCommandPlan(["dashboards", "build"], {
+        memoryCtx: {
+          agentId: workspace.agentId,
+          workspaceIdentity: `workspace:v1:${workspace.workspaceId}`,
+        },
+        baseDbPath: workspace.path,
+        mode: "apply",
+        allowWrite: true,
+        vaultConfirmed: true,
+        actionConfirmed: true,
+      }).mutationPolicy;
+    },
+  });
+}
+
 describe("obsidian bridge LanceDB memory mirror", () => {
   it("rebuildDashboards coalesces overlapping rebuilds", async () => {
     const vault = makeVault("obs-mirror-reentrant-");
     let active = 0;
     let maxActive = 0;
     let calls = 0;
-    const service = createObsidianBridgeService({
+    const service = createTestService({
       enabled: true,
       dryRun: false,
       reviewRoot: "plur1bus",
@@ -65,7 +85,7 @@ describe("obsidian bridge LanceDB memory mirror", () => {
     const vault = makeVault("obs-mirror-main-");
     const id = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaa1";
     const calls = [];
-    const service = createObsidianBridgeService({
+    const service = createTestService({
       enabled: true,
       dryRun: false,
       watch: false,
@@ -98,7 +118,7 @@ describe("obsidian bridge LanceDB memory mirror", () => {
       "bbbbbbbb-1111-4111-8111-bbbbbbbbbbb4",
       "bbbbbbbb-1111-4111-8111-bbbbbbbbbbb5",
     ];
-    const service = createObsidianBridgeService({
+    const service = createTestService({
       enabled: true,
       dryRun: false,
       reviewRoot: "plur1bus",
@@ -127,7 +147,7 @@ describe("obsidian bridge LanceDB memory mirror", () => {
     const bernVault = makeVault("obs-mirror-bern-");
     const mainId = "cccccccc-1111-4111-8111-ccccccccccc1";
     const bernId = "dddddddd-1111-4111-8111-ddddddddddd1";
-    const service = createObsidianBridgeService({
+    const service = createTestService({
       enabled: true,
       dryRun: false,
       reviewRoot: "plur1bus",
@@ -153,7 +173,7 @@ describe("obsidian bridge LanceDB memory mirror", () => {
   it("rebuildDashboards is idempotent on a second loader-backed run", async () => {
     const vault = makeVault("obs-mirror-idem-");
     const id = "eeeeeeee-1111-4111-8111-eeeeeeeeeee1";
-    const service = createObsidianBridgeService({
+    const service = createTestService({
       enabled: true,
       dryRun: false,
       reviewRoot: "plur1bus",
@@ -177,7 +197,7 @@ describe("obsidian bridge LanceDB memory mirror", () => {
       const suffix = String(index + 1).padStart(12, "0");
       return memoryRecord(`ffffffff-1111-4111-8111-${suffix}`);
     });
-    const service = createObsidianBridgeService({
+    const service = createTestService({
       enabled: true,
       dryRun: false,
       reviewRoot: "plur1bus",
@@ -198,7 +218,7 @@ describe("obsidian bridge LanceDB memory mirror", () => {
   it("rebuildDashboards deduplicates duplicate memory ids before writing mirrors", async () => {
     const vault = makeVault("obs-mirror-dupe-");
     const id = "99999999-1111-4111-8111-999999999999";
-    const service = createObsidianBridgeService({
+    const service = createTestService({
       enabled: true,
       dryRun: false,
       reviewRoot: "plur1bus",
@@ -225,7 +245,7 @@ describe("obsidian bridge LanceDB memory mirror", () => {
   it("rebuildDashboards is stable when loader is missing or returns no records", async () => {
     const missingLoaderVault = makeVault("obs-mirror-no-loader-");
     const emptyLoaderVault = makeVault("obs-mirror-empty-loader-");
-    const serviceWithoutLoader = createObsidianBridgeService({
+    const serviceWithoutLoader = createTestService({
       enabled: true,
       dryRun: false,
       reviewRoot: "plur1bus",
@@ -233,7 +253,7 @@ describe("obsidian bridge LanceDB memory mirror", () => {
     }, {
       logger: { info() {}, warn() {} },
     });
-    const serviceWithEmptyLoader = createObsidianBridgeService({
+    const serviceWithEmptyLoader = createTestService({
       enabled: true,
       dryRun: false,
       reviewRoot: "plur1bus",

@@ -11,6 +11,7 @@ import {
   quickapplySummary,
   generateMemoryCardTemplate,
 } from "../lib/obsidian-control-room.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 describe("smoke-ux: U6 — normalizeReviewProfile", () => {
   it("maps adversarial to standard", () => {
@@ -37,7 +38,11 @@ describe("smoke-ux: U6 — normalizeReviewProfile", () => {
 describe("smoke-ux: U2 — writeCommandsMarkdown", () => {
   it("writes commands.md to vault and returns written:true", () => {
     const vaultPath = mkdtempSync(join(tmpdir(), "smoke-ux-u2-"));
-    const result = writeCommandsMarkdown({ vaultPath }, {});
+    const mutationPolicy = confirmedObsidianPolicy({
+      baseDbPath: vaultPath,
+      command: ["dashboards", "build"],
+    });
+    const result = writeCommandsMarkdown({ vaultPath }, { mutationPolicy });
     assert.strictEqual(result.written, true, "expected written:true");
     const content = readFileSync(join(vaultPath, "plur1bus", "commands.md"), "utf8");
     assert.ok(content.includes("plur1bus_type: command_reference"), "frontmatter present");

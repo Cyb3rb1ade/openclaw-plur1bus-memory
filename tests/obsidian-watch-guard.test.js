@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createObsidianBridgeService } from "../lib/obsidian-bridge.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 function makeService(overrides = {}) {
   const calls = [];
@@ -19,6 +20,14 @@ function makeService(overrides = {}) {
         return { actions: [] };
       },
       logger: { info() {}, warn() {} },
+      mutationPolicyForWorkspace(workspace) {
+        return confirmedObsidianPolicy({
+          baseDbPath: workspace.path,
+          agentId: workspace.agentId,
+          workspaceIdentity: `workspace:v1:${workspace.workspaceId}`,
+          command: ["dashboards", "build"],
+        });
+      },
       ...overrides.options,
     },
   );

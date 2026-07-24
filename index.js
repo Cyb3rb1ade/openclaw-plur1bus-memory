@@ -37,7 +37,7 @@ import { performance } from "node:perf_hooks";
 // Shared modules (v1.9.0) — zentrale Logik für Plugin und Cron-Scripts
 import { distanceToScore } from "./lib/score.js";
 import { flushMetrics } from "./lib/metrics.js";
-import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary } from "./lib/text-utils.js";
+import { tokenize, jaccardSimilarity, cosineSimilarityVec, generateSummary as libGenerateSummary, compressMemorySlotsForPrompt } from "./lib/text-utils.js";
 import { MEMORY_CATEGORIES, MEMORY_ORIGINS, MEMORY_SCOPES, categorizeMemory, categorizeMemoryWithReason } from "./lib/categorize.js";
 import { computeMemoryImportance, shouldPromoteMemory } from "./lib/memory-fact-quality.js";
 import {
@@ -53,6 +53,8 @@ import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.j
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
 import { loadLinkIndex } from "./lib/obsidian/link-index.js";
 import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
+import { mutationAllowed, parseObsidianCommandPlan } from "./lib/obsidian-mutation-policy.js";
+import { isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
 import { renderStatus } from "./lib/telegram-commands/status.js";
 import { collectStatusData } from "./lib/telegram-commands/status-data.js";
 import {
@@ -66,9 +68,14 @@ import {
 import {
   parseQuery as parseMemoryQuery,
   formatResults as formatMemoryResults,
-  queryMemory,
+  queryMemoryAcrossAccessPools,
   parseMemoryFeedback,
 } from "./lib/telegram-commands/memory-query.js";
+import { withAccessReadDbs } from "./lib/shared-memory.js";
+import {
+  migrateLegacySharedRows,
+  parseLegacyMigrationArgs,
+} from "./lib/shared-memory-migration.js";
 import { recordFeedback } from "./lib/feedback-log.js";
 import {
   parseCorrection,
@@ -79,6 +86,7 @@ import {
   renderForgetResult,
   renderCorrectResult,
   archiveCard,
+  shareCard,
 } from "./lib/telegram-commands/memory-edit.js";
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
@@ -121,7 +129,11 @@ import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "./lib/setup/config-c
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
-import { runWikiCommand } from "./lib/wiki-command.js";
+import {
+  checkWikiAuth,
+  parseWikiCommandInput,
+  runWikiCommand,
+} from "./lib/wiki-command.js";
 import { checkAccess } from "./lib/acl-middleware.js";
 import {
   buildMemoryAccountTopology,
@@ -132,6 +144,7 @@ import {
   resolveHostHookMemoryContext,
   resolveMemoryRequestContext,
   resolveToolMemoryRequestContext,
+  normalizeWorkspaceTarget,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog } from "./lib/sql-safety.js";
 import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
@@ -143,6 +156,7 @@ import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
 import { applyImportanceBoost, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, mergeNamespaceRecallResults, computeUseAssociative, emitRetrievalLedger } from "./lib/recall-pipeline.js";
+import { applyRecallBudget, resolveRecallBudget } from "./lib/recall-budget.js";
 import {
   createRecallDecisionTrace,
   addTraceDecision,
@@ -237,7 +251,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { buildRemPartition, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
 import {
   buildEdgesForSession,
@@ -256,6 +270,7 @@ import {
   sessionKeyFrom,
 } from "./lib/reply-outcome-tracking.js";
 import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
+import { SharedMemoryPool } from "./lib/shared-memory-pool.js";
 import { resolveNamespaceLayout } from "./lib/namespace-config.js";
 import {
   extractMediaOutputIds,
@@ -408,11 +423,15 @@ function addSemanticDiscoveryStats(total, result = {}) {
   return total;
 }
 
-async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defaultAgentId }) {
+async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defaultAgentId, mutationPolicy }) {
   const discoveryCfg = semVaultCfg?.graphLinks?.semanticDiscovery || {};
   const batchSize = Math.max(1, Math.min(Number(discoveryCfg.batchSize || 500), 5000));
   let remaining = Math.max(1, Number(discoveryCfg.maxPerRun || 500));
   const total = semanticDiscoveryStats();
+  if (!mutationAllowed(mutationPolicy, "semantic_index_write")
+    || !mutationAllowed(mutationPolicy, "vault_write")) {
+    return { ...total, blocked: true, reason: "bound_confirmation_required" };
+  }
 
   const scanBatches = typeof db.scanActiveBatches === "function"
     ? db.scanActiveBatches({ batchSize })
@@ -420,13 +439,15 @@ async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defa
 
   for await (const lancedbRecords of scanBatches) {
     if (!Array.isArray(lancedbRecords) || lancedbRecords.length === 0) continue;
-    await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger });
+    await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger, mutationPolicy });
     const result = await discoverSemanticLinks(semVaultCfg, lancedbRecords, {
       db,
       pool,
       logger,
       defaultAgentId,
       maxPerRun: remaining,
+      mutationPolicy,
+      confirm: true,
     });
     addSemanticDiscoveryStats(total, result);
     const consumed = (result.processed || 0) + (result.skipped || 0) + (result.unchanged || 0) + (result.errors || 0);
@@ -636,6 +657,34 @@ function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
   };
 }
 
+function normalizeBoundedRecallInteger(value, fallback, minimum, maximum) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.floor(value)));
+}
+
+function resolveRuntimeRecallBudget(query, ceiling, adaptiveBudget) {
+  const cap = normalizeBoundedRecallInteger(ceiling, 12, 1, 100);
+  if (adaptiveBudget?.enabled !== true) return cap;
+  const tokenBudgetPct = Number.isFinite(adaptiveBudget.tokenBudgetPct)
+    ? Math.min(1, Math.max(0, adaptiveBudget.tokenBudgetPct))
+    : 0.3;
+  const resolved = resolveRecallBudget({
+    promptLength: String(query || "").length,
+    hasProjectSignals: /\b(project|plan|milestone|roadmap|deadline)\b/i.test(String(query || "")),
+    maxPromptMemories: cap,
+    tokenBudgetPct,
+  });
+  return Math.min(cap, Math.max(1, Math.floor(resolved.budget)));
+}
+
+function applyMergedRecallBudget(merged, budget) {
+  const effectiveBudget = normalizeBoundedRecallInteger(budget, 12, 1, 100);
+  const canonical = Array.isArray(merged.canonical) ? merged.canonical.slice(0, effectiveBudget) : [];
+  const remainingBudget = Math.max(0, effectiveBudget - canonical.length);
+  const memories = applyRecallBudget(merged.memories || [], { budget: remainingBudget }).selected;
+  return { ...merged, canonical, memories };
+}
+
 /**
  * Runs one existing recall pipeline per leased namespace and merges only after
  * every child settled, so a failed namespace cannot expose partial results.
@@ -657,18 +706,19 @@ async function runMergedNamespaceRecall(
   if (!Array.isArray(readDbs) || readDbs.length === 0) {
     return { queryVector: undefined, canonical: [], memories: [], trace };
   }
-  if (readDbs.length === 1) {
-    return runRecallPipeline({
-      ...baseParams,
-      dbTable: readDbs[0].db.table,
-      strictReadErrors: strictReadErrors || baseParams.strictReadErrors === true,
-    });
-  }
-
+  const providerEmbeddings = baseParams.embeddings;
+  const requestEmbeddings = Object.freeze({
+    embedQuery: (text) => typeof providerEmbeddings.embedQuery === "function"
+      ? providerEmbeddings.embedQuery(text, { agentId: baseParams.agentId })
+      : providerEmbeddings.embed(text, { agentId: baseParams.agentId }),
+    embed: (text) => providerEmbeddings.embed(text, { agentId: baseParams.agentId }),
+  });
   const timerConfig = phaseTimer?.summary?.() || {};
   phaseTimer?.start("namespace-recall");
   try {
-    const settled = await Promise.allSettled(readDbs.map(async ({ namespace, db }, index) => {
+    const requestNow = Date.now();
+    const canonicalSourceIndex = readDbs.findIndex((source) => source.sourceKind === "private");
+    const settled = await Promise.allSettled(readDbs.map(async ({ namespace, sourceKind, optional, db }, index) => {
       const childTrace = trace
         ? createNamespaceChildRecallTrace(trace, baseParams.query)
         : undefined;
@@ -677,31 +727,51 @@ async function runMergedNamespaceRecall(
         hardTimeoutMs: timerConfig.hardTimeoutMs,
         logger: baseParams.logger,
       });
+      const childStrictReadErrors = readDbs.length === 1
+        ? (strictReadErrors || baseParams.strictReadErrors === true)
+        : optional !== true;
       const result = await runRecallPipeline({
         ...baseParams,
+        embeddings: requestEmbeddings,
         dbTable: db.table,
         phaseTimer: childTimer,
         decisionTrace: childTrace,
-        strictReadErrors: true,
-        canonicalEnabled: index === 0 ? baseParams.canonicalEnabled : false,
+        strictReadErrors: childStrictReadErrors,
+        canonicalEnabled: index === canonicalSourceIndex ? baseParams.canonicalEnabled : false,
         retrievalLogger: null,
+        deferFinalCap: true,
+        candidateHardLimit: 100,
+        now: requestNow,
       });
-      return { namespace, result };
+      return { namespace, sourceKind, optional, result };
     }));
-    const failure = combineNamespaceRecallFailures(settled);
+    const requiredSettled = settled.filter((result, index) => readDbs[index].optional !== true);
+    const failure = combineNamespaceRecallFailures(requiredSettled);
     if (failure) throw failure;
 
-    const namespaceResults = settled.map((result) => ({
-      namespace: result.value.namespace,
-      ...result.value.result,
-    }));
-    const merged = mergeNamespaceRecallResults(namespaceResults, {
+    const namespaceResults = [];
+    for (let index = 0; index < settled.length; index++) {
+      const result = settled[index];
+      if (result.status === "rejected") {
+        trySafeWarn(baseParams.logger, `namespace-recall.${readDbs[index].namespace}`, result.reason);
+        continue;
+      }
+      namespaceResults.push({
+        namespace: result.value.namespace,
+        sourceKind: result.value.sourceKind,
+        ...result.value.result,
+      });
+    }
+    let merged = mergeNamespaceRecallResults(namespaceResults, {
       maxOut: baseParams.topN,
       canonicalMaxItems: baseParams.canonicalMaxItems,
       dedupEnabled: baseParams.dedupEnabled,
       dedupJaccard: baseParams.dedupJaccard,
       trace,
     });
+    if (baseParams.adaptiveBudget?.enabled === true) {
+      merged = applyMergedRecallBudget(merged, baseParams.budget);
+    }
     emitRetrievalLedger({
       retrievalLogger: baseParams.retrievalLogger,
       logger: baseParams.logger,
@@ -1896,7 +1966,7 @@ function deriveExpectedCanonicalTarget(path) {
 }
 
 /** Per-agent MemoryDB cache with callback-scoped operation leases. */
-class AgentDbPool {
+export class AgentDbPool {
   /**
    * @param {string} basePath Validated namespace base path.
    * @param {number} vectorDim Vector dimension.
@@ -2728,8 +2798,8 @@ function parseFeatureCronBootstrapLastPlanCreateCount(stdout) {
   }
 }
 
-function findNeoRecord(store, id) {
-  return findLatestNeoRecord(store, id);
+function findNeoRecord(store, id, requester = {}) {
+  return findLatestNeoRecord(store, id, requester);
 }
 
 function summarizeNeoStore(store) {
@@ -3260,6 +3330,146 @@ function makeReactionsCapabilityChecker(api) {
   };
 }
 
+/**
+ * Parse a text confirmation command without accepting shortened nonce prefixes.
+ * @param {unknown} args Raw command arguments.
+ * @returns {{requested: boolean, nonce: string, error?: string}} Parsed confirmation intent.
+ */
+export function parseConfirmationCommand(args) {
+  const input = String(args || "").trim();
+  if (!/^confirm(?:\s|:|$)/i.test(input)) {
+    return { requested: false, nonce: "" };
+  }
+  const match = input.match(/^confirm(?:\s+|:)([0-9a-fA-F-]+)$/i);
+  if (!match) return { requested: true, nonce: "", error: "invalid_format" };
+  try {
+    return { requested: true, nonce: safeUuid(match[1]) };
+  } catch {
+    return { requested: true, nonce: "", error: "invalid_format" };
+  }
+}
+
+/**
+ * Resolve the exact explicit identity tuple used for confirmation creation and completion.
+ * @param {object} memoryCtx Canonical Task 1 memory request context.
+ * @returns {{userId: string|undefined, chatId: string}} Confirmation identity binding.
+ */
+export function resolveConfirmationIdentity(memoryCtx) {
+  const confirmationChatId = memoryCtx?.conversationPrincipal || memoryCtx?.chatId || "";
+  if (!confirmationChatId) throw new Error("memory confirmation requires a verified conversation");
+  return {
+    userId: memoryCtx?.userId,
+    chatId: confirmationChatId,
+  };
+}
+
+const MAX_PENDING_CONFIRMATIONS = 1024;
+
+/**
+ * Remove one pending confirmation and its matching nonce index atomically.
+ * @param {Map<string, object>} confirmationStore Pending confirmation records.
+ * @param {Map<string, string>} confirmationIndex Exact nonce-to-record-key index.
+ * @param {string} key Confirmation record key.
+ * @param {object} [pending] Confirmation record when already read.
+ */
+function deletePendingConfirmation(confirmationStore, confirmationIndex, key, pending = confirmationStore.get(key)) {
+  confirmationStore.delete(key);
+  const nonce = pending?.nonce;
+  if (nonce && confirmationIndex.get(nonce) === key) confirmationIndex.delete(nonce);
+}
+
+/**
+ * Remove expired confirmation records before insertion or lookup.
+ * @param {Map<string, object>} confirmationStore Pending confirmation records.
+ * @param {Map<string, string>} confirmationIndex Exact nonce-to-record-key index.
+ * @returns {Set<string>} Nonces removed because they had expired.
+ */
+function sweepExpiredPendingConfirmations(confirmationStore, confirmationIndex) {
+  const expiredNonces = new Set();
+  const now = Date.now();
+  for (const [key, pending] of confirmationStore) {
+    if (Number(pending?.expiresAt) <= now) {
+      if (pending?.nonce) expiredNonces.add(pending.nonce);
+      deletePendingConfirmation(confirmationStore, confirmationIndex, key, pending);
+    }
+  }
+  return expiredNonces;
+}
+
+/**
+ * Store a pending confirmation under its exact nonce and nonce+target keys.
+ * @param {Map<string, object>} confirmationStore Pending confirmation records.
+ * @param {Map<string, string>} confirmationIndex Exact nonce-to-record-key index.
+ * @param {object} pending Confirmation returned by createConfirmation().
+ * @returns {object} The stored confirmation.
+ */
+export function rememberPendingConfirmation(confirmationStore, confirmationIndex, pending) {
+  const nonce = safeUuid(pending?.nonce);
+  const targetId = safeUuid(pending?.targetId);
+  const key = `${nonce}:${targetId}`;
+  sweepExpiredPendingConfirmations(confirmationStore, confirmationIndex);
+  const previousKey = confirmationIndex.get(nonce);
+  if (previousKey && previousKey !== key) {
+    deletePendingConfirmation(confirmationStore, confirmationIndex, previousKey);
+  }
+  while (confirmationStore.size >= MAX_PENDING_CONFIRMATIONS) {
+    const oldest = confirmationStore.entries().next().value;
+    if (!oldest) break;
+    deletePendingConfirmation(confirmationStore, confirmationIndex, oldest[0], oldest[1]);
+  }
+  confirmationStore.set(key, pending);
+  confirmationIndex.set(nonce, key);
+  return pending;
+}
+
+/**
+ * Redeem one exact pending confirmation without scanning or consuming mismatches.
+ * @param {object} options Completion inputs.
+ * @param {Map<string, object>} options.confirmationStore Pending confirmation records.
+ * @param {Map<string, string>} options.confirmationIndex Exact nonce-to-record-key index.
+ * @param {string} options.expectedCommand Required command name.
+ * @param {object} options.memoryCtx Canonical Task 1 memory request context.
+ * @param {string} options.nonce Complete canonical UUID nonce.
+ * @returns {{pending?: object, error?: string}} Completion result.
+ */
+export function completePendingConfirmation({
+  confirmationStore,
+  confirmationIndex,
+  expectedCommand,
+  memoryCtx,
+  nonce,
+}) {
+  try {
+    safeUuid(nonce);
+  } catch {
+    return { error: "invalid_format" };
+  }
+  const expiredNonces = sweepExpiredPendingConfirmations(confirmationStore, confirmationIndex);
+  if (expiredNonces.has(nonce)) return { error: "security.expired" };
+  const key = confirmationIndex.get(nonce);
+  if (!key) return { error: "not_found_or_expired" };
+  const pending = confirmationStore.get(key);
+  if (
+    !pending
+    || pending.nonce !== nonce
+    || pending.command !== expectedCommand
+    || key !== `${nonce}:${pending.targetId}`
+  ) {
+    return { error: "not_found_or_expired" };
+  }
+  const result = validateConfirmation(
+    pending.callbackData,
+    confirmationStore,
+    resolveConfirmationIdentity(memoryCtx),
+  );
+  if (!result.valid) {
+    if (!confirmationStore.has(key)) confirmationIndex.delete(nonce);
+    return { error: result.reason || "invalid" };
+  }
+  deletePendingConfirmation(confirmationStore, confirmationIndex, key, pending);
+  return { pending };
+}
+
 const plugin = {
   id: "memory-lancedb-namespaced",
   name: "Memory (LanceDB, per-Agent)",
@@ -3270,10 +3480,31 @@ const plugin = {
     if (!registrationDependencies || typeof registrationDependencies !== "object" || Array.isArray(registrationDependencies)) {
       throw new TypeError("plugin registration dependencies must be an object");
     }
-    const { importRouting } = registrationDependencies;
+    const {
+      importRouting,
+      commandRuntimeHooks = null,
+      handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand,
+      shareCard: registeredShareCard = shareCard,
+    } = registrationDependencies;
     if (importRouting !== undefined && typeof importRouting !== "function") {
       throw new TypeError("importRouting must be a function");
     }
+    if (commandRuntimeHooks !== null && (typeof commandRuntimeHooks !== "object" || Array.isArray(commandRuntimeHooks))) {
+      throw new TypeError("commandRuntimeHooks must be an object when provided");
+    }
+    if (registeredObsidianCommandHandler !== handleObsidianBridgeCommand && typeof registeredObsidianCommandHandler !== "function") {
+      throw new TypeError("handleObsidianBridgeCommand must be a function when provided");
+    }
+    if (typeof registeredShareCard !== "function") {
+      throw new TypeError("shareCard must be a function when provided");
+    }
+    const emitCommandRuntimeHook = (name, value) => {
+      const hook = commandRuntimeHooks?.[name];
+      if (hook !== undefined && typeof hook !== "function") {
+        throw new TypeError(`commandRuntimeHooks.${name} must be a function when provided`);
+      }
+      return hook?.(value);
+    };
     const rawPluginConfig = api.pluginConfig || {};
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
@@ -3371,8 +3602,11 @@ const plugin = {
     const canonicalEnabled = recallCfg.canonicalFirst   !== false; // default on
     const canonicalMinScore = recallCfg.canonicalMinScore ?? 0.30;
     const canonicalMaxItems = recallCfg.canonicalMaxItems ?? 5;
-    const maxPromptMemories = recallCfg.maxPromptMemories ?? 12;
-    const candidateTopK     = recallCfg.candidateTopK     ?? 40;
+    const maxPromptMemories = normalizeBoundedRecallInteger(recallCfg.maxPromptMemories, 12, 1, 100);
+    const candidateTopK     = normalizeBoundedRecallInteger(recallCfg.candidateTopK, 40, 1, 100);
+    const queryRefinerEnabled = recallCfg.queryRefinement?.enabled === true;
+    const adaptiveBudgetCfg = recallCfg.adaptiveBudget || {};
+    const semanticCompressionCfg = recallCfg.semanticCompression || {};
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
     const softBudgetMs      = recallCfg.softBudgetMs      ?? 35_000;
     const softBudgetFallback = recallCfg.softBudgetFallback !== false;
@@ -3678,7 +3912,18 @@ const plugin = {
       }
       return workspaceKey;
     };
-    const getNeoStore = (ctx = {}, event = {}) => createNeoStore(neoRoot, rememberNeoWorkspace(ctx, event));
+    const getNeoStore = (ctx = {}, event = {}, purpose = "general") => {
+      const workspaceKey = rememberNeoWorkspace(ctx, event);
+      emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
+      return createNeoStore(neoRoot, workspaceKey);
+    };
+    const neoRequester = (ctx = {}, event = {}) => ({
+      requesterAgentId: [ctx?.agentId, event?.agentId].find(value => typeof value === "string" && value.trim()) || "",
+      // ACL binding may not inherit routing defaults; an omitted trusted binding fails closed.
+      requesterWorkspaceKey: [ctx?.workspaceKey, event?.workspaceKey, ctx?.workspaceId, event?.workspaceId]
+        .find(value => typeof value === "string" && value.trim()) || "",
+      requesterOwnerId: [ctx?.ownerId, event?.ownerId, ctx?.userId, event?.userId].find(value => typeof value === "string" && value.trim()) || "",
+    });
     const snapshotNeoContent = (content) => {
       if (typeof content === "string") return content;
       if (!Array.isArray(content)) return "";
@@ -3730,6 +3975,26 @@ const plugin = {
     };
 
     const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
+    const sharedMemoryPool = new SharedMemoryPool(namespaceLayout.baseDir, vectorDim, AgentDbPool, api.logger);
+    const legacyMigrationShutdown = new AbortController();
+    if (commandRuntimeHooks) {
+      const withDb = pool.withDb.bind(pool);
+      pool.withDb = async (agentId, operation, ...args) => withDb(agentId, async (db, ...operationArgs) => {
+        emitCommandRuntimeHook("onPoolAcquire", { agentId });
+        const init = db.init?.bind(db);
+        if (init) {
+          db.init = async (...initArgs) => {
+            emitCommandRuntimeHook("onDbInit", { agentId });
+            return init(...initArgs);
+          };
+        }
+        try {
+          return await operation(db, ...operationArgs);
+        } finally {
+          if (init) db.init = init;
+        }
+      }, ...args);
+    }
     const emotionalPool = createEmotionalStatePool({
       temperaments: emotionCfg.temperaments || {},
       moodInfluence: emotionMoodInfluence,
@@ -3768,6 +4033,16 @@ const plugin = {
           cacheBasePath: baseDbPath,
           logger: api.logger,
         });
+    if (commandRuntimeHooks) {
+      for (const method of ["embed", "embedQuery", "embedPassage", "embedBatch"]) {
+        if (typeof embeddings[method] !== "function") continue;
+        const original = embeddings[method].bind(embeddings);
+        embeddings[method] = async (...args) => {
+          emitCommandRuntimeHook("onEmbed", { method });
+          return original(...args);
+        };
+      }
+    }
 
     // Reranker (optional — provider-aware since v3.1)
     // Cohere reranker — lokaler Fallback nur wenn fallbackProvider="local-transformers" explizit gesetzt
@@ -4252,6 +4527,29 @@ const plugin = {
     if (obsidianBridgeEnabled) {
       const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
         logger: api.logger,
+        mutationPolicyForWorkspace: (workspace) => {
+          const workspaceIdentity = normalizeWorkspaceTarget(
+            workspace.workspaceId,
+            "Obsidian service workspace",
+          );
+          const memoryCtx = {
+            agentId: workspace.agentId,
+            workspaceIdentity,
+            workspaceId: workspaceIdentity,
+          };
+          return parseObsidianCommandPlan(["dashboards", "build"], {
+            memoryCtx,
+            baseDbPath,
+            mode: obsidianBridgeCfg.mode,
+            dryRun: obsidianBridgeCfg.dryRun,
+            allowWrite: obsidianBridgeCfg.allowWrite,
+            vaultConfirmed: isOwnedVaultConfirmed({
+              baseDbPath,
+              memoryCtx,
+              vaultPath: workspace.path,
+            }),
+          }).mutationPolicy;
+        },
         memoryStore: async ({ workspace, payload }) => {
           const memoryCtx = resolveMemoryRequestContext({
             agentId: workspace.agentId,
@@ -4322,17 +4620,21 @@ const plugin = {
       if (neoEnabled && typeof api.registerMemoryCorpusSupplement === "function") {
         api.registerMemoryCorpusSupplement({
           async search(params) {
-            const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey });
+            const requester = neoRequester({ agentId: params?.agentId, ownerId: params?.ownerId || params?.userId }, { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey });
+            const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey });
             const workspaceKey = workspaceKeyFromContext({}, {
-              event: { agentSessionKey: params?.agentSessionKey },
+              event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
               runtime: api.runtime,
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
-            const items = [...store.readCandidates(500), ...store.readBehaviorCards(200)];
-            const lanes = routeNeoRecall(items, params?.query || "", { maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
+            const items = [...store.readCandidates(500, requester), ...store.readBehaviorCards(200, requester)];
+            let queryVector = null;
+            try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(params?.query || "", { agentId: requester.requesterAgentId }) : embeddings.embed(params?.query || "", { agentId: requester.requesterAgentId })); }
+            catch (error) { api.logger?.debug?.(`plur1bus-neo: corpus query embedding unavailable: ${String(error)}`); }
+            const lanes = routeNeoRecall(items, params?.query || "", { ...requester, queryVector, maxPerLane: Math.max(1, Math.ceil((params?.maxResults || 8) / 4)) });
             return Object.entries(lanes)
               .flatMap(([lane, rows]) => rows.map(row => ({ lane, row })))
               .sort((a, b) => b.row.score - a.row.score)
@@ -4352,17 +4654,18 @@ const plugin = {
               }));
           },
           async get(params) {
+            const requester = neoRequester({ agentId: params?.agentId, ownerId: params?.ownerId || params?.userId }, { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey });
             const workspaceKey = workspaceKeyFromContext({}, {
-              event: { agentSessionKey: params?.agentSessionKey },
+              event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
               runtime: api.runtime,
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
-            const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey });
+            const store = getNeoStore({}, { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey });
             const id = String(params?.lookup || "").split("/").pop();
-            const record = findNeoRecord(store, id);
+            const record = findNeoRecord(store, id, requester);
             if (!record) return null;
             return {
               corpus: "plur1bus",
@@ -4382,6 +4685,7 @@ const plugin = {
       }
 
       const resolveCommandLocale = (commandCtx) => {
+        emitCommandRuntimeHook("onLocale", { commandCtx });
         const messages = commandCtx?.messages || [];
         const lang = resolveLocale({ ctx: commandCtx, messages, fallback: "en" });
         const toneHint = commandCtx?.workspaceDir ? readSoulToneCached(commandCtx.workspaceDir) : null;
@@ -4409,20 +4713,82 @@ const plugin = {
           const origin = String(commandCtx?.origin || commandCtx?.source || commandCtx?.kind || "").toLowerCase();
           return channel === "cron" || origin === "cron";
         };
+        const resolveCronMemoryContext = async (commandCtx) => {
+          const agentId = safeAgentId(commandCtx?.agentId || "default");
+          const workspaceDir = await api.runtime.agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
+          return resolveMemoryRequestContext({
+            agentId,
+            workspaceDir,
+            channel: "cron",
+            accountId: "cron",
+          }, { workspaceAliases: memoryWorkspaceAliases });
+        };
+        // Chat command dispatch is deliberately deny-by-classification: a new
+        // action must be added to one of these predicates before it may acquire
+        // a store or other memory-bearing dependency.
+        const SENSITIVE_READ_ACTIONS = new Set([
+          "behavior", "curation", "doctor", "dreaming", "embeddings", "memory",
+          "origin", "persona", "recall", "reminder", "reminders", "skills", "start",
+          "state", "status", "temperament",
+        ]);
+        const isSensitiveChatRead = (actionKey, subKey) => {
+          if (actionKey === "neo") return subKey === "workspaces";
+          if (!SENSITIVE_READ_ACTIONS.has(actionKey)) return false;
+          if (actionKey === "skills") return ["review", "list", "show"].includes(subKey);
+          if (actionKey === "reminder" || actionKey === "reminders") return ["", "list", "show", "help"].includes(subKey);
+          if (actionKey === "memory") return !["promote", "demote", "prune", "tombstone", "disable-overlay", "supersede-overlay"].includes(subKey);
+          if (actionKey === "behavior") return !["promote", "demote", "prune"].includes(subKey);
+          return true;
+        };
+        const isDestructiveAction = (actionKey, subKey, tokens) => (
+          actionKey === "setup"
+          || actionKey === "migrate-legacy-shared"
+          || actionKey === "enable"
+          || actionKey === "disable"
+          || actionKey === "forget"
+          || actionKey === "correct"
+          || (actionKey === "temperament" && Boolean(subKey))
+          || (actionKey === "persona" && ["regenerate", "accept"].includes(subKey))
+          || (actionKey === "skills" && ["approve", "reject"].includes(subKey))
+          || ((actionKey === "reminder" || actionKey === "reminders") && ["cancel", "delete"].includes(subKey))
+          || (actionKey === "memory" && ["promote", "demote", "prune", "tombstone", "disable-overlay", "supersede-overlay"].includes(subKey))
+          || (actionKey === "behavior" && ["promote", "demote", "prune"].includes(subKey))
+          || (actionKey === "neo" && subKey === "workspaces" && tokens[2] === "migrate" && !tokens.includes("--dry-run"))
+        );
+        const knownPlur1busActions = new Set([
+          ...SENSITIVE_READ_ACTIONS, "setup", "enable", "disable", "forget", "correct",
+          "internal", "migrate-legacy-shared", "neo",
+        ]);
+        const callCommandLlm = async (messages, llmCfg) => {
+          emitCommandRuntimeHook("onLlmCallContext", llmCfg?.callContext);
+          return callLlm(messages, llmCfg);
+        };
         const runPlur1busCommand = async (commandCtx, prefixTokens = []) => {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const tokens = [...prefixTokens, ...parsePlur1busArgs(commandCtx)];
-            if (tokens.length === 0) return plur1busHelp("quick", resolveCommandLocale(commandCtx));
-            if (tokens[0]?.toLowerCase() === "help") return plur1busHelp(tokens[1]?.toLowerCase() === "advanced" ? "advanced" : "quick", resolveCommandLocale(commandCtx));
+            if (tokens.length === 0) return plur1busHelp("quick", resolveDenialLocale(commandCtx));
+            if (tokens[0]?.toLowerCase() === "help") return plur1busHelp(tokens[1]?.toLowerCase() === "advanced" ? "advanced" : "quick", resolveDenialLocale(commandCtx));
             const action = tokens[0] || "status";
             const actionKey = action.toLowerCase();
             const sub = tokens[1] || "";
             const id = tokens[2] || "";
-            const commandStore = getNeoStore({ workspaceDir: commandCtx.workspaceDir, workspaceKey: commandCtx.workspaceKey, agentId: commandCtx.agentId || "command" });
 
+            // Obsidian is an explicit B14 boundary. Its command-specific
+            // authorization remains delegated unchanged to its own handler.
             if (actionKey === "obsidian" || obsidianActionNames.has(actionKey)) {
               const obsidianMemoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+              let commandStore = null;
+              const getObsidianCommandStore = () => {
+                if (!commandStore) {
+                  commandStore = getNeoStore({
+                    workspaceDir: commandCtx.workspaceDir,
+                    workspaceKey: commandCtx.workspaceKey,
+                    agentId: commandCtx.agentId || "command",
+                  }, {}, "obsidian");
+                }
+                return commandStore;
+              };
               let runtimeConfig = null;
               try {
                 if (typeof api.runtime?.config?.current === "function") {
@@ -4434,7 +4800,8 @@ const plugin = {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
               const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
               const obsidianTokens = actionKey === "obsidian" ? tokens.slice(1) : tokens;
-              return handleObsidianBridgeCommand(obsidianTokens, {
+              const requestedVaultPath = obsidianBridgeCfg?.vaultPath || obsidianBridgeCfg?.vault || commandCtx.workspaceDir || "";
+              return registeredObsidianCommandHandler(obsidianTokens, {
                 config: obsidianBridgeCfg,
                 configPath: openclawConfigPath,
                 openclawConfig: commandCtx.openclawConfig || commandCtx.config || runtimeConfig,
@@ -4443,12 +4810,43 @@ const plugin = {
                 commandCtx,
                 workspaceDir: commandCtx.workspaceDir,
                 pluginConfig: cfg,
-                commandStore,
-                records: [
-                  ...commandStore.readCandidates(500).map((record) => ({ ...record, type: "memory_candidate", id: record.id, summary: record.statement || record.summary || record.text || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
-                  ...commandStore.readBehaviorCards(200).map((record) => ({ ...record, type: "source", id: record.id, summary: record.statement || record.summary || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
-                ],
-                findRecord: (recordId) => findNeoRecord(commandStore, recordId),
+                memoryCtx: obsidianMemoryCtx,
+                baseDbPath,
+                vaultConfirmed: requestedVaultPath
+                  ? isOwnedVaultConfirmed({
+                      baseDbPath,
+                      memoryCtx: obsidianMemoryCtx,
+                      vaultPath: requestedVaultPath,
+                    })
+                  : false,
+                semanticConfirmationStore: confirmationStore,
+                confirmationStore,
+                loadSemanticRecords: async () => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
+                  const initialized = await semanticDb.init();
+                  if (initialized === false) return [];
+                  return semanticDb.scanActive();
+                }),
+                searchSemanticNeighbors: async (source) => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
+                  const initialized = await semanticDb.init();
+                  if (initialized === false) return [];
+                  return semanticDb.search(
+                    source.vector,
+                    obsidianBridgeCfg?.graphLinks?.semanticDiscovery?.topK || 20,
+                    obsidianBridgeCfg?.graphLinks?.semanticDiscovery?.threshold || 0.78,
+                  );
+                }),
+                loadRecords: async () => {
+                  const store = getObsidianCommandStore();
+                  return [
+                    ...store.readCandidates(500, neoRequester(commandCtx, {})).map((record) => ({ ...record, type: "memory_candidate", id: record.id, summary: record.statement || record.summary || record.text || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
+                    ...store.readBehaviorCards(200, neoRequester(commandCtx, {})).map((record) => ({ ...record, type: "source", id: record.id, summary: record.statement || record.summary || "", sourceRefs: record.sourceRefs || [], memoryIds: record.memoryIds || [] })),
+                  ];
+                },
+                findRecord: (recordId) => findNeoRecord(
+                  getObsidianCommandStore(),
+                  recordId,
+                  neoRequester(commandCtx, {}),
+                ),
                 memoryStore: async ({ payload }) => {
                   const result = await storeMemoryFromToolParams({
                     memoryCtx: obsidianMemoryCtx,
@@ -4464,15 +4862,77 @@ const plugin = {
                 },
               });
             }
+            if (!knownPlur1busActions.has(actionKey)) {
+              return plur1busHelp("quick", resolveDenialLocale(commandCtx));
+            }
+            const subKey = sub.toLowerCase();
+            if (actionKey === "skills" && !["review", "list", "show", "approve", "reject"].includes(subKey)) {
+              const { lang, tone } = resolveDenialLocale(commandCtx);
+              return { text: subKey ? t("plur1bus.skills_unknown", { lang, tone, vars: { sub: subKey } }) : t("plur1bus.skills_help", { lang, tone }) };
+            }
+            if (actionKey === "neo" && !(subKey === "workspaces" && tokens[2] === "migrate")) {
+              return plur1busHelp("quick", resolveDenialLocale(commandCtx));
+            }
+            if ((actionKey === "recall" && subKey !== "why") || (actionKey === "origin" && subKey !== "trace")) {
+              return plur1busHelp("quick", resolveDenialLocale(commandCtx));
+            }
+            if ((actionKey === "persona" && !["", "regenerate", "accept"].includes(subKey))
+              || (actionKey === "behavior" && !["show", "candidates", "explain", "promote", "demote", "prune"].includes(subKey))
+              || ((actionKey === "reminder" || actionKey === "reminders") && !["", "list", "show", "help", "cancel", "delete"].includes(subKey))
+              || (actionKey === "curation" && !["", "conflicts", "stale", "promoted"].includes(subKey))) {
+              return plur1busHelp("quick", resolveDenialLocale(commandCtx));
+            }
+            if (actionKey === "migrate-legacy-shared") {
+              const resolvedCtx = await resolveRegisteredMemoryContext(commandCtx, {
+                requireWorkspace: true,
+              });
+              const denied = await checkAuth(
+                resolvedCtx,
+                { destructive: true, chatKind: resolvedCtx.chatKind },
+                commandCtx,
+              );
+              if (denied) return denied;
+              const options = parseLegacyMigrationArgs(tokens.slice(1));
+              return formatJsonCommandResult(await migrateLegacySharedRows({
+                privatePool: pool,
+                sharedPool: sharedMemoryPool,
+                embeddings,
+                agentId: resolvedCtx.agentId,
+                workspaceAliases: resolvedCtx.workspaceAliases,
+                apply: options.apply,
+                reportDir: resolvedCtx.workspaceDir,
+                reportName: options.reportName,
+                continuationToken: options.continuationToken,
+                signal: commandCtx.abortSignal || legacyMigrationShutdown.signal,
+                logger: api.logger,
+              }));
+            }
+            const cronInternal = actionKey === "internal" && isCronCommandContext(commandCtx);
+            const memoryCtx = cronInternal
+              ? await resolveCronMemoryContext(commandCtx)
+              : await resolveRegisteredMemoryContext(commandCtx);
+            if (actionKey === "internal") {
+              if (!isCronCommandContext(commandCtx)) {
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+                if (denied) return denied;
+              }
+            } else if (isDestructiveAction(actionKey, subKey, tokens)) {
+              const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+            } else if (isSensitiveChatRead(actionKey, subKey)) {
+              const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+            }
+            const commandStore = getNeoStore({
+              workspaceDir: memoryCtx?.workspaceDir || "",
+              workspaceKey: memoryCtx?.workspaceIdentity || "",
+              agentId: memoryCtx?.agentId || commandCtx.agentId || "command",
+            });
             // ── Phase 5+6: silent cron-internal jobs ──────────────────────
             // Pattern: /plur1bus internal <consolidate-daily|classify-recent|auto-accept-stale|rem-dream>
             // Wird ausschliesslich aus den OpenClaw-managed Cron-Jobs gefeuert
             // (delivery.mode=none).
             if (actionKey === "internal") {
-              if (!isCronCommandContext(commandCtx)) {
-                const denied = await checkAuth(commandCtx, { destructive: true });
-                if (denied) return denied;
-              }
               const subKey = (sub || "").toLowerCase();
               const internalAgent = commandCtx.agentId || "default";
               if (subKey === "consolidate-daily") {
@@ -4569,6 +5029,17 @@ const plugin = {
                   { runtimeLlm: sessionRuntime },
                 );
                 const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
+                let remAclPartition;
+                try {
+                  remAclPartition = buildRemPartition(
+                    memoryCtx.userPrincipal
+                      ? { scope: "user", agentId: memoryCtx.agentId, workspaceIdentity: "", ownerUserId: memoryCtx.userPrincipal }
+                      : { scope: "workspace", agentId: memoryCtx.agentId, workspaceIdentity: memoryCtx.workspaceIdentity, ownerUserId: "" },
+                    memoryCtx,
+                  );
+                } catch {
+                  return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "acl_partition_missing" });
+                }
                 const result = await pool.withDb(internalAgent, async (db) => {
                   await db.init();
                   return runRemDream({
@@ -4586,6 +5057,8 @@ const plugin = {
                       workspaceAliases: neoWorkspaceAliases,
                     }),
                     agentId: internalAgent,
+                    requestContext: memoryCtx,
+                    aclPartition: remAclPartition,
                     logger: api.logger,
                     maxMemories: isLocalProvider ? 1000 : 5000,
                     topK: isLocalProvider ? 10 : 20,
@@ -4668,7 +5141,7 @@ const plugin = {
                     "afterthought",
                     { runtimeLlm: sessionRuntime },
                   ),
-                  callLlm,
+                  callLlm: callCommandLlm,
                   timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
                   logger: api.logger,
                 });
@@ -4693,7 +5166,7 @@ const plugin = {
                     "persona-voice",
                     { runtimeLlm: sessionRuntime },
                   ),
-                  callLlm,
+                  callLlm: callCommandLlm,
                 });
                 api.logger?.info?.(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "persona-evolve", ...result });
@@ -4824,7 +5297,7 @@ const plugin = {
               if (!presetName) {
                 return { text: renderTemperamentOverview({ agentId: temperamentAgentId, temperamentsCfg: cfg.emotion?.temperaments || {}, lang }) };
               }
-              const denied = await checkAuth(commandCtx, { destructive: true });
+              const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
@@ -4875,7 +5348,7 @@ const plugin = {
                   : `🎤 Persona voice (${personaAgentId}):\n${parsed?.managedBlock || "(empty)"}` };
               }
               if (personaSub === "regenerate") {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (hasPersonaVoice(commandCtx.workspaceDir)) {
                   return { text: de
@@ -4895,7 +5368,7 @@ const plugin = {
                     "persona-voice",
                     { runtimeLlm: sessionRuntime },
                   ),
-                  callLlm,
+                  callLlm: callCommandLlm,
                 });
                 if (!seed) {
                   return { text: de ? "❌ Persona-Seed-Generierung fehlgeschlagen." : "❌ Persona seed generation failed." };
@@ -4913,7 +5386,7 @@ const plugin = {
                 // Proposal-Sektion aus einer Version vor Auto-Apply. Neue
                 // wöchentliche Evolutionen werden inzwischen direkt im
                 // Managed Block angewendet und brauchen kein accept mehr.
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 const result = acceptPersonaProposal(commandCtx.workspaceDir);
                 if (!result.accepted) {
@@ -4931,7 +5404,7 @@ const plugin = {
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
-              const denied = await checkAuth(commandCtx, { destructive: true });
+              const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
@@ -5085,14 +5558,14 @@ const plugin = {
                 return { text: showProposal(workspaceDir, id, { lang, tone }).text };
               }
               if (subKey === "approve") {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_approve_usage", { lang, tone }) };
                 const result = approveProposal(workspaceDir, id, { agentId: commandCtx.agentId, workspaceKey: commandCtx.workspaceKey, lang, tone });
                 return { text: result.text };
               }
               if (subKey === "reject") {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
                 const result = rejectProposal(workspaceDir, id, { lang, tone });
@@ -5106,7 +5579,7 @@ const plugin = {
               const reminderAgent = commandCtx.agentId || "default";
               const reminderWsKey = commandCtx.workspaceKey || commandCtx.workspaceDir || "default";
               if (subKey === "cancel" || subKey === "delete") {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("reminder.cancel_usage", { lang, tone }) };
                 return pool.withDb(reminderAgent, async (rdb) => {
@@ -5166,7 +5639,7 @@ const plugin = {
             if (action === "neo" && sub === "workspaces" && tokens[2] === "migrate") {
               const dryRun = tokens.includes("--dry-run");
               if (!dryRun) {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
               }
               const backupDir = commandOption(tokens, "--backup-dir", commandOption(tokens, "--backup", ""));
@@ -5178,8 +5651,8 @@ const plugin = {
               }));
             }
             if (action === "curation") {
-              const candidates = commandStore.readCandidates(500);
-              const behavior = commandStore.readBehaviorCards(200);
+              const candidates = commandStore.readCandidates(500, neoRequester(commandCtx, {}));
+              const behavior = commandStore.readBehaviorCards(200, neoRequester(commandCtx, {}));
               const records = [...candidates, ...behavior];
               const filtered = sub === "conflicts" ? records.filter(r => r.status === "conflict")
                 : sub === "stale" ? records.filter(r => r.embeddingStatus === "stale")
@@ -5192,7 +5665,7 @@ const plugin = {
               const subKey = sub.toLowerCase();
               if (["overlays", "overlay", "disable-overlay", "contradictions", "supersede-overlay", "doctor"].includes(subKey)) {
                 if (subKey === "disable-overlay" || subKey === "supersede-overlay") {
-                  const denied = await checkAuth(commandCtx, { destructive: true });
+                  const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                   if (denied) return denied;
                 }
                 const extraArgs = ["supersede-overlay", "doctor"].includes(subKey) ? tokens.slice(3) : [];
@@ -5229,10 +5702,10 @@ const plugin = {
                 return { text: `Usage: /plur1bus memory ${sub} <id>` };
               }
               if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
               }
-              const record = findNeoRecord(commandStore, id);
+              const record = findNeoRecord(commandStore, id, neoRequester(commandCtx, {}));
               if (!record) return { text: `No PLUR1BUS neo record found for ${id}` };
               if (sub === "origin" || sub === "explain") return formatJsonCommandResult(record);
               if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
@@ -5244,21 +5717,21 @@ const plugin = {
               }
             }
             if (action === "recall" && sub === "why") {
-              const record = findNeoRecord(commandStore, id);
+              const record = findNeoRecord(commandStore, id, neoRequester(commandCtx, {}));
               if (!record) return { text: `No PLUR1BUS neo record found for ${id}` };
               return formatJsonCommandResult({ id, category: record.category, status: record.status, origin: record.origin, salience: record.salience, confidence: record.confidence });
             }
             if (action === "origin" && sub === "trace") {
-              const record = findNeoRecord(commandStore, id);
+              const record = findNeoRecord(commandStore, id, neoRequester(commandCtx, {}));
               if (!record) return { text: `No PLUR1BUS neo record found for ${id}` };
               return formatJsonCommandResult({ id, sourceTurnIds: record.sourceTurnIds || record.origin?.sourceTurnIds || [], sourceMemoryIds: record.origin?.sourceMemoryIds || [], sourceToolCallIds: record.origin?.sourceToolCallIds || [], origin: record.origin });
             }
             if (action === "behavior") {
               if (["promote", "demote", "prune"].includes(sub)) {
-                const denied = await checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
               }
-              const cards = commandStore.readBehaviorCards(500);
+              const cards = commandStore.readBehaviorCards(500, neoRequester(commandCtx, {}));
               if (sub === "show") return formatJsonCommandResult(cards.filter(c => c.status === "active" || c.status === "promoted"));
               if (sub === "candidates") return formatJsonCommandResult(cards.filter(c => c.status === "candidate"));
               const card = cards.find(c => c.id === id);
@@ -5292,22 +5765,22 @@ const plugin = {
               });
             }
             if (actionKey === "state") {
-              return runStatusCommand(commandCtx);
+              return runStatusCommand(commandCtx, memoryCtx);
             }
             if (actionKey === "enable") {
-              return runFeatureToggle(commandCtx, true);
+              return runFeatureToggle(commandCtx, true, memoryCtx);
             }
             if (actionKey === "disable") {
-              return runFeatureToggle(commandCtx, false);
+              return runFeatureToggle(commandCtx, false, memoryCtx);
             }
             if (actionKey === "memory") {
-              return runMemoryCommand(commandCtx);
+              return runMemoryCommand(commandCtx, memoryCtx);
             }
             if (actionKey === "forget") {
-              return runForgetCommand(commandCtx);
+              return runForgetCommand(commandCtx, memoryCtx);
             }
             if (actionKey === "correct") {
-              return runCorrectCommand(commandCtx);
+              return runCorrectCommand(commandCtx, memoryCtx);
             }
             return plur1busHelp("quick", resolveCommandLocale(commandCtx));
           };
@@ -5346,10 +5819,13 @@ const plugin = {
         // Diese Commands lesen die vollqualifizierte openclaw.json (mit
         // ".config." Schicht) und sind bewusst von den /plur1bus_*
         // Wartungs-Commands getrennt.
-        const runStatusCommand = async (commandCtx) => {
+        const runStatusCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
+            const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const agentId = commandCtx?.agentId || "default";
+            const agentId = memoryCtx.agentId;
             const mood = emotionalPool.describe(agentId);
             let cardCount = null;
             try {
@@ -5367,11 +5843,11 @@ const plugin = {
               llmResultCache: llmResultCache.getMetrics(agentId),
               // Command-Handler kennen nur commandCtx — ein Hook-`ctx` existiert
               // in diesem Scope nicht (ReferenceError "ctx is not defined").
-              workspaceDir: commandCtx?.workspaceDir,
+              workspaceDir: memoryCtx.workspaceDir,
             });
             return { text: renderStatus(data, { lang, tone }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.status_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
@@ -5388,42 +5864,22 @@ const plugin = {
         const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
 
         const confirmationStore = new Map();
+        const confirmationIndex = new Map();
 
+        const resolveDenialLocale = (commandCtx) => ({
+          lang: resolveLocale({ ctx: commandCtx, messages: commandCtx?.messages || [], fallback: "en" }),
+          tone: pickTone(null),
+        });
         const checkMemoryAuth = (memoryCtx, commandCtx, opts = {}) => {
           const auth = isAuthorized(memoryCtx, cfg, { ...opts, chatKind: memoryCtx.chatKind });
           if (!auth.authorized) {
-            return { text: t(`plur1bus.${auth.reason || "unauthorized"}`, resolveCommandLocale(commandCtx)) };
+            return { text: t(`plur1bus.${auth.reason || "unauthorized"}`, resolveDenialLocale(commandCtx)) };
           }
           return null;
         };
 
-        const checkAuth = async (commandCtx, opts = {}, suppliedMemoryCtx = null) => {
-          const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
-          return checkMemoryAuth(memoryCtx, commandCtx, opts);
-        };
-
-        // Text-basierter Confirm-Abschluss. Das OpenClaw-SDK liefert keine
-        // Button-/Callback-Events an Plugins (siehe OPENCLAW_SDK_COMPAT_AUDIT),
-        // daher wird die Bestätigung als Folge-Command zugestellt:
-        // `/forget confirm <token>` bzw. `/correct confirm <token>`.
-        const parseConfirmArg = (args) => {
-          const m = String(args || "").trim().match(/^confirm[:\s]+([0-9a-fA-F-]{6,})$/i);
-          return m ? m[1] : null;
-        };
-        // Sucht das Pending per Nonce(-Präfix) für das erwartete Kommando und
-        // validiert es (user/chat/expiry) via validateConfirmation (löscht es).
-        const completePending = (memoryCtx, expectedCommand, token) => {
-          let pending = null;
-          for (const v of confirmationStore.values()) {
-            if (v.command === expectedCommand && (v.nonce === token || v.nonce.startsWith(token))) { pending = v; break; }
-          }
-          if (!pending) return { error: "not_found_or_expired" };
-          const result = validateConfirmation(pending.callbackData, confirmationStore, {
-            userId: memoryCtx.userId,
-            chatId: memoryCtx.conversationPrincipal,
-          });
-          if (!result.valid) return { error: result.reason || "invalid" };
-          return { pending };
+        const checkAuth = async (memoryCtx, opts = {}, localeCtx = null) => {
+          return checkMemoryAuth(memoryCtx, localeCtx, opts);
         };
 
         const checkArgsLength = (commandCtx) => {
@@ -5438,12 +5894,13 @@ const plugin = {
           return null;
         };
 
-        const runFeatureToggle = async (commandCtx, enable) => {
+        const runFeatureToggle = async (commandCtx, enable, suppliedMemoryCtx = null) => {
           const deniedLen = checkArgsLength(commandCtx);
           if (deniedLen) return deniedLen;
-          const { lang, tone } = resolveCommandLocale(commandCtx);
-          const denied = await checkAuth(commandCtx, { destructive: true });
+          const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
+          const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
           if (denied) return denied;
+          const { lang, tone } = resolveCommandLocale(commandCtx);
           if (chatConfigCommandsBlocked()) return { text: t("plur1bus.config_blocked", { lang, tone }) };
           const featureName = parseFeatureArg(commandCtx);
           if (!featureName) return { text: renderFeatureList({ lang, tone }) };
@@ -5486,14 +5943,16 @@ const plugin = {
           handler: async (commandCtx) => {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
             const { lang } = resolveCommandLocale(commandCtx);
-            const agentId = commandCtx?.agentId || "default";
+            const agentId = memoryCtx.agentId;
             const sub = (commandCtx.args || "").trim().split(/\s+/)[0]?.toLowerCase() || "list";
             const rest = (commandCtx.args || "").trim().slice(sub.length).trim();
             const subCtx = { ...commandCtx, args: rest };
             let speakerAuth = () => null;
             if (["name", "confirm", "reject", "clear"].includes(sub)) {
-              const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
               const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
               if (denied) return denied;
               speakerAuth = (ctx, opts) => checkMemoryAuth(memoryCtx, ctx, opts);
@@ -5549,18 +6008,26 @@ const plugin = {
 
         registerGatewayShutdown(api, {
           memoryDbAdapter,
-          pool,
+          pool: {
+            shutdown: async () => {
+              legacyMigrationShutdown.abort();
+              await pool.shutdown();
+            },
+          },
+          sharedMemoryPool,
           clearTurnRoutes: clearInitializedTurnRoutes,
           flushMetrics,
           llmResultCache,
         });
 
-        const runMemoryCommand = async (commandCtx) => {
+        const runMemoryCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
+            const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
             const input = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
@@ -5569,7 +6036,14 @@ const plugin = {
             const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const parsed = parseMemoryQuery(normalized.canonicalText);
-            const items = await queryMemory(memoryDbAdapter, agentId, parsed, memoryCtx);
+            const items = await queryMemoryAcrossAccessPools({
+              privatePool: pool,
+              sharedPool: sharedMemoryPool,
+              embeddings,
+              agent: agentId,
+              parsed,
+              ctx: { ...memoryCtx, logger: api.logger },
+            });
             if (parsed.explain) {
               const explanations = explainResults(items.map((r) => ({ entry: r, score: r.score ?? 0 })), parsed.topic);
               items.forEach((item, i) => {
@@ -5578,19 +6052,19 @@ const plugin = {
             }
             return { text: formatMemoryResults(items, parsed, { lang, tone, showIds: true }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.memory_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
 
-        const runForgetCommand = async (commandCtx) => {
+        const runForgetCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
-            const { lang, tone } = resolveCommandLocale(commandCtx);
-            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
             const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
             if (denied) return denied;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
             const args = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
@@ -5598,9 +6072,18 @@ const plugin = {
             });
 
             // Completion: /forget confirm <token>
-            const token = parseConfirmArg(args);
-            if (token) {
-              const { pending, error } = completePending(memoryCtx, "forget", token);
+            const confirmation = parseConfirmationCommand(args);
+            if (confirmation.requested) {
+              if (!confirmation.nonce) {
+                return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: confirmation.error || "invalid_format" } }) };
+              }
+              const { pending, error } = completePendingConfirmation({
+                confirmationStore,
+                confirmationIndex,
+                expectedCommand: "forget",
+                memoryCtx,
+                nonce: confirmation.nonce,
+              });
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
               const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, {
                 lang,
@@ -5628,23 +6111,29 @@ const plugin = {
               return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
             const card = candidates.card;
-            const confirm = createConfirmation({ userId: memoryCtx.userId, chatId: memoryCtx.conversationPrincipal, command: "forget", targetId: card.id });
-            confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
+            const confirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+            const confirm = createConfirmation({
+              userId: confirmationIdentity.userId,
+              chatId: confirmationIdentity.chatId,
+              command: "forget",
+              targetId: card.id,
+            });
+            rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
             return { text: t("plur1bus.forget_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
 
-        const runCorrectCommand = async (commandCtx) => {
+        const runCorrectCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
             const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
-            const { lang, tone } = resolveCommandLocale(commandCtx);
-            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
             const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
             if (denied) return denied;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
             const args = (commandCtx.args || "").trim();
             const agentId = memoryCtx.agentId;
             const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
@@ -5652,9 +6141,18 @@ const plugin = {
             });
 
             // Completion: /correct confirm <token>
-            const token = parseConfirmArg(args);
-            if (token) {
-              const { pending, error } = completePending(memoryCtx, "correct", token);
+            const confirmation = parseConfirmationCommand(args);
+            if (confirmation.requested) {
+              if (!confirmation.nonce) {
+                return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: confirmation.error || "invalid_format" } }) };
+              }
+              const { pending, error } = completePendingConfirmation({
+                confirmationStore,
+                confirmationIndex,
+                expectedCommand: "correct",
+                memoryCtx,
+                nonce: confirmation.nonce,
+              });
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
               const newText = pending.payload?.newText || "";
               if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
@@ -5682,7 +6180,12 @@ const plugin = {
                           : `User correction via /correct`,
                         confidence: 1,
                       },
-                      { neoStore, logger: api.logger, skipDriftGate: true },
+                      {
+                        neoStore,
+                        logger: api.logger,
+                        skipDriftGate: true,
+                        workspaceAliases: memoryCtx.workspaceAliases,
+                      },
                     );
                     // newId === id on idempotent skip; reinforcement still valid
                     try {
@@ -5733,13 +6236,102 @@ const plugin = {
               return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
             const card = candidates.card;
-            const confirm = createConfirmation({ userId: memoryCtx.userId, chatId: memoryCtx.conversationPrincipal, command: "correct", targetId: card.id });
+            const confirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+            const confirm = createConfirmation({
+              userId: confirmationIdentity.userId,
+              chatId: confirmationIdentity.chatId,
+              command: "correct",
+              targetId: card.id,
+            });
             confirm.payload = { newText: newNorm.canonicalText, oldText: oldNorm.canonicalText };
-            confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
+            rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
             return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: err?.message || err } }) };
+          }
+        };
+
+        /** Share a private memory into the bound workspace or user pool. */
+        const runShareCommand = async (commandCtx) => {
+          const { lang, tone } = resolveCommandLocale(commandCtx);
+          const fail = (key, vars = {}) => ({ text: t(key, { lang, tone, vars }) });
+          const sourceDenied = (error) => /^(?:share\.(?:card_not_found|source_not_live|source_scope_denied|source_owner_conflict|source_changed)|access denied:)/.test(String(error || ""));
+          try {
+            const deniedLen = checkArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
+            const raw = String(commandCtx?.args || "").trim();
+            // Share deliberately accepts only its documented space-separated form;
+            // other commands retain their existing confirmation grammar.
+            const requestedConfirmation = /^confirm(?:\s|:|$)/i.test(raw);
+            const confirmationMatch = raw.match(/^confirm\s+([0-9a-fA-F-]+)$/i);
+            let confirmation = { requested: requestedConfirmation, nonce: "", error: "invalid_format" };
+            if (confirmationMatch) {
+              try { confirmation = { requested: true, nonce: safeUuid(confirmationMatch[1]) }; } catch {}
+            }
+            if (confirmation.requested) {
+              if (!confirmation.nonce) return fail("plur1bus.confirm_failed", { reason: confirmation.error || "invalid_format" });
+              // First bind the redeeming request to its host-authenticated context.
+              let memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+              let denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+              const confirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+              emitCommandRuntimeHook("onShareConfirmationIdentity", {
+                phase: "complete",
+                identity: confirmationIdentity,
+                rawChatId: memoryCtx.chatId,
+              });
+              const completed = completePendingConfirmation({
+                confirmationStore, confirmationIndex, expectedCommand: "share", memoryCtx, nonce: confirmation.nonce,
+              });
+              if (completed.error) return fail("plur1bus.confirm_failed", { reason: completed.error });
+              const targetScope = completed.pending.payload?.targetScope;
+              const sourceId = completed.pending.payload?.sourceId;
+              if (!['workspace', 'user'].includes(targetScope) || !safeUuid(sourceId)) return fail("plur1bus.confirm_failed", { reason: "invalid_payload" });
+              // Re-resolve and re-authorize after redemption before touching the source writer.
+              memoryCtx = await resolveRegisteredMemoryContext(commandCtx, {
+                requireWorkspace: targetScope === "workspace", requireUser: targetScope === "user",
+              });
+              denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+              const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
+                targetScope, allowSensitiveShare: true, ctx: memoryCtx, logger: api.logger,
+              });
+              if (!result.ok) return fail(sourceDenied(result.error) ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+              return fail("plur1bus.share_done", { id: result.sharedId });
+            }
+
+            const parts = raw.split(/\s+/).filter(Boolean);
+            if (parts.length < 1 || parts.length > 2 || (parts.length === 2 && parts[1] !== "--user")) return fail("plur1bus.share_usage");
+            let sourceId;
+            try { sourceId = safeUuid(parts[0]); } catch { return fail("plur1bus.share_usage"); }
+            const targetScope = parts[1] === "--user" ? "user" : "workspace";
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx, {
+              requireWorkspace: targetScope === "workspace", requireUser: targetScope === "user",
+            });
+            const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
+            const result = await registeredShareCard(pool, sharedMemoryPool, embeddings, memoryCtx.agentId, sourceId, {
+              targetScope, ctx: memoryCtx, logger: api.logger,
+            });
+            if (result.ok) return fail("plur1bus.share_done", { id: result.sharedId });
+            if (result.error?.startsWith("share.explicit approval required")) {
+              const identity = resolveConfirmationIdentity(memoryCtx);
+              if (!identity.userId) return fail("plur1bus.share_user_required");
+              emitCommandRuntimeHook("onShareConfirmationIdentity", {
+                phase: "create",
+                identity,
+                rawChatId: memoryCtx.chatId,
+              });
+              const pending = createConfirmation({ userId: identity.userId, chatId: identity.chatId, command: "share", targetId: sourceId });
+              // Never retain source content in a command confirmation.
+              pending.payload = { targetScope, sourceId };
+              rememberPendingConfirmation(confirmationStore, confirmationIndex, pending);
+              return fail("plur1bus.share_confirm_text", { token: pending.nonce });
+            }
+            return fail(sourceDenied(result.error) ? "plur1bus.share_not_found" : "plur1bus.share_failed");
+          } catch (error) {
+            return fail("plur1bus.share_failed");
           }
         };
 
@@ -5747,22 +6339,23 @@ const plugin = {
           try {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
-            const { lang, tone } = resolveCommandLocale(commandCtx);
-            const denied = await checkAuth(commandCtx, { destructive: true });
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
             if (denied) return denied;
+            const { lang, tone } = resolveCommandLocale(commandCtx);
             const args = (commandCtx.args || "").trim();
             const parsed = parseMemoryFeedback(args);
             if (!parsed) {
               return { text: t("plur1bus.mf_usage", { lang, tone }) };
             }
-            const workspaceDir = commandCtx.workspaceDir || null;
+            const workspaceDir = memoryCtx.workspaceDir || null;
             if (!workspaceDir) {
               return { text: t("plur1bus.mf_no_workspace", { lang, tone }) };
             }
             recordFeedback(workspaceDir, "", parsed.memoryId, parsed.feedback, {});
             return { text: t("plur1bus.mf_done", { lang, tone, vars: { id: parsed.memoryId, feedback: parsed.feedback } }) };
           } catch (err) {
-            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.mf_failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
@@ -5795,23 +6388,54 @@ const plugin = {
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: runCorrectCommand,
         });
+        for (const name of ["share", "teile"]) {
+          api.registerCommand({
+            name,
+            description: "PLUR1BUS — share a memory to the workspace or authenticated user pool",
+            acceptsArgs: true,
+            channels: ["telegram", "discord", "slack", "mattermost"],
+            handler: runShareCommand,
+          });
+        }
         api.registerCommand({
           name: "wiki",
           description: "PLUR1BUS — Wiki durchsuchen, hinzufügen, löschen",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
           handler: async (ctx) => {
+            const parsed = parseWikiCommandInput(ctx?.args);
+            if (!parsed.ready) {
+              const { lang, tone } = resolveCommandLocale(ctx);
+              return {
+                text: t(parsed.responseKey, {
+                  lang,
+                  tone,
+                  vars: parsed.responseVars,
+                }),
+              };
+            }
+
             const memoryCtx = await resolveRegisteredMemoryContext(ctx);
+            const requestNow = Date.now();
+            const denied = checkWikiAuth(memoryCtx, cfg, {
+              destructive: parsed.destructive,
+              chatKind: memoryCtx.chatKind,
+              localeCtx: ctx,
+            });
+            if (denied) return denied;
+
             const wikiAgentId = memoryCtx.agentId;
             const sessionRuntime = ctx?.runtimeContext?.llm;
-            return runWikiCommand(ctx, {
+            return runWikiCommand({ ...ctx, args: parsed.args }, {
               pool,
               embeddings,
               reranker,
               callLlm,
               cfg,
               api,
-              memoryCtx,
+              ctx: memoryCtx,
+              now: requestNow,
+              workspaceDir: memoryCtx.workspaceDir,
               workspaceAliases: memoryWorkspaceAliases,
               llmCfg: mergingEnabled ? withLlmCallContext(
                 wikiLlmCfg,
@@ -5911,7 +6535,8 @@ const plugin = {
                 rootDir: neoRoot,
                 defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
                 workspaceAliases: neoWorkspaceAliases,
-                embeddingDrainEnabled: neoEmbeddingAutoDrainEnabled,
+                // Provider instances and credentials remain on the main thread.
+                embeddingDrainEnabled: false,
                 embeddingDrainImpact: neoEmbeddingDrainImpact,
                 embeddingDrainMaxItems: neoEmbeddingDrainMaxItems,
                 signal,
@@ -5919,7 +6544,14 @@ const plugin = {
               if (neoResult?.capture) {
                 api.logger.info(`plur1bus-neo: worker captured turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${background ? " (background)" : ""}`);
               }
-              const drain = neoResult?.drain;
+              const drain = neoEmbeddingAutoDrainEnabled
+                ? await neoStore.drainEmbeddingQueue({
+                    impact: neoEmbeddingDrainImpact,
+                    maxItems: neoEmbeddingDrainMaxItems,
+                    dimensions: vectorDim,
+                    embedder: (text) => embeddings.embed(text, { agentId }),
+                  })
+                : neoResult?.drain;
               if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
                 api.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}`);
               }
@@ -6314,6 +6946,25 @@ const plugin = {
                       } catch (_) { /* try next */ }
                     }
                   }
+                  let lightRequestContext = null;
+                  try {
+                    lightRequestContext = resolveMemoryRequestContext({
+                      agentId,
+                      workspaceDir: ctx?.workspaceDir,
+                      workspaceKey: ctx?.workspaceKey,
+                      userId: ctx?.userId ?? ctx?.senderId,
+                      channel: ctx?.channel ?? ctx?.messageProvider,
+                      accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
+                      chatId: ctx?.chatId,
+                    }, { workspaceAliases: memoryWorkspaceAliases });
+                  } catch (_) {
+                    lightRequestContext = null;
+                  }
+                  const lightAclBindings = lightRequestContext
+                    ? (lightRequestContext.userPrincipal
+                      ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
+                      : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
+                    : null;
                   lightDream({
                     turns: normalizedTurns,
                     neoStore,
@@ -6351,6 +7002,8 @@ const plugin = {
                     personaSeedCfg: (cfg.personaVoice?.enabled ?? true) !== false
                       ? { agentId, lang: cfg.language || "de", identityText: personaIdentityText }
                       : null,
+                    requestContext: lightRequestContext,
+                    aclBindings: lightAclBindings,
                     signal,
                   }).then((dreamResult) => {
                     throwIfAborted(signal, "light dream commit aborted");
@@ -6560,8 +7213,14 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
-              return await pool.withReadDbs(agentId, async (readDbs) => {
-              const limit = params.limit || maxPromptMemories;
+              return await withAccessReadDbs(
+                pool,
+                sharedMemoryPool,
+                agentId,
+                { ...memoryCtx, logger: api.logger },
+                async (readDbs) => {
+              const limit = normalizeBoundedRecallInteger(params.limit, maxPromptMemories, 1, 100);
+              const recallBudget = resolveRuntimeRecallBudget(params.query, limit, adaptiveBudgetCfg);
               const assocCfg = cfg?.continuityEngine?.associativeRecall || {};
               const initializedReadDbs = [];
               for (const entry of readDbs) {
@@ -6596,7 +7255,8 @@ const plugin = {
                 embeddings,
                 workspaceDir: ctx?.workspaceDir,
                 topN: limit,
-                budget: limit,
+                budget: recallBudget,
+                adaptiveBudget: adaptiveBudgetCfg,
                 recallMinScore,
                 importanceBoost,
                 dedupEnabled,
@@ -6606,6 +7266,7 @@ const plugin = {
                 canonicalMaxItems,
                 reranker,
                 rerankCandidates,
+                candidateTopK,
                 rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
                 rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
                 summaryMaxWords,
@@ -6621,10 +7282,12 @@ const plugin = {
                 associativeEnabled: true,
                 graphConfig: {
                   graphHydrationRelevanceThreshold: assocCfg.graphHydrationRelevanceThreshold ?? 0.25,
+                  graphIndex: { enabled: assocCfg.graphIndex?.enabled !== false },
                 },
                 workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
                 agentId,
                 memoryCtx,
+                queryRefinerEnabled,
                 decisionTrace: trace,
                 retrievalLogger: (ledgerInfo) => {
                   try {
@@ -7323,15 +7986,19 @@ const plugin = {
           try {
             const injectionKey = markNeoRecallInjection(event, ctx);
             const neoStore = getNeoStore(ctx, event);
+            const requester = neoRequester(ctx, event);
             neoStore.recordHook("before_prompt_build", {
               agentId: ctx?.agentId || "default",
               promptLength: event?.prompt?.length || 0,
               runner: event?.runner || event?.provider || "",
             });
             if (injectionKey !== null && event?.prompt && event.prompt.length >= 5) {
-              const neoItems = [...neoStore.readCandidates(500), ...neoStore.readBehaviorCards(200)];
+              const neoItems = [...neoStore.readCandidates(500, requester), ...neoStore.readBehaviorCards(200, requester)];
+              let queryVector = null;
+              try { queryVector = await (typeof embeddings.embedQuery === "function" ? embeddings.embedQuery(event.prompt, { agentId: requester.requesterAgentId }) : embeddings.embed(event.prompt, { agentId: requester.requesterAgentId })); }
+              catch (error) { api.logger?.debug?.(`plur1bus-neo: prompt query embedding unavailable: ${String(error)}`); }
               neoContext = formatNeoRecallContext(
-                routeNeoRecall(neoItems, event.prompt, { maxPerLane: 2, minScore: 0.08 }),
+                routeNeoRecall(neoItems, event.prompt, { ...requester, queryVector, maxPerLane: 2, minScore: 0.08 }),
                 { idempotencyKey: injectionKey || undefined },
               );
             }
@@ -7353,7 +8020,12 @@ const plugin = {
           ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
           : "";
         const agentId = memoryCtx.agentId;
-        return pool.withWriteDb(agentId, (db) => pool.withReadDbs(agentId, async (readDbs) => {
+        return pool.withWriteDb(agentId, (db) => withAccessReadDbs(
+          pool,
+          sharedMemoryPool,
+          agentId,
+          { ...memoryCtx, logger: api.logger },
+          async (readDbs) => {
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
           pool.withWriteDb(agentId, (maintenanceDb) => maintenanceDb.purgeExpiredThrottled(api.logger))
@@ -7493,7 +8165,8 @@ const plugin = {
             embeddings,
             workspaceDir: ctx?.workspaceDir,
             topN: maxPromptMemories,
-            budget: maxPromptMemories,
+            budget: resolveRuntimeRecallBudget(event.prompt, maxPromptMemories, adaptiveBudgetCfg),
+            adaptiveBudget: adaptiveBudgetCfg,
             recallMinScore: autoRecallMinScore,
             importanceBoost,
             dedupEnabled,
@@ -7503,6 +8176,7 @@ const plugin = {
             canonicalMaxItems,
             reranker,
             rerankCandidates,
+            candidateTopK,
             rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
             rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
             summaryMaxWords,
@@ -7522,10 +8196,12 @@ const plugin = {
               maxAssociatedResults: assocCfg.maxAssociatedResults ?? 40,
               minCumulativeRelevance: assocCfg.minCumulativeRelevance ?? 0.2,
               graphHydrationRelevanceThreshold: assocCfg.graphHydrationRelevanceThreshold ?? 0.25,
+              graphIndex: { enabled: assocCfg.graphIndex?.enabled !== false },
             } : {},
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             agentId,
             memoryCtx,
+            queryRefinerEnabled,
             decisionTrace: trace,
             retrievalLogger: (ledgerInfo) => {
               try {
@@ -7635,10 +8311,11 @@ const plugin = {
 
             if (patternCfg.enabled === true) {
               try {
+                const patternRecords = getNeoStore(ctx, event).readPatterns(100);
                 matchedPattern = await findBestPattern({
                   recentMemoryIds: ordered.map(r => r.entry.id),
                   threshold: patternCfg.patternThreshold ?? 0.7,
-                  patternRecords: [], // safe fallback; no pattern store yet in root
+                  patternRecords: Array.isArray(patternRecords) ? patternRecords : [],
                 });
                 if (tasteEnabled) {
                   const emotionalState = emotionalPool.get(agentId);
@@ -7915,11 +8592,38 @@ const plugin = {
             }
           } catch (_) { framedItems = associativeItems; }
 
-          const memoriesContext = formatRelevantMemoriesContext(framedItems, {
+          let promptItems = framedItems;
+          let promptSemanticLensItems = semanticLensItems;
+          if (semanticCompressionCfg.enabled === true) {
+            const allPromptItems = [...framedItems, ...semanticLensItems];
+            const tokenBudget = normalizeBoundedRecallInteger(
+              semanticCompressionCfg.tokenBudget,
+              240,
+              1,
+              1000,
+            );
+            const compressedSlots = compressMemorySlotsForPrompt(
+              allPromptItems.map((item) => ({
+                entry: {
+                  id: item.id,
+                  text: item.display || "",
+                  summary: item.display || "",
+                  category: item.category,
+                  memoryClass: item.memoryClass,
+                },
+              })),
+              tokenBudget,
+            );
+            promptItems = allPromptItems.flatMap((item, index) => (
+              compressedSlots[index] ? [{ ...item, display: compressedSlots[index] }] : []
+            ));
+            promptSemanticLensItems = [];
+          }
+          const memoriesContext = formatRelevantMemoriesContext(promptItems, {
             fadedThreshold: resolveFadedThreshold(recallCfg),
             overlays,
             matchedPattern,
-            semanticLensMemories: semanticLensItems,
+            semanticLensMemories: promptSemanticLensItems,
             decisionTrace: traceEnabled ? trace : null,
             traceOptions: {
               includeInPrompt: traceInPrompt,
@@ -8015,7 +8719,20 @@ const plugin = {
               if (echoCooldownOk) {
                 const { loadFreshDreamEcho, formatDreamEchoContext } = await import("./lib/dream-echo.js");
                 const { loadGovernorState, saveGovernorState, applyOutcomeAdjustments, evaluateGovernor, recordProactiveSend, withGovernorLock } = await import("./lib/proactive-governor.js");
-                const echo = loadFreshDreamEcho(ctx.workspaceDir, { now: nowMs });
+                let echoRequestContext = null;
+                try {
+                  echoRequestContext = resolveMemoryRequestContext({
+                    agentId: ctx?.agentId || "default",
+                    workspaceDir: ctx.workspaceDir,
+                    userId: ctx?.userId ?? ctx?.senderId,
+                    channel: ctx?.channel ?? ctx?.messageProvider,
+                    accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
+                    chatId: ctx?.chatId,
+                  }, { workspaceAliases: memoryWorkspaceAliases });
+                } catch (err) {
+                  api.logger?.debug?.(`plur1bus dream echo context unavailable: ${err?.message || "invalid context"}`);
+                }
+                const echo = loadFreshDreamEcho(ctx.workspaceDir, { now: nowMs, requestContext: echoRequestContext });
                 if (echo) {
                   // Advisory cross-process lock (closes the lost-update window
                   // with lib/afterthought.js's runAfterthoughtJob, which may run
@@ -8266,5 +8983,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, AgentDbPool, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
 export default plugin;

@@ -11,6 +11,10 @@ const root = join(here, "..");
 const configuration = readFileSync(join(root, "docs", "configuration.md"), "utf8");
 const readme = readFileSync(join(root, "README.md"), "utf8");
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function canonicalExample() {
   const heading = "## Beispiel-Konfiguration (Minimal)";
   const start = configuration.indexOf(heading);
@@ -65,5 +69,21 @@ describe("copyable configuration documentation contract", () => {
     assert.match(readme, new RegExp(`merging\\.autoApply[^\\n]*defaults to[^\\n]*${defaults.merging.autoApply}`, "i"));
     assert.match(readme, new RegExp(`reviews marked[^\\n]*${defaults.obsidianBridge.morningReview.status}`, "i"));
     assert.equal(defaults.obsidianBridge.eveningReview.status, defaults.obsidianBridge.morningReview.status);
+  });
+
+  it("documents B13 sharing, migration, and unchanged credential boundaries", () => {
+    const combinedDocs = `${readme}\n${configuration}`;
+    for (const phrase of [
+      "/share <id>",
+      "/share <id> --user",
+      ".plur1bus-shared/workspaces/w-<62hex>",
+      ".plur1bus-shared/users/u-<62hex>",
+      "copy, never move",
+      "OpenClaw default LLM",
+      "per-agent credentials",
+      "workspace_shared legacy rows are not reinterpreted",
+    ]) {
+      assert.match(combinedDocs, new RegExp(escapeRegExp(phrase), "i"));
+    }
   });
 });

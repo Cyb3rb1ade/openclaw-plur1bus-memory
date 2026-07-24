@@ -73,6 +73,9 @@ describe("P0 recall defaults", () => {
       text: `memory ${i + 1}`,
       _distance: i * 0.01,
       importance: 0.5,
+      scope: "agent-private",
+      agentId: "agent-a",
+      storedBy: "agent-a",
     }));
 
   it("runRecallPipeline returns up to 12 memories by default (maxPromptMemories)", async () => {
@@ -81,6 +84,7 @@ describe("P0 recall defaults", () => {
       query: "test",
       dbTable: makeDbTable(rows),
       embeddings,
+      agentId: "agent-a",
       canonicalEnabled: false,
       dedupEnabled: false,
       logger: { warn: () => {}, info: () => {} },
@@ -104,6 +108,7 @@ describe("P0 recall defaults", () => {
         query: "test",
         dbTable: makeDbTable(rows),
         embeddings,
+        agentId: "agent-a",
         workspaceDir: tmpDir,
         canonicalEnabled: true,
         canonicalMinScore: -1, // force all rows to qualify as canonical

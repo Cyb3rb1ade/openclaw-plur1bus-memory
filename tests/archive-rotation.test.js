@@ -5,9 +5,24 @@ import { tmpdir } from "node:os";
 import { test } from "node:test";
 
 import { rotateOldArchives } from "../lib/obsidian/archive-rotation.js";
+import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 
 function makeTempDir(prefix = "plur1bus-archive-test-") {
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function rotationPolicy(baseDbPath, action = "move") {
+  const tokens = action === "delete"
+    ? ["rotate", "--apply", "--delete", "--allow-delete"]
+    : ["rotate", "--apply"];
+  return parseObsidianCommandPlan(tokens, {
+    memoryCtx: { agentId: "test-agent", workspaceIdentity: "workspace:v1:test" },
+    baseDbPath,
+    mode: "apply",
+    allowWrite: true,
+    vaultConfirmed: true,
+    actionConfirmed: true,
+  }).mutationPolicy;
 }
 
 function cleanup(dir) {
@@ -58,7 +73,7 @@ test("move shifts files to stale/", () => {
   const dir = makeTempDir();
   try {
     writeFileWithMtime(dir, "old.md", "content", Date.now() - 40 * 86400000);
-    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 30 });
+    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 30, mutationPolicy: rotationPolicy(dir) });
     assert.equal(result.dryRun, false);
     assert.equal(result.action, "move");
     assert.equal(result.moved, 1);
@@ -73,7 +88,7 @@ test("delete only allowed with allowDelete=true", () => {
   const dir = makeTempDir();
   try {
     writeFileWithMtime(dir, "old.md", "content", Date.now() - 40 * 86400000);
-    const resultWithout = rotateOldArchives(dir, { dryRun: false, action: "delete", allowDelete: false, maxAgeDays: 30 });
+    const resultWithout = rotateOldArchives(dir, { dryRun: false, action: "delete", allowDelete: false, maxAgeDays: 30, mutationPolicy: rotationPolicy(dir, "delete") });
     assert.equal(resultWithout.action, "move");
     assert.equal(resultWithout.moved, 1);
     assert.equal(existsSync(join(dir, "old.md")), false);
@@ -82,7 +97,7 @@ test("delete only allowed with allowDelete=true", () => {
     const dir2 = makeTempDir();
     try {
       writeFileWithMtime(dir2, "old2.md", "content", Date.now() - 40 * 86400000);
-      const resultWith = rotateOldArchives(dir2, { dryRun: false, action: "delete", allowDelete: true, maxAgeDays: 30 });
+      const resultWith = rotateOldArchives(dir2, { dryRun: false, action: "delete", allowDelete: true, maxAgeDays: 30, mutationPolicy: rotationPolicy(dir2, "delete") });
       assert.equal(resultWith.action, "delete");
       assert.equal(resultWith.deleted, 1);
       assert.equal(existsSync(join(dir2, "old2.md")), false);
@@ -119,7 +134,7 @@ test("maxSizeMB removes oldest first", () => {
     writeFileWithMtime(dir, "middle.md", oneMB, now - 20 * 86400000);
     writeFileWithMtime(dir, "newest.md", oneMB, now - 10 * 86400000);
 
-    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxSizeMB: 2 });
+    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxSizeMB: 2, mutationPolicy: rotationPolicy(dir) });
     assert.equal(result.moved, 1);
     assert.equal(result.files[0].name, "oldest.md");
     assert.equal(existsSync(join(dir, "oldest.md")), false);
@@ -150,7 +165,7 @@ test("symlinks are skipped", () => {
     fs.writeFileSync(target, "real");
     const link = join(dir, "link.md");
     symlinkSync(target, link);
-    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 0 });
+    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 0, mutationPolicy: rotationPolicy(dir) });
     const names = result.files.map(f => f.name);
     assert.ok(!names.includes("link.md"), "symlink must not be rotated");
     // lstatSync does not follow symlinks, so it works even when the target was moved
@@ -170,7 +185,7 @@ test("path traversal is blocked", () => {
     // if it resolves outside. Let's use a simpler test: create a file normally,
     // then verify resolveInside would block a direct traversal attempt.
     writeFileWithMtime(dir, "normal.md", "content", Date.now() - 40 * 86400000);
-    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 30 });
+    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 30, mutationPolicy: rotationPolicy(dir) });
     assert.equal(result.moved, 1);
     assert.equal(existsSync(join(dir, "stale", "normal.md")), true);
   } finally {
@@ -187,7 +202,7 @@ test("files outside archiveDir are never affected", () => {
   try {
     writeFileWithMtime(archiveDir, "old.md", "content", Date.now() - 40 * 86400000);
     fs.writeFileSync(join(neighborDir, "neighbor.md"), "neighbor");
-    const result = rotateOldArchives(archiveDir, { dryRun: false, action: "move", maxAgeDays: 30 });
+    const result = rotateOldArchives(archiveDir, { dryRun: false, action: "move", maxAgeDays: 30, mutationPolicy: rotationPolicy(archiveDir) });
     assert.equal(result.moved, 1);
     assert.equal(existsSync(join(neighborDir, "neighbor.md")), true);
     assert.equal(existsSync(join(archiveDir, "stale", "old.md")), true);
@@ -200,7 +215,7 @@ test("unknown extensions are ignored", () => {
   const dir = makeTempDir();
   try {
     writeFileWithMtime(dir, "old.exe", "content", Date.now() - 40 * 86400000);
-    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 30 });
+    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 30, mutationPolicy: rotationPolicy(dir) });
     assert.equal(result.files.length, 0);
     assert.equal(existsSync(join(dir, "old.exe")), true);
   } finally {
@@ -214,7 +229,7 @@ test("stale/ is not scanned recursively", () => {
     fs.mkdirSync(join(dir, "stale"));
     writeFileWithMtime(join(dir, "stale"), "already-stale.md", "content", Date.now() - 100 * 86400000);
     writeFileWithMtime(dir, "top.md", "content", Date.now() - 40 * 86400000);
-    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 30 });
+    const result = rotateOldArchives(dir, { dryRun: false, action: "move", maxAgeDays: 30, mutationPolicy: rotationPolicy(dir) });
     // Only top.md should be considered (stale/ is a directory, not scanned)
     assert.equal(result.moved, 1);
     assert.equal(result.files[0].name, "top.md");

@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runRecallPipeline } from "../lib/recall-pipeline.js";
+import { runRecallPipeline as runRecallPipelineRaw } from "../lib/recall-pipeline.js";
 import { filterAssociativeCandidates } from "../lib/continuity-gate.js";
 
 const VECTOR_DIM = 4;
@@ -70,7 +70,14 @@ function makeRow(opts) {
     importance: opts.importance ?? 0.5,
     memoryStrength: opts.memoryStrength ?? 1.0,
     _distance: opts.distance ?? 0,
+    scope: "agent-private",
+    agentId: "agent-a",
+    storedBy: "agent-a",
   };
+}
+
+function runRecallPipeline(options) {
+  return runRecallPipelineRaw({ agentId: "agent-a", ...options });
 }
 
 describe("recall-pipeline decision trace", () => {

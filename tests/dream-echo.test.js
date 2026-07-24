@@ -9,6 +9,12 @@ import {
 
 const T0 = 1750000000000;
 const D = 86400000;
+const ECHO_CONTEXT = {
+  agentId: "echo-agent",
+  workspaceIdentity: "workspace:v1:echo-workspace",
+  workspaceAliases: { paths: [], aliases: [] },
+};
+const ECHO_BINDINGS = { scope: "workspace", agentId: "echo-agent", workspaceIdentity: "workspace:v1:echo-workspace", ownerUserId: "" };
 
 describe("distillDreamEcho", () => {
   it("nutzt das LLM, wenn konfiguriert", async () => {
@@ -38,9 +44,9 @@ describe("distillDreamEcho", () => {
 describe("dream-echo store + format", () => {
   it("append + load: liefert das jüngste frische Echo", () => {
     const dir = mkdtempSync(join(tmpdir(), "echo-"));
-    appendDreamEcho(dir, { sentence: "alt", topics: [], createdAt: T0 - 5 * D });
-    appendDreamEcho(dir, { sentence: "frisch", topics: ["a"], createdAt: T0 - 1000 });
-    const echo = loadFreshDreamEcho(dir, { now: T0 });
+    appendDreamEcho(dir, { sentence: "alt", topics: [], createdAt: T0 - 5 * D, aclBindings: ECHO_BINDINGS });
+    appendDreamEcho(dir, { sentence: "frisch", topics: ["a"], createdAt: T0 - 1000, aclBindings: ECHO_BINDINGS });
+    const echo = loadFreshDreamEcho(dir, { now: T0, requestContext: ECHO_CONTEXT });
     assert.strictEqual(echo.sentence, "frisch");
   });
 

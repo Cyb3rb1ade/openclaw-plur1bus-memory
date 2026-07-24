@@ -75,7 +75,7 @@ describe("neo worker runtime", () => {
     }
   });
 
-  it("drains pending low-impact embedding queue entries when enabled", async () => {
+  it("leaves embedding work deferred when no worker-safe embedder is configured", async () => {
     const rootDir = makeRoot("plur1bus-neo-worker-drain-");
     const runtime = createNeoWorkerRuntime();
     try {
@@ -111,23 +111,24 @@ describe("neo worker runtime", () => {
         behaviorCards: 1,
       });
       assert.ok(result.drain);
-      assert.equal(result.drain.processed, 5);
+      assert.equal(result.drain.processed, 0);
+      assert.equal(result.drain.deferred, 5);
       assert.equal(result.drain.pending, 0);
       assert.equal(result.drain.skipped, 0);
       assert.equal(result.drain.parseErrors, 0);
       assert.ok(result.drain.queuePath.endsWith("embedding-queue.jsonl"));
 
       const store = createNeoStore(rootDir, "workspace-drain");
-      assert.equal(latestById(readJsonl(store.paths.embeddings)).every((item) => item.status === "done"), true);
-      assert.equal(latestById(store.readTurns(10)).every((turn) => turn.embeddingStatus === "fresh"), true);
-      assert.equal(latestById(store.readCandidates(10)).every((candidate) => candidate.embeddingStatus === "fresh"), true);
-      assert.equal(latestById(store.readBehaviorCards(10)).every((card) => card.embeddingStatus === "fresh"), true);
+      assert.equal(latestById(readJsonl(store.paths.embeddings)).every((item) => item.status === "deferred"), true);
+      assert.equal(latestById(store.readTurns(10)).every((turn) => turn.embeddingStatus !== "fresh"), true);
+      assert.equal(latestById(store.readCandidates(10)).every((candidate) => candidate.embeddingStatus !== "fresh"), true);
+      assert.equal(latestById(store.readBehaviorCards(10)).every((card) => card.embeddingStatus !== "fresh"), true);
     } finally {
       await runtime.close();
     }
   });
 
-  it("skips capture when messages are absent but can still drain", async () => {
+  it("skips capture and defers drains without an embedder", async () => {
     const rootDir = makeRoot("plur1bus-neo-worker-drain-only-");
     const store = createNeoStore(rootDir, "workspace-drain-only");
     const candidate = {
@@ -162,10 +163,11 @@ describe("neo worker runtime", () => {
         reactions: 0,
         behaviorCards: 0,
       });
-      assert.equal(result.drain.processed, 1);
+      assert.equal(result.drain.processed, 0);
+      assert.equal(result.drain.deferred, 1);
       assert.equal(result.drain.pending, 0);
       assert.equal(readJsonl(store.paths.turns).length, 0);
-      assert.equal(store.readCandidates(10).at(-1).embeddingStatus, "fresh");
+      assert.notEqual(store.readCandidates(10).at(-1).embeddingStatus, "fresh");
       assert.deepStrictEqual(store.readHooks(), {});
     } finally {
       await runtime.close();

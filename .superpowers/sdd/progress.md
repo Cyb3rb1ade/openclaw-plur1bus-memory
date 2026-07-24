@@ -307,3 +307,89 @@ cross-principal ACL behavior remain B13. Main and Remote remain untouched.
   Important 0 / Minor 0. Focused gate 126/126 across 20 suites; lint and diff
   checks pass. B5 is closed without handler, default-LLM, API-key, per-agent
   credential, Main, or Remote changes.
+
+## 2026-07-23 — B13 Task 2 recall/provider ACL boundary
+
+- Commit `6d2a33e` (`fix: authorize recall before graph and providers`) preserves
+  complete ownership/provenance across initial, refined, and hydrated recall
+  rows and enforces the frozen canonical ACL context before graph traversal,
+  embeddings, reranking, and every soft-budget return.
+- Graph authorization inspects at most 400 ordered edges and 200 endpoint IDs.
+  Endpoint reads use bounded 100-ID chunks, a shared deadline, strict
+  multi-namespace error propagation, and an explicit
+  `ERR_UNSUPPORTED_IN_QUERY` compatibility signal; free-text error inference is
+  intentionally absent.
+- Initial, refined, graph-relevance, temporal-anchor, and canonical cache-miss
+  embeddings receive the request-bound frozen agent context. Model selection,
+  API-key/endpoint/header routing, provider fallback, and per-agent credential
+  behavior remain unchanged.
+- Historical disclosure proofs stop at their obsolete disclosure assumptions.
+  Final focused and directly affected gate: 113/113, no failures or skips.
+- Independent specification review: **PASS**, Critical 0 / Important 0 /
+  Minor 0. Independent quality review: **PASS**, Critical 0 / Important 0 /
+  Minor 0.
+- Work remains local on `fix/high-mid-audit-findings-continuation`; Main,
+  `fix/high-mid-audit-findings`, PR #85, and Remote remain untouched.
+
+## 2026-07-23 — B13 Task 3 Wiki visibility and destructive audit
+
+- Commits `e238596`, `ca8fbc2`, `b74782f`, `2a34054`, and `12df055` close
+  Wiki lifecycle, object-ACL, non-enumeration, handler-validation, bounded
+  post-ACL selection, and destructive-audit path findings.
+- Invalid or missing arguments stop before routing, runtime LLM, pool, lease,
+  DB initialization, or provider work. Add/search/delete preserve canonical
+  ownership and agent-scoped embedding purpose.
+- Delete remains archive-first, awaits DB deletion, then writes exactly one
+  audit record. Canonical audit parent and target paths reject files,
+  directories in the wrong position, non-writable nodes, and symlinks before
+  mutation; true missing paths remain creatable.
+- Final focused gates: 51/51 Wiki cases and 29/29 handler/auth/adapter/default-
+  LLM cases. Independent specification and quality re-reviews both pass with
+  Critical 0 / Important 0.
+- Main, `fix/high-mid-audit-findings`, PR #85, and Remote remain untouched.
+
+## 2026-07-23 — B13 Task 4 safe-update ownership and confirmations
+
+- Commits `3053573` and `72c374c` validate the stored ownership tuple before
+  idempotency or writes, preserve all ownership aliases verbatim, and keep
+  store-before-supersede durability.
+- `/forget` and `/correct` use the canonical host request tuple for both
+  confirmation creation and completion. Only complete UUID nonces with exact
+  command/target/identity bindings redeem; prefixes and mismatches do not
+  consume live confirmations.
+- Pending confirmations are expiry-swept atomically across both maps and capped
+  at 1,024 entries. Final affected gate: 157/157.
+- Independent specification and quality re-reviews pass with Critical 0 /
+  Important 0. Minor: re-registering the identical nonce+target at full
+  capacity can evict one unrelated oldest entry; production handlers generate
+  fresh random UUID nonces.
+
+## 2026-07-23 — B13 Task 5 sensitive command dispatch
+
+- Commits `2d14f60`, `9818ca2`, `ea128f5`, `569bca8`, `ca7ed52`, and `9d45fba`
+  authorize data-bearing chat reads before store, DB, embedding, LLM, and
+  file-backed locale work.
+- Public help and unknown subcommands return without data work; verified
+  internal cron jobs retain canonical runtime workspace routing; Obsidian
+  remains the explicit B14 delegation boundary.
+- The registered-command matrix covers every current action/subcommand class,
+  including all memory audit branches, and observes zero work for denied/public
+  paths, exact runtime-LLM identity, and B14 delegation.
+- Final Task 5 gate: required three-file suite passes with 70 tests and no
+  failures; adjacent ACL/status/speaker/default-LLM/internal checks and diff
+  checks pass. All known Critical/Important Task 5 findings are closed.
+
+## 2026-07-23 — B13 Task 11 documentation and focused verification
+
+- Added the operator-facing shared-pool command, strict principal/route,
+  migration cursor/bounds/abort, and conservative auto-recall hook contracts to
+  `README.md` and `docs/configuration.md`.
+- The receipt `docs/audits/2026-07-21-b13-acl-wiki-share-fix.md` binds
+  SEC-01/02/03/04/05/08/12/16, FA-04, and FE-ADD-04 to implementation commits,
+  causal regressions, historical proofs, positive paths, and call-site review.
+- Documentation TDD started RED because `/share <id> --user` was absent; final
+  focused B13 verification is recorded in the receipt. No repository-wide gate,
+  push, merge, Main, or Remote action belongs to this task.
+- The remaining command-reachability failure was traced to an unstubbed
+  query-purpose embedding plus a stale read-only LanceDB table version after
+  `/forget`; both are covered by the final focused command/shared-recall gate.

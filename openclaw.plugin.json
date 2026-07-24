@@ -768,7 +768,32 @@
           },
           "candidateTopK": {
             "type": "number",
+            "minimum": 1,
+            "maximum": 100,
             "default": 40
+          },
+          "queryRefinement": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": false }
+            }
+          },
+          "adaptiveBudget": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": false },
+              "tokenBudgetPct": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.3 }
+            }
+          },
+          "semanticCompression": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": false },
+              "tokenBudget": { "type": "number", "minimum": 1, "maximum": 1000, "default": 240 }
+            }
           },
           "softBudgetMs": {
             "type": "number",
@@ -932,6 +957,13 @@
               "graphHydrationRelevanceThreshold": {
                 "type": "number",
                 "default": 0.25
+              },
+              "graphIndex": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": { "type": "boolean", "default": true }
+                }
               },
               "assocThreshold": {
                 "type": "number",

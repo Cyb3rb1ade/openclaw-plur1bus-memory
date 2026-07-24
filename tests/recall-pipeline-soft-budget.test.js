@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { runRecallPipeline } from "../lib/recall-pipeline.js";
+import { runRecallPipeline as runRecallPipelineRaw } from "../lib/recall-pipeline.js";
 import { createRecallPhaseTimer } from "../lib/recall-phase-timer.js";
 
 const VECTOR_DIM = 4;
@@ -18,6 +18,7 @@ function makeEmbeddings() {
 }
 
 function makeRow(opts) {
+  const ownerAgentId = opts.agentId ?? "agent-a";
   return {
     id: opts.id,
     text: opts.text ?? "",
@@ -28,7 +29,17 @@ function makeRow(opts) {
     importance: opts.importance ?? 0.5,
     memoryStrength: opts.memoryStrength ?? 1.0,
     _distance: opts.distance ?? 0,
+    scope: opts.scope ?? "agent-private",
+    agentId: ownerAgentId,
+    storedBy: opts.storedBy ?? ownerAgentId,
+    workspaceId: opts.workspaceId ?? "",
+    workspaceKey: opts.workspaceKey ?? "",
+    ownerUserId: opts.ownerUserId ?? "",
   };
+}
+
+function runRecallPipeline(options) {
+  return runRecallPipelineRaw({ agentId: "agent-a", ...options });
 }
 
 function mockTable({ vectorRows = [] } = {}) {
@@ -76,6 +87,41 @@ function makeTimerThatExceedsAfter(phase) {
 }
 
 describe("recall-pipeline soft-budget fallback", () => {
+  it("filters a foreign candidate before an immediate soft-budget return", async () => {
+    const rows = [
+      makeRow({ id: "own", text: "allowed" }),
+      makeRow({
+        id: "foreign",
+        text: "workspace-b secret",
+        scope: "workspace",
+        workspaceId: "workspace:v1:ws-b",
+        workspaceKey: "workspace:v1:ws-b",
+      }),
+    ];
+    const phaseTimer = makeTimerThatExceedsAfter("vector_search");
+    const result = await runRecallPipeline({
+      query: "soft budget acl",
+      dbTable: mockTable({ vectorRows: rows }),
+      embeddings: makeEmbeddings(),
+      topN: 5,
+      recallMinScore: 0.1,
+      importanceBoost: 0,
+      canonicalEnabled: false,
+      associativeEnabled: false,
+      phaseTimer,
+      softBudgetFallback: true,
+      decisionTrace: true,
+    });
+
+    assert.deepEqual(result.memories.map((item) => item.entry.id), ["own"]);
+    assert.ok(result.trace.decisions.some((entry) => (
+      entry.memoryId === "foreign"
+      && entry.stage === "initial-acl"
+      && entry.reason === "acl.workspace.mismatch"
+    )));
+    assert.ok(result.trace.guards.some((guard) => guard.name === "soft-budget"));
+  });
+
   it("skips slow rerank and returns boosted/deduped results", async () => {
     const rows = [
       makeRow({ id: "a", text: "alpha", summary: "alpha summary", _distance: 0.1 }),

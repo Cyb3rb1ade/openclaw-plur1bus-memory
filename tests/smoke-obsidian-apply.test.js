@@ -12,10 +12,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   syncWorkspace,
-  confirmVaultPath,
-  isVaultPathConfirmed,
   bridgePaths,
 } from "../lib/obsidian-bridge.js";
+import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
 
 describe("obsidian-apply", () => {
   function makeWorkspace(dir) {
@@ -34,6 +33,20 @@ describe("obsidian-apply", () => {
     writeFileSync(abs, content, "utf8");
   }
 
+  function applyPolicy(dir, vaultConfirmed = true) {
+    return parseObsidianCommandPlan(["review", "apply"], {
+      memoryCtx: {
+        agentId: "test-agent",
+        workspaceIdentity: "workspace:v1:test-ws",
+      },
+      baseDbPath: dir,
+      mode: "apply",
+      allowWrite: true,
+      vaultConfirmed,
+      actionConfirmed: true,
+    }).mutationPolicy;
+  }
+
   it("blocks apply when vault path is not confirmed", async () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-"));
     const ws = makeWorkspace(dir);
@@ -42,17 +55,16 @@ describe("obsidian-apply", () => {
       requireVaultPathConfirmation: true,
       backupBeforeApply: true,
       auditLog: true,
+      mutationPolicy: applyPolicy(dir, false),
     });
-    assert.ok(result.actions.some(a => a.action === "vault_not_confirmed"), "should block unconfirmed vault");
-    assert.ok(result.issues.some(i => i.code === "vault_not_confirmed"), "should report issue");
+    assert.equal(result.applied, false);
+    assert.equal(result.reason, "mutation_policy_denied");
+    assert.equal(result.scan, null);
   });
 
   it("allows apply when vault path is confirmed", async () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-"));
     const ws = makeWorkspace(dir);
-    confirmVaultPath(ws);
-    assert.ok(isVaultPathConfirmed(ws));
-
     mkdirSync(join(dir, "memory", "cards"), { recursive: true });
     writeFileSync(join(dir, "memory", "cards", "test.md"), [
       "---",
@@ -77,6 +89,7 @@ describe("obsidian-apply", () => {
       auditLog: true,
       applyApproved: true,
       approvedPaths: "all",
+      mutationPolicy: applyPolicy(dir),
       memoryStore: async () => ({ details: { id: "mem-123" } }),
     });
     assert.ok(!result.actions.some(a => a.action === "vault_not_confirmed"), "should not block confirmed vault");
@@ -85,8 +98,6 @@ describe("obsidian-apply", () => {
   it("creates backup, manifest and audit log on apply", async () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-obs-"));
     const ws = makeWorkspace(dir);
-    confirmVaultPath(ws);
-
     mkdirSync(join(dir, "memory", "cards"), { recursive: true });
     const originalContent = [
       "---",
@@ -112,6 +123,7 @@ describe("obsidian-apply", () => {
       auditLog: true,
       applyApproved: true,
       approvedPaths: "all",
+      mutationPolicy: applyPolicy(dir),
       memoryStore: async () => ({ details: { id: "mem-456" } }),
     });
 
