@@ -6,9 +6,17 @@ import { join } from "node:path";
 
 import { collectTier1Links, writeGraphLinks } from "../lib/obsidian/graph-link-writer.js";
 import { backfillMemoryNoteScope, writeMemoryNotes } from "../lib/obsidian/memory-note-writer.js";
+import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 function makeVault(prefix) {
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function vaultPolicy(vault) {
+  return confirmedObsidianPolicy({
+    baseDbPath: vault,
+    command: ["dashboards", "build"],
+  });
 }
 
 function memoryRecord(id, overrides = {}) {
@@ -174,7 +182,7 @@ describe("graph link memory target resolution", () => {
       plur1bus_type: "knowledge",
       path: "notes/empty.md",
       memoryIds: ["missing"],
-    }]);
+    }], { mutationPolicy: vaultPolicy(vault) });
 
     const content = readFileSync(notePath, "utf8");
     assert.strictEqual(result.updated, 0);
@@ -209,7 +217,10 @@ describe("graph link memory target resolution", () => {
       plur1bus_type: "memory",
       path: "memories/mem-a.md",
       title: "Memory A",
-    }], { linkIndex: { version: "1", entries: {} } });
+    }], {
+      linkIndex: { version: "1", entries: {} },
+      mutationPolicy: vaultPolicy(vault),
+    });
 
     const content = readFileSync(notePath, "utf8");
     assert.strictEqual(result.updated, 0);
@@ -228,7 +239,7 @@ describe("memory note workspace metadata", () => {
       reviewRoot: "plur1bus",
       agentId: "bernhardine",
       workspaceKey: "bernhardine",
-    }, [memoryRecord(id)], { maxPerRun: 1 });
+    }, [memoryRecord(id)], { maxPerRun: 1, mutationPolicy: vaultPolicy(vault) });
 
     const content = readFileSync(join(vault, "plur1bus", "memories", `${id}.md`), "utf8");
     assert.match(content, /^agent_id: bernhardine$/m);
@@ -244,7 +255,7 @@ describe("memory note workspace metadata", () => {
       reviewRoot: "plur1bus",
       agentId: "main",
       workspaceKey: "main",
-    }, [memoryRecord(id)], { maxPerRun: 1 });
+    }, [memoryRecord(id)], { maxPerRun: 1, mutationPolicy: vaultPolicy(vault) });
 
     const content = readFileSync(join(vault, "plur1bus", "memories", `${id}.md`), "utf8");
     assert.doesNotMatch(content, /^tags:/m);
@@ -263,11 +274,12 @@ describe("memory note workspace metadata", () => {
       workspaceKey: "heisenberg",
     };
 
-    writeMemoryNotes(config, [memoryRecord(id)], { maxPerRun: 1 });
+    const mutationPolicy = vaultPolicy(vault);
+    writeMemoryNotes(config, [memoryRecord(id)], { maxPerRun: 1, mutationPolicy });
     const filePath = join(vault, "plur1bus", "memories", `${id}.md`);
     assert.ok(existsSync(filePath));
     const before = statSync(filePath).mtimeMs;
-    const result = writeMemoryNotes(config, [memoryRecord(id)], { maxPerRun: 1 });
+    const result = writeMemoryNotes(config, [memoryRecord(id)], { maxPerRun: 1, mutationPolicy });
     const after = statSync(filePath).mtimeMs;
 
     assert.strictEqual(result.written, 0);

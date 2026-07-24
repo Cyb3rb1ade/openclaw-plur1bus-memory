@@ -61,6 +61,9 @@ describe("recall-pipeline associative toggle (K1-02)", () => {
     status: "active",
     importance: 0.5,
     memoryStrength: 1.0,
+    scope: "agent-private",
+    agentId: "agent-a",
+    storedBy: "agent-a",
   };
   const assocRow = {
     id: "assoc-1",
@@ -71,6 +74,9 @@ describe("recall-pipeline associative toggle (K1-02)", () => {
     status: "active",
     importance: 0.5,
     memoryStrength: 1.0,
+    scope: "agent-private",
+    agentId: "agent-a",
+    storedBy: "agent-a",
   };
   const graphEdges = [{
     source: "seed-1",
@@ -89,6 +95,7 @@ describe("recall-pipeline associative toggle (K1-02)", () => {
     importanceBoost: 0,
     canonicalEnabled: false,
     graphEdges,
+    agentId: "agent-a",
   };
 
   it("continuity off -> no graph traversal", async () => {

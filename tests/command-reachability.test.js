@@ -108,6 +108,7 @@ describe("registered memory command reachability", () => {
   let previousOpenclawHome;
   let plugin;
   let localProvider;
+  let originalEmbedQuery;
   let originalEmbedPassage;
 
   before(async () => {
@@ -123,7 +124,9 @@ describe("registered memory command reachability", () => {
     ]);
     plugin = pluginModule.default;
     localProvider = providerModule.LocalTransformersEmbeddingProvider;
+    originalEmbedQuery = localProvider.prototype.embedQuery;
     originalEmbedPassage = localProvider.prototype.embedPassage;
+    localProvider.prototype.embedQuery = async () => Array(VECTOR_DIM).fill(0.125);
     localProvider.prototype.embedPassage = async () => Array(VECTOR_DIM).fill(0.125);
 
     api = registerApi();
@@ -131,7 +134,8 @@ describe("registered memory command reachability", () => {
 
   after(async () => {
     for (const registeredApi of registeredApis) await shutdownApi(registeredApi);
-    if (localProvider && originalEmbedPassage) {
+    if (localProvider && originalEmbedQuery && originalEmbedPassage) {
+      localProvider.prototype.embedQuery = originalEmbedQuery;
       localProvider.prototype.embedPassage = originalEmbedPassage;
     }
     if (previousOpenclawHome === undefined) delete process.env.OPENCLAW_HOME;
@@ -154,7 +158,7 @@ describe("registered memory command reachability", () => {
     shutdownApis.add(registeredApi);
   }
 
-  async function store(agentId, text, registeredApi = api) {
+  async function store(agentId, text, registeredApi = api, category = "fact") {
     const tools = registeredApi._toolFactory({
       agentId,
       workspaceDir,
@@ -162,7 +166,7 @@ describe("registered memory command reachability", () => {
       userId: OWNER,
     });
     const storeTool = tools.find((tool) => tool.name === "memory_store");
-    const result = await storeTool.execute(`seed-${agentId}`, { text, category: "fact" });
+    const result = await storeTool.execute(`seed-${agentId}`, { text, category });
     assert.equal(result.details?.action, "stored", JSON.stringify(result));
     return result.details.id;
   }
@@ -262,5 +266,43 @@ describe("registered memory command reachability", () => {
       commandApi,
     );
     assert.match(recalled.text, /B1 corrected value/);
+  });
+
+  it("registers /share and /teile aliases and shares a normal card without changing its source", async () => {
+    const agentId = "b13-share";
+    const memoryId = await store(agentId, "B13 workspace share target");
+    const baseCtx = commandContext(workspaceDir, agentId, memoryId);
+    const share = await run("share", baseCtx);
+    assert.match(share.text, /shared|geteilt/i);
+    assert.ok(share.text.includes(memoryId) === false, "the result exposes only the shared copy id");
+    const teile = await run("teile", { ...baseCtx, args: memoryId });
+    assert.match(teile.text, /shared|geteilt/i);
+    const userShare = await run("share", { ...baseCtx, args: `${memoryId} --user` });
+    assert.match(userShare.text, /shared|geteilt/i);
+    const sourceStillActive = await run("memory", commandContext(workspaceDir, agentId, "B13 workspace share target"));
+    assert.match(sourceStillActive.text, /B13 workspace share target/);
+  });
+
+  it("binds sensitive /share confirmation to the exact user and conversation", async () => {
+    const agentId = "b13-share-sensitive";
+    const memoryId = await store(agentId, "B13 sensitive share target", api, "secret");
+    const baseCtx = commandContext(workspaceDir, agentId, memoryId);
+    const initiated = await run("share", { ...baseCtx, args: `${memoryId} --user` });
+    const token = confirmationToken(initiated.text, "share");
+    assert.match(token, /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i);
+    const colonSyntax = await run("share", { ...baseCtx, args: `confirm:${token}` });
+    assert.match(colonSyntax.text, /usage|failed|fehlgeschlagen/i);
+    assert.doesNotMatch(colonSyntax.text, /shared|geteilt/i);
+    const extraSyntax = await run("share", { ...baseCtx, args: `confirm ${token} extra` });
+    assert.match(extraSyntax.text, /usage|failed|fehlgeschlagen/i);
+    assert.doesNotMatch(extraSyntax.text, /shared|geteilt/i);
+    const wrongUser = await run("share", { ...baseCtx, args: `confirm ${token}`, senderId: OTHER_ALLOWED_USER });
+    assert.match(wrongUser.text, /failed|fehlgeschlagen/i);
+    const shortened = await run("share", { ...baseCtx, args: `confirm ${token.slice(0, 6)}` });
+    assert.match(shortened.text, /failed|fehlgeschlagen/i);
+    const completed = await run("teile", { ...baseCtx, args: `confirm ${token}` });
+    assert.match(completed.text, /shared|geteilt/i);
+    const replay = await run("share", { ...baseCtx, args: `confirm ${token}` });
+    assert.match(replay.text, /failed|fehlgeschlagen/i);
   });
 });

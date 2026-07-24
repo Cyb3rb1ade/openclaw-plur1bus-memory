@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import plugin from "../index.js";
+import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -34,6 +35,7 @@ function makeApi(baseDbPath, configOverrides = {}) {
       neo: { enabled: true },
       obsidianBridge: { enabled: false },
       gc: { enabled: false },
+      security: { allowedUserIds: ["owner"] },
       ...configOverrides,
     },
     logger: { info: noop, warn: noop, error: noop, debug: noop },
@@ -53,15 +55,15 @@ function makeApi(baseDbPath, configOverrides = {}) {
   };
 }
 
-async function withPlugin(fn) {
+async function withPlugin(fn, registrationDependencies = {}) {
   const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-internal-auth-db-"));
   const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-internal-auth-ws-"));
   try {
     const api = makeApi(baseDbPath);
-    plugin.register(api, { importRouting: async () => routingCapability });
+    plugin.register(api, { importRouting: async () => routingCapability, ...registrationDependencies });
     const command = api._commands.find((item) => item.name === "plur1bus");
     assert.ok(command, "plur1bus command should be registered");
-    return await fn({ command, workspaceDir });
+    return await fn({ command, workspaceDir, baseDbPath });
   } finally {
     rmSync(baseDbPath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
@@ -106,7 +108,7 @@ function writeSkillProposal(workspaceDir, id = "proposal-1") {
 
 describe("/plur1bus internal auth gate", () => {
   it("blocks internal jobs from group chats without an ACL", async () => {
-    await withPlugin(async ({ command, workspaceDir }) => {
+    await withPlugin(async ({ command, workspaceDir, baseDbPath }) => {
       const result = await command.handler({
         args: "internal gc-run",
         workspaceDir,
@@ -119,7 +121,7 @@ describe("/plur1bus internal auth gate", () => {
   });
 
   it("keeps OpenClaw cron delivery authorized for internal jobs", async () => {
-    await withPlugin(async ({ command, workspaceDir }) => {
+    await withPlugin(async ({ command, workspaceDir, baseDbPath }) => {
       const result = await command.handler({
         args: "internal gc-run",
         workspaceDir,
@@ -132,9 +134,72 @@ describe("/plur1bus internal auth gate", () => {
       assert.match(result.text, /"reason": "gc_disabled"/);
     });
   });
+
+  it("routes verified cron jobs through the runtime workspace, never the raw chat workspace key", async () => {
+    const neoStores = [];
+    await withPlugin(async ({ command, workspaceDir, baseDbPath }) => {
+      const result = await command.handler({
+        args: "internal gc-run",
+        workspaceDir,
+        workspaceKey: "attacker-workspace",
+        agentId: "agent-a",
+        channel: "cron",
+      });
+      assert.match(result.text, /"job": "gc-run"/);
+      const expectedKey = resolveMemoryRequestContext({
+        agentId: "agent-a",
+        workspaceDir: baseDbPath,
+        channel: "cron",
+        accountId: "cron",
+      }).workspaceIdentity;
+      assert.deepEqual(neoStores, [{ purpose: "general", workspaceKey: expectedKey }]);
+      assert.notEqual(neoStores[0].workspaceKey, "attacker-workspace");
+      const workspaceRoot = join(baseDbPath, "_neo", "workspaces");
+      assert.equal(existsSync(join(workspaceRoot, "attacker-workspace")), false);
+    }, { commandRuntimeHooks: { onNeoStore: (effect) => neoStores.push(effect) } });
+  });
 });
 
 describe("/plur1bus mutating command auth gates", () => {
+  it("classifies legacy shared migration as operator-destructive and never grants cron bypass", async () => {
+    await withPlugin(async ({ command, workspaceDir }) => {
+      for (const context of [
+        { ...groupCtx, args: "migrate-legacy-shared" },
+        { ...groupCtx, origin: "cron", args: "migrate-legacy-shared --apply" },
+      ]) {
+        const result = await command.handler({ workspaceDir, ...context });
+        assertBlocked(result);
+      }
+      assert.equal(existsSync(join(workspaceDir, ".plur1bus", "migrations")), false);
+    });
+  });
+
+  it("runs an authorized dry-run through the official host-shaped command context", async () => {
+    await withPlugin(async ({ command, baseDbPath }) => {
+      const result = await command.handler({
+        args: "migrate-legacy-shared --report official-host.json",
+        senderId: "owner",
+        userId: "owner",
+        channel: "telegram",
+        accountId: "default",
+        agentId: "agent-a",
+        sessionKey: "agent:agent-a:telegram:direct:chat-a",
+        from: "telegram:chat-a",
+        to: "telegram:chat-a",
+        getCurrentConversationBinding: () => null,
+        chatType: "private",
+      });
+      assert.match(result.text, /"planned": 0/);
+      assert.match(result.text, /"incomplete": false/);
+      assert.equal(
+        existsSync(join(baseDbPath, ".plur1bus", "migrations", "official-host.json")),
+        true,
+      );
+      assert.equal(existsSync(join(baseDbPath, "agent-a")), false,
+        "missing authoritative table must not be bootstrapped by dry-run");
+    });
+  });
+
   it("blocks skill approval from group chats and leaves proposals unchanged", async () => {
     await withPlugin(async ({ command, workspaceDir }) => {
       writeSkillProposal(workspaceDir);
@@ -151,7 +216,7 @@ describe("/plur1bus mutating command auth gates", () => {
     });
   });
 
-  it("keeps read-only skill review available in group chats", async () => {
+  it("blocks read-only skill review from group chats", async () => {
     await withPlugin(async ({ command, workspaceDir }) => {
       writeSkillProposal(workspaceDir);
 
@@ -161,8 +226,7 @@ describe("/plur1bus mutating command auth gates", () => {
         ...groupCtx,
       });
 
-      assert.doesNotMatch(result.text, /allowedUserIds/);
-      assert.match(result.text, /proposal-1|Danger Skill/);
+      assertBlocked(result);
     });
   });
 
@@ -178,7 +242,7 @@ describe("/plur1bus mutating command auth gates", () => {
     });
   });
 
-  it("blocks neo workspace migrations from group chats unless dry-run", async () => {
+  it("blocks neo workspace migrations from group chats including dry-run", async () => {
     await withPlugin(async ({ command, workspaceDir }) => {
       const blocked = await command.handler({
         args: "neo workspaces migrate",
@@ -193,7 +257,7 @@ describe("/plur1bus mutating command auth gates", () => {
         workspaceDir,
         ...groupCtx,
       });
-      assert.doesNotMatch(dryRun.text, /allowedUserIds/);
+      assertBlocked(dryRun);
     });
   });
 

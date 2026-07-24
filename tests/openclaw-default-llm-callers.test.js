@@ -8,6 +8,8 @@ import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-l
 import { lightDream } from "../lib/dreaming/light-dream.js";
 import { runRemDream } from "../lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns } from "../lib/episodes.js";
+import { resolveMemoryRequestContext, userPoolKey, workspacePoolKey } from "../lib/memory-request-context.js";
+import { storeSharedMemory } from "../lib/shared-memory.js";
 
 const repoSource = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 const VECTOR_DIM = 384;
@@ -295,6 +297,11 @@ test("long /memory query uses its session runtime and recall-query owner route",
 test("exact-limit punctuation-free /memory input stays usable with merging disabled", async (t) => {
   const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-bounded-query-fallback-"));
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+  LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => makeVector();
+  t.after(() => {
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+  });
   const runtimeCalls = [];
   const pluginModule = await loadFreshPlugin();
   const api = createApi(baseDbPath, {
@@ -373,6 +380,9 @@ test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors
     createdAt: now,
     sourceTimestamp: now,
     status: "active",
+    scope: "workspace",
+    workspaceKey: "workspace:v1:rem-workspace",
+    agentId: "rem-agent",
   }));
   const features = [];
   const callLlm = async (_messages, cfg) => {
@@ -402,6 +412,14 @@ test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors
     },
     workspaceKey: "rem-workspace",
     agentId: "rem-agent",
+    requestContext: {
+      agentId: "rem-agent",
+      workspaceIdentity: "workspace:v1:rem-workspace",
+      workspaceAliases: { paths: [], aliases: [] },
+    },
+    aclPartition: {
+      scope: "workspace", agentId: "rem-agent", workspaceIdentity: "workspace:v1:rem-workspace", ownerUserId: "",
+    },
     force: true,
     narrativeCfg: { enabled: true, storeAsMemory: false },
     workspaceDir,
@@ -495,6 +513,129 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
   assert.equal(summaryCalls[1].signal instanceof AbortSignal, true);
   assert.equal(Object.hasOwn(summaryCalls[0], "model"), false);
   assert.equal(Object.hasOwn(summaryCalls[1], "model"), false);
+});
+
+test("verified auto-recall tickets and /memory compose authorized shared pools", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-shared-runtime-recall-"));
+  t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+  const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+  const embeddingCalls = [];
+  LocalTransformersEmbeddingProvider.prototype.embedPassage = async function embedPassage(text, ctx) {
+    embeddingCalls.push(["passage", text, ctx]);
+    return makeVector();
+  };
+  LocalTransformersEmbeddingProvider.prototype.embedQuery = async function embedQuery(text, ctx) {
+    embeddingCalls.push(["query", text, ctx]);
+    return makeVector();
+  };
+  t.after(() => {
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+  });
+
+  const pluginModule = await loadFreshPlugin();
+  const agentId = "shared-runtime-agent";
+  const memoryCtx = resolveMemoryRequestContext({
+    agentId,
+    workspaceDir: baseDbPath,
+    channel: "telegram",
+    accountId: "default",
+    userId: "42",
+    chatId: "chat-a",
+  });
+  const workspaceDb = new pluginModule.MemoryDB(
+    join(baseDbPath, ".plur1bus-shared", "workspaces", workspacePoolKey(memoryCtx.workspaceIdentity)),
+    VECTOR_DIM,
+  );
+  const userDb = new pluginModule.MemoryDB(
+    join(baseDbPath, ".plur1bus-shared", "users", userPoolKey(memoryCtx.userPrincipal)),
+    VECTOR_DIM,
+  );
+  await workspaceDb.init();
+  await userDb.init();
+  await storeSharedMemory(
+    workspaceDb,
+    {
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      text: "Workspace shared runtime topic",
+      summary: "Workspace shared runtime topic",
+      category: "fact",
+      agentId: "source-agent",
+      storedBy: "source-agent",
+      createdAt: Date.now(),
+      expiresAt: 0,
+    },
+    memoryCtx,
+    { targetScope: "workspace", vector: makeVector(), sourceAgentId: "source-agent" },
+  );
+  await storeSharedMemory(
+    userDb,
+    {
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      text: "Owner shared runtime topic",
+      summary: "Owner shared runtime topic",
+      category: "fact",
+      agentId: "source-agent",
+      storedBy: "source-agent",
+      createdAt: Date.now(),
+      expiresAt: 0,
+    },
+    memoryCtx,
+    { targetScope: "user", vector: makeVector(), sourceAgentId: "source-agent" },
+  );
+  await workspaceDb.shutdown();
+  await userDb.shutdown();
+
+  const api = createApi(baseDbPath, {
+    autoRecall: true,
+    merging: { enabled: false },
+    runtime: { recallTimeoutMs: 5_000 },
+    recall: { maxPromptMemories: 5, dedup: false, canonicalFirst: false },
+    continuityEngine: { enabled: false },
+    conversationReactivationRecall: { enabled: false },
+    emotion: { t3: { enabled: false } },
+  });
+  t.after(() => api._shutdown());
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const verified = await observeOfficialTurn(api, {
+    agentId,
+    workspaceDir: baseDbPath,
+    runId: "run-shared-verified",
+    prompt: "shared runtime topic",
+    senderId: "42",
+    chatId: "chat-a",
+  });
+  const verifiedResults = await api._emit("before_prompt_build", verified.event, verified.ctx);
+  const verifiedText = verifiedResults.map((result) => result?.prependContext || "").join("\n");
+  assert.match(verifiedText, /Workspace shared runtime topic/);
+  assert.match(verifiedText, /Owner shared runtime topic/);
+
+  const unverifiedResults = await api._emit(
+    "before_prompt_build",
+    { ...verified.event, runId: "run-shared-unverified", prompt: "shared runtime topic without ticket" },
+    { ...verified.ctx, runId: "run-shared-unverified" },
+  );
+  const unverifiedText = unverifiedResults.map((result) => result?.prependContext || "").join("\n");
+  assert.match(unverifiedText, /Workspace shared runtime topic/);
+  assert.doesNotMatch(unverifiedText, /Owner shared runtime topic/);
+
+  const memoryCommand = api._commands.find((command) => command.name === "memory");
+  const rendered = await memoryCommand.handler(officialCommandContext({
+    args: "shared runtime topic",
+    agentId,
+    senderId: "42",
+    chatId: "chat-a",
+  }));
+  assert.match(rendered.text, /Workspace shared runtime topic/);
+  assert.match(rendered.text, /Owner shared runtime topic/);
+  assert.doesNotMatch(rendered.text, /\(untitled\)/);
+  assert.doesNotMatch(rendered.text, /\? \/ \?/);
+  assert.ok(embeddingCalls.some(([purpose, _text, ctx]) => purpose === "query" && ctx?.agentId === agentId));
+  assert.equal(embeddingCalls.some(([_purpose, _text, ctx]) => (
+    ctx && ["model", "apiKey", "baseUrl", "headers"].some((key) => Object.hasOwn(ctx, key))
+  )), false);
 });
 
 test("/correct bounds an oversized canonical replacement before candidate lookup", async (t) => {

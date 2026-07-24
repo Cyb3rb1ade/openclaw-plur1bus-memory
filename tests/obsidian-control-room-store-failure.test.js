@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 import plugin, { MemoryDB } from "../index.js";
 import {
@@ -10,6 +11,8 @@ import {
   updateReviewBundleItems,
 } from "../lib/obsidian-control-room.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { parseObsidianCommandPlan } from "../lib/obsidian-mutation-policy.js";
+import { recordOwnedVaultConfirmation } from "../lib/obsidian-vault-authority.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID = "control-room-agent";
@@ -42,7 +45,7 @@ function makeApi(baseDbPath, vaultPath) {
       baseDbPath,
       embedding: { provider: "local-transformers", local: { dimensions: VECTOR_DIM } },
       merging: { enabled: false },
-      obsidianBridge: { enabled: false, vaultPath },
+      obsidianBridge: { enabled: false, vaultPath, mode: "apply", allowWrite: true, dryRun: false },
       autoCapture: false,
       autoRecall: false,
       neo: { enabled: false },
@@ -91,18 +94,31 @@ describe("registered Obsidian Control-Room memory apply", () => {
     baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-control-room-db-"));
     vaultPath = mkdtempSync(join(tmpdir(), "plur1bus-control-room-vault-"));
     workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-control-room-workspace-"));
-    bundleId = `rb-control-room-${Date.now()}`;
+    bundleId = `rb-${randomUUID()}`;
 
     originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     originalStore = MemoryDB.prototype.store;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => Array(VECTOR_DIM).fill(0.125);
 
     const obsidianConfig = { vaultPath };
+    const authorityCtx = {
+      agentId: AGENT_ID,
+      workspaceIdentity: `workspace-dir:v1:${realpathSync(workspaceDir)}`,
+    };
+    const mutationPolicy = parseObsidianCommandPlan(["review", "apply"], {
+      memoryCtx: authorityCtx,
+      baseDbPath,
+      mode: "apply",
+      allowWrite: true,
+      vaultConfirmed: true,
+      actionConfirmed: true,
+    }).mutationPolicy;
     const prepared = await prepareReviewBundle(obsidianConfig, {
       agentId: AGENT_ID,
       workspaceKey: WORKSPACE_KEY,
       workspaceDir,
       bundleId,
+      mutationPolicy,
       proposals: [{
         type: "memory_promotion",
         risk: "low",
@@ -114,7 +130,18 @@ describe("registered Obsidian Control-Room memory apply", () => {
       }],
     });
     assert.equal(prepared.items.length, 1, "fixture should prepare one memory item");
-    updateReviewBundleItems(obsidianConfig, bundleId, "approve", "all", { agentId: AGENT_ID });
+    updateReviewBundleItems(obsidianConfig, bundleId, "approve", "all", {
+      agentId: AGENT_ID,
+      workspaceKey: authorityCtx.workspaceIdentity,
+      mutationPolicy,
+    });
+    recordOwnedVaultConfirmation({
+      baseDbPath,
+      memoryCtx: authorityCtx,
+      vaultPath,
+      confirmationValidated: true,
+      confirmationNonce: randomUUID(),
+    });
 
     api = makeApi(baseDbPath, vaultPath);
     plugin.register(api, { importRouting: async () => routingCapability });

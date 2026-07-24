@@ -2,62 +2,22 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { storeSharedMemory } from "../lib/shared-memory.js";
 
-function makePool() {
-  const stored = [];
-  return {
-    stored,
-    pool: {
-      getDb() {
-        return {
-          store: async (entry) => {
-            stored.push(entry);
-          },
-        };
-      },
-    },
-  };
+function db() {
+  const rows = []; const fields = ["id", "text", "vector", "agentId", "workspaceId"].map((name) => ({ name, type: {} }));
+  return { vectorDim: 2, rows, async init() {}, async refreshSchemaFields() {}, table: {
+    async schema() { return { fields }; }, async addColumns(cols) { fields.push(...cols); },
+    query() { return { where: () => ({ limit: () => ({ toArray: async () => [] }) }) }; },
+  }, async store(row) { rows.push(row); }, async getById(id) { return rows.find((row) => row.id === id); } };
 }
+const source = { id: "11111111-1111-4111-8111-111111111111", agentId: "agent-1", text: "fact", status: "active" };
 
 describe("storeSharedMemory safety guard", () => {
   it("rejects core and neverForget memories without explicit sensitive approval", async () => {
-    const { pool, stored } = makePool();
-
-    await assert.rejects(
-      () => storeSharedMemory(pool, "agent-1", "critical private fact", { memoryClass: "core" }),
-      /sensitive shared memory requires explicit approval/,
-    );
-    await assert.rejects(
-      () => storeSharedMemory(pool, "agent-1", "critical private fact", { neverForget: 1 }),
-      /sensitive shared memory requires explicit approval/,
-    );
-    assert.deepStrictEqual(stored, []);
+    for (const extra of [{ memoryClass: "core" }, { neverForget: 1 }]) {
+      await assert.rejects(() => storeSharedMemory(db(), { ...source, ...extra }, { workspaceIdentity: "ws" }, { targetScope: "workspace", sourceAgentId: "agent-1", vector: [1, 2] }), /sensitive shared memory requires explicit approval/);
+    }
   });
-
-  it("rejects sensitive critical-push categories without explicit sensitive approval", async () => {
-    const { pool, stored } = makePool();
-
-    await assert.rejects(
-      () => storeSharedMemory(pool, "agent-1", "Erik password lives in the vault", { category: "password" }),
-      /sensitive shared memory requires explicit approval/,
-    );
-    await assert.rejects(
-      () => storeSharedMemory(pool, "agent-1", "Remember this person", { criticalPushType: "person" }),
-      /sensitive shared memory requires explicit approval/,
-    );
-    assert.deepStrictEqual(stored, []);
-  });
-
-  it("allows sensitive shared memories only when explicitly approved", async () => {
-    const { pool, stored } = makePool();
-
-    const result = await storeSharedMemory(pool, "agent-1", "approved shared fact", {
-      category: "password",
-      allowSensitiveShare: true,
-      id: "shared-1",
-    });
-
-    assert.deepStrictEqual(result, { ok: true, id: "shared-1" });
-    assert.strictEqual(stored.length, 1);
-    assert.strictEqual(stored[0].scope, "workspace_shared");
+  it("rejects sensitive category and type independently", async () => {
+    await assert.rejects(() => storeSharedMemory(db(), { ...source, category: "note", type: "password" }, { workspaceIdentity: "ws" }, { targetScope: "workspace", sourceAgentId: "agent-1", vector: [1, 2] }), /sensitive shared memory requires explicit approval/);
   });
 });

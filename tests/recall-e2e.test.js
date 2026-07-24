@@ -3,20 +3,30 @@
  */
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { runRecallPipeline, dedupResults } from "../lib/recall-pipeline.js";
+import { runRecallPipeline as runRecallPipelineRaw, dedupResults } from "../lib/recall-pipeline.js";
 import { tokenize, jaccardSimilarity } from "../lib/text-utils.js";
 import { computeDecayedStrength } from "../lib/memory-dynamics.js";
 import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { allocateMemoryTiers } from "../lib/recall-budget.js";
 
 describe("recall-e2e", () => {
-  const makeDbTable = (rows) => ({
+  const makeDbTable = (rows) => {
+    const authorizedRows = rows.map((row) => ({
+      scope: "agent-private",
+      agentId: "agent-a",
+      storedBy: "agent-a",
+      ...row,
+    }));
+    return ({
     vectorSearch: () => ({
       limit: () => ({
-        toArray: async () => rows,
+        toArray: async () => authorizedRows,
       }),
     }),
-  });
+    });
+  };
+
+  const runRecallPipeline = (options) => runRecallPipelineRaw({ agentId: "agent-a", ...options });
 
   const makeEmbeddings = (vec = [0.1, 0.2, 0.3]) => ({
     dim: vec.length,

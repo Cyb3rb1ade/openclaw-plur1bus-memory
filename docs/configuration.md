@@ -88,6 +88,40 @@ Sharing-Verträge bleiben B13 vorbehalten.
 
 ---
 
+## B13 Shared-Memory-Routen und Hook-Grenze
+
+Shared-Memory ist keine Konfigurations-Abkürzung für Namespace-Reads.
+`/share <id>` erzeugt nach gebundener Bestätigung eine Workspace-Kopie;
+`/share <id> --user` erzeugt eine User-Kopie. Eine Karte wird **copy, never
+move** behandelt. Physische, nicht aus Eingaben abgeleitete Routen sind maximal
+64 Zeichen und enden auf `.plur1bus-shared/workspaces/w-<62hex>` beziehungsweise
+`.plur1bus-shared/users/u-<62hex>`. Workspace-Aliase werden konfliktablehnend
+kanonisiert; es gibt keine versteckte Priorität. Der Zugriff bindet Kanal,
+Account und User; autorisierte Shared-Recall-Quellen sind additiv und nach
+kanonischem Origin dedupliziert.
+
+Automatische User-Shared-Recall im OpenClaw-Prompt-Hook existiert nur bei
+`autoRecall: true` und nur mit account-tragendem Session-Key, exaktem
+Host-Run-Ticket oder konservativer default-only Account-Topologie. Native und
+Slash-Kommandos minten absichtlich kein Route-Ticket, weil sie den Prompt-Hook
+nicht erreichen. Bei mehrdeutigen named/multi-account Main/Group/Channel-Turns
+entfällt nur die optionale User-Shared-Quelle; `/memory`, `/share --user` und
+Tools nutzen weiterhin den vom Host gelieferten Account. Ein Session-last-route
+Wert ist kein turn-gebundener Account-Nachweis.
+
+Alte `workspace_shared`-Zeilen werden nicht neu gedeutet: workspace_shared
+legacy rows are not reinterpreted. Nur der destruktiv autorisierte,
+initialisierte Runtime-Befehl `/plur1bus migrate-legacy-shared` kann sie nach
+Dry-run mit `--apply` kopieren. `--cursor <token>` ist opak und nur für den
+passenden Dry-run/Quellversions-Stand gültig. Pro Lauf gelten 250 Zeilen,
+4 MiB, 100 Provider-Aufrufe und 60 Sekunden; Version-/Modus-/Bindungsfehler,
+Timeout oder unklare Commits brechen ab und verlangen Fortsetzung oder Neustart.
+Es gibt keinen separaten DB-, Config- oder Credential-Bootstrap. Multi-Namespace,
+Neo/Obsidian-Aliase, Semantic Lens, CRR, OpenClaw default LLM und per-agent
+credentials ändern sich dadurch nicht.
+
+---
+
 ## Halbwertszeit (Typbasiert)
 
 | Key | Typ | Default | Beschreibung |

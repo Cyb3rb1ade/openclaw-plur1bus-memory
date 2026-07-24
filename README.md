@@ -241,6 +241,8 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
+PLUR1BUS requires Node.js 22.5 or newer.
+
 Drop into an OpenClaw extensions folder and restart the gateway:
 
 ```bash
@@ -414,7 +416,7 @@ The six runtime settings are `llmResultCacheEnabled` (default `true`), `llmResul
 
 Operational notes:
 
-- Persistence requires Node ≥ 22.5 for the built-in `node:sqlite` module; on older Node versions the cache transparently falls back to memory-only.
+- Persistence uses the built-in `node:sqlite` module available throughout the supported Node.js runtime range; if SQLite initialization is unavailable, the cache falls back to memory-only.
 - Persistence stores LLM response text as plaintext (directory `0o700`, file `0o600` under the memory database path). Responses may contain condensed memory content — enable persistence only where that is acceptable.
 - Integrated call sites send `temperature: 0` for determinism, and `llm-call.js` now actually forwards `temperature` to the provider (previously the setting was silently ignored). Existing configs that set `temperature` therefore change their effective provider behavior.
 
@@ -450,6 +452,68 @@ it never poisons results by marking everything `fakt`.
 - `agent-private` remains per-agent.
 - `workspace` shares by workspace.
 - `user` is owner-bound: der aufrufende `userId` wird gespeichert und bei Sichtbarkeit/Mutation geprüft.
+
+### Freigegebene Memory-Pools (B13)
+
+`/share <id>` kopiert eine sichtbare Karte nach bestätigter, an Benutzer und
+Chat gebundener Bestätigung in den Workspace-Pool. `/share <id> --user` nutzt
+dieselbe Bestätigung, erzeugt aber einen nur für denselben Kanal, Account und
+Benutzer sichtbaren User-Pool. Die Grammatik ist strikt: nur ein vollständiges
+UUID-`id`, optional genau `--user`, oder `/share confirm <nonce>` sind gültig;
+unbekannte oder doppelte Optionen werden vor jedem Store-, DB-, Embedding- oder
+Provider-Zugriff abgelehnt. Eine Freigabe ist **copy, never move**: die private
+Ursprungskarte bleibt unverändert, und die autorisierte Shared-Kopie enthält
+einen kanonischen Origin-Verweis. Recall darf die optionalen Shared-Quellen
+ergänzend lesen und dedupliziert den kanonischen Ursprung; sie ersetzen weder
+primären Recall noch dessen ACL.
+
+Physische Routen sind kein benutzergesteuerter Pfad: ihre Segmente sind höchstens
+64 Zeichen lang und werden als `.plur1bus-shared/workspaces/w-<62hex>` oder
+`.plur1bus-shared/users/u-<62hex>` abgelegt. Die Berechtigung bindet den
+kanonischen Workspace konfliktablehnend (keine versteckte Alias-Priorität) und
+den vollständigen Kanal+Account+Benutzer-Prinzipal. Fehlende oder abweichende
+Bindungen sind nicht sichtbar und nicht mutierbar; fehlend und verweigert
+werden gleich behandelt. `/memory` und `/share --user` verwenden den direkt
+vom Host gelieferten Account.
+
+Der aktuelle OpenClaw-Hook kann die optionale automatische User-Shared-Recall
+Quelle ausschließlich bei aktiviertem `autoRecall` verwenden. Er benötigt
+einen account-tragenden Session-Key, ein exaktes Host-Run-Ticket oder eine
+konservative default-only Account-Topologie. Native und Slash-Kommandos prägen
+absichtlich kein Route-Ticket, weil behandelte Kommandos den Prompt-Hook nicht
+erreichen. Bei mehrdeutigen benannten/multi-account Main-, Group- oder
+Channel-Turns wird nur diese optionale Quelle ausgelassen; andere Recall-Quellen
+bleiben unberührt. Ein zuletzt gespeicherter Session-Route-Wert ist kein
+turn-gebundener Account-Beweis.
+
+Legacy rows that used the old `workspace_shared` scope remain in their
+authoritative private table until an operator explicitly migrates them. Start
+with the non-mutating audit:
+
+```text
+/plur1bus migrate-legacy-shared
+```
+
+Use `--report <name.json>` for a fixed private report name, and resume a bounded
+dry run with the opaque `--cursor <token>` returned by the previous run. After
+reviewing the report, run `--apply` without a dry-run cursor; apply re-reads each
+source row, writes and verifies an idempotent workspace copy, and only then
+marks the legacy source. The command never deletes or re-scopes the source row:
+workspace_shared legacy rows are not reinterpreted. The operation is bounded
+per run to 250 rows, 4 MiB source bytes, 100 provider calls, and 60 seconds.
+The opaque cursor pins source versions and dry-run mode; an unavailable or
+changed pinned version, mode mismatch, checksum/binding failure, timeout, or
+uncertain commit aborts the run and requires the documented continuation or a
+restart without the cursor. Apply never accepts a dry-run cursor.
+It is operator-destructive, so it requires the same user authorization as
+`/forget`; cron identity does not bypass that gate. Reports are no-clobber
+`0600` JSON files below `.plur1bus/migrations/` and exclude memory content,
+vectors, evidence, and provenance.
+
+The migration runs only through the destructively authorized initialized runtime
+command; there is no standalone DB/config/credential bootstrap. Multi-Namespace,
+Neo/Obsidian aliases, Semantic Lens, CRR, the OpenClaw default LLM, and
+per-agent credentials do not change under sharing or migration.
 
 **`security.allowModelDestructiveMemoryOps`** (default `true`) — the model-facing tools `memory_forget` and `knowledge_update` mutate persistent memory/knowledge state. Set this flag to `false` if you want a hard opt-out for model-driven destructive memory writes.
 

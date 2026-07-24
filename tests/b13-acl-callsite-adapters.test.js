@@ -214,10 +214,9 @@ describe("B13 strict ownership ACL adapters", () => {
 
     const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
     assert.match(indexSource, /const auth = isAuthorized\(memoryCtx, cfg, \{ \.\.\.opts, chatKind: memoryCtx\.chatKind \}\)/);
-    assert.doesNotMatch(indexSource, /const denied = checkAuth\(/);
-    assert.match(indexSource, /const denied = await checkAuth\(commandCtx, \{ destructive: true \}\)/);
-    assert.equal([...indexSource.matchAll(/const denied = await checkAuth\(commandCtx, \{ destructive: true \}\)/g)].length, 14);
-    assert.match(indexSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\);\s+const denied = checkMemoryAuth\(memoryCtx, commandCtx, \{ destructive: true \}\)/);
+    assert.match(indexSource, /const checkAuth = async \(memoryCtx, opts = \{\}, localeCtx = null\) =>/);
+    assert.match(indexSource, /checkAuth\(memoryCtx, \{ destructive: true, chatKind: memoryCtx\.chatKind \}, commandCtx\)/);
+    assert.match(indexSource, /const runStatusCommand = async \(commandCtx, suppliedMemoryCtx = null\)/);
   });
 
   it("rejects malformed snapshots and unknown/internal scopes", () => {
@@ -307,7 +306,7 @@ describe("B13 strict ownership ACL adapters", () => {
     const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
     assert.match(indexSource, /const memoryCtx = await resolveRegisteredMemoryContext\(commandCtx\)/);
     assert.match(indexSource, /const storeAccessCtx = memoryCtx/);
-    assert.match(indexSource, /memoryCtx,\s*decisionTrace:/);
+    assert.match(indexSource, /memoryCtx,\s*queryRefinerEnabled,\s*decisionTrace:/);
     assert.doesNotMatch(indexSource, /checkAccess\(\{\s*agentId,\s*workspaceId/);
   });
 });
