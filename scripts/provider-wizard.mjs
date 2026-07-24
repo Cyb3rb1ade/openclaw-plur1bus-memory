@@ -7,6 +7,7 @@
  */
 
 import { createInterface } from "node:readline/promises";
+import { once } from "node:events";
 import { stdin, stdout } from "node:process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,9 +54,28 @@ export function formatWizardOption(type, key, { lang: l = "en" } = {}) {
 
 async function main() {
   const rl = createInterface({ input: stdin, output: stdout });
+  let inputClosed = false;
+  rl.once("close", () => {
+    inputClosed = true;
+  });
 
-  function askLine(prompt) {
-    return rl.question(prompt).then(a => a.trim());
+  async function rejectWhenInputCloses(signal) {
+    await once(rl, "close", { signal });
+    throw new Error("Input ended before provider setup completed");
+  }
+
+  async function askLine(prompt) {
+    if (inputClosed) throw new Error("Input ended before provider setup completed");
+    const closeController = new AbortController();
+    try {
+      const answer = await Promise.race([
+        rl.question(prompt),
+        rejectWhenInputCloses(closeController.signal),
+      ]);
+      return answer.trim();
+    } finally {
+      closeController.abort();
+    }
   }
 
   async function wizardEmbedding() {
@@ -128,13 +148,18 @@ async function main() {
       for (let i = 0; i < ADVANCED_RERANKER_MODELS.length; i++) {
         console.error(`  [${String.fromCharCode(97 + i)}] ${ADVANCED_RERANKER_MODELS[i]}`);
       }
-      const adv = await askLine("[a/b/c]: ");
-      const idx = adv.charCodeAt(0) - 97;
-      if (idx >= 0 && idx < ADVANCED_RERANKER_MODELS.length) {
-        console.error(t("setup.reranker.local_cpu_warning", { lang, tone }));
-        return { provider: "local-transformers", model: ADVANCED_RERANKER_MODELS[idx], candidates: 20, timeoutMs: 5000, fallbackOnError: true };
+      let idx;
+      while (idx === undefined) {
+        const adv = await askLine("[a/b/c]: ");
+        const candidateIndex = ["a", "b", "c"].indexOf(adv);
+        if (candidateIndex !== -1) {
+          idx = candidateIndex;
+        } else {
+          console.error(t("setup.reranker.invalid_advanced_choice", { lang, tone }));
+        }
       }
-      return { provider: "disabled", enabled: false, candidates: 20 };
+      console.error(t("setup.reranker.local_cpu_warning", { lang, tone }));
+      return { provider: "local-transformers", model: ADVANCED_RERANKER_MODELS[idx], candidates: 20, timeoutMs: 5000, fallbackOnError: true };
     }
   }
 

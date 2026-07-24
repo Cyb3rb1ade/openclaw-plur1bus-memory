@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-027",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/providers/dimension-guard.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (40 lines; sha256 ccb6069938861247430491b34a7419d8d726246eee711ded234901f405f79c9f). Read-only LanceDB schema probe over an operator-configured DB path; all failures return explicit unknown status and no untrusted input reaches SQL or a write sink."
+    },
+    {
+      "path": "lib/providers/dimensions.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (28 lines; sha256 bcde9ece3bf0c5567dc133d90672061474503c5227f1a998215322738138ee98). Static provider defaults and pure model classification only."
+    },
+    {
+      "path": "lib/providers/embedding-local-transformers.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (153 lines; sha256 695fb0be0de47c7e3593689ea58f0ec0b4faf6d40603ebc8324b83de459b3257). Model/cache configuration is operator-controlled, cacheDir environment expansion is restricted to the localPath allowlist, vector dimensions are checked, and batch failure falls back without swallowing errors. The optional dependency installation advisory is already tracked as cand-admzip-install-dos."
+    },
+    {
+      "path": "lib/providers/embedding-openai.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (182 lines; sha256 0fb717ff1792ded3c737220e85f46000f8dbd1a10cba5469f1be3562dd508e43). API keys/base URL are explicit operator provider configuration, dimensions are validated, retry loops are bounded, and fallback rethrows the original failure. Arbitrary compatible base URLs are a documented feature rather than an attacker-controlled SSRF surface; cache correctness findings are covered by the bug audit/shard-006."
+    },
+    {
+      "path": "lib/providers/env.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (114 lines; sha256 cc40156952847973438c5138af44b3a824a5504bf84c68dc9b315f1942196c1b). Template expansion uses explicit environment-name allowlists and strips control characters. apiKeyEnv is an operator configuration escape hatch and is not user/message controlled. Silent optional-resolution catches are a diagnostics policy issue, not a secret-disclosure path."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No new security candidate. Provider endpoints, model IDs, and key environment selectors are trusted administrator configuration; chat-driven configuration authorization is assessed at the setup command boundary."
+}

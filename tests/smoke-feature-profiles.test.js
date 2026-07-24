@@ -21,22 +21,30 @@ import {
   renderPlur1busStartStatus,
   writePlur1busStartNotice,
 } from "../lib/setup/feature-profiles.js";
+import { manifestConfigDefaults, validatePluginConfig } from "../lib/setup/config-contract.js";
 
 describe("feature-profiles", () => {
-  it("recommendedProfile enables the full experience without pending setup by default", () => {
+  it("recommendedProfile explicitly enables additional features behind safety gates", () => {
     const p = recommendedProfile();
-    assert.strictEqual(p.morningReview.enabled, true);
-    assert.strictEqual(p.morningReview.status, "active");
-    assert.strictEqual(p.eveningReview.enabled, true);
-    assert.strictEqual(p.eveningReview.status, "active");
+    assert.strictEqual(p.setupProfile, "recommended");
+    assert.strictEqual(p.obsidianBridge.morningReview.enabled, true);
+    assert.strictEqual(p.obsidianBridge.morningReview.status, "pending_setup");
+    assert.strictEqual(p.obsidianBridge.eveningReview.enabled, true);
+    assert.strictEqual(p.obsidianBridge.eveningReview.status, "pending_setup");
     assert.strictEqual(p.reranker.enabled, true);
+    assert.strictEqual(p.reranker.timeoutMs, 5000);
     assert.strictEqual(p.reranker.fallbackOnError, true);
     assert.strictEqual(p.merging.enabled, true);
-    assert.strictEqual(p.merging.autoApply, true);
+    assert.strictEqual(p.merging.autoApply, false);
     assert.strictEqual(p.merging.autoApplyRisk, "low-only");
+    assert.strictEqual(p.merging.backupBeforeApply, true);
+    assert.strictEqual(p.merging.auditLog, true);
     assert.strictEqual(p.schicht15.enabled, true);
     assert.strictEqual(p.obsidianBridge.enabled, true);
-    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, false);
+    assert.strictEqual(p.obsidianBridge.mode, "augment");
+    assert.strictEqual(p.obsidianBridge.dryRun, true);
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
+    assert.strictEqual(p.obsidianBridge.autoApplyLowRisk, false);
     assert.strictEqual(p.temporalContext.enabled, true);
     assert.strictEqual(p.runtime.embeddingCacheEnabled, true);
     assert.strictEqual(p.runtime.llmResultCacheEnabled, true);
@@ -44,19 +52,44 @@ describe("feature-profiles", () => {
     assert.strictEqual(p.metaCognition.enabled, true);
     assert.strictEqual(p.obsidianBridge.semanticGraph.mutateMemory, false);
     assert.strictEqual(p.obsidianBridge.soulPatch.force, false);
+    for (const route of [p.merging, p.schicht15, p.skillMiner, p.criticalPush, p.emotion.t3]) {
+      assert.equal(Object.hasOwn(route, "model"), false);
+    }
+    assert.equal(Object.hasOwn(p, "llm"), false);
   });
 
-  it("safeProfile has only core features", () => {
+  it("safeProfile is schema-valid, non-mutating, and keeps core capture/recall usable", () => {
     const p = safeProfile();
-    assert.strictEqual(p.morningReview.enabled, false);
+    validatePluginConfig(p);
+    assert.strictEqual(p.setupProfile, "safe");
+    assert.strictEqual(p.autoCapture, true);
+    assert.strictEqual(p.autoRecall, true);
+    assert.strictEqual(p.obsidianBridge.morningReview.enabled, false);
+    assert.strictEqual(p.obsidianBridge.eveningReview.enabled, false);
     assert.strictEqual(p.reranker.enabled, false);
+    assert.strictEqual(p.emotion.t3.enabled, false);
+    assert.strictEqual(p.metaCognition.llmReport, false);
     assert.strictEqual(p.merging.enabled, false);
-    assert.strictEqual(p.obsidianBridge.mode, "dry-run");
+    assert.strictEqual(p.merging.autoApply, false);
+    assert.strictEqual(p.schicht15.enabled, false);
+    assert.strictEqual(p.skillMiner.enabled, false);
+    assert.strictEqual(p.dailyConsolidation.enabled, false);
+    assert.strictEqual(p.criticalPush.enabled, false);
+    assert.strictEqual(p.obsidianBridge.mode, "augment");
+    assert.strictEqual(p.obsidianBridge.allowWrite, false);
+    assert.strictEqual(p.obsidianBridge.dryRun, true);
+    assert.strictEqual(p.obsidianBridge.autoApplyLowRisk, false);
+    assert.strictEqual(p.obsidianBridge.semanticGraph.proposalOnly, true);
+    assert.strictEqual(p.obsidianBridge.semanticGraph.mutateMemory, false);
+    for (const route of [p.merging, p.schicht15, p.skillMiner, p.criticalPush, p.emotion.t3]) {
+      assert.equal(Object.hasOwn(route, "model"), false);
+    }
+    assert.equal(Object.hasOwn(p, "llm"), false);
   });
 
   it("customProfileFromSelection merges user choices", () => {
     const p = customProfileFromSelection({ morningReview: true, reranker: { enabled: true, timeoutMs: 5000 } });
-    assert.strictEqual(p.morningReview.enabled, true);
+    assert.strictEqual(p.obsidianBridge.morningReview.enabled, true);
     assert.strictEqual(p.reranker.enabled, true);
     assert.strictEqual(p.reranker.timeoutMs, 5000);
     assert.strictEqual(p.merging.enabled, false);
@@ -70,18 +103,26 @@ describe("feature-profiles", () => {
     assert.strictEqual(cfg.merging.enabled, true, "merging should be added");
   });
 
-  it("applyFeatureProfile does not write feature-selection history when confirmed", () => {
+  it("applyFeatureProfile records explicit Recommended confirmation history", () => {
     const existing = {};
-    const merged = applyFeatureProfile(existing, recommendedProfile(), { confirmed: true });
+    const merged = applyFeatureProfile(existing, recommendedProfile(), {
+      confirmedAt: "2026-07-19T12:00:00.000Z",
+    });
     const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
-    assert.strictEqual(cfg.featuresConfirmedAt, undefined, "should not write feature-selection history");
+    assert.strictEqual(cfg.setupProfile, "recommended");
+    assert.strictEqual(cfg.featuresConfirmedAt, "2026-07-19T12:00:00.000Z");
+    assert.strictEqual(cfg.reranker.enabled, true);
+    assert.strictEqual(cfg.merging.autoApply, false);
   });
 
   it("detectPendingFeatures finds pending setup items", () => {
     const config = {
-      morningReview: { enabled: true, status: "pending_setup" },
-      eveningReview: { enabled: true, status: "pending_setup" },
-      obsidianBridge: { enabled: true, status: "active" },
+      obsidianBridge: {
+        enabled: true,
+        requireVaultPathConfirmation: false,
+        morningReview: { enabled: true, status: "pending_setup" },
+        eveningReview: { enabled: true, status: "pending_setup" },
+      },
     };
     const pending = detectPendingFeatures(config);
     assert.strictEqual(pending.length, 2, "should find 2 pending");
@@ -95,23 +136,29 @@ describe("feature-profiles", () => {
   });
 
   it("isApplyBlocked when pending setup exists", () => {
-    const config = { featuresConfirmedAt: "2026-06-03", morningReview: { enabled: true, status: "pending_setup" } };
+    const config = {
+      featuresConfirmedAt: "2026-06-03",
+      obsidianBridge: { morningReview: { enabled: true, status: "pending_setup" } },
+    };
     const result = isApplyBlocked(config);
     assert.strictEqual(result.blocked, true);
     assert.strictEqual(result.reason, "pending_setup");
   });
 
   it("isApplyBlocked returns false when everything ok", () => {
-    const config = { morningReview: { enabled: true, status: "active" } };
+    const config = { obsidianBridge: { morningReview: { enabled: true, status: "active" } } };
     const result = isApplyBlocked(config);
     assert.strictEqual(result.blocked, false);
   });
 
-  it("applyFeatureProfile with confirmed preserves existing keys without confirmation history", () => {
+  it("applyFeatureProfile preserves existing values and records confirmation history", () => {
     const existing = { plugins: { entries: { "memory-lancedb-namespaced": { enabled: true, config: { baseDbPath: "/custom", merging: { enabled: false } } } } } };
-    const merged = applyFeatureProfile(existing, recommendedProfile(), { confirmed: true });
+    const merged = applyFeatureProfile(existing, recommendedProfile(), {
+      confirmedAt: "2026-07-19T12:00:00.000Z",
+    });
     const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
-    assert.strictEqual(cfg.featuresConfirmedAt, undefined, "does not write confirmation history");
+    assert.strictEqual(cfg.setupProfile, "recommended");
+    assert.strictEqual(cfg.featuresConfirmedAt, "2026-07-19T12:00:00.000Z");
     assert.strictEqual(cfg.baseDbPath, "/custom", "existing baseDbPath preserved");
     assert.strictEqual(cfg.merging.enabled, false, "existing merging not overwritten");
     assert.strictEqual(cfg.temporalContext.enabled, true, "missing new core feature added");
@@ -119,13 +166,15 @@ describe("feature-profiles", () => {
 
   it("safeProfile blocks obsidian apply mode", () => {
     const p = safeProfile();
-    assert.strictEqual(p.obsidianBridge.mode, "dry-run");
-    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, false);
+    assert.strictEqual(p.obsidianBridge.mode, "augment");
+    assert.strictEqual(p.obsidianBridge.allowWrite, false);
+    assert.strictEqual(p.obsidianBridge.dryRun, true);
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
   });
 
   it("recommendedProfile sets obsidianBridge requireVaultPathConfirmation", () => {
     const p = recommendedProfile();
-    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, false);
+    assert.strictEqual(p.obsidianBridge.requireVaultPathConfirmation, true);
   });
 
   it("isApplyBlocked with pending_setup features when vault not confirmed", () => {
@@ -138,15 +187,28 @@ describe("feature-profiles", () => {
     assert.ok(result.pending.some((p) => p.feature === "obsidianBridge"));
   });
 
-  it("applyFeatureProfile does NOT overwrite existing plugin config keys", () => {
+  it("explicit Recommended forces reranker timeout while preserving the feature opt-out", () => {
     const existing = { plugins: { entries: { "memory-lancedb-namespaced": { enabled: true, config: { reranker: { enabled: false, timeoutMs: 9999 } } } } } };
     const merged = applyFeatureProfile(existing, recommendedProfile(), { confirmed: true });
     const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
     assert.strictEqual(cfg.reranker.enabled, false, "existing reranker.enabled preserved");
-    assert.strictEqual(cfg.reranker.timeoutMs, 9999, "existing reranker.timeoutMs preserved");
+    assert.strictEqual(cfg.reranker.timeoutMs, 5000, "Recommended safety timeout restored");
   });
 
-  it("fullExperienceDefaults enables all core feature defaults safely", () => {
+  it("manifest defaults remain safe when no explicit profile was selected", () => {
+    const cfg = manifestConfigDefaults();
+    assert.strictEqual(cfg.reranker.enabled, false);
+    assert.strictEqual(cfg.merging.enabled, false);
+    assert.strictEqual(cfg.merging.autoApply, false);
+    assert.strictEqual(cfg.skillMiner.enabled, false);
+    assert.strictEqual(cfg.dailyConsolidation.enabled, false);
+    assert.strictEqual(cfg.obsidianBridge.enabled, false);
+    assert.strictEqual(cfg.emotion.t3.enabled, false);
+    assert.strictEqual(cfg.runtime.recallCacheTtlMs, 120000);
+    assert.strictEqual(cfg.runtime.recallCacheMaxEntries, 128);
+  });
+
+  it("fullExperienceDefaults remains an explicit Recommended compatibility alias", () => {
     const cfg = fullExperienceDefaults();
     assert.strictEqual(cfg.temporalContext.enabled, true);
     assert.strictEqual(cfg.runtime.embeddingCacheEnabled, true);
@@ -155,26 +217,25 @@ describe("feature-profiles", () => {
     assert.strictEqual(cfg.emotion.t2.enabled, true);
     assert.strictEqual(cfg.emotion.t3.enabled, true);
     assert.strictEqual(cfg.metaCognition.llmReportMode, "budgeted");
+    assert.strictEqual(cfg.merging.autoApply, false);
     assert.strictEqual(cfg.merging.autoApplyRisk, "low-only");
     assert.strictEqual(cfg.obsidianBridge.semanticGraph.mutateMemory, false);
     assert.strictEqual(cfg.obsidianBridge.soulPatch.force, false);
   });
 
-  it("applyFullExperiencePolicy preserves existing disabled features during update", () => {
+  it("applyFullExperiencePolicy delegates to manifest-safe effective config without stripping history", () => {
     const cfg = applyFullExperiencePolicy({
       reranker: { enabled: false },
       runtime: { embeddingCacheEnabled: false, llmResultCacheEnabled: false },
       temporalContext: { enabled: false },
-      featurePolicy: { fullExperiencePromptedAt: "never-write" },
       featuresConfirmedAt: "2026-06-03",
     });
     assert.strictEqual(cfg.reranker.enabled, false);
     assert.strictEqual(cfg.runtime.embeddingCacheEnabled, false);
     assert.strictEqual(cfg.runtime.llmResultCacheEnabled, false);
     assert.strictEqual(cfg.temporalContext.enabled, false);
-    assert.strictEqual(cfg.merging.enabled, true);
-    assert.strictEqual(cfg.featurePolicy, undefined);
-    assert.strictEqual(cfg.featuresConfirmedAt, undefined);
+    assert.strictEqual(cfg.merging.enabled, false);
+    assert.strictEqual(cfg.featuresConfirmedAt, "2026-06-03");
   });
 
   it("applyFullExperiencePolicy respects an explicit emotion.t3 opt-out even with reranker enabled", () => {
@@ -183,7 +244,7 @@ describe("feature-profiles", () => {
     const cfg = applyFullExperiencePolicy({
       emotion: { t3: { enabled: false } },
     });
-    assert.strictEqual(cfg.reranker.enabled, true, "reranker stays at its default");
+    assert.strictEqual(cfg.reranker.enabled, false, "reranker stays at its manifest default");
     assert.strictEqual(cfg.emotion.t3.enabled, false, "explicit emotion.t3 opt-out must be preserved");
     // The fail-soft defaults should still be filled in around the opt-out.
     assert.strictEqual(cfg.emotion.t3.fallbackOnError, true);
@@ -194,7 +255,7 @@ describe("feature-profiles", () => {
     const cfg = applyFullExperiencePolicy({
       emotion: { t2: { enabled: false } },
     });
-    assert.strictEqual(cfg.reranker.enabled, true);
+    assert.strictEqual(cfg.reranker.enabled, false);
     assert.strictEqual(cfg.emotion.t2.enabled, false, "explicit emotion.t2 opt-out must be preserved");
   });
 
@@ -202,14 +263,14 @@ describe("feature-profiles", () => {
     const cfg = applyFullExperiencePolicy({
       metaCognition: { enabled: false },
     });
-    assert.strictEqual(cfg.reranker.enabled, true, "reranker stays at its default");
+    assert.strictEqual(cfg.reranker.enabled, false, "reranker stays at its manifest default");
     assert.strictEqual(cfg.metaCognition.enabled, false, "explicit metaCognition opt-out must be preserved");
     // fail-soft defaults still fill in around the opt-out.
     assert.strictEqual(cfg.metaCognition.llmReportMode, "budgeted");
     assert.strictEqual(cfg.metaCognition.fallbackOnError, true);
   });
 
-  it("applyFullExperiencePolicy can force full experience and apply opt-outs", () => {
+  it("applyFullExperiencePolicy cannot force implicit Full Experience", () => {
     const cfg = applyFullExperiencePolicy(
       {
         baseDbPath: "/custom-memory",
@@ -219,16 +280,16 @@ describe("feature-profiles", () => {
       },
       { forceFullExperience: true, disabledFeatures: ["skillMiner", "dailyConsolidation"] }
     );
-    assert.strictEqual(cfg.reranker.enabled, true);
+    assert.strictEqual(cfg.reranker.enabled, false);
     assert.strictEqual(cfg.reranker.timeoutMs, 9999);
-    assert.strictEqual(cfg.temporalContext.enabled, true);
+    assert.strictEqual(cfg.temporalContext.enabled, false);
     assert.strictEqual(cfg.skillMiner.enabled, false);
     assert.strictEqual(cfg.dailyConsolidation.enabled, false);
     assert.strictEqual(cfg.baseDbPath, "/custom-memory");
     assert.deepStrictEqual(cfg.embedding, { provider: "openai", model: "custom-embedding" });
   });
 
-  it("applyFeatureProfile --full preserves non-feature plugin config", () => {
+  it("explicit Recommended preserves non-feature config and explicit opt-outs", () => {
     const existing = {
       plugins: {
         entries: {
@@ -245,9 +306,88 @@ describe("feature-profiles", () => {
     };
     const merged = applyFeatureProfile(existing, recommendedProfile(), { forceFullExperience: true });
     const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
-    assert.strictEqual(cfg.reranker.enabled, true);
+    assert.strictEqual(cfg.reranker.enabled, false);
     assert.strictEqual(cfg.baseDbPath, "/custom-memory");
     assert.deepStrictEqual(cfg.embedding, { provider: "local-transformers", local: { dimensions: 384 } });
+  });
+
+  it("repeated Recommended restores mandatory safety gates while preserving feature opt-outs", () => {
+    const existing = {
+      plugins: {
+        entries: {
+          "memory-lancedb-namespaced": {
+            enabled: true,
+            config: {
+              reranker: { enabled: false, timeoutMs: 9999 },
+              merging: { enabled: false, autoApply: true },
+              obsidianBridge: {
+                enabled: false,
+                mode: "apply",
+                dryRun: false,
+                requireVaultPathConfirmation: false,
+                autoApplyLowRisk: true,
+                semanticGraph: { proposalOnly: false, mutateMemory: true },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const merged = applyFeatureProfile(existing, recommendedProfile(), {
+      confirmedAt: "2026-07-19T12:00:00.000Z",
+    });
+    const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
+
+    assert.strictEqual(cfg.reranker.enabled, false);
+    assert.strictEqual(cfg.reranker.timeoutMs, 5000);
+    assert.strictEqual(cfg.merging.enabled, false);
+    assert.strictEqual(cfg.merging.autoApply, false);
+    assert.strictEqual(cfg.merging.mode, "safe-versioned");
+    assert.strictEqual(cfg.merging.autoApplyRisk, "low-only");
+    assert.strictEqual(cfg.merging.backupBeforeApply, true);
+    assert.strictEqual(cfg.merging.auditLog, true);
+    assert.strictEqual(cfg.obsidianBridge.enabled, false);
+    assert.strictEqual(cfg.obsidianBridge.mode, "augment");
+    assert.strictEqual(cfg.obsidianBridge.dryRun, true);
+    assert.strictEqual(cfg.obsidianBridge.requireVaultPathConfirmation, true);
+    assert.strictEqual(cfg.obsidianBridge.autoApplyLowRisk, false);
+    assert.strictEqual(cfg.obsidianBridge.semanticGraph.proposalOnly, true);
+    assert.strictEqual(cfg.obsidianBridge.semanticGraph.mutateMemory, false);
+    assert.strictEqual(cfg.obsidianBridge.morningReview.status, "pending_setup");
+    assert.strictEqual(cfg.obsidianBridge.eveningReview.status, "pending_setup");
+  });
+
+  it("explicit Recommended repairs only its historical fixed merge invariants", () => {
+    const legacyConfig = {
+      setupProfile: "recommended",
+      reranker: { enabled: false },
+      merging: { enabled: false, backupBeforeApply: false, auditLog: false },
+      obsidianBridge: { enabled: false },
+    };
+    assert.throws(
+      () => validatePluginConfig(legacyConfig),
+      /plugins\.entries\.memory-lancedb-namespaced\.config\.merging\.backupBeforeApply.*must equal true/,
+    );
+
+    const merged = applyFeatureProfile(
+      {
+        plugins: {
+          entries: {
+            "memory-lancedb-namespaced": { enabled: true, config: legacyConfig },
+          },
+        },
+      },
+      recommendedProfile(),
+      { confirmedAt: "2026-07-19T12:00:00.000Z" },
+    );
+    const cfg = merged.plugins.entries["memory-lancedb-namespaced"].config;
+
+    assert.strictEqual(cfg.reranker.enabled, false);
+    assert.strictEqual(cfg.merging.enabled, false);
+    assert.strictEqual(cfg.obsidianBridge.enabled, false);
+    assert.strictEqual(cfg.merging.backupBeforeApply, true);
+    assert.strictEqual(cfg.merging.auditLog, true);
   });
 
   it("detectMissingCoreFeatures reports new core features missing from current config", () => {

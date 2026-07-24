@@ -62,10 +62,10 @@ test('classifyMemory trimmt Whitespace und matched case-insensitive', async () =
   assert.strictEqual(result, 'person');
 });
 
-test('classifyMemory wirft nicht bei Modell-Fehler, gibt "fakt"', async () => {
-  const fakeModel = { complete: async () => { throw new Error('boom'); } };
-  const result = await classifyMemory('x', fakeModel);
-  assert.strictEqual(result, 'fakt');
+test('classifyMemory propagiert Modell-Fehler statt sie als "fakt" zu klassifizieren', async () => {
+  const providerError = new Error('secret-bearing provider failure');
+  const fakeModel = { complete: async () => { throw providerError; } };
+  await assert.rejects(() => classifyMemory('x', fakeModel), (error) => error === providerError);
 });
 
 // ─── shouldPush ─────────────────────────────────────────────────────────
@@ -223,6 +223,32 @@ test('runClassifier: zählt errors korrekt wenn updateCardType wirft', async () 
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
+});
+
+test('runClassifier: Modell-Fehler überspringt Mutation und sanitisiert Diagnostik', async () => {
+  const secret = 'sk-live-secret prompt=private x-api-key=hidden';
+  const secretName = 'SecretProviderName-private-prompt';
+  const logs = [];
+  const updates = [];
+  const fakeDb = {
+    findRecentUnclassified: async () => [
+      { id: 'card-secret', content: 'private memory prompt', title: 'private memory prompt' },
+    ],
+    updateCardType: async (...args) => { updates.push(args); },
+  };
+  const providerError = new Error(secret);
+  providerError.name = secretName;
+  const result = await runClassifier(fakeDb, 'agent-secret', {
+    model: { complete: async () => { throw providerError; } },
+    logger: { info() {}, warn(message) { logs.push(message); } },
+  });
+
+  assert.strictEqual(result.processed, 0);
+  assert.strictEqual(result.classified, 0);
+  assert.strictEqual(result.errors, 1);
+  assert.strictEqual(updates.length, 0);
+  assert.doesNotMatch(JSON.stringify(result), /sk-live-secret|private memory prompt|x-api-key|SecretProviderName/i);
+  assert.doesNotMatch(JSON.stringify(logs), /sk-live-secret|private memory prompt|x-api-key|SecretProviderName/i);
 });
 
 // ─── Cron-Job autoAcceptStale ───────────────────────────────────────────

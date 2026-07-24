@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runWikiCommand } from "../lib/wiki-command.js";
+import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
 
 // ─── Mock helpers ─────────────────────────────────────────────────────────────
 
@@ -70,19 +71,22 @@ function makeCtx(args, extra = {}) {
     agentId: "test-agent",
     messages: [],
     workspaceDir: null,
+    workspaceId: "workspace-1",
+    channel: "telegram",
+    accountId: "primary",
     userId: "test-user-42",
     chatId: "test-chat-42",
     ...extra,
   };
 }
 
-function makeDeps(db, { callLlm, archiveDir } = {}) {
+function makeDeps(db, { callLlm, archiveDir, cfg } = {}) {
   return {
     pool: { getDb: () => db },
     embeddings: { embed: async () => new Float32Array(4).fill(0.1) },
     reranker: null,
     callLlm: callLlm ?? (async () => "synthesized answer"),
-    cfg: { security: { allowedUserIds: ["test-user-42"] } },
+    cfg: cfg ?? { security: { allowedUserIds: ["test-user-42"] } },
     api: { logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } },
     llmCfg: { model: "test-model", maxTokens: 400 },
     archiveDir,
@@ -110,7 +114,60 @@ describe("wiki-command smoke", () => {
     assert.ok(!result.text.includes("Fehler") && !result.text.includes("error"), `unexpected error: ${result.text}`);
     assert.strictEqual(stored.length, 1, "store should have been called once");
     assert.strictEqual(stored[0].memoryKind, "wiki", "memoryKind must be 'wiki'");
-    assert.strictEqual(stored[0].workspaceKey, "workspace-1", "workspaceKey must be persisted for wiki entries");
+    assert.strictEqual(stored[0].workspaceKey, "workspace:v1:workspace-1", "canonical workspaceKey must be persisted for wiki entries");
+    assert.strictEqual(stored[0].workspaceId, "workspace:v1:workspace-1");
+    assert.strictEqual(stored[0].agentId, "test-agent");
+  });
+
+  it("authorizes Wiki writes only from the supplied frozen memory context", async () => {
+    const stored = [];
+    let dbLeases = 0;
+    let embeds = 0;
+    const db = makeDb({ storeSpy: async (entry) => { stored.push(entry); } });
+    const memoryCtx = resolveMemoryRequestContext({
+      agentId: "test-agent",
+      workspaceId: "workspace-1",
+      channel: "telegram",
+      accountId: "primary",
+      userId: "owner-user",
+      chatId: "owner-chat",
+      chatKind: "private",
+    });
+    const deps = makeDeps(db, {
+      archiveDir,
+      cfg: { security: { allowedUserIds: ["owner-user"], allowedChatIds: ["owner-chat"] } },
+    });
+    deps.pool = {
+      getDb() {
+        dbLeases++;
+        return db;
+      },
+    };
+    deps.embeddings = {
+      async embed() {
+        embeds++;
+        return new Float32Array(4).fill(0.1);
+      },
+    };
+    const rawCtx = makeCtx("add Frozen owner: canonical route wins", {
+      userId: "attacker",
+      chatId: "attacker-chat",
+      chatType: "group",
+    });
+    const allowed = await runWikiCommand(rawCtx, { ...deps, memoryCtx });
+    assert.equal(stored.length, 1, allowed.text);
+    assert.equal(dbLeases, 1);
+    assert.equal(embeds, 1);
+
+    const deniedCtx = Object.freeze({ ...memoryCtx, chatKind: "group" });
+    const deniedDeps = makeDeps(db, { archiveDir, cfg: {} });
+    deniedDeps.pool = { getDb() { throw new Error("DB lease must not happen before auth"); } };
+    deniedDeps.embeddings = { async embed() { throw new Error("provider must not run before auth"); } };
+    const denied = await runWikiCommand(makeCtx("add Denied: no side effects"), {
+      ...deniedDeps,
+      memoryCtx: deniedCtx,
+    });
+    assert.match(denied.text, /not authorized|nicht autorisiert/i);
   });
 
   it("wikiDelete removes a wiki entry by query", async () => {
@@ -150,7 +207,7 @@ describe("wiki-command smoke", () => {
     );
   });
 
-  it("wikiDelete aborts when archive fails — does not call delete", async () => {
+  it("wikiDelete rejects an invalid agent before DB or archive work", async () => {
     const deleted = [];
     const db = makeDb({
       getByIdFn: async () => ({
@@ -162,21 +219,17 @@ describe("wiki-command smoke", () => {
       deleteSpy: async (sql) => { deleted.push(sql); },
     });
     // Invalid agentId forces archiveCard to throw via safeAgentId.
-    const result = await runWikiCommand(
+    await assert.rejects(() => runWikiCommand(
       makeCtx("delete id:bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", { agentId: "../../etc" }),
       makeDeps(db, { archiveDir }),
-    );
+    ), /Invalid agent ID/);
     assert.strictEqual(deleted.length, 0, "delete must NOT be called when archive fails");
-    assert.ok(
-      result.text.includes("Archive failed") || result.text.includes("NICHT gelöscht"),
-      `expected wiki.archive_failed message, got: ${result.text}`,
-    );
   });
 
   it("wikiSearch returns wiki-labelled result when wiki entries exist", async () => {
     const wikiRows = [
       { id: "cccccccc-cccc-cccc-cccc-cccccccccccc", memoryKind: "wiki", _distance: 0.2,
-        status: "active", text: "Kimi: LLM provider", summary: "[Wiki] Kimi" },
+        status: "active", text: "Kimi: LLM provider", summary: "[Wiki] Kimi", agentId: "test-agent", storedBy: "test-agent" },
     ];
     const db = makeDb({ wikiRows });
     const result = await runWikiCommand(makeCtx("Kimi"), makeDeps(db, { archiveDir }));
@@ -189,7 +242,7 @@ describe("wiki-command smoke", () => {
   it("wikiSearch falls back to memory result when no wiki entries exist", async () => {
     const memoryRows = [
       { id: "dddddddd-dddd-dddd-dddd-dddddddddddd", memoryKind: "memory", _distance: 0.25,
-        status: "active", text: "Kimi memory entry", summary: "Kimi memory" },
+        status: "active", text: "Kimi memory entry", summary: "Kimi memory", agentId: "test-agent", storedBy: "test-agent" },
     ];
     const db = makeDb({ memoryRows });
     const result = await runWikiCommand(makeCtx("Kimi"), makeDeps(db, { archiveDir }));
@@ -229,13 +282,15 @@ describe("wiki-command smoke", () => {
   });
 
   it("wikiSearch still returns a user-scoped fallback memory for the owning user", async () => {
+    const ownerCtx = makeCtx("Kimi", { userId: "owner-user" });
+    const ownerPrincipal = resolveMemoryRequestContext(ownerCtx).userPrincipal;
     const memoryRows = [
       { id: "dededede-abab-abab-abab-abababababab", memoryKind: "memory", _distance: 0.25,
-        status: "active", text: "user scoped memory", summary: "user scoped", scope: "user", ownerUserId: "owner-user" },
+        status: "active", text: "user scoped memory", summary: "user scoped", scope: "user", ownerUserId: ownerPrincipal },
     ];
     const db = makeDb({ memoryRows });
     const result = await runWikiCommand(
-      makeCtx("Kimi", { userId: "owner-user" }),
+      ownerCtx,
       makeDeps(db, { archiveDir }),
     );
     assert.ok(

@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-039",
+  "reviewer": "security-file-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/time-window.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (66 lines; SHA-256 2536094cc548c07e3ecfd3db429b7bd88dc4643202810d25942d28b51019f987). The module performs Intl/Date arithmetic and fixed quiet-hour comparisons only; it has no file, network, query, process, prompt, secret, or authorization sink. Production callers supply operator configuration rather than per-message attacker-selected timezone values (index.js:6154; lib/afterthought.js:111-112). The process-lifetime formatter cache has no cardinality bound, invalid timezones silently fall back to server-local time (39-46), and integer quiet-hour bounds are not range-checked to 0-23 (60-66); these can defeat an operator's intended quiet window under malformed configuration but do not establish a lower-trust security path. tests/time-window.test.js passed."
+    },
+    {
+      "path": "lib/wiki-command.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-chat-read-auth-bypass",
+        "cand-agent-db-path-traversal",
+        "cand-wiki-add-duplicate-cross-scope-disclosure",
+        "cand-wiki-delete-id-missing-record-acl",
+        "cand-wiki-delete-query-missing-record-acl",
+        "cand-wiki-search-inactive-fallback-disclosure"
+      ],
+      "evidence": "Read in full (365 lines; SHA-256 196f00de4700781effd8fc84668ad144f3bf644d20539060b1770a0b619403f5). The registered multi-channel /wiki handler is reachable at index.js:4222-4226. Search results do pass checkAccess at 125-149, but the default search branch never calls checkWikiAuth (357-361), independently supporting cand-chat-read-auth-bypass. All three pool.getDb calls consume raw commandCtx.agentId (311,334,348,358), supporting the existing path-traversal candidate at the unsafe AgentDbPool boundary. Four distinct local candidates remain. First, wikiAdd calls unscoped, all-kind db.findSimilar and returns a foreign candidate summary/text preview without checkAccess (177-186). Second, ID deletion globally authorizes the user but gets, archives, and deletes the UUID-selected row without applying the already-built aclCtx (220-255,314-320,343-351). Third, query deletion searches all active wiki rows without ACL, then either discloses foreign IDs/previews or archives/deletes the sole match (258-300). Fourth, searchByKind's old-builder/error fallback filters score and kind but omits the active-status predicate present in its primary query, allowing superseded/archived rows into wiki search output (40-73,130-149). Benign public-handler mocks confirmed a workspace-b row was deleted from workspace-a through both ID and query branches, a victim-owned user-scope summary token was returned by wikiAdd's duplicate response, an unauthorized allowlist user could read an agent-private wiki row, and a status=superseded row was returned when the builder lacked where(). Direct checkAccess denied the same foreign workspace row. The six targeted tests passed, but smoke-wiki-command has no delete ACL, duplicate ACL, allowlist-read, or inactive-fallback assertion. Safe UUID validation, wiki-only guards, and archive-first writes prevent injection/non-wiki deletion but do not supply object authorization. Destructive wiki deletions also omit the required appendDestructiveOpLog audit entry, and several catches are silent; these are additional policy/forensics defects."
+    },
+    {
+      "path": "lib/with-timeout.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (45 lines; SHA-256 71c23e86b90c90848ae8228b177d1285f818af09a7631e52ff99937a2a022869). It races a caller-provided promise against a fixed timer, clears the timer on settlement, preserves the original error, and introduces no input parser or privileged sink of its own. The timeout deliberately does not abort the underlying work: a benign check observed a side effect complete after withTimeout had already rejected. Because production callers wrap LanceDB writes as well as reads (index.js:653-657; lib/db-adapter.js:150-151), retries can overlap late mutations and produce ambiguous completion or duplicate effects. That is a material robustness/integrity issue for the bug audit, but authorization has already occurred and no independent attacker-controlled privilege transition was established here. tests/with-timeout.test.js passed but does not assert cancellation or late-side-effect behavior."
+    },
+    {
+      "path": "openclaw.plugin.json",
+      "status": "full_reviewed",
+      "disposition": "candidate_support",
+      "candidateIds": [
+        "cand-chat-read-auth-bypass",
+        "cand-model-forget-auth-bypass",
+        "cand-model-tool-knowledge-authz",
+        "cand-safe-profile-unexpected-privileged-activation",
+        "cand-feature-cron-channel-target-confusion",
+        "cand-afterthought-cross-session-leak",
+        "cand-startup-cohere-reranker-config-bypass"
+      ],
+      "evidence": "Read in full (1,939 lines; SHA-256 1d0e3816081ffda9e5576c28eb48c50a6bf428fcee0ac4383761af2cddb52864). This is declarative schema/contract data with no executable sink or hard-coded credential. It directly advertises memory_forget and knowledge_update (6-18) and defaults allowModelDestructiveMemoryOps=true (1706-1717), supporting the existing model-tool authorization candidates. It defines user/chat allowlists (1719-1734), making handlers that omit isAuthorized, including /wiki search, an actual policy bypass. The explicit reranker enabled/provider choices at 403-460 support cand-startup-cohere-reranker-config-bypass because the separate startup patch ignores them. featureCronSetup.auto defaults true (1694-1703), afterthought defaults true (1654-1665), and the schema's Obsidian mode enum accepts only augment/apply (958-965), supplying configuration/reachability evidence for the existing feature-cron, afterthought, and Safe Profile candidates. Most objects fail closed on unknown keys, but recall.decisionTrace at 681-706 is malformed as JSON Schema: it lacks type/properties/additionalProperties and places field schemas as ignored custom keywords. A structural check confirmed type/properties are absent, so host validation does not enforce that subtree; runtime uses strict ===true checks, making this a feature/config-validation defect rather than a distinct privilege sink. Many numeric and secret-bearing strings also lack range/format metadata, but their sources are operator configuration. tests/config-audit.test.js and tests/model-tool-auth.test.js passed; they explicitly lock the destructive-tool default to true and inspect decisionTrace defaults without validating the malformed object schema."
+    },
+    {
+      "path": "package.json",
+      "status": "full_reviewed",
+      "disposition": "candidate_support",
+      "candidateIds": [
+        "cand-feature-cron-channel-target-confusion",
+        "cand-afterthought-cross-session-leak"
+      ],
+      "evidence": "Read in full (78 lines; SHA-256 9786fcb5d86638cdd2b72fde7acf21df6e96ba9ebc88dfb5f571620a90be636d). main and openclaw.extensions both select the current root index.js (6-19), and the publication files list excludes the stale plur1bus/ tree (21-35), confirming there is no alternate packaged runtime entrypoint. The only automatic lifecycle mutation is postinstall at line 49, which invokes scripts/setup-feature-crons.mjs and masks all failure. That script creates/updates OpenClaw cron jobs through fixed argv and is intended/idempotent, but automatic package installation supplies reachability for the already tracked wrong-recipient feature-cron and cross-session afterthought candidates. The remaining scripts are explicit operator commands; dependency names are fixed, the optional transformer version is exact, and repository lock data pins resolved installs in this checkout. Caret ranges in the published manifest and swallowed postinstall failures are supply-chain/reliability concerns, but no current vulnerable dependency, attacker-controlled package name, shell interpolation, credential, or new security sink was established in this file. tests/feature-cron-plan.test.js passed."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-wiki-delete-id-missing-record-acl",
+      "title": "Wiki deletion by UUID archives and deletes a cross-workspace record without object authorization",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "cross-workspace-integrity"
+      ],
+      "instanceKey": "missing-record-acl:lib/wiki-command.js:229",
+      "source": "A globally authorized chat user supplies /wiki delete id:<UUID> while commandCtx selects an agent database that may contain wiki rows from multiple workspaces or owners.",
+      "control": "checkWikiAuth enforces only the global destructive user/chat allowlist. The dispatcher constructs aclCtx, but does not pass it to wikiDelete, and the ID branch checks only UUID syntax plus memoryKind, never checkAccess against scope/workspace/owner.",
+      "sink": "The foreign card is archived and db.table.delete executes an id predicate under the service account.",
+      "impact": "An allowed user who obtains another workspace's wiki UUID can remove that active knowledge record and copy its full contents into the archive, violating object/workspace isolation despite archive-based recoverability.",
+      "locations": [
+        "index.js:4222",
+        "index.js:4226",
+        "lib/wiki-command.js:113",
+        "lib/wiki-command.js:220",
+        "lib/wiki-command.js:224",
+        "lib/wiki-command.js:229",
+        "lib/wiki-command.js:239",
+        "lib/wiki-command.js:246",
+        "lib/wiki-command.js:251",
+        "lib/wiki-command.js:314",
+        "lib/wiki-command.js:320",
+        "lib/wiki-command.js:343",
+        "lib/wiki-command.js:351",
+        "lib/acl-middleware.js:47"
+      ],
+      "validationFacts": "A benign public-handler mock returned a scope=workspace, workspaceKey=workspace-b wiki card from getById while the caller context was workspace-a. Direct checkAccess returned allowed:false/acl.workspace.mismatch, but runWikiCommand archived the row, called table.delete once, and returned the normal deleted response. safeUuid and the wiki-only guard behaved as intended. Existing smoke tests cover valid ID deletion safeguards but no foreign-scope row.",
+      "attackFacts": "The attacker must be allowed to perform destructive chat commands, share the routed agent DB with the victim record, and learn the target UUID; UUID entropy limits blind guessing, but IDs can appear in wiki ambiguity/read output or other memory surfaces. Archive-first limits irreversibility but does not authorize the mutation. Calling checkAccess with the already-built aclCtx before archive/delete preserves the feature."
+    },
+    {
+      "candidateId": "cand-wiki-delete-query-missing-record-acl",
+      "title": "Wiki deletion by semantic query searches and mutates foreign workspace records without object authorization",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "cross-workspace-integrity"
+      ],
+      "instanceKey": "missing-record-acl:lib/wiki-command.js:270",
+      "source": "A globally authorized chat user supplies a semantic /wiki delete <query> in a workspace sharing the selected agent database with other workspace wiki rows.",
+      "control": "searchByKind restricts kind/status but has no scope/workspace/owner predicate, and unlike wikiSearch the delete caller never passes results through filterWikiResultsByAcl/checkAccess.",
+      "sink": "A sole foreign match is archived and deleted; multiple foreign matches instead have their IDs and summaries rendered into the ambiguity response.",
+      "impact": "The attacker can discover foreign wiki metadata/IDs and delete another workspace's knowledge entry without first knowing its UUID.",
+      "locations": [
+        "index.js:4222",
+        "index.js:4226",
+        "lib/wiki-command.js:40",
+        "lib/wiki-command.js:50",
+        "lib/wiki-command.js:258",
+        "lib/wiki-command.js:270",
+        "lib/wiki-command.js:275",
+        "lib/wiki-command.js:279",
+        "lib/wiki-command.js:285",
+        "lib/wiki-command.js:292",
+        "lib/wiki-command.js:300",
+        "lib/wiki-command.js:314",
+        "lib/wiki-command.js:320",
+        "lib/wiki-command.js:343",
+        "lib/wiki-command.js:351",
+        "lib/acl-middleware.js:47"
+      ],
+      "validationFacts": "A benign mock vector search returned one active workspace-b wiki row for a workspace-a caller. Direct ACL evaluation denied it, while runWikiCommand called table.delete once and returned success. The supplied query and embedding need only select a single result; the validation used public command behavior and temporary archive state that was removed afterwards. Existing tests verify kind filtering but never mix workspaces/owners.",
+      "attackFacts": "Requires destructive-command authorization and two workspaces or owners co-resident in one agent DB. Unlike the ID instance, the search itself locates the object; multiple results still disclose IDs/previews. Applying filterWikiResultsByAcl before uniqueness/response/archive/delete preserves semantic deletion and archive-first behavior."
+    },
+    {
+      "candidateId": "cand-wiki-add-duplicate-cross-scope-disclosure",
+      "title": "Wiki add duplicate check returns cross-scope memory summaries without ACL or wiki-kind filtering",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-862",
+        "cross-user-data-exposure"
+      ],
+      "instanceKey": "pre-acl-duplicate:lib/wiki-command.js:179",
+      "source": "A user authorized to add wiki entries supplies text that embeds near an active memory in the same agent database.",
+      "control": "wikiAdd calls db.findSimilar across every active memory kind and scope, then treats the first hit as a duplicate without applying checkAccess or requiring memoryKind=wiki. The normal model-facing store path provides the safe sibling control by filtering duplicate candidates through candidateVisibleForStore at index.js:5085-5087.",
+      "sink": "The foreign candidate's summary or text preview is interpolated into the duplicate response and storage is blocked.",
+      "impact": "An allowed wiki contributor can use similarity probes as an existence/content oracle for another user's or workspace's private memories and can trigger cross-scope denial of wiki additions.",
+      "locations": [
+        "lib/wiki-command.js:157",
+        "lib/wiki-command.js:169",
+        "lib/wiki-command.js:177",
+        "lib/wiki-command.js:179",
+        "lib/wiki-command.js:181",
+        "lib/wiki-command.js:182",
+        "lib/wiki-command.js:314",
+        "lib/wiki-command.js:320",
+        "lib/wiki-command.js:329",
+        "lib/wiki-command.js:337",
+        "index.js:1035",
+        "index.js:1045",
+        "index.js:5085",
+        "index.js:5087",
+        "lib/acl-middleware.js:47"
+      ],
+      "validationFacts": "A benign public-handler mock made findSimilar return a scope=user memory owned by victim with summary 'victim private token ZETA'. The attacker was globally authorized for wiki add but was not that row's owner; runWikiCommand returned ZETA in the duplicate response and did not store. Production validation should measure how readily semantically related probes clear the 0.92 threshold and whether multiple human principals commonly share an agent database.",
+      "attackFacts": "Requires add-command authorization, co-resident foreign memory, and a sufficiently similar probe; exact secret knowledge is not required when topics/phrasing are guessable, but the high threshold limits broad enumeration. Filtering candidates by checkAccess plus memoryKind before rendering preserves duplicate prevention."
+    },
+    {
+      "candidateId": "cand-wiki-search-inactive-fallback-disclosure",
+      "title": "Wiki vector-search fallback omits lifecycle filtering and resurfaces superseded or archived records",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-672",
+        "lifecycle-filter-bypass"
+      ],
+      "instanceKey": "fallback-status-filter:lib/wiki-command.js:63",
+      "source": "A chat user supplies a wiki search query while the LanceDB builder lacks where() or the primary filtered query throws, causing the documented legacy/error fallback.",
+      "control": "The primary where clause requires active/null status, but the fallback maps and filters only score plus memoryKind; it never rejects archived, deleted, or superseded rows. MemoryDB.vectorSearchActive is a safe sibling that applies this exact status filter after fallback at index.js:1083-1084.",
+      "sink": "wikiSearch passes the inactive row through ACL and synthesizeAnswer, which returns its summary/text to the chat and may send it to the configured synthesis LLM.",
+      "impact": "Corrected, superseded, archived, or logically deleted knowledge can be disclosed again and influence synthesized answers after the primary lifecycle control fails.",
+      "locations": [
+        "lib/wiki-command.js:40",
+        "lib/wiki-command.js:44",
+        "lib/wiki-command.js:47",
+        "lib/wiki-command.js:59",
+        "lib/wiki-command.js:61",
+        "lib/wiki-command.js:63",
+        "lib/wiki-command.js:64",
+        "lib/wiki-command.js:68",
+        "lib/wiki-command.js:70",
+        "lib/wiki-command.js:80",
+        "lib/wiki-command.js:95",
+        "lib/wiki-command.js:130",
+        "lib/wiki-command.js:139",
+        "lib/wiki-command.js:149",
+        "index.js:1083",
+        "index.js:1084"
+      ],
+      "validationFacts": "A benign public-handler mock removed where() from the vector builder and returned one status=superseded, same-agent wiki row. runWikiCommand returned its 'old superseded secret' text. Current @lancedb/lancedb supports where(), so production exploitation requires an old/partial schema, alternate builder, or a primary-query error followed by a successful unfiltered retry; migrations add status and memoryKind independently, making partial states possible. Existing fallback tests use active rows only.",
+      "attackFacts": "The user can trigger search but may not be able to force the builder/schema failure; this is the primary proof gap. Once fallback occurs, disclosure is deterministic and can compound the existing missing chat-read authorization. Adding the same active/null status predicate to the JS fallback preserves compatibility and wiki recall."
+    }
+  ],
+  "notes": "All five assigned files were read completely from immutable snapshot 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Four operation-specific wiki candidates were retained with candidate-local validation and explicit preconditions. Six targeted regression suites passed (time-window, with-timeout, wiki command, config audit, model-tool auth, feature-cron plan) but lack the reported boundary cases. Only this review receipt was written; no product file or feature was changed or disabled."
+}

@@ -1,0 +1,7 @@
+Uses a dummy value only (not a credential):
+
+printf '1\n2\nDEMO_KEY_ONLY_NOT_A_SECRET\n3\n' | script -q -e -E always -c "node <immutable>/scripts/provider-wizard.mjs" terminal.typescript
+
+The input selects OpenAI embedding, literal key mode, the dummy string, then
+the disabled reranker. `script -E always` records a pseudo-terminal transcript
+to demonstrate the exact terminal exposure surface.

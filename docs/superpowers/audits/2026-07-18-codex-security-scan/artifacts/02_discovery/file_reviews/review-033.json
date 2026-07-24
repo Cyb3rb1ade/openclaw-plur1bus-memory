@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-033",
+  "reviewer": "security-frontier-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/safe-update.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-safe-update-workspace-binding-loss",
+        "cand-acl-missing-ownership-fail-open"
+      ],
+      "evidence": "Read in full (378 lines; SHA-256 5cd07720bd4a3f62deee00c517b7e881aa67a4ba1bebddd2c0f36fa7f632ac4d). Content changes require evidence and a replacement vector, semantic drift is gated unless the trusted caller explicitly skips it, the replacement is stored before the old row is superseded, and graph/event operations are bounded and fail non-destructively (15-33, 226-378). The production /correct path performs destructive-command auth, bound confirmation, old-card ACL checking, archiving, and audit logging before/after this helper (index.js:4065-4124; lib/telegram-commands/memory-edit.js:189-225), so the helper's raw id/update API was not promoted as a standalone auth bypass. A concrete metadata loss remains: buildUpdateEntry copies scope and ownerUserId but never copies workspaceKey (80-128); MemoryDB.store subsequently defaults the missing workspaceKey to an empty string (index.js:666-716), while workspace ACL treats a missing binding as accessible (lib/acl-middleware.js:71-79). The new row is active and durable before the correctly bound old row is superseded (329-341). Dynamic validation transformed a workspace-a row into a replacement with no workspaceKey; after normal schema defaulting, checkAccess allowed workspace-b. This is a new concrete producer for the already tracked missing-ownership fail-open candidate. Idempotency-read failure is silent at 188-197 and graph rewrites append rather than remove old edges (149-181), but those are reliability/consistency defects without a separate cross-boundary impact in this path."
+    },
+    {
+      "path": "lib/score.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (16 lines; SHA-256 ddf1b53f37c3d354f17ffdc4be91e3ba79790ed1008455601f3ff21c715f1760). The module performs only a constant-time numeric distance-to-score conversion and has no file, network, query, authorization, parser, or mutation sink. Negative/non-finite caller values can violate the documented [0,1] range, but production LanceDB L2/cosine distances are non-negative and no attacker-controlled alternate distance producer or security decision bypass was established; this is numerical hardening only."
+    },
+    {
+      "path": "lib/security.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (183 lines; SHA-256 b845937bda7ebb85ab2676ee06fe4c66170c623c2d40e7693d52040cfa50f463). Identity and chat-kind resolution cover nested channel variants and conflicting group evidence fails toward group (17-69). Destructive authorization requires an allowed user when any whitelist is configured, additionally enforces a configured chat list, and otherwise permits only positively identified private chats; unknown/group contexts fail closed (89-142). Confirmation records use random UUID nonces, expiry, user+chat binding, one-time deletion, and nonce+target lookup (148-183). validateConfirmation does not compare the callback command prefix to pending.command, but production completePending selects an entry by the expected command and passes the stored callbackData rather than user callback bytes (index.js:3843-3863), eliminating a reachable command-confusion path. Prefix confirmation accepts at least six nonce hex characters, but the same authenticated user+chat must own the pending operation, so no cross-principal privilege gain follows. Relevant auth/security suites passed."
+    },
+    {
+      "path": "lib/semantic-input.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (145 lines; SHA-256 d045e3873b8432f2167304d7409d6d8e845e6dfc0628a6a33d2bd26b9e074c75). Inputs must be strings, are hashed rather than logged verbatim, reject above 100,000 characters, and either pass directly, use an injected summarizer, or fall back to linear sentence dedupe/compression (26-58, 74-145). User-facing /memory, /forget, and /correct handlers first enforce the stricter 4,000-character command limit (index.js:3971-3979, 4002-4037, 4065-4137; lib/input-limits.js:8-47), making this helper's >6,000-character LLM summarization branch unreachable from those destructive chat commands. The recall summarizer is model-token bounded and its output only selects semantic-search candidates, whose normal pipeline applies ACL. A custom summarizer response is not independently capped here, and single-sentence heuristic fallback can remain uncompressed, but no remotely controlled privileged sink or practical resource-exhaustion chain was established."
+    },
+    {
+      "path": "lib/semantic-lens-index.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-semantic-lens-acl-bypass"
+      ],
+      "evidence": "Read in full (242 lines; SHA-256 c99300e0e491cde50c17a965be4e3d2ee10cac0d96df876463f1be1bfa8fdf33). The feature is default-off, additive, capped, time-bounded, deduplicates base IDs, rejects inactive rows, requires significant token overlap, and returns base recall unchanged on load/selection errors (5-13, 23-69, 99-117, 135-197, 207-241). Those controls constrain volume and prompt injection but do not enforce object visibility. hydrateMemory accepts a map/object/callback result verbatim, and tryPick checks existence/status/relevance only before appending the full entry (139-185). Production calls it after normal recall ACL filtering but hydrates lens IDs through raw MemoryDB.getById without passing agent/workspace/user context (index.js:5816-5822; MemoryDB.getById at index.js:1094-1098); lens summaries are then rendered into prompt context (index.js:5823-5836, 6119-6124; lib/relevant-memory-context.js:222-224). Dynamic validation used a current workspace-a base memory and an index community pointing to an active scope:'user' victim row: direct checkAccess denied the row, while applySemanticLensToRecall appended its secret summary. The fixed default index suffix has no attacker-controlled traversal segment, and production does not pass the optional arbitrary indexPath; the unbounded cache/file-read concerns require local workspace/config control and were not retained separately. Tests cover caps, freshness, status, and query relevance but no ACL/owner/workspace case."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-safe-update-workspace-binding-loss",
+      "instanceKey": "acl-binding-loss:lib/safe-update.js:80",
+      "title": "Safe reconsolidation drops workspace ownership from corrected memories",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "CWE-200",
+        "authorization-metadata-loss"
+      ],
+      "source": "An authorized /correct operation targets an active scope:'workspace' memory that carries workspaceKey/workspaceId ownership metadata.",
+      "control": "buildUpdateEntry manually reconstructs the new row and copies scope but omits workspaceKey/workspaceId; MemoryDB.store fills the absent schema field with an empty string, and the ACL's legacy compatibility branch allows workspace rows with no binding.",
+      "sink": "safeUpdate stores the unbound replacement as active, then supersedes the correctly bound original; subsequent recall or mutation paths treat the replacement as visible from another workspace sharing the agent database.",
+      "impact": "Correcting a workspace-scoped memory can broaden its visibility from one workspace to every workspace served by that agent, exposing the corrected content and enabling later wrong-workspace operations.",
+      "closestControl": "The caller authorizes and ACL-checks the old card, but no post-build invariant verifies that the replacement retained the old scope binding; the legacy ACL check later fails open on the resulting empty workspaceKey.",
+      "locations": [
+        "lib/safe-update.js:80",
+        "lib/safe-update.js:93",
+        "lib/safe-update.js:99",
+        "lib/safe-update.js:100",
+        "lib/safe-update.js:125",
+        "lib/safe-update.js:329",
+        "lib/safe-update.js:337",
+        "lib/safe-update.js:340",
+        "lib/safe-update.js:341",
+        "index.js:666",
+        "index.js:689",
+        "index.js:716",
+        "index.js:4101",
+        "index.js:4112",
+        "lib/acl-middleware.js:71",
+        "lib/acl-middleware.js:73",
+        "lib/acl-middleware.js:74",
+        "lib/telegram-commands/memory-edit.js:199",
+        "lib/telegram-commands/memory-edit.js:210"
+      ],
+      "validationRecommended": true,
+      "validationFacts": "Pure construction reproduced the defect: old workspaceKey was 'workspace-a'; buildUpdateEntry had no workspaceKey property; normal schema defaulting yielded workspaceKey:''; checkAccess for workspace-b returned allowed:true. tests/safe-update-dataloss.test.js passed but checks store-before-supersede ordering only and has no ownership-preservation assertion.",
+      "attackFacts": "A principal must be authorized to correct a workspace-a memory; the confidentiality beneficiary is a different principal/workspace using the same agent DB after the correction. The old-row ACL and confirmation do not prevent the post-update exposure. User-scoped ownerUserId and typical agent-private storedBy are preserved, so the demonstrated instance is specifically workspace scope. This candidate also supplies a concrete normal-operation producer for cand-acl-missing-ownership-fail-open."
+    },
+    {
+      "candidateId": "cand-semantic-lens-acl-bypass",
+      "instanceKey": "object-authz:lib/semantic-lens-index.js:167",
+      "title": "Semantic Lens hydrates and injects memory IDs without applying recall ACL",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "CWE-200",
+        "cross-user-memory-exposure"
+      ],
+      "source": "A workspace Semantic Lens index supplies community member UUIDs associated with an otherwise authorized base recall result; a referenced row may be workspace- or user-scoped to another principal in the same agent table.",
+      "control": "tryPick validates dedupe, count, lifecycle status, and token overlap, but never invokes checkAccess. The production hydration callback calls raw db.getById(memoryId), which validates UUID syntax but has no authorization context.",
+      "sink": "The hydrated row's summary/text is converted to a semanticLensItem and appended to the model's memory context, bypassing the ACL stage that filtered normal recall results.",
+      "impact": "When the enabled index references a foreign row, another workspace/user can have that row's sensitive content disclosed to the answering model and potentially reflected in its response.",
+      "closestControl": "runRecallPipeline applies checkAccess to ordinary results before the lens runs, but the post-recall additive path does not reapply that control; status/relevance/caps do not substitute for owner/workspace authorization.",
+      "locations": [
+        "lib/semantic-lens-index.js:139",
+        "lib/semantic-lens-index.js:142",
+        "lib/semantic-lens-index.js:163",
+        "lib/semantic-lens-index.js:167",
+        "lib/semantic-lens-index.js:173",
+        "lib/semantic-lens-index.js:175",
+        "lib/semantic-lens-index.js:180",
+        "lib/semantic-lens-index.js:190",
+        "lib/semantic-lens-index.js:207",
+        "lib/semantic-lens-index.js:223",
+        "lib/semantic-lens-index.js:233",
+        "lib/recall-pipeline.js:1035",
+        "lib/recall-pipeline.js:1040",
+        "index.js:1094",
+        "index.js:1097",
+        "index.js:5816",
+        "index.js:5818",
+        "index.js:5821",
+        "index.js:5823",
+        "index.js:5827",
+        "index.js:6123",
+        "lib/relevant-memory-context.js:222",
+        "lib/relevant-memory-context.js:224"
+      ],
+      "validationRecommended": true,
+      "validationFacts": "A dynamic candidate-local test created an allowed workspace-a base result and an index community pointing to an active scope:'user', ownerUserId:'victim' row with overlapping tokens. checkAccess for attacker returned false, while applySemanticLensToRecall returned reason:'applied' and appended foreign1 with summary 'victim secret'. All semantic-lens tests passed, but none asserts ACL equivalence with the main recall pipeline.",
+      "attackFacts": "The feature must be explicitly enabled and the current workspace index must contain or be poisoned with the victim UUID in a community reached by an allowed base memory. Exact content overlap of two non-generic tokens and a maximum of three additions constrain exploitation but do not authorize it. UUID knowledge/index provenance are the main proof gaps: the precomputation writer is outside this module/repository, while workspace-local index modification or a cross-scope builder can satisfy them."
+    }
+  ],
+  "notes": "All five shard-033 files were read in full at the immutable target. Two new candidates were retained. Existing auth/confirmation controls, the 4,000-character command gate, fixed production index path, default-off/capped lens behavior, and non-negative production distance provenance close the remaining security hypotheses. No product code or shared discovery ledger was modified."
+}

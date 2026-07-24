@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-016",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/memory-history.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (95 lines). Both exported traversals cap depth and detect cycles (13-51, 63-94) and only call injected db.getById. They do not call safeUuid as required for any LanceDB ID, but repository search found no runtime caller outside tests; without a reachable user-facing source or direct query construction in this module, the policy gap is not promoted."
+    },
+    {
+      "path": "lib/memory-merge-safety.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (274 lines). It is pure deterministic text analysis with no file/query/process/network sink. It preserves ordering when detecting role reversal (182-200, 219-243) and requires salient terms from both inputs in merged text (246-274). False positives/negatives can cause memory-quality or merge-safety defects, but the destructive sequencing defect lives in index.js and is covered by the bug audit."
+    },
+    {
+      "path": "lib/memory-text-contradiction.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (69 lines). Pure ranking helpers use version, active status, authoritative update source, and timestamp, with deterministic tie behavior. No untrusted syntax or privileged sink exists here."
+    },
+    {
+      "path": "lib/meta-cognition.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (380 lines). Recall text is analyzed in memory; topic extraction strips non-word characters and selects at most three tokens (24-40). Written Neo candidates use fixed statements or those bounded tokens and remain status=candidate (124-229), not activated instructions. Quadratic duplicate analysis at 60-75 is a performance concern, but caller recall sets are bounded and no independent attacker-controlled high-impact sink was found."
+    },
+    {
+      "path": "lib/metrics-debounce.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (88 lines). It is an in-memory batching helper and delegates filesystem behavior to flushFn. Failed entries are removed before the flush and never restored (62-75), and timer/onError catches silently swallow errors (28-31, 67-74), both confirmed reliability/observability defects under the repository standards. Metrics loss is not a privilege or confidentiality boundary."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No security candidates. Bug audit should retain destructive merge ordering and metrics-loss/error-swallowing findings; memory-history validation is a dormant API hardening gap."
+}

@@ -185,7 +185,7 @@ describe("memory store decision trace", () => {
     });
 
     const api = makeMockApi(basePath, {
-      merging: { enabled: true, model: "mock-model", apiKey: "sk-test" },
+      merging: { enabled: true, autoApply: true, model: "mock-model", apiKey: "sk-test" },
       duplicateThreshold: 0.9999,
     });
     plugin.register(api);
@@ -243,7 +243,7 @@ describe("memory store decision trace", () => {
     });
 
     const api = makeMockApi(basePath, {
-      merging: { enabled: true, model: "mock-model", apiKey: "sk-test" },
+      merging: { enabled: true, autoApply: true, model: "mock-model", apiKey: "sk-test" },
       duplicateThreshold: 0.9999,
     });
     plugin.register(api);
@@ -298,7 +298,7 @@ describe("memory store decision trace", () => {
     const archiveBefore = existsSync(archiveAgentDir) ? readdirSync(archiveAgentDir).length : 0;
 
     const api = makeMockApi(basePath, {
-      merging: { enabled: true, model: "mock-model", apiKey: "sk-test" },
+      merging: { enabled: true, autoApply: true, model: "mock-model", apiKey: "sk-test" },
       duplicateThreshold: 0.9999,
     });
     plugin.register(api);

@@ -1,0 +1,214 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-018",
+  "reviewer": "shard006-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/neo-worker-runner.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (85 lines; SHA-256 0efec9895087dfe0b1dd7bf230c288c3f064fe4aef4a24b6721989e75bed86f3). The worker accepts jobs only through parentPort, validates the job envelope and required rootDir, executes the fixed runNeoAgentEndJob operation, and returns structured results/errors. rootDir and serialized context are host-worker inputs rather than chat-controlled values in this file; filesystem containment is delegated to the reviewed Neo store. No command, SQL, network, or direct external-message sink is present."
+    },
+    {
+      "path": "lib/neo-worker-runtime.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (218 lines; SHA-256 4c7de0bb1d5661828899716609b34180964e4e179ece6ff9d256851474c16ece). Runtime jobs are serialized through one worker, request IDs are internally generated, abort and worker failures reject callers, and logger/signal fields are stripped before structured cloning. The unbounded pending map/queue and absence of a built-in deadline are availability-hardening concerns, but only trusted in-process callers can enqueue jobs and no independent security boundary violation was established."
+    },
+    {
+      "path": "lib/obsidian-bridge.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-obsidian-symlink-escape",
+        "cand-obsidian-vault-approval-tamper",
+        "cand-obsidian-readonly-controls-bypass"
+      ],
+      "evidence": "Read in full (1,927 lines; SHA-256 11e068211c831d60b486d88bffe6db445a86a6766dbd554488d63fc1db289720). scanWorkspace follows each explicit include root with statSync/walk before checking child Dirents (1054-1093); because the defaults include memory/cards/**/*.md (51-56), a symlinked memory/cards root is traversed even though the broad-root walk skips that symlink. The resulting lexical in-vault paths can read external Markdown and reach payload/memoryStore processing (1129-1143, 1347-1407), corroborating cand-obsidian-symlink-escape. Vault confirmation is itself stored under the untrusted vault and accepted by path string alone (823-859), supporting cand-obsidian-vault-approval-tamper. Finally, background rebuilds expire bundles and write memory mirrors, commands, dashboards, and graph links without consulting cfg.dryRun, mode, or vault confirmation (1746-1840), and start schedules them in both watch branches (1875-1908), supporting cand-obsidian-readonly-controls-bypass. Direct sync approval is also path-only (1047-1052) rather than content-hash/user/nonce-bound, but no production caller supplying applyApproved/approvedPaths was found, so that API-hardening issue is not a separate candidate."
+    },
+    {
+      "path": "lib/obsidian-control-room.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-obsidian-dryrun-auth-bypass",
+        "cand-obsidian-review-status-auth-bypass",
+        "cand-obsidian-vault-approval-tamper",
+        "cand-obsidian-review-bundle-cross-agent",
+        "cand-obsidian-readonly-controls-bypass",
+        "cand-obsidian-symlink-escape",
+        "cand-obsidian-maintenance-auth-bypass"
+      ],
+      "evidence": "Read in full (3,614 lines; SHA-256 90202ed73cabbf9d8b1bd8ee1b91692c57616349b15b9ea7da44313c43799927). The destructive classifier returns false as soon as any case-normalized --dry-run token exists (3281-3289), before dangerous flags and subcommands are considered; execution branches then inspect the original tokens case-sensitively or ignore dry-run entirely (3341-3401, 3451-3476, 3504-3551, 3580-3600). Dynamic probes confirmed mixed and uppercase variants classify false and an unauthorized supergroup quickapply invocation reaches the handler without the lock response. Approve/reject/snooze are omitted from the destructive set (3295-3300) but mutate the authoritative review JSON (1756-1822, 3574-3578). Review approval state and all payload/hash fields are loaded from mutable vault JSON (1324-1340, 1727-1741); validation compares attacker-replaceable hashes but never authenticates approvalHash or an external receipt (1837-1878), and apply trusts status=approved before memoryStore (1940-1979). Bundle IDs have minute-only, non-agent-scoped names (896-902), latest selection does not filter workspaceKey/createdByAgent (2553-2583), and apply does not validate bundle ownership, allowing shared-vault cross-agent overwrite/selection. resolveUnder/atomicWriteText are lexical and follow intermediate directory symlinks (666-725), corroborating cand-obsidian-symlink-escape. The classifier also omits maintenance deep while the handler invokes its mutating implementation at 3444, corroborating cand-obsidian-maintenance-auth-bypass."
+    },
+    {
+      "path": "lib/obsidian/adversarial-deep.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (49 lines; SHA-256 8b273900163487dae0b5208be3b95e329b2829fc3ad9252dda3edc505cdad900). This pure classifier has no privileged sink. Prompt-injection-like text produces warning rather than block (34-42), but normal auto-apply requires adversarial status pass and warnings remain subject to explicit review. The heuristic can be bypassed by obfuscation, yet the actionable failure is the separately recorded ability to forge approval/adversarial fields in mutable bundle JSON, not an independent vulnerability in this function."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-obsidian-dryrun-auth-bypass",
+      "title": "A dry-run token suppresses Obsidian command authorization while handlers still perform real mutations",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-693",
+        "authorization-bypass"
+      ],
+      "source": "Any chat participant can append --dry-run (or a case variant such as --DRY-RUN) to a destructive Obsidian command, including review apply/quickapply, rotate, cron install, config discovery write, or SOUL patch.",
+      "control": "isObsidianCommandDestructive lowercases all tokens and immediately returns false whenever --dry-run is present, before checking dangerous flags or mutating subcommands. Execution does not share that parsed decision: several branches ignore --dry-run, derive real execution from --apply, or check the original case-sensitive token.",
+      "sink": "The skipped authorization gate can reach applyApprovedReviewBundle -> memoryStore, rotateOldArchives -> rename/unlink, openclawCronAdd, writeDiscoveredObsidianWorkspaces, initWorkspace, and patchSoulMd with real-write parameters.",
+      "impact": "A user excluded by allowedUserIds, including a participant in a group/supergroup, can bypass the destructive-command ACL and write durable memory, install cron jobs, modify OpenClaw/SOUL/vault files, or delete/move review artifacts. No feature needs to be disabled to fix the parser/control mismatch.",
+      "locations": [
+        "lib/obsidian-control-room.js:3281",
+        "lib/obsidian-control-room.js:3284",
+        "lib/obsidian-control-room.js:3288",
+        "lib/obsidian-control-room.js:3306",
+        "lib/obsidian-control-room.js:3341",
+        "lib/obsidian-control-room.js:3367",
+        "lib/obsidian-control-room.js:3451",
+        "lib/obsidian-control-room.js:3463",
+        "lib/obsidian-control-room.js:3504",
+        "lib/obsidian-control-room.js:3535",
+        "lib/obsidian-control-room.js:3580",
+        "lib/obsidian-control-room.js:3590",
+        "index.js:2975"
+      ],
+      "validationFacts": "Direct evaluation returned false for ['rotate','--apply','--dry-run','--delete','--allow-delete'], ['discover','workspaces','--write','--DRY-RUN'], ['soul','patch','--force-soul','--DRY-RUN'], and ['review','quickapply','--DRY-RUN']. An unauthorized supergroup call to review quickapply low-risk --dry-run reached the normal handler and returned the no-open-proposals response rather than the authorization lock. The existing auth tests cover dry-run and destructive flags separately, not contradictory/case-variant combinations.",
+      "attackFacts": "A one-command memory path is `review quickapply low-risk --dry-run` when a low-risk proposal exists; a two-command path is unauthorized `review approve low-risk` followed by `review apply --dry-run`. `rotate --apply --delete --allow-delete --dry-run --max-age-days 0` reaches deletion, and uppercase --DRY-RUN also causes handlers that check exact lowercase spelling to execute non-dry-run behavior. Preconditions are the corresponding configured feature/artifact and ordinary command access. A feature-preserving repair must parse flags once, reject contradictory modes, authorize from the normalized effective action, and pass the same immutable parsed options to execution."
+    },
+    {
+      "candidateId": "cand-obsidian-review-status-auth-bypass",
+      "title": "Review approval, rejection, and snooze decisions bypass the configured user/chat ACL",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-284",
+        "approval-bypass"
+      ],
+      "source": "Any user who can invoke the review command, including a non-whitelisted participant in a shared chat, can request approve, reject, or snooze for a selected/latest bundle.",
+      "control": "The command classifier protects review apply and quickapply but not approve/reject/snooze. The handler therefore skips isAuthorized and calls updateReviewBundleItems without passing the resolved user/chat identity; approval metadata defaults to the generic approvedBy='human'.",
+      "sink": "updateReviewBundleItems persists approved/rejected/snoozed states and synthetic approval metadata to the bundle JSON. applyApprovedReviewBundle later treats approved as sufficient to reach memoryStore/knowledgeUpdate/task writes after content checks that do not authenticate the reviewer.",
+      "impact": "An unauthorized participant can manufacture the approval prerequisite for durable memory/knowledge changes (and combine it with the dry-run auth bypass for immediate apply), or reject/snooze legitimate proposals to suppress the review workflow. The configured allowlist and private-chat fail-safe are not enforced at the decision boundary.",
+      "locations": [
+        "lib/obsidian-control-room.js:1756",
+        "lib/obsidian-control-room.js:1760",
+        "lib/obsidian-control-room.js:1793",
+        "lib/obsidian-control-room.js:1821",
+        "lib/obsidian-control-room.js:1946",
+        "lib/obsidian-control-room.js:1975",
+        "lib/obsidian-control-room.js:3295",
+        "lib/obsidian-control-room.js:3300",
+        "lib/obsidian-control-room.js:3306",
+        "lib/obsidian-control-room.js:3574"
+      ],
+      "validationFacts": "Static dispatch is direct: isObsidianCommandDestructive(['review','approve','all']) evaluates false, while the review branch calls the disk-mutating update routine. Validation should create a temporary pending bundle, invoke approve/reject/snooze through handleObsidianBridgeCommand with a supergroup identity excluded from allowedUserIds, and assert both the absence of the lock response and the persisted status change.",
+      "attackFacts": "Requires an existing review bundle and chat command access. Approval alone does not execute memoryStore under the normal path, but it crosses the intended human-authorization boundary and can be consumed by a later authorized apply; cand-obsidian-dryrun-auth-bypass completes the chain without an authorized second actor. Preserve all review actions while applying isAuthorized and user/chat/nonce-bound approval receipts to every status mutation."
+    },
+    {
+      "candidateId": "cand-obsidian-vault-approval-tamper",
+      "title": "An untrusted Obsidian vault can self-assert vault confirmation and forge approved review payloads",
+      "taxonomy": [
+        "CWE-345",
+        "CWE-602",
+        "CWE-284",
+        "integrity-bypass"
+      ],
+      "source": "A collaborator, sync peer, compromised Obsidian plugin, or other principal able to modify the explicitly untrusted vault can alter .adaptive-learning/obsidian-bridge/confirmed-vaults.json and plur1bus/review-bundles/*.items.json independently of the Markdown a human reviews.",
+      "control": "Vault confirmation is read from a file inside the vault and accepted by matching workspace.path. Review status, adversarial result, payload, payloadHash, approvedPayloadHash, explicit-global flags, and approvalMetadata are also loaded from vault JSON. The apply validator compares mutually attacker-controlled hashes and never authenticates approvalHash against an external user/chat/nonce-bound receipt or secret.",
+      "sink": "syncWorkspace accepts the forged vault confirmation before its apply path; applyApprovedReviewBundle accepts forged status='approved' and consistent attacker-recomputed hashes, then passes the forged semantic payload to memoryStore or knowledgeUpdate (or writes a task file).",
+      "impact": "A malicious shared/synchronized vault can bypass the safety gate and inject attacker-selected durable memories/knowledge when apply runs, including global/user-scope approval metadata, while leaving the human-readable review Markdown benign. This violates the code's own untrusted-Obsidian trust model.",
+      "locations": [
+        "lib/obsidian-bridge.js:823",
+        "lib/obsidian-bridge.js:839",
+        "lib/obsidian-bridge.js:848",
+        "lib/obsidian-bridge.js:853",
+        "lib/obsidian-bridge.js:1259",
+        "lib/obsidian-control-room.js:1324",
+        "lib/obsidian-control-room.js:1338",
+        "lib/obsidian-control-room.js:1340",
+        "lib/obsidian-control-room.js:1727",
+        "lib/obsidian-control-room.js:1837",
+        "lib/obsidian-control-room.js:1850",
+        "lib/obsidian-control-room.js:1946",
+        "lib/obsidian-control-room.js:1975"
+      ],
+      "validationFacts": "The approvalHash is generated at 1767-1774 but is never recomputed or verified. A forged memory item can omit source preconditions, use sourceTrustLevel='untrusted_obsidian', set adversarialReview.status='pass', and provide internally consistent payload hashes; revalidateItem then has no external approval evidence to distinguish it from a human-approved item. Validation should tamper only the .items.json while leaving its .md unchanged and confirm an authorized apply reaches a memoryStore spy.",
+      "attackFacts": "Requires write access to the configured vault and a subsequent apply/sync invocation; direct apply still normally requires an authorized chat user, but the user need not have approved the forged item and the dry-run ACL candidate can remove that final barrier. A feature-preserving fix is to keep readable bundle mirrors in Obsidian while storing the authoritative confirmation/approval ledger outside the vault (or verifying a keyed signature) and binding receipts to canonical payload/source hashes, workspace, agent, user, chat, nonce, and action."
+    },
+    {
+      "candidateId": "cand-obsidian-review-bundle-cross-agent",
+      "title": "Shared-vault ReviewBundles are selected and applied without agent/workspace ownership checks",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "cross-agent-isolation"
+      ],
+      "source": "Two agent/workspace contexts use the same configured vaultPath, or a user in one agent context supplies/selects a ReviewBundle created for another agent in that shared review directory.",
+      "control": "Global vaultPath takes priority for every context. Auto bundle IDs contain only UTC date/hour/minute and can collide across agents. latestReviewBundleId scans every .items.json without filtering record.bundle.workspaceKey or createdByAgent, and load/apply never compares those fields to options.agentId/workspaceKey.",
+      "sink": "The selected foreign bundle is approved/applied through the current command context; the production memoryStore callback stores its payload under commandCtx.agentId/workspaceDir, while same-minute prepareReviewBundle calls can overwrite the same bundle files.",
+      "impact": "A proposal from agent/workspace A can be silently selected, overwritten, approved, or written into agent B's authoritative LanceDB memory, breaking per-agent isolation and confusing audit provenance. Concurrent review generation can also destroy one agent's pending review state.",
+      "locations": [
+        "lib/obsidian-control-room.js:522",
+        "lib/obsidian-control-room.js:523",
+        "lib/obsidian-control-room.js:896",
+        "lib/obsidian-control-room.js:898",
+        "lib/obsidian-control-room.js:1324",
+        "lib/obsidian-control-room.js:1382",
+        "lib/obsidian-control-room.js:1442",
+        "lib/obsidian-control-room.js:1727",
+        "lib/obsidian-control-room.js:1940",
+        "lib/obsidian-control-room.js:2553",
+        "lib/obsidian-control-room.js:2564",
+        "lib/obsidian-control-room.js:2577",
+        "lib/obsidian-control-room.js:3562",
+        "index.js:2975",
+        "index.js:2978"
+      ],
+      "validationFacts": "Neither latestReviewBundleId nor applyApprovedReviewBundle references bundle.workspaceKey/createdByAgent for authorization, despite receiving the current agentId/workspaceKey. Validation should place approved bundles for A and B in one temporary vault, make A newer, invoke implicit apply from B, and assert the B memoryStore spy receives A's payload; separately create two bundles in the same minute to prove path collision.",
+      "attackFacts": "Requires a shared vault/review root (direct cfg.vaultPath naturally creates this for all contexts) and at least two agent/workspace identities. An explicit bundle ID removes timing dependence; implicit latest selection makes accidental cross-agent apply plausible. Preserve shared-vault support by namespacing bundle storage/IDs by validated agent+workspace and enforcing those ownership fields on load, status update, latest selection, and apply."
+    },
+    {
+      "candidateId": "cand-obsidian-readonly-controls-bypass",
+      "title": "Obsidian background rebuilds mutate vault state despite read-only, dry-run, or unconfirmed configuration",
+      "taxonomy": [
+        "CWE-693",
+        "unsafe-state-change",
+        "configuration-bypass"
+      ],
+      "source": "An operator enables the bridge/watch service while relying on mode='augment' or mode='dry-run', dryRun=true, requireVaultPathConfirmation=true, or allowWrite=false as a no-mutation safety posture.",
+      "control": "The bridge normalizes mode/dryRun/confirmation settings, but mode is never used as an execution gate. syncWorkspace checks dryRun and vault confirmation, whereas rebuildDashboards has no equivalent gate and is started/scheduled regardless. Several control-room state writers such as expireStaleBundles and generateConflictReport also bypass the otherwise-used allowWrite check.",
+      "sink": "rebuildDashboards expires pending bundle JSON and invokes writeMemoryNotes, writeCommandsMarkdown, generateDashboards, and writeGraphLinks; startup invokes it immediately and periodically. Additional dry-run paths write config backups and sync metrics before/without their mutation guard.",
+      "impact": "A documented/readable safety mode can still create or replace vault files, rewrite graph-link managed blocks, and reject/expire review state. This can cause unexpected data loss or external writes when combined with the symlink escape, and defeats operator expectations during migration or audit runs.",
+      "locations": [
+        "lib/obsidian-bridge.js:278",
+        "lib/obsidian-bridge.js:279",
+        "lib/obsidian-bridge.js:653",
+        "lib/obsidian-bridge.js:668",
+        "lib/obsidian-bridge.js:670",
+        "lib/obsidian-bridge.js:1253",
+        "lib/obsidian-bridge.js:1259",
+        "lib/obsidian-bridge.js:1541",
+        "lib/obsidian-bridge.js:1746",
+        "lib/obsidian-bridge.js:1769",
+        "lib/obsidian-bridge.js:1795",
+        "lib/obsidian-bridge.js:1820",
+        "lib/obsidian-bridge.js:1824",
+        "lib/obsidian-bridge.js:1835",
+        "lib/obsidian-bridge.js:1875",
+        "lib/obsidian-bridge.js:1897",
+        "lib/obsidian-control-room.js:554",
+        "lib/obsidian-control-room.js:2024",
+        "lib/obsidian-control-room.js:2053",
+        "lib/obsidian-control-room.js:2248",
+        "lib/obsidian-control-room.js:2276"
+      ],
+      "validationFacts": "Static call flow shows no cfg.dryRun/mode/confirmation branch in rebuildDashboards. Existing memory-mirror tests prove rebuildDashboards creates files when invoked but do not cover dryRun=true, unconfirmed vaults, or allowWrite=false. Validation should call the service against a temporary unconfirmed vault in each read-only configuration and assert no mtime/content/state changes, including stale bundle expiration and graph-link blocks.",
+      "attackFacts": "Requires service startup/manual rebuild and a configured writable vault; authoritative memory writes are not claimed from this path, but review/control-room state and vault mirrors are mutated. A feature-preserving repair should centralize a mutation policy passed to every writer, make dry-run return planned actions only, keep outbound dashboards available through an explicit write-capable mode, and apply confirmation/allowWrite consistently rather than disabling the dashboard or graph features."
+    }
+  ],
+  "notes": "All five assigned files were read completely from immutable commit snapshot 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Targeted regression tests passed: auth-003-obsidian-command-gate, neo-worker-runtime, obsidian-bridge-memory-mirror, obsidian-discover-config-parse, obsidian-false-tombstone, obsidian-smoke, obsidian-watch-guard, and smoke-obsidian-apply (8/8 files). Classifier/handler probes confirmed the mixed-flag authorization gap. This review corroborates the existing cand-obsidian-symlink-escape and cand-obsidian-maintenance-auth-bypass families. It also corrects the broad premise of cand-obsidian-rotate-auth-bypass from review-019: ordinary lowercase rotate --apply/--delete is gated at 3287-3320, but the new dry-run short-circuit still bypasses that gate and reaches rotation. No source file or feature was modified or recommended for disablement; fixes can preserve all functionality by strengthening shared path, authorization, ownership, and approval primitives."
+}

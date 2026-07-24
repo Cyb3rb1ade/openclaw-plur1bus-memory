@@ -67,4 +67,34 @@ describe("bounded-cache idle eviction", () => {
     assert.strictEqual(evicted.length, 1);
     assert.deepStrictEqual(evicted[0], { key: "a", value: 1 });
   });
+
+  it("waits for every pending eviction before surfacing collected failures", async () => {
+    const failure = new Error("first eviction failed");
+    let finishSecond;
+    const secondFinished = new Promise((resolve) => { finishSecond = resolve; });
+    const cache = makeBoundedCache(1, async (key) => {
+      if (key === "a") throw failure;
+      await secondFinished;
+    });
+
+    cache.set("a", 1);
+    cache.set("b", 2);
+    cache.set("c", 3);
+    let settled = false;
+    const drain = cache.awaitPendingEvictions().then(
+      () => { settled = true; },
+      (err) => { settled = true; throw err; },
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settled, false, "the drain must await non-failing evictions too");
+
+    finishSecond();
+    await assert.rejects(drain, (err) => {
+      assert.ok(err instanceof AggregateError);
+      assert.equal(err.errors.length, 1);
+      assert.equal(err.errors[0].key, "a");
+      assert.equal(err.errors[0].cause, failure);
+      return true;
+    });
+  });
 });

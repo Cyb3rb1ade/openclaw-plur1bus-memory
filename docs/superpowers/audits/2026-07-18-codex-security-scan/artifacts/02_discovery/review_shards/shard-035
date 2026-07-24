@@ -1,0 +1,5 @@
+{"path":"lib/speaker-mapping-store.js","area":"."}
+{"path":"lib/speaker-proposer.js","area":"."}
+{"path":"lib/speaker-segment-schema.js","area":"."}
+{"path":"lib/sql-safety.js","area":"."}
+{"path":"lib/telegram-commands/feature-toggle.js","area":"."}

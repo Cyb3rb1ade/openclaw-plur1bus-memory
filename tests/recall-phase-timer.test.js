@@ -51,6 +51,51 @@ describe("recall-phase-timer", () => {
     assert.ok(!logs.some((m) => typeof m === "string" && m.includes("secret")));
   });
 
+  it("does not retain credentials or query text in failure summaries", () => {
+    const secret = "sk-1234567890abcdefghijklmn";
+    const queryText = "private query about the acquisition";
+    const timer = createRecallPhaseTimer({});
+
+    timer.fail("namespace-recall", new Error(`token=${secret}; query=${queryText}`));
+
+    const serialized = JSON.stringify(timer.summary());
+    assert.ok(!serialized.includes(secret));
+    assert.ok(!serialized.includes(queryText));
+    assert.equal(timer.summary().errors[0].error, "phase failed");
+  });
+
+  it("retains the phase failure and returns a throwing logger as secondary evidence", () => {
+    const loggerError = new Error("injected phase logger failure");
+    const timer = createRecallPhaseTimer({
+      logger: { warn() { throw loggerError; } },
+    });
+
+    const result = timer.fail("namespace-recall", new Error("original namespace timeout"));
+
+    assert.deepEqual(result, { ok: false, error: loggerError });
+    assert.equal(timer.summary().errors.length, 1);
+    assert.equal(timer.summary().errors[0].phase, "namespace-recall");
+    assert.equal(timer.summary().errors[0].error, "phase failed");
+  });
+
+  it("returns a non-rejecting settlement for an asynchronously failing logger", async () => {
+    const loggerError = new Error("injected async phase logger failure");
+    const timer = createRecallPhaseTimer({
+      logger: {
+        warn() {
+          return { then(_resolve, reject) { reject(loggerError); } };
+        },
+      },
+    });
+
+    const result = timer.fail("namespace-recall", new Error("original namespace timeout"));
+
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.pending, true);
+    assert.deepEqual(await result.settlement, { ok: false, error: loggerError });
+    assert.equal(timer.summary().errors[0].error, "phase failed");
+  });
+
   it("returns the current active phase", () => {
     const timer = createRecallPhaseTimer({});
     timer.start("scoring");

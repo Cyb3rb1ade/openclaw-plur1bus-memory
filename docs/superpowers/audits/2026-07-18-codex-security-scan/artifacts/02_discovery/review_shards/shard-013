@@ -1,0 +1,5 @@
+{"path":"lib/jobs/schicht15-tracker.js","area":"."}
+{"path":"lib/jobs/skill-miner.js","area":"."}
+{"path":"lib/jobs/skill-miner/evidence-aggregator.js","area":"."}
+{"path":"lib/jobs/skill-miner/llm-extractor.js","area":"."}
+{"path":"lib/jobs/skill-miner/nudge-renderer.js","area":"."}

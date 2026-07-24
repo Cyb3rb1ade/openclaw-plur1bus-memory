@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-020",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/obsidian/dataview-generator.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (13 lines; sha256 39fc0626d731a259469bab59080be561f9a547c0765c528f8e7e0cfe4af5fe4a). The generic renderer would accept Dataview expressions, but repository callers supply fixed dashboard definition values and configuration-derived reviewRoot; no chat-controlled expression source was found. Output is a review-vault query block rather than host code execution."
+    },
+    {
+      "path": "lib/obsidian/evidence-scorer.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (16 lines; sha256 7e0bac56a371abeb24a29df0a70466857ef3907ccd1c3514008e02f69394446a). Pure bounded heuristic over record metadata, with no privilege or I/O sink."
+    },
+    {
+      "path": "lib/obsidian/frontmatter.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (67 lines; sha256 938a68197554175b2349b898274da734f7bd585fb6f705581ca5d406fdc70ed8). Serialization flattens newlines, bounds scalars to 2000 characters, and JSON-quotes YAML metacharacters. Parsing supports only scalar/list syntax and does not instantiate YAML tags or execute aliases, suppressing YAML object/code injection. The silent JSON parse fallback is a logging-policy issue only."
+    },
+    {
+      "path": "lib/obsidian/graph-link-writer.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (327 lines; sha256 b53c2361365121b9c77565c7365a9ae7a150058fb9dc79d1c87ac6aa2cfa242e). Write targets pass resolveReviewPath, managed-block hash conflicts protect manual edits, semantic links consume a prebuilt index only, and failures are logged via safeWarn. Link labels strip managed markers, closing brackets, pipes, and newlines. Link targets are less aggressively escaped, but indexed paths originate from contained record files or fixed record-writer paths; no demonstrated untrusted-to-executable sink exists."
+    },
+    {
+      "path": "lib/obsidian/impact-analysis.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (29 lines; sha256 0521475d0ae10e862bfda50c01354ba92b7286be690d5b8f2fa450709a91826c). Produces explicitly proposal-only explanatory records and does not alter LanceDB, recall ranking, or memory truth. Record writing and path containment are covered in their own shard."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No reportable security candidate. These modules generate contained, non-authoritative Obsidian review artifacts; authorization of the chat commands that invoke them is tracked separately."
+}

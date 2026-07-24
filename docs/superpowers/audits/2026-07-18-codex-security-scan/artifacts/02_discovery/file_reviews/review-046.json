@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-046",
+  "reviewer": "security-file-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "scripts/lib/patch-agents-memory-instructions.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (29 lines; SHA-256 39aabf4d3a38c3cad333ff04f400813dab97995c7f01d8db238469f34b050cc8). The wrapper either transforms stdin in memory or delegates a supplied operator path to the canonical agents patcher (3-24), and reports rejected/failed operations through its top-level catch (26-29). It has no shell, network, database, authorization, or independently reachable path sink beyond the privileged local installer patcher already reviewed in its canonical module. The normal installer uses its --stdin mode after selecting a configured workspace path; that workspace path's shell-handling candidate is recorded in review-045 rather than duplicated here."
+    },
+    {
+      "path": "scripts/maintain-lancedb.mjs",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-lancedb-maintenance-versions-symlink-prune"
+      ],
+      "evidence": "Read in full (145 lines; SHA-256 8159b0e27ee1a6d626d65dbde17037ae9786cd8d57a229d1d4c3fd78be759e13). The default is dry-run, and --apply makes a backup before unlinking only .json/.manifest entries (43-86, 105-142); the targeted repair-script tests cover normal dry-run, backup, manifest pruning, and preservation of .lance data. A symlinked _versions directory is nevertheless accepted by existsSync/readdirSync and all subsequent stat/copy/unlink calls follow it, creating a distinct destructive symlink candidate. Functional finding for the parent audit: --keep accepts negative integers because parseInt(-100) is truthy (32-40); manifests.slice(-100) can select every manifest in a 100-or-fewer-entry table, and --apply then removes all of them despite reporting a negative keep value."
+    },
+    {
+      "path": "scripts/migrate-missing-columns.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (167 lines; SHA-256 c1c0744dc658acba169e5bb333b2eab4a519451c1b54c9232d9c83918c9f095c). The migration has no shell or user/message input surface; it connects to an explicit administrator-selected path, adds only a fixed column allowlist, logs each failure, and verifies the schema after migration (19-166). No independent security candidate was established. Feature/robustness finding for the parent audit: its documented default is the namespace base directory (24, 80-83), while the product architecture stores each memories table in a per-agent child directory; the script checks for memories directly at the base (89-96) and therefore fails under the documented per-agent layout unless the operator supplies one agent DB path manually."
+    },
+    {
+      "path": "scripts/protect-plur1bus-deploy.sh",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (152 lines; SHA-256 9a0b53e67d3419943c1859691dccb69f3c75316acbeed5ac2e28181703b5f5cc). The cron guard compares a fixed small runtime set, backs up before source restoration, rejects a detected pure re-export stub when its checker is available, and uses quoted process/file arguments (39-152). No lower-trust runtime-controlled source was shown for its explicitly documented PLUR1BUS_SRC/DEPLOY environment overrides. Important deploy-reliability gap for the parent audit: although comments say defaults are portable and derived from OPENCLAW_HOME, STUB_CHECKER is hardcoded to /root/scripts/lib/deploy-integrity.mjs (111). If unavailable (for example a non-root deployment), source_file_is_broken_stub returns 1 (113), which the if at 123 treats as not-broken and then copies an unchecked source (127-132): the guard fails open exactly when the stub check is absent. The tracked mirror also states that its production copy has no automated sync (4-8)."
+    },
+    {
+      "path": "scripts/provider-wizard.mjs",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-provider-wizard-literal-key-terminal-exposure"
+      ],
+      "evidence": "Read in full (155 lines; SHA-256 7131f9ddbee9748a7ee8b2a9b06de08386b93cbe0575825ec9fb0c86e09775a3). Provider/model choices are fixed allowlists and the module dynamically resolves only its fixed sibling i18n module (14-50), so no command or module-path injection was found. When a user selects a literal OpenAI or Cohere key, however, askLine uses ordinary readline terminal input and the final JSON prints the literal key to stdout (54-59, 76-85, 104-120, 141-146). This is a credential-exposure candidate. Feature-preservation finding for the parent audit: in advanced reranker mode, any invalid a/b/c choice silently returns provider=disabled rather than re-prompting (128-138), so a typo disables reranking without confirmation."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-lancedb-maintenance-versions-symlink-prune",
+      "title": "LanceDB maintenance follows a table-controlled _versions symlink while backing up and deleting manifests",
+      "taxonomy": [
+        "CWE-59",
+        "CWE-22",
+        "CWE-73",
+        "arbitrary-file-deletion"
+      ],
+      "instanceKey": "symlink-prune:scripts/maintain-lancedb.mjs:124",
+      "source": "A principal able to modify a LanceDB table directory replaces its _versions child with a symbolic link to another directory containing files ending in .json or .manifest.",
+      "control": "The maintenance script constructs versionsDir with join and checks only existsSync. It never lstat/realpaths the directory, verifies containment below the selected DB base, or uses no-follow operations before enumerating and pruning it.",
+      "sink": "sortedManifests follows versionsDir through readdirSync/statSync (43-48); --apply copies the selected external files into the backup (50-60) and unlinkSync(join(versionsDir, m.name)) deletes them through the symlink (79-83).",
+      "impact": "A lower-trust table-directory writer can redirect a service-account maintenance run to disclose selected external manifest/JSON contents into its backup and remove selected external files, rather than pruning only the intended database table.",
+      "locations": [
+        "scripts/maintain-lancedb.mjs:43",
+        "scripts/maintain-lancedb.mjs:46",
+        "scripts/maintain-lancedb.mjs:50",
+        "scripts/maintain-lancedb.mjs:55",
+        "scripts/maintain-lancedb.mjs:63",
+        "scripts/maintain-lancedb.mjs:80",
+        "scripts/maintain-lancedb.mjs:82",
+        "scripts/maintain-lancedb.mjs:113",
+        "scripts/maintain-lancedb.mjs:118",
+        "scripts/maintain-lancedb.mjs:124",
+        "scripts/maintain-lancedb.mjs:125",
+        "scripts/repair-installed-plugin.mjs:199"
+      ],
+      "validationFacts": "Static source-to-control-to-sink tracing is complete. Existing repair-script tests pass for real directories but do not create a symlinked _versions target. Isolated validation should use a temporary DB root, an outside sentinel directory with 51 JSON files, and --apply --keep 50; it must also determine whether deployed LanceDB table directories are writable by a principal less trusted than the maintenance runner before severity calibration.",
+      "attackFacts": "The operation is opt-in through --apply (or repair-installed-plugin --maintain-lancedb), and normal service-owned 0700 data directories reduce exposure. A lstat/realpath containment check that rejects symlinks before backup/prune preserves all supported maintenance behavior and its existing backup flow."
+    },
+    {
+      "candidateId": "cand-provider-wizard-literal-key-terminal-exposure",
+      "title": "Provider wizard echoes literal API keys in the interactive terminal and emitted JSON",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-532",
+        "credential-exposure"
+      ],
+      "instanceKey": "sensitive-output:scripts/provider-wizard.mjs:81",
+      "source": "An operator chooses the literal-key branch for OpenAI or Cohere and types a provider API key into the interactive wizard.",
+      "control": "askLine is built on createInterface({ input: stdin, output: stdout }) and rl.question without a no-echo/password mechanism. The literal is retained as apiKey rather than converted to an environment reference or redacted result.",
+      "sink": "The terminal echoes the normal readline entry, and main serializes the full embedding/reranker object including apiKey to stdout at line 144. Terminal scrollback, recordings, transcript logs, or an unguarded pipe can retain the credential.",
+      "impact": "A provider credential deliberately entered during setup can be exposed to another principal with access to the terminal transcript or command output, contrary to the installer's masked-secret behavior.",
+      "locations": [
+        "scripts/provider-wizard.mjs:54",
+        "scripts/provider-wizard.mjs:55",
+        "scripts/provider-wizard.mjs:57",
+        "scripts/provider-wizard.mjs:58",
+        "scripts/provider-wizard.mjs:77",
+        "scripts/provider-wizard.mjs:80",
+        "scripts/provider-wizard.mjs:81",
+        "scripts/provider-wizard.mjs:105",
+        "scripts/provider-wizard.mjs:108",
+        "scripts/provider-wizard.mjs:109",
+        "scripts/provider-wizard.mjs:141",
+        "scripts/provider-wizard.mjs:144"
+      ],
+      "validationFacts": "Static evidence shows both literal-key branches and full stdout serialization. Targeted provider-wizard tests pass but exercise exported option helpers only; they do not allocate a TTY or assert secret redaction. Validation should use a non-production key and a pseudo-terminal to document actual echo behavior, while keeping the output contract compatible with a securely stored config handoff.",
+      "attackFacts": "The user voluntarily selects a literal-key mode, so this is not a remote key theft vector; exposure requires terminal/output observers. Offering the existing apiKeyEnv default, or a no-echo input plus a deliberate secure handoff/redaction mode, preserves all provider choices without disabling literal credentials."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Targeted tests passed: agents-patcher, provider-wizard, provider-wizard-config, protect-plur1bus-deploy, and repair-scripts (5/5 files, 0 failures); Node syntax checks and bash -n also passed. Source-repo git status remained clean. No product-repository file was modified. Two security candidates are discovery-stage only; feature-preserving bug findings (negative keep destructive behavior, per-agent migration default mismatch, deploy stub check fail-open, and advanced wizard typo disabling reranker) are explicitly retained for the parent audit."
+}

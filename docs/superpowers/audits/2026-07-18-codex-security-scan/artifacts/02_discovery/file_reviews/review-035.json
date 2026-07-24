@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-035",
+  "reviewer": "security-file-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/speaker-mapping-store.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-chat-read-auth-bypass",
+        "cand-speaker-media-id-cross-agent-binding"
+      ],
+      "evidence": "Read in full (294 lines; SHA-256 db78abe71903dbff0a71fb793f2db7761276b72de255f05ba6a408b9ce083093). All speaker-mapping SELECT/INSERT/UPSERT/DELETE operations use SQLite placeholders and rows are keyed by agentId+speakerLabel (124-207), so labels/names cannot alter SQL structure. The DB path derives only from trusted process configuration plus fixed suffixes (28-40). However, getMergeResultByMediaOutputId queries the external merge_results table only by a caller-supplied global mediaOutputId and returns resultJson without agent/workspace/session/owner binding (270-290). Combined with the message-token source and proposal sink, this can copy another media result's identity hints into the current agent's pending mappings. Confirmed/pending speaker reads also supply the already tracked chat-read authorization candidate. Missing-table/malformed-JSON catches are silent, contrary to diagnostics policy, but fail closed to null."
+    },
+    {
+      "path": "lib/speaker-proposer.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-speaker-media-id-cross-agent-binding"
+      ],
+      "evidence": "Read in full (87 lines; SHA-256 9963499d1fd46e3591862117ace22fc355b033219c5084b46f5cbf3a1776a980). The linear direct-address regex is not ReDoS-prone, confirmed labels are skipped, duplicate label/name pairs are suppressed, and output remains a pending proposal requiring explicit user confirmation (21-57). storeNewProposals nevertheless persists every first proposal under the caller-supplied current agent without carrying or checking the media result's originating agent/workspace/session (68-85). The heuristic also assigns an addressed name such as 'Hi Alice' to the speaker who uttered it, which is a likely attribution/correctness defect mitigated by confirmation, not a separate security candidate."
+    },
+    {
+      "path": "lib/speaker-segment-schema.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-speaker-media-id-cross-agent-binding"
+      ],
+      "evidence": "Read in full (313 lines; SHA-256 5dd35fa1bab75b5a342f28a50113a2b7c7e5a9f2a7c9c5ea61ae1af99577e922). Segment source/attribution enums and confidence values are normalized; formatter/mapping operations are pure and the media token regex is linear. The extraction helper accepts any hex/dash token embedded anywhere in message text and returns it without UUID shape, provenance, signature, session, or ownership binding (56-57, 275-295). index.js applies it to both user and assistant text blocks and forwards every resulting ID into the speaker proposal pipeline (index.js:4344, 4360-4365, 4370-4378, 4569-4570), making a manually supplied token a live lookup selector. Unbounded segment/word/text arrays are a resource-control gap, but the current source is the local diarization DB and no independent remote DoS boundary was established."
+    },
+    {
+      "path": "lib/sql-safety.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-destructive-audit-log-symlink-write",
+        "cand-resolveinside-nonexistent-ancestor-symlink"
+      ],
+      "evidence": "Read in full (150 lines; SHA-256 6f790ef2df2fc56f2be1eda2e8c00ba3619f606c3601909707cb2d801478fe88). UUID, agent, timestamp, status, and type validators are strict, and sqlString quotes apostrophes/backslashes (12-67, 108-133). Two path-control defects remain. First, appendDestructiveOpLog joins and creates workspaceDir/.adaptive-learning directly, follows a pre-existing directory symlink, and appends outside the workspace (140-149); a benign temporary validation created an outside destructive-ops.jsonl through that symlink. Second, resolveInside realpaths only the complete immediate parent when it exists; if an earlier component is a symlink and a later parent does not yet exist, the fallback performs only lexical resolution (95-105). A benign temporary validation resolved base/link/new/file through base/link -> outside, then a downstream recursive mkdir/write landed outside. Current production call shapes must still be checked for the required multi-level non-existent target before the second defect is reportable."
+    },
+    {
+      "path": "lib/telegram-commands/feature-toggle.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-feature-toggle-config-mode-downgrade"
+      ],
+      "evidence": "Read in full (244 lines; SHA-256 80c6a29f216adb0030a5f1b52e5d1cc72ca3dd76c9fd95cdb0fcbf74d17e6c96). Feature keys map to a fixed whitelist, the config path is operator/process controlled, updates are lock-protected, and both canonical and compatibility chat routers enforce input length, destructive checkAuth, and allowChatConfigCommands before calling toggleFeature (index.js:3871-3882; plur1bus/index.js:2551-2562). The atomic writer does not preserve the original file mode: it writes the complete config (which may contain literal API keys) to a new default-mode temp file and renames it over openclaw.json (161-165). A benign temporary validation showed a 0600 config becomes 0644 under umask 0022 after a successful toggle. A crash/rename failure can also leave the full default-mode temp file. Existing feature-toggle tests pass but assert neither mode preservation nor temp cleanup."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-speaker-media-id-cross-agent-binding",
+      "title": "Spoofable media-output IDs select diarization results without agent or session binding",
+      "taxonomy": [
+        "CWE-639",
+        "CWE-862",
+        "CWE-345",
+        "cross-agent-data-exposure"
+      ],
+      "instanceKey": "missing-object-binding:lib/speaker-mapping-store.js:270",
+      "source": "Any user/assistant message block can contain an HTML comment matching media-output-id with an arbitrary hex/dash value; index.js extracts all such values from ordinary message content.",
+      "control": "The token has no authenticity/provenance binding, and getMergeResultByMediaOutputId selects a globally shared external row solely by mediaOutputId without expected agent, workspace, session, chat, or owner criteria.",
+      "sink": "The selected segments are scanned for speaker names and the resulting displayName/contextHint is persisted as a pending speaker mapping under the current agent; the pending proposal is later rendered by /speaker proposals and can be confirmed into an active mapping.",
+      "impact": "A principal who learns or guesses another media output ID can copy victim diarization identity/context hints into their routed agent, disclose those hints, poison its pending review queue, and potentially induce a wrong active speaker identity after confirmation.",
+      "locations": [
+        "lib/speaker-segment-schema.js:56",
+        "lib/speaker-segment-schema.js:289",
+        "lib/speaker-mapping-store.js:270",
+        "lib/speaker-mapping-store.js:278",
+        "lib/speaker-mapping-store.js:280",
+        "lib/speaker-mapping-store.js:290",
+        "lib/speaker-proposer.js:21",
+        "lib/speaker-proposer.js:48",
+        "lib/speaker-proposer.js:68",
+        "lib/speaker-proposer.js:77",
+        "index.js:290",
+        "index.js:297",
+        "index.js:301",
+        "index.js:303",
+        "index.js:4364",
+        "index.js:4377",
+        "index.js:4570"
+      ],
+      "validationFacts": "A benign temporary SQLite reproduction inserted a merge_results row for deadbeef-1111, supplied that ID through an ordinary token, and observed an Alice proposal persisted under agent-attacker. This confirms the code path and missing binding. Production validation must inspect the external diarization schema/ID entropy and determine whether mediaOutputId values are visible across principals or cryptographically unguessable.",
+      "attackFacts": "The attacker needs a valid victim mediaOutputId or enough predictability to discover one. Explicit user confirmation prevents automatic activation, but it does not prevent pending proposal persistence or disclosure; the separate chat-read auth defect can broaden who sees it. Binding the token/result to the originating agent/session and authenticating the carrier preserves the speaker feature."
+    },
+    {
+      "candidateId": "cand-destructive-audit-log-symlink-write",
+      "title": "Destructive-operation logging follows a workspace-controlled directory symlink",
+      "taxonomy": [
+        "CWE-59",
+        "CWE-22",
+        "filesystem-containment"
+      ],
+      "instanceKey": "symlink-write:lib/sql-safety.js:140",
+      "source": "A repository/workspace contributor can pre-create .adaptive-learning as a symlink to a directory outside workspaceDir; destructive event fields can also contain user/model-derived query text, although JSON encoding prevents raw line injection.",
+      "control": "appendDestructiveOpLog uses join/existsSync/mkdirSync without lstat, realpath containment, resolveInside, or no-follow file creation.",
+      "sink": "appendFileSync follows the directory symlink and creates or appends destructive-ops.jsonl using the OpenClaw service account during chat/model forget, correction, or automatic merge deletion.",
+      "impact": "A malicious workspace can make the service create or corrupt a fixed-name file outside the workspace and redirect audit records away from their expected location, weakening audit integrity and crossing filesystem boundaries.",
+      "locations": [
+        "lib/sql-safety.js:140",
+        "lib/sql-safety.js:143",
+        "lib/sql-safety.js:144",
+        "lib/sql-safety.js:145",
+        "index.js:2728",
+        "index.js:5153",
+        "index.js:5233",
+        "index.js:5256",
+        "lib/telegram-commands/memory-edit.js:180",
+        "lib/telegram-commands/memory-edit.js:224"
+      ],
+      "validationFacts": "A temporary workspace with .adaptive-learning -> outside caused appendDestructiveOpLog to create outside/destructive-ops.jsonl. Validate the deployment's workspace ownership/symlink policy and service privileges; the fixed output basename constrains impact but does not restore containment.",
+      "attackFacts": "Preconditions are write/symlink control over a workspace plus any subsequent destructive or merge operation. The attacker cannot freely choose the basename and JSON serialization escapes record values, so arbitrary-content overwrite is not established. A contained no-follow audit writer preserves all memory features."
+    },
+    {
+      "candidateId": "cand-resolveinside-nonexistent-ancestor-symlink",
+      "title": "resolveInside misses an existing ancestor symlink when the immediate parent does not exist",
+      "taxonomy": [
+        "CWE-59",
+        "CWE-22",
+        "path-canonicalization"
+      ],
+      "instanceKey": "path-control:lib/sql-safety.js:79",
+      "source": "A caller supplies or derives a multi-level new target beneath a base containing an attacker-created symlink in an earlier path component.",
+      "control": "For a non-existent target whose immediate parent is also absent, resolveInside does not walk to and realpath the nearest existing ancestor; it lexically resolves dirname(join(...parts)) and only checks the resulting string prefix.",
+      "sink": "The helper returns a path that traverses the ancestor symlink when a downstream caller recursively creates the missing parent or writes the target.",
+      "impact": "A caller relying on the documented containment guarantee can create/write outside baseDir through an ancestor symlink even though traversal strings are rejected.",
+      "locations": [
+        "lib/sql-safety.js:79",
+        "lib/sql-safety.js:83",
+        "lib/sql-safety.js:95",
+        "lib/sql-safety.js:101",
+        "lib/sql-safety.js:102",
+        "lib/sql-safety.js:105"
+      ],
+      "validationFacts": "A benign temporary check with base/link -> outside and target link/new/file returned a lexically in-base path; recursive mkdir/write created outside/new/file. Existing security tests cover dot-dot, absolute paths, and a new file in an existing real subdirectory, but not a non-existent descendant below a symlink.",
+      "attackFacts": "The helper defect is deterministic, but final reportability requires a current production caller that both accepts such a multi-level target and creates/writes it. Reviewed cache and archive callers often use only one new directory level or existing targets, so this row may close as suppressed hardening if no concrete call shape survives repository-wide reconciliation."
+    },
+    {
+      "candidateId": "cand-feature-toggle-config-mode-downgrade",
+      "title": "Feature toggles replace a private OpenClaw config with a default-permission file",
+      "taxonomy": [
+        "CWE-276",
+        "CWE-732",
+        "sensitive-config-exposure"
+      ],
+      "instanceKey": "insecure-file-mode:lib/telegram-commands/feature-toggle.js:161",
+      "source": "An authorized /enable or /disable command reads the full operator OpenClaw JSON, which may contain literal provider API keys and other secrets.",
+      "control": "The update is authorized, key-whitelisted, and atomically renamed, but atomicWriteJson neither stats/preserves the original mode nor explicitly creates the temporary file as 0600 and cleans it on failure.",
+      "sink": "writeFileSync creates path.tmp-PID-time with Node's default 0666 masked by umask, then renameSync makes that file the new openclaw.json.",
+      "impact": "A successful toggle can change a 0600 secrets-bearing config to 0644; a crash or failed rename can leave a similarly permissive full-config temp copy, exposing credentials to other local principals when directory permissions permit traversal.",
+      "locations": [
+        "lib/telegram-commands/feature-toggle.js:161",
+        "lib/telegram-commands/feature-toggle.js:162",
+        "lib/telegram-commands/feature-toggle.js:163",
+        "lib/telegram-commands/feature-toggle.js:164",
+        "lib/telegram-commands/feature-toggle.js:193",
+        "lib/telegram-commands/feature-toggle.js:200",
+        "lib/telegram-commands/feature-toggle.js:206",
+        "index.js:3871",
+        "index.js:3875",
+        "index.js:3877",
+        "index.js:3881"
+      ],
+      "validationFacts": "A temporary reproduction chmodded openclaw.json to 0600, ran toggleFeature(autoCapture,true), and observed mode 0644 with toggleOk=true under umask 0022. The targeted feature-toggle/security/speaker test files all pass; none asserts mode preservation. Validate typical OPENCLAW_HOME/config directory permissions and service-user topology for severity.",
+      "attackFacts": "The state change itself requires an authorized/private-owner command, so chat authorization is not bypassed. Confidentiality impact requires another local principal who can traverse the config directory; a 0700 parent directory is counterevidence. Preserving the original mode or forcing 0600 and cleaning temp files retains every toggle feature."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Targeted speaker, feature-toggle, SQL-safety, and missing-merge-table tests passed (5/5 test files). Chat feature-toggle authorization is present; findings concern result binding and filesystem/config confidentiality controls, with feature-preserving remedies only."
+}

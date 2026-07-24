@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-040",
+  "reviewer": "security-file-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "patches/apply-memory-patches.sh",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-startup-cohere-reranker-config-bypass"
+      ],
+      "evidence": "Read in full (206 lines; SHA-256 98439ec2fec1b70b90a23b07669da30c02048a9e7c3c1d3ccbca39352ef016c4). The installer executes this patch unconditionally at scripts/install-memory-system.sh:1579-1596, and the script injects code into OpenClaw's native memory manager at lines 65-106. The injected runtime reads COHERE_API_KEY from the state .env and, whenever the key exists and merged.length > 1, sends the cleaned query plus every merged memory snippet to Cohere at lines 80-90. It does not consult PLUR1BUS reranker.provider or reranker.enabled, even though the installer offers explicit local and disabled selections at scripts/install-memory-system.sh:786-805 and persists disabled configuration at 1028-1049. The fixed HTTPS destination, eight-second timeout, and public documentation at how-to-memory-perfect.md:1928-1963 are counterevidence against arbitrary SSRF or covert destination selection, but do not preserve the operator's local/disabled privacy choice. The remaining privileged mutations use fixed targets (/usr/lib/node_modules/openclaw/dist and /root/index.js), quoted version-dispatch script paths, and no lower-privilege attacker-controlled filename was established; missing integrity/version anchoring and partial best-effort application remain deployment robustness concerns, not separate security candidates."
+    },
+    {
+      "path": "plur1bus/index.js",
+      "status": "full_reviewed",
+      "disposition": "suppressed",
+      "evidence": "Read in full (4,080 lines; SHA-256 a129ed5c16be6e0dd4ca4d60002196dd9cca0e9dd02cb3d542785fa172a128d5), including imports/config/providers, MemoryDB and AgentDbPool, command and hook registration, file/network sinks, model tools, capture, and recall. Static review found an old unsafe AgentDbPool join of raw agentId (817-839), read and state-changing command branches without the current authorization gates (1936-2402, 2623-2638, 2768-2787), and model-facing memory_forget/knowledge_update mutations without user-bound authorization (3522-3760); if this file were restored as a runtime, those paths would reproduce existing cand-agent-db-path-traversal, cand-chat-read-auth-bypass, cand-model-forget-auth-bypass/cand-model-tool-knowledge-authz, and ownership-isolation concerns. Reachability is absent at this commit: package.json main and openclaw.extensions both select root ./index.js, package.json files excludes plur1bus/, this directory has no package/plugin manifest, deploy-integrity lists only root runtime files, and a direct import fails immediately with ERR_MODULE_NOT_FOUND for plur1bus/lib/categorize.js. Repository documentation explicitly identifies plur1bus/ as an archived v5.2.11, stale, partially-decayed leftover (docs/superpowers/plans/2026-06-09-obsidian-bridge-ux-u6-u2.md:15 and docs/superpowers/plans/2026-06-16-installer-deploy-integrity-followup.md:52-66). The insecure code is therefore retained as bug/deployment-drift evidence but suppressed as a current security entrypoint. No hard-coded credential was found."
+    },
+    {
+      "path": "plur1bus/lib/acl-middleware.js",
+      "status": "full_reviewed",
+      "disposition": "candidate_support",
+      "candidateIds": [
+        "cand-acl-missing-ownership-fail-open"
+      ],
+      "evidence": "Read in full (1 line; SHA-256 8e465a0d762fee3930232696f4d0e0094a0472f628d083941a7004bd7d0e8095). It is only a static re-export of ../../lib/acl-middleware.js and therefore adds no independent authorization or file sink. In repository context it exposes the canonical module already reviewed under cand-acl-missing-ownership-fail-open; if copied as a standalone plur1bus package, the relative target lies outside that package and the import fails rather than creating a second exploitable implementation. The current package/deploy path imports root lib/acl-middleware.js directly."
+    },
+    {
+      "path": "plur1bus/lib/continuity-gate.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (137 lines; SHA-256 107f1183f9577ce7112d7e2d18c42f2951a489f190aa57582648b293a02958eb). This archived implementation performs fixed score, rate, depth, duplicate, and emotional-fit checks and mutates only caller-provided in-memory session counters. Unknown types fail closed. It has no authentication, filesystem, query, process, network, secret, or durable-state sink; missing caller-shape validation is at most a robustness defect."
+    },
+    {
+      "path": "plur1bus/lib/emotion.js",
+      "status": "full_reviewed",
+      "disposition": "candidate_support",
+      "candidateIds": [
+        "cand-emotion-engine-cross-agent-context",
+        "cand-mood-state-prompt-injection"
+      ],
+      "evidence": "Read in full (1 line; SHA-256 98a907e7a4e3bcb3bf0c4aa2873716ac8e8604b0a906228f1ff930bae2ea6182). It is only a static re-export of the fully reviewed canonical ../../lib/emotion.js, so it adds no new implementation, key handling, file sink, or authorization boundary. In repository context it inherits the canonical module's existing global-engine and label-validation candidates; as a standalone stale package the relative import is broken, and the current package imports root lib/emotion.js directly."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-startup-cohere-reranker-config-bypass",
+      "title": "Startup patch uploads native-memory queries and snippets despite a local or disabled reranker selection",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-359",
+        "privacy-control-bypass"
+      ],
+      "instanceKey": "implicit-provider-activation:patches/apply-memory-patches.sh:80",
+      "source": "OpenClaw native memory search produces a cleaned user query and merged result snippets that can contain private conversation and memory content.",
+      "control": "The installer always applies the patch, and the injected code treats presence of COHERE_API_KEY in the OpenClaw state .env as the sole enablement signal. It never checks the effective configured reranker provider/enabled state, including the installer's explicit local and disabled modes.",
+      "sink": "The patched manager POSTs query=cleaned and documents=merged snippets to the fixed https://api.cohere.com/v2/rerank endpoint with the discovered key.",
+      "impact": "An operator who selected local or disabled reranking, or retained a Cohere key for another component, can unknowingly disclose memory queries and retrieved snippets to a third-party service.",
+      "locations": [
+        "patches/apply-memory-patches.sh:3",
+        "patches/apply-memory-patches.sh:65",
+        "patches/apply-memory-patches.sh:80",
+        "patches/apply-memory-patches.sh:82",
+        "patches/apply-memory-patches.sh:84",
+        "patches/apply-memory-patches.sh:88",
+        "patches/apply-memory-patches.sh:106",
+        "scripts/install-memory-system.sh:786",
+        "scripts/install-memory-system.sh:790",
+        "scripts/install-memory-system.sh:798",
+        "scripts/install-memory-system.sh:803",
+        "scripts/install-memory-system.sh:1028",
+        "scripts/install-memory-system.sh:1047",
+        "scripts/install-memory-system.sh:1579",
+        "scripts/install-memory-system.sh:1594",
+        "how-to-memory-perfect.md:1934",
+        "how-to-memory-perfect.md:1963"
+      ],
+      "validationFacts": "Static source-to-sink tracing confirms that local/disabled configuration is not referenced by the injected code and that installer execution is unconditional. No live network request was made. The endpoint is fixed HTTPS, requests are bounded to eight seconds, failures fall back to local score ordering, and the remote feature is documented; these facts bound SSRF/availability risk but do not resolve the configuration bypass. Production validation should inspect whether the patched OpenClaw native memory path is active, whether state .env retains COHERE_API_KEY after changing provider modes, and whether a separate explicit native-memory consent setting exists outside this repository.",
+      "attackFacts": "Preconditions are a successfully patched matching OpenClaw manager bundle, more than one merged native-memory result, and a COHERE_API_KEY in the selected state directory. A malicious user need only cause a normal search containing sensitive content; disclosure is automatic once those operator/runtime conditions hold. Honoring an explicit provider/enablement flag while retaining Cohere as an available mode preserves the feature and the requested local/disabled choices."
+    }
+  ],
+  "notes": "All five assigned files were read in full at immutable snapshot 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. One configuration-bypass/privacy candidate was retained. The archived plur1bus runtime contains old insecure paths but is excluded from package and deployment entrypoints and is not importable in this snapshot, so it was not promoted as a current vulnerability. No product-repository file was modified and no feature-disable recommendation is implied."
+}

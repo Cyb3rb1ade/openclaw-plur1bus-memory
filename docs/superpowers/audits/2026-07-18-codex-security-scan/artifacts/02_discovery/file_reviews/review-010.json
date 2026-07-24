@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-010",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/interpretation-overlay.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (403 lines); prompt/data poisoning was checked. The store is append-only, writes one fixed file below trusted workspaceDir (lines 40-43, 387-389), and the live render path excludes provisional, superseded, disabled, and forgotten overlays (lines 91-114, 128-150). Operator mutations append tombstones/supersession records rather than changing LanceDB."
+    },
+    {
+      "path": "lib/job-lock.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (44 lines); atomic wx lock creation and fixed caller-provided lock paths. Stale-lock timing can affect reliability but no attacker-controlled path or privilege boundary is established here."
+    },
+    {
+      "path": "lib/job-rate-limit.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (64 lines); persistent local rate-limit bookkeeping behind atomicJsonUpdate. Keys do not enter code, query, or filesystem syntax."
+    },
+    {
+      "path": "lib/jobs/auto-accept-stale-criticals.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (54 lines); bounded job delegates selection and confirmation to DB adapter methods and fails to no-op when methods are absent. Any policy concern is feature semantics rather than an independently attacker-reachable bypass in this file."
+    },
+    {
+      "path": "lib/jobs/conflict-resolver.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (264 lines); untrusted memory text reaches an LLM prompt, but output is schema/enum checked (lines 123-145), never applied to memory, and is persisted only as review_only/apply_via_safe_reconsolidation proposals (lines 225-248). This exact path therefore lacks a privileged automatic sink."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No reportable high-impact candidate; LLM-content injection is contained at a proposal-only boundary in this shard."
+}

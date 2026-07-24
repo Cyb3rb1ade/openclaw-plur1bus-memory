@@ -1,0 +1,5 @@
+{"path":"scripts/reindex-provider.mjs","area":"."}
+{"path":"scripts/repair-dreaming-cron.mjs","area":"."}
+{"path":"scripts/repair-installed-plugin.mjs","area":"."}
+{"path":"scripts/restore-snapshot.sh","area":"."}
+{"path":"scripts/run-graph-links-once.mjs","area":"."}

@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-036",
+  "reviewer": "security-file-review-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/telegram-commands/memory-edit.js",
+      "status": "full_reviewed",
+      "disposition": "suppressed",
+      "evidence": "Read in full (345 lines; SHA-256 5dfd872cc325ae56b6e884ea16cbbbbdf68879d70821422d4dd9034f830f420f). The production /forget and /correct callers perform destructive checkAuth, validate command/correction length, and bind confirmation to resolved userId+chatId+nonce before invoking these helpers (index.js:4002-4058, 4065-4162). The helpers apply record ACL checks (44-49, 163-164, 199-200), archive first, sanitize agent/path/id components (132-143), and the DB adapter applies safeAgentId/safeUuid at the filesystem/query sinks (lib/db-adapter.js:296-301, 460-488, 492-510). shareCard enforces record ACL and an explicit sensitive-card approval flag (296-337), but no production command/tool caller was found, so its unbound boolean approval flag is not currently reachable. No distinct security candidate remains in this file; functional failures in the caller are tracked by the bug audit."
+    },
+    {
+      "path": "lib/telegram-commands/memory-query.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-chat-read-auth-bypass"
+      ],
+      "evidence": "Read in full (260 lines; SHA-256 dae8b20cebd1a8a6b1a7aef3ee212b9bc243f8aeb87f1a2f886b08aebf78329c). Query parsing is bounded by the caller's validateCommandArgs, filter construction is delegated to the reviewed filter parser, and both the DB adapter and queryMemory apply record-level ACL filtering (115-126; lib/db-adapter.js:446-455). Memory feedback IDs use safeUuid (245-259). However, the registered /memory handler never calls checkAuth/isAuthorized before querying and rendering the first-line memory summary/title plus UUID (index.js:3971-3998; this file:169-223), so configured allowedUserIds/allowedChatIds are not enforced for this independently reachable read operation. Record scope ACL does not substitute for a configured human/channel allowlist for agent-private/workspace rows."
+    },
+    {
+      "path": "lib/telegram-commands/skill-commands.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-chat-read-auth-bypass",
+        "cand-skill-approval-blind-executable"
+      ],
+      "evidence": "Read in full (137 lines; SHA-256 cdb5eea215bb5a6124bf9dfbff793b07a3c9b1712f3810f61e8da5ee921800c3). The router applies destructive checkAuth to approve/reject (index.js:3540-3552), and safeSlug prevents the LLM-generated skill name from traversing outside skills/ (61-69). Read-only review/list/show do not call checkAuth (index.js:3530-3539), while showProposal returns complete model-generated instructions and examples (114-134), extending the configured-allowlist bypass to proposal data. Separately, the default review omits instructions/examples and truncates description to 80 characters (24-49); approval re-reads a mutable JSONL proposal selected only by ID and immediately writes its verbatim instructions as an OpenClaw-compatible SKILL.md (52-71; proposal-writer.js:22-23, 47-62; skill-md-renderer.js:7-49). The optional show command is not required, no reviewed-content digest is bound to approval, and no second confirmation protects the model-to-executable-instructions boundary."
+    },
+    {
+      "path": "lib/telegram-commands/speaker-mapping.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-chat-read-auth-bypass"
+      ],
+      "evidence": "Read in full (110 lines; SHA-256 ade1cebbcdd861efedfa4390300f2d8becaf60239ff09fc57b7c35e779fd15b6). Every mapping mutation (name, confirm, reject, clear) invokes the injected destructive checkAuth before the parameterized SQLite-backed operation (54-68, 75-109), and the outer command bounds total arguments (index.js:3916-3918). In contrast, list and proposals directly read and render agent-scoped speaker names, attribution, confidence, and contextual hints without checkAuth (49-52, 70-73; index.js:3928, 3935-3937). Thus a participant excluded by configured user/chat allowlists can independently enumerate personal speaker-attribution data in a shared routed channel. Unescaped Markdown in stored labels/names can affect presentation, but no script/process/file sink or privilege escalation was established."
+    },
+    {
+      "path": "lib/telegram-commands/status-data.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-chat-read-auth-bypass"
+      ],
+      "evidence": "Read in full (114 lines; SHA-256 20a81b7ec6b9743fb82d1214e135e00e2c372b439f5035e76c5cdb3d02497bb8). The config path is process/operator-controlled, JSON parsing does not execute content, and the collector is read-only. The registered /state handler nevertheless omits checkAuth (index.js:3788-3815, 3888-3895) and renders memory counts, emotional state, graph/cache/sync metrics, feature state, and the fully resolved local config path embedded in issue.reason (28-55, 67-111). When allowedUserIds/allowedChatIds are configured, non-allowlisted channel participants can still obtain this operational metadata; this is a lower-impact child instance of the shared read-authorization defect."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-chat-read-auth-bypass",
+      "title": "Independent sensitive chat read commands bypass configured user and chat allowlists",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-200",
+        "missing-authorization"
+      ],
+      "instanceKey": "missing-authz:lib/telegram-commands/memory-query.js:115",
+      "instances": [
+        "memory-query:lib/telegram-commands/memory-query.js:115",
+        "skill-proposal-read:lib/telegram-commands/skill-commands.js:24",
+        "speaker-mapping-read:lib/telegram-commands/speaker-mapping.js:49",
+        "status-read:lib/telegram-commands/status-data.js:67"
+      ],
+      "source": "A user who can invoke a registered Telegram, Discord, Slack, or Mattermost command in a channel routed to the same agent/workspace, but is absent from configured allowedUserIds/allowedChatIds.",
+      "control": "The shared checkAuth/isAuthorized helper implements non-destructive allowlist checks, but /memory, skill review/list/show, speaker list/proposals, and /state never call it. Record-level memory ACL filtering remains present but does not enforce the configured human/channel allowlists for agent-private or workspace data.",
+      "sink": "The handlers render memory summary lines and UUIDs, complete skill proposal instructions/examples, speaker identities/context hints, and operational/config-path status metadata into the invoking chat.",
+      "impact": "A non-allowlisted participant in a shared routed channel can enumerate private memory-derived and operator-review data plus personal/operational metadata despite an explicit allowlist policy.",
+      "locations": [
+        "index.js:3530",
+        "index.js:3538",
+        "index.js:3788",
+        "index.js:3810",
+        "index.js:3916",
+        "index.js:3928",
+        "index.js:3937",
+        "index.js:3971",
+        "index.js:3983",
+        "index.js:3995",
+        "lib/security.js:89",
+        "lib/security.js:130",
+        "lib/telegram-commands/memory-query.js:115",
+        "lib/telegram-commands/memory-query.js:169",
+        "lib/telegram-commands/skill-commands.js:24",
+        "lib/telegram-commands/skill-commands.js:114",
+        "lib/telegram-commands/speaker-mapping.js:49",
+        "lib/telegram-commands/speaker-mapping.js:70",
+        "lib/telegram-commands/status-data.js:28",
+        "lib/telegram-commands/status-data.js:67"
+      ],
+      "validationFacts": "The call graph is code-complete: all four registered read surfaces reach their renderers without checkAuth. The existing shard-001 integration-style check already showed that the same router serves a non-allowlisted read command instead of denying it. Exact closure should seed each data source and exercise actual gateway identity fields, preserving the four independent child instances during validation/deduplication.",
+      "attackFacts": "The attacker needs command access to a shared channel routed to the victim agent/workspace; no allowlist membership is needed. Exposure is returned directly in chat. User-scoped memories with a populated owner remain protected by record ACL, but agent-private/workspace memories and the other read surfaces are not user-bound. Status disclosure is lower impact than memory/proposal/speaker disclosure and should be calibrated separately if the broad family is split."
+    },
+    {
+      "candidateId": "cand-skill-approval-blind-executable",
+      "title": "Skill approval can activate mutable LLM-generated instructions omitted from the default review",
+      "taxonomy": [
+        "CWE-451",
+        "CWE-345",
+        "agent-tool-prompt-injection",
+        "supply-chain"
+      ],
+      "instanceKey": "agent-skill-approval:lib/telegram-commands/skill-commands.js:52",
+      "source": "Stored evidence influences the skill-miner LLM, whose proposal JSONL contains arbitrary title, description, instructions, and examples; local workspace modification or a compromised provider can alter the pending proposal before approval.",
+      "control": "Approval is user-authorized, but the default review displays no instructions/examples and only 80 characters of description. The optional show operation is not mandatory, and the approved ID is not bound to an exact full-content hash or a user/chat-bound confirmation.",
+      "sink": "approveProposal re-reads the current proposal by ID, renderSkillMd copies its instructions verbatim, and writeFileSync creates workspace skills/<safeSlug>/SKILL.md for later agent loading.",
+      "impact": "Prompt-injected, provider-compromised, or tampered instructions can be approved under an innocuous summary and later steer agent behavior/tool use with the authority granted to workspace skills.",
+      "locations": [
+        "index.js:3540",
+        "index.js:3544",
+        "lib/telegram-commands/skill-commands.js:24",
+        "lib/telegram-commands/skill-commands.js:45",
+        "lib/telegram-commands/skill-commands.js:52",
+        "lib/telegram-commands/skill-commands.js:55",
+        "lib/telegram-commands/skill-commands.js:64",
+        "lib/telegram-commands/skill-commands.js:68",
+        "lib/telegram-commands/skill-commands.js:69",
+        "lib/jobs/skill-miner/proposal-writer.js:22",
+        "lib/jobs/skill-miner/proposal-writer.js:47",
+        "lib/jobs/skill-miner/skill-md-renderer.js:7",
+        "lib/jobs/skill-miner/skill-md-renderer.js:38"
+      ],
+      "validationFacts": "Static validation confirms the review/approval mismatch and mutable re-read. Existing unit coverage confirms approveProposal creates SKILL.md from the proposal instructions, while router tests confirm unauthorized group users are denied approval. Remaining validation should confirm OpenClaw workspace-skill discovery timing and whether any host UX outside this repository presents and cryptographically binds the exact content before activation.",
+      "attackFacts": "An authorized user must still approve the proposal, so this is a social-engineering/agent supply-chain path rather than an unauthenticated write. safeSlug blocks path traversal but does not constrain instruction semantics. A feature-preserving control is full-content presentation plus digest-bound confirmation and tamper detection, not disabling skill mining."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Two existing candidate families gain exact command/helper evidence; the broad chat-read family contains four independently reachable instances that should remain visible through deduplication. No repository file was modified and no feature-disable recommendation is implied."
+}

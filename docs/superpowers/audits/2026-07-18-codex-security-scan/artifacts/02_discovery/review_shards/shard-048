@@ -1,0 +1,5 @@
+{"path":"scripts/run-semantic-discover-once.mjs","area":"."}
+{"path":"scripts/run-semantic-link-index-phase43c.mjs","area":"."}
+{"path":"scripts/setup-feature-crons.mjs","area":"."}
+{"path":"scripts/verify-plugin-deploy.mjs","area":"."}
+{"path":"scripts/verify-workspace-writer.mjs","area":"."}

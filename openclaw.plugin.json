@@ -90,23 +90,136 @@
       "baseDbPath": {
         "type": "string"
       },
-      "hooks": {
+      "namespaces": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "allowConversationAccess": {
+          "activeWriteNamespace": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+          },
+          "activeRecallNamespaces": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          },
+          "legacyReadOnlyNamespaces": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            }
+          },
+          "crossNamespaceRecall": {
+            "type": "boolean"
+          }
+        }
+      },
+      "embeddingBatchSize": {
+        "type": "number",
+        "minimum": 1,
+        "default": 8
+      },
+      "language": {
+        "type": "string",
+        "default": "de"
+      },
+      "timezone": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "default": null
+      },
+      "replyOutcomeTracking": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
             "type": "boolean",
             "default": true
           },
-          "allowPromptInjection": {
-            "type": "boolean",
-            "default": true
+          "maxAgeMs": {
+            "type": "number",
+            "minimum": 0,
+            "default": 604800000
           },
-          "timeoutMs": {
-            "type": "number"
+          "maxMemoryIds": {
+            "type": "number",
+            "minimum": 1,
+            "default": 12
           },
-          "timeouts": {
-            "type": "object"
+          "maxReplyChars": {
+            "type": "number",
+            "minimum": 1,
+            "default": 4000
+          },
+          "maxAssistantChars": {
+            "type": "number",
+            "minimum": 1,
+            "default": 4000
+          },
+          "maxOutcomeLogEntries": {
+            "type": "number",
+            "minimum": 1,
+            "default": 5000
+          },
+          "maxFeedbackLogEntries": {
+            "type": "number",
+            "minimum": 1,
+            "default": 5000
+          }
+        }
+      },
+      "dreaming": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "narrative": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "temperature": {
+                "type": "number",
+                "minimum": 0,
+                "default": 0.9
+              },
+              "storeAsMemory": {
+                "type": "boolean",
+                "default": true
+              },
+              "importanceMax": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 0.49,
+                "default": 0.45
+              }
+            }
+          }
+        }
+      },
+      "reminders": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "deliveryMode": {
+            "type": "string",
+            "enum": [
+              "pending_only",
+              "webhook",
+              "host_callback"
+            ],
+            "default": "pending_only"
+          },
+          "webhookUrl": {
+            "type": "string"
           }
         }
       },
@@ -276,6 +389,10 @@
           "recallCacheTtlMs": {
             "type": "number",
             "default": 120000
+          },
+          "recallCacheMaxEntries": {
+            "type": "number",
+            "default": 128
           },
           "maxQueueDepthRecall": {
             "type": "number",
@@ -474,19 +591,23 @@
             "default": 0.7
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
           },
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
             "type": "boolean"
           },
           "headers": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "autoApply": {
             "type": "boolean",
@@ -494,28 +615,22 @@
           },
           "autoApplyRisk": {
             "type": "string",
-            "enum": [
-              "low-only"
-            ],
+            "const": "low-only",
             "default": "low-only"
           },
           "backupBeforeApply": {
             "type": "boolean",
+            "const": true,
             "default": true
           },
           "auditLog": {
             "type": "boolean",
+            "const": true,
             "default": true
-          },
-          "maxAutoApplyPerRun": {
-            "type": "number",
-            "default": 5
           },
           "mode": {
             "type": "string",
-            "enum": [
-              "safe-versioned"
-            ],
+            "const": "safe-versioned",
             "default": "safe-versioned"
           }
         }
@@ -529,19 +644,23 @@
             "default": false
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
           },
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
             "type": "boolean"
           },
           "headers": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "minImportance": {
             "type": "number",
@@ -566,7 +685,10 @@
             "default": "0 3 * * 0"
           },
           "timezone": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "default": "Europe/Berlin"
           },
           "maxPerRun": {
@@ -582,19 +704,23 @@
             "default": 3
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
           },
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
             "type": "boolean"
           },
           "headers": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           }
         }
       },
@@ -679,29 +805,37 @@
             }
           },
           "decisionTrace": {
-            "enabled": {
-              "type": "boolean",
-              "default": false
-            },
-            "includeInPrompt": {
-              "type": "boolean",
-              "default": false
-            },
-            "maxCandidates": {
-              "type": "number",
-              "default": 50
-            },
-            "maxTextPreviewChars": {
-              "type": "number",
-              "default": 160
-            },
-            "persist": {
-              "type": "boolean",
-              "default": false
-            },
-            "visibleHints": {
-              "type": "boolean",
-              "default": false
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "includeInPrompt": {
+                "type": "boolean",
+                "default": false
+              },
+              "maxCandidates": {
+                "type": "number",
+                "minimum": 1,
+                "default": 50
+              },
+              "maxTextPreviewChars": {
+                "type": "number",
+                "minimum": 0,
+                "default": 160
+              },
+              "persist": {
+                "type": "boolean",
+                "const": false,
+                "default": false
+              },
+              "visibleHints": {
+                "type": "boolean",
+                "const": false,
+                "default": false
+              }
             }
           }
         }
@@ -1068,7 +1202,10 @@
                 "default": "0 9 * * *"
               },
               "timezone": {
-                "type": "string",
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "default": "Europe/Berlin"
               },
               "delivery": {
@@ -1121,7 +1258,10 @@
                 "default": "0 18 * * *"
               },
               "timezone": {
-                "type": "string",
+                "type": [
+                  "string",
+                  "null"
+                ],
                 "default": "Europe/Berlin"
               },
               "delivery": {
@@ -1584,19 +1724,23 @@
             "default": 3
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
           },
           "baseUrl": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string"
+            "type": "string",
+            "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
             "type": "boolean"
           },
           "headers": {
-            "type": "object"
+            "type": "object",
+            "description": "Optional direct transport headers. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           }
         }
       },
@@ -1619,7 +1763,10 @@
             "default": true
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "opinion": {
             "type": "boolean",
@@ -1660,7 +1807,10 @@
             "default": true
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -1694,7 +1844,7 @@
       "featureCronSetup": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Controls the gateway_start deferred bootstrap that runs scripts/setup-feature-crons.mjs (persona-evolve, afterthought) — covers install channels that never run npm (rsync/git-clone installs, ClawHub).",
+        "description": "Controls gateway_start provisioning for exactly seven owner-gated jobs: persona-evolve: personaVoice.enabled && skillMiner.enabled; afterthought: afterthought.enabled && (skillMiner.enabled || merging.enabled); consolidate-daily: dailyConsolidation.enabled; classify-recent: criticalPush.enabled; rem-dream: merging.enabled; skill-miner: skillMiner.enabled; discover-semantic-links: obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled. Raw sourceConfig owns gates/schedules; effective runtimeConfig owns bindings/accounts/delivery. Outbound delivery uses concrete peer.id/defaultTo, never allowFrom, and fails closed without model or credential overrides.",
         "properties": {
           "auto": {
             "type": "boolean",
@@ -1754,20 +1904,44 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean",
-            "default": false
+            "type": "boolean"
           },
           "cron": {
             "type": "string"
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "delivery": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "announce",
+              "silent"
+            ]
+          },
+          "session": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "current"
+            ]
+          },
+          "writeReviewBundle": {
+            "type": "boolean"
+          },
+          "applyMode": {
+            "type": "string",
+            "const": "manual"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "pending_setup",
+              "active"
+            ]
           }
         }
       },
@@ -1776,20 +1950,41 @@
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean",
-            "default": false
+            "type": "boolean"
           },
           "cron": {
             "type": "string"
           },
           "timezone": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "delivery": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "announce",
+              "silent"
+            ]
+          },
+          "session": {
+            "type": "string",
+            "enum": [
+              "isolated",
+              "current"
+            ]
+          },
+          "applyMode": {
+            "type": "string",
+            "const": "manual"
           },
           "status": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "pending_setup",
+              "active"
+            ]
           }
         }
       },
@@ -1803,7 +1998,7 @@
           },
           "llmReport": {
             "type": "boolean",
-            "default": true
+            "default": false
           },
           "llmReportMode": {
             "type": "string",
@@ -1812,6 +2007,16 @@
           "fallbackOnError": {
             "type": "boolean",
             "default": true
+          },
+          "sessionThreshold": {
+            "type": "number",
+            "minimum": 1,
+            "default": 50
+          },
+          "intervalDays": {
+            "type": "number",
+            "minimum": 0,
+            "default": 7
           }
         }
       },
@@ -1848,13 +2053,16 @@
                 "default": false
               },
               "model": {
-                "type": "string"
+                "type": "string",
+                "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
               },
               "apiKey": {
-                "type": "string"
+                "type": "string",
+                "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
               },
               "baseUrl": {
-                "type": "string"
+                "type": "string",
+                "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
               },
               "fallbackOnError": {
                 "type": "boolean",

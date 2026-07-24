@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-009",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/i18n-dictionary.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1706 lines; sha256 bb28d2220fce2d9e76f1d643d3c2ffb43c25586fcf079e743925ab069482d3f5). Static translation data only; it contains no executable interpolation or privileged sink. Authentication wording is documentation, not an enforcement boundary, and the concrete command authorization implementation remains covered separately."
+    },
+    {
+      "path": "lib/i18n.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (181 lines; sha256 f9846591fc0bb8ec21b66c6ec178c1d9be4ef6619d8d7e6fb09ed9923e81e148). Telegram MarkdownV2 and HTML modes escape interpolated values at lines 118-136; plain mode is deliberately unformatted. SOUL filename candidates are fixed constants joined beneath a runtime workspace path, so no attacker-controlled path segment is introduced here. The silent read catch is a reliability/policy issue, not a security boundary bypass."
+    },
+    {
+      "path": "lib/input-limits.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (72 lines; sha256 f40d1f71f6bf3ff199102d509b982ce375a90d18049ab97bcb61cc312be017c2). Generic length validators only. validateAgentId is not a filesystem-safe validator, but this helper itself has no filesystem sink; concrete callers that use agent IDs in paths remain independently covered, including the primary AgentDbPool candidate."
+    },
+    {
+      "path": "lib/install/agents-patcher.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (79 lines; sha256 410695e0f065f1c9c74f787f26ea723b451b813ad6eaf2e36b9a5f2001423b54). The exported patcher can write any absolute target ending in AGENTS.md, but the path is supplied by a privileged local installation workflow rather than chat/model input; it creates a timestamped backup and uses an atomic rename. No untrusted remote source-to-sink path was found in this unit."
+    },
+    {
+      "path": "lib/install/soul-patcher.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (92 lines; sha256 4d3dc5d1d4b305b7a85cb39e27b257748d74425adb95cc82261c87827716b49a). The operator-facing patcher accepts an absolute SOUL.MD target, but no chat/model-controlled path reaches it; managed-block hashes prevent unconfirmed overwrite of manual edits, dry-run returns before writes, and backups are retained. The mismatch between relativePath validation and the actual target is defense in depth for a trusted installer surface, not a demonstrated remote boundary crossing."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No security candidate. Installer patchers are privileged local setup utilities; their explicit path authority should remain documented and tested, while command/model authorization and agent-path sinks are covered by separate frontier rows."
+}

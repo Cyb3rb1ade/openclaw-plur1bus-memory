@@ -44,7 +44,7 @@ describe("legacy provider migration", () => {
 
     const result = applyLegacyProviderDefaults(
       {
-        embedding: { provider: "openai" },
+        embedding: {},
         reranker: { provider: "disabled", enabled: false },
       },
       { baseDbPath: root }
@@ -52,7 +52,8 @@ describe("legacy provider migration", () => {
 
     assert.equal(result.changed, true);
     assert.equal(result.config.embedding.provider, "local-transformers");
-    assert.equal(result.config.reranker.provider, "local-transformers");
+    assert.equal(result.config.reranker.provider, "disabled");
+    assert.equal(result.config.reranker.enabled, false);
   });
 
   it("treats PLUR1BUS schema-seed-only LanceDB tables as switchable", async () => {
@@ -66,7 +67,7 @@ describe("legacy provider migration", () => {
 
     const result = applyLegacyProviderDefaults(
       {
-        embedding: { provider: "openai" },
+        embedding: {},
         reranker: { provider: "disabled", enabled: false },
       },
       { baseDbPath: root }
@@ -75,7 +76,8 @@ describe("legacy provider migration", () => {
     assert.equal(await table.countRows(), 0);
     assert.equal(result.changed, true);
     assert.equal(result.config.embedding.provider, "local-transformers");
-    assert.equal(result.config.reranker.provider, "local-transformers");
+    assert.equal(result.config.reranker.provider, "disabled");
+    assert.equal(result.config.reranker.enabled, false);
   });
 
   it("does not switch a one-fragment real LanceDB table with a later delete transaction", async () => {
@@ -98,7 +100,7 @@ describe("legacy provider migration", () => {
     assert.deepEqual(result.config, existing);
   });
 
-  it("moves legacy no-provider installs with no tables to local embedding and reranker", () => {
+  it("moves a missing embedding locally without overriding an explicit reranker opt-out", () => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-legacy-"));
     const result = applyLegacyProviderDefaults(
       {
@@ -111,9 +113,9 @@ describe("legacy provider migration", () => {
     assert.equal(result.config.embedding.provider, "local-transformers");
     assert.equal(result.config.embedding.local.model, "intfloat/multilingual-e5-small");
     assert.equal(result.config.embedding.local.dimensions, 384);
-    assert.equal(result.config.reranker.provider, "local-transformers");
-    assert.equal(result.config.reranker.enabled, true);
-    assert.equal(result.config.reranker.local.model, "BAAI/bge-reranker-v2-m3");
+    assert.equal(result.config.reranker.enabled, false);
+    assert.equal(Object.hasOwn(result.config.reranker, "provider"), false);
+    assert.deepEqual(result.migrations, ["embedding"]);
   });
 
   it("does not switch providers once a memory table has data", () => {
@@ -142,5 +144,91 @@ describe("legacy provider migration", () => {
 
     assert.equal(result.changed, false);
     assert.deepEqual(result.config, existing);
+  });
+
+  it("preserves explicit OpenAI embedding providers without inline credentials", () => {
+    for (const embedding of [
+      {
+        provider: "openai",
+        model: "custom-openai-embed",
+        dimensions: 2048,
+        embeddingCacheEnabled: false,
+        embeddingCacheMaxEntries: 17,
+      },
+      {
+        provider: "openai-compatible",
+        model: "custom-compatible-embed",
+        dimensions: 3072,
+        baseUrl: "https://embedding.example.test/v1",
+        enabled: true,
+        embeddingCachePersist: true,
+      },
+    ]) {
+      const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-explicit-embedding-"));
+      const existing = {
+        embedding,
+        reranker: { provider: "disabled", enabled: false },
+      };
+      const before = structuredClone(existing);
+
+      const result = applyLegacyProviderDefaults(existing, { baseDbPath: root });
+
+      assert.equal(result.changed, false);
+      assert.deepEqual(result.migrations, []);
+      assert.deepEqual(result.config, before);
+      assert.deepEqual(existing, before);
+    }
+  });
+
+  it("preserves explicit Cohere reranker selection without inline credentials", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-explicit-cohere-"));
+    const previousKey = process.env.COHERE_API_KEY;
+    process.env.COHERE_API_KEY = "resolved-later";
+    const existing = {
+      embedding: { provider: "local-transformers", model: "custom-local" },
+      reranker: {
+        provider: "cohere",
+        enabled: true,
+        model: "custom-rerank",
+        timeoutMs: 4321,
+        candidates: 37,
+        fallbackOnError: false,
+      },
+    };
+    try {
+      const result = applyLegacyProviderDefaults(existing, { baseDbPath: root });
+
+      assert.equal(result.changed, false);
+      assert.deepEqual(result.migrations, []);
+      assert.deepEqual(result.config, existing);
+    } finally {
+      if (previousKey === undefined) delete process.env.COHERE_API_KEY;
+      else process.env.COHERE_API_KEY = previousKey;
+    }
+  });
+
+  it("preserves an explicit disabled reranker provider", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-explicit-disabled-"));
+    const existing = {
+      embedding: { provider: "local-transformers" },
+      reranker: { provider: "disabled", timeoutMs: 3210 },
+    };
+
+    const result = applyLegacyProviderDefaults(existing, { baseDbPath: root });
+
+    assert.equal(result.changed, false);
+    assert.deepEqual(result.migrations, []);
+    assert.deepEqual(result.config, existing);
+  });
+
+  it("synthesizes both local providers when provider selection is absent", () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-provider-absent-"));
+
+    const result = applyLegacyProviderDefaults({}, { baseDbPath: root });
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(result.migrations, ["embedding", "reranker"]);
+    assert.equal(result.config.embedding.provider, "local-transformers");
+    assert.equal(result.config.reranker.provider, "local-transformers");
   });
 });
