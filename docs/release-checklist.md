@@ -34,15 +34,15 @@
 - [x] Clean baseline before release edits: 3,260 tests; 3,259 passed; 0 failed; 1 skipped
 - [x] Clean baseline `npm ci --ignore-scripts`: passed
 - [x] Clean baseline dependency audit: 0 vulnerabilities
-- [ ] Release candidate `npm ci --ignore-scripts`
-- [ ] Release candidate `npm audit`
-- [ ] Release candidate `npm run lint`
-- [ ] Release candidate full serial test suite
-- [ ] Release candidate `git diff --check`
-- [ ] `npm pack --dry-run --json` content and size review
-- [ ] Canonical `.tgz` plus SHA-256 generated
-- [ ] Existing installer/updater regressions pass
-- [ ] Fresh disposable OpenClaw install from local canonical `.tgz`
+- [x] Release candidate `npm ci --ignore-scripts`: passed
+- [x] Release candidate `npm audit`: 0 vulnerabilities
+- [x] Release candidate `npm run lint`: passed
+- [x] Release candidate full serial test suite: 3,259 passed; 0 failed; 1 skipped
+- [x] Release candidate `git diff --check`: passed
+- [x] `npm pack --dry-run --json` content and size review: 274 files; 892.8 kB packed
+- [x] Canonical `.tgz` plus SHA-256 generated
+- [x] Existing installer/updater regressions pass: 4 passed; 0 failed
+- [x] Fresh disposable OpenClaw install from local canonical `.tgz`: plugin enabled; doctor 0 plugin errors
 
 ## PR and Immutable Source
 
