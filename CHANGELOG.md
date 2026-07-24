@@ -7,9 +7,59 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.0] — 2026-07-24 — Not just an agent. Yours.
+
+### Changed
+
+- **PLUR1BUS feature LLM calls now follow OpenClaw's effective target-agent model.** Named chat-model defaults and cross-feature fallback chains were removed. A feature-local direct provider is used only when its own complete provider/model configuration is present; otherwise OpenClaw remains authoritative for model choice, policy, credentials, and per-agent routing.
+- **Node.js 22.5 or newer is now required.** This supports the patched `sharp` runtime and the built-in SQLite path used by persistent embedding caching.
+- **Read-only legacy memory namespaces remain available without weakening writable schema requirements.** Legacy rows are authorized only through validated `storedBy`/`workspaceKey` bindings; unbound and conflicting rows remain invisible.
+- **Recall is globally bounded across namespaces and access pools.** B12 Core/B12-P apply one ownership gate, dedupe, adaptive budget, compression pass, decision trace, and result cap across private and explicitly authorized shared sources.
+
+### Added
+
+- **Canonical memory request context and explicit sharing.** Host routing is resolved through OpenClaw's public routing surface and bound to immutable agent, workspace, channel/account, conversation, and user proofs. Confirmed workspace/user shares are idempotent, owner-bound copies stored in isolated pools.
+- **Bounded legacy `workspace_shared` migration.** Dry-run and apply modes use pinned source versions, checksummed continuation tokens, bounded database/provider work, private repair reports, and copy-verify-marker ordering.
+- **Exact LLM result cache.** Deterministic PLUR1BUS transforms can reuse validated, bounded, agent-scoped results with lifecycle cleanup, persistence controls, and payload-safe diagnostics.
+- **Recall decision and ownership evidence.** Authorized graph traversal, shared recall composition, namespace-aware trace caps, and `/memory` access-pool parity are covered by runtime regressions.
+
 ### Fixed
 
 - **Feature-Cron-Setup: Jobs ohne Delivery-Bedarf werden jetzt mit `--no-deliver` angelegt.** Ohne explizites Delivery-Flag defaultet `openclaw cron add` auf `announce -> channel "last"` — isolierte Cron-Sessions haben aber keinen "last active chat", die Zustellung schlägt zur Laufzeit fail-closed fehl. Betroffen waren die drei `persona-evolve`-Crons (und disabled Afterthoughts ohne ableitbares Ziel). Updates/Neuinstallationen legen die Jobs jetzt automatisch korrekt an; bestehende fehlerhafte Jobs per `openclaw cron edit --name "plur1bus persona-evolve <agent>" --no-deliver` korrigieren.
+- **B1–B7 storage/runtime closure.** Memory replacement is store/readback-before-delete, timed-out mutations retain their leases until settlement, abort barriers prevent late writes, auto-capture checkpoints acknowledge only durable rows, embedding-cache persistence is bounded, and `/forget`/`/correct` initiation remains archive-first and authorized.
+- **B8–B11 migration, operations, wizard, and manifest closure.** Migration writers serialize safely, maintenance scripts validate every path/argument and re-diagnose outcomes, provider choices fail closed, and manifest values remain authoritative.
+- **B12 Core and B12-P recall closure.** Namespace paths are capability-pinned and revalidated, timeouts cannot leak partial reads, recall compression preserves metadata alignment, and advertised recall switches now reach the production path.
+- **B13 ownership and ACL closure.** Sensitive reads authorize before I/O, host route tickets are bounded and replay-safe, wiki/review targets cannot escape their roots, confirmation state is bounded, and graph/provider work never sees unauthorized rows.
+- **B14 Obsidian mutation closure.** Commands use one immutable parsed plan and bound mutation policy; foreign review IDs and unsafe/symlinked targets fail closed before reads or writes.
+- **B15 background-memory closure.** REM runs, patterns, graph candidates, echoes, vault output, and persisted dream memories retain one validated ACL partition and ownership binding.
+- **Parallel CI compatibility.** Emotion Tier-3 timeout promises stay alive until the awaited fallback resolves; ESM fixtures work on the supported Node floor; archived advisory manifests no longer confuse GitHub dependency review.
+
+### Security
+
+- Completed the repository-wide high/medium remediation program across B1–B15. Ownership, path containment, authorization-before-read/write, timeout settlement, cancellation, error redaction, bounded queues/caches, destructive-operation auditing, and immutable request contexts have dedicated regression coverage.
+- Archived audit evidence is excluded from GitHub dependency review without rewriting the historical evidence itself.
+
+### Dependencies
+
+- Updated patched transitive releases for `brace-expansion` and `protobufjs`.
+- Upgraded the Transformers image dependency override to `sharp@0.35.3`.
+- `npm audit` reports 0 vulnerabilities on the release baseline.
+
+### Compatibility
+
+- No manual LanceDB data migration is required for ordinary upgrades.
+- Installations on Node.js 20 or Node.js 22.0–22.4 must upgrade Node.js before installing 7.1.0.
+- The OpenClaw plugin ID, display name, package name, and the nested emotional-state-injector version remain unchanged.
+
+### Verification
+
+- `npm ci --ignore-scripts`: passed.
+- `npm audit`: 0 vulnerabilities.
+- Full serial suite: 3,260 tests, 3,259 passed, 0 failed, 1 skipped across 561 suites.
+
+### Known Issues
+
+- A pre-existing reranker scoring-quality bug is tracked separately. It is not introduced by 7.1.0 and does not change the zero-failure test or dependency-audit result.
 
 ## [7.0.0] — 2026-07-16 — Humanization: Persona, Afterthoughts, Dream Echoes
 

@@ -1,46 +1,91 @@
-# Release Checklist — PLUR1BUS Memory v7.0.0 (Humanization)
+# Release Checklist — PLUR1BUS 7.1.0
 
-> Status: **Released**  
-> Release-Datum: 2026-07-16  
-> Git-Tag: `v7.0.0` gepusht (Commit `3607b32`) · ClawHub: `@cyb3rb1ade/plur1bus-memory@7.0.0` (latest)
+> Release title: **PLUR1BUS 7.1.0 - Not just an agent. Yours.**
+> Status: **Release candidate**
+> Target date: 2026-07-24
+> Source baseline: `origin/main` at `f1ec54c` plus release-only metadata and documentation
 
 ---
+
+## Scope
+
+- [x] Complete B1–B15 high/medium audit remediation from merged PRs #85 and #86
+- [x] B12 Core and B12-P recall/namespace closure
+- [x] B13 ownership, ACL, sharing, and legacy-migration closure
+- [x] Patched `brace-expansion`/`protobufjs` dependency updates
+- [x] `sharp@0.35.3`
+- [x] Node.js `>=22.5.0`
+- [x] Exact LLM result cache and OpenClaw-default LLM routing
+- [x] No new runtime feature or schema migration in the release-preparation commits
 
 ## Pre-Release
 
-- [x] CHANGELOG.md finalisiert (Breaking/Changed, Added, Fixed, Verification)
-- [x] **Tests:** 2466 passing, 0 failing (1 skipped) über 492 Test-Suites — vor und nach dem Versions-Bump
-- [x] **Keine DB-Schema-Änderung** (abwärtskompatibel mit 6.9.x; LanceDB-Schema unverändert)
-- [x] **Versionen synchron:** `package.json` = `openclaw.plugin.json` = `7.0.0`
-- [x] **README aktualisiert:** Version-Header + "New in v7.0.0"-Block
-- [x] **Breaking Changes dokumentiert:**
-  - Persona-Evolution wendet Vorschläge automatisch an (kein Propose/Accept mehr); Sicherheit über Bounds (12-Bullet-Cap, Seed-End-Boundary, Append-Dedup)
-  - Afterthought-Skip-Contract nutzt `NO_REPLY`-Token; bestehende Crons werden beim Setup-Lauf automatisch migriert
-- [x] **Migrationshinweise:** keine manuelle Migration nötig (Cron-Migration und AGENTS.md-Patching laufen automatisch)
-- [x] **Rollback:** Vor-Release-Stand = Tag `v6.9.10`; Downgrade jederzeit über ClawHub-Tag bzw. Git-Tag möglich
+- [x] Version synchronized: `package.json`, root `package-lock.json`, and `openclaw.plugin.json` = `7.1.0`
+- [x] Stable identities preserved: npm package, plugin ID, plugin display name
+- [x] Nested emotional-state-injector remains `1.0.0`
+- [x] README updated with 7.1.0 highlights and installation sources
+- [x] CHANGELOG finalized from `v7.0.0..main`
+- [x] Known issues updated; pre-existing reranker scoring issue remains separate
+- [x] Git tag, GitHub Release, GitHub Packages version, and ClawHub version `7.1.0` confirmed unused
+- [x] GitHub Release/Packages and ClawHub authentication confirmed
 
----
+## Local Validation
 
-## Validation
+- [x] Clean baseline before release edits: 3,260 tests; 3,259 passed; 0 failed; 1 skipped
+- [x] Clean baseline `npm ci --ignore-scripts`: passed
+- [x] Clean baseline dependency audit: 0 vulnerabilities
+- [x] Release candidate `npm ci --ignore-scripts`: passed
+- [x] Release candidate `npm audit`: 0 vulnerabilities
+- [x] Release candidate `npm run lint`: passed
+- [x] Release candidate full serial test suite: 3,259 passed; 0 failed; 1 skipped
+- [x] Release candidate `git diff --check`: passed
+- [x] `npm pack --dry-run --json` content and size review: 274 files; 892.8 kB packed
+- [x] Canonical `.tgz` plus SHA-256 generated
+- [x] Existing installer/updater regressions pass: 4 passed; 0 failed
+- [x] Fresh disposable OpenClaw install from local canonical `.tgz`: plugin enabled; doctor 0 plugin errors
 
-- [x] **Voller Test-Lauf auf Release-Commit:** `npm test` grün (inkl. Daily-Decay-Bounded-Selection-Fix `e72cb2b`)
-- [x] **agents-patcher (TDD):** managed Block `<!-- plur1bus:telegram-reaction-rules -->` — appendet nur bei vorhandener Reaction-Guidance, idempotent, No-Touch sonst
-- [x] **Feature-Cron-Automation:** idempotenter Setup über npm postinstall, `/plur1bus setup crons`, Doctor-Hinweis und deferred `gateway_start`-Bootstrap; Delivery-Derivation nie geraten (bei Konflikt disabled + Hinweis)
-- [x] **Live-Verifikation Reaction-Regeln:** Telegram-Reaction 🤣 auf aktuelle Nachricht erfolgreich (ok:true); Regeln in allen vier Workspace-AGENTS.md aktiv
-- [x] **Update-Pfad:** `update-openclaw.sh` patcht `workspace*/AGENTS.md` über den agents-patcher bei jedem Update
+## PR and Immutable Source
 
----
+- [ ] Release branch pushed
+- [ ] Release PR opened and every required GitHub check green
+- [ ] Release PR merged into `main`
+- [ ] Exact merged `main` commit reverified
+- [ ] Annotated tag `v7.1.0` created on the verified merge commit and pushed
 
-## Post-Release
+## GitHub Packages
 
-- [x] Git-Tag `v7.0.0` gesetzt und gepusht
-- [x] ClawHub-Publish aus GitHub-Quelle (`Cyb3rb1ade/openclaw-plur1bus-memory@3607b32`): `--dry-run` geprüft (246 Dateien, 2.5 MB) → publish → inspect bestätigt `Latest: 7.0.0`, source-linked
-- [x] Release-Notes im Repo (CHANGELOG.md)
-- [ ] ClawHub-Scan-Ergebnis prüfen (stand bei Publish auf "pending")
-- [ ] Betrieb beobachten: Persona-Auto-Apply-Ergebnisse und Afterthought-`NO_REPLY`-Verhalten in den nächsten Cron-Läufen
+- [ ] `@cyb3rb1ade/plur1bus-memory@7.1.0` published to `https://npm.pkg.github.com`
+- [ ] Published metadata resolves to `7.1.0`
+- [ ] Downloaded GitHub Packages artifact verified
+- [ ] Fresh disposable OpenClaw install from the GitHub Packages artifact
 
----
+## GitHub Release
 
-## Frühere Releases
+- [ ] Published title is exactly `PLUR1BUS 7.1.0 - Not just an agent. Yours.`
+- [ ] Release is non-draft and non-prerelease
+- [ ] Canonical `.tgz` and SHA-256 assets attached
+- [ ] Downloaded checksum passes
+- [ ] Fresh disposable OpenClaw install from the GitHub Release asset
 
-Die v6.1.0-(Engram-)GA-Checkliste liegt in der Git-History dieser Datei (Stand vor 2026-07-16).
+## ClawHub
+
+- [ ] Dry-run from immutable GitHub tag passes
+- [ ] `@cyb3rb1ade/plur1bus-memory@7.1.0` published
+- [ ] Source repository, tag, and commit linkage verified
+- [ ] Artifact digest verified
+- [ ] ClawHub scan/moderation state recorded
+- [ ] Fresh disposable OpenClaw install of exact ClawHub `7.1.0`
+
+## Compatibility and Rollback
+
+- No manual LanceDB migration is required for an ordinary upgrade.
+- Node.js 20 and Node.js 22.0–22.4 must be upgraded before installation.
+- Published tags and package versions are immutable and are never overwritten.
+- Rollback source: immutable GitHub/ClawHub release `v7.0.0`.
+- The pre-existing reranker scoring-quality bug remains a separate follow-up.
+
+## Previous Release
+
+PLUR1BUS v7.0.0 was released on 2026-07-16 at commit `3607b32`, with GitHub
+tag `v7.0.0` and ClawHub package
+`@cyb3rb1ade/plur1bus-memory@7.0.0`.
