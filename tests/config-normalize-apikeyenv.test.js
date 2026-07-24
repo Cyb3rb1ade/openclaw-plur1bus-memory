@@ -35,4 +35,15 @@ describe("config-normalize apiKeyEnv", () => {
     const cfg = normalizeRerankerConfig({ provider: "cohere", apiKeyEnv: "COHERE_API_KEY" });
     assert.strictEqual(cfg.fallbackProvider, "disabled");
   });
+
+  it("normalizeRerankerConfig leitet provider=cohere aus apiKeyEnv ab, wenn provider fehlt", () => {
+    // Regression: enabled:true + apiKeyEnv (ohne explizites provider-Feld) wurde
+    // bisher stillschweigend zu provider="disabled", weil die Inferenz nur
+    // raw.apiKey prüfte, nicht raw.apiKeyEnv — obwohl beide im Rest der
+    // Codebase (resolveApiKey) gleichwertige Credential-Quellen sind.
+    const cfg = normalizeRerankerConfig({ enabled: true, apiKeyEnv: "COHERE_API_KEY", fallbackOnError: true, timeoutMs: 2500 });
+    assert.strictEqual(cfg.provider, "cohere");
+    assert.strictEqual(cfg.enabled, true);
+    assert.strictEqual(cfg.apiKeyEnv, "COHERE_API_KEY");
+  });
 });

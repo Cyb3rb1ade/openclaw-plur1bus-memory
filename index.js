@@ -1269,10 +1269,21 @@ class MemoryDB {
     if (!textField?.type) {
       throw new Error(`MemoryDB ownership schema verification failed: authoritative text field missing for ${this.dbPath}`);
     }
+    // Utf8 vs. LargeUtf8 are both valid Arrow string types; LanceDB promotes a
+    // column to LargeUtf8 once written values exceed the 32-bit offset range,
+    // which happens routinely for `text` (long memory content) but not for
+    // short id columns. Requiring bit-identical DataTypes here rejected
+    // legitimate tables where `text` had been promoted but `agentId`/
+    // `workspaceId` correctly stayed Utf8 — both are string-family, so both
+    // are acceptable ownership-column types.
+    const STRING_TYPES = new Set(["Utf8", "LargeUtf8"]);
+    if (!STRING_TYPES.has(String(textField.type))) {
+      throw new Error(`MemoryDB ownership schema verification failed: authoritative text field is not a string type for ${this.dbPath}`);
+    }
     if (!this.readOnly) {
       for (const fieldName of ["agentId", "workspaceId"]) {
         const field = fields.find((candidate) => candidate.name === fieldName);
-        if (!field || String(field.type) !== String(textField.type)) {
+        if (!field || !STRING_TYPES.has(String(field.type))) {
           throw new Error(`MemoryDB ownership schema verification failed: ${fieldName} must match text DataType for ${this.dbPath}`);
         }
       }

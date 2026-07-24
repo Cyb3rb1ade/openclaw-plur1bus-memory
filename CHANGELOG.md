@@ -7,6 +7,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.1] — 2026-07-24 — Hotfix
+
+### Fixed
+
+- **`MemoryDB.refreshSchemaFields` rejected valid ownership columns.** The ownership-schema guard added in 7.1.0 required `agentId`/`workspaceId` to be bit-identical Arrow DataTypes to `text`. LanceDB legitimately promotes `text` to `LargeUtf8` once stored content grows past the 32-bit offset range, while short id columns correctly stay `Utf8` — both are string-family types, but the strict equality check rejected this real, pre-existing table shape and broke `memory_recall`/`memory_store` on upgrade. The check now accepts any Arrow string type (`Utf8`, `LargeUtf8`) for both `text` and the ownership columns.
+- **`normalizeRerankerConfig` ignored `apiKeyEnv` when inferring the reranker provider.** A config with `enabled: true` and `apiKeyEnv: "COHERE_API_KEY"` but no explicit `provider` field silently resolved to `provider: "disabled"`, because the inference only checked `raw.apiKey`. `apiKeyEnv` is an equally valid, equally common credential source elsewhere in this codebase (`resolveApiKey`); the inference now treats it the same way, so reranking activates as intended without requiring both `provider` and a credential field to be set redundantly.
+
 ## [7.1.0] — 2026-07-24 — Not just an agent. Yours.
 
 ### Changed
