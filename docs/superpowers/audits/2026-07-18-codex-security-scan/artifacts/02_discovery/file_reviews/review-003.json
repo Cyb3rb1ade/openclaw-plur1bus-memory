@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-003",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/code-index/query.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (187 lines); bounded token scoring and XML-context rendering escape &, <, > and double quotes before prompt markup. Limit and output size are clamped."
+    },
+    {
+      "path": "lib/code-index/schema.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (43 lines); deterministic hashes/normalization only, with no privileged sink."
+    },
+    {
+      "path": "lib/code-index/ts-source-indexer.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (324 lines); parses source text with the TypeScript compiler API and emits inert index records. It neither executes indexed code nor dynamically imports identifiers extracted from it."
+    },
+    {
+      "path": "lib/code-index/workspace-indexer.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (131 lines); path-traversal seed suppressed by exact controls at lines 31-41 and 66-69: all discovered and explicit paths flow through resolveInside(root,...), symlink directory entries are not followed because only Dirent directories/files are accepted, and the output path is fixed to .plur1bus/code-index.json at lines 111-115."
+    },
+    {
+      "path": "lib/continuity-gate.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (322 lines); pure recall-rate/score filtering with no authorization, file, query, process, parser, or network boundary."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No reportable high-impact candidate; the code-index path traversal family has exact per-instance counterevidence."
+}

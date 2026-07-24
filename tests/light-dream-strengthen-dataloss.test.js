@@ -39,4 +39,54 @@ describe("strengthenMemory — delete+add fallback data-loss guard", () => {
     assert.strictEqual(added[1].id, ID, "the rollback must re-insert the original memory id");
     assert.strictEqual(added[1].text, "fact", "the rollback must restore the original content");
   });
+
+  it("finishes re-adding the memory when abort arrives after delete starts", async () => {
+    const controller = new AbortController();
+    const added = [];
+    const db = {
+      table: {
+        query: () => ({ where: () => ({ limit: () => ({ toArray: async () => [{ ...ORIGINAL }] }) }) }),
+        update: async () => { throw new Error("update() not supported"); },
+        delete: async () => {
+          controller.abort();
+        },
+        add: async (rows) => {
+          added.push(rows[0]);
+        },
+      },
+    };
+
+    const strengthened = await strengthenMemory(db, ID, controller.signal);
+
+    assert.strictEqual(strengthened, true, "the started delete+add replacement must settle as one unit");
+    assert.strictEqual(added.length, 1, "the updated row must be re-added even though abort arrived during delete");
+    assert.strictEqual(added[0].id, ID);
+    assert.strictEqual(added[0].replayCount, 1);
+  });
+
+  it("surfaces both re-add and rollback failures after delete", async () => {
+    const addErrors = [
+      new Error("strengthened re-add failed"),
+      new Error("original rollback failed"),
+    ];
+    let addCalls = 0;
+    const db = {
+      table: {
+        query: () => ({ where: () => ({ limit: () => ({ toArray: async () => [{ ...ORIGINAL }] }) }) }),
+        update: async () => { throw new Error("update() not supported"); },
+        delete: async () => {},
+        add: async () => {
+          throw addErrors[addCalls++];
+        },
+      },
+    };
+
+    await assert.rejects(
+      strengthenMemory(db, ID),
+      (error) => error instanceof AggregateError
+        && error.errors[0] === addErrors[0]
+        && error.errors[1] === addErrors[1],
+    );
+    assert.strictEqual(addCalls, 2, "the rollback re-add must still be attempted exactly once");
+  });
 });

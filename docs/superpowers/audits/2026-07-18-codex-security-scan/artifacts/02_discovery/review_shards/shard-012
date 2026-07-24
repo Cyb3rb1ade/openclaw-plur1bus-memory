@@ -1,0 +1,5 @@
+{"path":"lib/jobs/memory-compaction.js","area":"."}
+{"path":"lib/jobs/memory-dynamics-maintenance.js","area":"."}
+{"path":"lib/jobs/proactive-check.js","area":"."}
+{"path":"lib/jobs/reflection-job.js","area":"."}
+{"path":"lib/jobs/reminder-dispatch.js","area":"."}

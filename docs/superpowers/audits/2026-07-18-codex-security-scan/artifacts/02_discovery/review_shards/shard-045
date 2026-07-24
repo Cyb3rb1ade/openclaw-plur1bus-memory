@@ -1,0 +1,5 @@
+{"path":"scripts/install-memory-system.sh","area":"."}
+{"path":"scripts/lib/deploy-integrity.mjs","area":"."}
+{"path":"scripts/lib/find-deploy-dir.mjs","area":"."}
+{"path":"scripts/lib/installer-config.mjs","area":"."}
+{"path":"scripts/lib/openclaw-cli.mjs","area":"."}

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-044",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "plur1bus/lib/text-utils.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (1 line; SHA-256 6c0e03d7a389f9aa539f7a5771555246bab2148d4f035ebbb9b65ad34f6dd173). This is a package-compatibility re-export of the reviewed root text-utils module and adds no code path or sink."
+    },
+    {
+      "path": "scripts/auto-capture-lancedb.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_security_candidate",
+      "evidence": "Read in full (781 lines; SHA-256 eca4ec48f4e442fd49de5653e7db815a18d934e633b75f35dd0505315fff60e7). Agent ids derive from trusted local configuration/environment and CLI filters only intersect that list, so no untrusted path/command boundary was established. Feature defects are concrete: captureAgent advances in-memory file offsets before embedding/table persistence and saves them even when all vectors/inserts fail (550-555, 635-742), permanently dropping those session records; its success return references block-scoped `items` outside the file loop (746), causing ReferenceError after state has been written. State also cannot recognize a rotated/replaced JSONL file whose size is <= its prior offset (557-560). Existing targeted tests cover exported stream/dedup helpers, not the full captureAgent failure/success path."
+    },
+    {
+      "path": "scripts/backup-snapshot.sh",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (96 lines; SHA-256 ee3ccfe02ee8b340b81328a9545bbc71bed9d6b02b6f115a29e04d9652c774fd). The operator-selected OPENCLAW_HOME is canonicalized, sources outside it and top-level symlinks are skipped, and copied symlinks are deleted from snapshots. It is a local operator CLI with no chat/request input."
+    },
+    {
+      "path": "scripts/build-code-index.mjs",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (55 lines; SHA-256 ffa1238b1a8831dbe459ddf61eb8fe705928ebb4974932c2bb7dbaa16bfc372a). The workspace directory is an explicit local CLI argument and is passed to the code-index API; no untrusted remote caller, shell evaluation, or authorization boundary is present. --help executes successfully."
+    },
+    {
+      "path": "scripts/cleanup-vault-missing-tasks.mjs",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": ["cand-vault-task-cleanup-symlink-delete"],
+      "evidence": "Read in full (145 lines; SHA-256 3cb133224e0b1ff87815160f8f70a6399b72b7a29a557af40657d1e5758815e4). cleanupWorkspace accepts a vault path, follows a symlinked records/tasks directory through existsSync/readdirSync, and unlinkSyncs matching target files at 112-121 without canonical containment, lstat, or a no-follow guard. The script is automatically invoked at gateway startup according to its header, making the mutable vault tree a relevant boundary."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-vault-task-cleanup-symlink-delete",
+      "instanceKey": "vault-task-directory-symlink-delete:scripts/cleanup-vault-missing-tasks.mjs:112",
+      "title": "Gateway-start vault cleanup follows a task-directory symlink and deletes outside the workspace",
+      "taxonomy": ["CWE-59", "CWE-61", "CWE-73"],
+      "source": "A user able to modify an Obsidian workspace can replace plur1bus/records/tasks with a symlink to another directory accessible to the plugin process.",
+      "control": "cleanupWorkspace uses lexical join/existsSync/readdirSync and does not canonicalize or reject a symlinked tasksDir before performing deletion.",
+      "sink": "unlinkSync(join(tasksDir, entry.name)) removes each matching missing-<field>-<id>.md file under the symlink-resolved destination (scripts/cleanup-vault-missing-tasks.mjs:112-121).",
+      "impact": "At gateway startup, an attacker-controlled vault symlink can redirect the privileged cleanup's deletion of predictable matching Markdown files outside the intended workspace.",
+      "closestControl": "Repository guidance requires resolveInside for file operations and rejects traversal; this cleanup imports resolve but applies no containment/symlink check. Existing entry.isFile checks apply only after traversing tasksDir.",
+      "locations": ["scripts/cleanup-vault-missing-tasks.mjs:99", "scripts/cleanup-vault-missing-tasks.mjs:112", "scripts/cleanup-vault-missing-tasks.mjs:120"],
+      "validationFacts": "A bounded realistic-interface PoC should create a temporary workspace whose records/tasks is a symlink to a separate temporary directory containing a matching task file, invoke the script with PLUR1BUS_VAULTS, and confirm the outside file is removed. It should preserve all target source files.",
+      "attackFacts": "Requires filesystem write/symlink control in the configured vault and a gateway-start cleanup run; impact is limited to names matching the cleanup pattern. Preserve cleanup functionality by canonicalizing each path under a trusted workspace root and rejecting symlinked task directories before scanning/deleting."
+    }
+  ],
+  "notes": "All five assigned files were read completely from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. tests/auto-capture-import.test.js and tests/auto-capture-batch.test.js passed; build-code-index --help passed. No repository source file was modified. The auto-capture defects are carried into the bug/feature audit as reliability findings, while the cleanup symlink path proceeds to security validation."
+}

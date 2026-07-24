@@ -27,9 +27,11 @@ describe("install-memory-system non-interactive guard", () => {
     const script = readFileSync(join(process.cwd(), "scripts", "install-memory-system.sh"), "utf8");
     assert.match(script, /installer-config\.mjs/);
     assert.match(script, /plur1bus-install-log\.jsonl/);
-    assert.match(script, /Feature-Update-Modus/);
-    assert.match(script, /enable-all/);
-    assert.match(script, /prompt_choice FEATURE_UPDATE_MODE [^\n]*"enable-all" "keep" "enable-all"/);
+    assert.match(script, /Feature-Profil: preserve=unverändert, safe=Safe, recommended=Recommended/);
+    assert.match(script, /prompt_choice FEATURE_UPDATE_MODE [^\n]*"preserve" "preserve" "safe" "recommended"/);
+    assert.match(script, /Feature-Profil: safe=Safe, recommended=Recommended" "safe" "safe" "recommended"/);
+    assert.match(script, /--accept-defaults: Recommended wurde ausdrücklich ausgewählt/);
+    assert.doesNotMatch(script, /FEATURE_POLICY_MODE="enable-all"/);
     assert.match(script, /prompt_secret OPENAI_KEY/);
     assert.match(script, /prompt_secret COHERE_KEY/);
     assert.match(script, /ActiveMemory installieren\? yes=ja, no=nein" "yes"/);
@@ -43,7 +45,7 @@ afterEach(() => {
 
 describe("smokeTestExports", () => {
   it("passes when every expected export is present and the right kind", async () => {
-    const filePath = join(dir, "lib", "neo-arch.js");
+    const filePath = join(dir, "lib", "neo-arch.mjs");
     writeFileSync(
       filePath,
       'export function buildNeoWorkspaceAliases() { return {}; }\nexport function isInjectedContextText() { return false; }\n',
@@ -58,7 +60,7 @@ describe("smokeTestExports", () => {
   });
 
   it("fails when an expected export is missing", async () => {
-    const filePath = join(dir, "lib", "neo-arch.js");
+    const filePath = join(dir, "lib", "neo-arch.mjs");
     writeFileSync(filePath, "export function somethingElse() {}\n");
 
     const report = await smokeTestExports([
@@ -70,7 +72,7 @@ describe("smokeTestExports", () => {
   });
 
   it("fails (not throws) when the module cannot be imported at all", async () => {
-    const filePath = join(dir, "lib", "broken-syntax.js");
+    const filePath = join(dir, "lib", "broken-syntax.mjs");
     writeFileSync(filePath, "export function oops( {\n");
 
     const report = await smokeTestExports([
@@ -82,7 +84,7 @@ describe("smokeTestExports", () => {
   });
 
   it("reports a broken re-export stub as a smoke-test failure, not just missing-export", async () => {
-    const filePath = join(dir, "lib", "neo-arch.js");
+    const filePath = join(dir, "lib", "neo-arch.mjs");
     writeFileSync(filePath, 'export * from "../../lib/neo-arch.js";\n');
 
     const report = await smokeTestExports([

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-008",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/fetch-with-timeout.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (40 lines); generic bounded fetch/retry wrapper. URL policy is intentionally delegated to callers, so SSRF closure remains open for every concrete caller and is not suppressed here."
+    },
+    {
+      "path": "lib/filter-parser.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (305 lines); LanceDB injection suppressed by the fixed KEY_TO_COLUMN allowlist at lines 266-274, numeric/date parsing at lines 291-299, and quote/backslash escaping at lines 199-201 and 300. User values cannot select a column or enter query syntax."
+    },
+    {
+      "path": "lib/frontmatter.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (55 lines); apparent YAML-injection sink accepts agent and memory identifiers, but repository callers source these from trusted agent context and UUID-backed DB records. No chat-controlled scalar reaches buildFrontmatter directly in this shard; caller/import rows remain independently open."
+    },
+    {
+      "path": "lib/garbage-collector.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (183 lines) plus direct caller lib/jobs/gc-job.js:106-168. Archive directories are derived from configured base paths and actual one-segment directory entries; candidate ids originate from existing per-agent LanceDB rows selected by selectCandidatesForGc, whose normal write path uses random UUIDs. No remote/user path source reaches backupPath. Missing explicit safeUuid remains a defense-in-depth policy gap, not a demonstrated cross-boundary exploit path."
+    },
+    {
+      "path": "lib/graph-index.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (78 lines); in-memory map construction/query only, with no privileged sink."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No reportable candidate. Concrete SSRF callers and all import/migration paths remain separate frontier rows; this receipt does not close those families."
+}

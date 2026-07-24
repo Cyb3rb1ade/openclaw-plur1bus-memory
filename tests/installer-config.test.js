@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   applyInstallerFeaturePolicy,
@@ -9,29 +10,90 @@ import {
   parseInstallLog,
 } from "../scripts/lib/installer-config.mjs";
 
+const installerSource = readFileSync(
+  new URL("../scripts/install-memory-system.sh", import.meta.url),
+  "utf8",
+);
+
 describe("installer feature config policy", () => {
-  it("fresh installs write full experience defaults into the plugin config", () => {
+  it("leaves chat model selection to OpenClaw and never copies the merging route into Schicht 1.5", () => {
+    const promptStart = installerSource.indexOf('if confirm "LLM-Merging aktivieren?');
+    const promptEnd = installerSource.indexOf("\nfi\n\nelse", promptStart);
+    assert.ok(promptStart >= 0 && promptEnd > promptStart, "merging prompt block must be present");
+    const promptBlock = installerSource.slice(promptStart, promptEnd);
+    assert.doesNotMatch(promptBlock, /MERGING_(?:MODEL|BASEURL|KEY|DISABLE_THINKING|USER_AGENT)/);
+    assert.doesNotMatch(promptBlock, /explizites Modell|OpenAI-kompatibler Chat-Completions-Endpunkt/i);
+
+    const routeStart = installerSource.indexOf("  # Merging-Block aufbauen");
+    const routeEnd = installerSource.indexOf("  # Embedding Fallback Block", routeStart);
+    assert.ok(routeStart >= 0 && routeEnd > routeStart, "generated chat route block must be present");
+    const routeBlock = installerSource.slice(routeStart, routeEnd);
+    assert.doesNotMatch(routeBlock, /MERGING_(?:MODEL|BASEURL|KEY|DISABLE_THINKING|USER_AGENT)/);
+    assert.doesNotMatch(routeBlock, /\"(?:model|baseUrl|apiKey|headers|disableThinking)\"/);
+    assert.match(routeBlock, /SCHICHT15_BLOCK/);
+  });
+
+  it("preserve is byte-stable for missing, enabled, and disabled plugin entries", () => {
+    for (const original of [
+      {},
+      { enabled: true },
+      { enabled: false, config: { reranker: { enabled: false } } },
+    ]) {
+      const before = JSON.stringify(original);
+      const entry = applyInstallerFeaturePolicy(original, { mode: "preserve" });
+      assert.equal(JSON.stringify(entry), before);
+      assert.deepEqual(entry, original);
+      assert.notEqual(entry, original);
+    }
+  });
+
+  it("preserve retains provider, path, runtime, rollback, and explicit false state", () => {
+    const original = {
+      enabled: false,
+      config: {
+        baseDbPath: "/custom/memory",
+        embedding: {
+          provider: "local-transformers",
+          local: { model: "intfloat/multilingual-e5-small", dimensions: 384 },
+        },
+        reranker: { enabled: false, timeoutMs: 9999 },
+        runtime: { recallCacheTtlMs: 77, recallCacheMaxEntries: 4 },
+      },
+      rollback: { previousBackend: "memory-lancedb", backup: "/backup/state" },
+    };
+    const entry = applyInstallerFeaturePolicy(original, { mode: "preserve" });
+
+    assert.deepEqual(entry, original);
+    assert.equal(entry.enabled, false);
+    assert.equal(entry.config.reranker.enabled, false);
+    assert.equal(entry.config.runtime.recallCacheTtlMs, 77);
+    assert.deepEqual(entry.rollback, original.rollback);
+  });
+
+  it("explicit Safe creates/enables an entry and applies only schema-valid Safe", () => {
     const entry = applyInstallerFeaturePolicy(
       {
-        enabled: true,
+        enabled: false,
         config: {
           embedding: { provider: "openai", apiKey: "${OPENAI_API_KEY}", model: "text-embedding-3-large" },
           baseDbPath: "/openclaw/memory/lancedb-namespaced",
         },
       },
-      { mode: "fresh" },
+      { mode: "safe", confirmedAt: "2026-07-19T12:00:00.000Z" },
     );
 
     assert.equal(entry.enabled, true);
     assert.equal(entry.config.autoCapture, true);
     assert.equal(entry.config.autoRecall, true);
-    assert.equal(entry.config.temporalContext.enabled, true);
-    assert.equal(entry.config.runtime.embeddingCacheEnabled, true);
-    assert.equal(entry.config.dailyConsolidation.enabled, true);
-    assert.equal(entry.config.obsidianBridge.enabled, true);
-    assert.equal(entry.config.obsidianBridge.soulPatch.enabled, true);
-    assert.equal(entry.config.featuresConfirmedAt, undefined);
-    assert.equal(entry.config.featurePolicy, undefined);
+    assert.equal(entry.config.reranker.enabled, false);
+    assert.equal(entry.config.merging.enabled, false);
+    assert.equal(entry.config.skillMiner.enabled, false);
+    assert.equal(entry.config.dailyConsolidation.enabled, false);
+    assert.equal(entry.config.criticalPush.enabled, false);
+    assert.equal(entry.config.obsidianBridge.allowWrite, false);
+    assert.equal(entry.config.obsidianBridge.dryRun, true);
+    assert.equal(entry.config.setupProfile, "safe");
+    assert.equal(entry.config.featuresConfirmedAt, "2026-07-19T12:00:00.000Z");
     assert.deepEqual(entry.config.embedding, {
       provider: "openai",
       apiKey: "${OPENAI_API_KEY}",
@@ -39,7 +101,7 @@ describe("installer feature config policy", () => {
     });
   });
 
-  it("updates preserve explicit disabled features while enabling missing new defaults", () => {
+  it("explicit Recommended enables missing advanced features but preserves opt-outs", () => {
     const entry = applyInstallerFeaturePolicy(
       {
         enabled: true,
@@ -49,66 +111,109 @@ describe("installer feature config policy", () => {
           temporalContext: { enabled: false },
         },
       },
-      { mode: "preserve" },
+      { mode: "recommended", confirmedAt: "2026-07-19T12:00:00.000Z" },
     );
 
     assert.equal(entry.config.baseDbPath, "/custom/memory");
     assert.equal(entry.config.reranker.enabled, false);
-    assert.equal(entry.config.reranker.timeoutMs, 9999);
+    assert.equal(entry.config.reranker.timeoutMs, 5000);
     assert.equal(entry.config.temporalContext.enabled, false);
     assert.equal(entry.config.dailyConsolidation.enabled, true);
     assert.equal(entry.config.obsidianBridge.enabled, true);
+    assert.equal(entry.config.merging.autoApply, false);
+    assert.equal(entry.config.setupProfile, "recommended");
+    assert.equal(entry.config.featuresConfirmedAt, "2026-07-19T12:00:00.000Z");
   });
 
-  it("preserve mode keeps reranker-dependent feature opt-outs disabled", () => {
-    const entry = applyInstallerFeaturePolicy(
+  it("migrates legacy config.hooks only for explicit profile application", () => {
+    const legacyHooks = { allowConversationAccess: false, timeouts: { agent_end: 1234 } };
+    const migrated = applyInstallerFeaturePolicy(
+      { enabled: true, config: { hooks: legacyHooks } },
+      { mode: "safe", confirmedAt: "2026-07-19T12:00:00.000Z" },
+    );
+    assert.equal(migrated.hooks.allowConversationAccess, false);
+    assert.equal(migrated.hooks.timeouts.agent_end, 1234);
+    assert.equal(Object.hasOwn(migrated.config, "hooks"), false);
+
+    const explicitHooks = { allowConversationAccess: true };
+    const retained = applyInstallerFeaturePolicy(
+      { enabled: true, hooks: explicitHooks, config: { hooks: legacyHooks } },
+      { mode: "recommended", confirmedAt: "2026-07-19T12:00:00.000Z" },
+    );
+    assert.equal(retained.hooks.allowConversationAccess, true);
+    assert.equal(Object.hasOwn(retained.config, "hooks"), false);
+  });
+
+  it("fills installer hook defaults only where explicit-profile values are absent", () => {
+    for (const mode of ["safe", "recommended"]) {
+      const fresh = applyInstallerFeaturePolicy({}, { mode });
+      assert.deepEqual(fresh.hooks, {
+        allowConversationAccess: true,
+        allowPromptInjection: true,
+        timeouts: { before_prompt_build: 90000, agent_end: 60000 },
+      });
+    }
+
+    const explicit = applyInstallerFeaturePolicy(
       {
-        enabled: true,
+        hooks: {
+          allowConversationAccess: false,
+          allowPromptInjection: false,
+          timeouts: { before_prompt_build: 123, agent_end: 456, custom: 789 },
+        },
+      },
+      { mode: "safe" },
+    );
+    assert.deepEqual(explicit.hooks, {
+      allowConversationAccess: false,
+      allowPromptInjection: false,
+      timeouts: { before_prompt_build: 123, agent_end: 456, custom: 789 },
+    });
+
+    const legacy = applyInstallerFeaturePolicy(
+      {
         config: {
-          reranker: { enabled: true },
-          emotion: {
-            t2: { enabled: false },
-            t3: { enabled: false },
-          },
-          metaCognition: {
-            enabled: false,
-            llmReport: false,
+          hooks: {
+            allowConversationAccess: false,
+            timeouts: { agent_end: 1234 },
           },
         },
       },
-      { mode: "preserve" },
+      { mode: "recommended" },
     );
-
-    assert.equal(entry.config.reranker.enabled, true);
-    assert.equal(entry.config.emotion.t2.enabled, false);
-    assert.equal(entry.config.emotion.t3.enabled, false);
-    assert.equal(entry.config.metaCognition.enabled, false);
-    assert.equal(entry.config.metaCognition.llmReport, false);
-  });
-
-  it("enable-all updates reactivate core feature flags without replacing provider config", () => {
-    const entry = applyInstallerFeaturePolicy(
-      {
-        enabled: true,
-        config: {
-          baseDbPath: "/custom/memory",
-          embedding: { provider: "local-transformers", local: { model: "intfloat/multilingual-e5-small", dimensions: 384 } },
-          reranker: { enabled: false, timeoutMs: 9999 },
-          temporalContext: { enabled: false },
-        },
-      },
-      { mode: "enable-all" },
-    );
-
-    assert.equal(entry.config.reranker.enabled, true);
-    assert.equal(entry.config.reranker.timeoutMs, 9999);
-    assert.equal(entry.config.temporalContext.enabled, true);
-    assert.equal(entry.config.baseDbPath, "/custom/memory");
-    assert.deepEqual(entry.config.embedding, {
-      provider: "local-transformers",
-      local: { model: "intfloat/multilingual-e5-small", dimensions: 384 },
+    assert.deepEqual(legacy.hooks, {
+      allowConversationAccess: false,
+      allowPromptInjection: true,
+      timeouts: { before_prompt_build: 90000, agent_end: 1234 },
     });
   });
+
+  it("plans around legacy config.hooks in preserve mode without rewriting it", () => {
+    const legacyHooks = { allowConversationAccess: false };
+    const config = { hooks: legacyHooks, reranker: { enabled: false } };
+    const original = { enabled: false, config };
+
+    assert.deepEqual(applyInstallerFeaturePolicy(original, { mode: "preserve" }), original);
+    const plan = createFeatureUpdatePlan({
+      existingPluginEntry: original,
+      existingPluginConfig: config,
+      proposedPluginConfig: config,
+      mode: "preserve",
+    });
+
+    assert.equal(plan.after.missing.length, 0);
+    assert.equal(Object.hasOwn(plan.afterConfig, "hooks"), false);
+    assert.deepEqual(original.config.hooks, legacyHooks);
+  });
+
+  for (const mode of ["fresh", "force", "enable-all"]) {
+    it(`rejects implicit ${mode} activation inside the helper`, () => {
+      assert.throws(
+        () => applyInstallerFeaturePolicy({}, { mode }),
+        /preserve|safe|recommended/,
+      );
+    });
+  }
 });
 
 describe("installer install log planning", () => {
@@ -151,7 +256,7 @@ describe("installer install log planning", () => {
 
     assert.equal(plan.isUpdate, true);
     assert.equal(plan.detectedBy.log, true);
-    assert.ok(plan.newlyActivated.some((feature) => feature.key === "dailyConsolidation"));
+    assert.equal(plan.newlyActivated.some((feature) => feature.key === "dailyConsolidation"), false);
     assert.ok(plan.preservedDisabled.some((feature) => feature.key === "reranker"));
     assert.ok(plan.preservedDisabled.some((feature) => feature.key === "temporalContext"));
     assert.equal(plan.after.missing.length, 0);

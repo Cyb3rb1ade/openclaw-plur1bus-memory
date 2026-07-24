@@ -66,6 +66,39 @@ describe("EmotionEngine Eskalations-Schwelle", () => {
 });
 
 describe("EmotionEngine T3-Timeout", () => {
+  it("räumt den Timeout nach einer schnellen T3-Antwort auf", async () => {
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const created = [];
+    const cleared = new Set();
+    globalThis.setTimeout = (callback, ms, ...args) => {
+      const timer = originalSetTimeout(callback, ms, ...args);
+      created.push(timer);
+      return timer;
+    };
+    globalThis.clearTimeout = (timer) => {
+      cleared.add(timer);
+      return originalClearTimeout(timer);
+    };
+    try {
+      const engine = new EmotionEngine({
+        escalationConfidence: 0.95,
+        tier3: { enabled: true, timeoutMs: 10_000, callLlm: async () => JSON.stringify(t3Response) },
+      });
+      engine._tier1 = { classify: () => makeScore({ primary_emotion: "joy", valence: 0.6, confidence: 0.6, tier_used: 1 }) };
+
+      const score = await engine.analyze("egal", "user");
+
+      assert.strictEqual(score.tier_used, 3);
+      assert.ok(created.length > 0);
+      assert.ok(created.every((timer) => cleared.has(timer)));
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      globalThis.clearTimeout = originalClearTimeout;
+      for (const timer of created) originalClearTimeout(timer);
+    }
+  });
+
   it("fällt bei hängendem T3-Call auf das lokale Ergebnis zurück", async () => {
     const engine = new EmotionEngine({
       escalationConfidence: 0.95,

@@ -1,0 +1,32 @@
+{
+  "candidateId": "cand-admzip-install-dos",
+  "title": "Optional local-inference install resolves vulnerable adm-zip parser",
+  "instanceKey": "dependency-dos:package-lock.json:893",
+  "seedRowId": "seed-ghsa-xcpc-8h2w-3j85",
+  "advisory": "GHSA-xcpc-8h2w-3j85 / CVE-2026-39244",
+  "affectedLocations": [
+    { "label": "root_control", "path": "package-lock.json", "line": 893, "detail": "Lockfile resolves adm-zip@0.5.17, affected by the advisory." },
+    { "label": "wrapper", "path": "package-lock.json", "line": 1624, "detail": "onnxruntime-node@1.24.3 install-time wrapper depends on adm-zip ^0.5.16." },
+    { "label": "entrypoint", "path": "lib/providers/embedding-local-transformers.js", "line": 74, "detail": "Supported optional local-transformers provider imports the dependency chain." },
+    { "label": "entrypoint", "path": "lib/providers/reranker-local-transformers.js", "line": 43, "detail": "Supported optional local reranker imports the dependency chain." }
+  ],
+  "attackerControlledSource": "A crafted NuGet ZIP supplied from a compromised/malicious package feed, configured HTTPS proxy, or equivalent installation supply-chain position.",
+  "sinkOrBrokenControl": "onnxruntime-node@1.24.3 postinstall loads the downloaded .nupkg with adm-zip@0.5.17; vulnerable adm-zip eagerly allocates the attacker-declared uncompressed size before validating actual data/CRC.",
+  "impact": "Multi-gigabyte allocation can terminate the npm/OpenClaw installation process or exhaust host memory when the optional local inference dependency is installed.",
+  "plausibility": "The checked-in lockfile selects the affected version. Upstream package evidence retained under artifacts/01_context/advisory_evidence proves a default Linux x64 postinstall path invokes AdmZip on a network-fetched NuGet package.",
+  "closestControl": "TLS, registry integrity metadata, and a fixed Microsoft/NuGet feed constrain the source, but do not protect after feed/proxy compromise; the vulnerable parser itself lacks the fixed allocation bound.",
+  "validationRecommended": true,
+  "candidateLocalValidation": {
+    "method": "lockfile inspection, current npm audit, and exact upstream tarball source trace",
+    "evidence": "package-lock.json:64-75, 893-901, 1624-1640 plus retained onnxruntime-node install scripts",
+    "proofGap": "No safe OOM PoC executed because doing so would be destructive; advisory regression/fix evidence demonstrates the allocation primitive."
+  },
+  "candidateLocalAttackPath": {
+    "source": "network-fetched NuGet .nupkg during onnxruntime-node postinstall",
+    "transformations": ["HTTPS download to temp file", "new AdmZip(packageFilePath)", "getEntry(pathInPackage)", "extractEntryTo"],
+    "sink": "adm-zip@0.5.17 eager Buffer allocation from declared uncompressed size",
+    "outcome": "installation-process OOM / host availability loss",
+    "preconditions": ["optional @huggingface/transformers dependency installed", "Linux x64 default CUDA package acquisition or forced install", "attacker can influence the fetched package bytes through supply-chain/proxy compromise"]
+  },
+  "taxonomy": ["CWE-400", "CWE-789"]
+}

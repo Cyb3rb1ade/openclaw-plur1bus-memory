@@ -43,6 +43,7 @@ SRC="${PLUR1BUS_SRC:-$OPENCLAW_HOME/plur1bus-release}"
 DEPLOY="${PLUR1BUS_DEPLOY:-$OPENCLAW_HOME/extensions/memory-lancedb-namespaced}"
 GW="${PLUR1BUS_GW:-openclaw-gateway.service}"
 LOG="${PLUR1BUS_LOG:-$OPENCLAW_HOME/logs/protect-deploy.log}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 # Runtime files that carry the fixes and must always match source.
 # NOTE: scripts/cleanup-stores.mjs is intentionally NOT listed here; the file
@@ -60,6 +61,14 @@ FILES=(
   lib/relevant-memory-context.js
   test/neo-maintenance.test.js
 )
+# Optional release metadata restored alongside runtime code. Together with
+# FILES this is the single source of truth for preflight, copy, and equality.
+METADATA_FILES=(
+  package.json
+  README.md
+  LICENSE
+)
+RESTORE_FILES=("${FILES[@]}" "${METADATA_FILES[@]}")
 # Marker that must be present in deployed code (proves the fix is in place).
 MARKER_FILE="lib/neo-arch.js"
 MARKER="isInjectedContextText"
@@ -69,6 +78,108 @@ log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >> "$LOG"; }
 
 [ -d "$SRC" ]    || { log "ERROR: source missing: $SRC"; exit 1; }
 [ -d "$DEPLOY" ] || { log "ERROR: deploy missing: $DEPLOY"; exit 1; }
+SRC="$(cd -- "$SRC" && pwd -P)"
+DEPLOY="$(cd -- "$DEPLOY" && pwd -P)"
+
+SOURCE_MISSING=10
+SOURCE_UNSAFE=11
+SRC_ROOT_ID="$(stat -c '%d:%i' -- "$SRC" 2>/dev/null)" || {
+  log "ERROR: source root cannot be identified: $SRC"
+  exit 1
+}
+
+SOURCE_CANDIDATE_REAL=""
+SOURCE_CANDIDATE_ID=""
+SOURCE_CANDIDATE_HASH=""
+SOURCE_CANDIDATE_ERROR=""
+
+inspect_source_candidate() {
+  local rel="$1"
+  local remainder="$1"
+  local component
+  local current="$SRC"
+  local current_root_id
+
+  SOURCE_CANDIDATE_REAL=""
+  SOURCE_CANDIDATE_ID=""
+  SOURCE_CANDIDATE_HASH=""
+  SOURCE_CANDIDATE_ERROR=""
+
+  if [ -L "$SRC" ] || [ ! -d "$SRC" ]; then
+    SOURCE_CANDIDATE_ERROR="source root is no longer a real directory"
+    return "$SOURCE_UNSAFE"
+  fi
+  current_root_id="$(stat -c '%d:%i' -- "$SRC" 2>/dev/null)" || {
+    SOURCE_CANDIDATE_ERROR="source root cannot be identified"
+    return "$SOURCE_UNSAFE"
+  }
+  if [ "$current_root_id" != "$SRC_ROOT_ID" ]; then
+    SOURCE_CANDIDATE_ERROR="source root changed after canonicalization"
+    return "$SOURCE_UNSAFE"
+  fi
+
+  case "$rel" in
+    ""|/*)
+      SOURCE_CANDIDATE_ERROR="invalid relative allowlist path"
+      return "$SOURCE_UNSAFE"
+      ;;
+  esac
+
+  while :; do
+    component="${remainder%%/*}"
+    case "$component" in
+      ""|.|..)
+        SOURCE_CANDIDATE_ERROR="invalid allowlist path component: $component"
+        return "$SOURCE_UNSAFE"
+        ;;
+    esac
+    current="$current/$component"
+    if [ -L "$current" ]; then
+      SOURCE_CANDIDATE_ERROR="symlink component: $current"
+      return "$SOURCE_UNSAFE"
+    fi
+    if [ ! -e "$current" ]; then
+      return "$SOURCE_MISSING"
+    fi
+    if [ "$remainder" = "$component" ]; then
+      break
+    fi
+    if [ ! -d "$current" ]; then
+      SOURCE_CANDIDATE_ERROR="non-directory parent component: $current"
+      return "$SOURCE_UNSAFE"
+    fi
+    remainder="${remainder#*/}"
+  done
+
+  if [ ! -f "$current" ]; then
+    SOURCE_CANDIDATE_ERROR="final candidate is not a regular file: $current"
+    return "$SOURCE_UNSAFE"
+  fi
+  SOURCE_CANDIDATE_REAL="$(realpath -e -- "$current" 2>/dev/null)" || {
+    SOURCE_CANDIDATE_ERROR="candidate cannot be canonicalized: $current"
+    return "$SOURCE_UNSAFE"
+  }
+  case "$SOURCE_CANDIDATE_REAL" in
+    "$SRC"/*) ;;
+    *)
+      SOURCE_CANDIDATE_ERROR="candidate escapes canonical source root: $SOURCE_CANDIDATE_REAL"
+      return "$SOURCE_UNSAFE"
+      ;;
+  esac
+  SOURCE_CANDIDATE_ID="$(stat -c '%d:%i' -- "$SOURCE_CANDIDATE_REAL" 2>/dev/null)" || {
+    SOURCE_CANDIDATE_ERROR="candidate cannot be identified: $SOURCE_CANDIDATE_REAL"
+    return "$SOURCE_UNSAFE"
+  }
+  SOURCE_CANDIDATE_HASH="$(md5sum -- "$SOURCE_CANDIDATE_REAL" 2>/dev/null | cut -d' ' -f1)" || {
+    SOURCE_CANDIDATE_ERROR="candidate cannot be hashed: $SOURCE_CANDIDATE_REAL"
+    return "$SOURCE_UNSAFE"
+  }
+  if [ -z "$SOURCE_CANDIDATE_HASH" ]; then
+    SOURCE_CANDIDATE_ERROR="candidate produced an empty hash: $SOURCE_CANDIDATE_REAL"
+    return "$SOURCE_UNSAFE"
+  fi
+  return 0
+}
 
 drift=0
 reasons=()
@@ -78,12 +189,27 @@ if ! grep -q "$MARKER" "$DEPLOY/$MARKER_FILE" 2>/dev/null; then
   drift=1; reasons+=("missing-marker:$MARKER")
 fi
 
-# 2) md5 check — each runtime file must match source
-for f in "${FILES[@]}"; do
-  [ -f "$SRC/$f" ] || continue   # only enforce files that exist in source
-  s=$(md5sum "$SRC/$f" 2>/dev/null | cut -d' ' -f1)
-  d=$(md5sum "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
-  if [ "$s" != "$d" ]; then drift=1; reasons+=("mismatch:$f"); fi
+# 2) safety and md5 check — each restorable source must be a regular file,
+# and every source file must have a matching deployed file and hash.
+for f in "${RESTORE_FILES[@]}"; do
+  if inspect_source_candidate "$f"; then
+    source_status=0
+  else
+    source_status=$?
+  fi
+  if [ "$source_status" -eq "$SOURCE_MISSING" ]; then
+    continue
+  fi
+  if [ "$source_status" -eq "$SOURCE_UNSAFE" ]; then
+    log "ERROR: refusing unsafe source candidate: $SRC/$f ($SOURCE_CANDIDATE_ERROR)"
+    exit 1
+  fi
+  if [ ! -f "$DEPLOY/$f" ]; then
+    drift=1; reasons+=("missing:$f")
+    continue
+  fi
+  deploy_hash=$(md5sum -- "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
+  if [ "$SOURCE_CANDIDATE_HASH" != "$deploy_hash" ]; then drift=1; reasons+=("mismatch:$f"); fi
 done
 
 if [ "$drift" -eq 0 ]; then
@@ -92,44 +218,149 @@ fi
 
 log "DRIFT detected: ${reasons[*]}"
 
+# Stub-guard: never propagate a broken re-export shim from SRC into DEPLOY.
+# Resolve the checker beside this canonicalized script, or (for the installed
+# mirror) inside the canonical pinned source repository. Missing, linked,
+# unimportable, or incomplete checker state is an explicit fail-closed error.
+SCRIPT_CHECKER="$SCRIPT_DIR/lib/deploy-integrity.mjs"
+SOURCE_CHECKER="$SRC/scripts/lib/deploy-integrity.mjs"
+if [ -e "$SCRIPT_CHECKER" ] || [ -L "$SCRIPT_CHECKER" ]; then
+  STUB_CHECKER="$SCRIPT_CHECKER"
+  CHECKER_ROOT="$SCRIPT_DIR"
+elif [ -e "$SOURCE_CHECKER" ] || [ -L "$SOURCE_CHECKER" ]; then
+  STUB_CHECKER="$SOURCE_CHECKER"
+  CHECKER_ROOT="$SRC"
+else
+  log "ERROR: deploy-integrity checker missing: $SCRIPT_CHECKER and $SOURCE_CHECKER"
+  exit 1
+fi
+if [ ! -f "$STUB_CHECKER" ] || [ -L "$STUB_CHECKER" ]; then
+  log "ERROR: deploy-integrity checker missing or unsafe: $STUB_CHECKER"
+  exit 1
+fi
+STUB_CHECKER_REAL="$(realpath -- "$STUB_CHECKER")" || {
+  log "ERROR: deploy-integrity checker cannot be canonicalized: $STUB_CHECKER"
+  exit 1
+}
+case "$STUB_CHECKER_REAL" in
+  "$CHECKER_ROOT"/*) ;;
+  *) log "ERROR: deploy-integrity checker escapes repository script location: $STUB_CHECKER_REAL"; exit 1 ;;
+esac
+if ! node --input-type=module -e '
+  import { pathToFileURL } from "node:url";
+  const checker = await import(pathToFileURL(process.argv[1]).href);
+  if (typeof checker.detectBrokenStub !== "function") process.exit(1);
+' "$STUB_CHECKER_REAL" >/dev/null 2>&1; then
+  log "ERROR: deploy-integrity checker is broken or lacks detectBrokenStub: $STUB_CHECKER_REAL"
+  exit 1
+fi
+
+source_file_is_broken_stub() {
+  node --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    try {
+      const checker = await import(pathToFileURL(process.argv[1]).href);
+      const result = checker.detectBrokenStub(process.argv[2]);
+      process.exit(result.isBroken ? 0 : 1);
+    } catch (error) {
+      console.error(error?.message ?? error);
+      process.exit(2);
+    }
+  ' "$STUB_CHECKER_REAL" "$1"
+}
+
+# Capture every source candidate before creating a backup or changing deploy.
+declare -A PREFLIGHT_STATE=()
+declare -A PREFLIGHT_REAL=()
+declare -A PREFLIGHT_ID=()
+declare -A PREFLIGHT_HASH=()
+declare -A PREFLIGHT_STUB=()
+for f in "${RESTORE_FILES[@]}"; do
+  if inspect_source_candidate "$f"; then
+    source_status=0
+  else
+    source_status=$?
+  fi
+  if [ "$source_status" -eq "$SOURCE_MISSING" ]; then
+    PREFLIGHT_STATE["$f"]="absent"
+    PREFLIGHT_STUB["$f"]="not-applicable"
+    continue
+  fi
+  if [ "$source_status" -eq "$SOURCE_UNSAFE" ]; then
+    log "ERROR: refusing unsafe source candidate: $SRC/$f ($SOURCE_CANDIDATE_ERROR)"
+    exit 1
+  fi
+  PREFLIGHT_STATE["$f"]="present"
+  PREFLIGHT_REAL["$f"]="$SOURCE_CANDIDATE_REAL"
+  PREFLIGHT_ID["$f"]="$SOURCE_CANDIDATE_ID"
+  PREFLIGHT_HASH["$f"]="$SOURCE_CANDIDATE_HASH"
+  PREFLIGHT_STUB["$f"]="not-applicable"
+  case "$f" in
+    *.js|*.mjs)
+      if source_file_is_broken_stub "$SOURCE_CANDIDATE_REAL" >/dev/null 2>&1; then
+        log "ERROR: refusing to propagate broken re-export stub from $SOURCE_CANDIDATE_REAL"
+        exit 1
+      else
+        checker_status=$?
+        if [ "$checker_status" -ne 1 ]; then
+          log "ERROR: deploy-integrity checker failed for $SOURCE_CANDIDATE_REAL (status=$checker_status)"
+          exit 1
+        fi
+      fi
+      PREFLIGHT_STUB["$f"]="safe"
+      ;;
+  esac
+done
+
+source_candidate_matches_preflight() {
+  local rel="$1"
+  local source_status
+
+  if inspect_source_candidate "$rel"; then
+    source_status=0
+  else
+    source_status=$?
+  fi
+  if [ "${PREFLIGHT_STATE[$rel]}" = "absent" ]; then
+    [ "$source_status" -eq "$SOURCE_MISSING" ]
+    return
+  fi
+  [ "$source_status" -eq 0 ] || return 1
+  [ "$SOURCE_CANDIDATE_REAL" = "${PREFLIGHT_REAL[$rel]}" ] || return 1
+  [ "$SOURCE_CANDIDATE_ID" = "${PREFLIGHT_ID[$rel]}" ] || return 1
+  [ "$SOURCE_CANDIDATE_HASH" = "${PREFLIGHT_HASH[$rel]}" ] || return 1
+}
+
 # Drift-Backup bewusst ausserhalb des Extension-Scan-Roots ablegen: ein Backup-
 # Verzeichnis neben der Extension wuerde dieselbe Plugin-ID erneut deklarieren.
-BK_ROOT="${PLUR1BUS_BACKUP_DIR:-/root/.openclaw-backups/plur1bus-drift}"
+BK_ROOT="${PLUR1BUS_BACKUP_DIR:-$HOME/.openclaw-backups/plur1bus-drift}"
 BK="$BK_ROOT/$(basename "${DEPLOY%/}").drift-bak-$(date +%Y%m%dT%H%M%S)"
 mkdir -p "$BK"
-for f in "${FILES[@]}"; do
-  [ -f "$DEPLOY/$f" ] && { mkdir -p "$BK/$(dirname "$f")"; cp -a "$DEPLOY/$f" "$BK/$f"; }
-done
-for m in openclaw.plugin.json package.json README.md LICENSE; do
-  [ -f "$DEPLOY/$m" ] && cp -a "$DEPLOY/$m" "$BK/$m"
+for f in "${RESTORE_FILES[@]}"; do
+  if [ -f "$DEPLOY/$f" ]; then
+    mkdir -p "$BK/$(dirname "$f")"
+    cp -a "$DEPLOY/$f" "$BK/$f"
+  fi
 done
 log "backed up drifted deploy -> $BK"
 
-# Stub-guard: never propagate a broken re-export shim from SRC into DEPLOY.
-# Reuses the exact detector that caught the 2026-06-16 incident, so this stays
-# safe even if PLUR1BUS_SRC is ever pointed at a stale/partial directory again.
-STUB_CHECKER="/root/scripts/lib/deploy-integrity.mjs"
-source_file_is_broken_stub() {
-  [ -f "$STUB_CHECKER" ] || return 1   # checker missing: don't block on it
-  node --input-type=module -e "
-    import { detectBrokenStub } from '$STUB_CHECKER';
-    process.exit(detectBrokenStub(process.argv[1]).isBroken ? 0 : 1);
-  " "$1" 2>/dev/null
-}
+# Revalidate the complete source snapshot after backup and before any restore.
+for f in "${RESTORE_FILES[@]}"; do
+  if ! source_candidate_matches_preflight "$f"; then
+    log "ERROR: source candidate changed after preflight: $f${SOURCE_CANDIDATE_ERROR:+ ($SOURCE_CANDIDATE_ERROR)}"
+    exit 1
+  fi
+done
 
 # Restore canonical source over the deploy (code only; never touch node_modules/state).
-for f in "${FILES[@]}"; do
-  [ -f "$SRC/$f" ] || continue
-  if source_file_is_broken_stub "$SRC/$f"; then
-    log "ERROR: refusing to propagate broken re-export stub from $SRC/$f — leaving deploy untouched for this file"
-    continue
-  fi
+for f in "${RESTORE_FILES[@]}"; do
+  [ "${PREFLIGHT_STATE[$f]}" = "present" ] || continue
   mkdir -p "$DEPLOY/$(dirname "$f")"
-  cp -a "$SRC/$f" "$DEPLOY/$f"
-done
-# Keep version metadata in sync so the deploy reports the right version.
-for m in openclaw.plugin.json package.json README.md LICENSE; do
-  [ -f "$SRC/$m" ] && cp -a "$SRC/$m" "$DEPLOY/$m"
+  if ! source_candidate_matches_preflight "$f"; then
+    log "ERROR: source candidate changed after preflight: $f${SOURCE_CANDIDATE_ERROR:+ ($SOURCE_CANDIDATE_ERROR)}"
+    exit 1
+  fi
+  cp -a -- "${PREFLIGHT_REAL[$f]}" "$DEPLOY/$f"
 done
 log "restored canonical source from $SRC"
 
@@ -138,6 +369,15 @@ if ! grep -q "$MARKER" "$DEPLOY/$MARKER_FILE" 2>/dev/null; then
   log "ERROR: restore failed, marker still missing"
   exit 1
 fi
+for f in "${RESTORE_FILES[@]}"; do
+  [ "${PREFLIGHT_STATE[$f]}" = "present" ] || continue
+  deploy_hash=$(md5sum -- "$DEPLOY/$f" 2>/dev/null | cut -d' ' -f1)
+  if [ "${PREFLIGHT_HASH[$f]}" != "$deploy_hash" ]; then
+    log "ERROR: restore hash verification failed for $f"
+    exit 1
+  fi
+done
+log "verified restored file hashes from $SRC"
 
 if [ "${PLUR1BUS_NO_RESTART:-0}" = "1" ]; then
   log "restore complete (restart suppressed by PLUR1BUS_NO_RESTART)"

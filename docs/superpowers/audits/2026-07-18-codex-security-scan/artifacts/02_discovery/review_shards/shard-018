@@ -1,0 +1,5 @@
+{"path":"lib/neo-worker-runner.js","area":"."}
+{"path":"lib/neo-worker-runtime.js","area":"."}
+{"path":"lib/obsidian-bridge.js","area":"."}
+{"path":"lib/obsidian-control-room.js","area":"."}
+{"path":"lib/obsidian/adversarial-deep.js","area":"."}

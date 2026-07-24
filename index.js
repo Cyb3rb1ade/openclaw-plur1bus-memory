@@ -27,10 +27,10 @@
  *   evidenceQuote, scope.
  */
 
-import { randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 
@@ -81,10 +81,15 @@ import {
   archiveCard,
 } from "./lib/telegram-commands/memory-edit.js";
 import { normalizeCommandInput } from "./lib/semantic-input.js";
-import { validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
+import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
+import {
+  openDirectoryCapability,
+  pathMatchesDirectoryCapability,
+  stableDirectoryCapabilitiesSupported,
+} from "./lib/directory-capability.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
 import { listPendingProposals, approveProposal, rejectProposal, listActiveSkills, showProposal } from "./lib/telegram-commands/skill-commands.js";
@@ -102,11 +107,9 @@ import { resolveLocale, readSoulToneCached, pickTone, t } from "./lib/i18n.js";
 import { isKnowledgePromoted, recordKnowledgePromotion, checkMaxPromotions, computeContentHash } from "./lib/jobs/schicht15-tracker.js";
 import {
   PLUGIN_KEY,
-  applyFullExperiencePolicy,
   applyFeatureProfile,
   consumePlur1busStartNotice,
   describeProfileDiff,
-  detectMissingCoreFeatures,
   detectObsidianVaults,
   detectPendingFeatures,
   isApplyBlocked,
@@ -114,13 +117,24 @@ import {
   renderPlur1busStartStatus,
   safeProfile,
 } from "./lib/setup/feature-profiles.js";
+import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "./lib/setup/config-contract.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import { runWikiCommand } from "./lib/wiki-command.js";
 import { checkAccess } from "./lib/acl-middleware.js";
-import { safeUuid, safeUuidList, safeTimestamp, appendDestructiveOpLog } from "./lib/sql-safety.js";
-import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
+import {
+  buildMemoryAccountTopology,
+  buildMemoryWorkspaceAliases,
+  createHostRoutingLoader,
+  createMemoryTurnRouteRegistry,
+  resolveHostCommandMemoryContext,
+  resolveHostHookMemoryContext,
+  resolveMemoryRequestContext,
+  resolveToolMemoryRequestContext,
+} from "./lib/memory-request-context.js";
+import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog } from "./lib/sql-safety.js";
+import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
 import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
@@ -128,7 +142,7 @@ import { runProactiveCheck } from "./lib/jobs/proactive-check.js";
 import { runReflectionJob } from "./lib/jobs/reflection-job.js";
 import { shouldTriggerReflection } from "./lib/meta-cognition.js";
 import { explainResults, renderExplanation } from "./lib/explainability.js";
-import { applyImportanceBoost, dedupResults, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, computeUseAssociative } from "./lib/recall-pipeline.js";
+import { applyImportanceBoost, parseKnowledgeMd, getKnowledgeChunks, searchCanonical, runRecallPipeline, mergeNamespaceRecallResults, computeUseAssociative, emitRetrievalLedger } from "./lib/recall-pipeline.js";
 import {
   createRecallDecisionTrace,
   addTraceDecision,
@@ -187,10 +201,20 @@ import {
 import { createRecallPhaseTimer } from "./lib/recall-phase-timer.js";
 import { createEmbeddingCache } from "./lib/embedding-cache.js";
 import { withTimeout, TimeoutError } from "./lib/with-timeout.js";
+import { redactError, safeDebug, settleSafeWarning, trySafeWarn } from "./lib/safe-logging.js";
+import { safeWarnLlmFailure } from "./lib/llm-failure.js";
+import { throwIfAborted } from "./lib/abort.js";
 import { callLlm as callOpenAiLlm } from "./lib/llm-call.js";
+import {
+  LLM_ROUTE_KINDS,
+  completeFeatureLlm,
+  isLlmRouteAvailable,
+  resolveFeatureLlmRoute,
+} from "./lib/llm-router.js";
 import {
   LLM_RESULT_CACHE_PURPOSES,
   createLlmResultCache,
+  withLlmCallContext,
   withLlmResultCacheContext,
 } from "./lib/llm-result-cache.js";
 import {
@@ -232,7 +256,7 @@ import {
   sessionKeyFrom,
 } from "./lib/reply-outcome-tracking.js";
 import { MultiNamespacePool } from "./lib/multi-namespace-pool.js";
-import { DEFAULT_NAMESPACE } from "./lib/namespace-config.js";
+import { resolveNamespaceLayout } from "./lib/namespace-config.js";
 import {
   extractMediaOutputIds,
   stripMediaOutputIdToken,
@@ -398,6 +422,7 @@ async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defa
     if (!Array.isArray(lancedbRecords) || lancedbRecords.length === 0) continue;
     await writeMemoryNotes(semVaultCfg, lancedbRecords, { logger });
     const result = await discoverSemanticLinks(semVaultCfg, lancedbRecords, {
+      db,
       pool,
       logger,
       defaultAgentId,
@@ -494,6 +519,20 @@ function resolveConfiguredApiKey(cfg = {}, defaultRef = "") {
   return defaultRef ? resolveOptionalEnvVars(defaultRef) : undefined;
 }
 
+function normalizedLlmErrorClass(error) {
+  if (error instanceof TypeError) return "TypeError";
+  if (error instanceof RangeError) return "RangeError";
+  if (error instanceof SyntaxError) return "SyntaxError";
+  if (error?.name === "TimeoutError" && error?.code === "ETIMEOUT") return "TimeoutError";
+  if (typeof DOMException === "function"
+    && error instanceof DOMException
+    && error.name === "AbortError") {
+    return "AbortError";
+  }
+  if (error instanceof Error) return "Error";
+  return "NonError";
+}
+
 function commandOption(tokens = [], flag, fallback = "") {
   const index = tokens.indexOf(flag);
   if (index >= 0 && typeof tokens[index + 1] === "string" && !tokens[index + 1].startsWith("--")) {
@@ -535,23 +574,29 @@ function readFileHeadSync(path, maxBytes = 8192) {
  * @param {object} llmCfg
  * @param {object} logger
  * @param {string} agentId
+ * @param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [callContext]
  * @returns {Promise<string>}
  */
-async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId) {
+async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId, callContext = {}) {
   try {
     const result = await callLlm([
       {
         role: "user",
         content: `Summarize this text into the most important facts, decisions, preferences, and actionable information. Keep all specific names, numbers, URLs, dates, technical details, and configuration values. Output ONLY the summary, no preamble. Target length: ${Math.round(maxChars / 4)} characters.\n\n${text.slice(0, 60000)}`,
       },
-    ], withLlmResultCacheContext(
-      { ...llmCfg, maxTokens: Math.round(maxChars / 3), temperature: 0 },
-      agentId,
+    ], withLlmCallContext(
+      withLlmResultCacheContext(
+        { ...llmCfg, maxTokens: Math.round(maxChars / 3), temperature: 0 },
+        agentId,
+        LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
+      ),
+      callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
       LLM_RESULT_CACHE_PURPOSES.CAPTURE_SUMMARY,
+      { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
     ));
     if (result && result.length > 20) return result;
   } catch (e) {
-    if (logger) logger.warn(`memory-lancedb-namespaced: summarize failed (${e.message}), falling back to truncation`);
+    safeWarnLlmFailure(logger, "capture-summary.llm", e, { fallback: "truncate" });
   }
   // Fallback: truncate if LLM fails
   return text.slice(0, maxChars);
@@ -565,9 +610,10 @@ async function summarizeForCapture(text, maxChars, llmCfg, logger, agentId) {
  * @param {object|null} llmCfg
  * @param {object} logger
  * @param {string} agentId
+ * @param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [callContext]
  * @returns {Function|null}
  */
-function makeQuerySummarizer(llmCfg, logger, agentId) {
+function makeQuerySummarizer(llmCfg, logger, agentId, callContext = {}) {
   if (!llmCfg) return null;
   return async (query) => {
     const result = await callLlm([
@@ -575,14 +621,148 @@ function makeQuerySummarizer(llmCfg, logger, agentId) {
         role: "user",
         content: `Extract the key topics, names, events, decisions, and facts from the following text that are relevant for a semantic memory search. Output ONLY a compact summary (2-4 sentences, max 800 chars) capturing the most searchable information. Do not add commentary.\n\n${query.slice(0, 60000)}`,
       },
-    ], withLlmResultCacheContext(
-      { ...llmCfg, maxTokens: 300, temperature: 0 },
-      agentId,
+    ], withLlmCallContext(
+      withLlmResultCacheContext(
+        { ...llmCfg, maxTokens: 300, temperature: 0 },
+        agentId,
+        LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
+      ),
+      callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
       LLM_RESULT_CACHE_PURPOSES.RECALL_QUERY_SUMMARY,
+      { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
     ));
     if (result && result.length > 20) return result;
     throw new Error("empty summarizer response");
   };
+}
+
+/**
+ * Runs one existing recall pipeline per leased namespace and merges only after
+ * every child settled, so a failed namespace cannot expose partial results.
+ *
+ * @param {{namespace?: string|null, db: MemoryDB}[]} readDbs
+ * @param {Object} baseParams
+ * @param {Object|null|undefined} trace
+ * @param {Object|null|undefined} phaseTimer
+ * @param {{strictReadErrors?: boolean}} [options]
+ * @returns {Promise<{queryVector: Array|undefined, canonical: Array, memories: Array, trace: Object|undefined}>}
+ */
+async function runMergedNamespaceRecall(
+  readDbs,
+  baseParams,
+  trace,
+  phaseTimer,
+  { strictReadErrors = false } = {},
+) {
+  if (!Array.isArray(readDbs) || readDbs.length === 0) {
+    return { queryVector: undefined, canonical: [], memories: [], trace };
+  }
+  if (readDbs.length === 1) {
+    return runRecallPipeline({
+      ...baseParams,
+      dbTable: readDbs[0].db.table,
+      strictReadErrors: strictReadErrors || baseParams.strictReadErrors === true,
+    });
+  }
+
+  const timerConfig = phaseTimer?.summary?.() || {};
+  phaseTimer?.start("namespace-recall");
+  try {
+    const settled = await Promise.allSettled(readDbs.map(async ({ namespace, db }, index) => {
+      const childTrace = trace
+        ? createNamespaceChildRecallTrace(trace, baseParams.query)
+        : undefined;
+      const childTimer = createRecallPhaseTimer({
+        softBudgetMs: timerConfig.softBudgetMs,
+        hardTimeoutMs: timerConfig.hardTimeoutMs,
+        logger: baseParams.logger,
+      });
+      const result = await runRecallPipeline({
+        ...baseParams,
+        dbTable: db.table,
+        phaseTimer: childTimer,
+        decisionTrace: childTrace,
+        strictReadErrors: true,
+        canonicalEnabled: index === 0 ? baseParams.canonicalEnabled : false,
+        retrievalLogger: null,
+      });
+      return { namespace, result };
+    }));
+    const failure = combineNamespaceRecallFailures(settled);
+    if (failure) throw failure;
+
+    const namespaceResults = settled.map((result) => ({
+      namespace: result.value.namespace,
+      ...result.value.result,
+    }));
+    const merged = mergeNamespaceRecallResults(namespaceResults, {
+      maxOut: baseParams.topN,
+      canonicalMaxItems: baseParams.canonicalMaxItems,
+      dedupEnabled: baseParams.dedupEnabled,
+      dedupJaccard: baseParams.dedupJaccard,
+      trace,
+    });
+    emitRetrievalLedger({
+      retrievalLogger: baseParams.retrievalLogger,
+      logger: baseParams.logger,
+      entry: {
+        agentId: baseParams.agentId,
+        workspaceKey: baseParams.workspaceKey,
+        query: baseParams.query,
+        resultsCount: merged.memories.length,
+        selectedIds: merged.memories.map((memory) => memory.entry.id),
+      },
+    });
+    return merged;
+  } catch (error) {
+    try {
+      phaseTimer?.fail?.("namespace-recall", error);
+    } catch (phaseTimerError) {
+      trySafeWarn(baseParams.logger, "namespace-recall.phaseTimer", phaseTimerError);
+    }
+    throw error;
+  } finally {
+    phaseTimer?.end("namespace-recall");
+  }
+}
+
+function combineNamespaceRecallFailures(settled) {
+  const failures = settled
+    .filter((result) => result.status === "rejected")
+    .map((result) => result.reason);
+  if (failures.length === 0) return null;
+  const timeoutFailures = failures.filter((error) => (
+    error instanceof TimeoutError
+    && error.settlement
+    && typeof error.settlement.then === "function"
+  ));
+  if (timeoutFailures.length === 0) return failures[0];
+  const primary = timeoutFailures[0];
+  const settlements = [...new Set(timeoutFailures.map((error) => error.settlement))];
+  if (settlements.length > 1) {
+    primary.settlement = settleAllNamespaceReads(settlements);
+  }
+  return primary;
+}
+
+async function settleAllNamespaceReads(settlements) {
+  const outcomes = await Promise.allSettled(settlements);
+  const failed = outcomes.find((result) => result.status === "rejected");
+  if (failed) throw failed.reason;
+  return outcomes.map((result) => result.value);
+}
+
+function createNamespaceChildRecallTrace(masterTrace, query) {
+  const config = masterTrace?.config || {};
+  return createRecallDecisionTrace({
+    query,
+    maxTextPreviewChars: config.maxTextPreviewChars,
+    maxCandidates: config.maxCandidates,
+    maxDecisions: config.maxDecisions,
+    maxGuards: config.maxGuards,
+    maxStoreDecisions: config.maxStoreDecisions,
+    config,
+  });
 }
 
 // ============================================================================
@@ -596,6 +776,37 @@ const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fi
 // Operation-level timeouts for LanceDB calls (P0 Performance-Audit K3).
 const LANCEDB_READ_TIMEOUT_MS = 10_000;
 const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
+const INIT_LATE_HANDLE_KIND = Symbol("MemoryDB.initLateHandleKind");
+const MAX_BACKGROUND_LIFECYCLE_ERRORS = 50;
+
+function logMemoryDbDebug(logger, scope, error, dbPath) {
+  return safeDebug(logger, scope, error, { agent: basename(dbPath) });
+}
+
+async function waitForTimeoutSettlement(error) {
+  let currentError = error;
+  let waited = false;
+  const seen = new Set();
+  while (
+    currentError instanceof TimeoutError
+    && currentError.settlement
+    && typeof currentError.settlement.then === "function"
+    && !seen.has(currentError.settlement)
+  ) {
+    const settlement = currentError.settlement;
+    seen.add(settlement);
+    waited = true;
+    try {
+      const value = await settlement;
+      return { waited, status: "fulfilled", value };
+    } catch (settlementError) {
+      currentError = settlementError;
+    }
+  }
+  return waited
+    ? { waited, status: "rejected", error: currentError }
+    : { waited: false, status: "unavailable", error };
+}
 
 function normalizeVectorValue(vector) {
   if (!vector || Array.isArray(vector) || typeof vector !== "object") return vector;
@@ -615,13 +826,55 @@ function normalizeVectorValue(vector) {
 }
 
 class MemoryDB {
-  constructor(dbPath, vectorDim, logger = null) {
+  /**
+   * @param {string} dbPath LanceDB agent path.
+   * @param {number} vectorDim Vector dimension.
+   * @param {object} [logger] Optional logger.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void), directoryCapability?: object|null, secureDirectoryRequired?: boolean, beforeLanceOperation?: ((operation: string, capability: object|null) => void), lancedbProvider?: (() => Promise<object>|object)}} [options] Non-mutating mode, trusted directory routing, and an injectable DB provider for lifecycle tests.
+   */
+  constructor(dbPath, vectorDim, logger = null, {
+    readOnly = false,
+    pathGuard = null,
+    directoryCapability = null,
+    secureDirectoryRequired = false,
+    beforeLanceOperation = null,
+    lancedbProvider = null,
+  } = {}) {
+    if (pathGuard !== null && typeof pathGuard !== "function") {
+      throw new TypeError("MemoryDB pathGuard must be a function");
+    }
+    if (directoryCapability !== null && (
+      typeof directoryCapability !== "object"
+      || typeof directoryCapability.assertOpen !== "function"
+      || typeof directoryCapability.close !== "function"
+      || typeof directoryCapability.path !== "string"
+    )) {
+      throw new TypeError("MemoryDB directoryCapability must be a stable directory capability");
+    }
+    if (beforeLanceOperation !== null && typeof beforeLanceOperation !== "function") {
+      throw new TypeError("MemoryDB beforeLanceOperation must be a function");
+    }
+    if (lancedbProvider !== null && typeof lancedbProvider !== "function") {
+      throw new TypeError("MemoryDB lancedbProvider must be a function");
+    }
     this.dbPath = dbPath;
     this.vectorDim = vectorDim;
     this.logger = logger;
+    this.readOnly = readOnly === true;
+    this.pathGuard = pathGuard;
+    this.directoryCapability = directoryCapability;
+    this.secureDirectoryRequired = secureDirectoryRequired === true;
+    this.beforeLanceOperation = beforeLanceOperation;
+    this.lancedbProvider = lancedbProvider;
     this.db = null;
     this.table = null;
     this.initPromise = null;
+    this.shutdownPromise = null;
+    this.pendingInitSettlements = new Set();
+    this.pendingDebugSettlements = new Set();
+    this.backgroundDiagnosticErrors = [];
+    this.backgroundDiagnosticErrorOverflow = 0;
+    this.initCleanupErrors = [];
     this.schemaFieldNames = null;
     this._writeCounter = 0;
     this._reindexing = false;
@@ -631,22 +884,276 @@ class MemoryDB {
   }
 
   async shutdown() {
-    if (this.isShuttingDown || this.isShutdown) return;
+    if (this.shutdownPromise) return this.shutdownPromise;
+    if (this.isShutdown) return;
     this.isShuttingDown = true;
+    const shutdownPromise = (async () => {
+      const errors = [];
+      const activeInit = this.initPromise;
+      if (activeInit) {
+        try {
+          await activeInit;
+        } catch (error) {
+          errors.push(error);
+          const logged = logMemoryDbDebug(this.logger, "MemoryDB.shutdown.activeInit", error, this.dbPath);
+          const loggingOutcome = await settleSafeWarning(logged);
+          if (!loggingOutcome.ok) errors.push(loggingOutcome.error);
+        }
+      }
+      await this._drainPendingInitSettlements("shutdown");
+      await this._drainPendingDebugSettlements();
+      errors.push(...this._drainMemoryDbDiagnosticErrors());
+      errors.push(...this.initCleanupErrors);
+      this.initCleanupErrors = [];
+      errors.push(...await this._closeHandles("shutdown"));
+      try {
+        this.directoryCapability?.close();
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        this.directoryCapability = null;
+      }
+      this.initPromise = null;
+      this.isShutdown = true;
+      if (errors.length > 0) {
+        throw new AggregateError(
+          errors,
+          `MemoryDB shutdown failed for ${this.dbPath} (${errors.length} lifecycle error${errors.length === 1 ? "" : "s"})`,
+        );
+      }
+    })();
+    this.shutdownPromise = shutdownPromise;
     try {
-      if (this.table && typeof this.table.close === "function") {
-        try { await this._write(this.table.close(), "MemoryDB.table.close"); } catch (_) { /* ignore */ }
+      return await shutdownPromise;
+    } finally {
+      this.isShuttingDown = false;
+      if (this.shutdownPromise === shutdownPromise) this.shutdownPromise = null;
+    }
+  }
+
+  async _acquireInitHandle(promise, label, kind, readOnly = this.readOnly) {
+    try {
+      return readOnly
+        ? await this._read(promise, label)
+        : await this._write(promise, label);
+    } catch (error) {
+      if (error instanceof TimeoutError && error.settlement) {
+        error[INIT_LATE_HANDLE_KIND] = kind;
       }
-      if (this.db && typeof this.db.close === "function") {
-        try { await this._write(this.db.close(), "MemoryDB.db.close"); } catch (_) { /* ignore */ }
+      throw error;
+    }
+  }
+
+  async _cleanupTimedOutInitHandles({
+    rawStatus,
+    rawValue,
+    lateHandleKind,
+    table,
+    db,
+  }) {
+    const errors = [];
+    const tables = new Set(table ? [table] : []);
+    const connections = new Set(db ? [db] : []);
+    let createdTable = null;
+
+    if (rawStatus === "fulfilled") {
+      if (lateHandleKind === "connection" && rawValue) connections.add(rawValue);
+      if (lateHandleKind === "table" && rawValue) tables.add(rawValue);
+      if (lateHandleKind === "created-table" && rawValue) {
+        createdTable = rawValue;
+        tables.add(rawValue);
       }
+    }
+
+    if (lateHandleKind === "created-table") {
+      if (!createdTable && db) {
+        try {
+          const names = await db.tableNames();
+          if (names.includes(TABLE_NAME)) {
+            createdTable = await db.openTable(TABLE_NAME);
+            tables.add(createdTable);
+          }
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (createdTable) {
+        try {
+          await createdTable.delete('id = "__schema__"');
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+    }
+
+    for (const currentTable of tables) {
+      try {
+        if (typeof currentTable?.close === "function") await currentTable.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    for (const connection of connections) {
+      try {
+        if (typeof connection?.close === "function") await connection.close();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    return errors;
+  }
+
+  _deferTimedOutInitCleanup(error) {
+    if (!(error instanceof TimeoutError) || !error.settlement) return false;
+    const rawSettlement = error.settlement;
+    const lateHandleKind = error[INIT_LATE_HANDLE_KIND] || null;
+    const table = this.table;
+    const db = this.db;
+    this.table = null;
+    this.db = null;
+    this.schemaFieldNames = null;
+
+    const completion = (async () => {
+      let rawStatus = "fulfilled";
+      let rawValue;
+      let rawError;
+      try {
+        rawValue = await rawSettlement;
+      } catch (settlementError) {
+        rawStatus = "rejected";
+        rawError = settlementError;
+      }
+      const cleanupErrors = await this._cleanupTimedOutInitHandles({
+        rawStatus,
+        rawValue,
+        lateHandleKind,
+        table,
+        db,
+      });
+      return { rawStatus, rawValue, rawError, cleanupErrors };
+    })();
+    const settlement = completion.then((outcome) => {
+      if (outcome.rawError && outcome.cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [outcome.rawError, ...outcome.cleanupErrors],
+          `MemoryDB timed-out initialization and late cleanup failed for ${this.dbPath}`,
+        );
+      }
+      if (outcome.cleanupErrors.length > 0) {
+        throw new AggregateError(
+          outcome.cleanupErrors,
+          `MemoryDB timed-out initialization cleanup failed for ${this.dbPath}`,
+        );
+      }
+      if (outcome.rawError) throw outcome.rawError;
+      return outcome.rawValue;
+    });
+    settlement.then(
+      () => {},
+      (settlementError) => {
+        this._trackMemoryDbDebug("MemoryDB.init.lateSettlement", settlementError);
+      },
+    );
+    const record = { completion };
+    this.pendingInitSettlements.add(record);
+    completion.then(
+      (outcome) => {
+        if (outcome.cleanupErrors.length === 0) this.pendingInitSettlements.delete(record);
+      },
+      (completionError) => {
+        this._trackMemoryDbDebug("MemoryDB.init.cleanupCompletion", completionError);
+      },
+    );
+    error.settlement = settlement;
+    return true;
+  }
+
+  _trackMemoryDbDebug(scope, error) {
+    const outcome = logMemoryDbDebug(this.logger, scope, error, this.dbPath);
+    if (!outcome.ok) {
+      this._recordMemoryDbDiagnosticError(outcome.error);
+      return;
+    }
+    if (!outcome.pending) return;
+    let pending;
+    pending = (async () => {
+      try {
+        const settled = await settleSafeWarning(outcome);
+        if (!settled.ok) this._recordMemoryDbDiagnosticError(settled.error);
+      } catch (settlementError) {
+        this._recordMemoryDbDiagnosticError(settlementError);
+      } finally {
+        this.pendingDebugSettlements.delete(pending);
+      }
+    })();
+    this.pendingDebugSettlements.add(pending);
+  }
+
+  async _drainPendingDebugSettlements() {
+    await Promise.allSettled([...this.pendingDebugSettlements]);
+  }
+
+  _recordMemoryDbDiagnosticError(error) {
+    if (this.backgroundDiagnosticErrors.length < MAX_BACKGROUND_LIFECYCLE_ERRORS) {
+      this.backgroundDiagnosticErrors.push(error);
+      return;
+    }
+    this.backgroundDiagnosticErrorOverflow += 1;
+  }
+
+  _drainMemoryDbDiagnosticErrors() {
+    const errors = this.backgroundDiagnosticErrors.splice(0, this.backgroundDiagnosticErrors.length);
+    if (this.backgroundDiagnosticErrorOverflow > 0) {
+      errors.push(new Error(
+        `MemoryDB background diagnostic failures omitted (${this.backgroundDiagnosticErrorOverflow})`,
+      ));
+      this.backgroundDiagnosticErrorOverflow = 0;
+    }
+    return errors;
+  }
+
+  async _drainPendingInitSettlements(context) {
+    const records = [...this.pendingInitSettlements];
+    if (records.length === 0) return [];
+    const outcomes = await Promise.all(records.map((record) => record.completion));
+    for (const record of records) this.pendingInitSettlements.delete(record);
+    const cleanupErrors = outcomes.flatMap((outcome) => outcome.cleanupErrors);
+    if (cleanupErrors.length > 0) {
+      const aggregate = new AggregateError(
+        cleanupErrors,
+        `MemoryDB ${context} blocked by timed-out initialization cleanup for ${this.dbPath}`,
+      );
+      this.initCleanupErrors.push(aggregate);
+      return [aggregate];
+    }
+    return [];
+  }
+
+  async _closeHandles(_context) {
+    const errors = [];
+    const table = this.table;
+    const db = this.db;
+    try {
+      if (table && typeof table.close === "function") {
+        // Close is lifecycle settlement, not an ordinary DB write. A timeout
+        // wrapper cannot abort it and must not let cleanup/retry run ahead.
+        await table.close();
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      if (db && typeof db.close === "function") {
+        await db.close();
+      }
+    } catch (error) {
+      errors.push(error);
     } finally {
       this.table = null;
       this.db = null;
-      this.initPromise = null;
-      this.isShutdown = true;
-      this.isShuttingDown = false;
+      this.schemaFieldNames = null;
     }
+    return errors;
   }
 
   _read(promise, label) {
@@ -657,10 +1164,50 @@ class MemoryDB {
     return withTimeout(promise, LANCEDB_WRITE_TIMEOUT_MS, label);
   }
 
+  _assertWritable(operation) {
+    if (this.readOnly) {
+      throw new Error(`MemoryDB.${operation} rejected: database is read-only`);
+    }
+  }
+
+  _assertTrustedPath() {
+    if (this.isShuttingDown || this.isShutdown) {
+      throw new Error(`MemoryDB is ${this.isShutdown ? "shutdown" : "shutting down"}: ${this.dbPath}`);
+    }
+    this.pathGuard?.();
+    this.directoryCapability?.assertOpen();
+  }
+
+  _lancePath() {
+    if (this.directoryCapability) return this.directoryCapability.path;
+    if (this.secureDirectoryRequired) {
+      throw new Error(`secure directory capability is unavailable for ${this.dbPath}`);
+    }
+    return this.dbPath;
+  }
+
+  _beforeLancePathOperation(operation) {
+    this.beforeLanceOperation?.(operation, this.directoryCapability);
+  }
+
   async refreshSchemaFields() {
+    this._assertTrustedPath();
     if (!this.table) return;
     const schema = await this._read(this.table.schema(), "MemoryDB.schema");
-    this.schemaFieldNames = new Set((schema.fields || []).map(f => f.name));
+    const fields = Array.isArray(schema?.fields) ? schema.fields : [];
+    const textField = fields.find((field) => field.name === "text");
+    if (!textField?.type) {
+      throw new Error(`MemoryDB ownership schema verification failed: authoritative text field missing for ${this.dbPath}`);
+    }
+    if (!this.readOnly) {
+      for (const fieldName of ["agentId", "workspaceId"]) {
+        const field = fields.find((candidate) => candidate.name === fieldName);
+        if (!field || String(field.type) !== String(textField.type)) {
+          throw new Error(`MemoryDB ownership schema verification failed: ${fieldName} must match text DataType for ${this.dbPath}`);
+        }
+      }
+    }
+    this.schemaFieldNames = new Set(fields.map(f => f.name));
   }
 
   normalizeEntryForTable(entry) {
@@ -680,6 +1227,7 @@ class MemoryDB {
     if (normalized.origin == null) normalized.origin = "dm";
     if (normalized.mergedFrom == null) normalized.mergedFrom = "[]";
     if (normalized.expiresAt == null) normalized.expiresAt = 0;
+    if (normalized.agentId == null) normalized.agentId = "";
     if (normalized.storedBy == null) normalized.storedBy = "";
     if (normalized.sourceTurnId == null) normalized.sourceTurnId = "";
     if (normalized.sourceMessageRole == null) normalized.sourceMessageRole = "";
@@ -713,6 +1261,7 @@ class MemoryDB {
     if (normalized.status == null) normalized.status = "active";
     if (normalized.versionCreatedAt == null) normalized.versionCreatedAt = 0;
     if (normalized.updatedAt == null) normalized.updatedAt = 0;
+    if (normalized.workspaceId == null) normalized.workspaceId = "";
     if (normalized.workspaceKey == null) normalized.workspaceKey = "";
     if (normalized.memoryKind == null) normalized.memoryKind = "memory";
     if (normalized.reminderStatus == null) normalized.reminderStatus = "";
@@ -734,30 +1283,62 @@ class MemoryDB {
   }
 
   async init() {
+    this._assertTrustedPath();
     if (this.initPromise) return this.initPromise;
-    this.initPromise = (async () => {
-      const lancedb = await getLanceDB();
-      this.db = await this._write(lancedb.connect(this.dbPath), "MemoryDB.connect");
+    const generationPromise = (async () => {
+      try {
+        await this._drainPendingInitSettlements("retry");
+        await this._drainPendingDebugSettlements();
+        if (this.initCleanupErrors.length > 0) {
+          throw new AggregateError(
+            [...this.initCleanupErrors],
+            `MemoryDB initialization blocked by prior cleanup failure for ${this.dbPath}`,
+          );
+        }
+        this._assertTrustedPath();
+        if (this.readOnly && this.secureDirectoryRequired && !this.directoryCapability) return false;
+        if (this.readOnly && !this.secureDirectoryRequired && !existsSync(this.dbPath)) return false;
+        const lancedb = this.lancedbProvider ? await this.lancedbProvider() : await getLanceDB();
+        this._assertTrustedPath();
+        this._beforeLancePathOperation("connect");
+        const lancePath = this._lancePath();
+        this.db = await this._acquireInitHandle(
+          lancedb.connect(lancePath),
+          "MemoryDB.connect",
+          "connection",
+        );
+      this._assertTrustedPath();
       const tables = await this._read(this.db.tableNames(), "MemoryDB.tableNames");
       if (tables.includes(TABLE_NAME)) {
-        this.table = await this._write(this.db.openTable(TABLE_NAME), "MemoryDB.openTable");
+        this._assertTrustedPath();
+        this._beforeLancePathOperation("openTable");
+        this.table = await this._acquireInitHandle(
+          this.db.openTable(TABLE_NAME),
+          "MemoryDB.openTable",
+          "table",
+        );
+        this._assertTrustedPath();
+        if (this.readOnly) {
+          await this.refreshSchemaFields();
+          return true;
+        }
         // Migrate: add missing columns
         // Statt eines großen try/catch: Schema einmal lesen, dann pro Spalte
         // einzeln migrieren. So verhindert ein Fehler bei einer Spalte nicht
         // die Migration der übrigen.
-        let schema;
-        try {
-          schema = await this._read(this.table.schema(), "MemoryDB.schema");
-        } catch (e) {
-          console.error(`[memory-lancedb-namespaced] schema read failed for ${this.dbPath}: ${e.message}`);
-        }
+        const schema = await this._read(this.table.schema(), "MemoryDB.schema");
 
         if (schema) {
+          const textField = schema.fields?.find((field) => field.name === "text");
+          if (!textField?.type) {
+            throw new Error(`MemoryDB ownership migration failed: authoritative text field missing for ${this.dbPath}`);
+          }
           const allColumns = [
             { name: 'summary', valueSql: "''" },
             { name: 'origin', valueSql: "'dm'" },
             { name: 'mergedFrom', valueSql: "'[]'" },
             { name: 'expiresAt', valueSql: '0' },
+            { name: 'agentId', type: textField.type, valueSql: "''", securityCritical: true },
             { name: 'storedBy', valueSql: "''" },
             { name: 'sourceTurnId', valueSql: "''" },
             { name: 'sourceMessageRole', valueSql: "''" },
@@ -804,22 +1385,39 @@ class MemoryDB {
             { name: 'dispatchCount', valueSql: '0' },
             { name: 'lastDispatchAttemptAt', valueSql: '0' },
             { name: 'nextDispatchAttemptAt', valueSql: '0' },
+            { name: 'workspaceId', type: textField.type, valueSql: "''", securityCritical: true },
             { name: 'workspaceKey', valueSql: "''" },
           ];
 
           for (const col of allColumns) {
+            const hasCol = schema.fields.some(f => f.name === col.name);
+            if (hasCol) continue;
+            if (col.securityCritical) {
+              const { securityCritical: _securityCritical, ...column } = col;
+              await this._write(this.table.addColumns([column]), `MemoryDB.addColumns:${col.name}`);
+              continue;
+            }
             try {
-              const hasCol = schema.fields.some(f => f.name === col.name);
-              if (!hasCol) {
-                await this._write(this.table.addColumns([col]), `MemoryDB.addColumns:${col.name}`);
-              }
+              await this._write(this.table.addColumns([col]), `MemoryDB.addColumns:${col.name}`);
             } catch (e) {
+              if (e instanceof TimeoutError) throw e;
               console.error(`[memory-lancedb-namespaced] migration error for column '${col.name}' in ${this.dbPath}: ${e.message}`);
             }
           }
         }
+      } else if (this.readOnly) {
+        const cleanupErrors = await this._closeHandles("read-only-missing-table");
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError(
+            cleanupErrors,
+            `MemoryDB read-only missing-table cleanup failed for ${this.dbPath}`,
+          );
+        }
+        return false;
       } else {
-        this.table = await this._write(this.db.createTable(TABLE_NAME, [
+        this._assertTrustedPath();
+        this._beforeLancePathOperation("createTable");
+        this.table = await this._acquireInitHandle(this.db.createTable(TABLE_NAME, [
           {
             id: "__schema__",
             type: "memory",
@@ -833,6 +1431,7 @@ class MemoryDB {
             createdAt: 0,
             mergedFrom: "[]",
             expiresAt: 0,
+            agentId: "",
             storedBy: "",
             sourceTurnId: "",
             sourceMessageRole: "",
@@ -866,17 +1465,48 @@ class MemoryDB {
             status: "active",
             versionCreatedAt: 0,
             updatedAt: 0,
+            workspaceId: "",
             workspaceKey: "",
           },
-        ]), "MemoryDB.createTable");
-        await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
+        ]), "MemoryDB.createTable", "created-table", false);
       }
-      await this.refreshSchemaFields();
+        if (!this.readOnly) {
+          this._assertTrustedPath();
+          // A prior process may have stopped after table creation but before
+          // deleting the bootstrap row. Recovery is safe and idempotent.
+          await this._write(this.table.delete('id = "__schema__"'), "MemoryDB.deleteSchemaRow");
+        }
+        await this.refreshSchemaFields();
+      } catch (error) {
+        if (this._deferTimedOutInitCleanup(error)) throw error;
+        const cleanupErrors = await this._closeHandles("failed-init");
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError(
+            [error, ...cleanupErrors],
+            `MemoryDB initialization and cleanup failed for ${this.dbPath}`,
+          );
+        }
+        throw error;
+      }
     })();
-    return this.initPromise;
+    this.initPromise = generationPromise;
+    try {
+      const initialized = await generationPromise;
+      if (initialized === false && this.initPromise === generationPromise) {
+        // A read-only namespace may legitimately appear after this non-mutating
+        // probe. Keep concurrent callers coalesced for this generation, but do
+        // not turn an absent table into a process-lifetime negative cache.
+        this.initPromise = null;
+      }
+      return initialized;
+    } catch (error) {
+      if (this.initPromise === generationPromise) this.initPromise = null;
+      throw error;
+    }
   }
 
   async store(entry) {
+    this._assertWritable("store");
     await this.init();
     const text = typeof entry?.text === "string" ? entry.text.trim() : "";
     const summary = typeof entry?.summary === "string" ? entry.summary.trim() : "";
@@ -943,6 +1573,8 @@ class MemoryDB {
   }
 
   async _maybeReindex() {
+    this._assertWritable("reindex");
+    this._assertTrustedPath();
     if (this._reindexing) return;
     // v6.2.1 — Zeitbasiertes Intervall enforce (P0-Fix)
     if (Date.now() - this._lastReindexAt < REINDEX_MIN_INTERVAL_MS) return;
@@ -1056,7 +1688,9 @@ class MemoryDB {
           id: r.id,
           text: r.text,
           importance: r.importance ?? 0.5,
+          agentId: r.agentId || "",
           storedBy: r.storedBy || "",
+          workspaceId: r.workspaceId || "",
           workspaceKey: r.workspaceKey || "",
           scope: r.scope || "agent-private",
           ownerUserId: r.ownerUserId || "",
@@ -1069,6 +1703,7 @@ class MemoryDB {
   }
 
   async vectorSearchActive(vector, limit) {
+    this._assertTrustedPath();
     const fetchLimit = Math.max(limit, Math.min(limit * 3, 100));
     try {
       const builder = this.table.vectorSearch(vector);
@@ -1085,6 +1720,7 @@ class MemoryDB {
   }
 
   async delete(id) {
+    this._assertWritable("delete");
     await this.init();
     // safeUuid wirft Error wenn id nicht exakt UUID-Format hat
     const safe = safeUuid(id);
@@ -1099,6 +1735,7 @@ class MemoryDB {
   }
 
   async update(id, patch) {
+    this._assertWritable("update");
     await this.init();
     const safe = safeUuid(id);
     const rows = await this._read(this.table.query().where(`id = "${safe}"`).limit(1).toArray(), `MemoryDB.update.query:${safe}`);
@@ -1106,7 +1743,24 @@ class MemoryDB {
       throw new Error(`Memory not found: ${id}`);
     }
     const existing = rows[0];
-    const updated = { ...existing, ...patch };
+    const patchObject = patch && typeof patch === "object" ? patch : {};
+    const schemaFields = this.schemaFieldNames || new Set(Object.keys(existing));
+    if (typeof this.table.update === "function") {
+      const values = {};
+      for (const [key, value] of Object.entries(patchObject)) {
+        if (key === "id" || !schemaFields.has(key)) continue;
+        values[key] = key === "vector" ? normalizeVectorValue(value) : value;
+      }
+      if (Object.keys(values).length > 0) {
+        await this._write(
+          this.table.update({ where: `id = "${safe}"`, values }),
+          `MemoryDB.update.inPlace:${safe}`,
+        );
+      }
+      return;
+    }
+
+    const updated = { ...existing, ...patchObject, id: existing.id };
     const normalizedUpdated = this.normalizeEntryForTable(updated);
     await this._write(this.table.delete(`id = "${safe}"`), `MemoryDB.update.delete:${safe}`);
     try {
@@ -1117,7 +1771,15 @@ class MemoryDB {
       // Fehler weiterreichen.
       try {
         await this._write(this.table.add([this.normalizeEntryForTable(existing)]), `MemoryDB.update.restore:${safe}`);
-      } catch (_) { /* Original-Restore ebenfalls failed — Fehler unten */ }
+      } catch (restoreErr) {
+        this.logger?.warn?.(
+          `memory-lancedb-namespaced: MemoryDB.update restore failed dbPath=${this.dbPath} id=${safe}: ${String(restoreErr)}`,
+        );
+        throw new AggregateError(
+          [addErr, restoreErr],
+          `MemoryDB.update replacement and restore failed for ${safe} at ${this.dbPath}`,
+        );
+      }
       throw addErr;
     }
   }
@@ -1141,6 +1803,7 @@ class MemoryDB {
   }
 
   buildActiveScanQuery() {
+    this._assertTrustedPath();
     let query = this.table.query()
       .where("status IS NULL OR (status != 'deleted' AND status != 'archived')");
     if (typeof query.select === "function") {
@@ -1179,6 +1842,7 @@ class MemoryDB {
   }
 
   async purgeExpired() {
+    this._assertWritable("purgeExpired");
     await this.init();
     const now = safeTimestamp(Date.now());
     const protectedWhere = "(neverForget IS NULL OR neverForget = 0) AND (memoryClass IS NULL OR memoryClass != 'core')";
@@ -1190,6 +1854,7 @@ class MemoryDB {
    * Used by before_prompt_build; explicit/admin calls still use purgeExpired().
    */
   purgeExpiredThrottled(logger) {
+    this._assertWritable("purgeExpiredThrottled");
     const last = purgeThrottleMap.get(this.dbPath);
     if (last && Date.now() - last < PURGE_THROTTLE_MS) {
       return Promise.resolve();
@@ -1201,49 +1866,484 @@ class MemoryDB {
   }
 }
 
+function pathEntryExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
+    throw error;
+  }
+}
+
+function deriveExpectedCanonicalTarget(path) {
+  const missingParts = [];
+  const absolutePath = resolve(path);
+  let existingAncestor = absolutePath;
+  while (!pathEntryExists(existingAncestor)) {
+    const parent = dirname(existingAncestor);
+    if (parent === existingAncestor) throw new Error(`No existing ancestor for DB path: ${path}`);
+    missingParts.unshift(basename(existingAncestor));
+    existingAncestor = parent;
+  }
+  const canonicalAncestor = realpathSync(existingAncestor);
+  return {
+    absolutePath,
+    expectedTarget: missingParts.length > 0
+      ? resolveInside(canonicalAncestor, ...missingParts)
+      : canonicalAncestor,
+  };
+}
+
+/** Per-agent MemoryDB cache with callback-scoped operation leases. */
 class AgentDbPool {
-  constructor(basePath, vectorDim, logger = null) {
-    this.basePath = basePath;
+  /**
+   * @param {string} basePath Validated namespace base path.
+   * @param {number} vectorDim Vector dimension.
+   * @param {object} [logger] Optional logger.
+   * @param {{readOnly?: boolean, pathGuard?: (() => void), secureRouting?: boolean, parentDirectoryCapability?: object|null, baseSegment?: string|null}} [options] Non-mutating mode and optional descriptor-bound namespace route.
+   */
+  constructor(basePath, vectorDim, logger = null, {
+    readOnly = false,
+    pathGuard = null,
+    secureRouting = null,
+    parentDirectoryCapability = null,
+    baseSegment = null,
+  } = {}) {
+    if (pathGuard !== null && typeof pathGuard !== "function") {
+      throw new TypeError("AgentDbPool pathGuard must be a function");
+    }
+    const parentRouted = parentDirectoryCapability !== null || baseSegment !== null;
+    const stableRouting = secureRouting === true
+      || (secureRouting !== false && stableDirectoryCapabilitiesSupported());
+    if (parentRouted && !stableRouting) {
+      throw new Error("explicit named namespace routing requires stable directory capabilities");
+    }
+    if (parentRouted && (
+      !parentDirectoryCapability
+      || typeof parentDirectoryCapability.openChild !== "function"
+      || typeof parentDirectoryCapability.childMatches !== "function"
+    )) {
+      throw new TypeError("secure AgentDbPool routing requires a parent directory capability");
+    }
+    if (parentRouted && (typeof baseSegment !== "string" || !baseSegment)) {
+      throw new TypeError("secure AgentDbPool routing requires a base segment");
+    }
+    pathGuard?.();
+    const basePin = deriveExpectedCanonicalTarget(basePath);
+    this.basePath = basePin.absolutePath;
+    this.canonicalBasePath = basePin.expectedTarget;
     this.vectorDim = vectorDim;
     this.logger = logger;
-    this.dbs = makeBoundedCache(50, async (_id, db) => {
+    this.readOnly = readOnly === true;
+    this.pathGuard = pathGuard;
+    this.secureRouting = stableRouting;
+    this.parentRouted = parentRouted;
+    this.parentDirectoryCapability = parentDirectoryCapability;
+    this.baseSegment = baseSegment;
+    this.baseDirectoryCapability = null;
+    this.agentPathPins = new Map();
+    this.backgroundLifecycleErrors = [];
+    this.backgroundLifecycleErrorOverflow = 0;
+    if (this.secureRouting && this.parentRouted) {
+      try {
+        this.baseDirectoryCapability = this.parentDirectoryCapability.openChild(
+          this.baseSegment,
+          { create: !this.readOnly },
+        );
+      } catch (error) {
+        if (!(this.readOnly && (error?.code === "ENOENT" || error?.code === "ENOTDIR"))) throw error;
+      }
+    }
+    this.dbs = makeBoundedCache(50, async (id, db) => {
       if (db && typeof db.shutdown === "function") {
-        try { await db.shutdown(); } catch (_) { /* ignore */ }
+        try {
+          await db.shutdown();
+        } catch (error) {
+          const contextual = this._contextualizeDbError(id, "eviction", error);
+          const loggingError = await this._warnLifecycle(id, "eviction", contextual);
+          if (loggingError) {
+            throw new AggregateError(
+              [contextual, loggingError],
+              `agent=${id} eviction and warning delivery failed`,
+            );
+          }
+          throw contextual;
+        }
       }
     });
+    this.activeOperations = new Set();
+    this.clearPromise = null;
+    this.shutdownPromise = null;
     this.isShutdown = false;
   }
 
+  _contextualizeDbError(agentId, phase, error) {
+    const safeMessage = redactError(error).message;
+    const contextual = new Error(
+      `agent=${agentId} ${phase} failed: ${safeMessage}`,
+      { cause: error },
+    );
+    contextual.agentId = agentId;
+    contextual.phase = phase;
+    return contextual;
+  }
+
+  async _warnLifecycle(agentId, phase, error) {
+    const warning = trySafeWarn(
+      this.logger,
+      `memory-lancedb-namespaced agent=${agentId} phase=${phase}`,
+      error,
+      { agentId, phase },
+    );
+    const outcome = await settleSafeWarning(warning);
+    return outcome.ok
+      ? null
+      : this._contextualizeDbError(agentId, `${phase}-warning`, outcome.error);
+  }
+
+  _recordBackgroundLifecycleError(error) {
+    const normalized = this._contextualizeDbError("pool", "background-lifecycle", error);
+    if (this.backgroundLifecycleErrors.length < MAX_BACKGROUND_LIFECYCLE_ERRORS) {
+      this.backgroundLifecycleErrors.push(normalized);
+      return;
+    }
+    this.backgroundLifecycleErrorOverflow += 1;
+  }
+
+  _drainBackgroundLifecycleErrors() {
+    const errors = this.backgroundLifecycleErrors.splice(0, this.backgroundLifecycleErrors.length);
+    if (this.backgroundLifecycleErrorOverflow > 0) {
+      const overflow = new Error(
+        `agent DB pool background lifecycle failures omitted (${this.backgroundLifecycleErrorOverflow})`,
+      );
+      overflow.phase = "background-lifecycle-overflow";
+      errors.push(overflow);
+      this.backgroundLifecycleErrorOverflow = 0;
+    }
+    return errors;
+  }
+
+  _getOrCreateDb(id) {
+    const cached = this.dbs.get(id);
+    if (cached) {
+      if (this.secureRouting) this._assertSecureAgentCapability(id, cached.directoryCapability);
+      else this._resolveAgentPath(id);
+      return cached;
+    }
+    const dbPath = resolve(this.canonicalBasePath, id);
+    let directoryCapability = null;
+    if (this.secureRouting) {
+      const baseExists = this._assertBasePath({ create: !this.readOnly });
+      if (baseExists) {
+        try {
+          directoryCapability = this.baseDirectoryCapability.openChild(id, { create: !this.readOnly });
+        } catch (error) {
+          if (!this.readOnly && (error?.code === "ELOOP" || error?.code === "ENOTDIR")) {
+            throw new Error(`Path traversal blocked: ${dbPath}`, { cause: error });
+          }
+          if (!(this.readOnly && (error?.code === "ENOENT" || error?.code === "ENOTDIR"))) throw error;
+        }
+      }
+    } else {
+      this._resolveAgentPath(id);
+    }
+    let db;
+    try {
+      db = new MemoryDB(dbPath, this.vectorDim, this.logger, {
+        readOnly: this.readOnly,
+        pathGuard: this.secureRouting
+          ? () => this._assertSecureAgentCapability(id, directoryCapability)
+          : () => this._assertAgentPath(id),
+        directoryCapability,
+        secureDirectoryRequired: this.secureRouting,
+        beforeLanceOperation: this.secureRouting
+          ? (operation, capability) => this._onBeforeAgentLanceOperation(id, operation, capability)
+          : null,
+      });
+      if (!(this.secureRouting && this.readOnly && !directoryCapability)) {
+        this.dbs.set(id, db);
+      }
+    } catch (error) {
+      directoryCapability?.close();
+      throw error;
+    }
+    return db;
+  }
+
+  _onBeforeAgentLanceOperation(_id, _operation, _capability) {}
+
+  _assertSecureAgentCapability(id, capability) {
+    const baseExists = this._assertBasePath({ create: !this.readOnly });
+    if (!capability) {
+      if (!this.readOnly) {
+        throw new Error(`agent DB directory capability is missing: ${id}`);
+      }
+      return false;
+    }
+    if (!baseExists || !this.baseDirectoryCapability.childMatches(id, capability)) {
+      throw new Error(`agent DB linked identity changed after initialization: ${id}`);
+    }
+    return true;
+  }
+
+  _assertBasePath({ create = false } = {}) {
+    this.pathGuard?.();
+    if (this.secureRouting) {
+      if (!this.parentRouted) {
+        const configuredBaseExists = pathEntryExists(this.basePath);
+        if (!configuredBaseExists && !create) {
+          if (this.baseDirectoryCapability) {
+            throw new Error(`DB base linked identity changed after initialization: ${this.basePath}`);
+          }
+          return false;
+        }
+        if (!configuredBaseExists) {
+          const beforeCreate = deriveExpectedCanonicalTarget(this.basePath);
+          if (beforeCreate.expectedTarget !== this.canonicalBasePath) {
+            throw new Error("DB base canonical target changed before creation");
+          }
+        }
+        if (!this.baseDirectoryCapability) {
+          this.baseDirectoryCapability = openDirectoryCapability(this.canonicalBasePath, { create });
+        }
+        const configuredTarget = realpathSync(this.basePath);
+        const baseMatches = configuredTarget === this.canonicalBasePath
+          && pathMatchesDirectoryCapability(this.canonicalBasePath, this.baseDirectoryCapability);
+        if (!baseMatches) {
+          throw new Error(`DB base linked identity changed after initialization: ${this.basePath}`);
+        }
+        this.pathGuard?.();
+        return true;
+      }
+      if (!this.baseDirectoryCapability) {
+        try {
+          this.baseDirectoryCapability = this.parentDirectoryCapability.openChild(this.baseSegment, { create });
+        } catch (error) {
+          if (!create && (error?.code === "ENOENT" || error?.code === "ENOTDIR")) return false;
+          throw error;
+        }
+      }
+      const baseMatches = this.parentDirectoryCapability.childMatches(this.baseSegment, this.baseDirectoryCapability);
+      if (!baseMatches) {
+        throw new Error(`DB base linked identity changed after initialization: ${this.baseSegment ?? this.basePath}`);
+      }
+      this.pathGuard?.();
+      return true;
+    }
+    const entryExists = pathEntryExists(this.basePath);
+    if (!entryExists) {
+      if (!create) return false;
+      const beforeCreate = deriveExpectedCanonicalTarget(this.basePath);
+      if (beforeCreate.expectedTarget !== this.canonicalBasePath) {
+        throw new Error("DB base canonical target changed before creation");
+      }
+      // Create at the pinned canonical target; lexical ancestor substitution
+      // cannot redirect this mkdir to a different tree.
+      mkdirSync(this.canonicalBasePath, { recursive: true });
+    }
+    const currentTarget = realpathSync(this.basePath);
+    if (currentTarget !== this.canonicalBasePath) {
+      throw new Error("DB base canonical target changed after initialization");
+    }
+    this.pathGuard?.();
+    return true;
+  }
+
+  _assertAgentPath(id) {
+    const baseExists = this._assertBasePath({ create: !this.readOnly });
+    const configuredPath = resolve(this.canonicalBasePath, id);
+    let pin = this.agentPathPins.get(id);
+    if (!pin) {
+      const existed = baseExists && pathEntryExists(configuredPath);
+      const canonicalTarget = existed
+        ? resolveInside(this.canonicalBasePath, id)
+        : configuredPath;
+      pin = Object.freeze({ configuredPath, canonicalTarget, existed });
+      this.agentPathPins.set(id, pin);
+    }
+    const entryExists = baseExists && pathEntryExists(pin.configuredPath);
+    if (!entryExists) {
+      if (pin.existed) throw new Error(`agent DB canonical target changed: ${id} is now missing`);
+      return pin.canonicalTarget;
+    }
+    const currentTarget = resolveInside(this.canonicalBasePath, id);
+    if (currentTarget !== pin.canonicalTarget) {
+      throw new Error(`agent DB canonical target changed after initialization: ${id}`);
+    }
+    return pin.canonicalTarget;
+  }
+
+  _resolveAgentPath(id) {
+    return this._assertAgentPath(id);
+  }
+
+  /** Compatibility accessor; production operations must prefer withDb(). */
   getDb(agentId) {
     if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
-    const id = agentId || "default";
-    this.dbs.acquire(id);
+    if (this.clearPromise) throw new Error("AgentDbPool is clearing; use withDb() after clear settles");
+    const id = safeAgentId(agentId || "default");
+    return this._getOrCreateDb(id);
+  }
+
+  /**
+   * Lease an agent DB until the callback settles.
+   * @param {string} agentId Agent identity used for path and cache isolation.
+   * @param {(db: MemoryDB) => unknown} fn Operation to run while the DB is leased.
+   * @returns {Promise<unknown>} Callback result.
+   */
+  async withDb(agentId, fn) {
+    if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
+    if (typeof fn !== "function") throw new TypeError("AgentDbPool.withDb requires a callback");
+    while (this.clearPromise) await this.clearPromise;
+    if (this.isShutdown) throw new Error("AgentDbPool is shutdown");
+    const id = safeAgentId(agentId || "default");
+    let startLease;
+    const startGate = new Promise((resolve) => { startLease = resolve; });
+    let acquired = false;
+    const callbackPromise = (async () => {
+      await startGate;
+      this.dbs.acquire(id);
+      acquired = true;
+      const db = this._getOrCreateDb(id);
+      return fn(db);
+    })();
+    let leasePromise;
+    leasePromise = (async () => {
+      try {
+        try {
+          await callbackPromise;
+        } catch (error) {
+          const settlement = await waitForTimeoutSettlement(error);
+          if (settlement.status === "rejected") {
+            const lateError = this._contextualizeDbError(id, "late-settlement", settlement.error);
+            this._recordBackgroundLifecycleError(lateError);
+            const loggingError = await this._warnLifecycle(
+              id,
+              "late-settlement",
+              new Error("late database operation failed"),
+            );
+            if (loggingError) this._recordBackgroundLifecycleError(loggingError);
+          }
+        }
+      } catch (trackingError) {
+        const contextual = this._contextualizeDbError(id, "lease-tracking", trackingError);
+        this._recordBackgroundLifecycleError(contextual);
+        try {
+          const loggingError = await this._warnLifecycle(id, "lease-tracking", trackingError);
+          if (loggingError) this._recordBackgroundLifecycleError(loggingError);
+        } catch (containmentError) {
+          this._recordBackgroundLifecycleError(containmentError);
+        }
+      } finally {
+        if (acquired) this.dbs.release(id);
+        this.activeOperations.delete(leasePromise);
+      }
+    })();
+    this.activeOperations.add(leasePromise);
+    startLease();
     try {
-      const cached = this.dbs.get(id);
-      if (cached) return cached;
-      const dbPath = join(this.basePath, id);
-      const db = new MemoryDB(dbPath, this.vectorDim, this.logger);
-      this.dbs.set(id, db);
-      return db;
+      return await callbackPromise;
+    } catch (error) {
+      // The caller observes the original timeout/error immediately. leasePromise
+      // independently retains the B7 lease through any attached settlement.
+      throw error;
     } finally {
-      this.dbs.release(id);
+      if (!acquired) {
+        // Failed acquisition has no callback settlement to retain.
+        await leasePromise;
+      }
     }
   }
 
   async shutdown() {
+    if (this.shutdownPromise) return this.shutdownPromise;
     if (this.isShutdown) return;
     this.isShutdown = true;
-    for (const db of this.dbs.values()) {
-      if (db && typeof db.shutdown === "function") {
-        try { await db.shutdown(); } catch (_) { /* ignore */ }
+    const shutdownPromise = (async () => {
+      const errors = [];
+      if (this.clearPromise) {
+        try {
+          await this.clearPromise;
+        } catch (error) {
+          if (error instanceof AggregateError) errors.push(...error.errors);
+          else errors.push(error);
+        }
       }
+      await Promise.allSettled([...this.activeOperations]);
+      errors.push(...this._drainBackgroundLifecycleErrors());
+      for (const [agentId, db] of this.dbs.entries()) {
+        if (!db || typeof db.shutdown !== "function") continue;
+        try {
+          await db.shutdown();
+        } catch (error) {
+          const contextual = this._contextualizeDbError(agentId, "shutdown", error);
+          errors.push(contextual);
+          const loggingError = await this._warnLifecycle(agentId, "shutdown", contextual);
+          if (loggingError) errors.push(loggingError);
+        }
+      }
+      try {
+        await this.dbs.awaitPendingEvictions();
+      } catch (error) {
+        if (error instanceof AggregateError) errors.push(...error.errors);
+        else errors.push(error);
+      }
+      this.dbs.clear();
+      try {
+        this.baseDirectoryCapability?.close();
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        this.baseDirectoryCapability = null;
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, `agent DB pool shutdown failures (${errors.length})`);
+      }
+    })();
+    this.shutdownPromise = shutdownPromise;
+    try {
+      return await shutdownPromise;
+    } finally {
+      if (this.shutdownPromise === shutdownPromise) this.shutdownPromise = null;
     }
-    await this.dbs.awaitPendingEvictions();
-    this.dbs.clear();
   }
 
-  clear() {
-    this.dbs.clear();
+  /** Close cached DBs and release their directory capabilities while keeping the pool reusable. */
+  async clear() {
+    if (this.isShutdown) return this.shutdownPromise;
+    if (this.clearPromise) return this.clearPromise;
+    const clearPromise = (async () => {
+      await Promise.allSettled([...this.activeOperations]);
+      const errors = this._drainBackgroundLifecycleErrors();
+      for (const [agentId, db] of this.dbs.entries()) {
+        if (!db || typeof db.shutdown !== "function") continue;
+        try {
+          await db.shutdown();
+        } catch (error) {
+          const contextual = this._contextualizeDbError(agentId, "clear", error);
+          errors.push(contextual);
+          const loggingError = await this._warnLifecycle(agentId, "clear", contextual);
+          if (loggingError) errors.push(loggingError);
+        }
+      }
+      try {
+        await this.dbs.awaitPendingEvictions();
+      } catch (error) {
+        if (error instanceof AggregateError) errors.push(...error.errors);
+        else errors.push(error);
+      }
+      this.dbs.clear();
+      if (errors.length > 0) {
+        throw new AggregateError(errors, `agent DB pool clear failures (${errors.length})`);
+      }
+    })();
+    this.clearPromise = clearPromise;
+    try {
+      return await clearPromise;
+    } finally {
+      if (this.clearPromise === clearPromise) this.clearPromise = null;
+    }
   }
 }
 
@@ -1785,10 +2885,43 @@ function appendConflictLog(workspaceDir, entry) {
 // ============================================================================
 
 async function callLlm(messages, llmCfg) {
-  return callOpenAiLlm(messages, llmCfg, {
-    loadOpenAI: getOpenAI,
-    resultCache: llmCfg?.resultCache,
+  const result = await completeFeatureLlm(messages, llmCfg, {
+    runtimeLlm: llmCfg?.callContext?.runtimeLlm,
+    agentId: llmCfg?.callContext?.agentId,
+    purpose: llmCfg?.callContext?.purpose,
+    maxTokens: llmCfg?.maxTokens,
+    temperature: llmCfg?.temperature,
+    jsonMode: llmCfg?.jsonMode,
+    disableThinking: llmCfg?.disableThinking,
+    timeoutMs: llmCfg?.timeoutMs,
+    signal: llmCfg?.callContext?.signal ?? llmCfg?.signal,
+    resultCacheContext: llmCfg?.resultCacheContext,
+  }, {
+    directCall: (directMessages, directCfg) => callOpenAiLlm(directMessages, directCfg, {
+      loadOpenAI: getOpenAI,
+      resultCache: directCfg?.resultCache,
+    }),
   });
+  if (result.status === "failed") throw result.error;
+  return result.status === "ok" ? result.text : null;
+}
+
+/**
+ * Compose deterministic result caching before call-local routing context.
+ * @param {object} llmCfg
+ * @param {string} agentId
+ * @param {string} purpose
+ * @param {object} overrides
+ * @param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [callContext]
+ * @returns {object}
+ */
+function withDeterministicLlmContext(llmCfg, agentId, purpose, overrides = {}, callContext = {}) {
+  return withLlmCallContext(
+    withLlmResultCacheContext({ ...llmCfg, ...overrides }, agentId, purpose),
+    callContext?.agentId || (typeof callContext?.runtimeLlm?.complete === "function" ? undefined : agentId),
+    purpose,
+    { runtimeLlm: callContext?.runtimeLlm, signal: callContext?.signal },
+  );
 }
 
 /**
@@ -1797,9 +2930,10 @@ async function callLlm(messages, llmCfg) {
  * @param {string} newText
  * @param {object} llmCfg
  * @param {string} agentId
+ * @param {{runtimeLlm?: object}} [callContext]
  * @returns {Promise<object|null>}
  */
-async function callMergeCheck(existingText, newText, llmCfg, agentId) {
+async function callMergeCheck(existingText, newText, llmCfg, agentId, callContext = {}) {
   const A = String(existingText || "").slice(0, 2000);
   const B = String(newText || "").slice(0, 2000);
   const content = await callLlm([
@@ -1807,10 +2941,12 @@ async function callMergeCheck(existingText, newText, llmCfg, agentId) {
       role: "user",
       content: `Two memory fragments — should they be merged into one?\n\nFragment A: ${A}\nFragment B: ${B}\n\nRespond with JSON only: {"merge": boolean, "reason": "brief explanation", "mergedText": "merged version (only if merge=true)"}\nRules:\n- merge=true only if both fragments describe the same subject/fact from different angles\n- mergedText must contain ALL information from both fragments\n- mergedText must be longer than the shorter of the two fragments`,
     },
-  ], withLlmResultCacheContext(
-    { ...llmCfg, jsonMode: true, maxTokens: 300, temperature: 0 },
+  ], withDeterministicLlmContext(
+    llmCfg,
     agentId,
     LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
+    { jsonMode: true, maxTokens: 300, temperature: 0 },
+    callContext,
   ));
   if (!content) return null;
   let parsed;
@@ -2033,10 +3169,12 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
       role: "user",
       content: `Here is the current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memory (category=${category}, importance=${importance.toFixed(1)}, date=${today}):\n${text}\n\nIntegrate this information into the KNOWLEDGE.md body.\n- Add a new entry under the appropriate section with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Change NOTHING else.\n- Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.`,
     },
-  ], withLlmResultCacheContext(
-    { ...llmCfg, maxTokens: 3000, temperature: 0 },
+  ], withDeterministicLlmContext(
+    llmCfg,
     agentId,
     LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+    { maxTokens: 3000, temperature: 0 },
+    llmCfg?.callContext,
   ));
 
   if (!updated) return;
@@ -2049,10 +3187,12 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
         role: "user",
         content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
       },
-    ], withLlmResultCacheContext(
-      { ...llmCfg, maxTokens: 4000, temperature: 0 },
+    ], withDeterministicLlmContext(
+      llmCfg,
       agentId,
       LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+      { maxTokens: 4000, temperature: 0 },
+      llmCfg?.callContext,
     ));
 
     const compactedLines = compacted?.split("\n").length ?? Infinity;
@@ -2126,12 +3266,24 @@ const plugin = {
   description: "Per-agent isolated LanceDB memory",
   kind: "extension",
 
-  register(api) {
-    const rawCfg = api.pluginConfig || {};
-    let cfg = applyFullExperiencePolicy(rawCfg);
+  register(api, registrationDependencies = {}) {
+    if (!registrationDependencies || typeof registrationDependencies !== "object" || Array.isArray(registrationDependencies)) {
+      throw new TypeError("plugin registration dependencies must be an object");
+    }
+    const { importRouting } = registrationDependencies;
+    if (importRouting !== undefined && typeof importRouting !== "function") {
+      throw new TypeError("importRouting must be a function");
+    }
+    const rawPluginConfig = api.pluginConfig || {};
+    const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
+    let cfg = resolveEffectiveConfig(rawPluginConfig);
     pluginLogger = api.logger;
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
+    const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
+      explicit: namespacesExplicit,
+      path: `${PLUGIN_CONFIG_PATH}.namespaces`,
+    });
     const providerMigration = applyLegacyProviderDefaults(cfg, { baseDbPath });
     cfg = providerMigration.config;
     const llmResultCache = createLlmResultCache({
@@ -2144,14 +3296,38 @@ const plugin = {
       baseDbPath,
       logger: api.logger,
     });
+    const createFeatureRoute = (feature, featureConfig = {}) => {
+      const routeConfig = { ...featureConfig };
+      let credentialUnavailable = false;
+      if (typeof routeConfig.apiKey === "string" && routeConfig.apiKey.trim()) {
+        try {
+          const unresolvedReference = routeConfig.apiKey.replace(/\$\{[^{}]+\}/g, "");
+          if (unresolvedReference.includes("${")) {
+            throw new Error("Malformed environment reference");
+          }
+          routeConfig.apiKey = resolveEnvVars(routeConfig.apiKey);
+        } catch (_) {
+          credentialUnavailable = true;
+          delete routeConfig.apiKey;
+        }
+      }
+      const route = resolveFeatureLlmRoute(routeConfig, {
+        feature,
+        runtimeLlm: api.runtime?.llm,
+        logger: api.logger,
+        resultCache: llmResultCache,
+        credentialUnavailable,
+      });
+      return isLlmRouteAvailable(route) ? route : null;
+    };
     if (providerMigration.changed) {
       api.logger.info(
         `memory-lancedb-namespaced: applied local provider defaults for empty legacy install (${providerMigration.migrations.join(", ")})`
       );
     }
 
-    // Full Experience setup notices: pending setup still warns, but feature
-    // selection itself is config-as-truth and no prompted/confirmed history is required.
+    // Explicit-profile setup notices: pending setup still warns, while normal
+    // manifest-derived config loading requires no selection history.
     const applyBlocked = isApplyBlocked(cfg);
     if (applyBlocked.blocked) {
       if (applyBlocked.reason === "pending_setup") {
@@ -2232,7 +3408,6 @@ const plugin = {
     const traceCfg = cfg.recall?.decisionTrace || {};
     const traceEnabled = traceCfg.enabled === true;
     const traceInPrompt = traceEnabled && traceCfg.includeInPrompt === true;
-    const tracePersist = traceEnabled && traceCfg.persist === true;
 
     const riCfg = cfg.retroactiveInterference ?? {};
 
@@ -2243,26 +3418,17 @@ const plugin = {
     // TTL presets
     const TTL_MAP = { session: 86_400_000, short: 14 * 86_400_000 };
 
-    // Merging config. Provider-neutral default: optional LLM features must
-    // declare their chat model explicitly; do not silently fall back to Kimi.
+    // Merging config
     const mergingCfg = cfg.merging || {};
-    const mergingRequested = mergingCfg.enabled === true;
-    const mergingModel = typeof mergingCfg.model === "string" ? mergingCfg.model.trim() : "";
-    const mergingEnabled = mergingRequested && mergingModel !== "";
+    const mergingEnabled = mergingCfg.enabled === true;
     const mergingAutoApply = mergingCfg.autoApply === true;
     const mergingThreshold = mergingCfg.threshold ?? 0.70;
-    const mergingLlmCfg = mergingEnabled ? {
-      model: mergingModel,
-      baseUrl: mergingCfg.baseUrl || undefined,
-      apiKey: mergingCfg.apiKey ? resolveEnvVars(mergingCfg.apiKey) : apiKey,
-      disableThinking: mergingCfg.disableThinking ?? false,
-      headers: mergingCfg.headers || undefined,
-      resultCache: llmResultCache,
-    } : null;
-    if (mergingRequested && !mergingEnabled) {
-      api.logger.warn("memory-lancedb-namespaced: merging.enabled=true but merging.model is empty; disabling LLM merging. Set config.merging.model for any OpenAI-compatible chat provider.");
+    const mergingLlmCfg = mergingEnabled
+      ? createFeatureRoute("merging", mergingCfg)
+      : null;
+    if (mergingEnabled && mergingLlmCfg) {
+      api.logger.info(`memory-lancedb-namespaced: merging enabled (threshold: ${mergingThreshold}, route: ${mergingLlmCfg.kind})`);
     }
-    if (mergingEnabled) api.logger.info(`memory-lancedb-namespaced: merging enabled (threshold: ${mergingThreshold}, model: ${mergingLlmCfg.model})`);
 
     // Dreaming-Narrative config: menschenähnliche, stimmungsgefärbte Träume
     // als additive Schicht über Light/REM Dream. Default an, aber effektiv
@@ -2280,87 +3446,96 @@ const plugin = {
 
     // Schicht 1.5 config
     const schicht15Cfg = cfg.schicht15 || {};
-    const schicht15Requested = schicht15Cfg.enabled === true;
-    const schicht15Model = (typeof schicht15Cfg.model === "string" && schicht15Cfg.model.trim() !== "")
-      ? schicht15Cfg.model.trim()
-      : mergingModel;
-    const schicht15Enabled = schicht15Requested && schicht15Model !== "";
+    const schicht15Enabled = schicht15Cfg.enabled === true;
     const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
     const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 3;
-    const schicht15LlmCfg = schicht15Enabled ? {
-      model: schicht15Model,
-      baseUrl: schicht15Cfg.baseUrl || mergingCfg.baseUrl || undefined,
-      apiKey: schicht15Cfg.apiKey ? resolveEnvVars(schicht15Cfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
-      disableThinking: schicht15Cfg.disableThinking ?? mergingCfg.disableThinking ?? false,
-      headers: schicht15Cfg.headers || mergingCfg.headers || undefined,
-      resultCache: llmResultCache,
-    } : null;
-    if (schicht15Requested && !schicht15Enabled) {
-      api.logger.warn("memory-lancedb-namespaced: schicht15.enabled=true but no schicht15.model or merging.model is configured; disabling KNOWLEDGE.md LLM tooling.");
+    const schicht15LlmCfg = schicht15Enabled
+      ? createFeatureRoute("schicht15", schicht15Cfg)
+      : null;
+    if (schicht15LlmCfg) {
+      api.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance}, route: ${schicht15LlmCfg.kind})`);
     }
-    if (schicht15Enabled) api.logger.info(`memory-lancedb-namespaced: schicht15 enabled (minImportance: ${schicht15MinImportance})`)
 
     // Skill Miner config
     const skillMinerCfg = cfg.skillMiner || {};
     const skillMinerEnabled = skillMinerCfg.enabled === true;
-    const skillMinerModel = (typeof skillMinerCfg.model === "string" && skillMinerCfg.model.trim() !== "")
-      ? skillMinerCfg.model.trim()
-      : mergingModel;
-    const skillMinerLlmCfg = skillMinerEnabled && skillMinerModel
-      ? {
-          model: skillMinerModel,
-          baseUrl: skillMinerCfg.baseUrl || mergingCfg.baseUrl || undefined,
-          apiKey: skillMinerCfg.apiKey ? resolveEnvVars(skillMinerCfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
-          disableThinking: skillMinerCfg.disableThinking ?? mergingCfg.disableThinking ?? false,
-          headers: skillMinerCfg.headers || mergingCfg.headers || undefined,
-          resultCache: llmResultCache,
-        }
+    const skillMinerLlmCfg = skillMinerEnabled
+      ? createFeatureRoute("skillMiner", skillMinerCfg)
       : null;
-    if (skillMinerEnabled && !skillMinerLlmCfg) {
-      api.logger.warn("memory-lancedb-namespaced: skillMiner.enabled=true but no skillMiner.model or merging.model is configured; disabling skill miner.");
+    if (skillMinerLlmCfg) {
+      api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (route: ${skillMinerLlmCfg.kind})`);
     }
-    if (skillMinerLlmCfg) api.logger.info(`memory-lancedb-namespaced: skillMiner enabled (model: ${skillMinerLlmCfg.model})`);
+
+    // Generic enhancement routes remain behind their existing feature gates,
+    // but each prompt owns its model-selection descriptor.
+    const captureSummaryLlmCfg = createFeatureRoute("capture-summary", {});
+    const recallQueryLlmCfg = createFeatureRoute("recall-query-summary", {});
+    const memoryCompactionLlmCfg = createFeatureRoute("memory-compaction", {});
+    const conflictResolutionLlmCfg = createFeatureRoute("conflict-resolution", {});
+    const remPatternLlmCfg = createFeatureRoute("rem-pattern-analysis", {});
+    const conversationInsightsLlmCfg = createFeatureRoute("conversation-insights", {});
+    const dreamNarrativeLlmCfg = createFeatureRoute("dream-narrative", {});
+    const dreamEchoLlmCfg = createFeatureRoute("dream-echo", {});
+    const episodeExtractionLlmCfg = createFeatureRoute("episode-extraction", {});
+    const afterthoughtLlmCfg = createFeatureRoute("afterthought", cfg.afterthought || {});
+    const personaVoiceLlmCfg = createFeatureRoute("persona-voice", cfg.personaVoice || {});
+    const wikiLlmCfg = createFeatureRoute("wiki", {});
+    const overlayLlmCfg = createFeatureRoute("continuity-overlay", cfg.continuityEngine?.overlays || {});
+    const overlayAuditLlmCfg = createFeatureRoute("overlay-audit-contradiction", {});
+    const memoryTextContradictionLlmCfg = createFeatureRoute("memory-text-contradiction", {});
 
     // Emotion Tier Config
     const emotionCfg = cfg.emotion || {};
     const emotionTier = emotionCfg.tier || "auto";
     const emotionT2Enabled = emotionCfg.t2?.enabled !== false;
-    // Tier 3: enabled if wanted AND a provider exists (merging LLM via callLlm, or direct apiKey).
+    // Tier 3: enabled if wanted AND its feature-local route is available.
     // onlyWhenProviderAvailable (default: true) makes T3 soft-skip instead of error when no provider.
     const emotionT3WantsEnabled = emotionCfg.t3?.enabled === true;
-    const emotionT3HasProvider = !!(mergingLlmCfg || emotionCfg.t3?.apiKey || emotionCfg.t3?.openaiClient);
+    const emotionT3LlmCfg = emotionT3WantsEnabled
+      ? createFeatureRoute("emotionT3", emotionCfg.t3 || {})
+      : null;
+    const emotionT3HasProvider = Boolean(
+      emotionT3LlmCfg
+      && (emotionT3LlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
+        || typeof api.runtime?.llm?.complete === "function"),
+    );
     const emotionT3OnlyWhenProviderAvailable = emotionCfg.t3?.onlyWhenProviderAvailable !== false;
     const emotionT3Enabled = emotionT3WantsEnabled && (emotionT3HasProvider || !emotionT3OnlyWhenProviderAvailable);
-    const emotionT3Model = emotionCfg.t3?.model || mergingModel || "kimi-for-coding";
-    // Prefer plugin-internal callLlm (routes through configured model); falls back to apiKey path in Tier3LLMClassifier
-    const emotionT3CallLlm = (emotionT3Enabled && mergingLlmCfg)
+    const emotionT3CallLlm = (emotionT3Enabled && emotionT3LlmCfg)
       ? /**
          * Call the emotion provider with optional agent-scoped cache context.
          * @param {Array<object>} messages
-         * @param {{agentId?: string}} [context]
+         * @param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [context]
          * @returns {Promise<string|null>}
          */
         (messages, context = {}) => {
-          const emotionLlmCfg = {
-            ...mergingLlmCfg,
-            model: emotionT3Model,
-            maxTokens: 300,
-            temperature: 0,
-            disableThinking: true,
-          };
+          const emotionLlmCfg = withLlmCallContext(
+            {
+              ...emotionT3LlmCfg,
+              maxTokens: 300,
+              temperature: 0,
+              disableThinking: true,
+            },
+            context.agentId,
+            LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+            { runtimeLlm: context.runtimeLlm, signal: context.signal },
+          );
           return context.agentId
-            ? callLlm(messages, withLlmResultCacheContext(
-                { ...emotionLlmCfg, temperature: 0 },
+            ? callLlm(messages, withLlmCallContext(
+                withLlmResultCacheContext(
+                  { ...emotionLlmCfg, temperature: 0 },
+                  context.agentId,
+                  LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+                ),
                 context.agentId,
                 LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
+                { runtimeLlm: context.runtimeLlm, signal: context.signal },
               ))
             : callLlm(messages, emotionLlmCfg);
         }
       : null;
-    if (emotionT3Enabled && mergingLlmCfg) {
-      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled via callLlm (model: ${emotionT3Model})`);
-    } else if (emotionT3Enabled) {
-      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled via apiKey (model: ${emotionT3Model})`);
+    if (emotionT3Enabled && emotionT3LlmCfg) {
+      api.logger.info(`memory-lancedb-namespaced: emotion tier-3 enabled (route: ${emotionT3LlmCfg.kind})`);
     } else if (emotionT3WantsEnabled && !emotionT3HasProvider) {
       api.logger.info("memory-lancedb-namespaced: emotion tier-3 deferred — no LLM provider configured (onlyWhenProviderAvailable)");
     }
@@ -2373,7 +3548,7 @@ const plugin = {
     setEmotionConfig({
       tier: emotionTier,
       t2: { enabled: emotionT2Enabled },
-      t3: { enabled: emotionT3Enabled, model: emotionT3Model, callLlm: emotionT3CallLlm, apiKey: emotionCfg.t3?.apiKey || null, baseUrl: emotionCfg.t3?.baseUrl || undefined, timeoutMs: emotionT3TimeoutMs },
+      t3: { enabled: emotionT3Enabled, callLlm: emotionT3CallLlm, apiKey: null, baseUrl: undefined, timeoutMs: emotionT3TimeoutMs },
       escalationConfidence: emotionT3EscalationConfidence,
     });
     if (emotionTier !== "auto") {
@@ -2436,6 +3611,40 @@ const plugin = {
     const neoEmbeddingDrainImpact = neoEmbeddingDrainCfg.impact || "low";
     const neoEmbeddingDrainMaxItems = Math.max(1, Number(neoEmbeddingDrainCfg.maxItems || 250));
     const neoWorkspaceAliases = buildNeoWorkspaceAliases({ obsidianBridge: obsidianBridgeCfg, neo: neoCfg });
+    const memoryWorkspaceAliases = buildMemoryWorkspaceAliases(cfg, neoWorkspaceAliases);
+    let hostMemoryConfig = {};
+    try {
+      hostMemoryConfig = typeof api.runtime?.config?.current === "function" ? api.runtime.config.current() : (api.runtime?.config || {});
+    } catch (error) {
+      api.logger?.warn?.(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
+    }
+    const memoryAccountTopology = buildMemoryAccountTopology(hostMemoryConfig);
+    const hostRoutingLoader = createHostRoutingLoader({
+      logger: api.logger,
+      ...(importRouting ? { importRouting } : {}),
+    });
+    const turnRouteState = autoRecall ? { initPromise: null, registry: null } : null;
+    const getMemoryTurnRoutes = autoRecall ? async () => {
+      if (turnRouteState.registry) return turnRouteState.registry;
+      if (!turnRouteState.initPromise) {
+        turnRouteState.initPromise = (async () => {
+          try {
+            const routingCapability = await hostRoutingLoader();
+            turnRouteState.registry = createMemoryTurnRouteRegistry({ routingCapability, logger: api.logger });
+            return turnRouteState.registry;
+          } catch (error) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: turn route registry unavailable: ${String(error)}`);
+            return null;
+          }
+        })();
+      }
+      return turnRouteState.initPromise;
+    } : null;
+    const clearInitializedTurnRoutes = autoRecall ? async () => {
+      if (!turnRouteState.initPromise) return;
+      const turnRoutes = await turnRouteState.initPromise;
+      turnRoutes?.clear();
+    } : null;
     const neoWorkerRuntime = neoEnabled
       ? createNeoWorkerRuntime({ logger: api.logger })
       : null;
@@ -2443,10 +3652,10 @@ const plugin = {
       api.logger.warn("memory-lancedb-namespaced: neo mode=slot requested but this branch keeps memory-core as default slot owner; no memory capability registration call will be made.");
     }
     // Versteckte Kopplung sichtbar machen: Light/REM-Dreaming und
-    // Episoden-Extraktion brauchen ein Chat-Modell (merging.model). Ohne das
-    // laufen diese Features still als No-op, obwohl sie "aktiv" wirken.
+    // Episoden-Extraktion brauchen eine aktive Merging-Route. Ohne sie laufen
+    // diese Features still als No-op, obwohl sie "aktiv" wirken.
     if (neoEnabled && !mergingLlmCfg) {
-      api.logger.warn("memory-lancedb-namespaced: light/REM dreaming and episode extraction require a chat model (config.merging.model). Without it these features silently no-op. Set merging.model to enable them.");
+      api.logger.warn("memory-lancedb-namespaced: light/REM dreaming and episode extraction require merging.enabled and an available LLM route. They will no-op until that route is available.");
     }
     const sessionWorkspaceKeys = new Map();
     const rememberNeoWorkspace = (ctx = {}, event = {}) => {
@@ -2520,33 +3729,7 @@ const plugin = {
       return `plur1bus:${key}`;
     };
 
-    const nsCfg = cfg.namespaces || {};
-    // MultiNamespacePool stores agents at: join(memoryBaseDir, namespace, agentId).
-    // Production default: baseDbPath = ~/.openclaw/memory/lancedb-namespaced
-    //   → resolveWriteNamespace({}) = "lancedb-namespaced"
-    //   → memoryBaseDir = join(baseDbPath, "..") = ~/.openclaw/memory
-    //   → effective agent path = join(memoryBaseDir, "lancedb-namespaced", agentId) = baseDbPath/agentId ✓
-    // Tests / custom cfg.baseDbPath: path like /tmp/test-XXX (not ending with namespace name).
-    //   → activeWriteNamespace overridden to "." so join(baseDbPath, ".", agentId) = baseDbPath/agentId ✓
-    const _writeNsName = nsCfg.activeWriteNamespace || DEFAULT_NAMESPACE;
-    const _basePathEndsWithNs = baseDbPath.endsWith("/" + _writeNsName) || baseDbPath.endsWith("\\" + _writeNsName);
-    let _memoryBaseDir, _effectiveNsCfg;
-    if (_basePathEndsWithNs) {
-      // Normal production path: strip the namespace segment, let MultiNamespacePool re-append it.
-      _memoryBaseDir = join(baseDbPath, "..");
-      _effectiveNsCfg = nsCfg;
-    } else {
-      // Non-namespaced baseDbPath (tests, custom path): agents live directly in baseDbPath.
-      // Use "." as namespace so join(baseDbPath, ".", agentId) normalises to baseDbPath/agentId.
-      _memoryBaseDir = baseDbPath;
-      _effectiveNsCfg = {
-        ...nsCfg,
-        activeWriteNamespace: ".",
-        activeRecallNamespaces: ["."],
-        // legacyReadOnlyNamespaces intentionally not set — no cross-ns recall for flat paths.
-      };
-    }
-    const pool = new MultiNamespacePool(_memoryBaseDir, _effectiveNsCfg, vectorDim, AgentDbPool, api.logger);
+    const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
     const emotionalPool = createEmotionalStatePool({
       temperaments: emotionCfg.temperaments || {},
       moodInfluence: emotionMoodInfluence,
@@ -2600,19 +3783,28 @@ const plugin = {
 
     api.logger.info(`memory-lancedb-namespaced: registered (baseDbPath: ${baseDbPath})`);
 
-    function normalizeOwnerUserId(userId) {
-      return String(userId || "").trim();
-    }
-
-    function resolveStoreScopeAccess(ctxLike = {}, rawScope) {
+    function resolveStoreScopeAccess(memoryCtx, rawScope) {
       const scope = MEMORY_SCOPES.includes(rawScope) ? rawScope : "agent-private";
-      const { userId } = resolveIdentity(ctxLike);
-      const requestUserId = normalizeOwnerUserId(userId);
-      const ownerUserId = scope === "user" ? requestUserId : "";
-      if (scope === "user" && !ownerUserId) {
+      if (!memoryCtx?.agentId) return { ok: false, error: "memory context requires an agent" };
+      if (scope === "user" && !memoryCtx.userPrincipal) {
         return { ok: false, error: "user scope requires an authenticated user" };
       }
-      return { ok: true, scope, ownerUserId, requestUserId };
+      if (scope === "workspace" && !memoryCtx.workspaceIdentity) {
+        return { ok: false, error: "workspace scope requires a bound workspace" };
+      }
+      const workspaceIdentity = scope === "workspace" ? memoryCtx.workspaceIdentity : "";
+      return {
+        ok: true,
+        scope,
+        ownerUserId: scope === "user" ? memoryCtx.userPrincipal : "",
+        ownershipFields: Object.freeze({
+          agentId: memoryCtx.agentId,
+          storedBy: memoryCtx.agentId,
+          workspaceId: workspaceIdentity,
+          workspaceKey: workspaceIdentity,
+          ownerUserId: scope === "user" ? memoryCtx.userPrincipal : "",
+        }),
+      };
     }
 
     function candidateVisibleForStore(candidate, accessCtx) {
@@ -2620,12 +3812,275 @@ const plugin = {
       return checkAccess(accessCtx, candidate.entry).allowed;
     }
 
-    async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
-      const storeAgentId = storeCtx.agentId || "default";
-      const storeDb = pool.getWriteDb(storeAgentId);
-      const storeWorkspaceKey = storeCtx.workspaceKey || workspaceKeyFromContext(storeCtx, {
-        workspaceDir: storeCtx.workspaceDir,
+    const durableMergeQueues = new Map();
+
+    function durableMergeWriteKey({
+      workspaceKey,
+      text,
+      category,
+      origin,
+      importance,
+      ttl,
+      sourceUrl,
+      evidenceQuote,
+      scope,
+      ownerUserId,
+    }) {
+      return JSON.stringify([
+        workspaceKey,
+        text,
+        category,
+        origin,
+        importance,
+        ttl,
+        sourceUrl,
+        evidenceQuote,
+        scope,
+        ownerUserId,
+      ]);
+    }
+
+    function durableMergeIdentity(agentId, candidateId, writeKey) {
+      const digest = createHash("sha256")
+        .update(JSON.stringify(["memory_store_merge", agentId, candidateId, String(writeKey || "")]))
+        .digest("hex");
+      return {
+        idempotencyKey: `sha256:${digest}`,
+        replacementId: `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20, 32)}`,
+      };
+    }
+
+    function destructiveDeleteIdempotencyKey(source, agentId, memoryId, via) {
+      const digest = createHash("sha256")
+        .update(JSON.stringify(["memory.deleted", source, agentId, memoryId, via]))
+        .digest("hex");
+      return `sha256:${digest}`;
+    }
+
+    async function deleteWithAuditContinuation({
+      db,
+      memoryId,
+      workspaceDir,
+      logEntry,
+      onLateFailure,
+    }) {
+      const idempotencyKey = logEntry.idempotencyKey
+        || destructiveDeleteIdempotencyKey(logEntry.source, logEntry.agentId, memoryId, logEntry.via);
+      let deletionLogged = false;
+      const appendDeletionLog = () => {
+        if (deletionLogged) return;
+        appendDestructiveOpLog(workspaceDir, { ...logEntry, memoryId, idempotencyKey });
+        deletionLogged = true;
+      };
+
+      try {
+        await db.delete(memoryId);
+      } catch (deleteErr) {
+        if (deleteErr instanceof TimeoutError && deleteErr.settlement) {
+          const rawDeleteSettlement = deleteErr.settlement;
+          deleteErr.settlement = rawDeleteSettlement.then(
+            (value) => {
+              appendDeletionLog();
+              return value;
+            },
+            (lateDeleteError) => {
+              onLateFailure?.(lateDeleteError);
+              throw lateDeleteError;
+            },
+          );
+        }
+        throw deleteErr;
+      }
+
+      appendDeletionLog();
+    }
+
+    function isExpectedMergeReplacement(entry, replacementId, candidateId, expectedEntry) {
+      if (!entry || entry.id !== replacementId || entry.text !== expectedEntry.text) return false;
+      if (entry.status && entry.status !== "active") return false;
+      const stableFields = [
+        "agentId",
+        "storedBy",
+        "workspaceId",
+        "workspaceKey",
+        "scope",
+        "ownerUserId",
+        "sourceUrl",
+        "evidenceQuote",
+      ];
+      if (stableFields.some((field) => entry[field] !== expectedEntry[field])) return false;
+      try {
+        return JSON.parse(entry.mergedFrom || "[]").includes(candidateId);
+      } catch (error) {
+        api.logger?.debug?.(`memory-lancedb-namespaced: invalid mergedFrom for replacement=${replacementId}: ${String(error)}`);
+        return false;
+      }
+    }
+
+    function runDurableMergeQueued(queueKey, operation) {
+      const predecessor = durableMergeQueues.get(queueKey) || Promise.resolve();
+      const operationPromise = predecessor
+        .catch((predecessorErr) => {
+          // The predecessor already delivered its own failure. Keep the key
+          // usable for the next independent attempt and make the continuation
+          // visible without propagating the old rejection into the new work.
+          api.logger?.debug?.(`memory-lancedb-namespaced: durable merge predecessor failed for ${queueKey}: ${String(predecessorErr)}`);
+        })
+        .then(operation);
+      const settlementTail = operationPromise.catch(async (error) => {
+        const settlement = await waitForTimeoutSettlement(error);
+        if (settlement.status === "rejected") {
+          api.logger?.debug?.(
+            `memory-lancedb-namespaced: durable merge late settlement failed for ${queueKey}: ${String(settlement.error)}`,
+          );
+        }
       });
+      durableMergeQueues.set(queueKey, settlementTail);
+      settlementTail.then(
+        () => {
+          if (durableMergeQueues.get(queueKey) === settlementTail) durableMergeQueues.delete(queueKey);
+        },
+        (trackingError) => {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge settlement tracking failed for ${queueKey}: ${String(trackingError)}`);
+          if (durableMergeQueues.get(queueKey) === settlementTail) durableMergeQueues.delete(queueKey);
+        },
+      );
+      return operationPromise;
+    }
+
+    async function withDurableMerge({
+      db,
+      agentId,
+      selectedCandidate,
+      accessCtx,
+      workspaceDir,
+      writeKey,
+      prepareReplacement,
+    }) {
+      const candidateId = safeUuid(selectedCandidate?.entry?.id);
+      const selectedText = selectedCandidate?.entry?.text;
+      const queueKey = JSON.stringify([agentId, candidateId]);
+      const { idempotencyKey, replacementId } = durableMergeIdentity(
+        agentId,
+        candidateId,
+        writeKey || selectedText,
+      );
+      return runDurableMergeQueued(queueKey, async () => {
+        const authoritativeCandidate = await db.getById(candidateId);
+        const candidateIsActive = authoritativeCandidate
+          && (!authoritativeCandidate.status || authoritativeCandidate.status === "active");
+        const candidateMatchesSelection = authoritativeCandidate?.id === candidateId
+          && authoritativeCandidate?.text === selectedText;
+        const candidateStillVisible = authoritativeCandidate
+          && candidateVisibleForStore({ entry: authoritativeCandidate }, accessCtx);
+        if (!candidateIsActive || !candidateMatchesSelection || !candidateStillVisible) {
+          const staleErr = new Error("merge candidate is stale, no longer active, or no longer authorized");
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${staleErr.message}`);
+          throw staleErr;
+        }
+
+        const preparedResult = await prepareReplacement(authoritativeCandidate, replacementId);
+        if (!preparedResult) return null;
+
+        const mergedEntry = { ...preparedResult.mergedEntry, id: safeUuid(replacementId) };
+        const prepared = { ...preparedResult, mergedEntry };
+        let archivePath = "";
+        try {
+          archivePath = archiveCard(authoritativeCandidate, agentId);
+        } catch (archiveErr) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge archive failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath || "unwritten"}: ${String(archiveErr)}`);
+          throw archiveErr;
+        }
+
+        const finishDurableMerge = async () => {
+          let verifiedReplacement;
+          try {
+            verifiedReplacement = await db.getById(replacementId);
+          } catch (verificationErr) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
+            throw verificationErr;
+          }
+          if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry)) {
+            const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
+            throw verificationErr;
+          }
+
+          try {
+            await deleteWithAuditContinuation({
+              db,
+              memoryId: candidateId,
+              workspaceDir,
+              logEntry: {
+                event: "memory.deleted",
+                source: "memory_store_merge",
+                agentId,
+                via: "merge",
+                archivePath,
+                idempotencyKey,
+                timestamp: new Date().toISOString(),
+              },
+              onLateFailure: (lateDeleteError) => {
+                api.logger?.warn?.(`memory-lancedb-namespaced: durable merge late delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateDeleteError)}`);
+              },
+            });
+          } catch (deleteErr) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge delete failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(deleteErr)}`);
+            throw deleteErr;
+          }
+          return { ...prepared, authoritativeCandidate, archivePath, idempotencyKey };
+        };
+
+        let existingReplacement;
+        try {
+          existingReplacement = await db.getById(replacementId);
+        } catch (idempotencyReadError) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge idempotency read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(idempotencyReadError)}`);
+          throw idempotencyReadError;
+        }
+        if (existingReplacement) {
+          if (!isExpectedMergeReplacement(existingReplacement, replacementId, candidateId, mergedEntry)) {
+            throw new Error(`durable merge idempotency collision for ${replacementId}`);
+          }
+          return finishDurableMerge();
+        }
+
+        try {
+          await db.store(mergedEntry);
+        } catch (storeErr) {
+          if (storeErr instanceof TimeoutError && storeErr.settlement) {
+            const rawStoreSettlement = storeErr.settlement;
+            storeErr.settlement = rawStoreSettlement.then(
+              () => finishDurableMerge(),
+              (lateStoreError) => {
+                api.logger?.warn?.(`memory-lancedb-namespaced: durable merge late store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(lateStoreError)}`);
+                throw lateStoreError;
+              },
+            );
+          }
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge store failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(storeErr)}`);
+          throw storeErr;
+        }
+
+        return finishDurableMerge();
+      });
+    }
+
+    async function storeMemoryFromToolParams(storeCtx = {}, params = {}) {
+      const memoryCtx = storeCtx.memoryCtx || resolveToolMemoryRequestContext({
+        agentId: storeCtx.agentId,
+        workspaceDir: storeCtx.workspaceDir,
+        sessionKey: storeCtx.sessionKey,
+        messageChannel: storeCtx.messageChannel,
+        agentAccountId: storeCtx.agentAccountId,
+        requesterSenderId: storeCtx.requesterSenderId,
+        deliveryContext: storeCtx.deliveryContext,
+      }, { workspaceAliases: memoryWorkspaceAliases });
+      const storeAgentId = memoryCtx.agentId;
+      const scopeAccess = resolveStoreScopeAccess(memoryCtx, params.scope);
+      if (!scopeAccess.ok) return { error: scopeAccess.error };
+      const { scope, ownerUserId, ownershipFields } = scopeAccess;
+      const storeWorkspaceKey = ownershipFields.workspaceKey;
       // v6.2.1 — Input-Validierung für Memory-Text (P0-Fix)
       const textValidation = validateMemoryText(params.text);
       if (!textValidation.ok) {
@@ -2638,6 +4093,7 @@ const plugin = {
         maxCandidates: traceCfg.maxCandidates ?? 50,
       });
       try {
+        return await pool.withWriteDb(storeAgentId, async (storeDb) => {
         const vector = await embeddings.embed(params.text, { agentId: storeAgentId });
         const categoryResult = params.category
           ? { category: params.category, reason: "caller-provided" }
@@ -2659,12 +4115,7 @@ const plugin = {
           reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
         });
         const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
-        const scopeAccess = resolveStoreScopeAccess(storeCtx, params.scope);
-        if (!scopeAccess.ok) {
-          return { error: scopeAccess.error };
-        }
-        const { scope, ownerUserId, requestUserId } = scopeAccess;
-        const storeAccessCtx = { agentId: storeAgentId, workspaceId: storeWorkspaceKey, userId: requestUserId };
+        const storeAccessCtx = memoryCtx;
         const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
         const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
 
@@ -2689,56 +4140,74 @@ const plugin = {
           const mergeCandidate = candidateVisibleForStore(mergeCandidateRaw, storeAccessCtx) ? mergeCandidateRaw : null;
           if (mergeCandidate) {
             addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
-            let mergeResult = null;
-            if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
-              api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
-              addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "meaningful difference" });
-            } else {
-              try {
-                mergeResult = await Promise.race([
-                  callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg, agentId),
-                  new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
-                ]);
-              } catch (mergeErr) {
-                api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
-              }
-            }
-            if (category === "decision" && storeCtx.workspaceDir && mergeCandidate.entry.storedBy && mergeCandidate.entry.storedBy !== storeAgentId) {
-              const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
-              appendConflictLog(storeCtx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: storeAgentId, newText: params.text.slice(0, 200), existingMemoryId: mergeCandidate.entry.id, existingAgentId: mergeCandidate.entry.storedBy, existingText: mergeCandidate.entry.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
-            }
-            const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
-            if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
-              if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
-                api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
-                addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "LLM mergedText loses facts" });
-              } else {
-                // DATA-003: prepare the merged entry and archive the original BEFORE
-                // deleting it. If embedding or archiving fails, the original remains intact.
+            const durableMerge = await withDurableMerge({
+              db: storeDb,
+              agentId: storeAgentId,
+              selectedCandidate: mergeCandidate,
+              accessCtx: storeAccessCtx,
+              workspaceDir: storeCtx?.workspaceDir,
+              writeKey: durableMergeWriteKey({
+                workspaceKey: storeWorkspaceKey,
+                text: params.text,
+                category,
+                origin,
+                importance,
+                ttl: params.ttl && TTL_MAP[params.ttl] ? params.ttl : "",
+                sourceUrl,
+                evidenceQuote,
+                scope,
+                ownerUserId,
+              }),
+              prepareReplacement: async (authoritativeCandidate, replacementId) => {
+                let mergeResult = null;
+                if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
+                  api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                  addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
+                } else {
+                  try {
+                    mergeResult = await Promise.race([
+                      callMergeCheck(
+                        authoritativeCandidate.text,
+                        params.text,
+                        mergingLlmCfg,
+                        storeAgentId,
+                        storeCtx.callContext,
+                      ),
+                      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
+                    ]);
+                  } catch (mergeErr) {
+                    api.logger.warn("memory-lancedb-namespaced: merge check skipped", {
+                      errorClass: normalizedLlmErrorClass(mergeErr),
+                    });
+                  }
+                }
+                if (category === "decision" && storeCtx.workspaceDir && authoritativeCandidate.storedBy && authoritativeCandidate.storedBy !== storeAgentId) {
+                  const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
+                  appendConflictLog(storeCtx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: storeAgentId, newText: params.text.slice(0, 200), existingMemoryId: authoritativeCandidate.id, existingAgentId: authoritativeCandidate.storedBy, existingText: authoritativeCandidate.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
+                }
+                const minLen = Math.min(authoritativeCandidate.text.length, params.text.length);
+                if (!(mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen)) {
+                  return null;
+                }
+                if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
+                  api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                  addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
+                  return null;
+                }
+                const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
-                const mergedEntry = applyDynamicsDefaults({ id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]), expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
-                let archivePath;
-                try {
-                  archivePath = archiveCard(mergeCandidate.entry, storeAgentId);
-                } catch (archiveErr) {
-                  api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
-                  throw archiveErr;
-                }
-                await storeDb.delete(mergeCandidate.entry.id);
-                appendDestructiveOpLog(storeCtx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId: storeAgentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
-                try {
-                  await storeDb.store(mergedEntry);
-                } catch (storeErr) {
-                  api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
-                  throw storeErr;
-                }
-                if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
-                if (storeCtx.workspaceDir && shouldPromoteMemory(category, Math.max(importance, mergeCandidate.entry.importance), importanceResult.factQuality, schicht15MinImportance)) {
-                  trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
-                }
-                addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
-                return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
+                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]), expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+                return { mergedEntry, mergeResult, mergedImportance };
+              },
+            });
+            if (durableMerge) {
+              const { mergedEntry, mergeResult, mergedImportance, authoritativeCandidate } = durableMerge;
+              if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${authoritativeCandidate.id} (${mergeResult.reason || ""})`, relatedId: authoritativeCandidate.id });
+              if (storeCtx.workspaceDir && shouldPromoteMemory(category, mergedImportance, importanceResult.factQuality, schicht15MinImportance)) {
+                trackKnowledgePending(storeCtx.workspaceDir, { sourceAgent: storeAgentId, memoryId: mergedEntry.id, category, importance: mergedImportance });
               }
+              addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${authoritativeCandidate.id} (${mergeResult.reason || ""})` });
+              return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
             }
           }
         } else if (category === "decision" && storeCtx.workspaceDir) {
@@ -2753,15 +4222,17 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: storeAgentId, workspaceKey: storeWorkspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
-            applyRetroactiveInterference(storeDb, entry, {
-              threshold: riCfg.threshold ?? 0.65,
-              multiplier: riCfg.multiplier ?? 0.9,
-              maxAffected: riCfg.maxAffected ?? 5,
-            }).catch((err) => {
+            const maintenance = pool.withWriteDb(storeAgentId, (maintenanceDb) =>
+              applyRetroactiveInterference(maintenanceDb, entry, {
+                threshold: riCfg.threshold ?? 0.65,
+                multiplier: riCfg.multiplier ?? 0.9,
+                maxAffected: riCfg.maxAffected ?? 5,
+              }));
+            return maintenance.catch((err) => {
               api.logger?.warn?.("[retroactive-interference] failed", err?.message ?? err);
             });
           });
@@ -2772,6 +4243,7 @@ const plugin = {
         }
         addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
         return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id, decisionTrace: trace } };
+        });
       } catch (err) {
         return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
       }
@@ -2781,7 +4253,11 @@ const plugin = {
       const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
         logger: api.logger,
         memoryStore: async ({ workspace, payload }) => {
-          const result = await storeMemoryFromToolParams({ agentId: workspace.agentId, workspaceDir: workspace.path }, payload);
+          const memoryCtx = resolveMemoryRequestContext({
+            agentId: workspace.agentId,
+            workspaceDir: workspace.path,
+          }, { workspaceAliases: memoryWorkspaceAliases });
+          const result = await storeMemoryFromToolParams({ memoryCtx, workspaceDir: memoryCtx.workspaceDir }, payload);
           const text = result?.content?.[0]?.text || "";
           if (text.startsWith("Memory store failed")) throw new Error(text);
           return result;
@@ -2946,6 +4422,7 @@ const plugin = {
             const commandStore = getNeoStore({ workspaceDir: commandCtx.workspaceDir, workspaceKey: commandCtx.workspaceKey, agentId: commandCtx.agentId || "command" });
 
             if (actionKey === "obsidian" || obsidianActionNames.has(actionKey)) {
+              const obsidianMemoryCtx = await resolveRegisteredMemoryContext(commandCtx);
               let runtimeConfig = null;
               try {
                 if (typeof api.runtime?.config?.current === "function") {
@@ -2973,12 +4450,17 @@ const plugin = {
                 ],
                 findRecord: (recordId) => findNeoRecord(commandStore, recordId),
                 memoryStore: async ({ payload }) => {
-                  const { userId } = resolveIdentity(commandCtx);
-                  return storeMemoryFromToolParams({
-                    agentId: commandCtx.agentId || "command",
-                    workspaceDir: commandCtx.workspaceDir,
-                    userId,
+                  const result = await storeMemoryFromToolParams({
+                    memoryCtx: obsidianMemoryCtx,
+                    workspaceDir: obsidianMemoryCtx.workspaceDir,
+                    callContext: {
+                      runtimeLlm: commandCtx?.runtimeContext?.llm,
+                    },
                   }, payload);
+                  const text = result?.content?.[0]?.text || "";
+                  if (result?.error) throw new Error(`Memory store failed: ${result.error}`);
+                  if (text.startsWith("Memory store failed")) throw new Error(text);
+                  return result;
                 },
               });
             }
@@ -2988,7 +4470,7 @@ const plugin = {
             // (delivery.mode=none).
             if (actionKey === "internal") {
               if (!isCronCommandContext(commandCtx)) {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
               }
               const subKey = (sub || "").toLowerCase();
@@ -2998,16 +4480,29 @@ const plugin = {
                 if (dcCfg.enabled === false) {
                   return formatJsonCommandResult({ job: "consolidate-daily", skipped: true, reason: "dailyConsolidation_disabled" });
                 }
-                const rawDb = pool.getDb(internalAgent);
-                await rawDb.init();
-                const result = await runDailyConsolidation(rawDb, internalAgent, {
-                  logger: api.logger,
-                  neoStore: commandStore,
-                  workspaceDir: commandCtx.workspaceDir,
-                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                  llmCfg: mergingLlmCfg,
-                  callLlm,
-                  embeddings,
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const result = await pool.withDb(internalAgent, async (rawDb) => {
+                  await rawDb.init();
+                  return runDailyConsolidation(rawDb, internalAgent, {
+                    logger: api.logger,
+                    neoStore: commandStore,
+                    workspaceDir: commandCtx.workspaceDir,
+                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                    compactionLlmCfg: mergingEnabled ? withLlmCallContext(
+                      memoryCompactionLlmCfg,
+                      typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                      "memory-compaction",
+                      { runtimeLlm: sessionRuntime },
+                    ) : null,
+                    conflictLlmCfg: mergingEnabled ? withLlmCallContext(
+                      conflictResolutionLlmCfg,
+                      typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                      "conflict-resolution",
+                      { runtimeLlm: sessionRuntime },
+                    ) : null,
+                    callLlm,
+                    embeddings,
+                  });
                 });
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
@@ -3017,22 +4512,34 @@ const plugin = {
                 if (cpCfg.enabled === false) {
                   return formatJsonCommandResult({ job: "classify-recent", skipped: true, reason: "criticalPush_disabled" });
                 }
-                // Klassifikations-Modell: criticalPush.model bevorzugt, sonst
-                // das merging-Chat-Modell. Ohne Modell führt der Job einen
-                // No-op aus (kein Vergiften der Karten als "fakt").
-                const cpModelName = (typeof cpCfg.model === "string" && cpCfg.model.trim())
-                  ? cpCfg.model.trim()
-                  : mergingModel;
-                const cpLlmCfg = cpModelName ? {
-                  model: cpModelName,
-                  baseUrl: cpCfg.baseUrl || mergingCfg.baseUrl || undefined,
-                  apiKey: cpCfg.apiKey ? resolveEnvVars(cpCfg.apiKey) : (mergingLlmCfg?.apiKey || apiKey),
-                  disableThinking: cpCfg.disableThinking ?? mergingCfg.disableThinking ?? false,
-                  headers: cpCfg.headers || mergingCfg.headers || undefined,
-                } : null;
-                const criticalModel = cpLlmCfg ? {
+                const cpLlmCfg = createFeatureRoute("criticalPush", cpCfg);
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const directCriticalRoute = cpLlmCfg?.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE;
+                const nativeCriticalRuntimeAvailable = typeof sessionRuntime?.complete === "function"
+                  || typeof cpLlmCfg?.runtimeLlm?.complete === "function";
+                if (cpLlmCfg && !directCriticalRoute && !nativeCriticalRuntimeAvailable) {
+                  api.logger.warn(
+                    "memory-lancedb-namespaced: Critical Push skipped: openclaw-runtime-unavailable",
+                    { feature: "criticalPush" },
+                  );
+                }
+                const criticalRouteAvailable = directCriticalRoute || nativeCriticalRuntimeAvailable;
+                const criticalModel = cpLlmCfg && criticalRouteAvailable ? {
                   complete: async ({ prompt }) => {
-                    const text = await callLlm([{ role: "user", content: prompt }], { ...cpLlmCfg, maxTokens: 16 });
+                    const callContext = typeof sessionRuntime?.complete === "function"
+                      ? {
+                          runtimeLlm: sessionRuntime,
+                          purpose: "critical-push-classification",
+                        }
+                      : {
+                          agentId: internalAgent,
+                          purpose: "critical-push-classification",
+                        };
+                    const text = await callLlm([{ role: "user", content: prompt }], {
+                      ...cpLlmCfg,
+                      maxTokens: 16,
+                      callContext,
+                    });
                     return { text: text || "" };
                   },
                 } : null;
@@ -3051,32 +4558,42 @@ const plugin = {
                 return formatJsonCommandResult({ job: "auto-accept-stale", ...result });
               }
               if (subKey === "rem-dream") {
-                if (!mergingLlmCfg) {
+                if (!mergingEnabled || !isLlmRouteAvailable(remPatternLlmCfg)) {
                   return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "no_llm_config" });
                 }
-                const db = pool.getDb(internalAgent);
-                await db.init();
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const commandRoute = (route, purpose) => withLlmCallContext(
+                  route,
+                  typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                  purpose,
+                  { runtimeLlm: sessionRuntime },
+                );
                 const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
-                const result = await runRemDream({
-                  db,
-                  llmCfg: mergingLlmCfg,
-                  callLlm,
-                  neoStore: commandStore,
-                  workspaceKey: workspaceKeyFromContext(commandCtx, {
-                    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-                    rootDir: neoRoot,
-                    runtime: api.runtime,
-                    sessionWorkspaceKeys,
-                    workspaceAliases: neoWorkspaceAliases,
-                  }),
-                  agentId: internalAgent,
-                  logger: api.logger,
-                  maxMemories: isLocalProvider ? 1000 : 5000,
-                  topK: isLocalProvider ? 10 : 20,
-                  narrativeCfg: dreamNarrativeCfg,
-                  embeddings,
-                  workspaceDir: commandCtx?.workspaceDir || null,
-                  temperamentName: resolveTemperamentName(internalAgent),
+                const result = await pool.withDb(internalAgent, async (db) => {
+                  await db.init();
+                  return runRemDream({
+                    db,
+                    patternLlmCfg: commandRoute(remPatternLlmCfg, "rem-pattern-analysis"),
+                    narrativeLlmCfg: commandRoute(dreamNarrativeLlmCfg, "dream-narrative"),
+                    echoLlmCfg: commandRoute(dreamEchoLlmCfg, "dream-echo"),
+                    callLlm,
+                    neoStore: commandStore,
+                    workspaceKey: workspaceKeyFromContext(commandCtx, {
+                      defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+                      rootDir: neoRoot,
+                      runtime: api.runtime,
+                      sessionWorkspaceKeys,
+                      workspaceAliases: neoWorkspaceAliases,
+                    }),
+                    agentId: internalAgent,
+                    logger: api.logger,
+                    maxMemories: isLocalProvider ? 1000 : 5000,
+                    topK: isLocalProvider ? 10 : 20,
+                    narrativeCfg: dreamNarrativeCfg,
+                    embeddings,
+                    workspaceDir: commandCtx?.workspaceDir || null,
+                    temperamentName: resolveTemperamentName(internalAgent),
+                  });
                 });
                 if (result.report && commandCtx.workspaceDir) {
                   writeRemDreamToVault(result.report, result.trends, commandCtx.workspaceDir);
@@ -3085,17 +4602,14 @@ const plugin = {
                 const semanticCfg = obsidianBridgeCfg?.graphLinks?.semanticDiscovery;
                 if (semanticCfg?.enabled && commandCtx.workspaceDir) {
                   const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
-                  const semDb = pool.getDb(internalAgent);
-                  Promise.resolve()
-                    .then(async () => {
-                      return runSemanticDiscoveryBatches({
+                  pool.withDb(internalAgent, (semDb) =>
+                    runSemanticDiscoveryBatches({
                         db: semDb,
                         semVaultCfg,
                         pool,
                         logger: api.logger,
                         defaultAgentId: internalAgent,
-                      });
-                    })
+                      }))
                     .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
                     .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
                 }
@@ -3105,31 +4619,55 @@ const plugin = {
                 if (!skillMinerEnabled || !skillMinerLlmCfg) {
                   return formatJsonCommandResult({ job: "skill-miner", skipped: true, reason: "not_configured" });
                 }
-                const rawDb = pool.getDb(internalAgent);
-                await rawDb.init();
-                const result = await runSkillMiner(rawDb, internalAgent, {
-                  logger: api.logger,
-                  neoStore: commandStore,
-                  workspaceDir: commandCtx.workspaceDir,
-                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                  llmCfg: skillMinerLlmCfg,
-                  callLlm,
-                  maxPerRun: skillMinerCfg.maxPerRun ?? 5,
-                  minConfidence: skillMinerCfg.minConfidence ?? 0.6,
-                  minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const skillMinerCallContext = typeof sessionRuntime?.complete === "function"
+                  ? {
+                      runtimeLlm: sessionRuntime,
+                      purpose: LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                    }
+                  : {
+                      agentId: internalAgent,
+                      purpose: LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                    };
+                const result = await pool.withDb(internalAgent, async (rawDb) => {
+                  await rawDb.init();
+                  return runSkillMiner(rawDb, internalAgent, {
+                    logger: api.logger,
+                    neoStore: commandStore,
+                    workspaceDir: commandCtx.workspaceDir,
+                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                    llmCfg: withLlmCallContext(
+                      skillMinerLlmCfg,
+                      skillMinerCallContext.agentId,
+                      LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                      { runtimeLlm: skillMinerCallContext.runtimeLlm },
+                    ),
+                    callLlm,
+                    maxPerRun: skillMinerCfg.maxPerRun ?? 5,
+                    minConfidence: skillMinerCfg.minConfidence ?? 0.6,
+                    minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                  });
                 });
                 api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "skill-miner", ...result });
               }
               if (subKey === "afterthought") {
-                if ((cfg.afterthought?.enabled ?? true) === false) {
+                if ((cfg.afterthought?.enabled ?? true) === false
+                  || !(skillMinerEnabled || mergingEnabled)
+                  || !isLlmRouteAvailable(afterthoughtLlmCfg)) {
                   return formatJsonCommandResult({ job: "afterthought", skipped: true, reason: "disabled" });
                 }
                 const { runAfterthoughtJob } = await import("./lib/afterthought.js");
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const result = await runAfterthoughtJob({
                   workspaceDir: commandCtx.workspaceDir,
                   agentId: internalAgent,
-                  llmCfg: skillMinerLlmCfg || mergingLlmCfg || null,
+                  llmCfg: withLlmCallContext(
+                    afterthoughtLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    "afterthought",
+                    { runtimeLlm: sessionRuntime },
+                  ),
                   callLlm,
                   timeZone: cfg.afterthought?.timezone ?? cfg.timezone ?? null,
                   logger: api.logger,
@@ -3138,30 +4676,39 @@ const plugin = {
                 return formatJsonCommandResult({ job: "afterthought", ...result });
               }
               if (subKey === "persona-evolve") {
-                if ((cfg.personaVoice?.enabled ?? true) === false || !skillMinerLlmCfg) {
+                if ((cfg.personaVoice?.enabled ?? true) === false
+                  || !skillMinerEnabled
+                  || !isLlmRouteAvailable(personaVoiceLlmCfg)) {
                   return formatJsonCommandResult({ job: "persona-evolve", skipped: true, reason: "not_configured" });
                 }
                 const { evolvePersonaVoice } = await import("./lib/persona-voice.js");
                 const outcomes = readReplyOutcomeLog(commandCtx.workspaceDir, 200);
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const result = await evolvePersonaVoice({
                   workspaceDir: commandCtx.workspaceDir,
                   outcomes,
-                  llmCfg: skillMinerLlmCfg,
+                  llmCfg: withLlmCallContext(
+                    personaVoiceLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                    "persona-voice",
+                    { runtimeLlm: sessionRuntime },
+                  ),
                   callLlm,
                 });
                 api.logger?.info?.(`plur1bus internal persona-evolve[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "persona-evolve", ...result });
               }
               if (subKey === "reminder-dispatch") {
-                const rawDb = pool.getDb(internalAgent);
-                await rawDb.init();
                 const remindersCfg = cfg.reminders || {};
-                const result = await runReminderDispatch(rawDb, internalAgent, {
-                  logger: api.logger,
-                  workspaceDir: commandCtx.workspaceDir,
-                  workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                  deliveryMode: remindersCfg.deliveryMode || "pending_only",
-                  webhookUrl: remindersCfg.webhookUrl ? resolveEnvVars(remindersCfg.webhookUrl) : null,
+                const result = await pool.withDb(internalAgent, async (rawDb) => {
+                  await rawDb.init();
+                  return runReminderDispatch(rawDb, internalAgent, {
+                    logger: api.logger,
+                    workspaceDir: commandCtx.workspaceDir,
+                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
+                    deliveryMode: remindersCfg.deliveryMode || "pending_only",
+                    webhookUrl: remindersCfg.webhookUrl ? resolveEnvVars(remindersCfg.webhookUrl) : null,
+                  });
                 });
                 api.logger?.info?.(`plur1bus internal reminder-dispatch[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "reminder-dispatch", ...result });
@@ -3200,14 +4747,14 @@ const plugin = {
                   try {
                     const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
                     const wsAgentId = ws.agentId || internalAgent;
-                    const wsDb = pool.getDb(wsAgentId);
-                    const semResult = await runSemanticDiscoveryBatches({
-                      db: wsDb,
-                      semVaultCfg,
-                      pool,
-                      logger: api.logger,
-                      defaultAgentId: wsAgentId,
-                    });
+                    const semResult = await pool.withDb(wsAgentId, (wsDb) =>
+                      runSemanticDiscoveryBatches({
+                        db: wsDb,
+                        semVaultCfg,
+                        pool,
+                        logger: api.logger,
+                        defaultAgentId: wsAgentId,
+                      }));
                     api.logger?.info?.(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
                     totalProcessed += semResult.processed;
                     totalSkipped += semResult.skipped;
@@ -3253,7 +4800,6 @@ const plugin = {
             }
             if (actionKey === "start") {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
-              const rawMissing = detectMissingCoreFeatures(rawCfg);
               const statusText = renderPlur1busStartStatus(cfg, {
                 vaultPath: cfg.obsidianBridge?.vaultPath || null,
                 workspaceRoot: cfg.obsidianBridge?.workspaceRoot || null,
@@ -3267,11 +4813,7 @@ const plugin = {
               const startTemperament = cfg.emotion?.temperaments?.[startAgentId];
               const startTemperamentLabel = startTemperament?.preset || (startTemperament ? "custom" : (DEFAULT_TEMPERAMENTS[startAgentId] ? "default-Profil" : "ausgewogen"));
               lines.push("", `🎭 Temperament (${startAgentId}): ${startTemperamentLabel} — ändern mit /plur1bus temperament <preset>`);
-              if (rawMissing.length > 0) {
-                lines.push("", "New core features defaulted on for this update:");
-                for (const feature of rawMissing) lines.push(`- ${feature.label}`);
-              }
-              lines.push("", "To intentionally reapply the full core selection, run: /plur1bus setup recommended --full");
+              lines.push("", "Setup choices: /plur1bus setup safe or /plur1bus setup recommended");
               return { text: lines.join("\n") };
             }
             if (actionKey === "temperament") {
@@ -3282,7 +4824,7 @@ const plugin = {
               if (!presetName) {
                 return { text: renderTemperamentOverview({ agentId: temperamentAgentId, temperamentsCfg: cfg.emotion?.temperaments || {}, lang }) };
               }
-              const denied = checkAuth(commandCtx, { destructive: true });
+              const denied = await checkAuth(commandCtx, { destructive: true });
               if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
@@ -3333,18 +4875,28 @@ const plugin = {
                   : `🎤 Persona voice (${personaAgentId}):\n${parsed?.managedBlock || "(empty)"}` };
               }
               if (personaSub === "regenerate") {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (hasPersonaVoice(commandCtx.workspaceDir)) {
                   return { text: de
                     ? "⚠️ Persona-Profil existiert bereits — erst `persona-voice.md` manuell löschen, um neu zu erzeugen."
                     : "⚠️ Persona profile already exists — delete `persona-voice.md` manually first to regenerate." };
                 }
-                const personaLlmCfg = skillMinerLlmCfg || mergingLlmCfg;
-                if (!personaLlmCfg) {
+                if (!(skillMinerEnabled || mergingEnabled) || !isLlmRouteAvailable(personaVoiceLlmCfg)) {
                   return { text: de ? "❌ Kein LLM konfiguriert." : "❌ No LLM configured." };
                 }
-                const seed = await generatePersonaSeed({ agentId: personaAgentId, lang, llmCfg: personaLlmCfg, callLlm });
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
+                const seed = await generatePersonaSeed({
+                  agentId: personaAgentId,
+                  lang,
+                  llmCfg: withLlmCallContext(
+                    personaVoiceLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : personaAgentId,
+                    "persona-voice",
+                    { runtimeLlm: sessionRuntime },
+                  ),
+                  callLlm,
+                });
                 if (!seed) {
                   return { text: de ? "❌ Persona-Seed-Generierung fehlgeschlagen." : "❌ Persona seed generation failed." };
                 }
@@ -3361,7 +4913,7 @@ const plugin = {
                 // Proposal-Sektion aus einer Version vor Auto-Apply. Neue
                 // wöchentliche Evolutionen werden inzwischen direkt im
                 // Managed Block angewendet und brauchen kein accept mehr.
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 const result = acceptPersonaProposal(commandCtx.workspaceDir);
                 if (!result.accepted) {
@@ -3379,7 +4931,7 @@ const plugin = {
             }
             if (actionKey === "setup") {
               const { lang, tone } = resolveCommandLocale(commandCtx);
-              const denied = checkAuth(commandCtx, { destructive: true });
+              const denied = await checkAuth(commandCtx, { destructive: true });
               if (denied) return denied;
               if (cfg.security?.allowChatConfigCommands === false) {
                 return { text: t("plur1bus.setup_blocked", { lang, tone }) };
@@ -3434,18 +4986,13 @@ const plugin = {
                 const pluginKey = PLUGIN_KEY;
                 const existingPluginCfg = rawCfg.plugins?.entries?.[pluginKey]?.config || null;
 
-                // Auto-detect Obsidian vaults before applying profile
+                // Discovery is informational only; explicit confirmation remains required.
                 const vaultResult = detectObsidianVaults(existingPluginCfg?.obsidianBridge || profile.obsidianBridge || {});
-                if (vaultResult.detected && profile.obsidianBridge) {
-                  profile.obsidianBridge.requireVaultPathConfirmation = false;
-                }
 
                 // Compute diff before applying (shows what changes)
                 const diff = describeProfileDiff(existingPluginCfg, profile);
 
-                const merged = applyFeatureProfile(rawCfg, profile, {
-                  forceFullExperience: tokens.includes("--full"),
-                });
+                const merged = applyFeatureProfile(rawCfg, profile);
                 const pendingInner = detectPendingFeatures(merged.plugins?.entries?.[pluginKey]?.config);
                 try {
                   const tmp = `${openclawConfigPath}.tmp-${process.pid}-${Date.now()}`;
@@ -3493,7 +5040,7 @@ const plugin = {
               lines.push(t("plur1bus.setup_activated", { lang, tone }));
               for (const [key, value] of Object.entries(profile)) {
                 if (key === "setupProfile" || key === "featuresConfirmedAt") continue;
-                if (typeof value !== "object" || value.enabled === undefined) continue;
+                if (value === null || typeof value !== "object" || value.enabled === undefined) continue;
                 const actualEnabled = mergedCfg[key]?.enabled ?? value.enabled;
                 if (!actualEnabled) {
                   lines.push(`• ${key}: disabled`);
@@ -3538,14 +5085,14 @@ const plugin = {
                 return { text: showProposal(workspaceDir, id, { lang, tone }).text };
               }
               if (subKey === "approve") {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_approve_usage", { lang, tone }) };
                 const result = approveProposal(workspaceDir, id, { agentId: commandCtx.agentId, workspaceKey: commandCtx.workspaceKey, lang, tone });
                 return { text: result.text };
               }
               if (subKey === "reject") {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
                 const result = rejectProposal(workspaceDir, id, { lang, tone });
@@ -3559,42 +5106,44 @@ const plugin = {
               const reminderAgent = commandCtx.agentId || "default";
               const reminderWsKey = commandCtx.workspaceKey || commandCtx.workspaceDir || "default";
               if (subKey === "cancel" || subKey === "delete") {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
                 if (!id) return { text: t("reminder.cancel_usage", { lang, tone }) };
-                const rdb = pool.getDb(reminderAgent);
-                await rdb.init();
-                try {
-                  await cancelReminder(rdb, id);
-                  return { text: t("reminder.cancel_success", { lang, tone, vars: { id } }) };
-                } catch (e) {
-                  return { text: t("reminder.cancel_failed", { lang, tone, vars: { id, error: e?.message || String(e) } }) };
-                }
+                return pool.withDb(reminderAgent, async (rdb) => {
+                  await rdb.init();
+                  try {
+                    await cancelReminder(rdb, id);
+                    return { text: t("reminder.cancel_success", { lang, tone, vars: { id } }) };
+                  } catch (e) {
+                    return { text: t("reminder.cancel_failed", { lang, tone, vars: { id, error: e?.message || String(e) } }) };
+                  }
+                });
               }
-              const rdb = pool.getDb(reminderAgent);
-              await rdb.init();
               if (subKey === "list" || subKey === "show" || subKey === "help") {
-                let rows = [];
-                try {
-                  rows = await listReminders(rdb, reminderAgent, reminderWsKey);
-                } catch (e) {
-                  api.logger.warn(`plur1bus-reminder: list failed: ${String(e)}`);
-                }
-                const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
-                if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };
-                active.sort((a, b) => (a.remindAt || 0) - (b.remindAt || 0));
-                const lines = [t("reminder.list_header", { lang, tone })];
-                for (const r of active) {
-                  const when = r.remindAt ? new Date(r.remindAt).toISOString().replace("T", " ").slice(0, 16) : "?";
-                  lines.push(t("reminder.list_item", { lang, tone, vars: {
-                    when,
-                    text: String(r.text || "").slice(0, 80),
-                    status: r.reminderStatus || "scheduled",
-                    id: r.id,
-                  } }));
-                }
-                lines.push(t("reminder.list_hint", { lang, tone }));
-                return { text: lines.join("\n") };
+                return pool.withDb(reminderAgent, async (rdb) => {
+                  await rdb.init();
+                  let rows = [];
+                  try {
+                    rows = await listReminders(rdb, reminderAgent, reminderWsKey);
+                  } catch (e) {
+                    api.logger.warn(`plur1bus-reminder: list failed: ${String(e)}`);
+                  }
+                  const active = rows.filter(r => !["cancelled", "acknowledged"].includes(r.reminderStatus));
+                  if (active.length === 0) return { text: t("reminder.list_none", { lang, tone }) };
+                  active.sort((a, b) => (a.remindAt || 0) - (b.remindAt || 0));
+                  const lines = [t("reminder.list_header", { lang, tone })];
+                  for (const r of active) {
+                    const when = r.remindAt ? new Date(r.remindAt).toISOString().replace("T", " ").slice(0, 16) : "?";
+                    lines.push(t("reminder.list_item", { lang, tone, vars: {
+                      when,
+                      text: String(r.text || "").slice(0, 80),
+                      status: r.reminderStatus || "scheduled",
+                      id: r.id,
+                    } }));
+                  }
+                  lines.push(t("reminder.list_hint", { lang, tone }));
+                  return { text: lines.join("\n") };
+                });
               }
               return { text: t("reminder.unknown", { lang, tone, vars: { sub: subKey } }) };
             }
@@ -3617,7 +5166,7 @@ const plugin = {
             if (action === "neo" && sub === "workspaces" && tokens[2] === "migrate") {
               const dryRun = tokens.includes("--dry-run");
               if (!dryRun) {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
               }
               const backupDir = commandOption(tokens, "--backup-dir", commandOption(tokens, "--backup", ""));
@@ -3643,18 +5192,25 @@ const plugin = {
               const subKey = sub.toLowerCase();
               if (["overlays", "overlay", "disable-overlay", "contradictions", "supersede-overlay", "doctor"].includes(subKey)) {
                 if (subKey === "disable-overlay" || subKey === "supersede-overlay") {
-                  const denied = checkAuth(commandCtx, { destructive: true });
+                  const denied = await checkAuth(commandCtx, { destructive: true });
                   if (denied) return denied;
                 }
                 const extraArgs = ["supersede-overlay", "doctor"].includes(subKey) ? tokens.slice(3) : [];
                 const doctorCfg = cfg?.continuityEngine?.doctor ?? { enabled: false };
+                const auditAgentId = commandCtx?.agentId || "default";
+                const sessionRuntime = commandCtx?.runtimeContext?.llm;
                 const result = await runOverlayAuditCommand({
                   subCommand: subKey,
                   id,
                   extraArgs,
                   workspaceDir: commandCtx?.workspaceDir,
                   callLlm,
-                  mergingLlmCfg,
+                  overlayAuditLlmCfg: mergingEnabled ? withLlmCallContext(
+                    overlayAuditLlmCfg,
+                    typeof sessionRuntime?.complete === "function" ? undefined : auditAgentId,
+                    "overlay-audit-contradiction",
+                    { runtimeLlm: sessionRuntime },
+                  ) : null,
                   doctorCfg,
                 });
                 if ((subKey === "disable-overlay" || subKey === "supersede-overlay") && result.ok) {
@@ -3673,7 +5229,7 @@ const plugin = {
                 return { text: `Usage: /plur1bus memory ${sub} <id>` };
               }
               if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
               }
               const record = findNeoRecord(commandStore, id);
@@ -3699,7 +5255,7 @@ const plugin = {
             }
             if (action === "behavior") {
               if (["promote", "demote", "prune"].includes(sub)) {
-                const denied = checkAuth(commandCtx, { destructive: true });
+                const denied = await checkAuth(commandCtx, { destructive: true });
                 if (denied) return denied;
               }
               const cards = commandStore.readBehaviorCards(500);
@@ -3757,7 +5313,7 @@ const plugin = {
           };
         const plur1busCommands = [
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
-          { name: "plur1bus_start", description: "Complete PLUR1BUS installation and show Full Experience status.", acceptsArgs: false, prefixTokens: ["start"] },
+          { name: "plur1bus_start", description: "Show PLUR1BUS status and onboarding guidance.", acceptsArgs: false, prefixTokens: ["start"] },
           { name: "plur1bus_temperament", description: "Show or set the agent's emotional temperament.", acceptsArgs: true, prefixTokens: ["temperament"] },
           { name: "plur1bus_persona", description: "Show or (re)generate the agent's persona voice profile.", acceptsArgs: true, prefixTokens: ["persona"] },
           { name: "plur1bus_status", description: "Show PLUR1BUS memory status.", acceptsArgs: true, prefixTokens: ["status"] },
@@ -3777,7 +5333,12 @@ const plugin = {
             description: command.description,
             acceptsArgs: command.acceptsArgs ?? false,
             channels: ["telegram", "discord", "slack", "mattermost", "cron"],
-            handler: (commandCtx) => runPlur1busCommand(commandCtx, command.prefixTokens),
+            handler: (commandCtx) => {
+              if (command.name === "plur1bus_memory") return runMemoryCommand(commandCtx);
+              if (command.name === "plur1bus_forget") return runForgetCommand(commandCtx);
+              if (command.name === "plur1bus_correct") return runCorrectCommand(commandCtx);
+              return runPlur1busCommand(commandCtx, command.prefixTokens);
+            },
           });
         }
 
@@ -3792,12 +5353,13 @@ const plugin = {
             const mood = emotionalPool.describe(agentId);
             let cardCount = null;
             try {
-              const db = pool.getDb(agentId);
-              if (db?.table) {
-                cardCount = await db.table.countRows();
-              }
-            } catch (_) {
+              cardCount = await pool.withDb(agentId, async (db) => {
+                if (!db?.table) return null;
+                return db.table.countRows();
+              });
+            } catch (error) {
               // DB not available → cardCount stays null
+              api.logger?.debug?.(`memory-lancedb-namespaced: status card count unavailable for agent=${agentId}: ${String(error)}`);
             }
             const data = collectStatusData({
               memoryStats: { cardCount, lastUpdateMinutes: null },
@@ -3820,24 +5382,24 @@ const plugin = {
           return raw.split(/\s+/)[0];
         };
 
-        // Operator-Opt-out für Config-mutierende Chat-Commands. Das Plugin-SDK
-        // liefert dem Command-Handler keine Sender-Identität, daher ist echte
-        // Per-User-Autorisierung nicht möglich. In geteilten Channels kann der
-        // Operator hiermit /enable, /disable und /plur1bus setup für
-        // alle sperren (default: erlaubt — kein Verhaltensbruch).
+        // Operator opt-out for config-mutating chat commands. Host route facts
+        // are resolved separately below; this switch remains an additional
+        // deployment-level block for shared channels.
         const chatConfigCommandsBlocked = () => (cfg.security?.allowChatConfigCommands === false);
 
         const confirmationStore = new Map();
 
-        const checkAuth = (commandCtx, opts = {}) => {
-          // Identität aus dem Kontext robust auflösen (verschiedene Feldnamen je
-          // Channel/OpenClaw-Version), damit Auth + Confirmation greifen.
-          const identity = resolveIdentity(commandCtx);
-          const auth = isAuthorized({ ...commandCtx, ...identity }, cfg, opts);
+        const checkMemoryAuth = (memoryCtx, commandCtx, opts = {}) => {
+          const auth = isAuthorized(memoryCtx, cfg, { ...opts, chatKind: memoryCtx.chatKind });
           if (!auth.authorized) {
             return { text: t(`plur1bus.${auth.reason || "unauthorized"}`, resolveCommandLocale(commandCtx)) };
           }
           return null;
+        };
+
+        const checkAuth = async (commandCtx, opts = {}, suppliedMemoryCtx = null) => {
+          const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
+          return checkMemoryAuth(memoryCtx, commandCtx, opts);
         };
 
         // Text-basierter Confirm-Abschluss. Das OpenClaw-SDK liefert keine
@@ -3850,14 +5412,16 @@ const plugin = {
         };
         // Sucht das Pending per Nonce(-Präfix) für das erwartete Kommando und
         // validiert es (user/chat/expiry) via validateConfirmation (löscht es).
-        const completePending = (commandCtx, expectedCommand, token) => {
-          const { userId, chatId } = resolveIdentity(commandCtx);
+        const completePending = (memoryCtx, expectedCommand, token) => {
           let pending = null;
           for (const v of confirmationStore.values()) {
             if (v.command === expectedCommand && (v.nonce === token || v.nonce.startsWith(token))) { pending = v; break; }
           }
           if (!pending) return { error: "not_found_or_expired" };
-          const result = validateConfirmation(pending.callbackData, confirmationStore, { userId, chatId });
+          const result = validateConfirmation(pending.callbackData, confirmationStore, {
+            userId: memoryCtx.userId,
+            chatId: memoryCtx.conversationPrincipal,
+          });
           if (!result.valid) return { error: result.reason || "invalid" };
           return { pending };
         };
@@ -3868,11 +5432,17 @@ const plugin = {
           return null;
         };
 
-        const runFeatureToggle = (commandCtx, enable) => {
+        const checkSemanticArgsLength = (commandCtx) => {
+          const v = validateSemanticCommandArgs(commandCtx.args);
+          if (!v.ok) return { text: `❌ ${v.error}` };
+          return null;
+        };
+
+        const runFeatureToggle = async (commandCtx, enable) => {
           const deniedLen = checkArgsLength(commandCtx);
           if (deniedLen) return deniedLen;
           const { lang, tone } = resolveCommandLocale(commandCtx);
-          const denied = checkAuth(commandCtx, { destructive: true });
+          const denied = await checkAuth(commandCtx, { destructive: true });
           if (denied) return denied;
           if (chatConfigCommandsBlocked()) return { text: t("plur1bus.config_blocked", { lang, tone }) };
           const featureName = parseFeatureArg(commandCtx);
@@ -3913,7 +5483,7 @@ const plugin = {
           description: "PLUR1BUS — Speaker naming. /speaker list | name <label> <name> | proposals | confirm <label> | reject <label> | clear <label>",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
-          handler: (commandCtx) => {
+          handler: async (commandCtx) => {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang } = resolveCommandLocale(commandCtx);
@@ -3921,17 +5491,24 @@ const plugin = {
             const sub = (commandCtx.args || "").trim().split(/\s+/)[0]?.toLowerCase() || "list";
             const rest = (commandCtx.args || "").trim().slice(sub.length).trim();
             const subCtx = { ...commandCtx, args: rest };
+            let speakerAuth = () => null;
+            if (["name", "confirm", "reject", "clear"].includes(sub)) {
+              const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+              const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
+              if (denied) return denied;
+              speakerAuth = (ctx, opts) => checkMemoryAuth(memoryCtx, ctx, opts);
+            }
             switch (sub) {
               case "name":
-                return runSpeakerNameCommand(subCtx, agentId, checkAuth, { lang });
+                return runSpeakerNameCommand(subCtx, agentId, speakerAuth, { lang });
               case "proposals":
                 return runSpeakerProposalsCommand(agentId, { lang });
               case "confirm":
-                return runSpeakerConfirmCommand(subCtx, agentId, checkAuth, { lang });
+                return runSpeakerConfirmCommand(subCtx, agentId, speakerAuth, { lang });
               case "reject":
-                return runSpeakerRejectCommand(subCtx, agentId, checkAuth, { lang });
+                return runSpeakerRejectCommand(subCtx, agentId, speakerAuth, { lang });
               case "clear":
-                return runSpeakerClearCommand(subCtx, agentId, checkAuth, { lang });
+                return runSpeakerClearCommand(subCtx, agentId, speakerAuth, { lang });
               case "list":
               default:
                 return runSpeakerListCommand(agentId, { lang });
@@ -3961,31 +5538,38 @@ const plugin = {
           logger: api.logger,
         });
 
+        const resolveRegisteredMemoryContext = (commandCtx, options = {}) => resolveHostCommandMemoryContext(commandCtx, {
+          resolveAgentWorkspaceDir: (config, agentId) => api.runtime.agent.resolveAgentWorkspaceDir(config, agentId),
+          workspaceAliases: memoryWorkspaceAliases,
+          routingLoader: hostRoutingLoader,
+          requireConversation: options.requireConversation !== false,
+          requireWorkspace: options.requireWorkspace === true,
+          requireUser: options.requireUser === true,
+        });
+
         registerGatewayShutdown(api, {
           memoryDbAdapter,
           pool,
+          clearTurnRoutes: clearInitializedTurnRoutes,
           flushMetrics,
           llmResultCache,
         });
 
         const runMemoryCommand = async (commandCtx) => {
           try {
-            const deniedLen = checkArgsLength(commandCtx);
+            const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
             const input = (commandCtx.args || "").trim();
-            const agentId = commandCtx.agentId || "default";
-            const summarizer = makeQuerySummarizer(mergingLlmCfg, api.logger, agentId);
+            const agentId = memoryCtx.agentId;
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+              runtimeLlm: commandCtx?.runtimeContext?.llm,
+            });
             const normalized = await normalizeCommandInput({ kind: "recall-query", text: input, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
             const parsed = parseMemoryQuery(normalized.canonicalText);
-            const { userId } = resolveIdentity(commandCtx);
-            const items = await queryMemory(memoryDbAdapter, agentId, parsed, {
-              agentId,
-              workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-              userId,
-              workspaceDir: commandCtx.workspaceDir,
-            });
+            const items = await queryMemory(memoryDbAdapter, agentId, parsed, memoryCtx);
             if (parsed.explain) {
               const explanations = explainResults(items.map((r) => ({ entry: r, score: r.score ?? 0 })), parsed.topic);
               items.forEach((item, i) => {
@@ -4001,31 +5585,29 @@ const plugin = {
 
         const runForgetCommand = async (commandCtx) => {
           try {
-            const deniedLen = checkArgsLength(commandCtx);
+            const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const denied = checkAuth(commandCtx, { destructive: true });
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
-            const agentId = commandCtx.agentId || "default";
+            const agentId = memoryCtx.agentId;
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+              runtimeLlm: commandCtx?.runtimeContext?.llm,
+            });
 
             // Completion: /forget confirm <token>
             const token = parseConfirmArg(args);
             if (token) {
-              const { pending, error } = completePending(commandCtx, "forget", token);
+              const { pending, error } = completePending(memoryCtx, "forget", token);
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
-              const { userId } = resolveIdentity(commandCtx);
               const result = await forgetCard(memoryDbAdapter, agentId, pending.targetId, {
                 lang,
                 tone,
-                workspaceDir: commandCtx.workspaceDir,
+                workspaceDir: memoryCtx.workspaceDir,
                 logger: api.logger,
-                ctx: {
-                  agentId,
-                  workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-                  userId,
-                  workspaceDir: commandCtx.workspaceDir,
-                },
+                ctx: memoryCtx,
               });
               if (!result.ok) return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: result.error } }) };
               return { text: t("plur1bus.forget_done", { lang, tone, vars: { id: pending.targetId } }) };
@@ -4035,14 +5617,8 @@ const plugin = {
             if (!args) return { text: t("plur1bus.forget_usage", { lang, tone }) };
             const normalized = await normalizeCommandInput({ kind: "forget-intent", text: args, summarizer, logger: api.logger, lang, tone });
             if (normalized.error) return { text: `❌ ${normalized.error}` };
-            const { userId: requestUserId } = resolveIdentity(commandCtx);
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, normalized.canonicalText, {
-              ctx: {
-                agentId,
-                workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-                userId: requestUserId,
-                workspaceDir: commandCtx.workspaceDir,
-              },
+              ctx: memoryCtx,
             });
             if (candidates.none) {
               return { text: t("plur1bus.forget_not_found", { lang, tone, vars: { query: normalized.canonicalText } }) };
@@ -4052,8 +5628,7 @@ const plugin = {
               return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
             const card = candidates.card;
-            const { userId, chatId } = resolveIdentity(commandCtx);
-            const confirm = createConfirmation({ userId, chatId, command: "forget", targetId: card.id });
+            const confirm = createConfirmation({ userId: memoryCtx.userId, chatId: memoryCtx.conversationPrincipal, command: "forget", targetId: card.id });
             confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
             return { text: t("plur1bus.forget_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
           } catch (err) {
@@ -4064,62 +5639,61 @@ const plugin = {
 
         const runCorrectCommand = async (commandCtx) => {
           try {
-            const deniedLen = checkArgsLength(commandCtx);
+            const deniedLen = checkSemanticArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const denied = checkAuth(commandCtx, { destructive: true });
+            const memoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+            const denied = checkMemoryAuth(memoryCtx, commandCtx, { destructive: true });
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
-            const agentId = commandCtx.agentId || "default";
+            const agentId = memoryCtx.agentId;
+            const summarizer = makeQuerySummarizer(mergingEnabled ? recallQueryLlmCfg : null, api.logger, agentId, {
+              runtimeLlm: commandCtx?.runtimeContext?.llm,
+            });
 
             // Completion: /correct confirm <token>
             const token = parseConfirmArg(args);
             if (token) {
-              const { pending, error } = completePending(commandCtx, "correct", token);
+              const { pending, error } = completePending(memoryCtx, "correct", token);
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
               const newText = pending.payload?.newText || "";
               if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
               const validated = validateCorrectionText(newText);
               if (!validated.ok) return { text: `❌ ${validated.error}` };
-              const { userId } = resolveIdentity(commandCtx);
               const result = await correctCard(memoryDbAdapter, agentId, pending.targetId, newText, {
                 lang,
                 tone,
-                workspaceDir: commandCtx.workspaceDir,
+                workspaceDir: memoryCtx.workspaceDir,
                 logger: api.logger,
-                ctx: {
-                  agentId,
-                  workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-                  userId,
-                  workspaceDir: commandCtx.workspaceDir,
-                },
+                ctx: memoryCtx,
                 updateMemory: async ({ id, newContent }) => {
-                  const rawDb = pool.getDb(agentId);
-                  await rawDb.init();
-                  const vector = await embeddings.embed(newContent, { agentId });
-                  const neoStore = getNeoStore(commandCtx, {});
-                  const { newId } = await safeUpdate(
-                    rawDb,
-                    id,
-                    { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
-                    {
-                      updateSource: "telegram:/correct",
-                      updateEvidence: pending.payload?.oldText
-                        ? `User corrected "${pending.payload.oldText}" to "${newContent}"`
-                        : `User correction via /correct`,
-                      confidence: 1,
-                    },
-                    { neoStore, logger: api.logger, skipDriftGate: true },
-                  );
-                  // newId === id on idempotent skip; reinforcement still valid
-                  try {
-                    const correctedCard = await rawDb.getById(newId);
-                    if (correctedCard) {
-                      await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
+                  return pool.withDb(agentId, async (rawDb) => {
+                    await rawDb.init();
+                    const vector = await embeddings.embed(newContent, { agentId });
+                    const neoStore = getNeoStore(commandCtx, {});
+                    const { newId } = await safeUpdate(
+                      rawDb,
+                      id,
+                      { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
+                      {
+                        updateSource: "telegram:/correct",
+                        updateEvidence: pending.payload?.oldText
+                          ? `User corrected "${pending.payload.oldText}" to "${newContent}"`
+                          : `User correction via /correct`,
+                        confidence: 1,
+                      },
+                      { neoStore, logger: api.logger, skipDriftGate: true },
+                    );
+                    // newId === id on idempotent skip; reinforcement still valid
+                    try {
+                      const correctedCard = await rawDb.getById(newId);
+                      if (correctedCard) {
+                        await rawDb.update(newId, applyRetrievalReinforcement(correctedCard, Date.now()));
+                      }
+                    } catch (err) {
+                      api.logger?.warn?.(`[/correct] reinforcement failed: ${err?.message}`);
                     }
-                  } catch (err) {
-                    api.logger?.warn?.(`[/correct] reinforcement failed: ${err?.message}`);
-                  }
+                  });
                 },
               });
               if (!result.ok) return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: result.error } }) };
@@ -4134,18 +5708,22 @@ const plugin = {
             }
             const [oldNorm, newNorm] = await Promise.all([
               normalizeCommandInput({ kind: "correction-old", text: parsed.old, summarizer, logger: api.logger, lang, tone }),
-              normalizeCommandInput({ kind: "correction-new", text: parsed.new, summarizer, logger: api.logger, lang, tone }),
+              normalizeCommandInput({
+                kind: "correction-new",
+                text: parsed.new,
+                summarizer,
+                maxDirectChars: INPUT_LIMITS.CORRECTION_TEXT,
+                logger: api.logger,
+                lang,
+                tone,
+              }),
             ]);
             if (oldNorm.error) return { text: `❌ ${oldNorm.error}` };
             if (newNorm.error) return { text: `❌ ${newNorm.error}` };
-            const { userId: requestUserId } = resolveIdentity(commandCtx);
+            const validatedCanonicalCorrection = validateCorrectionText(newNorm.canonicalText);
+            if (!validatedCanonicalCorrection.ok) return { text: `❌ ${validatedCanonicalCorrection.error}` };
             const candidates = await resolveCandidates(memoryDbAdapter, agentId, oldNorm.canonicalText, {
-              ctx: {
-                agentId,
-                workspaceId: commandCtx.workspaceId || commandCtx.workspaceKey,
-                userId: requestUserId,
-                workspaceDir: commandCtx.workspaceDir,
-              },
+              ctx: memoryCtx,
             });
             if (candidates.none) {
               return { text: t("plur1bus.correct_not_found", { lang, tone, vars: { query: oldNorm.canonicalText } }) };
@@ -4155,8 +5733,7 @@ const plugin = {
               return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
             }
             const card = candidates.card;
-            const { userId, chatId } = resolveIdentity(commandCtx);
-            const confirm = createConfirmation({ userId, chatId, command: "correct", targetId: card.id });
+            const confirm = createConfirmation({ userId: memoryCtx.userId, chatId: memoryCtx.conversationPrincipal, command: "correct", targetId: card.id });
             confirm.payload = { newText: newNorm.canonicalText, oldText: oldNorm.canonicalText };
             confirmationStore.set(`${confirm.nonce}:${confirm.targetId}`, confirm);
             return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
@@ -4166,12 +5743,12 @@ const plugin = {
           }
         };
 
-        const runMemoryFeedbackCommand = (commandCtx) => {
+        const runMemoryFeedbackCommand = async (commandCtx) => {
           try {
             const deniedLen = checkArgsLength(commandCtx);
             if (deniedLen) return deniedLen;
             const { lang, tone } = resolveCommandLocale(commandCtx);
-            const denied = checkAuth(commandCtx, { destructive: true });
+            const denied = await checkAuth(commandCtx, { destructive: true });
             if (denied) return denied;
             const args = (commandCtx.args || "").trim();
             const parsed = parseMemoryFeedback(args);
@@ -4223,7 +5800,27 @@ const plugin = {
           description: "PLUR1BUS — Wiki durchsuchen, hinzufügen, löschen",
           acceptsArgs: true,
           channels: ["telegram", "discord", "slack", "mattermost"],
-          handler: (ctx) => runWikiCommand(ctx, { pool, embeddings, reranker, callLlm, cfg, api, llmCfg: mergingLlmCfg }),
+          handler: async (ctx) => {
+            const memoryCtx = await resolveRegisteredMemoryContext(ctx);
+            const wikiAgentId = memoryCtx.agentId;
+            const sessionRuntime = ctx?.runtimeContext?.llm;
+            return runWikiCommand(ctx, {
+              pool,
+              embeddings,
+              reranker,
+              callLlm,
+              cfg,
+              api,
+              memoryCtx,
+              workspaceAliases: memoryWorkspaceAliases,
+              llmCfg: mergingEnabled ? withLlmCallContext(
+                wikiLlmCfg,
+                typeof sessionRuntime?.complete === "function" ? undefined : wikiAgentId,
+                "wiki",
+                { runtimeLlm: sessionRuntime },
+              ) : null,
+            });
+          },
         });
       }
 
@@ -4267,6 +5864,13 @@ const plugin = {
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+          const throwIfCaptureAborted = () => {
+            if (!signal?.aborted) return;
+            if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
+            const abortError = new Error("auto-capture aborted");
+            abortError.name = "AbortError";
+            throw abortError;
+          };
           if (neoEnabled) {
             try {
               const neoWorkspaceKey = rememberNeoWorkspace(ctx, event);
@@ -4324,6 +5928,8 @@ const plugin = {
             }
           }
 
+          throwIfCaptureAborted();
+
           if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
             api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
             return;
@@ -4334,9 +5940,9 @@ const plugin = {
             return;
           }
 
-          const db = pool.getDb(agentId);
-
+          return pool.withDb(agentId, async (db) => {
           try {
+            throwIfCaptureAborted();
             // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
             const maxChars = cfg.captureMaxChars || 15000;
             const turnId = event.turnId || event.runId || "";
@@ -4443,9 +6049,16 @@ const plugin = {
               let text = it.text;
               try {
                 if (text.length > maxChars) {
-                  if (mergingLlmCfg) {
+                  if (mergingEnabled && isLlmRouteAvailable(captureSummaryLlmCfg)) {
                     api.logger.info(`memory-lancedb-namespaced: summarizing oversized text (${text.length} chars) for agent=${agentId}`);
-                    text = await summarizeForCapture(text, maxChars, mergingLlmCfg, api.logger, agentId);
+                    text = await summarizeForCapture(
+                      text,
+                      maxChars,
+                      captureSummaryLlmCfg,
+                      api.logger,
+                      agentId,
+                      { agentId, signal },
+                    );
                   } else {
                     text = text.slice(0, maxChars);
                   }
@@ -4456,6 +6069,7 @@ const plugin = {
                 return { it, text, ok: false };
               }
             }));
+            throwIfCaptureAborted();
 
             // Phase 1b: Batch-Embedding, falls der Provider es unterstützt.
             const batchSize = cfg.embeddingBatchSize || 8;
@@ -4465,8 +6079,10 @@ const plugin = {
               const textsToEmbed = validPreps.map((p) => p.text);
               try {
                 for (let i = 0; i < textsToEmbed.length; i += batchSize) {
+                  throwIfCaptureAborted();
                   const batch = textsToEmbed.slice(i, i + batchSize);
                   const batchVectors = await embeddings.embedBatch(batch, 3, { agentId });
+                  throwIfCaptureAborted();
                   for (let j = 0; j < batch.length; j++) {
                     textToVector.set(batch[j], batchVectors[j]);
                   }
@@ -4477,6 +6093,7 @@ const plugin = {
                 textToVector.clear();
               }
             }
+            throwIfCaptureAborted();
 
             // Phase 1c: Einzel-Embedding-Fallback für nicht gebatchte/fehlgeschlagene Items.
             const prepared = await Promise.all(validPreps.map(async (p) => {
@@ -4491,6 +6108,7 @@ const plugin = {
               }
               return { it: p.it, text: p.text, vector, ok: true };
             }));
+            throwIfCaptureAborted();
 
             // Phase 2: Dedup-Checks parallel (schnell mit ANN-Index)
             const toStore = (await Promise.all(
@@ -4505,6 +6123,7 @@ const plugin = {
                 }
               })
             )).filter(Boolean);
+            throwIfCaptureAborted();
 
             skipped = prepared.filter(p => p.ok).length - toStore.length;
 
@@ -4512,6 +6131,7 @@ const plugin = {
             const storedMemoryRows = [];
             for (const p of toStore) {
               try {
+                throwIfCaptureAborted();
                 const categoryResult = categorizeMemoryWithReason(p.text);
                 const category = categoryResult.category;
                 const categoryReason = categoryResult.reason;
@@ -4523,7 +6143,8 @@ const plugin = {
                 });
                 const summary = generateSummary(p.text, summaryMaxWords);
                 const evidenceQuote = p.it.text.slice(0, 200);
-                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user", null, { agentId });
+                const captureEmotion = await inferEmotionalValenceAsync(p.text, "user", null, { agentId, signal });
+                throwIfCaptureAborted();
                 const captureMoodContext = emotionalPool.snapshot(agentId);
                 const graphSignals = extractGraphSignals(p.text, { category, sourceUrl: p.it.sourceUrl, role: p.it.role });
                 const memoryId = randomUUID();
@@ -4560,14 +6181,20 @@ const plugin = {
                 stored++;
                 api.logger.info(`memory-lancedb-namespaced: stored memory [${category}|${captureOrigin}] for agent=${agentId}`);
               } catch (err) {
+                const settlement = await waitForTimeoutSettlement(err);
+                if (settlement.status === "rejected") {
+                  api.logger.warn(`memory-lancedb-namespaced: late capture store settlement failed: ${String(settlement.error)}`);
+                }
                 api.logger.warn(`memory-lancedb-namespaced: failed to store capture: ${String(err)}`);
               }
             }
+            throwIfCaptureAborted();
 
             api.logger.info(`memory-lancedb-namespaced: capture complete - stored=${stored}, skipped=${skipped}${background ? " (background)" : ""}`);
 
             // Speaker naming pipeline: propose display names from merged diarization segments.
             await runSpeakerProposalPipeline(agentId, [...mediaOutputIds]);
+            throwIfCaptureAborted();
 
             // Meta-Cognition: Session-Counter erhöhen, ggf. Reflection triggern
             if (metaCognitionEnabled && stored > 0) {
@@ -4603,6 +6230,7 @@ const plugin = {
             // --- Reminder Extraction ---
             for (const it of items) {
               try {
+                throwIfCaptureAborted();
                 const parsed = parseReminderIntent(it.text, { now: Date.now() });
                 if (parsed.remindAt && parsed.timePrecision !== "none") {
                   const wsKey = ctx?.workspaceDir || "default";
@@ -4633,9 +6261,15 @@ const plugin = {
                   }
                 }
               } catch (reminderStoreErr) {
+                const settlement = await waitForTimeoutSettlement(reminderStoreErr);
+                if (settlement.status === "rejected") {
+                  api.logger.warn(`plur1bus-reminder: late store settlement failed: ${String(settlement.error)}`);
+                }
                 api.logger.warn(`plur1bus-reminder: store failed: ${String(reminderStoreErr)}`);
               }
             }
+
+            throwIfCaptureAborted();
 
             // High-Watermark: Nur neue Messages seit letztem Durchlauf verarbeiten
             const neoStore = getNeoStore(ctx, event);
@@ -4661,7 +6295,7 @@ const plugin = {
               const digestHash = createHash("sha256").update(sessionDigest).digest("hex").slice(0, 16);
 
               // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)
-              if (!background && mergingLlmCfg && neoEnabled) {
+              if (!background && mergingEnabled && isLlmRouteAvailable(conversationInsightsLlmCfg) && neoEnabled) {
                 const processedDreams = hooks?.agent_end?.processedDreams || [];
                 if (processedDreams.includes(digestHash)) {
                   api.logger.info(`memory-lancedb-namespaced: light dream already processed for this session (digest=${digestHash})`);
@@ -4685,7 +6319,30 @@ const plugin = {
                     neoStore,
                     db,
                     embeddings,
-                    llmCfg: mergingLlmCfg,
+                    insightLlmCfg: withLlmCallContext(
+                      conversationInsightsLlmCfg,
+                      agentId,
+                      "conversation-insights",
+                      { signal },
+                    ),
+                    narrativeLlmCfg: withLlmCallContext(
+                      dreamNarrativeLlmCfg,
+                      agentId,
+                      "dream-narrative",
+                      { signal },
+                    ),
+                    echoLlmCfg: withLlmCallContext(
+                      dreamEchoLlmCfg,
+                      agentId,
+                      "dream-echo",
+                      { signal },
+                    ),
+                    personaLlmCfg: (skillMinerEnabled || mergingEnabled) ? withLlmCallContext(
+                      personaVoiceLlmCfg,
+                      agentId,
+                      "persona-voice",
+                      { signal },
+                    ) : null,
                     callLlm,
                     logger: api.logger,
                     narrativeCfg: dreamNarrativeCfg,
@@ -4694,12 +6351,16 @@ const plugin = {
                     personaSeedCfg: (cfg.personaVoice?.enabled ?? true) !== false
                       ? { agentId, lang: cfg.language || "de", identityText: personaIdentityText }
                       : null,
+                    signal,
                   }).then((dreamResult) => {
+                    throwIfAborted(signal, "light dream commit aborted");
                     if (ctx?.workspaceDir) {
+                      throwIfAborted(signal, "light dream commit aborted");
                       writeLightDreamToVault(dreamResult, ctx.workspaceDir, normalizedTurns);
                     }
                     // Markiere als verarbeitet
                     const mergedDreams = [...processedDreams.slice(-100), digestHash];
+                    throwIfAborted(signal, "light dream commit aborted");
                     neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
                   }).catch((dreamErr) => {
                     api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
@@ -4717,20 +6378,30 @@ const plugin = {
                   extractEpisodesFromTurns(normalizedTurns, {
                     workspaceKey: ctx?.workspaceKey,
                     agentId,
-                    llmCfg: mergingLlmCfg,
+                    llmCfg: mergingEnabled ? withLlmCallContext(
+                      episodeExtractionLlmCfg,
+                      agentId,
+                      "episode-extraction",
+                      { signal },
+                    ) : null,
                     callLlm,
+                    signal,
                   }).then((episodes) => {
+                    throwIfAborted(signal, "episode commit aborted");
                     if (episodes.length > 0) {
+                      throwIfAborted(signal, "episode commit aborted");
                       neoStore.appendEpisodes(episodes);
                       api.logger.info(`memory-lancedb-namespaced: ${episodes.length} episode(s) extracted for agent=${agentId}`);
                       if (ctx?.workspaceDir) {
                         for (const ep of episodes) {
+                          throwIfAborted(signal, "episode commit aborted");
                           writeEpisodeToVault(ep, ctx.workspaceDir);
                         }
                       }
                     }
                     // Markiere als verarbeitet
                     const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
+                    throwIfAborted(signal, "episode commit aborted");
                     neoStore.recordHook("agent_end", { processedEpisodes: mergedEpisodes });
                   }).catch((epErr) => {
                     api.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
@@ -4745,6 +6416,7 @@ const plugin = {
             // v5.4.0 — Memory-Graph: Assoziative Verknüpfung
             if (!background && neoEnabled && storedMemoryRows.length > 0) {
               try {
+                throwIfCaptureAborted();
                 const neoStore = getNeoStore(ctx, event);
                 const graphMetrics = createGraphMetrics();
 
@@ -4832,6 +6504,7 @@ const plugin = {
           } catch (err) {
             api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
           }
+          });
         }); // runtimeScheduler.enqueueCapture
       }, { timeoutMs: 60_000 });
     }
@@ -4862,9 +6535,8 @@ const plugin = {
     // ========================================================================
 
     api.registerTool((ctx) => {
-      const agentId = ctx.agentId;
-      const db = pool.getWriteDb(agentId);        // write-db — used by memory_store/forget
-      const readDbs = pool.getReadDbs(agentId);   // read namespaces — used by memory_recall
+      const memoryCtx = resolveToolMemoryRequestContext(ctx, { workspaceAliases: memoryWorkspaceAliases });
+      const agentId = memoryCtx.agentId;
       const modelDestructiveToolsAllowed = () => (cfg.security?.allowModelDestructiveMemoryOps !== false);
       const blockModelDestructiveTool = (toolName) => ({
         content: [{
@@ -4888,9 +6560,15 @@ const plugin = {
           },
           async execute(_toolCallId, params) {
             try {
+              return await pool.withReadDbs(agentId, async (readDbs) => {
               const limit = params.limit || maxPromptMemories;
               const assocCfg = cfg?.continuityEngine?.associativeRecall || {};
-              for (const { db: rdb } of readDbs) { await rdb.init(); }
+              const initializedReadDbs = [];
+              for (const entry of readDbs) {
+                const initialized = await entry.db.init();
+                if (initialized !== false && entry.db.table) initializedReadDbs.push(entry);
+              }
+              readDbs = initializedReadDbs;
               // v5.4.0 — Graph-Edges für assoziativen Spread laden
               let graphEdges = [];
               try {
@@ -4931,7 +6609,12 @@ const plugin = {
                 rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
                 rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
                 summaryMaxWords,
-                querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger, agentId),
+                querySummarizer: makeQuerySummarizer(
+                  mergingEnabled ? recallQueryLlmCfg : null,
+                  api.logger,
+                  agentId,
+                  { agentId },
+                ),
                 logger: api.logger,
                 emotionalState: emotionalPool.get(agentId),
                 graphEdges,
@@ -4941,6 +6624,7 @@ const plugin = {
                 },
                 workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
                 agentId,
+                memoryCtx,
                 decisionTrace: trace,
                 retrievalLogger: (ledgerInfo) => {
                   try {
@@ -4952,23 +6636,13 @@ const plugin = {
                   } catch (_e) { dbg(_e); }
                 },
               };
-              let canonicalHits, ordered, returnedTrace;
-              if (readDbs.length === 1) {
-                ({ canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runRecallPipeline({
-                  ..._recallBaseParams,
-                  dbTable: readDbs[0].db.table,
-                }));
-              } else {
-                const nsResults = await Promise.all(
-                  readDbs.map(({ db: nsDb }) => runRecallPipeline({
-                    ..._recallBaseParams,
-                    dbTable: nsDb.table,
-                  }))
-                );
-                canonicalHits = nsResults.flatMap(r => r.canonical || []);
-                returnedTrace = nsResults[0]?.trace;
-                ordered = dedupResults(nsResults.flatMap(r => r.memories || []), dedupJaccard);
-              }
+              const { canonical: canonicalHits, memories: ordered, trace: returnedTrace } = await runMergedNamespaceRecall(
+                readDbs,
+                _recallBaseParams,
+                trace,
+                phaseTimer,
+                { strictReadErrors: namespaceLayout.recallReadNamespaces.length > 1 },
+              );
               if (ordered.length === 0 && canonicalHits.length === 0) {
                 return { content: [{ type: "text", text: "No relevant memories found." }] };
               }
@@ -4996,6 +6670,7 @@ const plugin = {
                 lines.push(`[decision-trace] totalCandidates:${summary.totalCandidates} included:${summary.included} rejected:${summary.rejected} downranked:${summary.downranked} superseded:${summary.superseded} deduped:${summary.deduped} merged:${summary.merged} guardPass:${summary.guardPass} guardFail:${summary.guardFail}`);
               }
               return { content: [{ type: "text", text: lines.join("\n") }] };
+              });
             } catch (err) {
               return { content: [{ type: "text", text: `Memory recall failed: ${String(err)}` }] };
             }
@@ -5040,6 +6715,15 @@ const plugin = {
                   details: { action: "rejected", reason: "invalid_text" },
                 };
               }
+              const scopeAccess = resolveStoreScopeAccess(memoryCtx, params.scope);
+              if (!scopeAccess.ok) {
+                return {
+                  content: [{ type: "text", text: `Memory store rejected: ${scopeAccess.error}` }],
+                  details: { action: "rejected", reason: "missing_scope_owner" },
+                };
+              }
+              const { scope, ownerUserId, ownershipFields } = scopeAccess;
+              return await pool.withWriteDb(agentId, async (db) => {
               const trace = createRecallDecisionTrace({
                 query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
                 mode: "store",
@@ -5047,9 +6731,7 @@ const plugin = {
                 maxCandidates: traceCfg.maxCandidates ?? 50,
               });
               const vector = await embeddings.embed(params.text, { agentId });
-              const workspaceKey = ctx.workspaceKey || workspaceKeyFromContext(ctx, {
-                workspaceDir: ctx.workspaceDir,
-              });
+              const workspaceKey = ownershipFields.workspaceKey;
               const categoryResult = params.category
                 ? { category: params.category, reason: "caller-provided" }
                 : categorizeMemoryWithReason(params.text);
@@ -5070,15 +6752,7 @@ const plugin = {
                 reason: `category=${category} (${categoryReason}); importance=${importance.toFixed(2)}; ${importanceResult.importanceReason}`,
               });
               const expiresAt = params.ttl && TTL_MAP[params.ttl] ? Date.now() + TTL_MAP[params.ttl] : 0;
-              const scopeAccess = resolveStoreScopeAccess(ctx, params.scope);
-              if (!scopeAccess.ok) {
-                return {
-                  content: [{ type: "text", text: `Memory store rejected: ${scopeAccess.error}` }],
-                  details: { action: "rejected", reason: "missing_user_scope_owner" },
-                };
-              }
-              const { scope, ownerUserId, requestUserId } = scopeAccess;
-              const storeAccessCtx = { agentId, workspaceId: workspaceKey, userId: requestUserId };
+              const storeAccessCtx = memoryCtx;
               const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
               const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
 
@@ -5103,67 +6777,79 @@ const plugin = {
                 const mergeCandidate = candidateVisibleForStore(mergeCandidateRaw, storeAccessCtx) ? mergeCandidateRaw : null;
                 if (mergeCandidate) {
                   addTraceStoreDecision(trace, { action: "merge_candidate", memoryId: mergeCandidate.entry.id, reason: `merge_score:${mergeCandidate.score.toFixed(3)}` });
-                  let mergeResult = null;
-                  if (hasMeaningfulDifference(mergeCandidate.entry.text, params.text)) {
-                    api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${mergeCandidate.entry.text.slice(0, 120)}"`);
-                    addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "meaningful difference" });
-                  } else {
-                    try {
-                      mergeResult = await Promise.race([
-                        callMergeCheck(mergeCandidate.entry.text, params.text, mergingLlmCfg, agentId),
-                        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
-                      ]);
-                    } catch (mergeErr) {
-                      api.logger.warn(`memory-lancedb-namespaced: merge check skipped: ${String(mergeErr)}`);
-                    }
-                  }
-                  // Conflict detection: log if decision from different agent
-                  if (category === "decision" && ctx.workspaceDir && mergeCandidate.entry.storedBy && mergeCandidate.entry.storedBy !== agentId) {
-                    const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
-                    appendConflictLog(ctx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: agentId, newText: params.text.slice(0, 200), existingMemoryId: mergeCandidate.entry.id, existingAgentId: mergeCandidate.entry.storedBy, existingText: mergeCandidate.entry.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
-                  }
-                  const minLen = Math.min(mergeCandidate.entry.text.length, params.text.length);
-                  if (mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen) {
-                    if (!validateMergedTextPreservesFacts(mergeCandidate.entry.text, params.text, mergeResult.mergedText)) {
-                      api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
-                      addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: mergeCandidate.entry.id, reason: "LLM mergedText loses facts" });
-                    } else {
-                      // DATA-003: prepare the merged entry and archive the original BEFORE
-                      // deleting it. If embedding/archiving fails, the original remains intact.
+                  const durableMerge = await withDurableMerge({
+                    db,
+                    agentId,
+                    selectedCandidate: mergeCandidate,
+                    accessCtx: storeAccessCtx,
+                    workspaceDir: ctx?.workspaceDir,
+                    writeKey: durableMergeWriteKey({
+                      workspaceKey,
+                      text: params.text,
+                      category,
+                      origin,
+                      importance,
+                      ttl: params.ttl && TTL_MAP[params.ttl] ? params.ttl : "",
+                      sourceUrl,
+                      evidenceQuote,
+                      scope,
+                      ownerUserId,
+                    }),
+                    prepareReplacement: async (authoritativeCandidate, replacementId) => {
+                      let mergeResult = null;
+                      if (hasMeaningfulDifference(authoritativeCandidate.text, params.text)) {
+                        api.logger?.warn?.(`[memory-merge-safety] merge candidate has meaningful difference; storing separately: "${params.text.slice(0, 120)}" vs "${authoritativeCandidate.text.slice(0, 120)}"`);
+                        addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "meaningful difference" });
+                      } else {
+                        try {
+                          mergeResult = await Promise.race([
+                            callMergeCheck(authoritativeCandidate.text, params.text, mergingLlmCfg, agentId),
+                            new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 30000)),
+                          ]);
+                        } catch (mergeErr) {
+                          api.logger.warn("memory-lancedb-namespaced: merge check skipped", {
+                            errorClass: normalizedLlmErrorClass(mergeErr),
+                          });
+                        }
+                      }
+                      // Conflict detection: log if decision from different agent
+                      if (category === "decision" && ctx.workspaceDir && authoritativeCandidate.storedBy && authoritativeCandidate.storedBy !== agentId) {
+                        const mergeDecision = mergeResult?.merge === true ? "merged" : "stored_separately";
+                        appendConflictLog(ctx.workspaceDir, { schemaVersion: 1, timestamp: new Date().toISOString(), newMemoryId: null, newAgentId: agentId, newText: params.text.slice(0, 200), existingMemoryId: authoritativeCandidate.id, existingAgentId: authoritativeCandidate.storedBy, existingText: authoritativeCandidate.text.slice(0, 200), score: mergeCandidate.score, category, mergeDecision });
+                      }
+                      const minLen = Math.min(authoritativeCandidate.text.length, params.text.length);
+                      if (!(mergeResult?.merge === true && mergeResult.mergedText && mergeResult.mergedText.length > minLen)) {
+                        return null;
+                      }
+                      if (!validateMergedTextPreservesFacts(authoritativeCandidate.text, params.text, mergeResult.mergedText)) {
+                        api.logger?.warn?.(`[memory-merge-safety] LLM mergedText loses facts; aborting merge and storing separately: "${mergeResult.mergedText.slice(0, 120)}"`);
+                        addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
+                        return null;
+                      }
+                      const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                       const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
                       const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user", null, { agentId });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
                       const mergedEntry = applyDynamicsDefaults({
-                        id: randomUUID(), text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
-                        importance: Math.max(importance, mergeCandidate.entry.importance), category, createdAt: Date.now(), mergedFrom: JSON.stringify([mergeCandidate.entry.id]),
-                        expiresAt, storedBy: agentId, workspaceKey, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId,
+                        id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
+                        importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]),
+                        expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
                         emotionalValence: serializeEmotionalValence(mergedEmotion),
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
                       }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
-                      let archivePath;
-                      try {
-                        archivePath = archiveCard(mergeCandidate.entry, agentId);
-                      } catch (archiveErr) {
-                        api.logger.warn?.(`memory-lancedb-namespaced: merge archive failed for ${mergeCandidate.entry.id}, aborting merge: ${String(archiveErr)}`);
-                        throw archiveErr;
-                      }
-                      await db.delete(mergeCandidate.entry.id);
-                      appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_store_merge", agentId, memoryId: mergeCandidate.entry.id, via: "merge", archivePath, timestamp: new Date().toISOString() });
-                      try {
-                        await db.store(mergedEntry);
-                      } catch (storeErr) {
-                        api.logger.warn?.(`memory-lancedb-namespaced: merge store failed for ${mergedEntry.id}, original archived at ${archivePath}: ${String(storeErr)}`);
-                        throw storeErr;
-                      }
-                      if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})`, relatedId: mergeCandidate.entry.id });
-                      if (ctx.workspaceDir && shouldPromoteMemory(category, Math.max(importance, mergeCandidate.entry.importance), importanceResult.factQuality, schicht15MinImportance)) {
-                        trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: Math.max(importance, mergeCandidate.entry.importance) });
-                      }
-                      addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${mergeCandidate.entry.id} (${mergeResult.reason || ""})` });
-                      return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
+                      return { mergedEntry, mergeResult, mergedImportance };
+                    },
+                  });
+                  if (durableMerge) {
+                    const { mergedEntry, mergeResult, mergedImportance, authoritativeCandidate } = durableMerge;
+                    if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.merged", timestamp: new Date().toISOString(), agentId, memoryId: mergedEntry.id, text: mergeResult.mergedText.slice(0, 200), category, origin, reason: `merged_with:${authoritativeCandidate.id} (${mergeResult.reason || ""})`, relatedId: authoritativeCandidate.id });
+                    if (ctx.workspaceDir && shouldPromoteMemory(category, mergedImportance, importanceResult.factQuality, schicht15MinImportance)) {
+                      trackKnowledgePending(ctx.workspaceDir, { sourceAgent: agentId, memoryId: mergedEntry.id, category, importance: mergedImportance });
                     }
+                    addTraceStoreDecision(trace, { action: "merge_allowed", memoryId: mergedEntry.id, reason: `merged_with:${authoritativeCandidate.id} (${mergeResult.reason || ""})` });
+                    return { content: [{ type: "text", text: `Memory merged [${category}|${origin}]: "${mergeResult.mergedText}" (ID: ${mergedEntry.id})` }], details: { action: "merged", id: mergedEntry.id, decisionTrace: trace } };
                   }
                 }
               } else if (category === "decision" && ctx.workspaceDir) {
@@ -5183,8 +6869,8 @@ const plugin = {
               const moodContext = emotionalPool.snapshot(agentId);
               const entry = applyDynamicsDefaults({
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
-                createdAt: Date.now(), mergedFrom: "[]", expiresAt, storedBy: agentId, workspaceKey,
-                sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, ownerUserId,
+                createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields,
+                sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
                 emotionalValence: serializeEmotionalValence(emotion),
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
@@ -5197,6 +6883,7 @@ const plugin = {
               }
               addTraceStoreDecision(trace, { action: "stored_separately", memoryId: entry.id, reason: "stored" });
               return { content: [{ type: "text", text: `Memory stored [${category}|${origin}]: ${summary} (ID: ${entry.id})` }], details: { action: "stored", id: entry.id, decisionTrace: trace } };
+              });
             } catch (err) {
               return { content: [{ type: "text", text: `Memory store failed: ${String(err)}` }] };
             }
@@ -5218,6 +6905,7 @@ const plugin = {
               if (!modelDestructiveToolsAllowed()) {
                 return blockModelDestructiveTool("memory_forget");
               }
+              return await pool.withWriteDb(agentId, async (db) => {
               if (params.memoryId) {
                 // Archive-First: vor dem Löschen ein JSON-Backup schreiben.
                 // Schlägt das Archiv fehl, NICHT löschen (wie bei /forget).
@@ -5229,8 +6917,22 @@ const plugin = {
                 } catch (archiveErr) {
                   return { content: [{ type: "text", text: `Archive failed — NOT deleted: ${String(archiveErr)}` }] };
                 }
-                await db.delete(params.memoryId);
-                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: params.memoryId, via: "id", archivePath, timestamp: new Date().toISOString() });
+                await deleteWithAuditContinuation({
+                  db,
+                  memoryId: params.memoryId,
+                  workspaceDir: ctx?.workspaceDir,
+                  logEntry: {
+                    event: "memory.deleted",
+                    source: "memory_forget",
+                    agentId,
+                    via: "id",
+                    archivePath,
+                    timestamp: new Date().toISOString(),
+                  },
+                  onLateFailure: (lateDeleteError) => {
+                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget late ID delete failed for agent=${agentId} memory=${params.memoryId} archive=${archivePath}: ${String(lateDeleteError)}`);
+                  },
+                });
                 return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (archived).` }] };
               }
               if (params.query) {
@@ -5252,11 +6954,27 @@ const plugin = {
                 } catch (archiveErr) {
                   return { content: [{ type: "text", text: `Archive failed — NOT deleted: ${String(archiveErr)}` }] };
                 }
-                await db.delete(targetId);
-                appendDestructiveOpLog(ctx?.workspaceDir, { event: "memory.deleted", source: "memory_forget", agentId, memoryId: targetId, via: "query", query: params.query.slice(0, 200), archivePath, timestamp: new Date().toISOString() });
+                await deleteWithAuditContinuation({
+                  db,
+                  memoryId: targetId,
+                  workspaceDir: ctx?.workspaceDir,
+                  logEntry: {
+                    event: "memory.deleted",
+                    source: "memory_forget",
+                    agentId,
+                    via: "query",
+                    query: params.query.slice(0, 200),
+                    archivePath,
+                    timestamp: new Date().toISOString(),
+                  },
+                  onLateFailure: (lateDeleteError) => {
+                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget late query delete failed for agent=${agentId} memory=${targetId} archive=${archivePath}: ${String(lateDeleteError)}`);
+                  },
+                });
                 return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (archived).` }] };
               }
               return { content: [{ type: "text", text: "Provide query or memoryId." }] };
+              });
             } catch (err) {
               return { content: [{ type: "text", text: `Memory forget failed: ${String(err)}` }] };
             }
@@ -5283,6 +7001,7 @@ const plugin = {
               return { content: [{ type: "text", text: "knowledge_update: workspaceDir not available." }] };
             }
 
+            return pool.withWriteDb(agentId, async (db) => {
             // Pending snapshot: hold only the short pending-file lock, then release
             // before attempting the KNOWLEDGE.md lock.
             const pendingSnapshot = readKnowledgePendingSnapshot(ctx.workspaceDir);
@@ -5395,10 +7114,12 @@ const plugin = {
                   role: "user",
                   content: `Current KNOWLEDGE.md body (empty = not yet created):\n${currentBody || "(empty)"}\n\nNew memories to integrate (date=${today}):\n${newEntriesBlock}${params?.note ? `\n\nCurator note: ${params.note}` : ""}\n\nIntegrate these into the KNOWLEDGE.md body.\n- Do not rewrite the document from scratch.\n- Preserve existing wording unless merging an exact duplicate or lightly compacting closely related points.\n- Only add or merge knowledge that is directly supported by the new memories.\n- Add entries under appropriate sections with today's date.\n- If an existing entry is logically identical, replace it instead of adding a duplicate.\n- Return ONLY the Markdown body, NO YAML frontmatter, NO explanation, NO code block wrapper.`,
                 },
-              ], withLlmResultCacheContext(
-                { ...schicht15LlmCfg, maxTokens: 3000, temperature: 0 },
+              ], withDeterministicLlmContext(
+                schicht15LlmCfg,
                 agentId,
                 LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+                { maxTokens: 3000, temperature: 0 },
+                { agentId },
               ));
 
               if (!updated) {
@@ -5414,10 +7135,12 @@ const plugin = {
                     role: "user",
                     content: `The following KNOWLEDGE.md body has grown too large (>200 lines). Consolidate it thematically — do NOT simply truncate.\n\nRules:\n1. Keep ALL unique facts and decisions — lose no information.\n2. Group thematically related entries under a shared point.\n3. Structure: Domain → Category → consolidated fact (Context-Tree style).\n4. If multiple entries describe the same concept from different angles, write one entry covering all aspects.\n5. Keep the date of the oldest merged entry.\n6. Target: max 150 lines, achieved only through real consolidation.\n7. Return ONLY the updated Markdown body, NO YAML frontmatter, NO code block wrapper.\n\n${finalBody}`,
                   },
-                ], withLlmResultCacheContext(
-                  { ...schicht15LlmCfg, maxTokens: 4000, temperature: 0 },
+                ], withDeterministicLlmContext(
+                  schicht15LlmCfg,
                   agentId,
                   LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
+                  { maxTokens: 4000, temperature: 0 },
+                  { agentId },
                 ));
 
                 const compactedLines = compacted?.split("\n").length ?? Infinity;
@@ -5450,11 +7173,15 @@ const plugin = {
               const lineCount = finalContent.split("\n").length;
               return { content: [{ type: "text", text: `KNOWLEDGE.md updated (${pendingTexts.length} memories integrated, ${lineCount} lines total).` }] };
             } catch (err) {
-              return { content: [{ type: "text", text: `knowledge_update failed: ${String(err)}` }] };
+              api.logger.warn("memory-lancedb-namespaced: knowledge_update failed", {
+                errorClass: normalizedLlmErrorClass(err),
+              });
+              return { content: [{ type: "text", text: "knowledge_update failed: provider or file operation unavailable." }] };
             } finally {
               // Release lock
               try { if (existsSync(lockPath)) { const { unlinkSync } = await import("node:fs"); unlinkSync(lockPath); } } catch (_e) { dbg(_e); }
             }
+            });
           },
         },
       ];
@@ -5482,7 +7209,6 @@ const plugin = {
     // GC-Purge durch, erzeugt aber KEINEN Recall-Context.
     function runMinimalBeforePromptMaintenance(event, ctx, { neoEnabled, gcEnabled }) {
       const agentId = ctx?.agentId;
-      const db = pool.getDb(agentId);
       if (neoEnabled) {
         try {
           const neoStore = getNeoStore(ctx, event);
@@ -5498,11 +7224,9 @@ const plugin = {
       }
       // GC: purge expired memories (non-blocking, throttled on hot path)
       if (gcEnabled) {
-        try {
-          db.purgeExpiredThrottled(api.logger);
-        } catch (gcErr) {
+        pool.withDb(agentId, (db) => db.purgeExpiredThrottled(api.logger)).catch((gcErr) => {
           api.logger?.warn?.(`memory-lancedb-namespaced: GC purge on internal turn failed: ${String(gcErr)}`);
-        }
+        });
       }
       return undefined;
     }
@@ -5535,6 +7259,19 @@ const plugin = {
     }
 
     if (autoRecall) {
+      api.on("reply_dispatch", async (event) => {
+        const turnRoutes = await getMemoryTurnRoutes();
+        turnRoutes?.observeReplyDispatch(event);
+        return undefined;
+      }, { priority: Number.MIN_SAFE_INTEGER });
+
+      api.on("agent_end", async (event, ctx) => {
+        if (!turnRouteState.initPromise) return;
+        const turnRoutes = await turnRouteState.initPromise;
+        const runId = ctx?.runId ?? event?.runId;
+        if (runId !== undefined && runId !== null) turnRoutes?.clearRun(runId);
+      });
+
       api.on("before_prompt_build", async (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
@@ -5552,10 +7289,35 @@ const plugin = {
           priority: background ? "low" : "normal",
           phaseTimer,
         }, async (signal, timer) => {
+        throwIfAborted(signal, "recall aborted");
         // P0-1: Interne/background Turns bekommen keine volle Recall-Injektion.
         if (skipInternalRecall) {
           return runMinimalBeforePromptMaintenance(event, ctx, { neoEnabled, gcEnabled });
         }
+        const routingCapability = await hostRoutingLoader();
+        const turnRoutes = await getMemoryTurnRoutes();
+        const memoryCtx = turnRoutes
+          ? await resolveHostHookMemoryContext({
+              ...ctx,
+              runId: ctx?.runId ?? event?.runId,
+              sessionKey: ctx?.sessionKey ?? event?.sessionKey,
+              sessionId: ctx?.sessionId ?? event?.sessionId,
+            }, {
+              getSessionEntry: ({ agentId, sessionKey, readConsistency }) => api.runtime.agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
+              workspaceAliases: memoryWorkspaceAliases,
+              accountTopology: memoryAccountTopology,
+              turnRoutes,
+              routingCapability,
+              logger: api.logger,
+            })
+          : resolveMemoryRequestContext({
+              agentId: ctx?.agentId,
+              workspaceDir: ctx?.workspaceDir,
+              channel: ctx?.messageProvider,
+              chatId: ctx?.chatId,
+              sessionKey: ctx?.sessionKey ?? event?.sessionKey,
+              sessionId: ctx?.sessionId ?? event?.sessionId,
+            }, { workspaceAliases: memoryWorkspaceAliases });
         let neoContext = "";
         if (neoEnabled) {
           try {
@@ -5590,17 +7352,24 @@ const plugin = {
         const startNoticeContext = pendingStartNotice
           ? `<plur1bus-start-notice>\n${pendingStartNotice}\n</plur1bus-start-notice>`
           : "";
-        const agentId = ctx?.agentId;
-        const db = pool.getDb(agentId);       // write-db — used for GC/maintenance
-        const readDbs = pool.getReadDbs(agentId); // read namespaces — used for recall
+        const agentId = memoryCtx.agentId;
+        return pool.withWriteDb(agentId, (db) => pool.withReadDbs(agentId, async (readDbs) => {
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
-          db.purgeExpiredThrottled(api.logger);
+          pool.withWriteDb(agentId, (maintenanceDb) => maintenanceDb.purgeExpiredThrottled(api.logger))
+            .catch((gcErr) => {
+              api.logger?.warn?.(`memory-lancedb-namespaced: GC purge before recall failed: ${String(gcErr)}`);
+            });
         }
         try {
           await db.init();
           // Init additional read namespaces (skip write-db instance — already inited above)
-          for (const { db: rdb } of readDbs) { if (rdb !== db) await rdb.init(); }
+          const initializedReadDbs = [];
+          for (const entry of readDbs) {
+            const initialized = entry.db === db ? true : await entry.db.init();
+            if (initialized !== false && entry.db.table) initializedReadDbs.push(entry);
+          }
+          readDbs = initializedReadDbs;
           // v5.5.0 — Fast-Bernd IPC: merge pending voice turns + export state
           let voiceMessages = event.messages || [];
           if (ctx?.workspaceDir) {
@@ -5639,21 +7408,27 @@ const plugin = {
             const lastUserText = promptText
               || extractMessageText([...voiceMessages].reverse().find((m) => m && m.role === "user")).trim();
             if (lastUserText.length >= 3) {
-              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId });
+              const turnEmotion = await inferEmotionalValenceAsync(lastUserText.slice(0, 2000), "user", null, { agentId, signal });
+              throwIfAborted(signal, "recall aborted");
               emoState.applyEmotionScore(turnEmotion);
             } else {
               emoState.updateFromMessages(voiceMessages);
             }
           } catch (e) {
+            throwIfAborted(signal, "recall aborted");
             dbg(e);
             emoState.updateFromMessages(voiceMessages);
           }
           if (ctx?.workspaceDir) {
             try {
+              throwIfAborted(signal, "recall aborted");
               const moodNow = emoState.describeMood();
+              throwIfAborted(signal, "recall aborted");
               writeFileSync(join(ctx.workspaceDir, ".emotional-state.json"), JSON.stringify({ ...moodNow, agentId, ts: Date.now(), state: emoState.serializeState() }));
+              throwIfAborted(signal, "recall aborted");
               writeFileSync(join(ctx.workspaceDir, ".current-mood.txt"), formatMoodFile(moodNow, agentId));
             } catch (e) {
+              throwIfAborted(signal, "recall aborted");
               dbg(e);
             }
           }
@@ -5673,13 +7448,22 @@ const plugin = {
           const autoCreateOverlays = continuityEnabled && overlayCfg.autoCreateOnRecall === true;
           let overlayGenerator = null;
           let overlayStore = null;
-          if (autoCreateOverlays && ctx?.workspaceDir) {
+          if (autoCreateOverlays
+            && mergingEnabled
+            && isLlmRouteAvailable(overlayLlmCfg)
+            && ctx?.workspaceDir) {
             overlayStore = new InterpretationOverlayStore(ctx.workspaceDir);
+            const overlayCallCfg = mergingEnabled ? withLlmCallContext(
+              overlayLlmCfg,
+              agentId,
+              "continuity-overlay",
+              { signal },
+            ) : null;
             overlayGenerator = new OverlayGenerator({
               enabled: true,
-              llm: (messages) => callLlm(messages, mergingLlmCfg),
-              contradictionLlm: overlayCfg.autoResolveContradictions
-                ? async (messages) => callLlm(messages, mergingLlmCfg)
+              llm: overlayCallCfg ? (messages) => callLlm(messages, overlayCallCfg) : null,
+              contradictionLlm: overlayCfg.autoResolveContradictions && overlayCallCfg
+                ? async (messages) => callLlm(messages, overlayCallCfg)
                 : null,
               autoResolveContradictions: overlayCfg.autoResolveContradictions ?? false,
               workspaceDir: ctx?.workspaceDir,
@@ -5722,7 +7506,12 @@ const plugin = {
             rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
             rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
             summaryMaxWords,
-            querySummarizer: makeQuerySummarizer(mergingLlmCfg, api.logger, agentId),
+            querySummarizer: makeQuerySummarizer(
+              mergingEnabled ? recallQueryLlmCfg : null,
+              api.logger,
+              agentId,
+              { agentId, signal },
+            ),
             logger: api.logger,
             emotionalState: emotionalPool.get(agentId),
             graphEdges,
@@ -5736,6 +7525,7 @@ const plugin = {
             } : {},
             workspaceKey: ctx?.workspaceKey || ctx?.workspaceDir || null,
             agentId,
+            memoryCtx,
             decisionTrace: trace,
             retrievalLogger: (ledgerInfo) => {
               try {
@@ -5747,23 +7537,13 @@ const plugin = {
               } catch (_e) { dbg(_e); }
             },
           };
-          let canonicalHits, ordered, pipelineTrace;
-          if (readDbs.length === 1) {
-            ({ canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runRecallPipeline({
-              ..._autoRecallBaseParams,
-              dbTable: readDbs[0].db.table,
-            }));
-          } else {
-            const nsResults = await Promise.all(
-              readDbs.map(({ db: nsDb }) => runRecallPipeline({
-                ..._autoRecallBaseParams,
-                dbTable: nsDb.table,
-              }))
-            );
-            canonicalHits = nsResults.flatMap(r => r.canonical || []);
-            pipelineTrace = nsResults[0]?.trace;
-            ordered = dedupResults(nsResults.flatMap(r => r.memories || []), dedupJaccard);
-          }
+          const { canonical: canonicalHits, memories: ordered, trace: pipelineTrace } = await runMergedNamespaceRecall(
+            readDbs,
+            _autoRecallBaseParams,
+            trace,
+            timer,
+            { strictReadErrors: namespaceLayout.recallReadNamespaces.length > 1 },
+          );
           trace = pipelineTrace || trace;
 
           api.logger.info?.(`memory-lancedb-namespaced: injecting ${ordered.length} memories + ${canonicalHits.length} canonical for agent=${agentId || "default"}${reranker ? " (reranked)" : ""}`);
@@ -5931,20 +7711,28 @@ const plugin = {
                     conversationContext: event.prompt,
                     triggerMemoryIds: [item.id],
                     sessionState: overlaySessionState,
+                    signal,
                   });
+                  throwIfAborted(signal, "recall aborted");
                   if (newOverlay) {
-                    const written = await overlayStore.append(newOverlay);
+                    throwIfAborted(signal, "recall aborted");
+                    const written = await overlayStore.append(newOverlay, 7, { signal });
+                    throwIfAborted(signal, "recall aborted");
                     if (written && newOverlay.autoContradiction) {
                       try {
                         const detector = new ContradictionDetector({ workspaceDir: ctx?.workspaceDir });
-                        await detector.persistContradiction(newOverlay.autoContradiction);
+                        throwIfAborted(signal, "recall aborted");
+                        await detector.persistContradiction(newOverlay.autoContradiction, { signal });
+                        throwIfAborted(signal, "recall aborted");
                       } catch (e) {
+                        throwIfAborted(signal, "recall aborted");
                         api.logger.warn?.(`continuity-engine: contradiction audit append failed: ${String(e)}`);
                       }
                     }
                     if (written) overlays.push(newOverlay);
                   }
                 } catch (e) {
+                  throwIfAborted(signal, "recall aborted");
                   api.logger.warn?.(`continuity-engine: overlay generation failed: ${String(e)}`);
                 }
               }
@@ -5956,11 +7744,15 @@ const plugin = {
           const contraCfg = cfg?.continuityEngine?.contradictionDetection || {};
           if (contraCfg.enabled === true && ctx?.workspaceDir) {
             try {
-              const llm = typeof api?.llm === "function"
-                ? api.llm.bind(api)
-                : (mergingLlmCfg?.model
-                    ? (messages) => callLlm(messages, mergingLlmCfg)
-                    : null);
+              const memoryContradictionCallCfg = mergingEnabled ? withLlmCallContext(
+                memoryTextContradictionLlmCfg,
+                agentId,
+                "memory-text-contradiction",
+                { signal },
+              ) : null;
+              const llm = memoryContradictionCallCfg
+                ? (messages) => callLlm(messages, memoryContradictionCallCfg)
+                : null;
               const detector = new ContradictionDetector({
                 llm,
                 workspaceDir: ctx.workspaceDir,
@@ -5968,8 +7760,11 @@ const plugin = {
               });
               memoryTextContradictions = await detector.findMemoryTextContradictions(associativeItems, {
                 maxPairs: contraCfg.maxPairsPerRecall ?? 20,
+                signal,
               });
+              throwIfAborted(signal, "recall aborted");
             } catch (e) {
+              throwIfAborted(signal, "recall aborted");
               api.logger?.warn?.(`continuity-engine: memory-text contradiction detection failed: ${String(e)}`);
             }
           }
@@ -6001,22 +7796,26 @@ const plugin = {
             try {
               const detector = new ContradictionDetector({ workspaceDir: ctx.workspaceDir, logger: api.logger });
               for (const rec of memoryTextContradictions) {
+                throwIfAborted(signal, "recall aborted");
                 await detector.persistContradiction({
                   targetMemoryId: rec.memoryA,
                   overlayA: rec.memoryA,
                   overlayB: rec.memoryB,
                   descriptionA: rec.descriptionA,
                   descriptionB: rec.descriptionB,
-                });
+                }, { signal });
+                throwIfAborted(signal, "recall aborted");
                 await detector.persistContradiction({
                   targetMemoryId: rec.memoryB,
                   overlayA: rec.memoryA,
                   overlayB: rec.memoryB,
                   descriptionA: rec.descriptionA,
                   descriptionB: rec.descriptionB,
-                });
+                }, { signal });
+                throwIfAborted(signal, "recall aborted");
               }
             } catch (e) {
+              throwIfAborted(signal, "recall aborted");
               api.logger?.warn?.(`continuity-engine: failed to persist memory-text contradictions: ${String(e)}`);
             }
           }
@@ -6141,12 +7940,22 @@ const plugin = {
                 workspaceDir: ctx.workspaceDir,
                 agentId,
                 lang: cfg.language || "de",
-                llmCfg: skillMinerLlmCfg || mergingLlmCfg || null,
+                llmCfg: (skillMinerEnabled || mergingEnabled) ? withLlmCallContext(
+                  personaVoiceLlmCfg,
+                  agentId,
+                  "persona-voice",
+                  { signal },
+                ) : null,
                 callLlm,
-              })?.catch(() => {});
+                signal,
+              })?.catch((err) => {
+                api.logger?.debug?.(`persona-voice: scheduled seed failed (fail-open): ${normalizedLlmErrorClass(err)}`);
+              });
               personaDirective = loadPersonaDirective(ctx.workspaceDir);
               personaEmojiPalette = loadPersonaEmojiPalette(ctx.workspaceDir);
-            } catch (_) { /* fail-open */ }
+            } catch (err) {
+              api.logger?.debug?.(`persona-voice: scheduled seed setup failed (fail-open): ${normalizedLlmErrorClass(err)}`);
+            }
           }
 
           const styleCfg = cfg.styleDirective || {};
@@ -6331,12 +8140,15 @@ const plugin = {
           } catch (reminderErr) {
             api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
+          throwIfAborted(signal, "recall aborted");
           return { prependContext: [neoContext, startNoticeContext, fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
         } catch (err) {
+          throwIfAborted(signal, "recall aborted");
           api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);
           const fallbackContext = [neoContext, startNoticeContext].filter(Boolean).join("\n\n");
           if (fallbackContext) return { prependContext: fallbackContext };
         }
+        }));
         });
         if (scheduledRecall.ok) {
           if (scheduledRecall.timedOut && scheduledRecall.fromCache) {
@@ -6357,7 +8169,6 @@ const plugin = {
       // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.
       api.on("before_prompt_build", async (_event, ctx) => {
         const agentId = ctx?.agentId;
-        const db = pool.getDb(agentId);
         if (neoEnabled) {
           try {
             const neoStore = getNeoStore(ctx, _event);
@@ -6372,7 +8183,9 @@ const plugin = {
         }
         // GC: purge expired memories (non-blocking, throttled on hot path)
         if (gcEnabled) {
-          db.purgeExpiredThrottled(api.logger);
+          pool.withDb(agentId, (db) => db.purgeExpiredThrottled(api.logger)).catch((gcErr) => {
+            api.logger?.warn?.(`memory-lancedb-namespaced: GC purge with auto-recall disabled failed: ${String(gcErr)}`);
+          });
         }
         // P0-1: Interne/background Turns bekommen keine Nudges (kein Prompt-Overhead).
         if (shouldSkipAutoRecallForInternalTurn(_event, ctx)) {
@@ -6400,6 +8213,7 @@ const plugin = {
         let temporalContinuityContext = "";
         let reminderNudge = "";
         try {
+          await pool.withDb(agentId, async (db) => {
           // lang/tone bereits oben via resolveCommandLocale aufgelöst.
           const wsKey = ctx?.workspaceDir || "default";
           // Capture previous activity before recording the current turn
@@ -6436,6 +8250,7 @@ const plugin = {
               await writePendingReminders(ctx?.workspaceDir, wsKey, agentId, pendingData);
             }
           }
+          });
         } catch (reminderErr) {
           api.logger.warn(`plur1bus-reminder: nudge injection failed (auto-recall off): ${String(reminderErr)}`);
         }
@@ -6451,5 +8266,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
+export { MemoryDB, AgentDbPool, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
 export default plugin;

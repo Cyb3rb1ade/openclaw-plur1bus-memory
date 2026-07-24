@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-004",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/contradiction-detector.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (406 lines). The only file is resolved beneath workspaceDir with resolveInside (lines 34-44), JSONL parsing errors are logged (226-243), writes are serialized and logged on failure (396-404), LLM content has a fixed yes/no decision sink and bounded pair counts (59-89, 359-382). Prompt manipulation can affect contradiction quality but does not reach a privileged mutation in this module."
+    },
+    {
+      "path": "lib/contradiction-disclosure.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (58 lines). Untrusted memory snippets are escaped and bounded before being wrapped in an explicitly untrusted historical-context block (lines 3-6, 30-54). The silent catch at lines 55-57 is a coding-standard/reliability defect, not a security exploit chain."
+    },
+    {
+      "path": "lib/conversation-reactivation-recall.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (772 lines). Additive selection is hard-capped (lines 44-53, 341-346), hydrated candidates are capped (415-437), inactive rows are excluded (127-150), and prompt output is escaped/bounded in an untrusted evidence-only block (648-668). The legacy fallback read uses join instead of mandatory resolveInside (59-71), but its root is host-supplied workspaceDir and its suffix is fixed; no attacker-controlled traversal segment or independently privileged sink was established. Hydration catches at 166-168 and 433-435 silently ignore errors and are reliability/policy issues."
+    },
+    {
+      "path": "lib/critical-push-classifier.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-critical-push-sensitive-log"
+      ],
+      "evidence": "Read in full (120 lines). The classifier explicitly recognizes passwords/API keys, bank data, and health data (lines 10-17, 19-37), and buildPushMessage embeds the full card body (lines 85-110). Supporting trace: runClassifier returns that full message in pushMessages (lib/jobs/critical-classifier.js:112-131), and index.js logs the complete result at info level (index.js:3039-3046). This forms a plausible CWE-532 sensitive-data-to-log path. The catch at lines 57-59 is also silent and violates the repository error-handling rule."
+    },
+    {
+      "path": "lib/critical-push-state.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-critical-push-agent-path"
+      ],
+      "evidence": "Read in full (83 lines). The exported functions interpolate agent directly into join(dir, `${agent}.json`) without safeAgentId or resolveInside (lines 20-27) and then read/write/rename that path (29-55, 70-82). Supporting trace: agent is commandCtx.agentId in the internal classifier command (index.js:2995, 3039). Exploitability depends on whether any in-scope host/adapter can supply a non-canonical agentId, so this remains a candidate for validation rather than a finding. The parse catch at lines 32-36 also fails silently."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-critical-push-sensitive-log",
+      "title": "Critical-push classification serializes secrets and health data into info logs",
+      "taxonomy": ["CWE-532", "sensitive-data-exposure"],
+      "source": "Stored memory-card content, including credentials, banking, or health information, enters classifyMemory/buildPushMessage.",
+      "control": "Type classification and daily rate limiting control delivery volume but do not redact the body.",
+      "sink": "buildPushMessage copies card.text/summary verbatim; runClassifier includes message.text in pushMessages; index.js logs JSON.stringify(result) at info level.",
+      "impact": "Anyone with plugin/service log access can recover highly sensitive memory content; the same body is prepared for outbound chat delivery.",
+      "locations": [
+        "lib/critical-push-classifier.js:10",
+        "lib/critical-push-classifier.js:19",
+        "lib/critical-push-classifier.js:85",
+        "lib/critical-push-classifier.js:96",
+        "lib/jobs/critical-classifier.js:112",
+        "lib/jobs/critical-classifier.js:131",
+        "index.js:3039",
+        "index.js:3045"
+      ],
+      "validationFacts": "Code-level source-to-sink is complete. Validation must establish logger persistence/access, whether the cron result is also delivered despite delivery.mode=none, and whether callers pre-redact card content.",
+      "attackFacts": "No attacker-controlled payload is required: storing a credential-like memory and running the enabled classifier is sufficient. Confidentiality impact requires a second principal or compromised component with log/chat access."
+    },
+    {
+      "candidateId": "cand-critical-push-agent-path",
+      "title": "Critical-push state path uses an unvalidated agent identifier",
+      "taxonomy": ["CWE-22", "path-traversal"],
+      "source": "Host command context agentId flows to runClassifier.",
+      "control": "Fallback to default exists, but there is no safeAgentId or resolveInside check in critical-push-state.",
+      "sink": "join(stateDir, `${agent}.json`) is read, written via a temporary sibling, and renamed.",
+      "impact": "A traversal-shaped agentId could read and overwrite a JSON-suffixed file outside the critical-push state directory under the service account.",
+      "locations": [
+        "index.js:2995",
+        "index.js:3039",
+        "lib/critical-push-state.js:20",
+        "lib/critical-push-state.js:24",
+        "lib/critical-push-state.js:29",
+        "lib/critical-push-state.js:39",
+        "lib/critical-push-state.js:47"
+      ],
+      "validationFacts": "The unsafe path construction and file sinks are confirmed. Validation must determine whether OpenClaw canonicalizes agentId before commandCtx and whether any chat, plugin, cron, or configuration boundary can supply separators.",
+      "attackFacts": "Requires control of commandCtx.agentId (or a direct exported-function caller) plus an execution that increments/saves state; authorized chat args alone do not visibly set agentId."
+    }
+  ],
+  "notes": "Two candidates retained for validation; all assigned files were read fully. No feature-disable recommendation is implied: likely remedies are redaction/structured logging and path validation."
+}

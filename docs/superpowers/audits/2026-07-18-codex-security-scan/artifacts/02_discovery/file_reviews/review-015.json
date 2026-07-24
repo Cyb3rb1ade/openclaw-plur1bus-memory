@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-015",
+  "reviewer": "root-security-reviewer",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/memory-context-sanitize.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (26 lines; SHA-256 476528aa230fcda996245aa22efee376153ea4bc9a6287ce77da62c1a54e2377). Context and entity text is normalized, length bounded, markup-neutralized, and marked as untrusted before prompt interpolation. No independent authorization, filesystem, network, or execution sink exists. Targeted sanitizer tests passed."
+    },
+    {
+      "path": "lib/memory-doctor.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (292 lines; SHA-256 3d9c2b4886c34e4074028a2c807e27a9c78e8ccb66f9c9a8a580d674628847a0). It emits diagnostic JSON and textual command suggestions only; command execution and authorization remain in index.js. The command adapter validates overlay UUIDs and gates mutating overlay commands before calling this module. Targeted doctor tests passed."
+    },
+    {
+      "path": "lib/memory-dynamics.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (351 lines; SHA-256 ac3f429d19b11fc14f4c78439d6426995c8b5f100005b95f67f863b84e430ea3). Decay/reinforcement calculations clamp inputs and generate a hashed retrieval ledger entry. No user-controllable path, authorization bypass, external egress, or unsafe write was found. Targeted dynamics tests passed."
+    },
+    {
+      "path": "lib/memory-fact-quality.js",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (487 lines; SHA-256 39fe9778e88127db77b792c1d8f967e48364d551a8df4c712c5a2411e3c382f3). This deterministic text classifier returns bounded score/reason structures and neither persists nor executes inputs. Targeted fact-quality tests passed."
+    },
+    {
+      "path": "lib/memory-graph.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-acl-missing-ownership-fail-open",
+        "cand-graph-constellation-symlink-write"
+      ],
+      "evidence": "Read in full (612 lines; SHA-256 945ad9b9030c8fdbf37df2ff9ed5a0b844f57f7d581abf4619be525cadaa2a09). buildEdgesForSession performs unscoped vector search at 381-391 and consumes the caller's cross-session recent list. The production caller puts resulting IDs in a workspace-partitioned graph but does not retain scope/ownership on an edge (index.js:4767-4810), corroborating the graph-hydration ownership-loss candidate from recall-pipeline.js. writeGraphConstellationReport writes under workspaceDir using join/mkdirSync/writeFileSync at 594-605 without resolveInside, realpath, or symlink checks. Targeted graph tests passed."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-acl-missing-ownership-fail-open",
+      "instanceKey": "unscoped-graph-edge:lib/memory-graph.js:381",
+      "title": "Graph construction creates ownership-unbound neighbor edges from a shared agent table",
+      "taxonomy": ["CWE-862", "authorization-context-loss"],
+      "source": "New captures and recent memories are loaded from the per-agent table, which can contain multiple workspace/user scopes, while the graph edge model contains only record IDs.",
+      "control": "Semantic vector search, temporal, entity, and emotional linking at 370-457 have no scope/ownership predicate; index.js:4767-4783 supplies recent rows without scope fields.",
+      "sink": "The resulting ID-only edges are appended to the active workspace graph and later feed graph-only hydration, whose metadata-loss/ACL fail-open path is recorded in cand-acl-missing-ownership-fail-open.",
+      "impact": "If records from different protected scopes share an agent DB and a foreign ID is linked into a reachable graph, a later graph recall can expose it despite final response ACL.",
+      "closestControl": "Normal vector mapping preserves storedBy/workspaceKey and checkAccess can use them; graph edges should preserve or enforce the same scope boundary before insertion/traversal.",
+      "locations": ["lib/memory-graph.js:381", "lib/memory-graph.js:428", "lib/memory-graph.js:443", "index.js:4767", "index.js:4779", "lib/recall-pipeline.js:296"],
+      "validationFacts": "Dynamic validation will use a fake table with a protected foreign row to show the edge is created and combine it with the existing hydration proof. Final exploitability depends on the configured agent/workspace sharing topology and graph reachability, which must be stated explicitly.",
+      "attackFacts": "Requires one agent serving more than one protected scope, graph construction enabled, and a semantically/temporally/entity/emotionally matching foreign row. A repair can retain associative recall by filtering or binding edges by scope before graph persistence and preserving full ownership metadata through hydration."
+    },
+    {
+      "candidateId": "cand-graph-constellation-symlink-write",
+      "instanceKey": "vault-symlink-write:lib/memory-graph.js:594",
+      "title": "Graph constellation report follows vault-directory symlinks outside the workspace",
+      "taxonomy": ["CWE-59", "CWE-61", "CWE-73"],
+      "source": "A writable workspace/vault can contain a symlink at memory, graph, year, or month below workspaceDir.",
+      "control": "writeGraphConstellationReport constructs a lexical path with join, then mkdirSync and writeFileSync it without resolveInside, lstat, realpath containment, or no-follow protection.",
+      "sink": "writeFileSync writes the predictable constellation-YYYY-MM-DD.md file at the symlink-resolved destination (lib/memory-graph.js:601-605); index.js invokes it probabilistically from the capture hook at 4816-4825.",
+      "impact": "A user who can modify the vault tree can redirect a plugin-process write outside the intended workspace, potentially overwriting a same-named file in a writable target directory.",
+      "closestControl": "Repository guidance requires resolveInside before every file write; other vault helpers use controlled path resolution. This writer has no equivalent containment guard.",
+      "locations": ["lib/memory-graph.js:594", "lib/memory-graph.js:601", "lib/memory-graph.js:604", "index.js:4816"],
+      "validationFacts": "A bounded temp-directory PoC can create workspace/memory/graph as a symlink to a temp outside directory, call the exported function with one edge, and verify the returned path/file lands outside the workspace. No product source changes are required.",
+      "attackFacts": "Requires write/symlink control within the configured workspace and a graph report invocation (or direct trusted API call); the automatic hook samples at 10%. Preserve reports by resolving and verifying each parent/target under a canonical workspace root and rejecting symlinks rather than disabling graph output."
+    }
+  ],
+  "notes": "All five assigned files were read in full from immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Nine focused unit-test files covering the reviewed behavior passed (memory-context-sanitize, memory-doctor, memory-fact-quality, graph edges/scoring/traversal, and dynamics halflife/maintenance). No repository source file was modified and all feature-preserving remediation paths are additive validation/boundary fixes."
+}

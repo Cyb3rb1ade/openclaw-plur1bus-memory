@@ -13,8 +13,10 @@
  *   1 = Fehler (Tabelle nicht gefunden, addColumns nicht unterstützt, etc.)
  */
 
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { resolveInside, safeAgentId } from "../lib/sql-safety.js";
 
 async function getLanceDB() {
   const lancedb = await import("@lancedb/lancedb");
@@ -77,88 +79,118 @@ const ALL_COLUMNS = [
   { name: "workspaceKey", valueSql: "''" },
 ];
 
-async function main() {
-  const dbPath = process.argv[2] || DEFAULT_DB_PATH;
+function selectDefaultTargets(base) {
+  if (!existsSync(base)) throw new Error(`LanceDB-Basispfad nicht gefunden: ${base}`);
+  if (lstatSync(base).isSymbolicLink()) throw new Error(`Unsicherer LanceDB-Basispfad (Symlink): ${base}`);
+  const resolvedBase = resolveInside(base);
+  const targets = [];
+  const rejected = [];
 
-  console.log(`[migrate] LanceDB-Pfad: ${dbPath}`);
+  for (const entry of readdirSync(resolvedBase, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) {
+      rejected.push({ label: entry.name, error: "unsicheres Symlink-Ziel außerhalb der per-Agent-Auswahl" });
+      continue;
+    }
+    if (!entry.isDirectory()) continue;
+    try {
+      const agentId = safeAgentId(entry.name);
+      targets.push({ label: agentId, dbPath: resolveInside(resolvedBase, agentId) });
+    } catch (error) {
+      rejected.push({ label: entry.name, error: error.message });
+    }
+  }
 
+  return { targets, rejected };
+}
+
+function selectExplicitTarget(inputPath) {
+  const absolutePath = resolve(inputPath);
+  if (!existsSync(absolutePath)) throw new Error(`Expliziter LanceDB-Pfad nicht gefunden: ${absolutePath}`);
+  const targetStat = lstatSync(absolutePath);
+  if (targetStat.isSymbolicLink()) throw new Error(`Unsicherer expliziter LanceDB-Symlink: ${absolutePath}`);
+  if (!targetStat.isDirectory()) throw new Error(`Expliziter LanceDB-Pfad ist kein Verzeichnis: ${absolutePath}`);
+  const dbPath = resolveInside(dirname(absolutePath), basename(absolutePath));
+  return { targets: [{ label: dbPath, dbPath }], rejected: [] };
+}
+
+async function migrateTarget(lancedb, { label, dbPath }) {
+  console.log(`\n[migrate] Ziel ${label}: ${dbPath}`);
   let db;
-  let table;
+  let ok = false;
   try {
-    const lancedb = await getLanceDB();
     db = await lancedb.connect(dbPath);
     const tables = await db.tableNames();
     if (!tables.includes(TABLE_NAME)) {
-      console.error(`[migrate] FEHLER: Tabelle '${TABLE_NAME}' nicht gefunden in ${dbPath}`);
-      console.error(`[migrate] Verfügbare Tabellen: ${tables.join(", ") || "(keine)"}`);
-      process.exit(1);
+      throw new Error(`Tabelle '${TABLE_NAME}' nicht gefunden (verfügbar: ${tables.join(", ") || "keine"})`);
     }
-    table = await db.openTable(TABLE_NAME);
-  } catch (err) {
-    console.error(`[migrate] FEHLER: Konnte DB nicht öffnen: ${err.message}`);
-    process.exit(1);
-  }
+    const table = await db.openTable(TABLE_NAME);
+    const beforeRows = await table.countRows();
+    const schema = await table.schema();
+    const fieldNames = new Set(schema.fields.map((field) => field.name));
+    const missing = ALL_COLUMNS.filter((column) => !fieldNames.has(column.name));
 
-  let schema;
+    let added = 0;
+    let failed = 0;
+    for (const column of missing) {
+      try {
+        await table.addColumns([column]);
+        console.log(`[migrate] ${label} + ${column.name}`);
+        added++;
+      } catch (error) {
+        console.error(`[migrate] ${label} ! ${column.name} FEHLER: ${error.message}`);
+        failed++;
+      }
+    }
+
+    const verifySchema = await table.schema();
+    const verifyFieldNames = new Set(verifySchema.fields.map((field) => field.name));
+    const stillMissing = ALL_COLUMNS.filter((column) => !verifyFieldNames.has(column.name));
+    const afterRows = await table.countRows();
+    if (afterRows !== beforeRows) {
+      throw new Error(`Zeilenprüfung fehlgeschlagen: vorher ${beforeRows}, nachher ${afterRows}`);
+    }
+    if (stillMissing.length > 0) {
+      throw new Error(`Spalten fehlen weiterhin: ${stillMissing.map((column) => column.name).join(", ")}`);
+    }
+
+    console.log(`[migrate] ${label} VERIFIED: ${added} hinzugefügt, ${failed} Add-Versuche fehlgeschlagen, ${afterRows} Zeilen erhalten.`);
+    ok = true;
+  } catch (error) {
+    console.error(`[migrate] ${label} FEHLER: ${error.message}`);
+  } finally {
+    if (db) {
+      try {
+        await db.close();
+      } catch (error) {
+        console.error(`[migrate] ${label} FEHLER beim Schließen der DB: ${error.message}`);
+        ok = false;
+      }
+    }
+  }
+  return ok;
+}
+
+async function main() {
+  const explicitPath = process.argv[2];
+  let selection;
   try {
-    schema = await table.schema();
-  } catch (err) {
-    console.error(`[migrate] FEHLER: Konnte Schema nicht lesen: ${err.message}`);
+    selection = explicitPath ? selectExplicitTarget(explicitPath) : selectDefaultTargets(DEFAULT_DB_PATH);
+  } catch (error) {
+    console.error(`[migrate] FEHLER: ${error.message}`);
     process.exit(1);
   }
 
-  const fieldNames = new Set(schema.fields.map((f) => f.name));
-  const missing = ALL_COLUMNS.filter((col) => !fieldNames.has(col.name));
-
-  if (missing.length === 0) {
-    console.log("[migrate] OK: Alle Spalten sind bereits vorhanden.");
-    process.exit(0);
+  const lancedb = await getLanceDB();
+  let failed = selection.rejected.length;
+  for (const rejection of selection.rejected) {
+    console.error(`[migrate] ${rejection.label} FEHLER: ${rejection.error}`);
+  }
+  for (const target of selection.targets) {
+    if (!await migrateTarget(lancedb, target)) failed++;
   }
 
-  console.log(`[migrate] ${missing.length} fehlende Spalten gefunden:`);
-  for (const col of missing) {
-    console.log(`  - ${col.name}`);
-  }
-
-  let added = 0;
-  let failed = 0;
-
-  for (const col of missing) {
-    try {
-      await table.addColumns([col]);
-      console.log(`[migrate] + ${col.name}`);
-      added++;
-    } catch (err) {
-      console.error(`[migrate] ! ${col.name} FEHLER: ${err.message}`);
-      failed++;
-    }
-  }
-
-  // Verify
-  let verifySchema;
-  try {
-    verifySchema = await table.schema();
-  } catch (err) {
-    console.error(`[migrate] FEHLER: Konnte Schema nach Migration nicht erneut lesen: ${err.message}`);
-    process.exit(1);
-  }
-
-  const verifyFieldNames = new Set(verifySchema.fields.map((f) => f.name));
-  const stillMissing = ALL_COLUMNS.filter((col) => !verifyFieldNames.has(col.name));
-
-  console.log("");
-  console.log(`[migrate] Ergebnis: ${added} hinzugefügt, ${failed} fehlgeschlagen, ${stillMissing.length} immer noch fehlend.`);
-
-  if (stillMissing.length > 0) {
-    console.error(`[migrate] FEHLER: Diese Spalten sind immer noch nicht vorhanden:`);
-    for (const col of stillMissing) {
-      console.error(`  - ${col.name}`);
-    }
-    process.exit(1);
-  }
-
-  console.log("[migrate] OK: Alle Spalten erfolgreich migriert.");
-  process.exit(0);
+  console.log(`\n[migrate] Ergebnis: ${selection.targets.length} Ziel(e) geprüft, ${failed} Fehler.`);
+  process.exit(failed === 0 ? 0 : 1);
 }
 
 main().catch((err) => {

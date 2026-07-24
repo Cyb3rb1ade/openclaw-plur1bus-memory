@@ -160,6 +160,31 @@ test("callLlm omits non-finite temperature from the provider body", async () => 
   assert.equal(Object.hasOwn(calls[0], "temperature"), false);
 });
 
+test("callLlm forwards cancellation to the direct provider request", async () => {
+  const requests = [];
+  class SignalAwareOpenAI {
+    constructor() {
+      this.chat = {
+        completions: {
+          create: async (body, options) => {
+            requests.push({ body, options });
+            return makeResponse({ text: "live" });
+          },
+        },
+      };
+    }
+  }
+  const signal = new AbortController().signal;
+
+  assert.equal(await callLlm(
+    [{ role: "user", content: "hello" }],
+    { model: "m", signal },
+    { OpenAI: SignalAwareOpenAI },
+  ), "live");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].options.signal, signal);
+});
+
 test("provider errors are not cached and cache persistence errors fail open", async (t) => {
   const cache = createLlmResultCache();
   const calls = [];

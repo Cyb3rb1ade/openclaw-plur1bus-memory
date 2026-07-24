@@ -20,7 +20,7 @@ describe("overlay audit commands", () => {
         subCommand: "overlays",
         workspaceDir: dir,
         callLlm: async () => "no",
-        mergingLlmCfg: {},
+        overlayAuditLlmCfg: {},
       });
       const parsed = JSON.parse(result.text);
       assert.strictEqual(parsed.count, 1);
@@ -104,7 +104,7 @@ describe("overlay audit commands", () => {
         subCommand: "contradictions",
         workspaceDir: dir,
         callLlm: async () => "yes",
-        mergingLlmCfg: {},
+        overlayAuditLlmCfg: {},
       });
       const parsed = JSON.parse(result.text);
       assert.strictEqual(parsed.scanned, 2);
@@ -124,7 +124,7 @@ describe("overlay audit commands", () => {
         subCommand: "contradictions",
         workspaceDir: dir,
         callLlm: null,
-        mergingLlmCfg: null,
+        overlayAuditLlmCfg: null,
       });
       assert.strictEqual(result.text, "LLM merging is not configured; cannot scan for contradictions.");
     } finally {
@@ -144,7 +144,7 @@ describe("overlay audit commands", () => {
         id: "custom-mem-123",
         workspaceDir: dir,
         callLlm: async () => "yes",
-        mergingLlmCfg: {},
+        overlayAuditLlmCfg: {},
       });
       assert.ok(!result.text.startsWith("Invalid"));
       const parsed = JSON.parse(result.text);

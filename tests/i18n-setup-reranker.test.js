@@ -20,6 +20,7 @@ const REQUIRED_KEYS = [
   "setup.reranker.lazy_load_notice",
   "setup.reranker.selected",
   "setup.reranker.invalid_choice",
+  "setup.reranker.invalid_advanced_choice",
   "setup.reranker.cohere_fallback_ask",
   "setup.reranker.dimension_unknown",
   "setup.reranker.reindex_confirm",
@@ -36,6 +37,11 @@ describe("i18n setup.reranker keys", () => {
   it("Cohere-Label enthält 'paid' (en)", () => {
     const label = t("setup.reranker.option.cohere", { lang: "en", tone: "default" });
     assert.ok(label.includes("paid"), `"paid" fehlt in: ${label}`);
+  });
+
+  it("advanced invalid-choice diagnostic names the exact valid tokens", () => {
+    const message = t("setup.reranker.invalid_advanced_choice", { lang: "en", tone: "default" });
+    assert.match(message, /a, b, or c/);
   });
 
   it("Cohere-Label enthält 'kostenpflichtig' (de)", () => {

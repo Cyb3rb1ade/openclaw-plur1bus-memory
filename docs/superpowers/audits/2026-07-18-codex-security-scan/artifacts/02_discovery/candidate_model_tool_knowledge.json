@@ -1,0 +1,31 @@
+{
+  "candidateId": "cand-model-tool-knowledge-authz",
+  "title": "Model-facing knowledge_update rewrites durable curated knowledge without user-bound authorization",
+  "instanceKey": "agent-tool-authz:index.js:5275",
+  "affectedLocations": [
+    { "label": "entrypoint", "path": "index.js", "line": 5266, "detail": "Registers knowledge_update as a model-facing tool." },
+    { "label": "root_control", "path": "index.js", "line": 4868, "detail": "Guard allows destructive model tools unless config is explicitly false." },
+    { "label": "root_control", "path": "openclaw.plugin.json", "line": 1714, "detail": "Schema default is true." },
+    { "label": "sink", "path": "index.js", "line": 5438, "detail": "Writes LLM-produced knowledge body to a temp file." },
+    { "label": "sink", "path": "index.js", "line": 5439, "detail": "Atomically replaces memory/KNOWLEDGE.md." }
+  ],
+  "attackerControlledSource": "Untrusted chat/retrieved/stored content can influence model tool selection; pending memory text and optional model-supplied note are then embedded in the curator prompt.",
+  "sinkOrBrokenControl": "The operation is gated only by an opt-out flag defaulting to allow and feature configuration. It does not invoke isAuthorized, createConfirmation, or validateConfirmation before rewriting KNOWLEDGE.md.",
+  "impact": "Prompt injection or model error can prematurely promote attacker-influenced memories into durable curated context, rewrite the knowledge body, and shape future agent behavior.",
+  "plausibility": "The registered tool reads pending memories, sends existing and new content to an LLM, and atomically replaces KNOWLEDGE.md. No user-bound authorization is present on this path.",
+  "closestControl": "Pending-memory filtering, promotion caps, LLM instructions, and atomic write protect consistency but do not authenticate the requested state change or constrain semantic prompt injection.",
+  "validationRecommended": true,
+  "candidateLocalValidation": {
+    "method": "static source-to-sink trace and configuration-default verification",
+    "evidence": "index.js:4864-4874, 5266-5457; openclaw.plugin.json:1706-1718; README.md:356,365",
+    "counterevidence": "Requires Schicht 1.5 plus an LLM configuration, is per-workspace/agent, uses pending items, and writes atomically; these are preconditions/impact bounds, not authorization."
+  },
+  "candidateLocalAttackPath": {
+    "source": "untrusted content influencing model and/or pending memory text",
+    "transformations": ["model invokes knowledge_update", "pending memories and note enter curator prompt", "LLM returns Markdown body", "frontmatter is reattached"],
+    "sink": "renameSync(temp, memory/KNOWLEDGE.md)",
+    "outcome": "persistent curated knowledge/agent context is modified",
+    "preconditions": ["allowModelDestructiveMemoryOps not false", "schicht15 enabled and LLM configured", "model invokes tool"]
+  },
+  "taxonomy": ["CWE-862", "CWE-284"]
+}

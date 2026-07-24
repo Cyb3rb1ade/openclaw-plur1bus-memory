@@ -609,11 +609,6 @@ echo
 OPENAI_KEY=""
 COHERE_KEY=""
 USE_MERGING="n"
-MERGING_KEY=""
-MERGING_BASEURL=""
-MERGING_MODEL=""
-MERGING_DISABLE_THINKING="false"
-MERGING_USER_AGENT=""
 USE_EMBEDDING_FALLBACK="n"
 EMBEDDING_FALLBACK_KEY=""
 EMBEDDING_FALLBACK_BASEURL=""
@@ -623,8 +618,8 @@ KEEP_EXISTING_MEMORY_CONFIG=0
 KEEP_EXISTING_ACTIVE_MEMORY_CONFIG=0
 MEMORY_CONFIG_MODE=""
 ACTIVE_MEMORY_MODE=""
-FEATURE_UPDATE_MODE="fresh"
-FEATURE_POLICY_MODE="fresh"
+FEATURE_UPDATE_MODE="preserve"
+FEATURE_POLICY_MODE="preserve"
 FEATURE_UPDATE_PLAN=""
 FEATURE_UPDATE_IS_UPDATE="false"
 INSTALL_LOG_PATH="$TARGET_DIR/state/$INSTALL_LOG_FILE"
@@ -666,23 +661,32 @@ eval "$(printf '%s' "$FEATURE_UPDATE_PLAN" | jq -r '@sh "FEATURE_UPDATE_IS_UPDAT
 if [[ "$FEATURE_UPDATE_IS_UPDATE" == "true" ]]; then
   info "Bestehende PLUR1BUS-Installation erkannt (config=$DETECTED_BY_CONFIG, log=$DETECTED_BY_LOG)."
   if [[ "$NEW_FEATURE_COUNT" -gt 0 ]]; then
-    info "Fehlende Core-Features, die im sicheren Update-Modus default-on ergänzt werden:"
+    info "Fehlende Core-Features mit wirksamen Manifest-Defaults (ohne die Rohconfig umzuschreiben):"
     printf '%s\n' "$FEATURE_UPDATE_PLAN" | jq -r '.newlyActivated[]? | "  - " + .label'
   fi
   if [[ "$PRESERVED_DISABLED_COUNT" -gt 0 ]]; then
     warn "Explizit deaktivierte Features bleiben im sicheren Update-Modus deaktiviert:"
     printf '%s\n' "$FEATURE_UPDATE_PLAN" | jq -r '.preservedDisabled[]? | "  - " + .label'
   fi
-  prompt_choice FEATURE_UPDATE_MODE "Feature-Update-Modus: enable-all=Recommended Full Experience, keep=User-Entscheidungen bewahren + fehlende Defaults ergänzen" "enable-all" "keep" "enable-all"
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    FEATURE_UPDATE_MODE="recommended"
+    info "--accept-defaults: Recommended wurde ausdrücklich ausgewählt."
+  else
+    prompt_choice FEATURE_UPDATE_MODE "Feature-Profil: preserve=unverändert, safe=Safe, recommended=Recommended" "preserve" "preserve" "safe" "recommended"
+  fi
 else
-  info "Keine bestehende PLUR1BUS-Installation in Config/Install-Log erkannt — Fresh-Install nutzt Full Experience Defaults."
-  FEATURE_UPDATE_MODE="fresh"
+  info "Keine bestehende PLUR1BUS-Installation in Config/Install-Log erkannt."
+  if [[ "$NON_INTERACTIVE" == "1" ]]; then
+    FEATURE_UPDATE_MODE="recommended"
+    info "--accept-defaults: Recommended wurde ausdrücklich ausgewählt."
+  else
+    prompt_choice FEATURE_UPDATE_MODE "Feature-Profil: safe=Safe, recommended=Recommended" "safe" "safe" "recommended"
+  fi
 fi
 
 case "$FEATURE_UPDATE_MODE" in
-  keep) FEATURE_POLICY_MODE="preserve" ;;
-  enable-all) FEATURE_POLICY_MODE="enable-all" ;;
-  fresh|*) FEATURE_POLICY_MODE="fresh" ;;
+  preserve|safe|recommended) FEATURE_POLICY_MODE="$FEATURE_UPDATE_MODE" ;;
+  *) error "Ungültiger Feature-Modus: $FEATURE_UPDATE_MODE"; exit 2 ;;
 esac
 EMBEDDING_KEY_DEFAULT="$EXISTING_EMBEDDING_KEY"
 [[ -z "$EMBEDDING_KEY_DEFAULT" ]] && EMBEDDING_KEY_DEFAULT="$MEMORY_SEARCH_EMBEDDING_KEY"
@@ -816,28 +820,9 @@ if [[ "$EMBEDDING_PROVIDER" != "local-transformers" ]] && confirm "Embedding-Fal
   prompt_input EMBEDDING_FALLBACK_MODEL   "Fallback Modell (leer = wie Primary)" ""
 fi
 
-if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories via LLM — funktioniert mit beliebigem OpenAI-kompatiblen Anbieter)" "n"; then
+if confirm "LLM-Merging aktivieren? (dedupliziert ähnliche Memories über das effektive OpenClaw-Agentenmodell)" "n"; then
   USE_MERGING="y"
-  # Vorhandene Merging-Config als Defaults auslesen (bei Update-Installationen)
-  _EXISTING_MERGING_MODEL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.model // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
-  _EXISTING_MERGING_URL=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.baseUrl // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
-  _EXISTING_MERGING_KEY=$(run_target "jq -r '.plugins.entries[\"memory-lancedb-namespaced\"].config.merging.apiKey // empty' '$TARGET_CONFIG' 2>/dev/null" || true)
-  prompt_input MERGING_BASEURL "Merging LLM Base-URL (leer = Provider-Default)" "${_EXISTING_MERGING_URL:-}"
-  while true; do
-    prompt_input MERGING_MODEL "Merging LLM Modell (erforderlich; OpenAI-kompatibler Chat-Completions-Endpunkt)" "${_EXISTING_MERGING_MODEL:-}"
-    [[ -n "$MERGING_MODEL" ]] && break
-    warn "Merging braucht ein explizites Modell. Es gibt keinen provider-spezifischen Zwangsdefault."
-  done
-  prompt_secret MERGING_KEY     "Merging LLM API Key" "${_EXISTING_MERGING_KEY:-}"
-  echo ""
-  info "Optionale provider-spezifische Chat-Optionen:"
-  info "  Einige OpenAI-kompatible Anbieter unterstützen disableThinking oder verlangen einen User-Agent."
-  if confirm "  Provider-spezifische Optionen konfigurieren?" "n"; then
-    if confirm "  disableThinking=true setzen?" "n"; then
-      MERGING_DISABLE_THINKING="true"
-    fi
-    prompt_input MERGING_USER_AGENT "  User-Agent Header (leer = keiner)" ""
-  fi
+  info "Merging übernimmt die live OpenClaw-Modellauswahl; der Installer persistiert kein Chat-Modell und keine direkte Route."
 fi
 
 else
@@ -1050,39 +1035,8 @@ else
 
   # Merging-Block aufbauen
   if [[ "$USE_MERGING" == "y" ]]; then
-    # Basis-Config (provider-agnostisch)
-    MERGING_BLOCK=$(jq -n \
-      --arg key "$MERGING_KEY" \
-      --arg url "$MERGING_BASEURL" \
-      --arg model "$MERGING_MODEL" \
-      --argjson disableThinking "$MERGING_DISABLE_THINKING" \
-      --arg userAgent "$MERGING_USER_AGENT" \
-      '{
-        "enabled": true,
-        "threshold": 0.70,
-        "model": $model,
-        "baseUrl": (if $url == "" then null else $url end),
-        "apiKey": (if $key == "" then null else $key end),
-        "disableThinking": $disableThinking
-      }
-      | if $userAgent != "" then . + {"headers": {"User-Agent": $userAgent}} else . end
-      | with_entries(select(.value != null))')
-    SCHICHT15_BLOCK=$(jq -n \
-      --arg key "$MERGING_KEY" \
-      --arg url "$MERGING_BASEURL" \
-      --arg model "$MERGING_MODEL" \
-      --argjson disableThinking "$MERGING_DISABLE_THINKING" \
-      --arg userAgent "$MERGING_USER_AGENT" \
-      '{
-        "enabled": true,
-        "model": $model,
-        "baseUrl": (if $url == "" then null else $url end),
-        "apiKey": (if $key == "" then null else $key end),
-        "disableThinking": $disableThinking,
-        "minImportance": 0.7
-      }
-      | if $userAgent != "" then . + {"headers": {"User-Agent": $userAgent}} else . end
-      | with_entries(select(.value != null))')
+    MERGING_BLOCK='{"enabled": true, "threshold": 0.70}'
+    SCHICHT15_BLOCK='{"enabled": true, "minImportance": 0.7}'
   else
     MERGING_BLOCK='{"enabled": false}'
     SCHICHT15_BLOCK='{"enabled": false}'
@@ -1181,8 +1135,10 @@ else
         "obsidianBridge": {
           "enabled": true,
           "watch": false,
-          "dryRun": false,
-          "autoApplyLowRisk": true,
+          "mode": "augment",
+          "dryRun": true,
+          "requireVaultPathConfirmation": true,
+          "autoApplyLowRisk": false,
           "workspaces": $obsidian_workspaces,
           "graphLinks": {
             "semanticDiscovery": {
@@ -1201,7 +1157,7 @@ PLUGIN_POLICY_INPUT=$(jq -n \
   --arg mode "$FEATURE_POLICY_MODE" \
   '{pluginEntry: $pluginEntry, mode: $mode}')
 PLUGIN_CONFIG=$(PLUR1BUS_INSTALLER_INPUT="$PLUGIN_POLICY_INPUT" node "$INSTALLER_CONFIG_HELPER" complete-plugin-entry)
-eval "$(printf '%s' "$PLUGIN_CONFIG" | jq -r '@sh "FINAL_MERGING_ENABLED=\(.config.merging.enabled // false) FINAL_MERGING_MODEL=\(.config.merging.model // "")"')"
+eval "$(printf '%s' "$PLUGIN_CONFIG" | jq -r '@sh "FINAL_MERGING_ENABLED=\(.config.merging.enabled // false)"')"
 
 FINAL_FEATURE_PLAN_INPUT=$(jq -n \
   --argjson existing "$EXISTING_PLUGIN_ENTRY" \
@@ -1220,18 +1176,9 @@ FEATURE_UPDATE_PLAN=$(PLUR1BUS_INSTALLER_INPUT="$FINAL_FEATURE_PLAN_INPUT" node 
 # jq-Patch-Script (wird remote oder lokal ausgeführt)
 JQ_PATCH=$(cat <<'JQEOF'
 # Plugin-Entry + Allow-Eintrag + Slots
-. as $root
-| .plugins.allow = ((.plugins.allow // []) | if index("memory-lancedb-namespaced") then . else . + ["memory-lancedb-namespaced"] end)
+.plugins.allow = ((.plugins.allow // []) | if index("memory-lancedb-namespaced") then . else . + ["memory-lancedb-namespaced"] end)
 | .plugins.slots.memory = (.plugins.slots.memory // "memory-core")
-| .plugins.entries["memory-lancedb-namespaced"] = (($plugin_config) + {"hooks": ((.plugins.entries["memory-lancedb-namespaced"].hooks // {}) + {
-    "allowConversationAccess": true,
-    "allowPromptInjection": true,
-    "timeouts": (((.plugins.entries["memory-lancedb-namespaced"].hooks.timeouts // {}) + {
-      "before_prompt_build": 90000,
-      "agent_end": 60000
-    }))
-  })})
-| if .plugins.entries["memory-lancedb"] then .plugins.entries["memory-lancedb"].enabled = false else . end
+| .plugins.entries["memory-lancedb-namespaced"] = $plugin_config
 JQEOF
 )
 
@@ -1239,9 +1186,10 @@ if [[ "$DRY_RUN" == "1" ]]; then
   dryrun "Würde openclaw.json mit Plugin-Config patchen"
   dryrun "  - plugins.allow += memory-lancedb-namespaced"
   dryrun "  - plugins.slots.memory bleibt '${EXISTING_MEMORY_SLOT:-memory-core}'"
-  dryrun "  - hooks.allowConversationAccess/allowPromptInjection + Hook-Timeouts werden sichergestellt"
+  dryrun "  - kein Backend-Wechsel: bestehende Legacy-Backends bleiben unverändert"
+  dryrun "  - Policy-Helper-Ergebnis wird direkt persistiert; explizite Hooks bleiben erhalten"
   if [[ "$KEEP_EXISTING_MEMORY_CONFIG" == "1" ]]; then
-    dryrun "  - plugins.entries.memory-lancedb-namespaced bleibt inhaltlich erhalten; Hook-Rechte werden sichergestellt"
+    dryrun "  - plugins.entries.memory-lancedb-namespaced bleibt inhaltlich erhalten"
   else
     dryrun "  - plugins.entries.memory-lancedb-namespaced wird aus User-Auswahl neu geschrieben"
   fi
@@ -1265,19 +1213,7 @@ if (!cfg.plugins.allow.includes('memory-lancedb-namespaced'))
 cfg.plugins.slots = cfg.plugins.slots || {};
 cfg.plugins.slots.memory = cfg.plugins.slots.memory || 'memory-core';
 cfg.plugins.entries = cfg.plugins.entries || {};
-const existing = cfg.plugins.entries['memory-lancedb-namespaced'] || {};
-plugin.hooks = {
-  ...(existing.hooks || {}),
-  allowConversationAccess: true,
-  allowPromptInjection: true,
-  timeouts: {
-    ...((existing.hooks && existing.hooks.timeouts) || {}),
-    before_prompt_build: 90000,
-    agent_end: 60000,
-  },
-};
 cfg.plugins.entries['memory-lancedb-namespaced'] = plugin;
-if (cfg.plugins.entries['memory-lancedb']) cfg.plugins.entries['memory-lancedb'].enabled = false;
 writeFileSync('${TARGET_CONFIG}', JSON.stringify(cfg, null, 2) + '\n', 'utf8');
 console.log('patched');
 NODEOF
@@ -1285,18 +1221,7 @@ NODEOF
     # Lokal: via jq
     TMPFILE=$(mktemp)
     jq --argjson plugin_config "$PLUGIN_CONFIG" \
-      '(. | .plugins.allow = ((.plugins.allow // []) | if index("memory-lancedb-namespaced") then . else . + ["memory-lancedb-namespaced"] end))
-       | .plugins.slots.memory = (.plugins.slots.memory // "memory-core")
-       | .plugins.entries["memory-lancedb-namespaced"] = (($plugin_config) + {"hooks": ((.plugins.entries["memory-lancedb-namespaced"].hooks // {}) + {
-           "allowConversationAccess": true,
-           "allowPromptInjection": true,
-           "timeouts": (((.plugins.entries["memory-lancedb-namespaced"].hooks.timeouts // {}) + {
-             "before_prompt_build": 90000,
-             "agent_end": 60000
-           }))
-         })})
-       | if .plugins.entries["memory-lancedb"] then .plugins.entries["memory-lancedb"].enabled = false else . end
-      ' \
+      "$JQ_PATCH" \
       "$TARGET_CONFIG" > "$TMPFILE" && mv "$TMPFILE" "$TARGET_CONFIG"
   fi
   ok "openclaw.json gepatcht"
@@ -1846,12 +1771,8 @@ echo "     node $TARGET_MAINTAIN_SCRIPT --check"
 echo
 if [[ "$FINAL_MERGING_ENABLED" != "true" ]]; then
   echo -e "${YELLOW}  Hinweis: LLM-Merging wurde nicht aktiviert. Für bessere Memory-Qualität${RESET}"
-  echo -e "${YELLOW}  Merging-Config manuell in openclaw.json ergänzen (beliebiger OpenAI-kompatibler Chat-Completions-Anbieter; Modell explizit setzen)${RESET}"
+  echo -e "${YELLOW}  merging.enabled manuell oder über ein explizites Profil aktivieren; ohne Route nutzt es das effektive OpenClaw-Agentenmodell.${RESET}"
   echo -e "${YELLOW}  Pfad: plugins.entries.memory-lancedb-namespaced.config.merging${RESET}"
-  echo
-elif [[ -z "$FINAL_MERGING_MODEL" ]]; then
-  echo -e "${YELLOW}  Hinweis: LLM-Merging ist als Feature aktiv, aber noch ohne Modell.${RESET}"
-  echo -e "${YELLOW}  Runtime läuft fail-soft/no-op, bis plugins.entries.memory-lancedb-namespaced.config.merging.model gesetzt ist.${RESET}"
   echo
 fi
 if [[ "$USE_ACTIVE_MEMORY" == "n" ]]; then

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { resolveToolMemoryRequestContext } from "../lib/memory-request-context.js";
 
 const VECTOR_DIM = 384;
 const AGENT_ID = "testagent-validation";
@@ -65,10 +66,31 @@ describe("memory_store input validation", () => {
     }
   });
 
+  function toolContext(agentId = AGENT_ID, userId = "") {
+    return {
+      agentId,
+      workspaceDir,
+      messageChannel: "telegram",
+      agentAccountId: "primary",
+      requesterSenderId: userId || undefined,
+    };
+  }
+
+  it("rejects a missing tool agent before exposing store or recall handlers", () => {
+    const api = makeMockApi(basePath);
+    plugin.register(api);
+    assert.throws(() => api._toolFactory({
+      workspaceDir,
+      messageChannel: "telegram",
+      agentAccountId: "primary",
+      requesterSenderId: "owner-user",
+    }), /agentId is required/);
+  });
+
   it("rejects text over the length limit and does not store it", async () => {
     const api = makeMockApi(basePath);
     plugin.register(api);
-    const tools = api._toolFactory({ agentId: AGENT_ID, workspaceDir });
+    const tools = api._toolFactory(toolContext());
     const storeTool = tools.find((t) => t.name === "memory_store");
 
     const huge = "a".repeat(50_001);
@@ -89,7 +111,7 @@ describe("memory_store input validation", () => {
   it('rejects scope="user" when no user identity is available', async () => {
     const api = makeMockApi(basePath);
     plugin.register(api);
-    const tools = api._toolFactory({ agentId: AGENT_ID, workspaceDir });
+    const tools = api._toolFactory(toolContext());
     const storeTool = tools.find((t) => t.name === "memory_store");
 
     const result = await storeTool.execute("call-user-scope-missing-owner", {
@@ -105,7 +127,8 @@ describe("memory_store input validation", () => {
   it('persists an owner binding for scope="user" when user identity is available', async () => {
     const api = makeMockApi(basePath);
     plugin.register(api);
-    const tools = api._toolFactory({ agentId: AGENT_ID, workspaceDir, userId: "owner-user", workspaceKey: "ws-1" });
+    const ownerContext = toolContext(AGENT_ID, "owner-user");
+    const tools = api._toolFactory(ownerContext);
     const storeTool = tools.find((t) => t.name === "memory_store");
 
     const result = await storeTool.execute("call-user-scope-owner", {
@@ -122,14 +145,18 @@ describe("memory_store input validation", () => {
     const stored = rows.find((row) => row.id === result.details.id);
     assert.ok(stored, "stored user-scoped memory must exist");
     assert.strictEqual(stored.scope, "user");
-    assert.strictEqual(stored.ownerUserId, "owner-user");
+    assert.strictEqual(stored.ownerUserId, resolveToolMemoryRequestContext(ownerContext).userPrincipal);
+    assert.strictEqual(stored.agentId, AGENT_ID);
+    assert.strictEqual(stored.storedBy, AGENT_ID);
+    assert.strictEqual(stored.workspaceId, "");
   });
 
   it('does not dedupe user-scoped memories across different users', async () => {
     const api = makeMockApi(basePath);
     plugin.register(api);
 
-    const ownerTools = api._toolFactory({ agentId: "testagent-validation-dedupe", workspaceDir, userId: "owner-user", workspaceKey: "ws-1" });
+    const ownerContext = toolContext("testagent-validation-dedupe", "owner-user");
+    const ownerTools = api._toolFactory(ownerContext);
     const ownerStoreTool = ownerTools.find((t) => t.name === "memory_store");
     const ownerResult = await ownerStoreTool.execute("call-user-scope-dedupe-owner", {
       text: "same scoped text",
@@ -138,7 +165,8 @@ describe("memory_store input validation", () => {
     });
     assert.strictEqual(ownerResult?.details?.action, "stored");
 
-    const otherTools = api._toolFactory({ agentId: "testagent-validation-dedupe", workspaceDir, userId: "other-user", workspaceKey: "ws-1" });
+    const otherContext = toolContext("testagent-validation-dedupe", "other-user");
+    const otherTools = api._toolFactory(otherContext);
     const otherStoreTool = otherTools.find((t) => t.name === "memory_store");
     const otherResult = await otherStoreTool.execute("call-user-scope-dedupe-other", {
       text: "same scoped text",
@@ -154,7 +182,10 @@ describe("memory_store input validation", () => {
     assert.strictEqual(userScopedRows.length, 2, "same user-scoped text from different users must persist twice");
     assert.deepStrictEqual(
       userScopedRows.map((row) => row.ownerUserId).sort(),
-      ["other-user", "owner-user"],
+      [
+        resolveToolMemoryRequestContext(otherContext).userPrincipal,
+        resolveToolMemoryRequestContext(ownerContext).userPrincipal,
+      ].sort(),
     );
   });
 
@@ -162,7 +193,7 @@ describe("memory_store input validation", () => {
     const api = makeMockApi(basePath);
     plugin.register(api);
 
-    const ownerTools = api._toolFactory({ agentId: "testagent-validation-scope-boundary", workspaceDir, userId: "owner-user", workspaceKey: "ws-1" });
+    const ownerTools = api._toolFactory(toolContext("testagent-validation-scope-boundary", "owner-user"));
     const ownerStoreTool = ownerTools.find((t) => t.name === "memory_store");
     const ownerResult = await ownerStoreTool.execute("call-scope-boundary-owner", {
       text: "cross-scope duplicate probe",
@@ -171,7 +202,7 @@ describe("memory_store input validation", () => {
     });
     assert.strictEqual(ownerResult?.details?.action, "stored");
 
-    const otherTools = api._toolFactory({ agentId: "testagent-validation-scope-boundary", workspaceDir, userId: "other-user", workspaceKey: "ws-1" });
+    const otherTools = api._toolFactory(toolContext("testagent-validation-scope-boundary", "other-user"));
     const otherStoreTool = otherTools.find((t) => t.name === "memory_store");
     const otherResult = await otherStoreTool.execute("call-scope-boundary-other", {
       text: "cross-scope duplicate probe",

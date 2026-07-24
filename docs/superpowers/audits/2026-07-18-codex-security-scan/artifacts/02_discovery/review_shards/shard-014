@@ -1,0 +1,5 @@
+{"path":"lib/jobs/skill-miner/proposal-writer.js","area":"."}
+{"path":"lib/jobs/skill-miner/skill-md-renderer.js","area":"."}
+{"path":"lib/jsonl-utils.js","area":"."}
+{"path":"lib/llm-call.js","area":"."}
+{"path":"lib/llm-result-cache.js","area":"."}

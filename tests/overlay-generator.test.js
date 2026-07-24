@@ -8,6 +8,92 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 describe("OverlayGenerator", () => {
+  it("omits invented model provenance when no model is configured", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => JSON.stringify({
+        shiftType: "meaning",
+        shiftDescription: "The decision has a new context.",
+        confidence: 0.9,
+      }),
+    });
+
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We chose Postgres." },
+      conversationContext: "Since then, the context has changed.",
+      relevanceScore: 0.9,
+    });
+
+    assert.ok(result);
+    assert.strictEqual(Object.hasOwn(result.provenance, "llmModel"), false);
+  });
+
+  it("treats model:null as absent provenance", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      model: null,
+      llm: async () => JSON.stringify({
+        shiftType: "meaning",
+        shiftDescription: "The decision has a new context.",
+        confidence: 0.9,
+      }),
+    });
+
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We chose Postgres." },
+      conversationContext: "Since then, the context has changed.",
+      relevanceScore: 0.9,
+    });
+
+    assert.ok(result);
+    assert.strictEqual(Object.hasOwn(result.provenance, "llmModel"), false);
+  });
+
+  it("uses model metadata returned by the injected completion", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      llm: async () => ({
+        text: JSON.stringify({
+          shiftType: "meaning",
+          shiftDescription: "The decision has a new context.",
+          confidence: 0.9,
+        }),
+        provider: "host-provider",
+        model: "host/resolved-model",
+      }),
+    });
+
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We chose Postgres." },
+      conversationContext: "Since then, the context has changed.",
+      relevanceScore: 0.9,
+    });
+
+    assert.ok(result);
+    assert.strictEqual(result.provenance.llmModel, "host/resolved-model");
+  });
+
+  it("omits model provenance when a string-only completion cannot report metadata", async () => {
+    const generator = new OverlayGenerator({
+      enabled: true,
+      model: "configured/model-without-resolved-metadata",
+      llm: async () => JSON.stringify({
+        shiftType: "meaning",
+        shiftDescription: "The decision has a new context.",
+        confidence: 0.9,
+      }),
+    });
+
+    const result = await generator.generate({
+      memory: { id: "m1", text: "We chose Postgres." },
+      conversationContext: "Since then, the context has changed.",
+      relevanceScore: 0.9,
+    });
+
+    assert.ok(result);
+    assert.strictEqual(Object.hasOwn(result.provenance, "llmModel"), false);
+  });
+
   it("returns null when disabled", async () => {
     const generator = new OverlayGenerator({ enabled: false, llm: async () => "x" });
     const result = await generator.generate({ memory: { id: "m1", text: "x" }, conversationContext: "x" });

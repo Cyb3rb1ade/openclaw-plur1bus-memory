@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-001",
+  "reviewer": "security-frontier-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": ".openclaw/scripts/mood-carrier.sh",
+      "status": "full_reviewed",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (146 lines; SHA-256 f9d675addb196187d38e5c159769affdf8edc85bd10ae91c720808de89eed4). Shell invocation uses fixed python3 and quoted argv (lines 12-14); the Python body parses two fixed state filenames, rotates the prior state by temporary-file rename, and writes a fixed marker/output filename (17-40, 93-108, 123-143). Mood values enter a prompt-style block (64-91), but the normal writer is index.js:5651-5655 from EmotionalState.describeMood's fixed labels and fixed-lexicon nuances; no chat-controlled path, shell, subprocess, network, authorization, or independent privileged mutation sink was established. A principal able to replace arbitrary workspace state files already crosses the local-workspace integrity boundary, so file-tamper prompt injection was not retained as a repository vulnerability."
+    },
+    {
+      "path": ".openclaw/scripts/test-mood-carrier.sh",
+      "status": "full_reviewed",
+      "disposition": "not_applicable",
+      "evidence": "Read in full (148 lines; SHA-256 1344853f2f7c6dcd697e5b011e3cc743356f794f857da55689afc2e7b92a2996). Test-only harness creates a mktemp directory, quotes its cleanup/source paths, invokes the assigned function against synthetic JSON, and asserts rotation, malformed-input, label, nuance, and missing-state behavior (lines 1-148). It is not a deployed entrypoint and exposes no production trust-boundary sink."
+    },
+    {
+      "path": "index.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-agent-db-path-traversal",
+        "cand-chat-read-auth-bypass",
+        "cand-cron-context-auth-bypass",
+        "cand-model-forget-auth-bypass",
+        "cand-acl-missing-ownership-fail-open",
+        "cand-afterthought-cross-session-leak"
+      ],
+      "evidence": "Read in full (6,455 lines; SHA-256 4c8469ba1009aa7dcb0418fa76b1b7ac74bdbdaaf2a2b16f910acee48889ea0d). Full-file coverage included imports/configuration and dependency loading (1-467), MemoryDB schema/search/update and ACL metadata normalization (468-1201), per-agent pools (1204-1243), embedding/LLM/network/deferred-child-process setup (1244-2128), plugin and command registration (2129-3782), identity/confirmation and chat commands (3784-4230), capture hooks (4231-4858), model-facing tools (4860-5463), and auto-recall/maintenance (5465-6455). Candidate anchors: unvalidated agentId is joined into the DB path (1217-1227) and is sourced from hook, command, and tool contexts (2946, 2995, 4265, 4337, 4864-4867, 5593-5595); internal-command auth is skipped when broad context strings equal cron (2931-2935, 2985-2995); sensitive read commands lack checkAuth despite multi-channel registration (3556-3597, 3631-3709, 3758-3781, 3971-3998, 4193-4199); model-facing memory_forget is allowed unless explicitly false and performs search/get/delete without user identity or record ACL (4864-4873, 5205-5262); empty ownership fields are schema defaults consumed by ACL-filtered recall/store paths (683-690, 716, 761-768, 807, 5085-5153; lib/recall-pipeline.js:1035-1063); and the cross-session afterthought job is exposed through the internal cron router (3124-3138). Fixed-argv process creation and operator-configured network endpoints were also reviewed (1527-1628, 3155-3165) without a separate attacker-controlled command/network candidate."
+    },
+    {
+      "path": "lib/acl-middleware.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-acl-missing-ownership-fail-open"
+      ],
+      "evidence": "Read in full (177 lines; SHA-256 f0523740498667fefc02e8444389b77ae96dfc25ba444e9bc3dc1a7ad0319eef). Context/memory null checks fail closed (47-53), user scope requires an authenticated matching owner and fails closed on a missing owner (82-95), and unknown scopes fail closed (97-98). In contrast, agent-private rows with neither agentId nor storedBy are allowed for every requesting agent (55-68), and workspace rows with neither workspaceId nor workspaceKey are allowed for every requesting workspace (71-79). filterMemoriesByAcl propagates those allow decisions (165-176). Dynamic candidate-local validation returned allowed:true for both missing-binding cases while a missing user owner returned acl.user.missing_owner. The audit logger uses a caller-provided path or a fixed suffix beneath workspaceDir (129-153); no separate remotely controlled traversal source was established for that optional administrative surface."
+    },
+    {
+      "path": "lib/afterthought.js",
+      "status": "full_reviewed",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-afterthought-cross-session-leak"
+      ],
+      "evidence": "Read in full (179 lines; SHA-256 27a88a3ce78e2e3ea3d98266e89aeb7f5eb5635ab5a9d6e5111abb1c2152c277). Candidate selection takes an unscoped outcome array and chooses the newest eligible record solely by timestamp/outcome, returning its full userPrompt (36-54). runAfterthoughtJob accepts agentId but no session/chat/delivery identity, reads the workspace-wide reply-outcomes log, passes all entries to that selector, composes from the selected prompt, and returns text/topic to its cron caller (105-125, 138-174). Supporting records preserve agentId, sessionKey, and workspaceKey (lib/reply-outcome-tracking.js:289-303), but readReplyOutcomeLog returns them unfiltered (353-357). Dynamic validation asked for an agent-a/private-chat-a job over two entries and selected the newer agent-b/group-chat-b confidential topic. Prompt sanitization and explicit untrusted framing are present (64-93), so prompt injection was not retained; the candidate is missing identity scoping and possible cross-destination disclosure. Silent catches at 52-54 and 94-96 are coding-standard/reliability defects but not separate security chains."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-afterthought-cross-session-leak",
+      "title": "Afterthought cron selects workspace-wide outcomes without agent, session, or destination scoping",
+      "taxonomy": [
+        "CWE-200",
+        "CWE-862",
+        "cross-session-data-exposure"
+      ],
+      "source": "Reply-outcome entries persist historical userPrompt together with agentId, sessionKey, and workspaceKey in a workspace-wide JSONL log.",
+      "control": "findAfterthoughtCandidate filters only timestamp and outcome and runAfterthoughtJob provides no expected agent/session/chat identity to the selector.",
+      "sink": "The selected historical prompt is sent to the LLM and the resulting text/topic is returned by /plur1bus internal afterthought for cron delivery to that job's configured destination.",
+      "impact": "A delayed follow-up can disclose or allude to one chat/session's confidential topic in another agent or delivery destination that shares the workspace outcome log.",
+      "locations": [
+        "lib/afterthought.js:36",
+        "lib/afterthought.js:39",
+        "lib/afterthought.js:45",
+        "lib/afterthought.js:48",
+        "lib/afterthought.js:105",
+        "lib/afterthought.js:120",
+        "lib/afterthought.js:124",
+        "lib/afterthought.js:146",
+        "lib/afterthought.js:171",
+        "lib/reply-outcome-tracking.js:289",
+        "lib/reply-outcome-tracking.js:293",
+        "lib/reply-outcome-tracking.js:294",
+        "lib/reply-outcome-tracking.js:295",
+        "lib/reply-outcome-tracking.js:297",
+        "lib/reply-outcome-tracking.js:353",
+        "lib/reply-outcome-tracking.js:357",
+        "index.js:3124",
+        "index.js:3138",
+        "README.md:224"
+      ],
+      "validationFacts": "A pure-function validation supplied a requested agent-a/private-chat-a identity alongside agent-a and newer agent-b/group-chat-b entries; findAfterthoughtCandidate selected the newer agent-b confidential prompt. tests/afterthought.test.js passed, but contains no cross-agent/session scoping assertion. Validation should confirm whether a bound agent workspace can receive outcomes from multiple chats/users and whether feature-cron delivery can target a different principal than the newest outcome.",
+      "attackFacts": "Preconditions are two principals or destinations sharing workspaceDir, an eligible outcome from the victim within 30-120 minutes, and an enabled afterthought cron whose delivery target is visible to the other principal. The attacker need not control the LLM output, but disclosure quality depends on how directly the generated follow-up repeats the topic. README.md:222 mitigates duplicate agent crons per shared workspace, but does not bind a selected outcome to the cron destination."
+    },
+    {
+      "candidateId": "cand-chat-read-auth-bypass",
+      "title": "Sensitive chat read commands bypass configured user and chat allowlists",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-200",
+        "missing-authorization"
+      ],
+      "source": "Any participant able to invoke registered Telegram, Discord, Slack, or Mattermost commands supplies recall queries and read subcommands.",
+      "control": "The command handlers validate input length and, for memory rows, scope metadata, but never call checkAuth/isAuthorized for non-destructive reads; configured allowedUserIds/allowedChatIds are therefore not consulted.",
+      "sink": "Reminder list renders reminder text/IDs, curation and Neo origin/explain/behavior commands serialize records, and /memory renders matching long-term memory summaries/IDs to the invoking chat.",
+      "impact": "A non-allowlisted user in a shared channel can enumerate private reminders, memory-derived records, behavior cards, provenance, and agent-private memory content associated with the routed agent/workspace.",
+      "locations": [
+        "index.js:3556",
+        "index.js:3574",
+        "index.js:3591",
+        "index.js:3631",
+        "index.js:3639",
+        "index.js:3679",
+        "index.js:3681",
+        "index.js:3700",
+        "index.js:3706",
+        "index.js:3758",
+        "index.js:3779",
+        "index.js:3832",
+        "index.js:3841",
+        "index.js:3971",
+        "index.js:3983",
+        "index.js:3995",
+        "index.js:4193",
+        "index.js:4198",
+        "lib/security.js:89",
+        "lib/security.js:130",
+        "lib/security.js:141"
+      ],
+      "validationFacts": "An integration-style mock registered the plugin with security.allowedUserIds=['owner'] and invoked /plur1bus curation as userId='intruder' in a Telegram group; the handler returned [] and did not deny the call. The source shows populated stores are serialized on the same path. Validation should seed representative reminder/Neo/memory data and confirm actual gateway sender fields and group routing.",
+      "attackFacts": "The attacker needs command access to a channel routed to the same agent/workspace; no allowlist membership is needed. Memory query ACL remains agent/workspace/user-scope aware, but agent-private is keyed to the routed agent rather than the human sender, so it does not replace the configured user allowlist. Exposure is direct in the command response."
+    },
+    {
+      "candidateId": "cand-cron-context-auth-bypass",
+      "title": "Broad cron-context strings bypass authorization for privileged internal commands",
+      "taxonomy": [
+        "CWE-863",
+        "authorization-bypass",
+        "confused-deputy"
+      ],
+      "source": "A registered /plur1bus command context contributes channel plus origin, source, or kind metadata.",
+      "control": "isCronCommandContext treats any one of those lower-cased strings equal to cron as trusted and skips the destructive checkAuth gate for every internal subcommand.",
+      "sink": "The internal router exposes consolidation, classification, auto-accept, dreaming, skill mining, afterthought, persona evolution, reminder dispatch, semantic-link writes, GC, feedback, proactive, and meta-reflection jobs.",
+      "impact": "If a non-cron adapter, plugin, or inbound message can influence one fallback metadata field, an unauthorized user can execute privileged maintenance and state-mutating jobs under the service account.",
+      "locations": [
+        "index.js:2931",
+        "index.js:2932",
+        "index.js:2933",
+        "index.js:2934",
+        "index.js:2985",
+        "index.js:2989",
+        "index.js:2990",
+        "index.js:2995",
+        "index.js:3252",
+        "index.js:3758",
+        "index.js:3779"
+      ],
+      "validationFacts": "With identical unauthorized Telegram group contexts, a dynamic handler check denied 'internal gc-run' normally but accepted it when only origin:'cron' was added; the accepted path returned the internal GC job result. tests/plur1bus-internal-auth.test.js passed and verifies trusted channel:'cron', but has no negative test for origin/source/kind on a non-cron channel. Production validation must establish which fields are authoritative and whether adapters can populate or preserve attacker-derived values.",
+      "attackFacts": "Authorization bypass is code-complete once any non-authoritative context field can equal cron. The critical proof gap is attacker control: if OpenClaw always constructs and overwrites all four fields from trusted routing metadata, ordinary chat text alone cannot exploit this. A safe design would bind the bypass to one documented, authoritative host signal rather than broad fallbacks."
+    },
+    {
+      "candidateId": "cand-model-forget-auth-bypass",
+      "title": "Model-facing memory_forget is enabled by default and deletes without user identity or record ACL",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-863",
+        "cross-user-memory-mutation"
+      ],
+      "source": "Untrusted conversational content can influence the model to invoke memory_forget with a query or memory UUID in a tool context that carries agentId but no user-bound authorization identity.",
+      "control": "security.allowModelDestructiveMemoryOps is treated as enabled unless exactly false; the code itself states model tool calls lack user-bound auth, and memory_forget performs no checkAccess against scope/ownerUserId.",
+      "sink": "The tool reads cards or search results, archives them, calls MemoryDB.delete, and returns candidate/full memory text or deletion status.",
+      "impact": "Prompt injection or a malicious participant can cause unauthorized deletion/archiving of another user's or scope's memory within the same agent database and may enumerate matching memory text during query selection.",
+      "locations": [
+        "index.js:4864",
+        "index.js:4868",
+        "index.js:4872",
+        "index.js:5205",
+        "index.js:5216",
+        "index.js:5218",
+        "index.js:5224",
+        "index.js:5232",
+        "index.js:5240",
+        "index.js:5243",
+        "index.js:5255",
+        "openclaw.plugin.json:1714",
+        "openclaw.plugin.json:1716",
+        "tests/model-tool-auth.test.js:45",
+        "tests/model-tool-auth.test.js:55",
+        "tests/config-audit.test.js:417"
+      ],
+      "validationFacts": "tests/model-tool-auth.test.js passed and explicitly verifies destructive model tools are allowed by default and blocked only by explicit false; tests/config-audit.test.js and the manifest lock that default to true. MemoryDB.getById/delete validate UUIDs and archiveCard validates agentId, so SQL/path injection through memoryId is not the candidate. Validation should confirm model tool approval UX, prompt-injection resistance, and whether the host can attach a trustworthy user identity unavailable in the current execute signature.",
+      "attackFacts": "The direct attack is stored/indirect prompt injection or a malicious chat participant inducing a tool call. A target UUID can be obtained through recall/read output, while query mode can search and disclose candidates itself. Archive-first makes deletion recoverable but does not provide authorization and still changes active persistent state. Exploitability is reduced if the OpenClaw host requires an independent trusted human approval before every destructive tool execution; no such gate appears in this repository."
+    },
+    {
+      "candidateId": "cand-agent-db-path-traversal",
+      "title": "Primary per-agent database pool joins unvalidated runtime agent IDs into filesystem paths",
+      "taxonomy": [
+        "CWE-22",
+        "path-traversal",
+        "agent-isolation-bypass"
+      ],
+      "source": "Host hook, command, and model-tool contexts supply ctx.agentId/commandCtx.agentId to the primary MultiNamespacePool and AgentDbPool.",
+      "control": "AgentDbPool only falls back to default; it caches and joins the raw identifier without safeAgentId or resolveInside, even though the repository provides safeAgentId and uses it in db-adapter.",
+      "sink": "MemoryDB is constructed at the escaped path, and subsequent init/search/store/maintenance connects to or creates LanceDB state there.",
+      "impact": "A traversal-shaped agent ID can escape the configured namespace directory, collide with another agent or plugin path, and read/create/modify LanceDB files under the service account, violating per-agent isolation.",
+      "locations": [
+        "index.js:1204",
+        "index.js:1217",
+        "index.js:1219",
+        "index.js:1224",
+        "index.js:1225",
+        "index.js:2946",
+        "index.js:2995",
+        "index.js:4265",
+        "index.js:4337",
+        "index.js:4864",
+        "index.js:4866",
+        "index.js:5593",
+        "index.js:5595",
+        "lib/multi-namespace-pool.js:21",
+        "lib/multi-namespace-pool.js:23",
+        "lib/multi-namespace-pool.js:31",
+        "lib/sql-safety.js:42",
+        "lib/db-adapter.js:296",
+        "lib/db-adapter.js:301"
+      ],
+      "validationFacts": "Pure path validation showed join('/srv/openclaw/memory/lancedb-namespaced/default','../../outside-agent') resolves outside the base, while safeAgentId rejects the same identifier. The unsafe code path is confirmed; validation must determine OpenClaw's canonical agent-ID constraints at every hook/tool/command adapter and whether configured agent creation or another plugin can introduce separators.",
+      "attackFacts": "Requires control of runtime agentId, not merely command args. Once supplied, ordinary recall/store/hook execution initializes the escaped DB path without a second containment check. Absolute-path behavior is not required; ../ segments suffice. If the host guarantees /^[A-Za-z0-9_-]{1,64}$/ before every plugin boundary, this becomes defense-in-depth rather than exploitable."
+    },
+    {
+      "candidateId": "cand-acl-missing-ownership-fail-open",
+      "title": "Agent and workspace ACL scopes authorize rows whose ownership binding is absent",
+      "taxonomy": [
+        "CWE-862",
+        "CWE-639",
+        "fail-open-authorization"
+      ],
+      "source": "Legacy, partially migrated, imported, or malformed rows can carry agent-private/workspace scope while storedBy/agentId or workspaceKey/workspaceId is empty; index normalization and migrations deliberately materialize empty ownership defaults.",
+      "control": "checkAccess treats a missing agent or workspace binding as backwards-compatible authorization rather than denying or quarantining the row.",
+      "sink": "The allow decision feeds recall output and store duplicate/merge candidate selection, including archive/delete/replacement of a visible merge candidate.",
+      "impact": "A requester in the wrong workspace, or an isolation-bypassing namespace context, can disclose or mutate an unbound memory row instead of having access fail closed.",
+      "locations": [
+        "lib/acl-middleware.js:55",
+        "lib/acl-middleware.js:59",
+        "lib/acl-middleware.js:62",
+        "lib/acl-middleware.js:63",
+        "lib/acl-middleware.js:71",
+        "lib/acl-middleware.js:73",
+        "lib/acl-middleware.js:74",
+        "lib/acl-middleware.js:82",
+        "lib/acl-middleware.js:88",
+        "lib/acl-middleware.js:89",
+        "lib/recall-pipeline.js:1035",
+        "lib/recall-pipeline.js:1040",
+        "index.js:683",
+        "index.js:689",
+        "index.js:716",
+        "index.js:761",
+        "index.js:767",
+        "index.js:807",
+        "index.js:5085",
+        "index.js:5087",
+        "index.js:5101",
+        "index.js:5103",
+        "index.js:5152"
+      ],
+      "validationFacts": "Direct checks returned allowed:true for {scope:'agent-private',storedBy:''} requested by agent-b and {scope:'workspace',workspaceKey:''} requested by workspace-b, while {scope:'user',ownerUserId:''} correctly failed closed. tests/user-scope-acl.test.js passed and tests only the fail-closed user case. Validation should inspect real migrated tables/importers for unbound rows and exercise a second workspace against the same agent database.",
+      "attackFacts": "The strongest standalone path is cross-workspace access when one agent database serves more than one workspace and a workspace-scoped row lacks workspaceKey. Agent-private rows live under per-agent DB directories, so a missing storedBy is not independently cross-agent unless a shared/escaped namespace or importer places the row in the requester's DB. The candidate is retained because the control is explicitly fail-open and empty bindings are normal schema defaults, but reachable harmful rows must be demonstrated."
+    }
+  ],
+  "notes": "All five assigned files were read in full at immutable commit 6dff096efe936f7ec3d0e11a8ba83bf08671ad4e. Six pre-dedup candidates are retained for parent validation; proof gaps are explicit, and no feature-disable recommendation is implied. Targeted dynamic checks were read-only with temporary test state and all selected regression tests passed."
+}

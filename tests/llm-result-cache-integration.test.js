@@ -139,8 +139,18 @@ function countDeterministicCalls(source, purpose, scope = "agentId") {
   return extractCallExpressions(source, "callLlm").filter((expression) => {
     const args = callArguments(expression);
     if (args.length !== 2) return false;
+    const composed = extractCallExpressions(args[1], "withDeterministicLlmContext");
+    if (composed.length === 1 && composed[0].trim() === args[1].trim()) {
+      const composedArgs = callArguments(composed[0]);
+      return composedArgs.length >= 4
+        && composedArgs[1] === scope
+        && composedArgs[2] === `LLM_RESULT_CACHE_PURPOSES.${purpose}`
+        && /\btemperature\s*:\s*0\b/.test(composedArgs[3]);
+    }
+    const contexts = extractCallExpressions(args[1], "withLlmCallContext");
+    if (contexts.length !== 1 || contexts[0].trim() !== args[1].trim()) return false;
     const wrappers = extractCallExpressions(args[1], "withLlmResultCacheContext");
-    if (wrappers.length !== 1 || wrappers[0].trim() !== args[1].trim()) return false;
+    if (wrappers.length !== 1) return false;
     const wrapperArgs = callArguments(wrappers[0]);
     return wrapperArgs.length === 3
       && /\btemperature\s*:\s*0\b/.test(wrapperArgs[0])
@@ -260,7 +270,7 @@ describe("deterministic LLM result-cache allowlist", () => {
       await runConflictResolver({
         agentId: "agent-a",
         workspaceDir,
-        llmCfg: { model: "mock" },
+        llmCfg: { feature: "conflict-resolution", model: "mock" },
         llmTimeoutMs: 25,
         callLlm: async (_messages, cfg) => {
           captureCfg = cfg;
@@ -289,7 +299,8 @@ describe("deterministic LLM result-cache allowlist", () => {
         workspaceKey: "workspace-a",
         dryRun: true,
         compaction: { similarityThreshold: 0.5, autoApply: false },
-        llmCfg: { model: "mock" },
+        compactionLlmCfg: { feature: "memory-compaction", model: "mock" },
+        conflictLlmCfg: { feature: "conflict-resolution", model: "mock" },
         llmMergeTimeoutMs: 25,
         callLlm: async (messages, cfg) => {
           capturedCfgs.push(cfg);
@@ -307,6 +318,10 @@ describe("deterministic LLM result-cache allowlist", () => {
       });
 
       const contexts = capturedCfgs.map((cfg) => cfg.resultCacheContext);
+      assert.deepEqual(capturedCfgs.map((cfg) => cfg.feature).sort(), [
+        "conflict-resolution",
+        "memory-compaction",
+      ]);
       assert.deepEqual(
         Object.fromEntries(contexts.map((context) => [context?.purpose, context?.scopeId])),
         {
@@ -469,29 +484,37 @@ describe("deterministic LLM result-cache allowlist", () => {
     const captureSection = sourceSection(source, "async function summarizeForCapture", "// Baut eine querySummarizer-Funktion");
     const recallSection = sourceSection(source, "function makeQuerySummarizer", "const REINDEX_WRITE_THRESHOLD");
     const mergeSection = sourceSection(source, "async function callMergeCheck", "// Schicht 1.5 — Pending-Tracking");
+    const bridgeStoreSection = sourceSection(source, "async function storeMemoryFromToolParams", "if (obsidianBridgeEnabled)");
+    const modelStoreSection = sourceSection(source, "name: \"memory_store\"", "name: \"memory_forget\"");
     const knowledgeSection = sourceSection(source, "async function updateKnowledgeMd", "// applyImportanceBoost");
     const knowledgeToolSection = sourceSection(source, "name: \"knowledge_update\"", "names: [\"memory_recall\"");
-    const emotionSection = sourceSection(source, "const emotionT3CallLlm", "if (emotionT3Enabled && mergingLlmCfg)");
+    const emotionSection = sourceSection(source, "const emotionT3CallLlm", "if (emotionT3Enabled && emotionT3LlmCfg)");
 
     assert.match(source, /createLlmResultCache\(\{[\s\S]*?baseDbPath,[\s\S]*?logger: api\.logger,[\s\S]*?\}\)/);
-    assert.match(source, /callOpenAiLlm\(messages, llmCfg, \{[\s\S]*?resultCache: llmCfg\?\.resultCache[\s\S]*?\}\)/);
+    assert.match(source, /completeFeatureLlm\(messages, llmCfg,[\s\S]*?resultCacheContext: llmCfg\?\.resultCacheContext/);
+    assert.match(source, /directCall: \(directMessages, directCfg\) => callOpenAiLlm\(directMessages, directCfg,[\s\S]*?resultCache: directCfg\?\.resultCache/);
     assertEveryCallIsDeterministic(captureSection, "CAPTURE_SUMMARY", 1);
     assertEveryCallIsDeterministic(recallSection, "RECALL_QUERY_SUMMARY", 1);
     assertEveryCallIsDeterministic(mergeSection, "MERGE_DECISION", 1);
     assertEveryCallIsDeterministic(knowledgeSection, "KNOWLEDGE_UPDATE", 2);
     assertEveryCallIsDeterministic(knowledgeToolSection, "KNOWLEDGE_UPDATE", 2);
 
-    assert.equal(countMatches(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg, api\.logger, agentId\)/g), 1);
-    assert.equal(countMatches(source, /makeQuerySummarizer\(mergingLlmCfg, api\.logger, agentId\)/g), 3);
-    assert.equal(countMatches(source, /callMergeCheck\(mergeCandidate\.entry\.text, params\.text, mergingLlmCfg, agentId\)/g), 2);
+    assert.doesNotMatch(source, /summarizeForCapture\(text, maxChars, mergingLlmCfg/);
+    assert.doesNotMatch(source, /makeQuerySummarizer\(mergingLlmCfg/);
+    assert.match(source, /summarizeForCapture\([\s\S]{0,250}?captureSummaryLlmCfg/);
+    assert.equal(countMatches(source, /makeQuerySummarizer\(\s*(?:mergingEnabled\s*\?\s*)?recallQueryLlmCfg/g), 5);
+    assert.equal(countMatches(bridgeStoreSection, /callMergeCheck\([\s\S]{0,220}?mergingLlmCfg,[\s\S]{0,80}?storeAgentId,[\s\S]{0,80}?storeCtx\.callContext/g), 1);
+    assert.equal(countMatches(modelStoreSection, /callMergeCheck\(authoritativeCandidate\.text, params\.text, mergingLlmCfg, agentId\)/g), 1);
+    assert.equal(countMatches(bridgeStoreSection, /withDurableMerge\(\{\s*db: storeDb,\s*agentId: storeAgentId,/g), 1);
+    assert.equal(countMatches(modelStoreSection, /withDurableMerge\(\{\s*db,\s*agentId,/g), 1);
 
     const emotionCallCount = extractCallExpressions(emotionSection, "callLlm").length;
     const scopedEmotionCallCount = countDeterministicCalls(emotionSection, "EMOTION_CLASSIFICATION", "context.agentId");
     assert.equal(scopedEmotionCallCount, 1);
-    const emotionCfgInitializer = sourceSection(emotionSection, "const emotionLlmCfg = {", "return context.agentId");
+    const emotionCfgInitializer = sourceSection(emotionSection, "const emotionLlmCfg = withLlmCallContext(", "return context.agentId");
     assert.doesNotMatch(
       emotionCfgInitializer,
-      /resultCacheContext|withLlmResultCacheContext|LLM_RESULT_CACHE_PURPOSES\.EMOTION_CLASSIFICATION|["'](?:default|shared)["']/,
+      /resultCacheContext|withLlmResultCacheContext|["'](?:default|shared)["']/,
     );
     const missingAgentCalls = extractCallExpressions(emotionSection, "callLlm").filter((expression) => {
       const args = callArguments(expression);
@@ -507,7 +530,7 @@ describe("deterministic LLM result-cache allowlist", () => {
       ["index.js", "function makeQuerySummarizer", ["@param {string} agentId", "@returns {Function|null}"]],
       ["index.js", "async function callMergeCheck", ["@param {string} agentId", "@returns {Promise<object|null>}"]],
       ["index.js", "async function updateKnowledgeMd", ["@param {string} agentId", "@returns {Promise<void>}"]],
-      ["index.js", "(messages, context = {}) =>", ["@param {Array<object>} messages", "@param {{agentId?: string}} [context]", "@returns {Promise<string|null>}"]],
+      ["index.js", "(messages, context = {}) =>", ["@param {Array<object>} messages", "@param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [context]", "@returns {Promise<string|null>}"]],
       ["lib/jobs/conflict-resolver.js", "async function resolveConflictPair", ["@param {string} agentId", "@returns {Promise<object>}"]],
       ["lib/jobs/conflict-resolver.js", "export async function runConflictResolver", ["@param {string} [opts.agentId]", "@returns {Promise<object>}"]],
       ["lib/jobs/memory-compaction.js", "async function callMergeCheck", ["@param {string} agentId", "@returns {Promise<object|null>}"]],
@@ -520,12 +543,12 @@ describe("deterministic LLM result-cache allowlist", () => {
       ["lib/dreaming/light-dream.js", "export async function lightDream", ["agentId?: string", "@returns {Promise<Object>}"]],
       ["lib/dreaming/rem-dream.js", "export async function summarizeClusterWithLlm", ["@param {string} [agentId=\"default\"]", "@returns {Promise<object>}"]],
       ["lib/dreaming/rem-dream.js", "export async function runRemDream", ["@param {string} [params.agentId", "@returns {Promise<object>}"]],
-      ["lib/emotion.js", "export async function inferEmotionalValenceAsync", ["@param {{agentId?: string}} [context]", "@returns {Promise<"]],
-      ["lib/emotion-engine.js", "async analyze", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
-      ["lib/emotion-engine.js", "async _tier3Only", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
-      ["lib/emotion-engine.js", "async _defaultRouting", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
-      ["lib/emotion-engine.js", "async _maybeT3", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
-      ["lib/tier3-llm.js", "async classify", ["@param {{agentId?: string}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/emotion.js", "export async function inferEmotionalValenceAsync", ["@param {{agentId?: string, runtimeLlm?: object, signal?: AbortSignal}} [context]", "@returns {Promise<"]],
+      ["lib/emotion-engine.js", "async analyze", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/emotion-engine.js", "async _tier3Only", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/emotion-engine.js", "async _defaultRouting", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/emotion-engine.js", "async _maybeT3", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
+      ["lib/tier3-llm.js", "async classify", ["@param {{agentId?: string, signal?: AbortSignal}} [context]", "@returns {Promise<EmotionScore>}"]],
     ];
 
     for (const [relativePath, signature, fragments] of contracts) {

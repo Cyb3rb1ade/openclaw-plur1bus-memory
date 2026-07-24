@@ -1,0 +1,5 @@
+{"path":"lib/providers/factory.js","area":"."}
+{"path":"lib/providers/legacy-provider-migration.js","area":"."}
+{"path":"lib/providers/openclaw-memory-embedding-adapters.js","area":"."}
+{"path":"lib/providers/reranker-chained.js","area":"."}
+{"path":"lib/providers/reranker-cohere.js","area":"."}

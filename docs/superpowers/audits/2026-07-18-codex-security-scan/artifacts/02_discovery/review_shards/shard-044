@@ -1,0 +1,5 @@
+{"path":"plur1bus/lib/text-utils.js","area":"."}
+{"path":"scripts/auto-capture-lancedb.mjs","area":"."}
+{"path":"scripts/backup-snapshot.sh","area":"."}
+{"path":"scripts/build-code-index.mjs","area":"."}
+{"path":"scripts/cleanup-vault-missing-tasks.mjs","area":"."}

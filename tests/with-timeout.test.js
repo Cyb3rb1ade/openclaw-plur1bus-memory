@@ -2,6 +2,16 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { withTimeout, TimeoutError } from "../lib/with-timeout.js";
 
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("withTimeout", () => {
   it("resolves when promise finishes before timeout", async () => {
     const result = await withTimeout(Promise.resolve("ok"), 100, "fast-op");
@@ -23,6 +33,22 @@ describe("withTimeout", () => {
         return true;
       },
     );
+  });
+
+  it("keeps the caller-visible timeout prompt while exposing the underlying settlement", async () => {
+    const raw = deferred();
+    const startedAt = Date.now();
+    const error = await withTimeout(raw.promise, 15, "late-write").then(
+      () => null,
+      (caught) => caught,
+    );
+
+    assert.ok(error instanceof TimeoutError);
+    assert.ok(Date.now() - startedAt < 100, "the caller should not wait for the raw operation");
+    assert.equal(typeof error.settlement?.then, "function", "timeout errors must retain the raw settlement promise");
+
+    raw.resolve("late-commit");
+    assert.equal(await error.settlement, "late-commit");
   });
 
   it("passes through underlying rejection", async () => {

@@ -1,0 +1,170 @@
+{
+  "agents": {
+    "list": [
+      {
+        "id": "../escaped-agent",
+        "workspace": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-installer-agent-id-path-traversal/validation_artifacts/repro-work/target/workspace"
+      }
+    ]
+  },
+  "plugins": {
+    "allow": [
+      "memory-lancedb-namespaced",
+      "active-memory"
+    ],
+    "slots": {
+      "memory": "memory-lancedb-namespaced"
+    },
+    "entries": {
+      "memory-lancedb-namespaced": {
+        "enabled": true,
+        "config": {
+          "embedding": {
+            "provider": "openai",
+            "apiKey": "${OPENAI_API_KEY}",
+            "model": "text-embedding-3-large",
+            "dimensions": 3072
+          },
+          "reranker": {
+            "provider": "disabled",
+            "enabled": true,
+            "fallbackOnError": true,
+            "timeoutMs": 2500
+          },
+          "baseDbPath": "/tmp/codex-security-scans/openclaw-plur1bus-memory/6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z/artifacts/05_findings/cand-installer-agent-id-path-traversal/validation_artifacts/repro-work/target/memory/lancedb-namespaced",
+          "autoCapture": true,
+          "autoRecall": true,
+          "neo": {
+            "enabled": true
+          },
+          "recall": {
+            "dedup": true,
+            "canonicalFirst": true
+          },
+          "temporalContext": {
+            "enabled": true
+          },
+          "runtime": {
+            "embeddingCacheEnabled": true,
+            "llmResultCacheEnabled": true
+          },
+          "emotion": {
+            "t2": {
+              "enabled": true
+            },
+            "t3": {
+              "enabled": true,
+              "fallbackOnError": true,
+              "onlyWhenProviderAvailable": true
+            },
+            "tier": "auto"
+          },
+          "metaCognition": {
+            "enabled": true,
+            "llmReport": true,
+            "llmReportMode": "budgeted",
+            "fallbackOnError": true
+          },
+          "merging": {
+            "enabled": true,
+            "autoApply": true,
+            "mode": "safe-versioned",
+            "autoApplyRisk": "low-only",
+            "backupBeforeApply": true,
+            "auditLog": true,
+            "maxAutoApplyPerRun": 5
+          },
+          "schicht15": {
+            "enabled": true,
+            "minImportance": 0.7,
+            "maxPromotionsPerRun": 3
+          },
+          "skillMiner": {
+            "enabled": true,
+            "maxPerRun": 5,
+            "minConfidence": 0.6,
+            "minEvidenceScore": 3
+          },
+          "dailyConsolidation": {
+            "enabled": true
+          },
+          "obsidianBridge": {
+            "enabled": true,
+            "dashboardLayer": {
+              "enabled": true,
+              "records": true,
+              "markdownDashboards": true,
+              "bases": false,
+              "dataview": false,
+              "tasks": false,
+              "autoLinkSuggestions": true
+            },
+            "semanticGraph": {
+              "enabled": true,
+              "proposalOnly": false,
+              "writeDerivedEdges": true,
+              "mutateMemory": false
+            },
+            "provenanceGraph": {
+              "enabled": true
+            },
+            "adversarialDeep": {
+              "enabled": true,
+              "semanticContradictionScan": true,
+              "evidenceScoring": true,
+              "llmClassifier": true,
+              "fallbackOnError": true,
+              "onlyWhenProviderAvailable": true
+            },
+            "soulPatch": {
+              "enabled": true,
+              "createIfMissing": true,
+              "backup": true,
+              "force": false,
+              "migrateLegacy": false,
+              "promptForLegacyMigration": true
+            },
+            "mode": "apply",
+            "reviewRoot": "plur1bus",
+            "requireUserApproval": true,
+            "applyApprovedOnly": true,
+            "writeManagedBlocks": true,
+            "allowWrite": true,
+            "allowDotObsidianWrite": false,
+            "backupBeforeApply": true,
+            "auditLog": true,
+            "requireVaultPathConfirmation": false,
+            "autoApplyLowRisk": true,
+            "dryRun": false
+          },
+          "morningReview": {
+            "enabled": true,
+            "delivery": "obsidian",
+            "status": "active"
+          },
+          "eveningReview": {
+            "enabled": true,
+            "delivery": "obsidian",
+            "status": "active"
+          },
+          "criticalPush": {
+            "enabled": true,
+            "maxPerDay": 3
+          }
+        },
+        "hooks": {
+          "allowConversationAccess": true,
+          "allowPromptInjection": true,
+          "timeouts": {
+            "before_prompt_build": 90000,
+            "agent_end": 60000
+          }
+        }
+      },
+      "active-memory": {
+        "enabled": false,
+        "config": {}
+      }
+    }
+  }
+}

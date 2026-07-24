@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-022",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/obsidian/managed-blocks.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (50 lines; sha256 c841efaeeb46c4d28645fd7c33647e6981a8d61fba96b6624556828e8d94599b). Existing block bodies are hash-checked before replacement, legacy newline hashing is explicit, and attribute quotes are encoded. Callers use fixed or safe-slug-derived block IDs; no untrusted ID reaches the marker match in reviewed runtime callers."
+    },
+    {
+      "path": "lib/obsidian/memory-explain-builder.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (36 lines; sha256 88aca09157be4d2867b55099dbb371d53a9fb14e4f0124639535a9bbb2df647b). The memory ID is safe-slugged for the contained output path and the page is explicitly explanatory only. Sensitive command-read authorization is already represented by cand-chat-read-auth-bypass; this renderer adds no distinct privilege sink."
+    },
+    {
+      "path": "lib/obsidian/memory-note-writer.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (275 lines; sha256 67e729cf00431e8d3f7f6e4b2ece4f70f080c35c1304af6e8b9577fe66a1c119). Record IDs are safe-slugged before filename construction, base review path is contained, dry-run returns before writes, scope backfill detects conflicting agent/workspace values, and writes are atomic. Frontmatter scalar escaping is weaker than the shared frontmatter helper, but newlines are collapsed and the mirror is non-authoritative; no code execution or memory-write path was demonstrated."
+    },
+    {
+      "path": "lib/obsidian/project-hub-builder.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (52 lines; sha256 c0fc440c439e8ff95956e67fb62024e14d40f3045b0dd613c13222b4c413af6a). User topic is safe-slugged for paths, all writes pass resolveReviewPath, artifacts are marked non-authoritative, and hash conflicts prevent overwriting manually edited managed blocks. General chat-command allowlist enforcement is covered by existing command-auth candidates rather than duplicated here."
+    },
+    {
+      "path": "lib/obsidian/property-normalizer.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (24 lines; sha256 8566eebc6028c780d60d3e2c1f241c0cda179922523c25187d0f899e2f541151). Pure missing-field proposal generation with no I/O or privilege sink."
+    }
+  ],
+  "rawCandidates": [],
+  "notes": "No new reportable candidate. These modules stay on the non-authoritative mirror/proposal side; common command authorization and downstream record/path writers are tracked in dedicated rows."
+}

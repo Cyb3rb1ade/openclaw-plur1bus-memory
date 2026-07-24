@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "scanId": "6dff096efe936f7ec3d0e11a8ba83bf08671ad4e_20260718T170344Z",
+  "assignment": "shard-011",
+  "reviewer": "parent-agent",
+  "status": "complete",
+  "files": [
+    {
+      "path": "lib/jobs/consolidation-report.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (107 lines). It reads and writes fixed report/state suffixes below host-supplied workspaceDir (lines 26-37, 82, 102). Memory-derived conflict text can alter Markdown presentation but does not escape the fixed file path or become executable here. Missing resolveInside and the catch-with-error-result behavior are policy/hardening matters; no attacker-controlled path segment is used."
+    },
+    {
+      "path": "lib/jobs/critical-classifier.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-critical-push-sensitive-log",
+        "cand-critical-push-agent-path"
+      ],
+      "evidence": "Read in full (136 lines). Sensitive card bodies become returned pushMessages at lines 109-135 and are logged by the caller at index.js:3045; this corroborates cand-critical-push-sensitive-log. Agent is passed unvalidated to file-backed counters at lines 25 and 68/129, corroborating cand-critical-push-agent-path. Reclassification precedes delivery (90-107), so a transient delivery failure can permanently suppress a critical push; that is a functional reliability defect rather than a separate exploit chain."
+    },
+    {
+      "path": "lib/jobs/daily-consolidation.js",
+      "status": "complete",
+      "disposition": "candidate",
+      "candidateIds": [
+        "cand-consolidation-dryrun-purge",
+        "cand-consolidation-agent-lock-path"
+      ],
+      "evidence": "Read in full (282 lines). The exported dry-run pipeline calls db.purgeExpired unconditionally at lines 129-137, while later destructive stages explicitly receive opts.dryRun (147-169, 181, 202-203, 230); the concrete MemoryDB sink hard-deletes expired rows at index.js:1181-1186. The function also interpolates agent into a lock path with join and no safeAgentId/resolveInside (lines 52-69), with agent sourced from commandCtx.agentId at index.js:2995/3003. Error handling is otherwise logged and the lock is released in finally."
+    },
+    {
+      "path": "lib/jobs/feedback-analyzer.js",
+      "status": "complete",
+      "disposition": "no_candidate",
+      "evidence": "Read in full (36 lines). It delegates fixed-workspace feedback reads/report generation and computes numeric ranges; it has no independent privileged sink or untrusted syntax construction."
+    },
+    {
+      "path": "lib/jobs/gc-job.js",
+      "status": "complete",
+      "disposition": "suppressed",
+      "evidence": "Read in full (202 lines). Agent IDs are enumerated from immediate directory entries (28-39, 106-120), not accepted from chat; symlink Dirents are not treated as directories. GC requires an explicit policy (82-89), archives before setting status (146-155, with supporting lib/garbage-collector.js:141-180), bounds reports to 50 runs (170-190), and logs operational failures. Missing safeAgentId/resolveInside at these trusted enumeration-derived joins and missing destructive audit-log wiring are repository-policy defects but no cross-boundary exploit was established in this file."
+    }
+  ],
+  "rawCandidates": [
+    {
+      "candidateId": "cand-consolidation-dryrun-purge",
+      "title": "Daily-consolidation dry-run still hard-deletes expired memories",
+      "taxonomy": ["CWE-693", "unsafe-destructive-operation"],
+      "source": "An operator or caller invokes exported runConsolidation with opts.dryRun=true.",
+      "control": "The dry-run flag is propagated to dynamics, Neo pruning, compaction, conflict resolution, reporting, and rate-state writes, but not to TTL purge.",
+      "sink": "db.purgeExpired calls MemoryDB.purgeExpired, which executes LanceDB table.delete for expired non-core rows.",
+      "impact": "A purported non-mutating audit run irreversibly deletes expired memory rows without archive or destructive-operation audit evidence.",
+      "locations": [
+        "lib/jobs/daily-consolidation.js:129",
+        "lib/jobs/daily-consolidation.js:133",
+        "lib/jobs/daily-consolidation.js:153",
+        "lib/jobs/daily-consolidation.js:181",
+        "lib/jobs/daily-consolidation.js:202",
+        "index.js:1181",
+        "index.js:1185"
+      ],
+      "validationFacts": "The dry-run branch inconsistency and hard-delete sink are code-complete. Validation must identify every production/API caller that can set dryRun and test a table double proving purgeExpired is invoked during dry-run.",
+      "attackFacts": "Requires an authorized operator/caller and at least one expired non-core row. No untrusted remote trigger is currently established; impact is operator-confusion/data loss."
+    },
+    {
+      "candidateId": "cand-consolidation-agent-lock-path",
+      "title": "Daily-consolidation lock path interpolates an unvalidated agent identifier",
+      "taxonomy": ["CWE-22", "path-traversal"],
+      "source": "commandCtx.agentId is passed as agent to runConsolidation.",
+      "control": "There is no safeAgentId or resolveInside validation before the lock filename is constructed.",
+      "sink": "acquireJobLock creates consolidation-${agent}.lock beneath a joined workspace locks path and releaseJobLock later removes it.",
+      "impact": "A separator-bearing agent identifier could create/remove a lock file outside the intended locks directory, subject to the fixed prefix/suffix and filesystem permissions.",
+      "locations": [
+        "index.js:2995",
+        "index.js:3003",
+        "lib/jobs/daily-consolidation.js:52",
+        "lib/jobs/daily-consolidation.js:66",
+        "lib/jobs/daily-consolidation.js:69",
+        "lib/jobs/daily-consolidation.js:84"
+      ],
+      "validationFacts": "Unsafe construction is confirmed; validate host guarantees for commandCtx.agentId and exact acquire/release path semantics.",
+      "attackFacts": "Requires influence over host agentId, not merely command arguments. The fixed consolidation- prefix limits traversal unless the supplied value contains separators; the .lock suffix remains."
+    }
+  ],
+  "notes": "The sensitive-log and counter-path candidates are dedupe-supporting repeats from shard-004; two additional daily-consolidation candidates require validation. Functional audit should separately record reclassify-before-delivery, expiredDeleted never incrementing, non-atomic report writes, and silent catches."
+}

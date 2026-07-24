@@ -1,0 +1,5 @@
+{"path":"lib/jobs/consolidation-report.js","area":"."}
+{"path":"lib/jobs/critical-classifier.js","area":"."}
+{"path":"lib/jobs/daily-consolidation.js","area":"."}
+{"path":"lib/jobs/feedback-analyzer.js","area":"."}
+{"path":"lib/jobs/gc-job.js","area":"."}

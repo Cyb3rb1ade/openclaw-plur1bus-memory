@@ -64,7 +64,7 @@ describe("Feedback-Spiralen-Guards", () => {
       neoStore: { appendDreams: () => {}, appendBehaviorCards: () => {}, readReactions: () => [] },
       db,
       embeddings: { embed: async () => [0.1, 0.2] },
-      llmCfg: { model: "test" },
+      insightLlmCfg: { model: "test" },
       callLlm: async () => JSON.stringify(["Bernd will LanceDB für Vektoren nutzen"]),
     });
     assert.strictEqual(result.strengthenedCount, 1, "nur die Nicht-Traum-Memory darf verstärkt werden");
