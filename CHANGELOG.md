@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Geändert
+
+- **Installer 2026.7.2-ready** (`install-memory-system.sh`): Die OpenClaw-managed
+  Cron-Jobs (Schritt 9d Semantic-Discovery, 9e REM-Dream) werden jetzt
+  versionsabhängig in die State-DB geschrieben. OpenClaw ≥ 2026.7.2 (auch Betas)
+  migriert `state/openclaw.sqlite` auf ein STRICT-Schema mit kanonischem
+  `job_json` und `schedule_identity`; der Installer erkennt das tatsächliche
+  Schema der Ziel-DB (STRICT-Check auf `cron_jobs`) und wählt den passenden
+  INSERT-Pfad — Legacy-Subset für ≤ 2026.7.1, kanonische v2-Rows für ≥ 2026.7.2.
+  Trifft eine neue CLI (> 2026.7.1) auf eine noch nicht migrierte DB, wird der
+  Job übersprungen mit Hinweis, erst den Gateway zu starten (Auto-Migration)
+  und den Installer zu wiederholen. Beide Pfade laufen über eine gemeinsame,
+  idempotente Funktion (`ensure_openclaw_cron_job`); SQL wird base64-transportiert
+  und übersteht damit auch Remote-Installationen via SSH unverändert.
+
 ## [7.1.2] — 2026-07-24 — Re-release
 
 Identical in content to 7.1.1. The 7.1.1 ClawHub registry release got stuck in an
