@@ -845,7 +845,7 @@ const REINDEX_MIN_INTERVAL_MS = 3600000; // Max 1 reindex per hour (v6.2.1 P0-fi
 
 // Operation-level timeouts for LanceDB calls (P0 Performance-Audit K3).
 const LANCEDB_READ_TIMEOUT_MS = 10_000;
-const LANCEDB_WRITE_TIMEOUT_MS = 15_000;
+const LANCEDB_WRITE_TIMEOUT_MS = 25_000;
 const INIT_LATE_HANDLE_KIND = Symbol("MemoryDB.initLateHandleKind");
 const MAX_BACKGROUND_LIFECYCLE_ERRORS = 50;
 
@@ -3758,7 +3758,9 @@ const plugin = {
             {
               ...emotionT3LlmCfg,
               maxTokens: 300,
-              temperature: 0,
+              // No temperature: some providers (Kimi coding) reject anything
+              // but one exact value per thinking mode and answer HTTP 400.
+              // Letting the provider default apply keeps the call portable.
               disableThinking: true,
             },
             context.agentId,
@@ -3768,7 +3770,7 @@ const plugin = {
           return context.agentId
             ? callLlm(messages, withLlmCallContext(
                 withLlmResultCacheContext(
-                  { ...emotionLlmCfg, temperature: 0 },
+                  { ...emotionLlmCfg },
                   context.agentId,
                   LLM_RESULT_CACHE_PURPOSES.EMOTION_CLASSIFICATION,
                 ),
