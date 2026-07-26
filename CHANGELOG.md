@@ -7,6 +7,28 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.4] — 2026-07-26
+
+### Behoben
+
+- **Alle Feature-LLM-Calls über die native OpenClaw-Route schlugen fehl.**
+  `completeFeatureLlm()` reichte `agentId` an `runtimeLlm.complete()` weiter.
+  OpenClaw baut Plugin-LLM-Runtimes aber mit
+  `authority.allowAgentIdOverride === false`, und der zur Registrierungszeit
+  erzeugte Handle (den die Hooks benutzen) hat gar keinen gebundenen Agenten —
+  `resolveAgentId()` warf deshalb bei **jedem** Aufruf
+  `Plugin LLM completion cannot override the target agent.`. Betroffen waren
+  `emotionT3`, `persona-voice`, `dream-narrative`, `episode-extraction` und
+  `conversation-insights`; sie fielen still in ihre Fallbacks zurück. Im Log
+  war davon nur `[llm-router] failed: transport-failed` zu sehen, weil der
+  Logger die Meldung bewusst redigiert.
+
+  `agentId` wird jetzt auf nativen Routen nicht mehr mitgeschickt; der Host
+  löst seinen Agenten selbst auf. Die Trennung pro Agent bleibt über den
+  Result-Cache-Scope erhalten, und der tatsächlich verwendete Agent kommt
+  weiterhin im Ergebnis zurück. Direct-Override-Routen (`merging`,
+  `schicht15`) waren nie betroffen und ändern sich nicht.
+
 ## [7.1.3] — 2026-07-26
 
 ### Geändert

@@ -508,8 +508,9 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
 
   const summaryCalls = runtimeCalls.filter((call) => call.purpose === "recall-query-summary");
   assert.equal(summaryCalls.length, 2);
-  assert.equal(summaryCalls[0].agentId, "tool-query-agent");
-  assert.equal(summaryCalls[1].agentId, autoAgent);
+  // The host resolves the agent itself; plugins must not send one.
+  assert.equal(Object.hasOwn(summaryCalls[0], "agentId"), false);
+  assert.equal(Object.hasOwn(summaryCalls[1], "agentId"), false);
   assert.equal(summaryCalls[1].signal instanceof AbortSignal, true);
   assert.equal(Object.hasOwn(summaryCalls[0], "model"), false);
   assert.equal(Object.hasOwn(summaryCalls[1], "model"), false);
@@ -749,7 +750,7 @@ test("capture scheduler abort reaches summary and Emotion without late durable w
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(calls.length, 1);
     assert.equal(calls[0].purpose, scenario);
-    assert.equal(calls[0].agentId, captureAgentId);
+    assert.equal(Object.hasOwn(calls[0], "agentId"), false);
     assert.equal(calls[0].signal.aborted, true);
     assert.equal(storeCalls, 0);
   }
@@ -859,7 +860,7 @@ test("recall commit barriers block writes when the runtime ignores abort and suc
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.equal(calls.length, 1);
     assert.equal(calls[0].purpose, scenario);
-    assert.equal(calls[0].agentId, agentId);
+    assert.equal(Object.hasOwn(calls[0], "agentId"), false);
     assert.equal(calls[0].signal.aborted, true);
     if (scenario === "continuity-overlay") {
       assert.equal(existsSync(join(baseDbPath, "interpretation-overlays.jsonl")), false);

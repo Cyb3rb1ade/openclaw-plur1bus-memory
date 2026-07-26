@@ -378,7 +378,9 @@ test("native default dispatch omits model and direct-only options", async () => 
   }, timer);
 
   assert.equal(receivedParams.messages, messages);
-  assert.equal(receivedParams.agentId, "agent-a");
+  // agentId stays out of the host call — see the dedicated regression test at
+  // the end of this file.
+  assert.equal(Object.hasOwn(receivedParams, "agentId"), false);
   assert.equal(receivedParams.purpose, "capture-summary");
   assert.equal(receivedParams.maxTokens, 240);
   assert.equal(receivedParams.temperature, 0.25);
@@ -405,15 +407,21 @@ test("native default dispatch omits model and direct-only options", async () => 
   assert.deepEqual(timer.cleared, [timer.scheduled[0]]);
 });
 
-test("one native-default route preserves per-call agent model resolution", async () => {
+test("one native-default route reports the host-resolved agent per call", async () => {
+  // The host owns agent resolution for plugin LLM calls and rejects any
+  // caller-supplied agentId, so each call reports back whichever agent and
+  // model the host actually used.
   const timer = createTimerHarness();
+  const seenParams = [];
+  let hostAgent = "host-resolved-a";
   const runtimeLlm = {
     async complete(params) {
+      seenParams.push(params);
       return {
-        text: `answer for ${params.agentId}`,
+        text: `answer for ${hostAgent}`,
         provider: "fake-host",
-        model: `model-for-${params.agentId}`,
-        agentId: params.agentId,
+        model: `model-for-${hostAgent}`,
+        agentId: hostAgent,
       };
     },
   };
@@ -427,15 +435,19 @@ test("one native-default route preserves per-call agent model resolution", async
     agentId: "agent-a",
     purpose: "recall-query-summary",
   }, timer);
+  hostAgent = "host-resolved-b";
   const second = await completeFeatureLlm([], route, {
     agentId: "agent-b",
     purpose: "recall-query-summary",
   }, timer);
 
-  assert.equal(first.model, "model-for-agent-a");
-  assert.equal(first.agentId, "agent-a");
-  assert.equal(second.model, "model-for-agent-b");
-  assert.equal(second.agentId, "agent-b");
+  for (const params of seenParams) {
+    assert.equal(Object.hasOwn(params, "agentId"), false);
+  }
+  assert.equal(first.model, "model-for-host-resolved-a");
+  assert.equal(first.agentId, "host-resolved-a");
+  assert.equal(second.model, "model-for-host-resolved-b");
+  assert.equal(second.agentId, "host-resolved-b");
   assert.equal(timer.scheduled.length, 2);
   assert.equal(timer.cleared.length, 2);
 });
@@ -897,4 +909,39 @@ test("native success removes the caller abort listener and timer", async () => {
   assert.equal(caller.addCount(), 1);
   assert.equal(caller.removeCount(), 1);
   assert.deepEqual(timer.cleared, [timer.scheduled[0]]);
+});
+
+test("native routes never forward agentId to the OpenClaw runtime", async () => {
+  // Regression (2026-07-26): the host builds plugin LLM runtimes with
+  // authority.allowAgentIdOverride === false, and hook-scoped handles carry no
+  // bound agent. Sending agentId made resolveAgentId() throw "Plugin LLM
+  // completion cannot override the target agent.", which killed every
+  // openclaw-default call — emotionT3, persona-voice, dream-narrative,
+  // episode-extraction and conversation-insights all fell back silently.
+  const timer = createTimerHarness();
+  let receivedParams;
+  const runtimeLlm = {
+    async complete(params) {
+      receivedParams = params;
+      if (Object.hasOwn(params, "agentId")) {
+        throw new Error("Plugin LLM completion cannot override the target agent.");
+      }
+      return { text: "host answer" };
+    },
+  };
+  const route = resolveFeatureLlmRoute({}, {
+    feature: "emotionT3",
+    runtimeLlm,
+    logger: createLogger(),
+  });
+
+  const result = await completeFeatureLlm([], route, {
+    agentId: "bernhardine",
+    purpose: "emotion-classification",
+  }, timer);
+
+  assert.equal(Object.hasOwn(receivedParams, "agentId"), false);
+  assert.equal(receivedParams.purpose, "emotion-classification");
+  assert.equal(result.status, "ok");
+  assert.equal(result.text, "host answer");
 });
