@@ -43,6 +43,9 @@ STOCK_SRC="$SOURCE_DIR/extensions/memory-lancedb-stock"
 DOC_FILES=("README.md" "CHANGELOG.md" "how-to-memory.md" "how-to-memory-perfect.md" "HOW-TO-OBSIDIAN.md" "HOW-TO-UPDATE.md")
 GC_SCRIPT="$SOURCE_DIR/scripts/memory-gc.mjs"
 MIN_OPENCLAW_VERSION="2026.5.10-beta.5"
+# Ab dieser Version (inkl. Betas) führt OpenClaw das STRICT-State-Schema v2
+# (cron_jobs mit schedule_identity + kanonischem job_json).
+STATE_SCHEMA_V2_MIN_VERSION="2026.7.2-beta.1"
 INSTALLER_CONFIG_HELPER="$SOURCE_DIR/scripts/lib/installer-config.mjs"
 AGENTS_PATCHER_HELPER="$SOURCE_DIR/scripts/lib/patch-agents-memory-instructions.mjs"
 INSTALL_LOG_FILE="plur1bus-install-log.jsonl"
@@ -1584,58 +1587,158 @@ else
   fi
 fi
 
-# ─── Schritt 9d: Semantic-Discovery Cron-Job (OpenClaw-managed, kein Modell) ─
+# ─── Schritt 9d/9e Helfer: OpenClaw-managed Cron-Jobs in der State-DB ───────
+# Zwei Schreibpfade, abhängig von der OpenClaw-Version des Ziels:
+#   legacy (<= 2026.7.1): historisches Spalten-Subset, minimales job_json
+#   v2     (>= 2026.7.2, auch Betas): STRICT-Schema — kanonisches job_json
+#          plus schedule_identity, wie sie der neue Loader/Codec selbst schreibt
+# Maßgeblich ist das tatsächliche Schema der Ziel-DB (eine frisch aktualisierte
+# CLI kann auf eine noch nicht migrierte DB treffen — die Migration läuft erst
+# beim nächsten Gateway-Boot); die CLI-Version dient als Kreuzcheck.
 
-step "Schritt 9d: Semantic-Discovery Cron-Job"
+detect_cron_schema() {
+  # schedule_identity gab es via ensureColumn schon in 2026.7.1 — das
+  # verlässliche v2-Merkmal ist das STRICT-Typing der migrierten Tabelle
+  # (plus neue Spalten wie declaration_key).
+  local is_strict
+  is_strict=$(run_target "sqlite3 '$SQLITE_DB' \"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cron_jobs' AND sql LIKE '%STRICT%';\" 2>/dev/null" || echo 0)
+  if [[ "${is_strict:-0}" -gt 0 ]]; then echo "v2"; else echo "legacy"; fi
+}
 
-SQLITE_DB="$TARGET_DIR/state/openclaw.sqlite"
-SEM_STORE_KEY="$TARGET_DIR/cron/jobs.json"
-SEM_JOB_ID="a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ensure_openclaw_cron_job() {
+  local job_id="$1" job_name="$2" cron_expr="$3" message="$4" timeout_s="$5" sort_order="$6" ok_note="$7"
+  local store_key="$TARGET_DIR/cron/jobs.json"
 
-if [[ "$DRY_RUN" == "1" ]]; then
-  dryrun "Würde OpenClaw-Cron-Job 'plur1bus-semantic-discover-daily' (02:00 CET, kein Modell) in $SQLITE_DB eintragen"
-elif [[ ! -f "$SQLITE_DB" ]]; then
-  warn "openclaw.sqlite nicht gefunden — nach erstem Gateway-Start erneut ausführen"
-else
-  EXISTING=$(run_target "sqlite3 '$SQLITE_DB' \"SELECT COUNT(*) FROM cron_jobs WHERE job_id='$SEM_JOB_ID';\" 2>/dev/null || echo 0")
-  if [[ "${EXISTING:-0}" -gt 0 ]]; then
-    ok "Semantic-Discovery Cron-Job bereits vorhanden"
-  else
-    NOW_MS=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null || node -e "console.log(Date.now())")
-    NOW_S=$(date +%s)
-    NEXT_RUN=$(python3 -c "
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dryrun "Würde OpenClaw-Cron-Job '$job_name' ($cron_expr, Europe/Berlin) in $SQLITE_DB eintragen"
+    return 0
+  fi
+  if ! run_target "test -f '$SQLITE_DB'" 2>/dev/null; then
+    warn "openclaw.sqlite nicht gefunden — nach erstem Gateway-Start erneut ausführen"
+    return 0
+  fi
+
+  local existing
+  existing=$(run_target "sqlite3 '$SQLITE_DB' \"SELECT COUNT(*) FROM cron_jobs WHERE job_id='$job_id';\" 2>/dev/null || echo 0")
+  if [[ "${existing:-0}" -gt 0 ]]; then
+    ok "Cron-Job '$job_name' bereits vorhanden"
+    return 0
+  fi
+
+  local schema
+  schema=$(detect_cron_schema)
+  if [[ "$schema" == "legacy" && -n "$OPENCLAW_VERSION" ]] && version_ge "$OPENCLAW_VERSION" "$STATE_SCHEMA_V2_MIN_VERSION"; then
+    warn "OpenClaw $OPENCLAW_VERSION erkannt, aber die State-DB hat noch das Legacy-Schema (Migration ausstehend)."
+    warn "Gateway einmal starten (Auto-Migration beim Boot), dann Installer erneut ausführen — '$job_name' wird übersprungen."
+    return 0
+  fi
+
+  local now_ms now_s next_run
+  now_ms=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null || node -e "console.log(Date.now())")
+  now_s=$(date +%s)
+  next_run=$(python3 -c "
 from datetime import datetime, timezone, timedelta
 now = datetime.now(timezone.utc)
 target = now.replace(hour=0, minute=0, second=0, microsecond=0)
 if target <= now: target += timedelta(days=1)
 print(int(target.timestamp() * 1000))
-" 2>/dev/null || echo "$NOW_MS")
-    if run_target "sqlite3 '$SQLITE_DB' \"
-INSERT OR IGNORE INTO cron_jobs (
-  store_key, job_id, name, enabled, created_at_ms,
-  schedule_kind, schedule_expr, schedule_tz,
-  agent_id, session_target, wake_mode,
-  payload_kind, payload_message, payload_model, payload_thinking, payload_timeout_seconds,
-  delivery_mode, failure_alert_disabled,
-  next_run_at_ms, consecutive_errors, consecutive_skipped,
-  job_json, state_json, updated_at, sort_order
-) VALUES (
-  '$SEM_STORE_KEY', '$SEM_JOB_ID', 'plur1bus-semantic-discover-daily', 1, $NOW_MS,
-  'cron', '0 2 * * *', 'Europe/Berlin',
-  'main', 'isolated', 'now',
-  'agentTurn', '/plur1bus internal discover-semantic-links',
-  NULL, NULL, 300,
-  'none', 0,
-  $NEXT_RUN, 0, 0,
-  '{\\\"name\\\":\\\"plur1bus-semantic-discover-daily\\\",\\\"agentId\\\":\\\"main\\\"}',
-  '{}', $NOW_S, 100
-);\"" 2>/dev/null; then
-      ok "Semantic-Discovery Cron-Job eingerichtet (täglich 02:00 CET, kein Modell-Override)"
-    else
-      warn "Cron-Job konnte nicht angelegt werden — Gateway neu starten und Installer wiederholen"
-    fi
+" 2>/dev/null || echo "$now_ms")
+
+  local insert_sql
+  insert_sql=$(STORE_KEY="$store_key" JOB_ID="$job_id" JOB_NAME="$job_name" CRON_EXPR="$cron_expr" \
+    MESSAGE="$message" TIMEOUT_S="$timeout_s" SORT_ORDER="$sort_order" \
+    NOW_MS="$now_ms" NOW_S="$now_s" NEXT_RUN="$next_run" SCHEMA="$schema" python3 - <<'PY'
+import json, os
+
+env = os.environ
+schema = env["SCHEMA"]
+schedule = {"kind": "cron", "expr": env["CRON_EXPR"], "tz": "Europe/Berlin"}
+
+def sq(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+columns = [
+    ("store_key", sq(env["STORE_KEY"])),
+    ("job_id", sq(env["JOB_ID"])),
+    ("name", sq(env["JOB_NAME"])),
+    ("enabled", "1"),
+    ("created_at_ms", env["NOW_MS"]),
+    ("schedule_kind", "'cron'"),
+    ("schedule_expr", sq(env["CRON_EXPR"])),
+    ("schedule_tz", "'Europe/Berlin'"),
+    ("agent_id", "'main'"),
+    ("session_target", "'isolated'"),
+    ("wake_mode", "'now'"),
+    ("payload_kind", "'agentTurn'"),
+    ("payload_message", sq(env["MESSAGE"])),
+    ("payload_model", "NULL"),
+    ("payload_thinking", "NULL"),
+    ("payload_timeout_seconds", env["TIMEOUT_S"]),
+    ("delivery_mode", "'none'"),
+    ("failure_alert_disabled", "0"),
+    ("next_run_at_ms", env["NEXT_RUN"]),
+    ("consecutive_errors", "0"),
+    ("consecutive_skipped", "0"),
+    ("state_json", "'{}'"),
+    ("updated_at", env["NOW_S"]),
+    ("sort_order", env["SORT_ORDER"]),
+]
+
+if schema == "v2":
+    # Kanonisches job_json in der Form, die der 2026.7.2-Codec beim Persistieren
+    # selbst erzeugt; schedule_identity im JSON.stringify-Format (kompakt,
+    # Key-Reihenfolge version/enabled/schedule), damit gespeicherter Timer-State
+    # als gültig erkannt wird statt als Schedule-Änderung.
+    job_json = {
+        "id": env["JOB_ID"],
+        "name": env["JOB_NAME"],
+        "enabled": True,
+        "createdAtMs": int(env["NOW_MS"]),
+        "agentId": "main",
+        "schedule": schedule,
+        "sessionTarget": "isolated",
+        "wakeMode": "now",
+        "payload": {"kind": "agentTurn", "message": env["MESSAGE"], "timeoutSeconds": int(env["TIMEOUT_S"])},
+        "delivery": {"mode": "none"},
+        "state": {},
+    }
+    identity = {"version": 1, "enabled": True, "schedule": schedule}
+    columns.append(("job_json", sq(json.dumps(job_json, separators=(",", ":")))))
+    columns.append(("schedule_identity", sq(json.dumps(identity, separators=(",", ":")))))
+else:
+    job_json = {"name": env["JOB_NAME"], "agentId": "main"}
+    columns.append(("job_json", sq(json.dumps(job_json, separators=(",", ":")))))
+
+names = ", ".join(name for name, _ in columns)
+values = ", ".join(value for _, value in columns)
+print(f"INSERT OR IGNORE INTO cron_jobs ({names}) VALUES ({values});")
+PY
+)
+  if [[ -z "$insert_sql" ]]; then
+    warn "Cron-Job '$job_name': SQL konnte nicht erzeugt werden (python3 fehlt?) — übersprungen"
+    return 0
   fi
-fi
+
+  # Base64 statt Inline-Quoting: das JSON in job_json übersteht so lokale
+  # bash -c UND remote ssh-Ausführung unverändert.
+  local insert_b64
+  insert_b64=$(printf '%s' "$insert_sql" | base64 | tr -d '\n')
+  if run_target "printf '%s' '$insert_b64' | base64 -d | sqlite3 '$SQLITE_DB'" 2>/dev/null; then
+    ok "Cron-Job '$job_name' eingerichtet ($ok_note; Schema: $schema)"
+  else
+    warn "Cron-Job '$job_name' konnte nicht angelegt werden — Gateway neu starten und Installer wiederholen"
+  fi
+}
+
+# ─── Schritt 9d: Semantic-Discovery Cron-Job (OpenClaw-managed, kein Modell) ─
+
+step "Schritt 9d: Semantic-Discovery Cron-Job"
+
+SQLITE_DB="$TARGET_DIR/state/openclaw.sqlite"
+ensure_openclaw_cron_job \
+  "a1b2c3d4-e5f6-7890-abcd-ef1234567890" "plur1bus-semantic-discover-daily" \
+  "0 2 * * *" "/plur1bus internal discover-semantic-links" 300 100 \
+  "täglich 02:00 CET, kein Modell-Override"
 
 # ─── Schritt 9e: REM-Dream Cron-Job (OpenClaw-managed) ──────────────────────
 # rem-dream schreibt Trend-Reports nach memory/dream-diary/rem/. Ohne diesen
@@ -1644,53 +1747,10 @@ fi
 
 step "Schritt 9e: REM-Dream Cron-Job"
 
-REM_STORE_KEY="$TARGET_DIR/cron/jobs.json"
-REM_JOB_ID="b2c3d4e5-f6a7-4901-bcde-f23456789012"
-
-if [[ "$DRY_RUN" == "1" ]]; then
-  dryrun "Würde OpenClaw-Cron-Job 'plur1bus-rem-dream-daily' (01:15 CET) in $SQLITE_DB eintragen"
-elif [[ ! -f "$SQLITE_DB" ]]; then
-  warn "openclaw.sqlite nicht gefunden — nach erstem Gateway-Start erneut ausführen"
-else
-  EXISTING_REM=$(run_target "sqlite3 '$SQLITE_DB' \"SELECT COUNT(*) FROM cron_jobs WHERE job_id='$REM_JOB_ID';\" 2>/dev/null || echo 0")
-  if [[ "${EXISTING_REM:-0}" -gt 0 ]]; then
-    ok "REM-Dream Cron-Job bereits vorhanden"
-  else
-    NOW_MS=$(python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null || node -e "console.log(Date.now())")
-    NOW_S=$(date +%s)
-    NEXT_RUN_REM=$(python3 -c "
-from datetime import datetime, timezone, timedelta
-now = datetime.now(timezone.utc)
-target = now.replace(hour=0, minute=0, second=0, microsecond=0)
-if target <= now: target += timedelta(days=1)
-print(int(target.timestamp() * 1000))
-" 2>/dev/null || echo "$NOW_MS")
-    if run_target "sqlite3 '$SQLITE_DB' \"
-INSERT OR IGNORE INTO cron_jobs (
-  store_key, job_id, name, enabled, created_at_ms,
-  schedule_kind, schedule_expr, schedule_tz,
-  agent_id, session_target, wake_mode,
-  payload_kind, payload_message, payload_model, payload_thinking, payload_timeout_seconds,
-  delivery_mode, failure_alert_disabled,
-  next_run_at_ms, consecutive_errors, consecutive_skipped,
-  job_json, state_json, updated_at, sort_order
-) VALUES (
-  '$REM_STORE_KEY', '$REM_JOB_ID', 'plur1bus-rem-dream-daily', 1, $NOW_MS,
-  'cron', '15 1 * * *', 'Europe/Berlin',
-  'main', 'isolated', 'now',
-  'agentTurn', '/plur1bus internal rem-dream',
-  NULL, NULL, 600,
-  'none', 0,
-  $NEXT_RUN_REM, 0, 0,
-  '{\\\"name\\\":\\\"plur1bus-rem-dream-daily\\\",\\\"agentId\\\":\\\"main\\\"}',
-  '{}', $NOW_S, 101
-);\"" 2>/dev/null; then
-      ok "REM-Dream Cron-Job eingerichtet (täglich 01:15 CET, kein Modell-Override)"
-    else
-      warn "Cron-Job konnte nicht angelegt werden — Gateway neu starten und Installer wiederholen"
-    fi
-  fi
-fi
+ensure_openclaw_cron_job \
+  "b2c3d4e5-f6a7-4901-bcde-f23456789012" "plur1bus-rem-dream-daily" \
+  "15 1 * * *" "/plur1bus internal rem-dream" 600 101 \
+  "täglich 01:15 CET, kein Modell-Override"
 
 # ─── Schritt 10: OpenClaw Plugin-Registry aktualisieren ──────────────────────
 
