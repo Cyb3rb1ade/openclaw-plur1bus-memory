@@ -135,7 +135,12 @@ function callArguments(expression) {
   return args;
 }
 
-function countDeterministicCalls(source, purpose, scope = "agentId") {
+// requireTemperatureZero=false for EMOTION_CLASSIFICATION: the Kimi coding
+// endpoint rejects any explicit temperature (HTTP 400, "only 0.6 is allowed"),
+// so the emotion call leaves it to the provider default. The result cache is
+// still agent- and purpose-scoped, just no longer temperature-pinned.
+function countDeterministicCalls(source, purpose, scope = "agentId", requireTemperatureZero = true) {
+  const temperatureOk = (text) => !requireTemperatureZero || /\btemperature\s*:\s*0\b/.test(text);
   return extractCallExpressions(source, "callLlm").filter((expression) => {
     const args = callArguments(expression);
     if (args.length !== 2) return false;
@@ -145,7 +150,7 @@ function countDeterministicCalls(source, purpose, scope = "agentId") {
       return composedArgs.length >= 4
         && composedArgs[1] === scope
         && composedArgs[2] === `LLM_RESULT_CACHE_PURPOSES.${purpose}`
-        && /\btemperature\s*:\s*0\b/.test(composedArgs[3]);
+        && temperatureOk(composedArgs[3]);
     }
     const contexts = extractCallExpressions(args[1], "withLlmCallContext");
     if (contexts.length !== 1 || contexts[0].trim() !== args[1].trim()) return false;
@@ -153,7 +158,7 @@ function countDeterministicCalls(source, purpose, scope = "agentId") {
     if (wrappers.length !== 1) return false;
     const wrapperArgs = callArguments(wrappers[0]);
     return wrapperArgs.length === 3
-      && /\btemperature\s*:\s*0\b/.test(wrapperArgs[0])
+      && temperatureOk(wrapperArgs[0])
       && wrapperArgs[1] === scope
       && wrapperArgs[2] === `LLM_RESULT_CACHE_PURPOSES.${purpose}`;
   }).length;
@@ -509,7 +514,7 @@ describe("deterministic LLM result-cache allowlist", () => {
     assert.equal(countMatches(modelStoreSection, /withDurableMerge\(\{\s*db,\s*agentId,/g), 1);
 
     const emotionCallCount = extractCallExpressions(emotionSection, "callLlm").length;
-    const scopedEmotionCallCount = countDeterministicCalls(emotionSection, "EMOTION_CLASSIFICATION", "context.agentId");
+    const scopedEmotionCallCount = countDeterministicCalls(emotionSection, "EMOTION_CLASSIFICATION", "context.agentId", false);
     assert.equal(scopedEmotionCallCount, 1);
     const emotionCfgInitializer = sourceSection(emotionSection, "const emotionLlmCfg = withLlmCallContext(", "return context.agentId");
     assert.doesNotMatch(

@@ -7,6 +7,28 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.5] — 2026-07-27
+
+### Behoben
+
+- **Emotion Tier 3 sendet keine `temperature` mehr.** Der Kimi-Coding-Endpunkt
+  akzeptiert pro Thinking-Modus nur genau einen Temperaturwert und beantwortet
+  alles andere mit `HTTP 400 invalid temperature: only 0.6 is allowed for this
+  model`. Da der T3-Aufruf `temperature: 0` fest gesetzt hat, war ein
+  `direct-override` auf diesen Endpunkt grundsätzlich unmöglich. Ohne das Feld
+  gilt der Provider-Default (gemessen: HTTP 200 in ~2,6 s mit
+  `thinking: disabled`).
+
+  **Folge für den LLM-Result-Cache:** Emotion-Ergebnisse sind nicht mehr über
+  `temperature: 0` determinismus-gepinnt. Der Cache bleibt agent- und
+  purpose-scoped; identischer Text kann aber theoretisch unterschiedlich
+  klassifiziert werden. Alle anderen Features behalten `temperature: 0`.
+
+- **LanceDB-Write-Timeout von 15 s auf 25 s.** Unter LanceDB-Last lief
+  `memory_store` regelmäßig in den Timeout und meldete dem Agenten einen
+  Fehlschlag, obwohl nur die Schreiblatenz zu hoch war. Betrifft
+  `LANCEDB_WRITE_TIMEOUT_MS` und `DEFAULT_WRITE_TIMEOUT_MS` (Read bleibt 10 s).
+
 ## [7.1.4] — 2026-07-26
 
 ### Behoben
