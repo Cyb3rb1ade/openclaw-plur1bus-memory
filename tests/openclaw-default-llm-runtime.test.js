@@ -234,7 +234,8 @@ test("global memory_store merge uses the target agent OpenClaw default", async (
 
   assert.match(result.content[0].text, /Memory stored/);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].agentId, agentId);
+  // The host resolves the agent itself; plugins must not send one.
+  assert.equal(Object.hasOwn(calls[0], "agentId"), false);
   assert.equal(calls[0].purpose, "merge-decision");
   assert.equal(Object.hasOwn(calls[0], "model"), false);
 });
@@ -407,7 +408,8 @@ test("a merging feature model is a native override only for the merging call", a
 
   assert.match(result.content[0].text, /Memory stored/);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].agentId, agentId);
+  // The host resolves the agent itself; plugins must not send one.
+  assert.equal(Object.hasOwn(calls[0], "agentId"), false);
   assert.equal(calls[0].model, "native/merging-override");
 });
 
@@ -756,7 +758,8 @@ test("Schicht 1.5 uses only its own config and the global target agent", async (
 
   assert.doesNotMatch(result.content[0].text, /not enabled/i);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].agentId, agentId);
+  // The host resolves the agent itself; plugins must not send one.
+  assert.equal(Object.hasOwn(calls[0], "agentId"), false);
   assert.equal(calls[0].purpose, "knowledge-update");
   assert.equal(Object.hasOwn(calls[0], "model"), false);
 });
@@ -892,7 +895,8 @@ test("Emotion Tier 3 uses its own native-default route with global agent scope",
 
   assert.match(result.content[0].text, /Memory stored/);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].agentId, agentId);
+  // The host resolves the agent itself; plugins must not send one.
+  assert.equal(Object.hasOwn(calls[0], "agentId"), false);
   assert.equal(calls[0].purpose, "emotion-classification");
   assert.equal(Object.hasOwn(calls[0], "model"), false);
 });
@@ -967,7 +971,7 @@ test("Emotion Tier 3 preserves onlyWhenProviderAvailable:false fail-soft routing
   assert.equal(typeof getEmotionConfig().t3.callLlm, "function");
 });
 
-test("host policy denial is attempted once and never retried without the target agent", async (t) => {
+test("host policy denial is attempted once and never retried", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   installEmbeddingStub(t);
   const agentId = "denied-agent";
@@ -999,7 +1003,8 @@ test("host policy denial is attempted once and never retried without the target 
 
   assert.match(result.content[0].text, /Memory stored/);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].agentId, agentId);
+  // The host resolves the agent itself; plugins must not send one.
+  assert.equal(Object.hasOwn(calls[0], "agentId"), false);
   assert.doesNotMatch(
     JSON.stringify({ result, logs: api.logger.calls }),
     /sk-live-merge-secret|prompt=private|x-api-key|header=secret/i,
@@ -1037,7 +1042,8 @@ test("native model policy denial is attempted once without a fallback model", as
 
   assert.match(result.content[0].text, /Memory stored/);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].agentId, agentId);
+  // The host resolves the agent itself; plugins must not send one.
+  assert.equal(Object.hasOwn(calls[0], "agentId"), false);
   assert.equal(calls[0].model, "blocked/primary-override");
 });
 
