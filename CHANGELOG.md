@@ -7,6 +7,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.3] — 2026-07-26
+
 ### Geändert
 
 - **Installer 2026.7.2-ready** (`install-memory-system.sh`): Die OpenClaw-managed
