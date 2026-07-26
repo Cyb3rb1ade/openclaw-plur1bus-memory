@@ -125,9 +125,11 @@ it("loads reply_dispatch routing through the real installed OpenClaw plugin load
     });
     assert.match(deniedGroup.text, /not configured|allowed list|nicht autorisiert/i);
 
-    loader.clearPluginLoaderCache();
-    loader.clearPluginRegistryLoadCache();
-    loader.clearActivatedPluginRuntimeState();
+    // clearPluginLoaderCache entfiel mit OpenClaw 2026.7.2; die verbleibenden
+    // Cleanups existieren in allen unterstützten Host-Versionen.
+    loader.clearPluginLoaderCache?.();
+    loader.clearPluginRegistryLoadCache?.();
+    loader.clearActivatedPluginRuntimeState?.();
     const allowlistConfig = {
       ...config,
       plugins: {
@@ -169,8 +171,10 @@ it("loads reply_dispatch routing through the real installed OpenClaw plugin load
     assert.match(wrongChat.text, /chat.*allowed|allowed.*chat|nicht autorisiert/i);
     assert.doesNotMatch(wrongChat.text, /must-not-reach-memory-query/);
   } finally {
-    loader.clearPluginLoaderCache();
-    loader.clearPluginRegistryLoadCache();
-    loader.clearActivatedPluginRuntimeState();
+    // clearPluginLoaderCache entfiel mit OpenClaw 2026.7.2; die verbleibenden
+    // Cleanups existieren in allen unterstützten Host-Versionen.
+    loader.clearPluginLoaderCache?.();
+    loader.clearPluginRegistryLoadCache?.();
+    loader.clearActivatedPluginRuntimeState?.();
   }
 });
