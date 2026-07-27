@@ -3026,7 +3026,9 @@ async function callMergeCheck(existingText, newText, llmCfg, agentId, callContex
     llmCfg,
     agentId,
     LLM_RESULT_CACHE_PURPOSES.MERGE_DECISION,
-    { jsonMode: true, maxTokens: 300, temperature: 0 },
+    // No temperature: providers like the Kimi coding endpoint allow exactly
+    // one value per thinking mode and answer HTTP 400 for anything else.
+    { jsonMode: true, maxTokens: 300 },
     callContext,
   ));
   if (!content) return null;
@@ -3254,7 +3256,9 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
     llmCfg,
     agentId,
     LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
-    { maxTokens: 3000, temperature: 0 },
+    // No temperature: providers like the Kimi coding endpoint allow exactly
+    // one value per thinking mode and answer HTTP 400 for anything else.
+    { maxTokens: 3000 },
     llmCfg?.callContext,
   ));
 
@@ -3272,7 +3276,9 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
       llmCfg,
       agentId,
       LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
-      { maxTokens: 4000, temperature: 0 },
+      // No temperature: providers like the Kimi coding endpoint allow exactly
+      // one value per thinking mode and answer HTTP 400 for anything else.
+      { maxTokens: 4000 },
       llmCfg?.callContext,
     ));
 
@@ -7794,7 +7800,9 @@ const plugin = {
                 schicht15LlmCfg,
                 agentId,
                 LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
-                { maxTokens: 3000, temperature: 0 },
+                // No temperature: providers like the Kimi coding endpoint allow exactly
+                // one value per thinking mode and answer HTTP 400 for anything else.
+                { maxTokens: 3000 },
                 { agentId },
               ));
 
@@ -7815,7 +7823,9 @@ const plugin = {
                   schicht15LlmCfg,
                   agentId,
                   LLM_RESULT_CACHE_PURPOSES.KNOWLEDGE_UPDATE,
-                  { maxTokens: 4000, temperature: 0 },
+                  // No temperature: providers like the Kimi coding endpoint allow exactly
+                  // one value per thinking mode and answer HTTP 400 for anything else.
+                  { maxTokens: 4000 },
                   { agentId },
                 ));
 

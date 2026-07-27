@@ -135,10 +135,11 @@ function callArguments(expression) {
   return args;
 }
 
-// requireTemperatureZero=false for EMOTION_CLASSIFICATION: the Kimi coding
-// endpoint rejects any explicit temperature (HTTP 400, "only 0.6 is allowed"),
-// so the emotion call leaves it to the provider default. The result cache is
-// still agent- and purpose-scoped, just no longer temperature-pinned.
+// requireTemperatureZero=false for EMOTION_CLASSIFICATION, MERGE_DECISION and
+// KNOWLEDGE_UPDATE: the Kimi coding endpoint rejects any explicit temperature
+// (HTTP 400, "only 0.6 is allowed"), so those calls leave it to the provider
+// default. Their result cache stays agent- and purpose-scoped, just no longer
+// temperature-pinned.
 function countDeterministicCalls(source, purpose, scope = "agentId", requireTemperatureZero = true) {
   const temperatureOk = (text) => !requireTemperatureZero || /\btemperature\s*:\s*0\b/.test(text);
   return extractCallExpressions(source, "callLlm").filter((expression) => {
@@ -164,11 +165,17 @@ function countDeterministicCalls(source, purpose, scope = "agentId", requireTemp
   }).length;
 }
 
+const TEMPERATURE_FREE_PURPOSES = new Set([
+  "EMOTION_CLASSIFICATION",
+  "MERGE_DECISION",
+  "KNOWLEDGE_UPDATE",
+]);
+
 function assertEveryCallIsDeterministic(source, purpose, expectedCount, scope = "agentId") {
   const callCount = extractCallExpressions(source, "callLlm").length;
   assert.equal(callCount, expectedCount, `unexpected callLlm count for ${purpose}`);
   assert.equal(
-    countDeterministicCalls(source, purpose, scope),
+    countDeterministicCalls(source, purpose, scope, !TEMPERATURE_FREE_PURPOSES.has(purpose)),
     expectedCount,
     `every ${purpose} callLlm must use its own deterministic cache wrapper`,
   );

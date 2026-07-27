@@ -7,6 +7,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.6] — 2026-07-27
+
+### Behoben
+
+- **`merging` und `schicht15` senden keine `temperature` mehr.** Gleiche Ursache
+  wie bei Emotion Tier 3 in 7.1.5: Der Kimi-Coding-Endpunkt erlaubt pro
+  Thinking-Modus genau einen Temperaturwert und antwortet auf `temperature: 0`
+  mit `HTTP 400`. Betroffen waren `callMergeCheck` (MERGE_DECISION) sowie beide
+  KNOWLEDGE_UPDATE-Pfade (Hook und Tool). Verifiziert: Mit
+  `thinking: disabled` und `response_format: json_object`, aber ohne
+  `temperature`, liefert der Endpunkt sauberes JSON in ~1,1 s.
+
+  **Folge:** Merge- und Knowledge-Entscheidungen sind nicht mehr über
+  `temperature: 0` determinismus-gepinnt. Der Result-Cache bleibt agent- und
+  purpose-scoped. Capture-Summary und Recall-Query-Summary behalten
+  `temperature: 0` — sie laufen über die native Route, die der Host bedient.
+
 ## [7.1.5] — 2026-07-27
 
 ### Behoben
