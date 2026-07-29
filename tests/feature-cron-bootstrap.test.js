@@ -377,7 +377,8 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       assert.ok(args.includes("--announce"));
       assert.deepStrictEqual(args.slice(args.indexOf("--to"), args.indexOf("--to") + 2), ["--to", "-100123"]);
       assert.deepStrictEqual(args.slice(args.indexOf("--account"), args.indexOf("--account") + 2), ["--account", "primary"]);
-      assert.match(args[args.indexOf("--message") + 1], /NO_REPLY/);
+      const feature = name.includes("afterthought") ? "afterthought" : "classify-recent";
+      assert.strictEqual(args[args.indexOf("--message") + 1], `/plur1bus internal ${feature}`);
     }
     for (const [name, args] of byName) {
       if (name.includes("afterthought") || name.includes("classify-recent")) continue;
@@ -919,7 +920,7 @@ describe("runSetupFeatureCrons Message-Contract-Migration", () => {
     return { impl, cronEdits };
   }
 
-  it("führt cron edit für Jobs mit altem 'output NOTHING'-Contract aus (keine Creates nötig)", async () => {
+  it("setzt Jobs mit bekanntem Carrier-Contract per cron edit auf den exakten Command", async () => {
     const { impl, cronEdits } = implWithExistingOldContract();
     const result = await runJsonSetupWith(impl);
     assert.strictEqual(result.exitCode, 0);
@@ -927,7 +928,7 @@ describe("runSetupFeatureCrons Message-Contract-Migration", () => {
     assert.strictEqual(cronEdits[0][2], "at-main");
     const msgIdx = cronEdits[0].indexOf("--message");
     assert.ok(msgIdx > 0);
-    assert.match(cronEdits[0][msgIdx + 1], /reply with exactly NO_REPLY/);
+    assert.strictEqual(cronEdits[0][msgIdx + 1], "/plur1bus internal afterthought");
     assert.strictEqual(result.parsed.lastPlanCreateCount, 0);
   });
 

@@ -127,6 +127,10 @@ import {
 } from "./lib/setup/feature-profiles.js";
 import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "./lib/setup/config-contract.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
+import {
+  formatAfterthoughtCronReply,
+  formatClassifierCronReply,
+} from "./lib/internal-cron-reply.js";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import {
@@ -4989,7 +4993,10 @@ const plugin = {
               if (subKey === "classify-recent") {
                 const cpCfg = cfg.criticalPush || {};
                 if (cpCfg.enabled === false) {
-                  return formatJsonCommandResult({ job: "classify-recent", skipped: true, reason: "criticalPush_disabled" });
+                  const disabledResult = { job: "classify-recent", skipped: true, reason: "criticalPush_disabled" };
+                  return cronInternal
+                    ? formatClassifierCronReply(disabledResult)
+                    : formatJsonCommandResult(disabledResult);
                 }
                 const cpLlmCfg = createFeatureRoute("criticalPush", cpCfg);
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
@@ -5029,7 +5036,9 @@ const plugin = {
                   maxPerDay: cpCfg.maxPerDay ?? 3,
                 });
                 api.logger?.info?.(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
-                return formatJsonCommandResult({ job: "classify-recent", ...result });
+                return cronInternal
+                  ? formatClassifierCronReply(result)
+                  : formatJsonCommandResult({ job: "classify-recent", ...result });
               }
               if (subKey === "auto-accept-stale") {
                 const result = await runAutoAcceptStale(memoryDbAdapter, internalAgent, { logger: api.logger, hours: 24 });
@@ -5147,7 +5156,10 @@ const plugin = {
                 if ((cfg.afterthought?.enabled ?? true) === false
                   || !(skillMinerEnabled || mergingEnabled)
                   || !isLlmRouteAvailable(afterthoughtLlmCfg)) {
-                  return formatJsonCommandResult({ job: "afterthought", skipped: true, reason: "disabled" });
+                  const disabledResult = { job: "afterthought", skipped: true, reason: "disabled" };
+                  return cronInternal
+                    ? formatAfterthoughtCronReply(disabledResult)
+                    : formatJsonCommandResult(disabledResult);
                 }
                 const { runAfterthoughtJob } = await import("./lib/afterthought.js");
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
@@ -5165,7 +5177,9 @@ const plugin = {
                   logger: api.logger,
                 });
                 api.logger?.info?.(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
-                return formatJsonCommandResult({ job: "afterthought", ...result });
+                return cronInternal
+                  ? formatAfterthoughtCronReply(result)
+                  : formatJsonCommandResult({ job: "afterthought", ...result });
               }
               if (subKey === "persona-evolve") {
                 if ((cfg.personaVoice?.enabled ?? true) === false
