@@ -8,10 +8,14 @@
 Afterthought and Critical Push crons while preserving their schedules and
 feature-internal LLM behavior.
 
-**Architecture:** Exact slash-command cron payloads let OpenClaw dispatch
-directly to the PLUR1BUS command handler. A small pure formatting module maps
-job results to direct cron replies or explicit failures. Existing PLUR1BUS
-delivery-contract payloads are migrated to their exact commands.
+**Architecture:** Exact slash-command payloads identify the two feature crons,
+but the installed OpenClaw dispatcher still starts its agent executor after
+calling a plugin command. A tested, idempotent host patch upgrades that
+dispatcher so the complete plugin ReplyPayload is passed through OpenClaw's
+existing finalization/delivery path and returned before `executeCronRun()`.
+A small pure formatting module maps job results to direct cron replies or
+explicit failures. Existing PLUR1BUS delivery-contract payloads are migrated
+to their exact commands.
 
 **Tech Stack:** Node.js ESM, OpenClaw plugin commands, `node:test`
 
@@ -67,3 +71,24 @@ delivery-contract payloads are migrated to their exact commands.
 - [ ] Run `node --test tests/*.test.js`.
 - [ ] Inspect the final diff for accidental runtime-policy or schedule changes.
 - [ ] Confirm the working tree contains only intentional files.
+
+### Task 5: Patch the installed OpenClaw cron boundary
+
+**Files:**
+- Create: `patches/apply-cron-plugin-direct-dispatch.mjs`
+- Create: `tests/cron-plugin-direct-dispatch-patch.test.js`
+- Create: `tests/cron-plugin-direct-dispatch-wiring.test.js`
+- Modify: `patches/apply-memory-patches.sh`
+- Modify: `scripts/install-memory-system.sh`
+
+- [ ] Add failing tests for structural upgrade, exact-command allowlisting,
+      complete ReplyPayload preservation, error propagation, idempotence,
+      rollback backup, patch-entrypoint wiring, and remote-installer copying.
+- [ ] Upgrade only the existing PLUR1BUS dispatcher and fail closed when its
+      audited anchors are absent.
+- [ ] Route direct feature replies through `finalizeCronRun()` and return before
+      `executeCronRun()`.
+- [ ] Preserve the legacy carrier behavior for multiline/custom prompts and
+      all unrelated commands.
+- [ ] Apply the transformer to a copy of the production runtime bundle and run
+      `node --check` on the result.

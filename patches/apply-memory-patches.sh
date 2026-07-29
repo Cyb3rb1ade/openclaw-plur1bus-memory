@@ -6,9 +6,11 @@
 # 16) stuck-session-abort: SIGUSR1 when session stuck > stuckSessionAbortMs
 # 17) memory-core-cohere-rerank: Cohere rerank-v3.5 after mergeHybridResults()
 # 19) plur1bus-user OpenClaw compatibility hotfixes
-# 20) bundled-runtime-deps race guard: skip npm installs when all packages are
+# 20) cron direct dispatch: finalize Afterthought/Critical Push plugin replies
+#     without starting an outer agent/model turn
+# 21) bundled-runtime-deps race guard: skip npm installs when all packages are
 #     already semver-satisfied, even if plugin install manifests differ
-# 21) plugin-deploy-sync: keep /root/index.js in sync with canonical repo source
+# 22) plugin-deploy-sync: keep /root/index.js in sync with canonical repo source
 #
 # 2026-05-23 harmonization:
 # - OpenClaw 2026.5.20 intentionally has no dedicated version-specific
@@ -133,6 +135,20 @@ patch_plur1bus_openclaw_compat() {
 }
 patch_plur1bus_openclaw_compat || rc=1
 
+# 20) PLUR1BUS feature-cron direct delivery
+patch_cron_plugin_direct_dispatch() {
+  local script_dir
+  local patcher
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  patcher="$script_dir/apply-cron-plugin-direct-dispatch.mjs"
+  if [[ ! -f "$patcher" ]]; then
+    echo "[patch] plur1bus cron direct dispatch: helper missing ($patcher)"
+    return 1
+  fi
+  node "$patcher" "$DIST_DIR"
+}
+patch_cron_plugin_direct_dispatch || rc=1
+
 patch_bundled_runtime_deps_satisfied_cache() {
   local target="$DIST_DIR/bundled-runtime-deps-Dj2QXhNg.js"
   [[ -f "$target" ]] || { echo "[patch] bundled runtime deps satisfied cache: target not found"; return 0; }
@@ -185,7 +201,7 @@ PYEOF
 }
 patch_bundled_runtime_deps_satisfied_cache || rc=1
 
-# 21) plugin-deploy-sync: keep /root/index.js in sync with canonical repo source
+# 22) plugin-deploy-sync: keep /root/index.js in sync with canonical repo source
 patch_plugin_deploy_sync() {
   local SRC
   SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/index.js"

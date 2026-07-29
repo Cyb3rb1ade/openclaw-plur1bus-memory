@@ -107,4 +107,47 @@ describe("formatClassifierCronReply", () => {
       /classify-recent failed/i,
     );
   });
+
+  it("delivers successful pushes and reports partial classifier failures", () => {
+    assert.deepStrictEqual(
+      formatClassifierCronReply({
+        processed: 1,
+        pushed: 1,
+        pushMessages: [{ text: "kritische Nachricht" }],
+        errors: 2,
+        errorDetails: [
+          { stage: "classify", error: "classification transport failed" },
+          { stage: "updateCardType", error: "database timeout" },
+        ],
+      }),
+      {
+        text: "kritische Nachricht\n\n⚠️ 2 weitere Karten konnten in diesem Lauf nicht verarbeitet werden.",
+      },
+    );
+  });
+
+  it("includes partial-failure warnings in structured button presentations", () => {
+    const result = formatClassifierCronReply({
+      pushed: 1,
+      pushMessages: [{
+        text: "kritische Nachricht",
+        inline_keyboard: [[
+          { text: "✅ OK", callback_data: "crit:ok:card-id" },
+        ]],
+      }],
+      errors: 1,
+    });
+
+    assert.equal(
+      result.text,
+      "kritische Nachricht\n\n⚠️ 1 weitere Karte konnte in diesem Lauf nicht verarbeitet werden.",
+    );
+    assert.deepStrictEqual(result.presentation.blocks.slice(-2), [
+      { type: "divider" },
+      {
+        type: "text",
+        text: "⚠️ 1 weitere Karte konnte in diesem Lauf nicht verarbeitet werden.",
+      },
+    ]);
+  });
 });
