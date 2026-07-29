@@ -48,6 +48,7 @@ import {
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
+import { planUnsafeDirectCronDisables } from "./lib/setup/feature-cron-plan.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
@@ -2716,6 +2717,64 @@ function ensureCronDirectDispatchAtRegistration(api, options = {}) {
 }
 
 /**
+ * Use OpenClaw's in-process cron service to close the direct-job execution
+ * window before the deferred CLI reconciliation starts.
+ *
+ * @param {object} api
+ * @param {{getCron?: Function}|null} gatewayContext
+ * @returns {Promise<{available: boolean, disabled: number, failed: number}>}
+ */
+async function reconcileUnsafeDirectCronsWithService(api, gatewayContext) {
+  let cron;
+  try {
+    cron = gatewayContext?.getCron?.();
+  } catch (error) {
+    api.logger?.warn?.(
+      `plur1bus-feature-crons: gateway cron service lookup failed (${error?.message || String(error)})`,
+    );
+    return { available: false, disabled: 0, failed: 0 };
+  }
+  if (!cron || typeof cron.list !== "function" || typeof cron.update !== "function") {
+    api.logger?.warn?.("plur1bus-feature-crons: gateway cron service unavailable for immediate safety reconciliation");
+    return { available: false, disabled: 0, failed: 0 };
+  }
+
+  let jobs;
+  try {
+    jobs = await cron.list({ includeDisabled: true });
+  } catch (error) {
+    api.logger?.warn?.(
+      `plur1bus-feature-crons: immediate cron list failed (${error?.message || String(error)})`,
+    );
+    return { available: true, disabled: 0, failed: 1 };
+  }
+
+  const unsafeJobs = planUnsafeDirectCronDisables(jobs);
+  let disabled = 0;
+  let failed = 0;
+  for (const job of unsafeJobs) {
+    try {
+      await cron.update(job.id, {
+        enabled: false,
+        name: job.safetyName,
+      });
+      disabled += 1;
+    } catch (error) {
+      failed += 1;
+      api.logger?.warn?.(
+        `plur1bus-feature-crons: immediate safety-disable failed for ${job.id} (${error?.message || String(error)})`,
+      );
+    }
+  }
+  if (disabled > 0) {
+    api.logger?.warn?.(
+      `plur1bus-feature-crons: immediately safety-disabled ${disabled} exact direct job(s)`,
+    );
+  }
+  return { available: true, disabled, failed };
+}
+
+/**
  * Deferred, best-effort feature-cron bootstrap for the gateway_start
  * handler registered above. Fail-open end to end: any failure here is
  * logged at debug/warn level and swallowed — it must never affect the
@@ -2818,7 +2877,16 @@ async function runDeferredFeatureCronBootstrap(api, {
       api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap attempt failed");
     }
 
-    const safetyPending = force && (!ok || !parsedResult || parsedResult.skipped === true);
+    const failedSafetyRecovery = Array.isArray(parsedResult?.results)
+      && parsedResult.results.some(
+        (result) => result?.action === "safety-recovery" && result?.ok === false,
+      );
+    const safetyPending = force && (
+      !ok
+      || !parsedResult
+      || parsedResult.skipped === true
+      || failedSafetyRecovery
+    );
     if (!safetyPending) {
       return { ok, safetyPending: false, attempts: attemptIndex + 1 };
     }
@@ -4673,11 +4741,13 @@ const plugin = {
     ) {
       api.on(
         "gateway_start",
-        () => {
-          // Never block gateway startup on this: schedule far enough out
-          // that the gateway is fully up (and the `openclaw` CLI can talk
-          // to it) before we spawn anything, and unref the timer so it can
-          // never keep the process alive on its own.
+        async (_event, gatewayContext) => {
+          if (!cronDirectDispatchReady) {
+            await reconcileUnsafeDirectCronsWithService(api, gatewayContext);
+          }
+          // The in-process service closes the immediate safety window first.
+          // CLI reconciliation remains deferred and retried so it can repair
+          // the host patch and restore only safely marked jobs.
           const timer = setTimeout(() => {
             runDeferredFeatureCronBootstrap(api, {
               cfg,
@@ -4689,7 +4759,7 @@ const plugin = {
           }, cronDirectDispatchReady ? 90_000 : 0);
           timer?.unref?.();
         },
-        { timeoutMs: 5_000 },
+        { timeoutMs: cronDirectDispatchReady ? 5_000 : 30_000 },
       );
     }
 
@@ -9090,5 +9160,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, ensureCronDirectDispatchAtRegistration, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, ensureCronDirectDispatchAtRegistration, parseFeatureCronBootstrapLastPlanCreateCount, reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap };
 export default plugin;

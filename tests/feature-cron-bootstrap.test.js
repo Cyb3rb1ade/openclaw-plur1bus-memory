@@ -19,6 +19,7 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const {
   ensureCronDirectDispatchAtRegistration,
   parseFeatureCronBootstrapLastPlanCreateCount,
+  reconcileUnsafeDirectCronsWithService,
   runDeferredFeatureCronBootstrap,
 } = pluginModule;
 
@@ -59,6 +60,39 @@ describe("gateway registration host-patch guard", () => {
       && message.includes("host direct dispatch unavailable")
       && message.includes("fixture patch failure")
     )));
+  });
+
+  it("safety-disables exact direct jobs through the gateway cron service before CLI retries", async () => {
+    const updates = [];
+    const api = makeApi();
+    const result = await reconcileUnsafeDirectCronsWithService(api, {
+      getCron: () => ({
+        list: async ({ includeDisabled }) => {
+          assert.equal(includeDisabled, true);
+          return [{
+            id: "critical-main",
+            agentId: "main",
+            name: "plur1bus classify-recent main",
+            enabled: true,
+            payload: { message: "/plur1bus internal classify-recent" },
+          }];
+        },
+        update: async (id, patch) => {
+          updates.push({ id, patch });
+          return { id, ...patch };
+        },
+      }),
+    });
+
+    assert.deepStrictEqual(updates, [{
+      id: "critical-main",
+      patch: {
+        enabled: false,
+        name:
+          "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+      },
+    }]);
+    assert.deepStrictEqual(result, { available: true, disabled: 1, failed: 0 });
   });
 });
 
@@ -1119,7 +1153,17 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
               reason: "host-direct-dispatch-unavailable",
               lastPlanCreateCount: 7,
             })
-            : JSON.stringify({
+            : spawned === 2
+              ? JSON.stringify({
+                dryRun: false,
+                plan: { create: [], skip: [], update: [{ enable: true }] },
+                results: [{
+                  action: "safety-recovery",
+                  ok: false,
+                }],
+                lastPlanCreateCount: 1,
+              })
+              : JSON.stringify({
               dryRun: false,
               plan: { create: [], skip: [], update: [] },
               lastPlanCreateCount: 0,
@@ -1129,9 +1173,9 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
       },
     });
 
-    assert.equal(spawned, 2);
-    assert.deepStrictEqual(waits, [5]);
-    assert.deepStrictEqual(result, { ok: true, safetyPending: false, attempts: 2 });
+    assert.equal(spawned, 3);
+    assert.deepStrictEqual(waits, [5, 10]);
+    assert.deepStrictEqual(result, { ok: true, safetyPending: false, attempts: 3 });
   });
 
   it("writes the marker on a successful run (close code 0)", async () => {

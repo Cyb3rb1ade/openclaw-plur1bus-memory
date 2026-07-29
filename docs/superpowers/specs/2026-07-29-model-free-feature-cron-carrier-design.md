@@ -63,10 +63,14 @@ nicht zu den auditierten Ankern, liest der Setup-Prozess vor jeder
 Config-Abhängigkeit die Cron-Liste nur, um aktive, exakt identifizierte
 Direct-Feature-Jobs zu deaktivieren. Er markiert deren Namen persistent und
 bewahrt die Delivery-Konfiguration. Nach erfolgreicher Patch-Reparatur werden
-nur diese markierten Jobs umbenannt und reaktiviert. Custom-Prompts bleiben
+nur diese markierten Jobs innerhalb des aktuellen gebundenen Agent-Plans,
+mit validierter Delivery und weiterhin aktivem Feature in einem Edit umbenannt
+und reaktiviert. Custom-Prompts bleiben
 unangetastet. Ein fehlgeschlagener Registrierungs-Patch erzwingt diesen
-Sicherheitslauf auch bei frischem Marker und deaktivierter Auto-Provisionierung;
-fehlgeschlagene CLI-, List- oder Edit-Schritte werden im laufenden
+Sicherheitslauf auch bei frischem Marker und deaktivierter Auto-Provisionierung.
+Der awaited `gateway_start`-Hook deaktiviert passende Jobs zuerst direkt über
+OpenClaws In-Process-Cron-Service, bevor der CLI-Abgleich startet;
+fehlgeschlagene CLI-, List-, Edit- oder Recovery-Schritte werden im laufenden
 Gateway-Prozess mit begrenztem Backoff wiederholt. Backups sind an den SHA-256-Hash der
 ungepatchten Runtime gebunden, sodass ein OpenClaw-Update keine veraltete
 Rollback-Datei wiederverwendet.
