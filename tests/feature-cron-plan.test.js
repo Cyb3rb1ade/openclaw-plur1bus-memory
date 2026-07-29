@@ -85,25 +85,43 @@ describe("direct feature-cron safety lifecycle", () => {
         "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
       disable: true,
     }]);
+
+    assert.deepStrictEqual(planUnsafeDirectCronDisables([{
+      ...jobs[0],
+      name:
+        "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+    }]), [{
+      id: "owned",
+      name: "plur1bus classify-recent main",
+      safetyName:
+        "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+      disable: true,
+    }]);
   });
 
-  it("recovers only a disabled exact marker whose feature remains enabled", () => {
-    const jobs = [{
+  it("recovers only a scoped disabled marker with a currently safe delivery", () => {
+    const job = {
       id: "owned",
       agentId: "main",
       name:
         "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
       enabled: false,
       payload: { message: "/plur1bus internal classify-recent" },
-    }];
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    };
+    const scopedSkip = [{ spec: classifier, reason: "already-exists", existingJob: job }];
 
-    assert.deepStrictEqual(planSafetyDisabledCronRecoveries(jobs, [classifier]), [{
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries(scopedSkip), [{
       id: "owned",
       name: "plur1bus classify-recent main",
       rename: "plur1bus classify-recent main",
       enable: true,
     }]);
-    assert.deepStrictEqual(planSafetyDisabledCronRecoveries(jobs, []), []);
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries([]), []);
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries([{
+      ...scopedSkip[0],
+      existingJob: { ...job, delivery: { mode: "announce", channel: "last" } },
+    }]), []);
   });
 });
 

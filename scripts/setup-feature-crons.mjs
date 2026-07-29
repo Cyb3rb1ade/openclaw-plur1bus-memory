@@ -142,6 +142,28 @@ function countPendingCreates(plan) {
   return failedCreates + disabledDeliveryCreates;
 }
 
+function mergeCronUpdates(updates, recoveries) {
+  const merged = [];
+  const indexes = new Map();
+  for (const update of [...updates, ...recoveries]) {
+    if (!update?.id) continue;
+    const existingIndex = indexes.get(update.id);
+    if (existingIndex === undefined) {
+      indexes.set(update.id, merged.length);
+      merged.push({ ...update });
+      continue;
+    }
+    const existing = merged[existingIndex];
+    const combined = { ...existing, ...update };
+    if (existing.disable || existing.noDeliver || update.disable || update.noDeliver) {
+      delete combined.enable;
+      delete combined.rename;
+    }
+    merged[existingIndex] = combined;
+  }
+  return merged;
+}
+
 function buildJsonResult({
   reason,
   message,
@@ -515,11 +537,11 @@ export async function runSetupFeatureCrons(options = {}) {
     // dry-run/nichts-zu-tun dieses hier, sonst erst das Ergebnis-Objekt nach
     // den cron-add-Aufrufen (vorher wären es zwei konkatenierte Objekte, die
     // der /plur1bus-setup-crons-Parser nicht lesen kann).
-    const recoveries = planSafetyDisabledCronRecoveries(existingJobs, enabledSpecs);
-    const updates = [
-      ...(Array.isArray(plan.update) ? plan.update : []),
-      ...recoveries,
-    ];
+    const recoveries = planSafetyDisabledCronRecoveries(plan.skip);
+    const updates = mergeCronUpdates(
+      Array.isArray(plan.update) ? plan.update : [],
+      recoveries,
+    );
     plan = { ...plan, update: updates };
     const nothingToDo = plan.create.length === 0 && updates.length === 0;
 
@@ -577,7 +599,12 @@ export async function runSetupFeatureCrons(options = {}) {
       if (u.disable) editArgs.push("--disable");
       if (u.noDeliver) editArgs.push("--no-deliver");
       const r = openclawImpl(editArgs, 15000);
-      results.push({ job: u.name, action: "update", ok: r.ok, stderr: r.ok ? undefined : r.stderr?.trim() });
+      results.push({
+        job: u.name,
+        action: u.enable ? "safety-recovery" : "update",
+        ok: r.ok,
+        stderr: r.ok ? undefined : r.stderr?.trim(),
+      });
       if (!opts.json) {
         const reason = u.enable ? "safety recovery" : "contract migration";
         if (r.ok) {

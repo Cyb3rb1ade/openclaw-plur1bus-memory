@@ -43,6 +43,9 @@ describe("cron direct-dispatch patch wiring", () => {
     assert.match(indexSource, /resolveOpenClawDistDir\(\)/);
     assert.match(indexSource, /force: !cronDirectDispatchReady/);
     assert.match(indexSource, /cronDirectDispatchReady \? 90_000 : 0/);
+    assert.match(indexSource, /await reconcileUnsafeDirectCronsWithService\(api, gatewayContext\)/);
+    assert.match(indexSource, /cron\.list\(\{ includeDisabled: true \}\)/);
+    assert.match(indexSource, /await cron\.update\(job\.id/);
   });
 
   it("gates automatic cron setup on host-patch readiness", () => {
