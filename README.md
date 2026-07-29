@@ -307,6 +307,9 @@ not PLUR1BUS defaults.
     "entries": {
       "memory-lancedb-namespaced": {
         "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true
+        },
         "config": {
           "baseDbPath": "~/.openclaw/memory/lancedb-namespaced",
           "obsidianBridge": {
@@ -370,6 +373,13 @@ not PLUR1BUS defaults.
   }
 }
 ```
+
+`hooks.allowConversationAccess: true` is mandatory for this trusted memory
+plugin. OpenClaw otherwise rejects the `before_agent_reply` admission fallback;
+if the independently installed host patch then becomes unavailable, a direct
+feature cron could reach the outer model before startup reconciliation. The
+installer enforces this single permission even in preserve mode while keeping
+all unrelated hook and feature choices unchanged.
 
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
 

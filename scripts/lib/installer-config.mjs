@@ -34,6 +34,19 @@ function effectivePlanInput(config) {
   return input;
 }
 
+function ensureRequiredConversationHookAccess(pluginEntry) {
+  const hooks = isPlainObject(pluginEntry.hooks) ? pluginEntry.hooks : {};
+  pluginEntry.hooks = {
+    ...hooks,
+    // Required for the fail-closed before_agent_reply cron admission barrier.
+    // PLUR1BUS is already a trusted conversation-memory plugin; keeping an
+    // explicit false here would silently re-enable the outer cron model path
+    // whenever the independently installed host patch cannot be applied.
+    allowConversationAccess: true,
+  };
+  return pluginEntry;
+}
+
 function getPath(obj, path) {
   let cur = obj;
   for (const part of path) {
@@ -51,7 +64,6 @@ function fillMissingHookDefaults(pluginEntry) {
   const hooks = isPlainObject(pluginEntry.hooks) ? pluginEntry.hooks : {};
   const timeouts = isPlainObject(hooks.timeouts) ? hooks.timeouts : {};
   pluginEntry.hooks = {
-    allowConversationAccess: true,
     allowPromptInjection: true,
     ...hooks,
     timeouts: {
@@ -60,7 +72,7 @@ function fillMissingHookDefaults(pluginEntry) {
       ...timeouts,
     },
   };
-  return pluginEntry;
+  return ensureRequiredConversationHookAccess(pluginEntry);
 }
 
 /**
@@ -74,7 +86,9 @@ export function applyInstallerFeaturePolicy(pluginEntry = {}, opts = {}) {
   if (!new Set(["preserve", "safe", "recommended"]).has(mode)) {
     throw new RangeError(`Feature policy mode must be preserve, safe, or recommended; received ${mode}`);
   }
-  if (mode === "preserve") return clone(pluginEntry || {});
+  if (mode === "preserve") {
+    return ensureRequiredConversationHookAccess(clone(pluginEntry || {}));
+  }
 
   const document = {
     plugins: {
