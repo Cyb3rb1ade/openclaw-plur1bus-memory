@@ -8,6 +8,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, it } from "node:test";
 
 import {
@@ -51,6 +52,78 @@ async function runCronIsolatedAgentTurn(params) {
     return executeCronRun();
   } finally {
     cleanup();
+  }
+}
+`;
+}
+
+function executableFixtureSource() {
+  return `
+let state = { modelCalls: 0, finalizedPayloads: null };
+export function getState() {
+  return state;
+}
+async function finalizeCronRun({ execution }) {
+  state.finalizedPayloads = execution.runResult.payloads;
+  return { status: "ok", delivered: true };
+}
+async function loadCronExecutorRuntime() {
+  return {
+    executeCronRun: async () => {
+      state.modelCalls += 1;
+      return { status: "model" };
+    },
+  };
+}
+export async function runCronIsolatedAgentTurn(params) {
+  state = { modelCalls: 0, finalizedPayloads: null };
+  let outcome = "completed";
+  let outcomeError;
+  let cronRunSessionCleanupAttempted = false;
+  const turnStartedAtMs = Date.now();
+  const abortReason = () => "aborted";
+  const isAborted = () => false;
+  const initialSessionId = "fixture-session";
+  const notifyExecutionStarted = () => {};
+  const prepared = {
+    context: {
+      deliveryRequested: true,
+      commandBody: params.job.payload.message,
+      liveSelection: { provider: "fixture", model: "fixture" },
+      sessionWorkAdmission: { release: () => {} },
+      withRunSession: (result) => result,
+    },
+  };
+  const match = () => ({
+    command: { handler: async () => params.job.handlerResult },
+  });
+  try {
+    /* plur1bus-cron-cmd-dispatch */
+    const _plMsg = (params.job.payload?.message ?? "").split("\\n")[0].trim();
+    if (_plMsg.startsWith("/")) {
+      try {
+        let _plMatch = match(_plMsg);
+        if (_plMatch) {
+          notifyExecutionStarted();
+          const _plResult = await _plMatch.command.handler({
+            commandBody: _plMsg,
+          });
+          if (!prepared.context.deliveryRequested) {
+            return prepared.context.withRunSession({ status: "completed" });
+          }
+          if (_plResult?.text) {
+            prepared.context.commandBody = \`\${prepared.context.commandBody}\\n\\n[PLUR1BUS] \${_plResult.text}\`;
+          }
+        }
+      } catch (_plErr) { console.warn(_plErr); }
+    }
+    const { executeCronRun } = await loadCronExecutorRuntime();
+    return executeCronRun();
+  } finally {
+    void outcome;
+    void outcomeError;
+    void cronRunSessionCleanupAttempted;
+    void initialSessionId;
   }
 }
 `;
@@ -151,5 +224,57 @@ describe("cron plugin direct-dispatch host patch", () => {
       readFileSync(`${target}.plur1bus-cron-direct.bak`, "utf8"),
       fixtureSource(),
     );
+  });
+
+  it("executes exact feature commands through finalization without calling the model", async () => {
+    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-runtime.mjs");
+    const reply = {
+      text: "kritische Nachricht",
+      presentation: {
+        blocks: [{
+          type: "buttons",
+          buttons: [{ label: "✅ OK", action: { type: "callback", value: "crit:ok:id" } }],
+        }],
+      },
+      presentationTextMode: "fallback",
+    };
+    const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
+    writeFileSync(target, patched.source);
+    const runtime = await import(`${pathToFileURL(target).href}?direct=${Date.now()}`);
+
+    const result = await runtime.runCronIsolatedAgentTurn({
+      job: {
+        payload: { message: "/plur1bus internal classify-recent" },
+        handlerResult: reply,
+      },
+    });
+
+    assert.equal(result.status, "ok");
+    assert.equal(runtime.getState().modelCalls, 0);
+    assert.deepStrictEqual(runtime.getState().finalizedPayloads, [reply]);
+  });
+
+  it("keeps multiline carrier prompts on the legacy model path", async () => {
+    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-runtime.mjs");
+    const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
+    writeFileSync(target, patched.source);
+    const runtime = await import(`${pathToFileURL(target).href}?legacy=${Date.now()}`);
+
+    const result = await runtime.runCronIsolatedAgentTurn({
+      job: {
+        payload: {
+          message: "/plur1bus internal afterthought\n\nDelivery contract",
+        },
+        handlerResult: { text: "Nachgedanke" },
+      },
+    });
+
+    assert.equal(result.status, "model");
+    assert.equal(runtime.getState().modelCalls, 1);
+    assert.equal(runtime.getState().finalizedPayloads, null);
   });
 });
