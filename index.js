@@ -48,7 +48,10 @@ import {
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
-import { planUnsafeDirectCronDisables } from "./lib/setup/feature-cron-plan.js";
+import {
+  isGuardedDirectFeatureCronMessage,
+  planUnsafeDirectCronDisables,
+} from "./lib/setup/feature-cron-plan.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
@@ -2717,6 +2720,26 @@ function ensureCronDirectDispatchAtRegistration(api, options = {}) {
 }
 
 /**
+ * Claim known PLUR1BUS feature-cron turns before OpenClaw can admit them to
+ * the outer model when the direct dispatcher was unavailable at registration.
+ *
+ * @param {object} event
+ * @param {object} context
+ * @param {{hostReady?: boolean}} [options]
+ * @returns {{handled: true, reply: {text: string}}|undefined}
+ */
+function guardUnsafeDirectCronTurn(event, context, { hostReady } = {}) {
+  if (
+    hostReady !== false
+    || context?.trigger !== "cron"
+    || !isGuardedDirectFeatureCronMessage(event?.cleanedBody)
+  ) {
+    return undefined;
+  }
+  return { handled: true, reply: { text: "NO_REPLY" } };
+}
+
+/**
  * Use OpenClaw's in-process cron service to close the direct-job execution
  * window before the deferred CLI reconciliation starts.
  *
@@ -2741,7 +2764,11 @@ async function reconcileUnsafeDirectCronsWithService(api, gatewayContext) {
 
   let jobs;
   try {
-    jobs = await cron.list({ includeDisabled: true });
+    jobs = await withTimeout(
+      Promise.resolve(cron.list({ includeDisabled: true })),
+      5_000,
+      "feature cron immediate safety list",
+    );
   } catch (error) {
     api.logger?.warn?.(
       `plur1bus-feature-crons: immediate cron list failed (${error?.message || String(error)})`,
@@ -2754,10 +2781,14 @@ async function reconcileUnsafeDirectCronsWithService(api, gatewayContext) {
   let failed = 0;
   for (const job of unsafeJobs) {
     try {
-      await cron.update(job.id, {
-        enabled: false,
-        name: job.safetyName,
-      });
+      await withTimeout(
+        Promise.resolve(cron.update(job.id, {
+          enabled: false,
+          name: job.safetyName,
+        })),
+        5_000,
+        `feature cron immediate safety update ${job.id}`,
+      );
       disabled += 1;
     } catch (error) {
       failed += 1;
@@ -3661,6 +3692,16 @@ const plugin = {
     const cronDirectDispatchReady = process.env.NODE_TEST_CONTEXT
       ? true
       : ensureCronDirectDispatchAtRegistration(api);
+    if (!cronDirectDispatchReady && typeof api.on === "function") {
+      api.on(
+        "before_agent_reply",
+        (event, context) => guardUnsafeDirectCronTurn(
+          event,
+          context,
+          { hostReady: cronDirectDispatchReady },
+        ),
+      );
+    }
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
@@ -9160,5 +9201,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, ensureCronDirectDispatchAtRegistration, parseFeatureCronBootstrapLastPlanCreateCount, reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, ensureCronDirectDispatchAtRegistration, guardUnsafeDirectCronTurn, parseFeatureCronBootstrapLastPlanCreateCount, reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap };
 export default plugin;

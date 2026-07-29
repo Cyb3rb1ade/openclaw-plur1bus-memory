@@ -68,6 +68,16 @@ mit validierter Delivery und weiterhin aktivem Feature in einem Edit umbenannt
 und reaktiviert. Custom-Prompts bleiben
 unangetastet. Ein fehlgeschlagener Registrierungs-Patch erzwingt diesen
 Sicherheitslauf auch bei frischem Marker und deaktivierter Auto-Provisionierung.
+Zusätzlich registriert das Plugin in diesem Fehlerfall sofort einen
+`before_agent_reply`-Admission-Guard. Er beansprucht ausschließlich Cron-Turns
+mit einem der zwei exakten Commands, einem exakt von PLUR1BUS ausgelieferten
+Legacy-Carrier oder der präzisen `[PLUR1BUS]`-Ergebnishülle, die der vorherige
+Host-Dispatcher vor seinem fehlerhaften Modell-Fallthrough anhängt, und
+antwortet vor der Modellauflösung mit `NO_REPLY`. Damit ist
+auch das Zeitfenster vor `gateway_start` modellfrei; Präfixe, Suffixe,
+Whitespace-Varianten und Custom-Prompts werden nicht beansprucht. Die Features
+bleiben für diesen Gateway-Prozess sicher pausiert und werden nach erfolgreichem
+Patch plus Neustart kontrolliert wieder aktiviert.
 Der awaited `gateway_start`-Hook deaktiviert passende Jobs zuerst direkt über
 OpenClaws In-Process-Cron-Service, bevor der CLI-Abgleich startet;
 fehlgeschlagene CLI-, List-, Edit- oder Recovery-Schritte werden im laufenden
