@@ -2,13 +2,27 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.1.0 - Not just an agent. Yours.**
+**PLUR1BUS 7.1.7 — model-free feature crons**
 
-Current version: **7.1.0** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.1.0`. See the [changelog](CHANGELOG.md) for the full history.
+Current version: **7.1.7** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.1.7`. See the [changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.1.7 — model-free feature cron dispatch
+
+- **No outer carrier model for Afterthought or Critical Push** — exact internal
+  commands are finalized through OpenClaw's normal delivery path before the
+  carrier agent/model executor.
+- **Scoped fail-closed recovery** — if the host dispatcher is unavailable,
+  only exact PLUR1BUS-owned feature jobs are paused and marked; custom prompts
+  and unrelated jobs are never claimed.
+- **Schedules and delivery remain intact** — existing jobs migrate
+  idempotently while keeping their 30-minute cadence and validated targets.
+- **Native internal LLM policy** — actual Afterthought composition and
+  classification still inherit the target agent's OpenClaw model and thinking
+  policy; PLUR1BUS does not force `thinking: off`.
 
 ### New in v7.1.0 — audited ownership, recall, and operations
 
@@ -250,14 +264,14 @@ Install the immutable GitHub Release package:
 
 ```bash
 openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.1.0/cyb3rb1ade-plur1bus-memory-7.1.0.tgz
+  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.1.7/cyb3rb1ade-plur1bus-memory-7.1.7.tgz
 ```
 
 Or install the exact ClawHub release:
 
 ```bash
 openclaw plugins install \
-  clawhub:@cyb3rb1ade/plur1bus-memory@7.1.0 \
+  clawhub:@cyb3rb1ade/plur1bus-memory@7.1.7 \
   --acknowledge-clawhub-risk
 ```
 
@@ -268,7 +282,7 @@ the exact package:
 ```bash
 npm login --scope=@cyb3rb1ade --auth-type=legacy \
   --registry=https://npm.pkg.github.com
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.1.0 --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.1.7 --pin
 ```
 
 For a source checkout, clone into the OpenClaw extensions folder and restart
