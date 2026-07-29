@@ -5,6 +5,7 @@ import {
   planFeatureCrons,
   deriveAgentDelivery,
   deriveDeliveryFromChannelConfig,
+  isGuardedDirectFeatureCronMessage,
   planMessageMigration,
   planSafetyDisabledCronRecoveries,
   planUnsafeDirectCronDisables,
@@ -59,8 +60,14 @@ describe("REQUIRED_FEATURE_CRONS", () => {
 
 describe("direct feature-cron safety lifecycle", () => {
   const classifier = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "classify-recent");
+  const legacyClassifierMessage =
+    "/plur1bus internal classify-recent\n\n" +
+    "Delivery contract: the job returns JSON. If `pushMessages` is a non-empty array, " +
+    "send each array entry verbatim as a separate message, with no additional commentary. " +
+    "If `pushMessages` is absent or empty, reply with exactly NO_REPLY and nothing else — " +
+    "do not invent content.";
 
-  it("marks only an active exact owned job and preserves recovery identity", () => {
+  it("marks only active exact shipped jobs and preserves recovery identity", () => {
     const jobs = [
       {
         id: "owned",
@@ -68,6 +75,13 @@ describe("direct feature-cron safety lifecycle", () => {
         name: "plur1bus classify-recent main",
         enabled: true,
         payload: { message: "/plur1bus internal classify-recent" },
+      },
+      {
+        id: "legacy-owned",
+        agentId: "main",
+        name: "plur1bus classify-recent main",
+        enabled: true,
+        payload: { message: legacyClassifierMessage },
       },
       {
         id: "custom",
@@ -78,13 +92,22 @@ describe("direct feature-cron safety lifecycle", () => {
       },
     ];
 
-    assert.deepStrictEqual(planUnsafeDirectCronDisables(jobs), [{
-      id: "owned",
-      name: "plur1bus classify-recent main",
-      safetyName:
-        "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
-      disable: true,
-    }]);
+    assert.deepStrictEqual(planUnsafeDirectCronDisables(jobs), [
+      {
+        id: "owned",
+        name: "plur1bus classify-recent main",
+        safetyName:
+          "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+        disable: true,
+      },
+      {
+        id: "legacy-owned",
+        name: "plur1bus classify-recent main",
+        safetyName:
+          "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+        disable: true,
+      },
+    ]);
 
     assert.deepStrictEqual(planUnsafeDirectCronDisables([{
       ...jobs[0],
@@ -97,6 +120,30 @@ describe("direct feature-cron safety lifecycle", () => {
         "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
       disable: true,
     }]);
+  });
+
+  it("guards only exact current and shipped legacy direct messages", () => {
+    assert.equal(isGuardedDirectFeatureCronMessage(classifier.message), true);
+    assert.equal(isGuardedDirectFeatureCronMessage(legacyClassifierMessage), true);
+    assert.equal(
+      isGuardedDirectFeatureCronMessage(
+        `${legacyClassifierMessage}\n\n[PLUR1BUS] {"pushMessages":[]}`,
+      ),
+      true,
+    );
+    assert.equal(
+      isGuardedDirectFeatureCronMessage(
+        `${classifier.message}\n\n[PLUR1BUS] NO_REPLY`,
+      ),
+      true,
+    );
+    assert.equal(isGuardedDirectFeatureCronMessage(`${classifier.message}\ncustom`), false);
+    assert.equal(
+      isGuardedDirectFeatureCronMessage(`${classifier.message}\ncustom\n\n[PLUR1BUS] NO_REPLY`),
+      false,
+    );
+    assert.equal(isGuardedDirectFeatureCronMessage(` ${classifier.message}`), false);
+    assert.equal(isGuardedDirectFeatureCronMessage(null), false);
   });
 
   it("recovers only a scoped disabled marker with a currently safe delivery", () => {
@@ -122,6 +169,16 @@ describe("direct feature-cron safety lifecycle", () => {
       ...scopedSkip[0],
       existingJob: { ...job, delivery: { mode: "announce", channel: "last" } },
     }]), []);
+
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries([{
+      ...scopedSkip[0],
+      existingJob: { ...job, payload: { message: legacyClassifierMessage } },
+    }]), [{
+      id: "owned",
+      name: "plur1bus classify-recent main",
+      rename: "plur1bus classify-recent main",
+      enable: true,
+    }]);
   });
 });
 

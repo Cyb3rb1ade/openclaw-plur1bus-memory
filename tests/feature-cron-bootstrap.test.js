@@ -18,6 +18,7 @@ const PV = "1.2.3";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const {
   ensureCronDirectDispatchAtRegistration,
+  guardUnsafeDirectCronTurn,
   parseFeatureCronBootstrapLastPlanCreateCount,
   reconcileUnsafeDirectCronsWithService,
   runDeferredFeatureCronBootstrap,
@@ -93,6 +94,62 @@ describe("gateway registration host-patch guard", () => {
       },
     }]);
     assert.deepStrictEqual(result, { available: true, disabled: 1, failed: 0 });
+  });
+
+  it("claims unsafe exact cron turns before the model when the host patch is unavailable", () => {
+    const exact = guardUnsafeDirectCronTurn(
+      { cleanedBody: "/plur1bus internal afterthought" },
+      { trigger: "cron" },
+      { hostReady: false },
+    );
+    const knownCarrier = guardUnsafeDirectCronTurn(
+      {
+        cleanedBody:
+          "/plur1bus internal classify-recent\n\n" +
+          "Delivery contract: the job returns JSON. If `pushMessages` is a non-empty array, " +
+          "send each array entry verbatim as a separate message, with no additional commentary. " +
+          "If `pushMessages` is absent or empty, reply with exactly NO_REPLY and nothing else — " +
+          "do not invent content.",
+      },
+      { trigger: "cron" },
+      { hostReady: false },
+    );
+    const previousHostEnvelope = guardUnsafeDirectCronTurn(
+      {
+        cleanedBody:
+          "/plur1bus internal afterthought\n\n[PLUR1BUS] NO_REPLY",
+      },
+      { trigger: "cron" },
+      { hostReady: false },
+    );
+
+    assert.deepStrictEqual(exact, { handled: true, reply: { text: "NO_REPLY" } });
+    assert.deepStrictEqual(knownCarrier, { handled: true, reply: { text: "NO_REPLY" } });
+    assert.deepStrictEqual(previousHostEnvelope, { handled: true, reply: { text: "NO_REPLY" } });
+    assert.equal(
+      guardUnsafeDirectCronTurn(
+        { cleanedBody: "/plur1bus internal afterthought\ncustom" },
+        { trigger: "cron" },
+        { hostReady: false },
+      ),
+      undefined,
+    );
+    assert.equal(
+      guardUnsafeDirectCronTurn(
+        { cleanedBody: "/plur1bus internal afterthought" },
+        { trigger: "manual" },
+        { hostReady: false },
+      ),
+      undefined,
+    );
+    assert.equal(
+      guardUnsafeDirectCronTurn(
+        { cleanedBody: "/plur1bus internal afterthought" },
+        { trigger: "cron" },
+        { hostReady: true },
+      ),
+      undefined,
+    );
   });
 });
 
@@ -414,7 +471,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     assert.deepStrictEqual(result.parsed.disabledJobs, ["plur1bus classify-recent main"]);
   });
 
-  it("restores only safety-marked exact jobs after the host patch is repaired", async () => {
+  it("atomically migrates and restores a safety-marked shipped legacy job after repair", async () => {
     const mutations = [];
     const markedName =
       "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]";
@@ -439,7 +496,14 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
               agentId: "main",
               name: markedName,
               enabled: false,
-              payload: { message: "/plur1bus internal classify-recent" },
+              payload: {
+                message:
+                  "/plur1bus internal classify-recent\n\n" +
+                  "Delivery contract: the job returns JSON. If `pushMessages` is a non-empty array, " +
+                  "send each array entry verbatim as a separate message, with no additional commentary. " +
+                  "If `pushMessages` is absent or empty, reply with exactly NO_REPLY and nothing else — " +
+                  "do not invent content.",
+              },
               delivery: { mode: "announce", channel: "telegram", to: "123" },
             }],
           }),
@@ -474,6 +538,8 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       "critical-main",
       "--name",
       "plur1bus classify-recent main",
+      "--message",
+      "/plur1bus internal classify-recent",
       "--enable",
     ]]);
   });
