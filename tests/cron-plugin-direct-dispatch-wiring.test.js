@@ -40,6 +40,9 @@ describe("cron direct-dispatch patch wiring", () => {
     assert.ok(packageJson.files.includes("patches/apply-cron-plugin-direct-dispatch.mjs"));
     assert.match(indexSource, /ensureCronDirectDispatchAtRegistration\(api\)/);
     assert.match(indexSource, /applyCronPluginDirectDispatchPatch/);
+    assert.match(indexSource, /resolveOpenClawDistDir\(\)/);
+    assert.match(indexSource, /force: !cronDirectDispatchReady/);
+    assert.match(indexSource, /cronDirectDispatchReady \? 90_000 : 1_000/);
   });
 
   it("gates automatic cron setup on host-patch readiness", () => {
@@ -50,5 +53,7 @@ describe("cron direct-dispatch patch wiring", () => {
 
     assert.match(source, /ensureCronDirectDispatchImpl\(\{ apply: !opts\.dryRun \}\)/);
     assert.match(source, /host-direct-dispatch-unavailable/);
+    assert.match(source, /planUnsafeDirectCronDisables\(existingJobs\)/);
+    assert.match(source, /\["cron", "edit", job\.id, "--disable", "--no-deliver"\]/);
   });
 });

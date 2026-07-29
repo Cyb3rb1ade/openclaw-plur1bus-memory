@@ -3,8 +3,10 @@
 import {
   constants,
   copyFileSync,
+  existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -18,7 +20,69 @@ const LEGACY_MARKER = "/* plur1bus-cron-cmd-dispatch */";
 const DIRECT_MARKER = "/* plur1bus-cron-direct-dispatch-v2 */";
 const TARGET_RE = /^isolated-agent-[A-Za-z0-9_-]+\.js$/;
 const EXECUTOR_ANCHOR = "const { executeCronRun } = await loadCronExecutorRuntime();";
-export const DEFAULT_OPENCLAW_DIST_DIR = "/usr/lib/node_modules/openclaw/dist";
+const STANDARD_OPENCLAW_DIST_DIRS = [
+  "/usr/lib/node_modules/openclaw/dist",
+  "/usr/local/lib/node_modules/openclaw/dist",
+];
+
+function openClawDistFromEntry(entryPath) {
+  if (typeof entryPath !== "string" || entryPath.length === 0) return null;
+  try {
+    let current = path.dirname(realpathSync(entryPath));
+    for (let depth = 0; depth < 8; depth += 1) {
+      const manifestPath = path.join(current, "package.json");
+      const distDir = path.join(current, "dist");
+      if (existsSync(manifestPath) && existsSync(distDir)) {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        if (manifest?.name === "openclaw") return realpathSync(distDir);
+      }
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Resolve the active OpenClaw dist directory from an explicit override, the
+ * running entry point, or the `openclaw` executable on PATH.
+ *
+ * @param {{override?: string|null, entryPath?: string|null, pathEnv?: string, standardCandidates?: string[]}} [options]
+ * @returns {string}
+ */
+export function resolveOpenClawDistDir(options = {}) {
+  const {
+    override = process.env.OPENCLAW_DIST_DIR,
+    entryPath = process.argv[1],
+    pathEnv = process.env.PATH || "",
+    standardCandidates = STANDARD_OPENCLAW_DIST_DIRS,
+  } = options;
+  if (typeof override === "string" && override.trim().length > 0) {
+    return path.resolve(override);
+  }
+
+  const entryDist = openClawDistFromEntry(entryPath);
+  if (entryDist) return entryDist;
+
+  for (const binDir of pathEnv.split(path.delimiter).filter(Boolean)) {
+    const pathDist = openClawDistFromEntry(path.join(binDir, "openclaw"));
+    if (pathDist) return pathDist;
+  }
+
+  for (const candidate of standardCandidates) {
+    const packageRoot = path.dirname(candidate);
+    try {
+      const manifest = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+      if (manifest?.name === "openclaw" && existsSync(candidate)) return realpathSync(candidate);
+    } catch {
+      // Continue through the bounded candidate list.
+    }
+  }
+  throw new Error("could not resolve the active OpenClaw dist directory");
+}
 
 function indentationAt(source, index) {
   const lineStart = source.lastIndexOf("\n", index - 1) + 1;
@@ -287,7 +351,7 @@ export function patchCronPluginDirectDispatchSource(source) {
  * @param {string} [distDir]
  * @returns {{status: "applied"|"already-patched", target: string, backup: string|null}}
  */
-export function applyCronPluginDirectDispatchPatch(distDir = DEFAULT_OPENCLAW_DIST_DIR) {
+export function applyCronPluginDirectDispatchPatch(distDir = resolveOpenClawDistDir()) {
   const bundles = readdirSync(distDir)
     .filter((name) => TARGET_RE.test(name))
     .map((name) => path.join(distDir, name))
@@ -356,7 +420,7 @@ export function applyCronPluginDirectDispatchPatch(distDir = DEFAULT_OPENCLAW_DI
  * @param {string} [distDir]
  * @returns {boolean}
  */
-export function isCronPluginDirectDispatchReady(distDir = DEFAULT_OPENCLAW_DIST_DIR) {
+export function isCronPluginDirectDispatchReady(distDir = resolveOpenClawDistDir()) {
   try {
     const candidates = readdirSync(distDir)
       .filter((name) => TARGET_RE.test(name))
@@ -377,7 +441,7 @@ function isMain() {
 
 if (isMain()) {
   try {
-    const distDir = process.argv[2] || DEFAULT_OPENCLAW_DIST_DIR;
+    const distDir = resolveOpenClawDistDir({ override: process.argv[2] });
     const result = applyCronPluginDirectDispatchPatch(distDir);
     process.stdout.write(
       `[patch] plur1bus cron direct dispatch: ${result.status} (${path.basename(result.target)})\n`,

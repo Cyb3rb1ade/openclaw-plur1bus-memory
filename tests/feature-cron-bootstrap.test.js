@@ -133,6 +133,17 @@ describe("shouldRunCronBootstrap", () => {
     );
   });
 
+  it("retries immediately when the prior setup left pending work", () => {
+    const lastRunAt = new Date(NOW - 60_000).toISOString();
+    assert.strictEqual(
+      shouldRunCronBootstrap(
+        { pluginVersion: PV, lastRunAt, lastPlanCreateCount: 1 },
+        { now: NOW, pluginVersion: PV },
+      ),
+      true,
+    );
+  });
+
   it("runs when the last run is stale (>= 20h old)", () => {
     const lastRunAt = new Date(NOW - 21 * 60 * 60 * 1000).toISOString(); // 21h ago
     assert.strictEqual(
@@ -300,7 +311,7 @@ async function runJsonSetupDirect(
 }
 
 describe("runSetupFeatureCrons effective config snapshot", () => {
-  it("fails closed before reading or mutating cron state when the host patch is unavailable", async () => {
+  it("fails closed by disabling only active exact direct jobs when the host patch is unavailable", async () => {
     const calls = [];
     const result = await runJsonSetupDirect(
       (args) => {
@@ -318,7 +329,43 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
             status: 0,
           };
         }
-        throw new Error(`cron state must not be accessed: ${args.join(" ")}`);
+        if (args.join(" ") === "cron list --json --all") {
+          return {
+            ok: true,
+            stdout: JSON.stringify({
+              jobs: [
+                {
+                  id: "critical-main",
+                  agentId: "main",
+                  name: "plur1bus classify-recent main",
+                  enabled: true,
+                  payload: { message: "/plur1bus internal classify-recent" },
+                  delivery: { mode: "announce", channel: "telegram", to: "123" },
+                },
+                {
+                  id: "custom-main",
+                  agentId: "main",
+                  name: "plur1bus classify-recent custom",
+                  enabled: true,
+                  payload: { message: "/plur1bus internal classify-recent\ncustom" },
+                },
+                {
+                  id: "disabled-main",
+                  agentId: "main",
+                  name: "plur1bus classify-recent main",
+                  enabled: false,
+                  payload: { message: "/plur1bus internal classify-recent" },
+                },
+              ],
+            }),
+            stderr: "",
+            status: 0,
+          };
+        }
+        if (args.join(" ") === "cron edit critical-main --disable --no-deliver") {
+          return { ok: true, stdout: "{}", stderr: "", status: 0 };
+        }
+        throw new Error(`unexpected OpenClaw call: ${args.join(" ")}`);
       },
       ["--json"],
       () => {
@@ -331,8 +378,14 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     assert.equal(result.parsed.lastPlanCreateCount, 1);
     assert.deepStrictEqual(
       calls.map((args) => args.join(" ")),
-      ["--version", "gateway call config.get --json"],
+      [
+        "--version",
+        "gateway call config.get --json",
+        "cron list --json --all",
+        "cron edit critical-main --disable --no-deliver",
+      ],
     );
+    assert.deepStrictEqual(result.parsed.disabledJobs, ["plur1bus classify-recent main"]);
   });
 
   it("applies the host patch normally and only verifies it during dry-run", async () => {
@@ -963,6 +1016,29 @@ describe("parseFeatureCronBootstrapLastPlanCreateCount", () => {
 describe("runDeferredFeatureCronBootstrap marker gating", () => {
   it("is exported", () => {
     assert.strictEqual(typeof runDeferredFeatureCronBootstrap, "function");
+  });
+
+  it("can force the safety run despite a fresh successful marker", async () => {
+    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-force-"));
+    const markerPath = path.join(baseDbPath, ".feature-crons-setup.json");
+    writeFileSync(markerPath, JSON.stringify({
+      pluginVersion: "7.1.6",
+      lastRunAt: new Date().toISOString(),
+      lastPlanCreateCount: 0,
+    }));
+    let spawned = 0;
+
+    await runDeferredFeatureCronBootstrap(makeApi(), {
+      cfg: {},
+      baseDbPath,
+      force: true,
+      spawnImpl: () => {
+        spawned += 1;
+        return fakeChild({ stdout: JSON.stringify({ lastPlanCreateCount: 0 }), closeCode: 0 });
+      },
+    });
+
+    assert.equal(spawned, 1);
   });
 
   it("writes the marker on a successful run (close code 0)", async () => {

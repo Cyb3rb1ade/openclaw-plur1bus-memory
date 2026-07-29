@@ -7,7 +7,8 @@
  * Runs as the invoking user. Before any cron read or mutation it installs or
  * verifies the shipped OpenClaw host dispatcher patch, then uses the
  * `openclaw` CLI over its local socket/token. If the runtime path is not
- * writable, setup remains fail-closed and changes no cron job.
+ * writable, setup remains fail-closed by disabling only active jobs with an
+ * exact PLUR1BUS direct-feature identity and payload.
  *
  * Contract: this script must NEVER fail an install. If the `openclaw` CLI
  * is missing or the gateway is unreachable, it prints a friendly note and
@@ -20,6 +21,7 @@
 
 import {
   planFeatureCrons,
+  planUnsafeDirectCronDisables,
   REQUIRED_FEATURE_CRONS,
   selectAgentsForCronSetup,
   selectEnabledFeatureCronSpecs,
@@ -31,12 +33,12 @@ import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
 import {
   applyCronPluginDirectDispatchPatch,
-  DEFAULT_OPENCLAW_DIST_DIR,
   isCronPluginDirectDispatchReady,
+  resolveOpenClawDistDir,
 } from "../patches/apply-cron-plugin-direct-dispatch.mjs";
 
 function ensureCronDirectDispatch({ apply }) {
-  const distDir = process.env.OPENCLAW_DIST_DIR || DEFAULT_OPENCLAW_DIST_DIR;
+  const distDir = resolveOpenClawDistDir();
   if (apply) return applyCronPluginDirectDispatchPatch(distDir);
   if (!isCronPluginDirectDispatchReady(distDir)) {
     throw new Error("PLUR1BUS cron direct dispatch is not installed");
@@ -139,7 +141,18 @@ function countPendingCreates(plan) {
   return failedCreates + disabledDeliveryCreates;
 }
 
-function buildJsonResult({ reason, message, configError = null, dryRun = false, plan = null, results = null, lastPlanCreateCount = 0 }) {
+function buildJsonResult({
+  reason,
+  message,
+  configError = null,
+  dryRun = false,
+  plan = null,
+  results = null,
+  disabledJobs = null,
+  wouldDisableJobs = null,
+  failedDisables = null,
+  lastPlanCreateCount = 0,
+}) {
   return {
     ok: false,
     dryRun,
@@ -149,6 +162,9 @@ function buildJsonResult({ reason, message, configError = null, dryRun = false, 
     ...(configError ? { configError } : {}),
     ...(plan ? { plan } : {}),
     ...(results ? { results } : {}),
+    ...(disabledJobs ? { disabledJobs } : {}),
+    ...(wouldDisableJobs ? { wouldDisableJobs } : {}),
+    ...(failedDisables !== null ? { failedDisables } : {}),
     lastPlanCreateCount,
   };
 }
@@ -322,37 +338,19 @@ export async function runSetupFeatureCrons(options = {}) {
       return 0;
     }
 
-    if (enabledSpecs.length === 0) {
+    let hostDispatchReady = true;
+    try {
+      ensureCronDirectDispatchImpl({ apply: !opts.dryRun });
+    } catch {
+      hostDispatchReady = false;
+    }
+
+    if (hostDispatchReady && enabledSpecs.length === 0) {
       const emptyPlan = { create: [], skip: [], update: [] };
       if (opts.json) {
         writeOutput(stdout, JSON.stringify({ dryRun: opts.dryRun, plan: emptyPlan, lastPlanCreateCount: 0 }, null, 2));
       } else {
         writeOutput(stdout, "[setup-feature-crons] no explicitly enabled feature owns a cron job — nothing to do.");
-      }
-      return 0;
-    }
-
-    try {
-      ensureCronDirectDispatchImpl({ apply: !opts.dryRun });
-    } catch {
-      if (opts.json) {
-        writeOutput(
-          stdout,
-          JSON.stringify(
-            buildJsonResult({
-              reason: "host-direct-dispatch-unavailable",
-              message: "required OpenClaw cron direct-dispatch patch unavailable; no cron jobs changed",
-              lastPlanCreateCount: enabledSpecs.length,
-            }),
-            null,
-            2,
-          ),
-        );
-      } else {
-        writeOutput(
-          stdout,
-          "[setup-feature-crons] required OpenClaw cron direct-dispatch patch unavailable — no cron jobs changed.",
-        );
       }
       return 0;
     }
@@ -401,6 +399,48 @@ export async function runSetupFeatureCrons(options = {}) {
         );
       } else {
         writeOutput(stdout, "[setup-feature-crons] could not parse cron list JSON — skipping.");
+      }
+      return 0;
+    }
+
+    if (!hostDispatchReady) {
+      const unsafeJobs = planUnsafeDirectCronDisables(existingJobs);
+      const results = [];
+      if (!opts.dryRun) {
+        for (const job of unsafeJobs) {
+          const result = openclawImpl(
+            ["cron", "edit", job.id, "--disable", "--no-deliver"],
+            15000,
+          );
+          results.push({
+            job: job.name,
+            action: "disable",
+            ok: result.ok,
+            stderr: result.ok ? undefined : result.stderr?.trim(),
+          });
+        }
+      }
+      const disabledJobs = opts.dryRun
+        ? []
+        : results.filter((result) => result.ok).map((result) => result.job);
+      const failedDisables = opts.dryRun
+        ? unsafeJobs.length
+        : results.filter((result) => !result.ok).length;
+      const payload = buildJsonResult({
+        reason: "host-direct-dispatch-unavailable",
+        message: "required OpenClaw cron direct-dispatch patch unavailable; active exact direct jobs were disabled",
+        disabledJobs,
+        wouldDisableJobs: opts.dryRun ? unsafeJobs.map((job) => job.name) : [],
+        failedDisables,
+        lastPlanCreateCount: enabledSpecs.length + failedDisables,
+      });
+      if (opts.json) {
+        writeOutput(stdout, JSON.stringify(payload, null, 2));
+      } else {
+        writeOutput(
+          stdout,
+          `[setup-feature-crons] required host dispatcher unavailable — disabled ${disabledJobs.length} exact direct job(s); ${failedDisables} remain unsafe.`,
+        );
       }
       return 0;
     }

@@ -133,7 +133,7 @@ import {
 } from "./lib/internal-cron-reply.js";
 import {
   applyCronPluginDirectDispatchPatch,
-  DEFAULT_OPENCLAW_DIST_DIR,
+  resolveOpenClawDistDir,
 } from "./patches/apply-cron-plugin-direct-dispatch.mjs";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
@@ -2700,10 +2700,11 @@ function getFeatureCronsSetupHint(baseDbPath) {
 function ensureCronDirectDispatchAtRegistration(api, options = {}) {
   const {
     applyImpl = applyCronPluginDirectDispatchPatch,
-    distDir = process.env.OPENCLAW_DIST_DIR || DEFAULT_OPENCLAW_DIST_DIR,
+    distDir,
   } = options;
   try {
-    const result = applyImpl(distDir);
+    const resolvedDistDir = distDir || resolveOpenClawDistDir();
+    const result = applyImpl(resolvedDistDir);
     api.logger?.info?.(`plur1bus-feature-crons: host direct dispatch ${result.status}`);
     return true;
   } catch (error) {
@@ -2721,11 +2722,16 @@ function ensureCronDirectDispatchAtRegistration(api, options = {}) {
  * gateway or the message flow.
  *
  * Throttled via the same marker file the doctor/status hint reads
- * (see shouldRunCronBootstrap): skipped when a run for the current plugin
- * version already happened in the last 20h, so a gateway that restarts
- * often doesn't re-spawn the setup script on every restart.
+ * (see shouldRunCronBootstrap): skipped when a successful run for the current
+ * plugin version happened in the last 20h. Host-patch failure forces the
+ * safety run regardless of the marker.
  */
-async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath, spawnImpl } = {}) {
+async function runDeferredFeatureCronBootstrap(api, {
+  cfg,
+  baseDbPath,
+  spawnImpl,
+  force = false,
+} = {}) {
   const markerPath = featureCronsMarkerPath(baseDbPath);
   let marker = null;
   try {
@@ -2734,7 +2740,7 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath, spawnImpl
     marker = null;
   }
 
-  if (!shouldRunCronBootstrap(marker, { pluginVersion: PLUGIN_VERSION })) {
+  if (!force && !shouldRunCronBootstrap(marker, { pluginVersion: PLUGIN_VERSION })) {
     api.logger?.debug?.("plur1bus-feature-crons: deferred bootstrap skipped (recent run recorded)");
     return;
   }
@@ -3560,9 +3566,9 @@ const plugin = {
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
     pluginLogger = api.logger;
-    if (!process.env.NODE_TEST_CONTEXT) {
-      ensureCronDirectDispatchAtRegistration(api);
-    }
+    const cronDirectDispatchReady = process.env.NODE_TEST_CONTEXT
+      ? true
+      : ensureCronDirectDispatchAtRegistration(api);
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
@@ -4637,7 +4643,10 @@ const plugin = {
     // depending on any of them running npm at all. See getFeatureCronsSetupHint
     // above and shouldRunCronBootstrap/featureCronsHintFromMarker in
     // lib/setup/feature-cron-bootstrap.js for the pure throttle/hint logic.
-    if (typeof api.on === "function" && cfg.featureCronSetup?.auto !== false) {
+    if (
+      typeof api.on === "function"
+      && (cfg.featureCronSetup?.auto !== false || !cronDirectDispatchReady)
+    ) {
       api.on(
         "gateway_start",
         () => {
@@ -4646,10 +4655,14 @@ const plugin = {
           // to it) before we spawn anything, and unref the timer so it can
           // never keep the process alive on its own.
           const timer = setTimeout(() => {
-            runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }).catch((err) => {
+            runDeferredFeatureCronBootstrap(api, {
+              cfg,
+              baseDbPath,
+              force: !cronDirectDispatchReady,
+            }).catch((err) => {
               api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap failed: ${err?.message || err}`);
             });
-          }, 90_000);
+          }, cronDirectDispatchReady ? 90_000 : 1_000);
           timer?.unref?.();
         },
         { timeoutMs: 5_000 },
