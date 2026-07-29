@@ -319,16 +319,6 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
         if (args[0] === "--version") {
           return { ok: true, stdout: "OpenClaw test", stderr: "", status: 0 };
         }
-        if (args.join(" ") === "gateway call config.get --json") {
-          return {
-            ok: true,
-            stdout: JSON.stringify(validCronConfigSnapshot({
-              pluginConfig: { criticalPush: { enabled: true } },
-            })),
-            stderr: "",
-            status: 0,
-          };
-        }
         if (args.join(" ") === "cron list --json --all") {
           return {
             ok: true,
@@ -362,7 +352,10 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
             status: 0,
           };
         }
-        if (args.join(" ") === "cron edit critical-main --disable --no-deliver") {
+        if (
+          args.join(" ")
+          === "cron edit critical-main --disable --name plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]"
+        ) {
           return { ok: true, stdout: "{}", stderr: "", status: 0 };
         }
         throw new Error(`unexpected OpenClaw call: ${args.join(" ")}`);
@@ -375,17 +368,80 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
 
     assert.equal(result.exitCode, 0);
     assert.equal(result.parsed.reason, "host-direct-dispatch-unavailable");
-    assert.equal(result.parsed.lastPlanCreateCount, 1);
+    assert.equal(result.parsed.lastPlanCreateCount, 7);
     assert.deepStrictEqual(
       calls.map((args) => args.join(" ")),
       [
         "--version",
-        "gateway call config.get --json",
         "cron list --json --all",
-        "cron edit critical-main --disable --no-deliver",
+        "cron edit critical-main --disable --name plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
       ],
     );
     assert.deepStrictEqual(result.parsed.disabledJobs, ["plur1bus classify-recent main"]);
+  });
+
+  it("restores only safety-marked exact jobs after the host patch is repaired", async () => {
+    const mutations = [];
+    const markedName =
+      "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]";
+    const result = await runJsonSetupDirect((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok", stderr: "", status: 0 };
+      if (args.join(" ") === "gateway call config.get --json") {
+        return {
+          ok: true,
+          stdout: JSON.stringify(validCronConfigSnapshot({
+            pluginConfig: { criticalPush: { enabled: true } },
+          })),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args.join(" ") === "cron list --json --all") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({
+            jobs: [{
+              id: "critical-main",
+              agentId: "main",
+              name: markedName,
+              enabled: false,
+              payload: { message: "/plur1bus internal classify-recent" },
+              delivery: { mode: "announce", channel: "telegram", to: "123" },
+            }],
+          }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "agents") {
+        return {
+          ok: true,
+          stdout: JSON.stringify([{
+            id: "main",
+            bindings: 1,
+            isDefault: true,
+            workspace: "/tmp/main",
+          }]),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && ["add", "edit"].includes(args[1])) {
+        mutations.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      throw new Error(`unexpected OpenClaw call: ${args.join(" ")}`);
+    });
+
+    assert.equal(result.exitCode, 0);
+    assert.deepStrictEqual(mutations, [[
+      "cron",
+      "edit",
+      "critical-main",
+      "--name",
+      "plur1bus classify-recent main",
+      "--enable",
+    ]]);
   });
 
   it("applies the host patch normally and only verifies it during dry-run", async () => {
@@ -1039,6 +1095,43 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
     });
 
     assert.equal(spawned, 1);
+  });
+
+  it("retries a forced safety run in the current process until setup is no longer skipped", async () => {
+    const baseDbPath = mkdtempSync(path.join(tmpdir(), "feature-cron-bootstrap-retry-"));
+    const waits = [];
+    let spawned = 0;
+
+    const result = await runDeferredFeatureCronBootstrap(makeApi(), {
+      cfg: {},
+      baseDbPath,
+      force: true,
+      safetyRetryDelaysMs: [0, 5, 10],
+      waitImpl: async (delayMs) => {
+        waits.push(delayMs);
+      },
+      spawnImpl: () => {
+        spawned += 1;
+        return fakeChild({
+          stdout: spawned === 1
+            ? JSON.stringify({
+              skipped: true,
+              reason: "host-direct-dispatch-unavailable",
+              lastPlanCreateCount: 7,
+            })
+            : JSON.stringify({
+              dryRun: false,
+              plan: { create: [], skip: [], update: [] },
+              lastPlanCreateCount: 0,
+            }),
+          closeCode: 0,
+        });
+      },
+    });
+
+    assert.equal(spawned, 2);
+    assert.deepStrictEqual(waits, [5]);
+    assert.deepStrictEqual(result, { ok: true, safetyPending: false, attempts: 2 });
   });
 
   it("writes the marker on a successful run (close code 0)", async () => {

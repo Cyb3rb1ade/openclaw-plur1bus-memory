@@ -59,11 +59,15 @@ zusätzlich vor der normalen Cron-Planung. Der aktive OpenClaw-Paketpfad wird
 aus dem laufenden Entry-Point oder dem `openclaw`-Executable auf `PATH`
 ermittelt; `OPENCLAW_DIST_DIR` bleibt als expliziter Override verfügbar.
 Fehlt die Schreibberechtigung oder passt die installierte OpenClaw-Struktur
-nicht zu den auditierten Ankern, liest der Setup-Prozess die Cron-Liste nur,
-um aktive, exakt identifizierte Direct-Feature-Jobs zu deaktivieren und ihre
-Delivery zu entfernen. Custom-Prompts bleiben unangetastet. Ein fehlgeschlagener
-Registrierungs-Patch erzwingt diesen Sicherheitslauf auch bei frischem Marker
-und deaktivierter Auto-Provisionierung. Backups sind an den SHA-256-Hash der
+nicht zu den auditierten Ankern, liest der Setup-Prozess vor jeder
+Config-Abhängigkeit die Cron-Liste nur, um aktive, exakt identifizierte
+Direct-Feature-Jobs zu deaktivieren. Er markiert deren Namen persistent und
+bewahrt die Delivery-Konfiguration. Nach erfolgreicher Patch-Reparatur werden
+nur diese markierten Jobs umbenannt und reaktiviert. Custom-Prompts bleiben
+unangetastet. Ein fehlgeschlagener Registrierungs-Patch erzwingt diesen
+Sicherheitslauf auch bei frischem Marker und deaktivierter Auto-Provisionierung;
+fehlgeschlagene CLI-, List- oder Edit-Schritte werden im laufenden
+Gateway-Prozess mit begrenztem Backoff wiederholt. Backups sind an den SHA-256-Hash der
 ungepatchten Runtime gebunden, sodass ein OpenClaw-Update keine veraltete
 Rollback-Datei wiederverwendet.
 

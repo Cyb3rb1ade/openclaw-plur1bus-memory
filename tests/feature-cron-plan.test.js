@@ -6,6 +6,8 @@ import {
   deriveAgentDelivery,
   deriveDeliveryFromChannelConfig,
   planMessageMigration,
+  planSafetyDisabledCronRecoveries,
+  planUnsafeDirectCronDisables,
   selectAgentsForCronSetup,
   selectEnabledFeatureCronSpecs,
   staggerPersonaEvolveSchedule,
@@ -52,6 +54,56 @@ describe("REQUIRED_FEATURE_CRONS", () => {
     assert.strictEqual(classifier.schedule.kind, "every");
     assert.strictEqual(classifier.schedule.everyMs, 30 * 60 * 1000);
     assert.strictEqual(classifier.message, classifier.command);
+  });
+});
+
+describe("direct feature-cron safety lifecycle", () => {
+  const classifier = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "classify-recent");
+
+  it("marks only an active exact owned job and preserves recovery identity", () => {
+    const jobs = [
+      {
+        id: "owned",
+        agentId: "main",
+        name: "plur1bus classify-recent main",
+        enabled: true,
+        payload: { message: "/plur1bus internal classify-recent" },
+      },
+      {
+        id: "custom",
+        agentId: "main",
+        name: "plur1bus classify-recent custom",
+        enabled: true,
+        payload: { message: "/plur1bus internal classify-recent\ncustom" },
+      },
+    ];
+
+    assert.deepStrictEqual(planUnsafeDirectCronDisables(jobs), [{
+      id: "owned",
+      name: "plur1bus classify-recent main",
+      safetyName:
+        "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+      disable: true,
+    }]);
+  });
+
+  it("recovers only a disabled exact marker whose feature remains enabled", () => {
+    const jobs = [{
+      id: "owned",
+      agentId: "main",
+      name:
+        "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+      enabled: false,
+      payload: { message: "/plur1bus internal classify-recent" },
+    }];
+
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries(jobs, [classifier]), [{
+      id: "owned",
+      name: "plur1bus classify-recent main",
+      rename: "plur1bus classify-recent main",
+      enable: true,
+    }]);
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries(jobs, []), []);
   });
 });
 
