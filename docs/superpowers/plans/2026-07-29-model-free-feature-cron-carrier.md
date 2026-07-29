@@ -81,17 +81,17 @@ to their exact commands.
 - Modify: `patches/apply-memory-patches.sh`
 - Modify: `scripts/install-memory-system.sh`
 
-- [ ] Add failing tests for structural upgrade, exact-command allowlisting,
+- [x] Add failing tests for structural upgrade, exact-command allowlisting,
       complete ReplyPayload preservation, error propagation, idempotence,
       rollback backup, patch-entrypoint wiring, and remote-installer copying.
-- [ ] Install the dispatcher into an audited unpatched OpenClaw bundle or
+- [x] Install the dispatcher into an audited unpatched OpenClaw bundle or
       upgrade the existing PLUR1BUS dispatcher; fail closed when required
       anchors or runtime exports are absent.
-- [ ] Route direct feature replies through `finalizeCronRun()` and return before
+- [x] Route direct feature replies through `finalizeCronRun()` and return before
       `executeCronRun()`.
-- [ ] Preserve the legacy carrier behavior for multiline/custom prompts and
+- [x] Preserve the legacy carrier behavior for multiline/custom prompts and
       all unrelated commands.
-- [ ] Ship the patch in release/deploy manifests, reapply it at gateway
+- [x] Ship the patch in release/deploy manifests, reapply it at gateway
       registration, and gate cron provisioning/migration on readiness.
-- [ ] Apply the transformer to a copy of the production runtime bundle and run
+- [x] Apply the transformer to a copy of the production runtime bundle and run
       `node --check` on the result.

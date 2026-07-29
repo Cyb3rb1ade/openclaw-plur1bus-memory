@@ -55,9 +55,15 @@ fehlgeschlagenen Cron-Lauf.
 
 Der Patch gehört zum Release-Paket. Die Plugin-Registrierung wendet ihn bei
 jedem Gateway-Start erneut an; der Feature-Cron-Setup-Prozess prüft ihn
-zusätzlich vor jedem Cron-Read oder jeder Mutation. Fehlt die Schreibberechtigung
-oder passt die installierte OpenClaw-Struktur nicht zu den auditierten Ankern,
-bleibt das Cron-Setup fail-closed. Backups sind an den SHA-256-Hash der
+zusätzlich vor der normalen Cron-Planung. Der aktive OpenClaw-Paketpfad wird
+aus dem laufenden Entry-Point oder dem `openclaw`-Executable auf `PATH`
+ermittelt; `OPENCLAW_DIST_DIR` bleibt als expliziter Override verfügbar.
+Fehlt die Schreibberechtigung oder passt die installierte OpenClaw-Struktur
+nicht zu den auditierten Ankern, liest der Setup-Prozess die Cron-Liste nur,
+um aktive, exakt identifizierte Direct-Feature-Jobs zu deaktivieren und ihre
+Delivery zu entfernen. Custom-Prompts bleiben unangetastet. Ein fehlgeschlagener
+Registrierungs-Patch erzwingt diesen Sicherheitslauf auch bei frischem Marker
+und deaktivierter Auto-Provisionierung. Backups sind an den SHA-256-Hash der
 ungepatchten Runtime gebunden, sodass ein OpenClaw-Update keine veraltete
 Rollback-Datei wiederverwendet.
 

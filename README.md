@@ -210,13 +210,13 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 
 ### Afterthoughts (delayed follow-ups)
 
-When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command itself returns either the composed text or OpenClaw's `NO_REPLY` suppression token. The shipped host patch is applied or verified during gateway registration and again before automatic cron provisioning; it finalizes this exact feature command through OpenClaw's normal delivery path before `executeCronRun()`. If the OpenClaw runtime cannot be patched, setup changes no cron job. An exact command without that host boundary does not prevent an outer model turn.
+When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command itself returns either the composed text or OpenClaw's `NO_REPLY` suppression token. The shipped host patch is applied or verified during gateway registration and again before automatic cron provisioning; it finalizes this exact feature command through OpenClaw's normal delivery path before `executeCronRun()`. If the OpenClaw runtime cannot be patched, setup disables active, exactly owned direct afterthought/classifier jobs and removes their delivery until the host boundary is restored. An exact command without that host boundary does not prevent an outer model turn.
 
 Setting this cron up is automatic when its raw feature gates are explicitly enabled — see below.
 
 #### Multi-agent feature-cron automation
 
-`node scripts/setup-feature-crons.mjs` loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, installs or verifies the host dispatcher patch, discovers bound agents, and idempotently plans up to seven jobs per agent. It fails closed without reading or mutating cron state when the gateway call fails, JSON is invalid, `valid !== true`, `sourceConfig`/`runtimeConfig` is not a plain object, or the host patch is unavailable. It never falls back to local config files or alternate raw/resolved fields.
+`node scripts/setup-feature-crons.mjs` loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, installs or verifies the host dispatcher patch, discovers bound agents, and idempotently plans up to seven jobs per agent. It fails closed without reading or mutating cron state when the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. If the host patch is unavailable, it reads cron state only to disable active jobs whose raw payload and canonical PLUR1BUS identity exactly match the two direct feature jobs; custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
 
 The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
 
@@ -231,7 +231,7 @@ The two configuration views have separate roles: `sourceConfig` alone controls e
 Every job runs with `--agent <agentId> --session isolated`. Provisioning does not set model, fallback, token, auth, API, or other credential overrides, so OpenClaw's default LLM and per-agent credentials remain authoritative. The script remains idempotent and exit-0 for install safety, so it can run from any of these channels:
 
 - **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`).
-- **Gateway startup (deferred bootstrap)** — a `gateway_start` handler in `index.js` schedules a one-off, non-blocking run 90 seconds after every gateway start (long enough for the `openclaw` CLI to be able to talk to the now-running gateway). This is the channel that actually covers the *documented* install path (`git clone` + `rsync` into `~/.openclaw/extensions/...`, which never runs `npm install`) as well as ClawHub installs, whose lifecycle hooks aren't guaranteed to run `npm` either — so it's the one channel that's install-method-agnostic. Throttled to at most once per ~20h (tracked via the same marker file the doctor/status hint reads, `.feature-crons-setup.json` under `baseDbPath`) so a gateway that restarts frequently doesn't repeatedly re-spawn the setup script; a plugin version bump forces an earlier re-run. Disable with `"featureCronSetup": { "auto": false }` in the plugin config.
+- **Gateway startup (deferred bootstrap)** — a `gateway_start` handler in `index.js` schedules a one-off, non-blocking run 90 seconds after every healthy gateway start (long enough for the `openclaw` CLI to be able to talk to the now-running gateway). If host-patch registration fails, the safety run is forced after one second, even when automatic provisioning is disabled, so already provisioned direct jobs can be disabled. This channel covers the *documented* install path (`git clone` + `rsync` into `~/.openclaw/extensions/...`, which never runs `npm install`) as well as ClawHub installs. Healthy runs are throttled to at most once per ~20h; pending work and plugin version changes retry earlier. Disable normal provisioning with `"featureCronSetup": { "auto": false }`; the fail-closed safety run remains active.
 - **Manual** — `/plur1bus setup crons` (optionally `--agent <id>`/`--account <acct>` to force single-agent mode).
 
 The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-derived**, not "have we shown this before": it reads the marker file and only surfaces a hint when setup has never run, ran under an older plugin version, or ran but couldn't create everything it planned (some crons are still pending — e.g. no delivery target could be derived). It's silent once a current-version run reports nothing left to create.
@@ -285,9 +285,13 @@ systemctl --user restart openclaw-gateway
 The package includes `patches/apply-cron-plugin-direct-dispatch.mjs`. Gateway
 registration reapplies it on every start so OpenClaw upgrades cannot silently
 restore the model-backed carrier. The patcher writes an atomic, source-hash
-bound rollback copy beside the changed runtime bundle. Automatic feature-cron
-setup remains disabled when the runtime is not writable or its audited
-structure cannot be recognized.
+bound rollback copy beside the changed runtime bundle. It discovers the active
+OpenClaw package from the running entry point or the `openclaw` executable on
+`PATH` (with `OPENCLAW_DIST_DIR` as an explicit override), so global prefixes,
+NVM, Homebrew-style layouts, and user installs are not tied to `/usr/lib`.
+When the runtime is not writable or its audited structure cannot be recognized,
+automatic setup disables exact owned direct jobs rather than allowing them to
+fall back to the model carrier.
 
 Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
 

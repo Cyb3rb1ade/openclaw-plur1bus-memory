@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +17,7 @@ import {
   applyCronPluginDirectDispatchPatch,
   isCronPluginDirectDispatchReady,
   patchCronPluginDirectDispatchSource,
+  resolveOpenClawDistDir,
 } from "../patches/apply-cron-plugin-direct-dispatch.mjs";
 
 const workDirs = [];
@@ -137,6 +140,44 @@ afterEach(() => {
 });
 
 describe("cron plugin direct-dispatch host patch", () => {
+  it("discovers a non-standard OpenClaw dist from the active CLI symlink", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "plur1bus-openclaw-prefix-"));
+    workDirs.push(root);
+    const packageRoot = path.join(root, "custom", "lib", "node_modules", "openclaw");
+    const distDir = path.join(packageRoot, "dist");
+    const binDir = path.join(root, "bin");
+    mkdirSync(distDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+    writeFileSync(path.join(packageRoot, "openclaw.mjs"), "export {};\n");
+    symlinkSync(path.join(packageRoot, "openclaw.mjs"), path.join(binDir, "openclaw"));
+
+    assert.equal(
+      resolveOpenClawDistDir({ entryPath: null, pathEnv: binDir, standardCandidates: [] }),
+      distDir,
+    );
+  });
+
+  it("discovers OpenClaw from the running entry and preserves an explicit override", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "plur1bus-openclaw-entry-"));
+    workDirs.push(root);
+    const packageRoot = path.join(root, "openclaw");
+    const distDir = path.join(packageRoot, "dist");
+    mkdirSync(distDir, { recursive: true });
+    writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+    const entry = path.join(distDir, "index.js");
+    writeFileSync(entry, "export {};\n");
+
+    assert.equal(
+      resolveOpenClawDistDir({ entryPath: entry, pathEnv: "", standardCandidates: [] }),
+      distDir,
+    );
+    assert.equal(
+      resolveOpenClawDistDir({ override: "/explicit/openclaw/dist" }),
+      "/explicit/openclaw/dist",
+    );
+  });
+
   it("upgrades the existing dispatcher before the model executor", () => {
     const patched = patchCronPluginDirectDispatchSource(fixtureSource());
 
