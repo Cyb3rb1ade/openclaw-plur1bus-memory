@@ -1,0 +1,136 @@
+# Modellfreier Carrier für PLUR1BUS-Feature-Crons
+
+## Ausgangslage
+
+Die Feature-Crons `afterthought` und `classify-recent` starten derzeit mit
+einer mehrzeiligen Agent-Nachricht. Nach dem eigentlichen Slash-Command folgt
+ein natürlichsprachiger „Delivery contract“.
+
+Die Analyse des installierten OpenClaw-Runtimes zeigte zusätzlich eine
+entscheidende Host-Eigenschaft: Der vorhandene
+`plur1bus-cron-cmd-dispatch` ruft zwar den Plugin-Handler auf, hängt dessen
+Text aber nur an `commandBody` an und startet danach auch bei einem exakten
+Command immer `executeCronRun()`. Exakte Payloads allein beseitigen den
+äußeren Agent-/Modell-Turn daher nicht.
+
+Auf dem untersuchten Echtsystem verursachten sechs halbstündliche Jobs dadurch
+mehr als sechs Millionen Input-Tokens pro Tag, obwohl die Läufe nahezu immer
+`NO_REPLY` ergaben.
+
+## Ziel
+
+Die bestehenden Features und ihre Semantik bleiben erhalten:
+
+- `classify-recent` läuft weiterhin alle 30 Minuten, damit sein
+  30-Minuten-Suchfenster lückenlos bleibt.
+- `afterthought` läuft weiterhin alle 30 Minuten.
+- Feature-interne LLM-Aufrufe bleiben möglich, wenn der Job tatsächlich einen
+  Kandidaten verarbeiten muss.
+- Die äußere Agent-/Modell-Runde zur Interpretation des Job-Ergebnisses
+  entfällt vollständig.
+
+## Design
+
+Die Cron-Payload besteht exakt aus dem registrierten Plugin-Command:
+
+```text
+/plur1bus internal afterthought
+/plur1bus internal classify-recent
+```
+
+Ein idempotenter Host-Patch installiert oder erweitert den
+PLUR1BUS-Cron-Dispatcher.
+Nur wenn die gesamte Payload exakt einem der beiden Feature-Commands
+entspricht, wird der Plugin-Handler direkt ausgeführt. Sein vollständiger
+`ReplyPayload` wird anschließend als modellfreies Ausführungsergebnis an
+OpenClaws bestehendes `finalizeCronRun()` übergeben. Diese Finalisierung
+übernimmt Zustellung, `NO_REPLY`-Unterdrückung, strukturierte Präsentationen,
+Cron-Status, Persistenz und Cleanup. Danach kehrt der Cron-Lauf zurück, bevor
+`executeCronRun()` erreicht wird.
+
+Mehrzeilige oder benutzerdefinierte Prompts sowie andere Commands behalten den
+bisherigen Pfad. Handler- oder Finalisierungsfehler werden für die beiden
+direkten Feature-Commands nicht mehr verschluckt, sondern ergeben einen
+fehlgeschlagenen Cron-Lauf.
+
+Der Patch gehört zum Release-Paket. Die Plugin-Registrierung wendet ihn bei
+jedem Gateway-Start erneut an; der Feature-Cron-Setup-Prozess prüft ihn
+zusätzlich vor der normalen Cron-Planung. Der aktive OpenClaw-Paketpfad wird
+aus dem laufenden Entry-Point oder dem `openclaw`-Executable auf `PATH`
+ermittelt; `OPENCLAW_DIST_DIR` bleibt als expliziter Override verfügbar.
+Fehlt die Schreibberechtigung oder passt die installierte OpenClaw-Struktur
+nicht zu den auditierten Ankern, liest der Setup-Prozess vor jeder
+Config-Abhängigkeit die Cron-Liste nur, um aktive, exakt identifizierte
+Direct-Feature-Jobs zu deaktivieren. Er markiert deren Namen persistent und
+bewahrt die Delivery-Konfiguration. Nach erfolgreicher Patch-Reparatur werden
+nur diese markierten Jobs innerhalb des aktuellen gebundenen Agent-Plans,
+mit validierter Delivery und weiterhin aktivem Feature in einem Edit umbenannt
+und reaktiviert. Custom-Prompts bleiben
+unangetastet. Ein fehlgeschlagener Registrierungs-Patch erzwingt diesen
+Sicherheitslauf auch bei frischem Marker und deaktivierter Auto-Provisionierung.
+Zusätzlich registriert das Plugin in diesem Fehlerfall sofort einen
+`before_agent_reply`-Admission-Guard. Er beansprucht ausschließlich Cron-Turns
+mit einem der zwei exakten Commands, einem exakt von PLUR1BUS ausgelieferten
+Legacy-Carrier oder der präzisen `[PLUR1BUS]`-Ergebnishülle, die der vorherige
+Host-Dispatcher vor seinem fehlerhaften Modell-Fallthrough anhängt, und
+antwortet vor der Modellauflösung mit `NO_REPLY`. Damit ist
+auch das Zeitfenster vor `gateway_start` modellfrei; Präfixe, Suffixe,
+Whitespace-Varianten und Custom-Prompts werden nicht beansprucht. Die Features
+bleiben für diesen Gateway-Prozess sicher pausiert und werden nach erfolgreichem
+Patch plus Neustart kontrolliert wieder aktiviert.
+Da OpenClaw `before_agent_reply` für nicht gebündelte Plugins nur mit
+`plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true`
+registriert, ist diese Berechtigung Teil des verbindlichen
+Installationsvertrags. Die Minimal-Konfiguration dokumentiert sie; der
+Installer stellt sie in allen Feature-Policy-Modi her und bewahrt alle anderen
+Hook- und Feature-Entscheidungen.
+Der awaited `gateway_start`-Hook deaktiviert passende Jobs zuerst direkt über
+OpenClaws In-Process-Cron-Service, bevor der CLI-Abgleich startet;
+fehlgeschlagene CLI-, List-, Edit- oder Recovery-Schritte werden im laufenden
+Gateway-Prozess mit begrenztem Backoff wiederholt. Backups sind an den SHA-256-Hash der
+ungepatchten Runtime gebunden, sodass ein OpenClaw-Update keine veraltete
+Rollback-Datei wiederverwendet.
+
+Der Handler übersetzt die internen Job-Ergebnisse im Cron-Kontext selbst in
+eine zustellbare Antwort:
+
+- Afterthought mit `text`: Text unverändert zurückgeben.
+- Afterthought ohne Text und regulärem Skip: `NO_REPLY`.
+- Classifier mit Push-Nachrichten: deren Texte in stabiler Reihenfolge als
+  eine Nachricht zurückgeben, getrennt durch Leerzeilen; Callback-Buttons
+  bleiben als strukturierte Präsentation erhalten.
+- Classifier ohne Push-Nachricht: `NO_REPLY`.
+- Expliziter technischer Jobfehler: Handler fehlschlagen lassen, damit der
+  Cron-Lauf als Fehler sichtbar wird.
+- Teilfehler mit bereits erzeugten Pushes: Pushes zustellen und einen knappen
+  Warnhinweis anhängen, damit bereits hochgezählte Pushes nicht verloren gehen
+  und der Teilfehler dennoch sichtbar bleibt.
+
+Manuelle, nicht aus einem Cron stammende `internal`-Aufrufe behalten die
+bisherige JSON-Diagnoseausgabe.
+
+## Migration bestehender Jobs
+
+Der Feature-Cron-Planner erkennt ausschließlich die bekannten, von PLUR1BUS
+ausgelieferten Delivery-Contract-Payloads und plant für sie ein `cron edit`
+auf den exakten Command. Beliebige benutzerdefinierte Prompts werden nicht
+überschrieben.
+
+Neu angelegte Jobs verwenden ebenfalls sofort die exakte Command-Payload.
+
+## Nicht Teil dieser Änderung
+
+- keine Änderung der Cron-Frequenz
+- kein `thinking: off` (insbesondere nicht für Kimi)
+- keine Modellwahl für Afterthought
+- keine Light-Context- oder Tool-Allowlist-Konfiguration
+- keine Mutation des Echtsystems
+
+## Verifikation
+
+Regressionstests decken die direkte Ergebnisübersetzung, Fehlerpropagation,
+exakte Cron-Payloads, die Migration bestehender Standard-Payloads sowie den
+idempotenten Host-Patch ab. Der Transformer wird zusätzlich gegen eine Kopie
+des tatsächlich installierten OpenClaw-Bundles angewandt und mit
+`node --check` validiert. Anschließend laufen die betroffenen Tests sowie die
+vollständige Testsuite.

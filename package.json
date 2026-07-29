@@ -21,6 +21,7 @@
   "files": [
     "index.js",
     "lib/",
+    "patches/apply-cron-plugin-direct-dispatch.mjs",
     "scripts/",
     "docs/audits/",
     "docs/runbooks/",

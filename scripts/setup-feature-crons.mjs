@@ -4,10 +4,11 @@
  * explicitly enabled PLUR1BUS feature crons for the current OpenClaw
  * installation.
  *
- * Runs entirely as the invoking user via the `openclaw` CLI (which talks to
- * the already-running gateway over its local socket/token) — no root, no
- * sudo, no system paths. Safe to run from `npm install` (postinstall), a
- * ClawHub update, or manually.
+ * Runs as the invoking user. Before any cron read or mutation it installs or
+ * verifies the shipped OpenClaw host dispatcher patch, then uses the
+ * `openclaw` CLI over its local socket/token. If the runtime path is not
+ * writable, setup remains fail-closed by disabling only active jobs with an
+ * exact PLUR1BUS direct-feature identity and payload.
  *
  * Contract: this script must NEVER fail an install. If the `openclaw` CLI
  * is missing or the gateway is unreachable, it prints a friendly note and
@@ -20,6 +21,8 @@
 
 import {
   planFeatureCrons,
+  planSafetyDisabledCronRecoveries,
+  planUnsafeDirectCronDisables,
   REQUIRED_FEATURE_CRONS,
   selectAgentsForCronSetup,
   selectEnabledFeatureCronSpecs,
@@ -29,6 +32,20 @@ import { validateInput } from "../lib/input-limits.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
+import {
+  applyCronPluginDirectDispatchPatch,
+  isCronPluginDirectDispatchReady,
+  resolveOpenClawDistDir,
+} from "../patches/apply-cron-plugin-direct-dispatch.mjs";
+
+function ensureCronDirectDispatch({ apply }) {
+  const distDir = resolveOpenClawDistDir();
+  if (apply) return applyCronPluginDirectDispatchPatch(distDir);
+  if (!isCronPluginDirectDispatchReady(distDir)) {
+    throw new Error("PLUR1BUS cron direct dispatch is not installed");
+  }
+  return { status: "already-patched" };
+}
 
 function parseArgs(argv) {
   const opts = { dryRun: false, agent: null, account: null, json: false, inputError: false };
@@ -125,7 +142,40 @@ function countPendingCreates(plan) {
   return failedCreates + disabledDeliveryCreates;
 }
 
-function buildJsonResult({ reason, message, configError = null, dryRun = false, plan = null, results = null, lastPlanCreateCount = 0 }) {
+function mergeCronUpdates(updates, recoveries) {
+  const merged = [];
+  const indexes = new Map();
+  for (const update of [...updates, ...recoveries]) {
+    if (!update?.id) continue;
+    const existingIndex = indexes.get(update.id);
+    if (existingIndex === undefined) {
+      indexes.set(update.id, merged.length);
+      merged.push({ ...update });
+      continue;
+    }
+    const existing = merged[existingIndex];
+    const combined = { ...existing, ...update };
+    if (existing.disable || existing.noDeliver || update.disable || update.noDeliver) {
+      delete combined.enable;
+      delete combined.rename;
+    }
+    merged[existingIndex] = combined;
+  }
+  return merged;
+}
+
+function buildJsonResult({
+  reason,
+  message,
+  configError = null,
+  dryRun = false,
+  plan = null,
+  results = null,
+  disabledJobs = null,
+  wouldDisableJobs = null,
+  failedDisables = null,
+  lastPlanCreateCount = 0,
+}) {
   return {
     ok: false,
     dryRun,
@@ -135,6 +185,9 @@ function buildJsonResult({ reason, message, configError = null, dryRun = false, 
     ...(configError ? { configError } : {}),
     ...(plan ? { plan } : {}),
     ...(results ? { results } : {}),
+    ...(disabledJobs ? { disabledJobs } : {}),
+    ...(wouldDisableJobs ? { wouldDisableJobs } : {}),
+    ...(failedDisables !== null ? { failedDisables } : {}),
     lastPlanCreateCount,
   };
 }
@@ -205,6 +258,7 @@ function discoverAgents(openclawImpl = openclaw) {
  * @param {{
  *   argv?: string[],
  *   openclawImpl?: (args: string[], timeout?: number) => {ok: boolean, stdout?: string, stderr?: string, status?: number|null, error?: Error|undefined},
+ *   ensureCronDirectDispatchImpl?: (options: {apply: boolean}) => object,
  *   stdout?: NodeJS.WritableStream,
  *   stderr?: NodeJS.WritableStream
  * }} [options]
@@ -214,6 +268,7 @@ export async function runSetupFeatureCrons(options = {}) {
   const {
     argv = process.argv.slice(2),
     openclawImpl = openclaw,
+    ensureCronDirectDispatchImpl = ensureCronDirectDispatch,
     stdout = process.stdout,
   } = options;
   const opts = parseArgs(argv);
@@ -256,6 +311,88 @@ export async function runSetupFeatureCrons(options = {}) {
         );
       } else {
         writeOutput(stdout, "[setup-feature-crons] invalid or missing --agent/--account value — no cron jobs changed.");
+      }
+      return 0;
+    }
+
+    let hostDispatchReady = true;
+    try {
+      ensureCronDirectDispatchImpl({ apply: !opts.dryRun });
+    } catch {
+      hostDispatchReady = false;
+    }
+
+    if (!hostDispatchReady) {
+      const list = openclawImpl(["cron", "list", "--json", "--all"], 15000);
+      let existingJobs = null;
+      if (list.ok) {
+        try {
+          const parsed = JSON.parse(list.stdout);
+          existingJobs = Array.isArray(parsed)
+            ? parsed
+            : Array.isArray(parsed?.jobs)
+              ? parsed.jobs
+              : [];
+        } catch {
+          existingJobs = null;
+        }
+      }
+
+      if (!existingJobs) {
+        const reason = list.ok ? "cron-list-parse-failed" : "cron-list-failed";
+        const payload = buildJsonResult({
+          reason,
+          message: "host dispatcher unavailable and cron state could not be inspected safely",
+          lastPlanCreateCount: pendingByDefault,
+        });
+        if (opts.json) {
+          writeOutput(stdout, JSON.stringify(payload, null, 2));
+        } else {
+          writeOutput(
+            stdout,
+            "[setup-feature-crons] host dispatcher unavailable and cron state could not be inspected — safety retry required.",
+          );
+        }
+        return 0;
+      }
+
+      const unsafeJobs = planUnsafeDirectCronDisables(existingJobs);
+      const results = [];
+      if (!opts.dryRun) {
+        for (const job of unsafeJobs) {
+          const result = openclawImpl(
+            ["cron", "edit", job.id, "--disable", "--name", job.safetyName],
+            15000,
+          );
+          results.push({
+            job: job.name,
+            action: "disable",
+            ok: result.ok,
+            stderr: result.ok ? undefined : result.stderr?.trim(),
+          });
+        }
+      }
+      const disabledJobs = opts.dryRun
+        ? []
+        : results.filter((result) => result.ok).map((result) => result.job);
+      const failedDisables = opts.dryRun
+        ? unsafeJobs.length
+        : results.filter((result) => !result.ok).length;
+      const payload = buildJsonResult({
+        reason: "host-direct-dispatch-unavailable",
+        message: "required OpenClaw cron direct-dispatch patch unavailable; active exact direct jobs were safety-disabled",
+        disabledJobs,
+        wouldDisableJobs: opts.dryRun ? unsafeJobs.map((job) => job.name) : [],
+        failedDisables,
+        lastPlanCreateCount: pendingByDefault + failedDisables,
+      });
+      if (opts.json) {
+        writeOutput(stdout, JSON.stringify(payload, null, 2));
+      } else {
+        writeOutput(
+          stdout,
+          `[setup-feature-crons] required host dispatcher unavailable — safety-disabled ${disabledJobs.length} exact direct job(s); ${failedDisables} remain unsafe.`,
+        );
       }
       return 0;
     }
@@ -400,7 +537,12 @@ export async function runSetupFeatureCrons(options = {}) {
     // dry-run/nichts-zu-tun dieses hier, sonst erst das Ergebnis-Objekt nach
     // den cron-add-Aufrufen (vorher wären es zwei konkatenierte Objekte, die
     // der /plur1bus-setup-crons-Parser nicht lesen kann).
-    const updates = Array.isArray(plan.update) ? plan.update : [];
+    const recoveries = planSafetyDisabledCronRecoveries(plan.skip);
+    const updates = mergeCronUpdates(
+      Array.isArray(plan.update) ? plan.update : [],
+      recoveries,
+    );
+    plan = { ...plan, update: updates };
     const nothingToDo = plan.create.length === 0 && updates.length === 0;
 
     if (opts.json) {
@@ -417,7 +559,8 @@ export async function runSetupFeatureCrons(options = {}) {
         if (c.hint) writeOutput(stdout, `         hint: ${c.hint}`);
       }
       for (const u of updates) {
-        writeOutput(stdout, `  ${opts.dryRun ? "WOULD-UPDATE" : "UPDATE"}  ${u.name}  (contract migration)`);
+        const reason = u.enable ? "safety recovery" : "contract migration";
+        writeOutput(stdout, `  ${opts.dryRun ? "WOULD-UPDATE" : "UPDATE"}  ${u.name}  (${reason})`);
       }
       if (nothingToDo) {
         writeOutput(stdout, "  Nothing to do — all feature crons already present.");
@@ -450,14 +593,22 @@ export async function runSetupFeatureCrons(options = {}) {
     // versucht.
     for (const u of updates) {
       const editArgs = ["cron", "edit", u.id];
+      if (typeof u.rename === "string") editArgs.push("--name", u.rename);
       if (typeof u.message === "string") editArgs.push("--message", u.message);
+      if (u.enable) editArgs.push("--enable");
       if (u.disable) editArgs.push("--disable");
       if (u.noDeliver) editArgs.push("--no-deliver");
       const r = openclawImpl(editArgs, 15000);
-      results.push({ job: u.name, action: "update", ok: r.ok, stderr: r.ok ? undefined : r.stderr?.trim() });
+      results.push({
+        job: u.name,
+        action: u.enable ? "safety-recovery" : "update",
+        ok: r.ok,
+        stderr: r.ok ? undefined : r.stderr?.trim(),
+      });
       if (!opts.json) {
+        const reason = u.enable ? "safety recovery" : "contract migration";
         if (r.ok) {
-          writeOutput(stdout, `  ✓ updated: ${u.name} (contract migration)`);
+          writeOutput(stdout, `  ✓ updated: ${u.name} (${reason})`);
         } else {
           writeOutput(stdout, `  ⚠ failed to update: ${u.name} — ${r.stderr?.trim() || "unknown error"}`);
           writeOutput(stdout, "    (will retry automatically next run — safe to ignore)");
