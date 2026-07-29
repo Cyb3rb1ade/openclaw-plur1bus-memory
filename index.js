@@ -2731,6 +2731,8 @@ async function runDeferredFeatureCronBootstrap(api, {
   baseDbPath,
   spawnImpl,
   force = false,
+  safetyRetryDelaysMs = [0, 1_000, 5_000, 30_000, 120_000, 600_000],
+  waitImpl,
 } = {}) {
   const markerPath = featureCronsMarkerPath(baseDbPath);
   let marker = null;
@@ -2742,70 +2744,92 @@ async function runDeferredFeatureCronBootstrap(api, {
 
   if (!force && !shouldRunCronBootstrap(marker, { pluginVersion: PLUGIN_VERSION })) {
     api.logger?.debug?.("plur1bus-feature-crons: deferred bootstrap skipped (recent run recorded)");
-    return;
+    return { ok: true, safetyPending: false, attempts: 0 };
   }
 
   const scriptPath = join(__pluginDir, "scripts", "setup-feature-crons.mjs");
-  let stdout = "";
-  let ok = false;
-  try {
-    let child;
-    if (spawnImpl) {
-      child = spawnImpl(process.execPath, [scriptPath, "--json"], {
-        cwd: __pluginDir,
-        detached: false,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } else {
-      const { spawn } = await import("node:child_process");
-      child = spawn(process.execPath, [scriptPath, "--json"], {
-        cwd: __pluginDir,
-        detached: false,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    }
-    ok = await new Promise((resolvePromise) => {
-      child.stdout?.on("data", (chunk) => { stdout += chunk; });
-      // stderr wird nicht ausgewertet, muss aber gedraint werden — ein
-      // voller Pipe-Buffer würde das Kind blockieren und 'close' nie feuern.
-      child.stderr?.resume();
-      child.on("error", () => resolvePromise(false));
-      child.on("close", (code) => resolvePromise(code === 0));
-    });
-  } catch (err) {
-    api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap spawn failed: ${err?.message || err}`);
-  }
+  const retrySchedule = force && Array.isArray(safetyRetryDelaysMs) && safetyRetryDelaysMs.length > 0
+    ? safetyRetryDelaysMs
+    : [0];
+  const waitForRetry = waitImpl || ((delayMs) => new Promise((resolvePromise) => {
+    const timer = setTimeout(resolvePromise, delayMs);
+    timer?.unref?.();
+  }));
 
-  // Marker is written ONLY on a successful run (spawn exited 0). On failure
-  // we leave any existing marker untouched (log only) so shouldRunCronBootstrap
-  // retries at the next gateway start instead of throttling for 20h while the
-  // doctor/status hint keeps nagging about a run that never actually happened.
-  if (ok) {
-    const lastPlanCreateCount = parseFeatureCronBootstrapLastPlanCreateCount(stdout);
+  for (let attemptIndex = 0; attemptIndex < retrySchedule.length; attemptIndex += 1) {
+    const delayMs = retrySchedule[attemptIndex];
+    if (attemptIndex > 0 && delayMs > 0) await waitForRetry(delayMs);
+
+    let stdout = "";
+    let ok = false;
     try {
-      writeJsonAtomic(
-        markerPath,
-        {
-          pluginVersion: PLUGIN_VERSION,
-          lastRunAt: new Date().toISOString(),
-          ...(lastPlanCreateCount !== undefined ? { lastPlanCreateCount } : {}),
-        },
-        { pretty: true },
-      );
+      let child;
+      if (spawnImpl) {
+        child = spawnImpl(process.execPath, [scriptPath, "--json"], {
+          cwd: __pluginDir,
+          detached: false,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } else {
+        const { spawn } = await import("node:child_process");
+        child = spawn(process.execPath, [scriptPath, "--json"], {
+          cwd: __pluginDir,
+          detached: false,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      }
+      ok = await new Promise((resolvePromise) => {
+        child.stdout?.on("data", (chunk) => { stdout += chunk; });
+        child.stderr?.resume();
+        child.on("error", () => resolvePromise(false));
+        child.on("close", (code) => resolvePromise(code === 0));
+      });
     } catch (err) {
-      api.logger?.debug?.(`plur1bus-feature-crons: marker write failed: ${err?.message || err}`);
+      api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap spawn failed: ${err?.message || err}`);
     }
 
-    // Cache is process-lifetime; invalidate it so the next doctor/status call
-    // re-reads the marker we just wrote instead of an earlier (or absent) hint.
-    _featureCronsHintCache = undefined;
+    let parsedResult = null;
+    try {
+      parsedResult = stdout.trim() ? JSON.parse(stdout.trim()) : null;
+    } catch {
+      parsedResult = null;
+    }
 
-    api.logger?.info?.(
-      `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
-    );
-  } else {
-    api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap failed — leaving marker untouched so it retries next start");
+    if (ok) {
+      const lastPlanCreateCount = parseFeatureCronBootstrapLastPlanCreateCount(stdout);
+      try {
+        writeJsonAtomic(
+          markerPath,
+          {
+            pluginVersion: PLUGIN_VERSION,
+            lastRunAt: new Date().toISOString(),
+            ...(lastPlanCreateCount !== undefined ? { lastPlanCreateCount } : {}),
+          },
+          { pretty: true },
+        );
+      } catch (err) {
+        api.logger?.debug?.(`plur1bus-feature-crons: marker write failed: ${err?.message || err}`);
+      }
+      _featureCronsHintCache = undefined;
+      api.logger?.info?.(
+        `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
+      );
+    } else {
+      api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap attempt failed");
+    }
+
+    const safetyPending = force && (!ok || !parsedResult || parsedResult.skipped === true);
+    if (!safetyPending) {
+      return { ok, safetyPending: false, attempts: attemptIndex + 1 };
+    }
+    if (attemptIndex + 1 < retrySchedule.length) {
+      api.logger?.warn?.(
+        `plur1bus-feature-crons: safety reconciliation pending; retry ${attemptIndex + 2}/${retrySchedule.length}`,
+      );
+    }
   }
+  api.logger?.warn?.("plur1bus-feature-crons: safety reconciliation still pending after bounded retries");
+  return { ok: false, safetyPending: true, attempts: retrySchedule.length };
 }
 
 /**
@@ -4662,7 +4686,7 @@ const plugin = {
             }).catch((err) => {
               api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap failed: ${err?.message || err}`);
             });
-          }, cronDirectDispatchReady ? 90_000 : 1_000);
+          }, cronDirectDispatchReady ? 90_000 : 0);
           timer?.unref?.();
         },
         { timeoutMs: 5_000 },
