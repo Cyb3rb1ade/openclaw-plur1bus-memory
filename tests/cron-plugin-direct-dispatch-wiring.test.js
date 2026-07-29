@@ -61,4 +61,13 @@ describe("cron direct-dispatch patch wiring", () => {
     assert.match(source, /planUnsafeDirectCronDisables\(existingJobs\)/);
     assert.match(source, /\["cron", "edit", job\.id, "--disable", "--name", job\.safetyName\]/);
   });
+
+  it("documents mandatory conversation-hook access for the admission fallback", () => {
+    const readme = readFileSync(path.join(repoRoot, "README.md"), "utf8");
+    const configuration = readFileSync(path.join(repoRoot, "docs/configuration.md"), "utf8");
+
+    assert.match(readme, /"hooks": \{\s*"allowConversationAccess": true\s*\}/);
+    assert.match(configuration, /"hooks": \{\s*"allowConversationAccess": true\s*\}/);
+    assert.match(readme, /mandatory[\s\S]{0,200}before_agent_reply/i);
+  });
 });

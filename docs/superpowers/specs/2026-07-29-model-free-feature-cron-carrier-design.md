@@ -78,6 +78,12 @@ auch das Zeitfenster vor `gateway_start` modellfrei; Präfixe, Suffixe,
 Whitespace-Varianten und Custom-Prompts werden nicht beansprucht. Die Features
 bleiben für diesen Gateway-Prozess sicher pausiert und werden nach erfolgreichem
 Patch plus Neustart kontrolliert wieder aktiviert.
+Da OpenClaw `before_agent_reply` für nicht gebündelte Plugins nur mit
+`plugins.entries.memory-lancedb-namespaced.hooks.allowConversationAccess=true`
+registriert, ist diese Berechtigung Teil des verbindlichen
+Installationsvertrags. Die Minimal-Konfiguration dokumentiert sie; der
+Installer stellt sie in allen Feature-Policy-Modi her und bewahrt alle anderen
+Hook- und Feature-Entscheidungen.
 Der awaited `gateway_start`-Hook deaktiviert passende Jobs zuerst direkt über
 OpenClaws In-Process-Cron-Service, bevor der CLI-Abgleich startet;
 fehlgeschlagene CLI-, List-, Edit- oder Recovery-Schritte werden im laufenden

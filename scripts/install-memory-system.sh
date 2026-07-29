@@ -1190,7 +1190,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   dryrun "  - plugins.allow += memory-lancedb-namespaced"
   dryrun "  - plugins.slots.memory bleibt '${EXISTING_MEMORY_SLOT:-memory-core}'"
   dryrun "  - kein Backend-Wechsel: bestehende Legacy-Backends bleiben unverändert"
-  dryrun "  - Policy-Helper-Ergebnis wird direkt persistiert; explizite Hooks bleiben erhalten"
+  dryrun "  - hooks.allowConversationAccess=true wird verbindlich sichergestellt; sonstige explizite Hooks bleiben erhalten"
   if [[ "$KEEP_EXISTING_MEMORY_CONFIG" == "1" ]]; then
     dryrun "  - plugins.entries.memory-lancedb-namespaced bleibt inhaltlich erhalten"
   else

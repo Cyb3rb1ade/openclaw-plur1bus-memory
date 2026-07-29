@@ -33,21 +33,22 @@ describe("installer feature config policy", () => {
     assert.match(routeBlock, /SCHICHT15_BLOCK/);
   });
 
-  it("preserve is byte-stable for missing, enabled, and disabled plugin entries", () => {
+  it("preserve changes only the mandatory conversation-hook permission", () => {
     for (const original of [
       {},
       { enabled: true },
       { enabled: false, config: { reranker: { enabled: false } } },
     ]) {
-      const before = JSON.stringify(original);
       const entry = applyInstallerFeaturePolicy(original, { mode: "preserve" });
-      assert.equal(JSON.stringify(entry), before);
-      assert.deepEqual(entry, original);
+      assert.deepEqual(entry, {
+        ...original,
+        hooks: { allowConversationAccess: true },
+      });
       assert.notEqual(entry, original);
     }
   });
 
-  it("preserve retains provider, path, runtime, rollback, and explicit false state", () => {
+  it("preserve retains provider, path, runtime, rollback, and feature opt-outs", () => {
     const original = {
       enabled: false,
       config: {
@@ -63,7 +64,10 @@ describe("installer feature config policy", () => {
     };
     const entry = applyInstallerFeaturePolicy(original, { mode: "preserve" });
 
-    assert.deepEqual(entry, original);
+    assert.deepEqual(entry, {
+      ...original,
+      hooks: { allowConversationAccess: true },
+    });
     assert.equal(entry.enabled, false);
     assert.equal(entry.config.reranker.enabled, false);
     assert.equal(entry.config.runtime.recallCacheTtlMs, 77);
@@ -131,7 +135,7 @@ describe("installer feature config policy", () => {
       { enabled: true, config: { hooks: legacyHooks } },
       { mode: "safe", confirmedAt: "2026-07-19T12:00:00.000Z" },
     );
-    assert.equal(migrated.hooks.allowConversationAccess, false);
+    assert.equal(migrated.hooks.allowConversationAccess, true);
     assert.equal(migrated.hooks.timeouts.agent_end, 1234);
     assert.equal(Object.hasOwn(migrated.config, "hooks"), false);
 
@@ -144,7 +148,7 @@ describe("installer feature config policy", () => {
     assert.equal(Object.hasOwn(retained.config, "hooks"), false);
   });
 
-  it("fills installer hook defaults only where explicit-profile values are absent", () => {
+  it("always enables required conversation access while preserving other explicit hook values", () => {
     for (const mode of ["safe", "recommended"]) {
       const fresh = applyInstallerFeaturePolicy({}, { mode });
       assert.deepEqual(fresh.hooks, {
@@ -165,7 +169,7 @@ describe("installer feature config policy", () => {
       { mode: "safe" },
     );
     assert.deepEqual(explicit.hooks, {
-      allowConversationAccess: false,
+      allowConversationAccess: true,
       allowPromptInjection: false,
       timeouts: { before_prompt_build: 123, agent_end: 456, custom: 789 },
     });
@@ -182,18 +186,21 @@ describe("installer feature config policy", () => {
       { mode: "recommended" },
     );
     assert.deepEqual(legacy.hooks, {
-      allowConversationAccess: false,
+      allowConversationAccess: true,
       allowPromptInjection: true,
       timeouts: { before_prompt_build: 90000, agent_end: 1234 },
     });
   });
 
-  it("plans around legacy config.hooks in preserve mode without rewriting it", () => {
+  it("plans around legacy config.hooks in preserve mode while enforcing top-level access", () => {
     const legacyHooks = { allowConversationAccess: false };
     const config = { hooks: legacyHooks, reranker: { enabled: false } };
     const original = { enabled: false, config };
 
-    assert.deepEqual(applyInstallerFeaturePolicy(original, { mode: "preserve" }), original);
+    assert.deepEqual(applyInstallerFeaturePolicy(original, { mode: "preserve" }), {
+      ...original,
+      hooks: { allowConversationAccess: true },
+    });
     const plan = createFeatureUpdatePlan({
       existingPluginEntry: original,
       existingPluginConfig: config,
