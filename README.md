@@ -210,13 +210,13 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 
 ### Afterthoughts (delayed follow-ups)
 
-When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command itself returns either the composed text or OpenClaw's `NO_REPLY` suppression token. `patches/apply-memory-patches.sh` upgrades the installed PLUR1BUS cron dispatcher so this exact feature command is finalized through OpenClaw's normal delivery path before `executeCronRun()`; without that host boundary, an exact command alone does not prevent an outer model turn.
+When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command itself returns either the composed text or OpenClaw's `NO_REPLY` suppression token. The shipped host patch is applied or verified during gateway registration and again before automatic cron provisioning; it finalizes this exact feature command through OpenClaw's normal delivery path before `executeCronRun()`. If the OpenClaw runtime cannot be patched, setup changes no cron job. An exact command without that host boundary does not prevent an outer model turn.
 
 Setting this cron up is automatic when its raw feature gates are explicitly enabled — see below.
 
 #### Multi-agent feature-cron automation
 
-`node scripts/setup-feature-crons.mjs` loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to seven jobs per agent. It fails closed without reading or mutating cron state when the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. It never falls back to local config files or alternate raw/resolved fields.
+`node scripts/setup-feature-crons.mjs` loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, installs or verifies the host dispatcher patch, discovers bound agents, and idempotently plans up to seven jobs per agent. It fails closed without reading or mutating cron state when the gateway call fails, JSON is invalid, `valid !== true`, `sourceConfig`/`runtimeConfig` is not a plain object, or the host patch is unavailable. It never falls back to local config files or alternate raw/resolved fields.
 
 The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
 
@@ -281,6 +281,13 @@ cd ~/.openclaw/extensions/memory-lancedb-namespaced
 npm install --omit=dev
 systemctl --user restart openclaw-gateway
 ```
+
+The package includes `patches/apply-cron-plugin-direct-dispatch.mjs`. Gateway
+registration reapplies it on every start so OpenClaw upgrades cannot silently
+restore the model-backed carrier. The patcher writes an atomic, source-hash
+bound rollback copy beside the changed runtime bundle. Automatic feature-cron
+setup remains disabled when the runtime is not writable or its audited
+structure cannot be recognized.
 
 Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
 

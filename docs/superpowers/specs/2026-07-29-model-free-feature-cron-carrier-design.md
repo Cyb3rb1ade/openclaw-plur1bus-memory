@@ -38,7 +38,8 @@ Die Cron-Payload besteht exakt aus dem registrierten Plugin-Command:
 /plur1bus internal classify-recent
 ```
 
-Ein idempotenter Host-Patch erweitert den vorhandenen PLUR1BUS-Cron-Dispatcher.
+Ein idempotenter Host-Patch installiert oder erweitert den
+PLUR1BUS-Cron-Dispatcher.
 Nur wenn die gesamte Payload exakt einem der beiden Feature-Commands
 entspricht, wird der Plugin-Handler direkt ausgeführt. Sein vollständiger
 `ReplyPayload` wird anschließend als modellfreies Ausführungsergebnis an
@@ -51,6 +52,14 @@ Mehrzeilige oder benutzerdefinierte Prompts sowie andere Commands behalten den
 bisherigen Pfad. Handler- oder Finalisierungsfehler werden für die beiden
 direkten Feature-Commands nicht mehr verschluckt, sondern ergeben einen
 fehlgeschlagenen Cron-Lauf.
+
+Der Patch gehört zum Release-Paket. Die Plugin-Registrierung wendet ihn bei
+jedem Gateway-Start erneut an; der Feature-Cron-Setup-Prozess prüft ihn
+zusätzlich vor jedem Cron-Read oder jeder Mutation. Fehlt die Schreibberechtigung
+oder passt die installierte OpenClaw-Struktur nicht zu den auditierten Ankern,
+bleibt das Cron-Setup fail-closed. Backups sind an den SHA-256-Hash der
+ungepatchten Runtime gebunden, sodass ein OpenClaw-Update keine veraltete
+Rollback-Datei wiederverwendet.
 
 Der Handler übersetzt die internen Job-Ergebnisse im Cron-Kontext selbst in
 eine zustellbare Antwort:

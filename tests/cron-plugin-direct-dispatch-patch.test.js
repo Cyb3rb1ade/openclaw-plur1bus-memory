@@ -13,6 +13,7 @@ import { afterEach, describe, it } from "node:test";
 
 import {
   applyCronPluginDirectDispatchPatch,
+  isCronPluginDirectDispatchReady,
   patchCronPluginDirectDispatchSource,
 } from "../patches/apply-cron-plugin-direct-dispatch.mjs";
 
@@ -143,7 +144,7 @@ describe("cron plugin direct-dispatch host patch", () => {
     assert.match(patched.source, /plur1bus-cron-direct-dispatch-v2/);
     assert.match(
       patched.source,
-      /_plFullMsg === _plMsg[\s\S]*afterthought\|classify-recent/,
+      /_plFullMsg === "\/plur1bus internal afterthought"[\s\S]*_plFullMsg === "\/plur1bus internal classify-recent"/,
     );
     assert.match(patched.source, /payloads: \[_plReply\]/);
     assert.match(patched.source, /await finalizeCronRun\(/);
@@ -169,12 +170,8 @@ describe("cron plugin direct-dispatch host patch", () => {
   it("does not bypass the model for custom multiline prompts or other commands", () => {
     const { source } = patchCronPluginDirectDispatchSource(fixtureSource());
 
-    assert.match(source, /_plFullMsg === _plMsg/);
-    assert.ok(
-      source.includes(
-        "/^\\/plur1bus\\s+internal\\s+(?:afterthought|classify-recent)(?:\\s|$)/",
-      ),
-    );
+    assert.match(source, /const _plFullMsg = params\.job\.payload\?\.message \?\? "";/);
+    assert.doesNotMatch(source, /_plFullMsg\.trim\(\)/);
   });
 
   it("is idempotent", () => {
@@ -207,23 +204,82 @@ describe("cron plugin direct-dispatch host patch", () => {
     const target = path.join(distDir, "isolated-agent-example.js");
     writeFileSync(target, fixtureSource());
 
+    assert.equal(isCronPluginDirectDispatchReady(distDir), false);
     const first = applyCronPluginDirectDispatchPatch(distDir);
     const second = applyCronPluginDirectDispatchPatch(distDir);
 
     assert.equal(first.status, "applied");
     assert.equal(second.status, "already-patched");
+    assert.equal(isCronPluginDirectDispatchReady(distDir), true);
     assert.match(readFileSync(target, "utf8"), /plur1bus-cron-direct-dispatch-v2/);
     assert.deepStrictEqual(
       readdirSync(distDir).sort(),
       [
         "isolated-agent-example.js",
-        "isolated-agent-example.js.plur1bus-cron-direct.bak",
+        first.backup.split("/").pop(),
       ],
     );
     assert.equal(
-      readFileSync(`${target}.plur1bus-cron-direct.bak`, "utf8"),
+      readFileSync(first.backup, "utf8"),
       fixtureSource(),
     );
+  });
+
+  it("installs the complete dispatcher into an unpatched OpenClaw bundle", async () => {
+    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-vanilla-"));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-vanilla.js");
+    writeFileSync(target, `
+async function finalizeCronRun(params) { return params; }
+async function runCronIsolatedAgentTurn(params) {
+  const { executeCronRun } = await loadCronExecutorRuntime();
+  return executeCronRun(params);
+}
+`);
+    writeFileSync(
+      path.join(distDir, "commands-plugin.js"),
+      "function matchPluginCommand() {} function executePluginCommand() {}\nexport { matchPluginCommand as z, executePluginCommand as y };\n",
+    );
+    writeFileSync(
+      path.join(distDir, "commands-registry-normalize-example.js"),
+      "function resolveTextCommand() {}\nexport { resolveTextCommand as q };\n",
+    );
+    writeFileSync(
+      path.join(distDir, "commands-registry.data-example.js"),
+      "function getChatCommands() {}\nexport { getChatCommands as x };\n",
+    );
+
+    const result = applyCronPluginDirectDispatchPatch(distDir);
+    const patched = readFileSync(target, "utf8");
+
+    assert.equal(result.status, "applied");
+    assert.match(patched, /plur1bus-cron-cmd-dispatch/);
+    assert.match(patched, /plur1bus-cron-direct-dispatch-v2/);
+    assert.match(patched, /const \{ z: _matchPluginCommand \}/);
+    assert.match(patched, /const \{ q: _resolveTextCommand \}/);
+    assert.match(patched, /const \{ x: _getChatCommands \}/);
+    assert.ok(
+      patched.indexOf("await finalizeCronRun(")
+        < patched.indexOf("const { executeCronRun }"),
+    );
+    await import(`${pathToFileURL(target).href}?syntax=${Date.now()}`);
+  });
+
+  it("fails closed instead of reusing a corrupt hash-bound rollback copy", () => {
+    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-backup-"));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-example.js");
+    writeFileSync(target, fixtureSource());
+    const first = applyCronPluginDirectDispatchPatch(distDir);
+
+    writeFileSync(target, fixtureSource());
+    writeFileSync(first.backup, "not the source represented by its filename");
+
+    assert.throws(
+      () => applyCronPluginDirectDispatchPatch(distDir),
+      /rollback copy does not match source hash/i,
+    );
+    assert.equal(readFileSync(target, "utf8"), fixtureSource());
   });
 
   it("executes exact feature commands through finalization without calling the model", async () => {
@@ -276,6 +332,32 @@ describe("cron plugin direct-dispatch host patch", () => {
     assert.equal(result.status, "model");
     assert.equal(runtime.getState().modelCalls, 1);
     assert.equal(runtime.getState().finalizedPayloads, null);
+  });
+
+  it("keeps suffixed and whitespace-modified feature commands on the legacy model path", async () => {
+    for (const [index, message] of [
+      "/plur1bus internal afterthought bitte ausführlich",
+      " /plur1bus internal afterthought",
+      "/plur1bus internal classify-recent ",
+    ].entries()) {
+      const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+      workDirs.push(distDir);
+      const target = path.join(distDir, "isolated-agent-runtime.mjs");
+      const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
+      writeFileSync(target, patched.source);
+      const runtime = await import(`${pathToFileURL(target).href}?custom=${Date.now()}-${index}`);
+
+      const result = await runtime.runCronIsolatedAgentTurn({
+        job: {
+          payload: { message },
+          handlerResult: { text: "legacy" },
+        },
+      });
+
+      assert.equal(result.status, "model");
+      assert.equal(runtime.getState().modelCalls, 1);
+      assert.equal(runtime.getState().finalizedPayloads, null);
+    }
   });
 
   it("fails exact feature commands closed when the plugin command is unavailable", async () => {

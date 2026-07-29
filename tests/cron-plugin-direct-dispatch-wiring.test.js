@@ -32,4 +32,23 @@ describe("cron direct-dispatch patch wiring", () => {
       /rm -f \/tmp\/apply-memory-patches\.sh \/tmp\/apply-cron-plugin-direct-dispatch\.mjs/,
     );
   });
+
+  it("ships the patch in release packages and reapplies it during gateway registration", () => {
+    const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+    const indexSource = readFileSync(path.join(repoRoot, "index.js"), "utf8");
+
+    assert.ok(packageJson.files.includes("patches/apply-cron-plugin-direct-dispatch.mjs"));
+    assert.match(indexSource, /ensureCronDirectDispatchAtRegistration\(api\)/);
+    assert.match(indexSource, /applyCronPluginDirectDispatchPatch/);
+  });
+
+  it("gates automatic cron setup on host-patch readiness", () => {
+    const source = readFileSync(
+      path.join(repoRoot, "scripts/setup-feature-crons.mjs"),
+      "utf8",
+    );
+
+    assert.match(source, /ensureCronDirectDispatchImpl\(\{ apply: !opts\.dryRun \}\)/);
+    assert.match(source, /host-direct-dispatch-unavailable/);
+  });
 });

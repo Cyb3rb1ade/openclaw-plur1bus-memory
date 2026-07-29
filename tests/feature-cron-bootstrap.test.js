@@ -16,7 +16,51 @@ import { buildAddArgs, runSetupFeatureCrons } from "../scripts/setup-feature-cro
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
-const { parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap } = pluginModule;
+const {
+  ensureCronDirectDispatchAtRegistration,
+  parseFeatureCronBootstrapLastPlanCreateCount,
+  runDeferredFeatureCronBootstrap,
+} = pluginModule;
+
+describe("gateway registration host-patch guard", () => {
+  it("applies the host patch and reports readiness", () => {
+    const api = makeApi();
+    const calls = [];
+
+    assert.equal(
+      ensureCronDirectDispatchAtRegistration(api, {
+        distDir: "/fixture/openclaw/dist",
+        applyImpl: (distDir) => {
+          calls.push(distDir);
+          return { status: "applied" };
+        },
+      }),
+      true,
+    );
+    assert.deepStrictEqual(calls, ["/fixture/openclaw/dist"]);
+    assert.ok(api.logs.some(([level, message]) => (
+      level === "info" && message.includes("host direct dispatch applied")
+    )));
+  });
+
+  it("logs and reports an unavailable host patch without throwing", () => {
+    const api = makeApi();
+
+    assert.equal(
+      ensureCronDirectDispatchAtRegistration(api, {
+        applyImpl: () => {
+          throw new Error("fixture patch failure");
+        },
+      }),
+      false,
+    );
+    assert.ok(api.logs.some(([level, message]) => (
+      level === "warn"
+      && message.includes("host direct dispatch unavailable")
+      && message.includes("fixture patch failure")
+    )));
+  });
+});
 
 describe("featureCronSetup manifest documentation", () => {
   it("names every owner gate and the fail-closed delivery source contract", () => {
@@ -185,7 +229,13 @@ async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
     }
     return openclawImpl(args, timeout);
   };
-  const exitCode = await runSetupFeatureCrons({ argv, openclawImpl: wrappedOpenClaw, stdout: stdout.stream, stderr: stderr.stream });
+  const exitCode = await runSetupFeatureCrons({
+    argv,
+    openclawImpl: wrappedOpenClaw,
+    ensureCronDirectDispatchImpl: () => ({ status: "already-patched" }),
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
   const text = stdout.read().trim();
   return {
     exitCode,
@@ -231,15 +281,100 @@ describe("buildAddArgs delivery boundary", () => {
   });
 });
 
-async function runJsonSetupDirect(openclawImpl, argv = ["--json"]) {
+async function runJsonSetupDirect(
+  openclawImpl,
+  argv = ["--json"],
+  ensureCronDirectDispatchImpl = () => ({ status: "already-patched" }),
+) {
   const stdout = createWritableBuffer();
   const stderr = createWritableBuffer();
-  const exitCode = await runSetupFeatureCrons({ argv, openclawImpl, stdout: stdout.stream, stderr: stderr.stream });
+  const exitCode = await runSetupFeatureCrons({
+    argv,
+    openclawImpl,
+    ensureCronDirectDispatchImpl,
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
   const output = stdout.read().trim();
   return { exitCode, stdout: output, stderr: stderr.read(), parsed: JSON.parse(output) };
 }
 
 describe("runSetupFeatureCrons effective config snapshot", () => {
+  it("fails closed before reading or mutating cron state when the host patch is unavailable", async () => {
+    const calls = [];
+    const result = await runJsonSetupDirect(
+      (args) => {
+        calls.push(args);
+        if (args[0] === "--version") {
+          return { ok: true, stdout: "OpenClaw test", stderr: "", status: 0 };
+        }
+        if (args.join(" ") === "gateway call config.get --json") {
+          return {
+            ok: true,
+            stdout: JSON.stringify(validCronConfigSnapshot({
+              pluginConfig: { criticalPush: { enabled: true } },
+            })),
+            stderr: "",
+            status: 0,
+          };
+        }
+        throw new Error(`cron state must not be accessed: ${args.join(" ")}`);
+      },
+      ["--json"],
+      () => {
+        throw new Error("host patch unavailable");
+      },
+    );
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.parsed.reason, "host-direct-dispatch-unavailable");
+    assert.equal(result.parsed.lastPlanCreateCount, 1);
+    assert.deepStrictEqual(
+      calls.map((args) => args.join(" ")),
+      ["--version", "gateway call config.get --json"],
+    );
+  });
+
+  it("applies the host patch normally and only verifies it during dry-run", async () => {
+    const applyModes = [];
+    const openclawImpl = (args) => {
+      if (args[0] === "--version") {
+        return { ok: true, stdout: "OpenClaw test", stderr: "", status: 0 };
+      }
+      if (args.join(" ") === "gateway call config.get --json") {
+        return {
+          ok: true,
+          stdout: JSON.stringify(validCronConfigSnapshot({
+            pluginConfig: { dailyConsolidation: { enabled: true } },
+          })),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args.join(" ") === "cron list --json --all") {
+        return { ok: true, stdout: JSON.stringify({ jobs: [] }), stderr: "", status: 0 };
+      }
+      if (args[0] === "agents") {
+        return {
+          ok: true,
+          stdout: JSON.stringify([{ id: "main", bindings: 1, isDefault: true, workspace: "/tmp/main" }]),
+          stderr: "",
+          status: 0,
+        };
+      }
+      return { ok: true, stdout: "{}", stderr: "", status: 0 };
+    };
+    const ensure = ({ apply }) => {
+      applyModes.push(apply);
+      return { status: "already-patched" };
+    };
+
+    await runJsonSetupDirect(openclawImpl, ["--json"], ensure);
+    await runJsonSetupDirect(openclawImpl, ["--json", "--dry-run"], ensure);
+
+    assert.deepStrictEqual(applyModes, [true, false]);
+  });
+
   it("loads exactly one redacted config snapshot before planning and separates source gates from runtime routing", async () => {
     const calls = [];
     const cronAdds = [];

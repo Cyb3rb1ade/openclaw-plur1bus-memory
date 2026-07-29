@@ -4,10 +4,10 @@
  * explicitly enabled PLUR1BUS feature crons for the current OpenClaw
  * installation.
  *
- * Runs entirely as the invoking user via the `openclaw` CLI (which talks to
- * the already-running gateway over its local socket/token) — no root, no
- * sudo, no system paths. Safe to run from `npm install` (postinstall), a
- * ClawHub update, or manually.
+ * Runs as the invoking user. Before any cron read or mutation it installs or
+ * verifies the shipped OpenClaw host dispatcher patch, then uses the
+ * `openclaw` CLI over its local socket/token. If the runtime path is not
+ * writable, setup remains fail-closed and changes no cron job.
  *
  * Contract: this script must NEVER fail an install. If the `openclaw` CLI
  * is missing or the gateway is unreachable, it prints a friendly note and
@@ -29,6 +29,20 @@ import { validateInput } from "../lib/input-limits.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
+import {
+  applyCronPluginDirectDispatchPatch,
+  DEFAULT_OPENCLAW_DIST_DIR,
+  isCronPluginDirectDispatchReady,
+} from "../patches/apply-cron-plugin-direct-dispatch.mjs";
+
+function ensureCronDirectDispatch({ apply }) {
+  const distDir = process.env.OPENCLAW_DIST_DIR || DEFAULT_OPENCLAW_DIST_DIR;
+  if (apply) return applyCronPluginDirectDispatchPatch(distDir);
+  if (!isCronPluginDirectDispatchReady(distDir)) {
+    throw new Error("PLUR1BUS cron direct dispatch is not installed");
+  }
+  return { status: "already-patched" };
+}
 
 function parseArgs(argv) {
   const opts = { dryRun: false, agent: null, account: null, json: false, inputError: false };
@@ -205,6 +219,7 @@ function discoverAgents(openclawImpl = openclaw) {
  * @param {{
  *   argv?: string[],
  *   openclawImpl?: (args: string[], timeout?: number) => {ok: boolean, stdout?: string, stderr?: string, status?: number|null, error?: Error|undefined},
+ *   ensureCronDirectDispatchImpl?: (options: {apply: boolean}) => object,
  *   stdout?: NodeJS.WritableStream,
  *   stderr?: NodeJS.WritableStream
  * }} [options]
@@ -214,6 +229,7 @@ export async function runSetupFeatureCrons(options = {}) {
   const {
     argv = process.argv.slice(2),
     openclawImpl = openclaw,
+    ensureCronDirectDispatchImpl = ensureCronDirectDispatch,
     stdout = process.stdout,
   } = options;
   const opts = parseArgs(argv);
@@ -312,6 +328,31 @@ export async function runSetupFeatureCrons(options = {}) {
         writeOutput(stdout, JSON.stringify({ dryRun: opts.dryRun, plan: emptyPlan, lastPlanCreateCount: 0 }, null, 2));
       } else {
         writeOutput(stdout, "[setup-feature-crons] no explicitly enabled feature owns a cron job — nothing to do.");
+      }
+      return 0;
+    }
+
+    try {
+      ensureCronDirectDispatchImpl({ apply: !opts.dryRun });
+    } catch {
+      if (opts.json) {
+        writeOutput(
+          stdout,
+          JSON.stringify(
+            buildJsonResult({
+              reason: "host-direct-dispatch-unavailable",
+              message: "required OpenClaw cron direct-dispatch patch unavailable; no cron jobs changed",
+              lastPlanCreateCount: enabledSpecs.length,
+            }),
+            null,
+            2,
+          ),
+        );
+      } else {
+        writeOutput(
+          stdout,
+          "[setup-feature-crons] required OpenClaw cron direct-dispatch patch unavailable — no cron jobs changed.",
+        );
       }
       return 0;
     }
