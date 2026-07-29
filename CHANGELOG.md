@@ -7,6 +7,45 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.7] — 2026-07-30
+
+### Behoben
+
+- **Afterthought- und Critical-Push-Crons starten keinen äußeren Agent-/LLM-Turn
+  mehr.** Die automatisch verwalteten Jobs verwenden jetzt ausschließlich die
+  exakten Befehle `/plur1bus internal afterthought` und
+  `/plur1bus internal classify-recent`. Ein mitgelieferter Host-Patch
+  finalisiert deren Plugin-Antwort direkt über OpenClaws normalen
+  Delivery-Pfad und kehrt vor `executeCronRun()` zurück.
+- **Fail-Closed statt Token-Fallback.** Ein Registrierungs-Guard beansprucht
+  nur die beiden exakten Befehle, die ausgelieferten Legacy-Carrier und den
+  präzisen alten PLUR1BUS-Ergebnis-Envelope. Ist der Dispatcher nicht
+  verfügbar, werden ausschließlich sicher erkannte PLUR1BUS-Feature-Jobs
+  markiert und pausiert; individuelle Prompts und fremde Jobs bleiben
+  unangetastet. Nach erfolgreicher Reparatur werden nur sicher zuordenbare Jobs
+  mit gültiger Delivery wieder aktiviert.
+- **Bestehende Jobs werden idempotent migriert.** Die 30-Minuten-Zeitpläne und
+  vorhandenen Delivery-Ziele bleiben erhalten; nur die verschwenderischen
+  natürlichsprachlichen Carrier-Payloads werden durch exakte interne Befehle
+  ersetzt.
+- **Hook-Zugriff ist explizit abgesichert.** Installer und Dokumentation
+  verlangen `hooks.allowConversationAccess: true`, ohne andere Hook- oder
+  Feature-Einstellungen zu überschreiben.
+
+### Kompatibilität
+
+- Die eigentliche Afterthought-Komposition und Critical-Push-Klassifikation
+  verwenden weiterhin OpenClaws native, agentenspezifische Modellroute und
+  deren Thinking-Policy. PLUR1BUS setzt insbesondere kein mit Kimi
+  inkompatibles `thinking: off`.
+
+### Verifikation
+
+- Produktionsanalyse: Sechs halbstündliche Legacy-Carrier verursachten im
+  untersuchten Tagesausschnitt 6.148.690 unnötige äußere Input-Tokens, meist
+  für `NO_REPLY`.
+- Vollständige Suite: 3.308 bestanden, 0 fehlgeschlagen, 1 übersprungen.
+
 ## [7.1.6] — 2026-07-27
 
 ### Behoben
