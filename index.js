@@ -131,6 +131,10 @@ import {
   formatAfterthoughtCronReply,
   formatClassifierCronReply,
 } from "./lib/internal-cron-reply.js";
+import {
+  applyCronPluginDirectDispatchPatch,
+  DEFAULT_OPENCLAW_DIST_DIR,
+} from "./patches/apply-cron-plugin-direct-dispatch.mjs";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import {
@@ -2685,6 +2689,32 @@ function getFeatureCronsSetupHint(baseDbPath) {
 }
 
 /**
+ * Apply or verify the OpenClaw host boundary required by model-free feature
+ * crons. Failure is logged and returned so cron setup can remain fail-closed
+ * without disabling the memory plugin.
+ *
+ * @param {object} api
+ * @param {{applyImpl?: Function, distDir?: string}} [options]
+ * @returns {boolean}
+ */
+function ensureCronDirectDispatchAtRegistration(api, options = {}) {
+  const {
+    applyImpl = applyCronPluginDirectDispatchPatch,
+    distDir = process.env.OPENCLAW_DIST_DIR || DEFAULT_OPENCLAW_DIST_DIR,
+  } = options;
+  try {
+    const result = applyImpl(distDir);
+    api.logger?.info?.(`plur1bus-feature-crons: host direct dispatch ${result.status}`);
+    return true;
+  } catch (error) {
+    api.logger?.warn?.(
+      `plur1bus-feature-crons: host direct dispatch unavailable; feature-cron setup will remain fail-closed (${error?.message || String(error)})`,
+    );
+    return false;
+  }
+}
+
+/**
  * Deferred, best-effort feature-cron bootstrap for the gateway_start
  * handler registered above. Fail-open end to end: any failure here is
  * logged at debug/warn level and swallowed — it must never affect the
@@ -3530,6 +3560,9 @@ const plugin = {
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
     pluginLogger = api.logger;
+    if (!process.env.NODE_TEST_CONTEXT) {
+      ensureCronDirectDispatchAtRegistration(api);
+    }
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
@@ -9020,5 +9053,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, ensureCronDirectDispatchAtRegistration, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
 export default plugin;
