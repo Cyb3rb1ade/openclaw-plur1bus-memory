@@ -47,15 +47,19 @@ describe("gateway registration host-patch guard", () => {
 
   it("logs and reports an unavailable host patch without throwing", () => {
     const api = makeApi();
+    let receivedDistDir;
 
     assert.equal(
       ensureCronDirectDispatchAtRegistration(api, {
-        applyImpl: () => {
+        distDir: "/fixture/openclaw/dist",
+        applyImpl: (distDir) => {
+          receivedDistDir = distDir;
           throw new Error("fixture patch failure");
         },
       }),
       false,
     );
+    assert.equal(receivedDistDir, "/fixture/openclaw/dist");
     assert.ok(api.logs.some(([level, message]) => (
       level === "warn"
       && message.includes("host direct dispatch unavailable")
