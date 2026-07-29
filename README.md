@@ -210,7 +210,7 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 
 ### Afterthoughts (delayed follow-ups)
 
-When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run `/plur1bus internal afterthought` and deliver the result — if the JSON has a `text` field, send exactly that text as the message; if `skipped` is `true`, reply with exactly `NO_REPLY` (OpenClaw's silent-reply token — the gateway suppresses delivery of token-only replies, which is far more reliable than asking the model to output nothing).
+When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command itself returns either the composed text or OpenClaw's `NO_REPLY` suppression token; do not append a delivery prompt, because any extra text turns the cron back into a model-backed agent turn.
 
 Setting this cron up is automatic when its raw feature gates are explicitly enabled — see below.
 
@@ -221,7 +221,7 @@ Setting this cron up is automatic when its raw feature gates are explicitly enab
 The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
 
 - `persona-evolve`: `personaVoice.enabled && skillMiner.enabled`; Sunday 04:15 local time, staggered five minutes per agent; no delivery.
-- `afterthought`: `afterthought.enabled && (skillMiner.enabled || merging.enabled)`; every 30 minutes; safe announce delivery with the `NO_REPLY` contract.
+- `afterthought`: `afterthought.enabled && (skillMiner.enabled || merging.enabled)`; every 30 minutes; exact-command announce delivery with a direct text/`NO_REPLY` result.
 - `consolidate-daily`: `dailyConsolidation.enabled`; daily 03:00 local time; no delivery.
 - `classify-recent`: `criticalPush.enabled`; every 30 minutes; safe announce delivery of approved pushes or `NO_REPLY`.
 - `rem-dream`: `merging.enabled`; daily 01:15 in `Europe/Berlin`; no delivery.
@@ -563,7 +563,7 @@ An explicit selection records `setupProfile` and `featuresConfirmedAt`. Recommen
 
 LanceDB is the authoritative store: every memory card lives there first, indexed per agent for isolation. The Obsidian bridge mirrors cards into a Markdown vault so the user can read, link, and edit them with normal tools; LanceDB stays the source of truth and the bridge re-syncs on changes.
 
-A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The plugin SDK currently exposes no outbound send API, so these messages are returned in the job result (`pushMessages`) for the cron carrier agent to deliver; once the SDK gains a reply-send hook, the same `telegramSend` path delivers them directly. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
+A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as the exact command `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The plugin SDK currently exposes no outbound send API, so the command handler converts returned `pushMessages` directly into the cron reply; no carrier-agent model turn is needed. Multiple push texts are combined in their original order. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
 
 The recall pipeline runs embedding → LanceDB vector search → optional query refinement → temporal filter → canonical `KNOWLEDGE.md` search → score/status processing → graph spread and hydration → budget allocation → optional rerank → deduplication → ACL filtering → finalization. The caller may then append bounded Semantic Lens and Conversation Reactivation Recall results; neither replaces the primary recall.
 
