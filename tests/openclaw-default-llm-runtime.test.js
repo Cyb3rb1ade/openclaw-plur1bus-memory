@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import OpenAI from "openai";
@@ -144,6 +144,17 @@ function withTempPaths(t) {
     rmSync(workspaceDir, { recursive: true, force: true });
   });
   return { baseDbPath, workspaceDir };
+}
+
+function cleanCriticalPushTestState(t, agentId) {
+  const stateFile = join(
+    homedir(),
+    ".openclaw",
+    "memory",
+    "_critical-push-state",
+    `${agentId}.json`,
+  );
+  t.after(() => rmSync(stateFile, { force: true }));
 }
 
 function installEmbeddingStub(t) {
@@ -575,19 +586,20 @@ test("an unresolved feature-local credential makes no native or direct request",
 
 test("critical classifier command prefers its session-bound runtime and does not inherit merging.model", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
-  const agentId = "critical-session-agent";
+  const agentId = `critical-session-${randomUUID()}`;
+  cleanCriticalPushTestState(t, agentId);
   const globalCalls = [];
   const sessionCalls = [];
   const globalRuntime = {
     async complete(params) {
       globalCalls.push(params);
-      return { text: "fakt", provider: "global", model: "global-model", agentId, usage: {} };
+      return { text: "person", provider: "global", model: "global-model", agentId, usage: {} };
     },
   };
   const sessionRuntime = {
     async complete(params) {
       sessionCalls.push(params);
-      return { text: "fakt", provider: "session", model: "session-model", agentId, usage: {} };
+      return { text: "person", provider: "session", model: "session-model", agentId, usage: {} };
     },
   };
   const pluginModule = await loadFreshPlugin();
@@ -612,7 +624,8 @@ test("critical classifier command prefers its session-bound runtime and does not
     runtimeContext: { llm: sessionRuntime },
   });
 
-  assert.match(result.text, /"processed": 1/);
+  assert.match(result.text, /^🔔 \*Neue kritische Erinnerung\*/);
+  assert.doesNotMatch(result.text, /"pushMessages"/);
   assert.equal(globalCalls.length, 0);
   assert.equal(sessionCalls.length, 1);
   assert.equal(Object.hasOwn(sessionCalls[0], "agentId"), false);
@@ -645,8 +658,7 @@ test("Critical Push leaves cards unclassified when no native runtime is availabl
   });
   const stored = await readMemory(pluginModule, baseDbPath, agentId, memoryId);
 
-  assert.match(result.text, /"processed": 0/);
-  assert.match(result.text, /no classification model configured/i);
+  assert.equal(result.text, "NO_REPLY");
   assert.equal(stored.type, "");
   const logs = JSON.stringify(api.logger.calls);
   assert.match(logs, /openclaw-runtime-unavailable/);
@@ -655,7 +667,8 @@ test("Critical Push leaves cards unclassified when no native runtime is availabl
 
 test("Critical Push direct override works without a host runtime", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
-  const agentId = "critical-direct-agent";
+  const agentId = `critical-direct-${randomUUID()}`;
+  cleanCriticalPushTestState(t, agentId);
   const memoryId = "88888888-8888-4888-8888-888888888888";
   const directCalls = [];
   installDirectOpenAiStub(t, directCalls, "person");
@@ -685,7 +698,17 @@ test("Critical Push direct override works without a host runtime", async (t) => 
   });
   const stored = await readMemory(pluginModule, baseDbPath, agentId, memoryId);
 
-  assert.match(result.text, /"processed": 1/);
+  assert.match(result.text, /^🔔 \*Neue kritische Erinnerung\*/);
+  assert.doesNotMatch(result.text, /"pushMessages"/);
+  assert.equal(result.presentationTextMode, "fallback");
+  assert.deepStrictEqual(
+    result.presentation.blocks[1].buttons.map((button) => button.action.value),
+    [
+      `crit:ok:${memoryId}`,
+      `crit:no:${memoryId}`,
+      `crit:edit:${memoryId}`,
+    ],
+  );
   assert.equal(directCalls.length, 1);
   assert.equal(directCalls[0].body.model, "direct/critical-model");
   assert.equal(stored.type, "person");
@@ -712,19 +735,42 @@ test("Critical Push policy rejection leaves cards unclassified and diagnostics s
   });
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
 
+  await assert.rejects(
+    () => findCommand(api).handler({
+      args: "internal classify-recent",
+      agentId,
+      channel: "cron",
+      workspaceDir,
+      workspaceKey: "workspace-critical-policy",
+    }),
+    /classify-recent failed/i,
+  );
+  const stored = await readMemory(pluginModule, baseDbPath, agentId, memoryId);
+  const diagnostics = JSON.stringify({ logs: api.logger.calls });
+
+  assert.equal(stored.type, "");
+  assert.doesNotMatch(diagnostics, /sk-live-policy-secret|private policy-rejection memory|x-api-key/i);
+});
+
+test("disabled Afterthought returns a direct silent cron reply", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  const agentId = "afterthought-disabled-agent";
+  const pluginModule = await loadFreshPlugin();
+  const api = createApi(baseDbPath, {
+    afterthought: { enabled: false },
+    emotion: { t3: { enabled: false } },
+  });
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
   const result = await findCommand(api).handler({
-    args: "internal classify-recent",
+    args: "internal afterthought",
     agentId,
     channel: "cron",
     workspaceDir,
-    workspaceKey: "workspace-critical-policy",
+    workspaceKey: "workspace-afterthought-disabled",
   });
-  const stored = await readMemory(pluginModule, baseDbPath, agentId, memoryId);
-  const diagnostics = JSON.stringify({ result, logs: api.logger.calls });
 
-  assert.match(result.text, /"processed": 0/);
-  assert.equal(stored.type, "");
-  assert.doesNotMatch(diagnostics, /sk-live-policy-secret|private policy-rejection memory|x-api-key/i);
+  assert.deepStrictEqual(result, { text: "NO_REPLY" });
 });
 
 test("Schicht 1.5 uses only its own config and the global target agent", async (t) => {

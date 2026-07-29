@@ -5,6 +5,10 @@ import {
   planFeatureCrons,
   deriveAgentDelivery,
   deriveDeliveryFromChannelConfig,
+  isGuardedDirectFeatureCronMessage,
+  planMessageMigration,
+  planSafetyDisabledCronRecoveries,
+  planUnsafeDirectCronDisables,
   selectAgentsForCronSetup,
   selectEnabledFeatureCronSpecs,
   staggerPersonaEvolveSchedule,
@@ -30,8 +34,10 @@ describe("REQUIRED_FEATURE_CRONS", () => {
     );
     const personaEvolve = REQUIRED_FEATURE_CRONS.find((s) => s.name.includes("persona-evolve"));
     const afterthought = REQUIRED_FEATURE_CRONS.find((s) => s.name.includes("afterthought"));
+    const classifier = REQUIRED_FEATURE_CRONS.find((s) => s.name.includes("classify-recent"));
     assert.ok(personaEvolve, "persona-evolve spec present");
     assert.ok(afterthought, "afterthought spec present");
+    assert.ok(classifier, "classify-recent spec present");
 
     assert.strictEqual(personaEvolve.needsDelivery, false);
     assert.match(personaEvolve.command, /\/plur1bus internal persona-evolve/);
@@ -43,10 +49,136 @@ describe("REQUIRED_FEATURE_CRONS", () => {
     assert.match(afterthought.command, /\/plur1bus internal afterthought/);
     assert.strictEqual(afterthought.schedule.kind, "every");
     assert.strictEqual(afterthought.schedule.everyMs, 30 * 60 * 1000);
-    // README delivery contract must be embedded in the agent message.
-    assert.match(afterthought.message, /text/);
-    assert.match(afterthought.message, /skipped/i);
-    assert.match(afterthought.message, /NOTHING|nothing/);
+    assert.strictEqual(afterthought.message, afterthought.command);
+
+    assert.strictEqual(classifier.needsDelivery, true);
+    assert.strictEqual(classifier.schedule.kind, "every");
+    assert.strictEqual(classifier.schedule.everyMs, 30 * 60 * 1000);
+    assert.strictEqual(classifier.message, classifier.command);
+  });
+});
+
+describe("direct feature-cron safety lifecycle", () => {
+  const classifier = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "classify-recent");
+  const legacyClassifierMessage =
+    "/plur1bus internal classify-recent\n\n" +
+    "Delivery contract: the job returns JSON. If `pushMessages` is a non-empty array, " +
+    "send each array entry verbatim as a separate message, with no additional commentary. " +
+    "If `pushMessages` is absent or empty, reply with exactly NO_REPLY and nothing else — " +
+    "do not invent content.";
+
+  it("marks only active exact shipped jobs and preserves recovery identity", () => {
+    const jobs = [
+      {
+        id: "owned",
+        agentId: "main",
+        name: "plur1bus classify-recent main",
+        enabled: true,
+        payload: { message: "/plur1bus internal classify-recent" },
+      },
+      {
+        id: "legacy-owned",
+        agentId: "main",
+        name: "plur1bus classify-recent main",
+        enabled: true,
+        payload: { message: legacyClassifierMessage },
+      },
+      {
+        id: "custom",
+        agentId: "main",
+        name: "plur1bus classify-recent custom",
+        enabled: true,
+        payload: { message: "/plur1bus internal classify-recent\ncustom" },
+      },
+    ];
+
+    assert.deepStrictEqual(planUnsafeDirectCronDisables(jobs), [
+      {
+        id: "owned",
+        name: "plur1bus classify-recent main",
+        safetyName:
+          "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+        disable: true,
+      },
+      {
+        id: "legacy-owned",
+        name: "plur1bus classify-recent main",
+        safetyName:
+          "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+        disable: true,
+      },
+    ]);
+
+    assert.deepStrictEqual(planUnsafeDirectCronDisables([{
+      ...jobs[0],
+      name:
+        "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+    }]), [{
+      id: "owned",
+      name: "plur1bus classify-recent main",
+      safetyName:
+        "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+      disable: true,
+    }]);
+  });
+
+  it("guards only exact current and shipped legacy direct messages", () => {
+    assert.equal(isGuardedDirectFeatureCronMessage(classifier.message), true);
+    assert.equal(isGuardedDirectFeatureCronMessage(legacyClassifierMessage), true);
+    assert.equal(
+      isGuardedDirectFeatureCronMessage(
+        `${legacyClassifierMessage}\n\n[PLUR1BUS] {"pushMessages":[]}`,
+      ),
+      true,
+    );
+    assert.equal(
+      isGuardedDirectFeatureCronMessage(
+        `${classifier.message}\n\n[PLUR1BUS] NO_REPLY`,
+      ),
+      true,
+    );
+    assert.equal(isGuardedDirectFeatureCronMessage(`${classifier.message}\ncustom`), false);
+    assert.equal(
+      isGuardedDirectFeatureCronMessage(`${classifier.message}\ncustom\n\n[PLUR1BUS] NO_REPLY`),
+      false,
+    );
+    assert.equal(isGuardedDirectFeatureCronMessage(` ${classifier.message}`), false);
+    assert.equal(isGuardedDirectFeatureCronMessage(null), false);
+  });
+
+  it("recovers only a scoped disabled marker with a currently safe delivery", () => {
+    const job = {
+      id: "owned",
+      agentId: "main",
+      name:
+        "plur1bus classify-recent main [plur1bus:host-dispatch-unavailable]",
+      enabled: false,
+      payload: { message: "/plur1bus internal classify-recent" },
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    };
+    const scopedSkip = [{ spec: classifier, reason: "already-exists", existingJob: job }];
+
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries(scopedSkip), [{
+      id: "owned",
+      name: "plur1bus classify-recent main",
+      rename: "plur1bus classify-recent main",
+      enable: true,
+    }]);
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries([]), []);
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries([{
+      ...scopedSkip[0],
+      existingJob: { ...job, delivery: { mode: "announce", channel: "last" } },
+    }]), []);
+
+    assert.deepStrictEqual(planSafetyDisabledCronRecoveries([{
+      ...scopedSkip[0],
+      existingJob: { ...job, payload: { message: legacyClassifierMessage } },
+    }]), [{
+      id: "owned",
+      name: "plur1bus classify-recent main",
+      rename: "plur1bus classify-recent main",
+      enable: true,
+    }]);
   });
 });
 
@@ -731,59 +863,81 @@ describe("planFeatureCrons — multi-agent mode (opts.agents)", () => {
 });
 
 describe("Message-Contract-Migration bestehender Jobs", () => {
-  const OLD_CONTRACT =
+  const OLD_AFTERTHOUGHT_CONTRACT =
     "/plur1bus internal afterthought\n\n" +
     "Delivery contract: the job returns JSON. If it has a `text` field, " +
     "send exactly that text as the message, verbatim, with no additional " +
     "commentary. If `skipped` is true, output NOTHING at all.";
+  const CURRENT_AFTERTHOUGHT_CONTRACT =
+    "/plur1bus internal afterthought\n\n" +
+    "Delivery contract: the job returns JSON. If it has a `text` field, " +
+    "send exactly that text as the message, verbatim, with no additional " +
+    "commentary. If `skipped` is true, reply with exactly NO_REPLY and " +
+    "nothing else — do not invent content.";
+  const CLASSIFIER_CONTRACT =
+    "/plur1bus internal classify-recent\n\n" +
+    "Delivery contract: the job returns JSON. If `pushMessages` is a non-empty array, " +
+    "send each array entry verbatim as a separate message, with no additional commentary. " +
+    "If `pushMessages` is absent or empty, reply with exactly NO_REPLY and nothing else — " +
+    "do not invent content.";
   const agents = [{ id: "main", isDefault: true }];
 
-  it("plant ein Message-Update für einen existierenden Job mit altem 'output NOTHING'-Contract", () => {
-    const existing = [
-      { id: "job-1", name: "plur1bus afterthought main", agentId: "main", payload: { message: OLD_CONTRACT }, delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
-    ];
+  it("migriert alle bekannten PLUR1BUS-Carrier-Payloads auf den exakten Command", () => {
+    assert.deepStrictEqual(
+      planMessageMigration({ id: "job-1", name: "afterthought-old", payload: { message: OLD_AFTERTHOUGHT_CONTRACT } }),
+      { id: "job-1", name: "afterthought-old", message: "/plur1bus internal afterthought" },
+    );
+    assert.deepStrictEqual(
+      planMessageMigration({ id: "job-2", name: "afterthought-current", payload: { message: CURRENT_AFTERTHOUGHT_CONTRACT } }),
+      { id: "job-2", name: "afterthought-current", message: "/plur1bus internal afterthought" },
+    );
+    assert.deepStrictEqual(
+      planMessageMigration({ id: "job-3", name: "classifier-current", payload: { message: CLASSIFIER_CONTRACT } }),
+      { id: "job-3", name: "classifier-current", message: "/plur1bus internal classify-recent" },
+    );
+  });
+
+  it("plant das Exact-Command-Update auch über den vollständigen Cron-Plan", () => {
+    const existing = [{
+      id: "job-4",
+      name: "plur1bus afterthought main",
+      agentId: "main",
+      payload: { message: CURRENT_AFTERTHOUGHT_CONTRACT },
+      delivery: { mode: "announce", channel: "telegram", to: "55736530" },
+    }];
     const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
     assert.ok(Array.isArray(plan.update), "plan.update existiert");
     assert.strictEqual(plan.update.length, 1);
-    assert.strictEqual(plan.update[0].id, "job-1");
-    assert.match(plan.update[0].message, /reply with exactly NO_REPLY/);
-    assert.doesNotMatch(plan.update[0].message, /output NOTHING at all/);
+    assert.strictEqual(plan.update[0].id, "job-4");
+    assert.strictEqual(plan.update[0].message, "/plur1bus internal afterthought");
     // Der Job bleibt trotzdem geskippt (kein Duplikat-Create).
-    assert.ok(plan.skip.some((s) => s.existingJob?.id === "job-1"));
+    assert.ok(plan.skip.some((s) => s.existingJob?.id === "job-4"));
   });
 
-  it("erhält Nutzer-Anpassungen rund um den alten Contract-Satz", () => {
-    const custom = `MEIN PREFIX\n${OLD_CONTRACT}\nMEIN SUFFIX`;
-    const existing = [
-      { id: "job-2", name: "plur1bus afterthought main", agentId: "main", payload: { message: custom }, delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
-    ];
-    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
-    assert.strictEqual(plan.update.length, 1);
-    assert.match(plan.update[0].message, /^MEIN PREFIX\n/);
-    assert.match(plan.update[0].message, /\nMEIN SUFFIX$/);
-    assert.match(plan.update[0].message, /reply with exactly NO_REPLY/);
+  it("überschreibt keine Nutzer-Anpassungen rund um einen bekannten Contract", () => {
+    const custom = `MEIN PREFIX\n${CURRENT_AFTERTHOUGHT_CONTRACT}\nMEIN SUFFIX`;
+    assert.strictEqual(
+      planMessageMigration({ id: "job-5", name: "custom", payload: { message: custom } }),
+      null,
+    );
   });
 
-  it("plant KEIN Update für Jobs ohne alten Contract-Satz (custom oder bereits migriert)", () => {
-    const existing = [
-      { id: "job-3", name: "plur1bus afterthought main", agentId: "main", payload: { message: "mein eigener prompt ohne contract" }, delivery: { mode: "announce", channel: "telegram", to: "55736530" } },
-      { id: "job-4", name: "plur1bus persona-evolve main", agentId: "main", payload: { message: "/plur1bus internal persona-evolve" } },
-    ];
-    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
-    assert.strictEqual(plan.update.length, 0);
-  });
-
-  it("migriert auch im Legacy-Single-Agent-Modus", () => {
-    const existing = [{ id: "job-5", name: "plur1bus afterthought", agentId: "main", payload: { message: OLD_CONTRACT } }];
-    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agent: "main" });
-    assert.strictEqual(plan.update.length, 1);
-    assert.strictEqual(plan.update[0].id, "job-5");
+  it("plant kein Update für Custom-Prompts oder bereits exakte Commands", () => {
+    assert.strictEqual(
+      planMessageMigration({ id: "job-6", payload: { message: "mein eigener prompt ohne contract" } }),
+      null,
+    );
+    assert.strictEqual(
+      planMessageMigration({ id: "job-7", payload: { message: "/plur1bus internal afterthought" } }),
+      null,
+    );
   });
 
   it("Jobs ohne id werden nicht zum Update geplant (cron edit braucht die id)", () => {
-    const existing = [{ name: "plur1bus afterthought main", agentId: "main", payload: { message: OLD_CONTRACT } }];
-    const plan = planFeatureCrons(existing, LEGACY_TWO_FEATURE_CRONS, { agents });
-    assert.strictEqual(plan.update.length, 0);
+    assert.strictEqual(
+      planMessageMigration({ name: "afterthought", payload: { message: OLD_AFTERTHOUGHT_CONTRACT } }),
+      null,
+    );
   });
 });
 

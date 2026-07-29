@@ -48,6 +48,10 @@ import {
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
+import {
+  isGuardedDirectFeatureCronMessage,
+  planUnsafeDirectCronDisables,
+} from "./lib/setup/feature-cron-plan.js";
 import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/obsidian-bridge.js";
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
@@ -127,6 +131,14 @@ import {
 } from "./lib/setup/feature-profiles.js";
 import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "./lib/setup/config-contract.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
+import {
+  formatAfterthoughtCronReply,
+  formatClassifierCronReply,
+} from "./lib/internal-cron-reply.js";
+import {
+  applyCronPluginDirectDispatchPatch,
+  resolveOpenClawDistDir,
+} from "./patches/apply-cron-plugin-direct-dispatch.mjs";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import {
@@ -2681,17 +2693,137 @@ function getFeatureCronsSetupHint(baseDbPath) {
 }
 
 /**
+ * Apply or verify the OpenClaw host boundary required by model-free feature
+ * crons. Failure is logged and returned so cron setup can remain fail-closed
+ * without disabling the memory plugin.
+ *
+ * @param {object} api
+ * @param {{applyImpl?: Function, distDir?: string}} [options]
+ * @returns {boolean}
+ */
+function ensureCronDirectDispatchAtRegistration(api, options = {}) {
+  const {
+    applyImpl = applyCronPluginDirectDispatchPatch,
+    distDir,
+  } = options;
+  try {
+    const resolvedDistDir = distDir || resolveOpenClawDistDir();
+    const result = applyImpl(resolvedDistDir);
+    api.logger?.info?.(`plur1bus-feature-crons: host direct dispatch ${result.status}`);
+    return true;
+  } catch (error) {
+    api.logger?.warn?.(
+      `plur1bus-feature-crons: host direct dispatch unavailable; feature-cron setup will remain fail-closed (${error?.message || String(error)})`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Claim known PLUR1BUS feature-cron turns before OpenClaw can admit them to
+ * the outer model when the direct dispatcher was unavailable at registration.
+ *
+ * @param {object} event
+ * @param {object} context
+ * @param {{hostReady?: boolean}} [options]
+ * @returns {{handled: true, reply: {text: string}}|undefined}
+ */
+function guardUnsafeDirectCronTurn(event, context, { hostReady } = {}) {
+  if (
+    hostReady !== false
+    || context?.trigger !== "cron"
+    || !isGuardedDirectFeatureCronMessage(event?.cleanedBody)
+  ) {
+    return undefined;
+  }
+  return { handled: true, reply: { text: "NO_REPLY" } };
+}
+
+/**
+ * Use OpenClaw's in-process cron service to close the direct-job execution
+ * window before the deferred CLI reconciliation starts.
+ *
+ * @param {object} api
+ * @param {{getCron?: Function}|null} gatewayContext
+ * @returns {Promise<{available: boolean, disabled: number, failed: number}>}
+ */
+async function reconcileUnsafeDirectCronsWithService(api, gatewayContext) {
+  let cron;
+  try {
+    cron = gatewayContext?.getCron?.();
+  } catch (error) {
+    api.logger?.warn?.(
+      `plur1bus-feature-crons: gateway cron service lookup failed (${error?.message || String(error)})`,
+    );
+    return { available: false, disabled: 0, failed: 0 };
+  }
+  if (!cron || typeof cron.list !== "function" || typeof cron.update !== "function") {
+    api.logger?.warn?.("plur1bus-feature-crons: gateway cron service unavailable for immediate safety reconciliation");
+    return { available: false, disabled: 0, failed: 0 };
+  }
+
+  let jobs;
+  try {
+    jobs = await withTimeout(
+      Promise.resolve(cron.list({ includeDisabled: true })),
+      5_000,
+      "feature cron immediate safety list",
+    );
+  } catch (error) {
+    api.logger?.warn?.(
+      `plur1bus-feature-crons: immediate cron list failed (${error?.message || String(error)})`,
+    );
+    return { available: true, disabled: 0, failed: 1 };
+  }
+
+  const unsafeJobs = planUnsafeDirectCronDisables(jobs);
+  let disabled = 0;
+  let failed = 0;
+  for (const job of unsafeJobs) {
+    try {
+      await withTimeout(
+        Promise.resolve(cron.update(job.id, {
+          enabled: false,
+          name: job.safetyName,
+        })),
+        5_000,
+        `feature cron immediate safety update ${job.id}`,
+      );
+      disabled += 1;
+    } catch (error) {
+      failed += 1;
+      api.logger?.warn?.(
+        `plur1bus-feature-crons: immediate safety-disable failed for ${job.id} (${error?.message || String(error)})`,
+      );
+    }
+  }
+  if (disabled > 0) {
+    api.logger?.warn?.(
+      `plur1bus-feature-crons: immediately safety-disabled ${disabled} exact direct job(s)`,
+    );
+  }
+  return { available: true, disabled, failed };
+}
+
+/**
  * Deferred, best-effort feature-cron bootstrap for the gateway_start
  * handler registered above. Fail-open end to end: any failure here is
  * logged at debug/warn level and swallowed — it must never affect the
  * gateway or the message flow.
  *
  * Throttled via the same marker file the doctor/status hint reads
- * (see shouldRunCronBootstrap): skipped when a run for the current plugin
- * version already happened in the last 20h, so a gateway that restarts
- * often doesn't re-spawn the setup script on every restart.
+ * (see shouldRunCronBootstrap): skipped when a successful run for the current
+ * plugin version happened in the last 20h. Host-patch failure forces the
+ * safety run regardless of the marker.
  */
-async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath, spawnImpl } = {}) {
+async function runDeferredFeatureCronBootstrap(api, {
+  cfg,
+  baseDbPath,
+  spawnImpl,
+  force = false,
+  safetyRetryDelaysMs = [0, 1_000, 5_000, 30_000, 120_000, 600_000],
+  waitImpl,
+} = {}) {
   const markerPath = featureCronsMarkerPath(baseDbPath);
   let marker = null;
   try {
@@ -2700,72 +2832,103 @@ async function runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath, spawnImpl
     marker = null;
   }
 
-  if (!shouldRunCronBootstrap(marker, { pluginVersion: PLUGIN_VERSION })) {
+  if (!force && !shouldRunCronBootstrap(marker, { pluginVersion: PLUGIN_VERSION })) {
     api.logger?.debug?.("plur1bus-feature-crons: deferred bootstrap skipped (recent run recorded)");
-    return;
+    return { ok: true, safetyPending: false, attempts: 0 };
   }
 
   const scriptPath = join(__pluginDir, "scripts", "setup-feature-crons.mjs");
-  let stdout = "";
-  let ok = false;
-  try {
-    let child;
-    if (spawnImpl) {
-      child = spawnImpl(process.execPath, [scriptPath, "--json"], {
-        cwd: __pluginDir,
-        detached: false,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } else {
-      const { spawn } = await import("node:child_process");
-      child = spawn(process.execPath, [scriptPath, "--json"], {
-        cwd: __pluginDir,
-        detached: false,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    }
-    ok = await new Promise((resolvePromise) => {
-      child.stdout?.on("data", (chunk) => { stdout += chunk; });
-      // stderr wird nicht ausgewertet, muss aber gedraint werden — ein
-      // voller Pipe-Buffer würde das Kind blockieren und 'close' nie feuern.
-      child.stderr?.resume();
-      child.on("error", () => resolvePromise(false));
-      child.on("close", (code) => resolvePromise(code === 0));
-    });
-  } catch (err) {
-    api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap spawn failed: ${err?.message || err}`);
-  }
+  const retrySchedule = force && Array.isArray(safetyRetryDelaysMs) && safetyRetryDelaysMs.length > 0
+    ? safetyRetryDelaysMs
+    : [0];
+  const waitForRetry = waitImpl || ((delayMs) => new Promise((resolvePromise) => {
+    const timer = setTimeout(resolvePromise, delayMs);
+    timer?.unref?.();
+  }));
 
-  // Marker is written ONLY on a successful run (spawn exited 0). On failure
-  // we leave any existing marker untouched (log only) so shouldRunCronBootstrap
-  // retries at the next gateway start instead of throttling for 20h while the
-  // doctor/status hint keeps nagging about a run that never actually happened.
-  if (ok) {
-    const lastPlanCreateCount = parseFeatureCronBootstrapLastPlanCreateCount(stdout);
+  for (let attemptIndex = 0; attemptIndex < retrySchedule.length; attemptIndex += 1) {
+    const delayMs = retrySchedule[attemptIndex];
+    if (attemptIndex > 0 && delayMs > 0) await waitForRetry(delayMs);
+
+    let stdout = "";
+    let ok = false;
     try {
-      writeJsonAtomic(
-        markerPath,
-        {
-          pluginVersion: PLUGIN_VERSION,
-          lastRunAt: new Date().toISOString(),
-          ...(lastPlanCreateCount !== undefined ? { lastPlanCreateCount } : {}),
-        },
-        { pretty: true },
-      );
+      let child;
+      if (spawnImpl) {
+        child = spawnImpl(process.execPath, [scriptPath, "--json"], {
+          cwd: __pluginDir,
+          detached: false,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } else {
+        const { spawn } = await import("node:child_process");
+        child = spawn(process.execPath, [scriptPath, "--json"], {
+          cwd: __pluginDir,
+          detached: false,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      }
+      ok = await new Promise((resolvePromise) => {
+        child.stdout?.on("data", (chunk) => { stdout += chunk; });
+        child.stderr?.resume();
+        child.on("error", () => resolvePromise(false));
+        child.on("close", (code) => resolvePromise(code === 0));
+      });
     } catch (err) {
-      api.logger?.debug?.(`plur1bus-feature-crons: marker write failed: ${err?.message || err}`);
+      api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap spawn failed: ${err?.message || err}`);
     }
 
-    // Cache is process-lifetime; invalidate it so the next doctor/status call
-    // re-reads the marker we just wrote instead of an earlier (or absent) hint.
-    _featureCronsHintCache = undefined;
+    let parsedResult = null;
+    try {
+      parsedResult = stdout.trim() ? JSON.parse(stdout.trim()) : null;
+    } catch {
+      parsedResult = null;
+    }
 
-    api.logger?.info?.(
-      `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
+    if (ok) {
+      const lastPlanCreateCount = parseFeatureCronBootstrapLastPlanCreateCount(stdout);
+      try {
+        writeJsonAtomic(
+          markerPath,
+          {
+            pluginVersion: PLUGIN_VERSION,
+            lastRunAt: new Date().toISOString(),
+            ...(lastPlanCreateCount !== undefined ? { lastPlanCreateCount } : {}),
+          },
+          { pretty: true },
+        );
+      } catch (err) {
+        api.logger?.debug?.(`plur1bus-feature-crons: marker write failed: ${err?.message || err}`);
+      }
+      _featureCronsHintCache = undefined;
+      api.logger?.info?.(
+        `plur1bus-feature-crons: deferred bootstrap ran (ok=${ok}${lastPlanCreateCount !== undefined ? `, planCreateCount=${lastPlanCreateCount}` : ""})`,
+      );
+    } else {
+      api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap attempt failed");
+    }
+
+    const failedSafetyRecovery = Array.isArray(parsedResult?.results)
+      && parsedResult.results.some(
+        (result) => result?.action === "safety-recovery" && result?.ok === false,
+      );
+    const safetyPending = force && (
+      !ok
+      || !parsedResult
+      || parsedResult.skipped === true
+      || failedSafetyRecovery
     );
-  } else {
-    api.logger?.info?.("plur1bus-feature-crons: deferred bootstrap failed — leaving marker untouched so it retries next start");
+    if (!safetyPending) {
+      return { ok, safetyPending: false, attempts: attemptIndex + 1 };
+    }
+    if (attemptIndex + 1 < retrySchedule.length) {
+      api.logger?.warn?.(
+        `plur1bus-feature-crons: safety reconciliation pending; retry ${attemptIndex + 2}/${retrySchedule.length}`,
+      );
+    }
   }
+  api.logger?.warn?.("plur1bus-feature-crons: safety reconciliation still pending after bounded retries");
+  return { ok: false, safetyPending: true, attempts: retrySchedule.length };
 }
 
 /**
@@ -3526,6 +3689,19 @@ const plugin = {
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
     pluginLogger = api.logger;
+    const cronDirectDispatchReady = process.env.NODE_TEST_CONTEXT
+      ? true
+      : ensureCronDirectDispatchAtRegistration(api);
+    if (!cronDirectDispatchReady && typeof api.on === "function") {
+      api.on(
+        "before_agent_reply",
+        (event, context) => guardUnsafeDirectCronTurn(
+          event,
+          context,
+          { hostReady: cronDirectDispatchReady },
+        ),
+      );
+    }
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
     const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
@@ -4600,22 +4776,31 @@ const plugin = {
     // depending on any of them running npm at all. See getFeatureCronsSetupHint
     // above and shouldRunCronBootstrap/featureCronsHintFromMarker in
     // lib/setup/feature-cron-bootstrap.js for the pure throttle/hint logic.
-    if (typeof api.on === "function" && cfg.featureCronSetup?.auto !== false) {
+    if (
+      typeof api.on === "function"
+      && (cfg.featureCronSetup?.auto !== false || !cronDirectDispatchReady)
+    ) {
       api.on(
         "gateway_start",
-        () => {
-          // Never block gateway startup on this: schedule far enough out
-          // that the gateway is fully up (and the `openclaw` CLI can talk
-          // to it) before we spawn anything, and unref the timer so it can
-          // never keep the process alive on its own.
+        async (_event, gatewayContext) => {
+          if (!cronDirectDispatchReady) {
+            await reconcileUnsafeDirectCronsWithService(api, gatewayContext);
+          }
+          // The in-process service closes the immediate safety window first.
+          // CLI reconciliation remains deferred and retried so it can repair
+          // the host patch and restore only safely marked jobs.
           const timer = setTimeout(() => {
-            runDeferredFeatureCronBootstrap(api, { cfg, baseDbPath }).catch((err) => {
+            runDeferredFeatureCronBootstrap(api, {
+              cfg,
+              baseDbPath,
+              force: !cronDirectDispatchReady,
+            }).catch((err) => {
               api.logger?.debug?.(`plur1bus-feature-crons: deferred bootstrap failed: ${err?.message || err}`);
             });
-          }, 90_000);
+          }, cronDirectDispatchReady ? 90_000 : 0);
           timer?.unref?.();
         },
-        { timeoutMs: 5_000 },
+        { timeoutMs: cronDirectDispatchReady ? 5_000 : 30_000 },
       );
     }
 
@@ -4989,7 +5174,10 @@ const plugin = {
               if (subKey === "classify-recent") {
                 const cpCfg = cfg.criticalPush || {};
                 if (cpCfg.enabled === false) {
-                  return formatJsonCommandResult({ job: "classify-recent", skipped: true, reason: "criticalPush_disabled" });
+                  const disabledResult = { job: "classify-recent", skipped: true, reason: "criticalPush_disabled" };
+                  return cronInternal
+                    ? formatClassifierCronReply(disabledResult)
+                    : formatJsonCommandResult(disabledResult);
                 }
                 const cpLlmCfg = createFeatureRoute("criticalPush", cpCfg);
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
@@ -5029,7 +5217,9 @@ const plugin = {
                   maxPerDay: cpCfg.maxPerDay ?? 3,
                 });
                 api.logger?.info?.(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
-                return formatJsonCommandResult({ job: "classify-recent", ...result });
+                return cronInternal
+                  ? formatClassifierCronReply(result)
+                  : formatJsonCommandResult({ job: "classify-recent", ...result });
               }
               if (subKey === "auto-accept-stale") {
                 const result = await runAutoAcceptStale(memoryDbAdapter, internalAgent, { logger: api.logger, hours: 24 });
@@ -5147,7 +5337,10 @@ const plugin = {
                 if ((cfg.afterthought?.enabled ?? true) === false
                   || !(skillMinerEnabled || mergingEnabled)
                   || !isLlmRouteAvailable(afterthoughtLlmCfg)) {
-                  return formatJsonCommandResult({ job: "afterthought", skipped: true, reason: "disabled" });
+                  const disabledResult = { job: "afterthought", skipped: true, reason: "disabled" };
+                  return cronInternal
+                    ? formatAfterthoughtCronReply(disabledResult)
+                    : formatJsonCommandResult(disabledResult);
                 }
                 const { runAfterthoughtJob } = await import("./lib/afterthought.js");
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
@@ -5165,7 +5358,9 @@ const plugin = {
                   logger: api.logger,
                 });
                 api.logger?.info?.(`plur1bus internal afterthought[${internalAgent}]: ${JSON.stringify({ ...result, text: result.text ? `${result.text.slice(0, 60)}…` : undefined })}`);
-                return formatJsonCommandResult({ job: "afterthought", ...result });
+                return cronInternal
+                  ? formatAfterthoughtCronReply(result)
+                  : formatJsonCommandResult({ job: "afterthought", ...result });
               }
               if (subKey === "persona-evolve") {
                 if ((cfg.personaVoice?.enabled ?? true) === false
@@ -9006,5 +9201,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, parseFeatureCronBootstrapLastPlanCreateCount, runDeferredFeatureCronBootstrap };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, ensureCronDirectDispatchAtRegistration, guardUnsafeDirectCronTurn, parseFeatureCronBootstrapLastPlanCreateCount, reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap };
 export default plugin;

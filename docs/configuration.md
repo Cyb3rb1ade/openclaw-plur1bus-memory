@@ -262,6 +262,9 @@ Das benannte Modell ist nur ein explizites Override-Beispiel, kein Default.
     "entries": {
       "memory-lancedb-namespaced": {
         "enabled": true,
+        "hooks": {
+          "allowConversationAccess": true
+        },
         "config": {
           "autoCapture": true,
           "autoRecall": true,
@@ -305,6 +308,12 @@ Das benannte Modell ist nur ein explizites Override-Beispiel, kein Default.
   }
 }
 ```
+
+`hooks.allowConversationAccess: true` ist für das vertrauenswürdige
+Memory-Plugin verpflichtend. OpenClaw registriert sonst den fail-closed
+`before_agent_reply`-Schutz der direkten Feature-Crons nicht. Der Installer
+stellt ausschließlich diese notwendige Berechtigung auch im Preserve-Modus
+sicher; sonstige Hook- und Feature-Entscheidungen bleiben erhalten.
 
 ---
 

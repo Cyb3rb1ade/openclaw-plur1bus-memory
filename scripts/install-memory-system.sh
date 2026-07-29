@@ -1190,7 +1190,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   dryrun "  - plugins.allow += memory-lancedb-namespaced"
   dryrun "  - plugins.slots.memory bleibt '${EXISTING_MEMORY_SLOT:-memory-core}'"
   dryrun "  - kein Backend-Wechsel: bestehende Legacy-Backends bleiben unverändert"
-  dryrun "  - Policy-Helper-Ergebnis wird direkt persistiert; explizite Hooks bleiben erhalten"
+  dryrun "  - hooks.allowConversationAccess=true wird verbindlich sichergestellt; sonstige explizite Hooks bleiben erhalten"
   if [[ "$KEEP_EXISTING_MEMORY_CONFIG" == "1" ]]; then
     dryrun "  - plugins.entries.memory-lancedb-namespaced bleibt inhaltlich erhalten"
   else
@@ -1510,14 +1510,16 @@ step "Schritt 9: OpenClaw-Patches anwenden"
 
 PATCHES_SCRIPT="$SOURCE_DIR/patches/apply-memory-patches.sh"
 PATCHES_USER_SCRIPT="$SOURCE_DIR/patches/apply-plur1bus-user-hotfix.sh"
+PATCHES_CRON_DIRECT_SCRIPT="$SOURCE_DIR/patches/apply-cron-plugin-direct-dispatch.mjs"
 if [[ -f "$PATCHES_SCRIPT" ]]; then
   if [[ "$DRY_RUN" == "0" ]]; then
     if [[ "$IS_REMOTE" == "1" ]]; then
       scp "$PATCHES_SCRIPT" "${SSH_HOST}:/tmp/apply-memory-patches.sh"
+      scp "$PATCHES_CRON_DIRECT_SCRIPT" "${SSH_HOST}:/tmp/apply-cron-plugin-direct-dispatch.mjs"
       if [[ -f "$PATCHES_USER_SCRIPT" ]]; then
         scp "$PATCHES_USER_SCRIPT" "${SSH_HOST}:/tmp/apply-plur1bus-user-hotfix.sh"
       fi
-      ssh "$SSH_HOST" "bash /tmp/apply-memory-patches.sh; rc=\$?; rm -f /tmp/apply-memory-patches.sh /tmp/apply-plur1bus-user-hotfix.sh; exit \$rc"
+      ssh "$SSH_HOST" "bash /tmp/apply-memory-patches.sh; rc=\$?; rm -f /tmp/apply-memory-patches.sh /tmp/apply-cron-plugin-direct-dispatch.mjs /tmp/apply-plur1bus-user-hotfix.sh; exit \$rc"
     else
       bash "$PATCHES_SCRIPT"
     fi
