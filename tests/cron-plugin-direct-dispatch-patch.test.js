@@ -94,9 +94,9 @@ export async function runCronIsolatedAgentTurn(params) {
       withRunSession: (result) => result,
     },
   };
-  const match = () => ({
-    command: { handler: async () => params.job.handlerResult },
-  });
+  const match = () => params.job.commandRegistered === false
+    ? null
+    : { command: { handler: async () => params.job.handlerResult } };
   try {
     /* plur1bus-cron-cmd-dispatch */
     const _plMsg = (params.job.payload?.message ?? "").split("\\n")[0].trim();
@@ -276,5 +276,45 @@ describe("cron plugin direct-dispatch host patch", () => {
     assert.equal(result.status, "model");
     assert.equal(runtime.getState().modelCalls, 1);
     assert.equal(runtime.getState().finalizedPayloads, null);
+  });
+
+  it("fails exact feature commands closed when the plugin command is unavailable", async () => {
+    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-runtime.mjs");
+    const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
+    writeFileSync(target, patched.source);
+    const runtime = await import(`${pathToFileURL(target).href}?missing=${Date.now()}`);
+
+    await assert.rejects(
+      runtime.runCronIsolatedAgentTurn({
+        job: {
+          payload: { message: "/plur1bus internal afterthought" },
+          commandRegistered: false,
+        },
+      }),
+      /direct cron command is not registered/i,
+    );
+    assert.equal(runtime.getState().modelCalls, 0);
+  });
+
+  it("fails exact feature commands closed when their handler returns no reply", async () => {
+    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-runtime.mjs");
+    const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
+    writeFileSync(target, patched.source);
+    const runtime = await import(`${pathToFileURL(target).href}?empty=${Date.now()}`);
+
+    await assert.rejects(
+      runtime.runCronIsolatedAgentTurn({
+        job: {
+          payload: { message: "/plur1bus internal classify-recent" },
+          handlerResult: undefined,
+        },
+      }),
+      /returned no ReplyPayload/i,
+    );
+    assert.equal(runtime.getState().modelCalls, 0);
   });
 });

@@ -29,7 +29,8 @@ function directFinalizeBlock(indent) {
   const i3 = `${i2}\t`;
   return [
     `${i}if (_plDirectDispatch) {`,
-    `${i1}const _plReply = _plResult && typeof _plResult === "object" ? _plResult : { text: "NO_REPLY" };`,
+    `${i1}if (!_plResult || typeof _plResult !== "object") throw new Error("PLUR1BUS direct cron handler returned no ReplyPayload");`,
+    `${i1}const _plReply = _plResult;`,
     `${i1}const _plText = typeof _plReply.text === "string" ? _plReply.text : "";`,
     `${i1}const _plRunEndedAt = Date.now();`,
     `${i1}const _plExecution = {`,
@@ -85,6 +86,8 @@ export function patchCronPluginDirectDispatchSource(source) {
       && finalizeIndex > directIndex
       && executorIndex > finalizeIndex
       && source.indexOf("_plDirectDispatch", directIndex) > directIndex
+      && source.indexOf("direct cron command is not registered", directIndex) > directIndex
+      && source.indexOf("returned no ReplyPayload", directIndex) > directIndex
       && source.indexOf("payloads: [_plReply]", directIndex) > directIndex
       && source.indexOf("if (_plDirectDispatch) throw _plErr;", directIndex) > directIndex;
     if (!complete) {
@@ -123,6 +126,19 @@ export function patchCronPluginDirectDispatchSource(source) {
   ].join("\n");
 
   let upgraded = legacy.replace(messageLine, guardedMessageLines);
+
+  const matchAnchor = "if (_plMatch) {";
+  const matchIndex = upgraded.indexOf(matchAnchor);
+  if (matchIndex < 0) {
+    throw new Error("legacy PLUR1BUS cron dispatcher command-match anchor not found");
+  }
+  const matchIndent = indentationAt(upgraded, matchIndex);
+  const matchLineStart = upgraded.lastIndexOf("\n", matchIndex - 1) + 1;
+  upgraded = [
+    upgraded.slice(0, matchLineStart),
+    `${matchIndent}if (_plDirectDispatch && !_plMatch) throw new Error("PLUR1BUS direct cron command is not registered");\n`,
+    upgraded.slice(matchLineStart),
+  ].join("");
 
   const deliveryAnchor = "if (!prepared.context.deliveryRequested) {";
   const deliveryIndex = upgraded.indexOf(deliveryAnchor);
