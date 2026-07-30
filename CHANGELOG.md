@@ -7,6 +7,31 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.8] — 2026-07-30
+
+### Behoben
+
+- **Feature-Cron-Setup toleriert langsame redigierte Konfigurations-Snapshots.**
+  Der Live-Gateway benötigte für
+  `openclaw gateway call config.get --json` etwa 12,5 bis 18 Sekunden. Der
+  bisherige 15-Sekunden-Child-Timeout konnte deshalb `ETIMEDOUT` liefern,
+  obwohl der Gateway gesund war, und die Cron-Reconciliation blieb ausstehend.
+  Ausschließlich dieser Snapshot-Aufruf erhält jetzt 30 Sekunden.
+
+### Unverändert
+
+- Die Konfiguration wird weiterhin genau einmal, redigiert und fail-closed
+  geladen. Es gibt keine neuen Retries und keine Änderung am gemeinsamen
+  CLI-Timeout.
+- Cron-Zeitpläne, Delivery, Modell-Routing und Thinking-Policy bleiben
+  unverändert.
+
+### Verifikation
+
+- Der Regressionstest wurde mit 15 Sekunden rot und mit 30 Sekunden grün
+  verifiziert.
+- Vollständige Suite: 3.309 bestanden, 0 fehlgeschlagen, 1 übersprungen.
+
 ## [7.1.7] — 2026-07-30
 
 ### Behoben
