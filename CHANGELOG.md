@@ -7,6 +7,40 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.1.9] — 2026-07-30
+
+### Geändert
+
+- **Afterthought und Critical Push laufen standardmäßig nur noch alle drei
+  Stunden.** Das reduziert die sechs zuvor halbstündlichen Feature-Jobs um
+  rechnerisch rund 83 Prozent. Bestehende, von PLUR1BUS ausgelieferte
+  30-Minuten-Zeitpläne werden idempotent migriert; individuell konfigurierte
+  Intervalle bleiben unangetastet.
+- **Semantic Discovery bleibt beim auslösenden Agenten.** Der Cron verarbeitet
+  nur noch die Obsidian-Workspaces dieses Agenten, statt unnötig fremde
+  Workspaces einzubeziehen.
+
+### Behoben
+
+- **Active-Memory erzeugt keine Recall-/Capture-Rückkopplung mehr.**
+  `:active-memory:`-Unterläufe werden vor expliziten Memory-Command-Ausnahmen
+  erkannt und sowohl von Auto-Recall als auch Auto-Capture ausgeschlossen.
+- **Kanonische Cron-Session-Keys werden sicher erkannt.** Interne PLUR1BUS-Jobs
+  bleiben autorisiert, auch wenn der Host weder `channel` noch `origin` als
+  `cron` weiterreicht.
+
+### Kompatibilität
+
+- Die tatsächlichen Afterthought- und Critical-Push-Entscheidungen behalten
+  ihre native, agentenspezifische OpenClaw-Modellroute und Thinking-Policy.
+- Delivery-Ziele und benutzerdefinierte Cron-Intervalle werden nicht
+  überschrieben.
+
+### Verifikation
+
+- Vollständige Suite: 3.314 bestanden, 0 fehlgeschlagen, 1 übersprungen.
+- `npm audit`: 0 Schwachstellen.
+
 ## [7.1.8] — 2026-07-30
 
 ### Behoben

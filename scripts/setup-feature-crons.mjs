@@ -595,6 +595,7 @@ export async function runSetupFeatureCrons(options = {}) {
       const editArgs = ["cron", "edit", u.id];
       if (typeof u.rename === "string") editArgs.push("--name", u.rename);
       if (typeof u.message === "string") editArgs.push("--message", u.message);
+      if (u.schedule) editArgs.push(...scheduleArgs(u.schedule));
       if (u.enable) editArgs.push("--enable");
       if (u.disable) editArgs.push("--disable");
       if (u.noDeliver) editArgs.push("--no-deliver");
