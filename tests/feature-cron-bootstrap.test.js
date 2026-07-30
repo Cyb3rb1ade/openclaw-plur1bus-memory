@@ -754,9 +754,9 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       return args[args.indexOf(flag) + 1];
     };
     assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * 0");
-    assert.strictEqual(schedule("plur1bus afterthought main", "--every"), "1800s");
+    assert.strictEqual(schedule("plur1bus afterthought main", "--every"), "10800s");
     assert.strictEqual(schedule("plur1bus consolidate-daily main", "--cron"), "0 3 * * *");
-    assert.strictEqual(schedule("plur1bus classify-recent main", "--every"), "1800s");
+    assert.strictEqual(schedule("plur1bus classify-recent main", "--every"), "10800s");
     assert.strictEqual(schedule("plur1bus rem-dream main", "--cron"), "15 1 * * *");
     assert.strictEqual(schedule("plur1bus rem-dream main", "--tz"), "Europe/Berlin");
     assert.strictEqual(schedule("plur1bus skill-miner main", "--cron"), "7 6 * * 2");
