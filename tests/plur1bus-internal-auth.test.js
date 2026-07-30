@@ -135,6 +135,21 @@ describe("/plur1bus internal auth gate", () => {
     });
   });
 
+  it("recognizes isolated cron command contexts by their canonical session key", async () => {
+    await withPlugin(async ({ command, workspaceDir }) => {
+      const result = await command.handler({
+        args: "internal gc-run",
+        workspaceDir,
+        workspaceKey: "ws",
+        agentId: "agent-a",
+        sessionKey: "agent:agent-a:cron:163b4770-5806-42df-8f80-147f1bfe3a53",
+      });
+
+      assert.match(result.text, /"job": "gc-run"/);
+      assert.match(result.text, /"reason": "gc_disabled"/);
+    });
+  });
+
   it("routes verified cron jobs through the runtime workspace, never the raw chat workspace key", async () => {
     const neoStores = [];
     await withPlugin(async ({ command, workspaceDir, baseDbPath }) => {

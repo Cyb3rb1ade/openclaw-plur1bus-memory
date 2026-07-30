@@ -27,6 +27,15 @@ describe("shouldSkipAutoRecallForInternalTurn", () => {
     assert.strictEqual(shouldSkipAutoRecallForInternalTurn({}, { sessionKey: "agent:main:main:heartbeat" }), true);
   });
 
+  it("skips OpenClaw active-memory child sessions", () => {
+    assert.strictEqual(
+      shouldSkipAutoRecallForInternalTurn({ prompt: "memory_recall internal context" }, {
+        sessionKey: "agent:bernhardine:telegram:bernhardine:direct:1211667028:active-memory:ffe3629431db",
+      }),
+      true,
+    );
+  });
+
   it("skips cron prompt marker", () => {
     assert.strictEqual(shouldSkipAutoRecallForInternalTurn({ prompt: "[cron:job-a] run review" }, {}), true);
   });

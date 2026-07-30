@@ -2,13 +2,24 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.1.8 — reliable feature-cron setup**
+**PLUR1BUS 7.1.9 — lower background token usage**
 
-Current version: **7.1.8** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.1.8`. See the [changelog](CHANGELOG.md) for the full history.
+Current version: **7.1.9** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.1.9`. See the [changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.1.9 — lower background token usage
+
+- **Six high-frequency jobs reduced by about 83%** — Afterthought and Critical
+  Push now run every three hours instead of every 30 minutes.
+- **Safe schedule migration** — only PLUR1BUS's shipped 30-minute cadence is
+  migrated; custom operator intervals and delivery targets remain untouched.
+- **No active-memory recursion** — active-memory child sessions cannot trigger
+  another PLUR1BUS recall or capture pass.
+- **Agent-scoped semantic discovery** — scheduled discovery processes only the
+  triggering agent's configured Obsidian workspaces.
 
 ### New in v7.1.8 — reliable feature-cron setup
 

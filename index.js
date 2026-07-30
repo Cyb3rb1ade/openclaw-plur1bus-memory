@@ -435,6 +435,19 @@ function addSemanticDiscoveryStats(total, result = {}) {
   return total;
 }
 
+/**
+ * Select the configured Obsidian workspaces owned by a cron's triggering agent.
+ *
+ * @param {object} rawConfig
+ * @param {string} agentId
+ * @returns {Array<object>}
+ */
+export function selectSemanticDiscoveryWorkspaces(rawConfig = {}, agentId) {
+  const workspaceAgentId = typeof agentId === "string" ? agentId.trim() : "";
+  if (!workspaceAgentId) return [];
+  return discoverObsidianWorkspaces(rawConfig, { workspace: workspaceAgentId });
+}
+
 async function runSemanticDiscoveryBatches({ db, semVaultCfg, pool, logger, defaultAgentId, mutationPolicy }) {
   const discoveryCfg = semVaultCfg?.graphLinks?.semanticDiscovery || {};
   const batchSize = Math.max(1, Math.min(Number(discoveryCfg.batchSize || 500), 5000));
@@ -4915,7 +4928,10 @@ const plugin = {
         const isCronCommandContext = (commandCtx) => {
           const channel = String(commandCtx?.channel || "").toLowerCase();
           const origin = String(commandCtx?.origin || commandCtx?.source || commandCtx?.kind || "").toLowerCase();
-          return channel === "cron" || origin === "cron";
+          const sessionKey = String(commandCtx?.sessionKey || "").toLowerCase();
+          return channel === "cron"
+            || origin === "cron"
+            || /^agent:[^:]+:cron(?::|$)/.test(sessionKey);
         };
         const resolveCronMemoryContext = async (commandCtx) => {
           const agentId = safeAgentId(commandCtx?.agentId || "default");
@@ -5425,9 +5441,9 @@ const plugin = {
               }
               if (subKey === "discover-semantic-links") {
                 const semBridgeCfg = obsidianBridgeCfg || {};
-                const workspaces = discoverObsidianWorkspaces(semBridgeCfg, { commandCtx });
+                const workspaces = selectSemanticDiscoveryWorkspaces(semBridgeCfg, internalAgent);
                 if (!workspaces.length) {
-                  return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_workspaces_configured" });
+                  return formatJsonCommandResult({ job: "discover-semantic-links", skipped: true, reason: "no_workspace_for_agent" });
                 }
                 let totalProcessed = 0, totalSkipped = 0, totalUnchanged = 0, totalErrors = 0, totalBlocked = 0;
                 for (const ws of workspaces) {
