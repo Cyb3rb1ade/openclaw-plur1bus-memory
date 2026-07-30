@@ -11,7 +11,11 @@ import {
   shouldRunCronBootstrap,
   featureCronsHintFromMarker,
 } from "../lib/setup/feature-cron-bootstrap.js";
-import { buildAddArgs, runSetupFeatureCrons } from "../scripts/setup-feature-crons.mjs";
+import {
+  buildAddArgs,
+  loadFeatureCronConfig,
+  runSetupFeatureCrons,
+} from "../scripts/setup-feature-crons.mjs";
 
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
@@ -405,6 +409,46 @@ async function runJsonSetupDirect(
   return { exitCode, stdout: output, stderr: stderr.read(), parsed: JSON.parse(output) };
 }
 
+describe("loadFeatureCronConfig timeout budget", () => {
+  it("allows 30 seconds for the redacted gateway snapshot", () => {
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          "memory-lancedb-namespaced": {
+            enabled: true,
+            config: { criticalPush: { enabled: true } },
+          },
+        },
+      },
+    };
+    const runtimeConfig = { agents: { defaults: {} } };
+    let receivedTimeout;
+
+    const result = loadFeatureCronConfig((args, timeout) => {
+      assert.deepStrictEqual(args, ["gateway", "call", "config.get", "--json"]);
+      receivedTimeout = timeout;
+      if (timeout < 30_000) {
+        return {
+          ok: false,
+          stdout: "",
+          stderr: "",
+          status: 1,
+          error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+        };
+      }
+      return {
+        ok: true,
+        stdout: JSON.stringify({ valid: true, sourceConfig, runtimeConfig }),
+        stderr: "",
+        status: 0,
+      };
+    });
+
+    assert.equal(receivedTimeout, 30_000);
+    assert.deepStrictEqual(result, { ok: true, sourceConfig, runtimeConfig });
+  });
+});
+
 describe("runSetupFeatureCrons effective config snapshot", () => {
   it("fails closed by disabling only active exact direct jobs when the host patch is unavailable", async () => {
     const calls = [];
@@ -618,7 +662,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     assert.strictEqual(result.exitCode, 0);
     const configCalls = calls.filter(({ args }) => args.join(" ") === "gateway call config.get --json");
     assert.strictEqual(configCalls.length, 1);
-    assert.strictEqual(configCalls[0].timeout, 15000);
+    assert.strictEqual(configCalls[0].timeout, 30000);
     assert.strictEqual(cronAdds.length, 1);
     assert.ok(cronAdds[0].includes("plur1bus consolidate-daily main"));
   });
