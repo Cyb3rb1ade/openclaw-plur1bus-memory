@@ -2,13 +2,22 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.1.7 — model-free feature crons**
+**PLUR1BUS 7.1.8 — reliable feature-cron setup**
 
-Current version: **7.1.7** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.1.7`. See the [changelog](CHANGELOG.md) for the full history.
+Current version: **7.1.8** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.1.8`. See the [changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.1.8 — reliable feature-cron setup
+
+- **Slow healthy gateways no longer miss reconciliation** — the redacted
+  effective-config snapshot used by feature-cron setup now has a focused
+  30-second budget; live measurements were approximately 12.5–18 seconds.
+- **Narrow compatibility fix** — the fail-closed result contract, single
+  snapshot, shared CLI defaults, schedules, delivery, model routing, and
+  thinking policy remain unchanged.
 
 ### New in v7.1.7 — model-free feature cron dispatch
 
@@ -264,14 +273,14 @@ Install the immutable GitHub Release package:
 
 ```bash
 openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.1.7/cyb3rb1ade-plur1bus-memory-7.1.7.tgz
+  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.1.8/cyb3rb1ade-plur1bus-memory-7.1.8.tgz
 ```
 
 Or install the exact ClawHub release:
 
 ```bash
 openclaw plugins install \
-  clawhub:@cyb3rb1ade/plur1bus-memory@7.1.7 \
+  clawhub:@cyb3rb1ade/plur1bus-memory@7.1.8 \
   --acknowledge-clawhub-risk
 ```
 
@@ -282,7 +291,7 @@ the exact package:
 ```bash
 npm login --scope=@cyb3rb1ade --auth-type=legacy \
   --registry=https://npm.pkg.github.com
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.1.7 --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.1.8 --pin
 ```
 
 For a source checkout, clone into the OpenClaw extensions folder and restart
