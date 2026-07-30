@@ -48,12 +48,12 @@ describe("REQUIRED_FEATURE_CRONS", () => {
     assert.strictEqual(afterthought.needsDelivery, true);
     assert.match(afterthought.command, /\/plur1bus internal afterthought/);
     assert.strictEqual(afterthought.schedule.kind, "every");
-    assert.strictEqual(afterthought.schedule.everyMs, 30 * 60 * 1000);
+    assert.strictEqual(afterthought.schedule.everyMs, 3 * 60 * 60 * 1000);
     assert.strictEqual(afterthought.message, afterthought.command);
 
     assert.strictEqual(classifier.needsDelivery, true);
     assert.strictEqual(classifier.schedule.kind, "every");
-    assert.strictEqual(classifier.schedule.everyMs, 30 * 60 * 1000);
+    assert.strictEqual(classifier.schedule.everyMs, 3 * 60 * 60 * 1000);
     assert.strictEqual(classifier.message, classifier.command);
   });
 });
@@ -348,6 +348,44 @@ describe("planFeatureCrons", () => {
     needsDelivery: true,
   };
   const specs = [personaSpec, afterthoughtSpec];
+
+  it("migrates only the shipped 30-minute direct-feature interval", () => {
+    const shippedAfterthought = REQUIRED_FEATURE_CRONS.find(
+      (spec) => spec.feature === "afterthought",
+    );
+    const existing = [{
+      id: "afterthought-main",
+      agentId: "main",
+      name: "plur1bus afterthought main",
+      payload: { message: "/plur1bus internal afterthought" },
+      schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "12345",
+        accountId: "default",
+      },
+    }];
+
+    const plan = planFeatureCrons(existing, [shippedAfterthought], {
+      agents: [{ id: "main", isDefault: true }],
+    });
+
+    assert.deepStrictEqual(plan.update, [{
+      id: "afterthought-main",
+      name: "plur1bus afterthought main",
+      schedule: { kind: "every", everyMs: 3 * 60 * 60 * 1000 },
+    }]);
+
+    existing[0].schedule.everyMs = 60 * 60 * 1000;
+    assert.deepStrictEqual(
+      planFeatureCrons(existing, [shippedAfterthought], {
+        agents: [{ id: "main", isDefault: true }],
+      }).update,
+      [],
+      "custom intervals must remain untouched",
+    );
+  });
 
   it("plans both specs as creates when no existing jobs match", () => {
     const plan = planFeatureCrons([], specs);
