@@ -208,7 +208,7 @@ function isPlainObject(value) {
 export function loadFeatureCronConfig(openclawImpl = openclaw) {
   let result;
   try {
-    result = openclawImpl(["gateway", "call", "config.get", "--json"], 15000);
+    result = openclawImpl(["gateway", "call", "config.get", "--json"], 30000);
   } catch (_error) {
     return { ok: false, error: { code: "config-call-failed" } };
   }
