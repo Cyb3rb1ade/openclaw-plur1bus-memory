@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import threading
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -23,6 +24,11 @@ except ImportError:  # pragma: no cover - exercised only before Hermes installs 
 from .service import PLUR1BUS_SERVICE
 from .runtime import Plur1busRuntime
 from .validation import ValidationError, normalize_text_payload, resolve_inside, safe_agent_id, safe_memory_id
+
+
+# Hermes profile names are single path segments; anything else must never be joined
+# into a config path.
+_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 def _utcnow_iso() -> str:
@@ -43,7 +49,10 @@ class Plur1busMemoryProvider(MemoryProvider):
     """
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
-        self.config = dict(config or {})
+        # Kept apart from `self.config` so every initialize() rebuilds the merge from
+        # disk instead of inheriting the previously served profile's values.
+        self._supplied_config = dict(config or {})
+        self.config = dict(self._supplied_config)
         self._hermes_home = Path.home() / ".hermes"
         self._session_id = ""
         self._closed = False
@@ -82,8 +91,9 @@ class Plur1busMemoryProvider(MemoryProvider):
             self._hermes_home = Path(str(hermes_home)).expanduser()
         supplied_config = kwargs.get("config")
         if isinstance(supplied_config, Mapping):
-            self.config.update(supplied_config.get("plur1bus", supplied_config))
-        self.config = self._runtime_config()
+            self._supplied_config.update(supplied_config.get("plur1bus", supplied_config))
+        profile_name = str(kwargs.get("agent_identity") or kwargs.get("agent_id") or "")
+        self.config = self._runtime_config(profile_name)
         self._validate_runtime_config()
         self._session_id = str(session_id or "")
         self._closed = False
@@ -361,11 +371,21 @@ class Plur1busMemoryProvider(MemoryProvider):
                 if len(self._prefetch_cache) > 32:
                     self._prefetch_cache.pop(next(iter(self._prefetch_cache)))
 
-    def _runtime_config(self) -> dict[str, Any]:
-        """Merge explicit config with the non-secret provider config file."""
-        config_path = self._hermes_home / "plugins" / "plur1bus" / "config.json"
-        disk_config = self._read_json(config_path)
-        return {**disk_config, **self.config}
+    def _runtime_config(self, profile: str = "") -> dict[str, Any]:
+        """Merge explicit config over the profile's and then the root's config file.
+
+        Under ``gateway.multiplex_profiles`` a single process serves every profile,
+        so the per-profile ``config.json`` written by the cutover — and with it
+        ``agentId`` and ``agentAliases`` — has to win over the root file. Without
+        this the alias never applies and every profile writes to a namespace named
+        after itself instead of its internal agent ID.
+        """
+        merged = self._read_json(self._hermes_home / "plugins" / "plur1bus" / "config.json")
+        if _PROFILE_NAME.fullmatch(profile or ""):
+            merged.update(self._read_json(
+                self._hermes_home / "profiles" / profile / "plugins" / "plur1bus" / "config.json"
+            ))
+        return {**merged, **self._supplied_config}
 
     def _validate_runtime_config(self) -> None:
         embedding = self.config.get("embedding", {})
