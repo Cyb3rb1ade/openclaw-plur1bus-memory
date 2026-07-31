@@ -23,6 +23,8 @@
     "lib/",
     "patches/apply-cron-plugin-direct-dispatch.mjs",
     "scripts/",
+    "plur1bus-hermes/",
+    "plur1bus-controls/",
     "docs/audits/",
     "docs/runbooks/",
     "docs/configuration.md",

@@ -1,7 +1,7 @@
-# Known Issues — v7.1.0
+# Known Issues — v7.1.2
 
-> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-07-24 (v7.1.0)
-> Release: v7.1.0 Current Baseline
+> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-07-24 (v7.1.2)
+> Release: v7.1.2 Current Baseline
 
 ---
 
@@ -30,7 +30,7 @@ Qualität bzw. Reihenfolge einzelner Reranker-Ergebnisse beeinträchtigen.
 Timeouts auf die ungerankte Reihenfolge zurück. Das Problem betrifft die
 Ranking-Qualität, nicht die ACL-, Speicher- oder Installationssicherheit.
 
-**Status:** Offen — separat zu analysieren und zu beheben. Nicht durch v7.1.0
+**Status:** Offen — separat zu analysieren und zu beheben. Nicht durch v7.1.2
 eingeführt.
 
 ---

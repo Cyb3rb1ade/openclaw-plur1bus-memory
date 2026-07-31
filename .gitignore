@@ -52,3 +52,14 @@ BREAKING_CHANGE_AUDIT.md
 !.openclaw/extensions/emotional-state-injector/
 !.openclaw/extensions/emotional-state-injector/**
 .worktrees/
+
+# Python subprojects (plur1bus-hermes, mtplx-embed, plur1bus-controls)
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+
+# iCloud/Time Machine duplicate-file artifacts ("file 2.ext", "dir 2") from
+# syncing a checkout under ~/Documents while files are being written.
+* 2.*
+* 2/
