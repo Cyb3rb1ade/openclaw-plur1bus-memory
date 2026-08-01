@@ -174,6 +174,8 @@ export const DEPLOY_FILES = [
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",
   "lib/speaker-proposer.js",
+  "lib/promoted-memory-reindex.js",
+  "scripts/embed-promoted-memories.mjs",
   // ── transitive index.js runtime closure ───────────────────────────────────
   "lib/atomic-json.js",
   "lib/critical-push-classifier.js",

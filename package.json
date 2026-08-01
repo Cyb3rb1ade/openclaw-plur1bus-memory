@@ -46,6 +46,7 @@
     "maintain-lancedb": "node scripts/maintain-lancedb.mjs",
     "maintain-lancedb:apply": "node scripts/maintain-lancedb.mjs --apply",
     "repair-dreaming-cron": "node scripts/repair-dreaming-cron.mjs",
+    "reindex-promotions": "node scripts/embed-promoted-memories.mjs --dry-run",
     "setup-feature-crons": "node scripts/setup-feature-crons.mjs",
     "postinstall": "node scripts/setup-feature-crons.mjs || true"
   },

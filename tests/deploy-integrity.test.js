@@ -278,6 +278,15 @@ describe("DEPLOY_FILES coverage", () => {
     assert.deepStrictEqual(missing, [], `feature-cron runtime files missing from DEPLOY_FILES: ${missing.join(", ")}`);
   });
 
+  it("contains the promoted-memory reindex runtime files", () => {
+    const reindexRuntime = [
+      "lib/promoted-memory-reindex.js",
+      "scripts/embed-promoted-memories.mjs",
+    ];
+    const missing = reindexRuntime.filter((file) => !DEPLOY_FILES.includes(file));
+    assert.deepStrictEqual(missing, [], `promoted-memory reindex files missing from DEPLOY_FILES: ${missing.join(", ")}`);
+  });
+
   it("every file in DEPLOY_FILES exists on disk in the repo", () => {
     const missing = DEPLOY_FILES.filter((f) => !existsSync(join(REPO_ROOT, f)));
     assert.deepStrictEqual(missing, [], `DEPLOY_FILES lists files that do not exist on disk: ${missing.join(", ")}`);
