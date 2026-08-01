@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 
 /**
  * Canonical list of files that must be present and byte-identical in the
@@ -174,9 +174,110 @@ export const DEPLOY_FILES = [
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",
   "lib/speaker-proposer.js",
+  // ── transitive index.js runtime closure ───────────────────────────────────
+  "lib/atomic-json.js",
+  "lib/critical-push-classifier.js",
+  "lib/critical-push-state.js",
+  "lib/fetch-with-timeout.js",
+  "lib/filter-parser.js",
+  "lib/garbage-collector.js",
+  "lib/graph-index.js",
+  "lib/i18n-dictionary.js",
+  "lib/install/soul-patcher.js",
+  "lib/job-lock.js",
+  "lib/job-rate-limit.js",
+  "lib/jobs/conflict-resolver.js",
+  "lib/jobs/consolidation-report.js",
+  "lib/jobs/memory-compaction.js",
+  "lib/jobs/memory-dynamics-maintenance.js",
+  "lib/jobs/skill-miner/evidence-aggregator.js",
+  "lib/jobs/skill-miner/llm-extractor.js",
+  "lib/jobs/skill-miner/skill-md-renderer.js",
+  "lib/metrics-debounce.js",
+  "lib/obsidian-review-authority.js",
+  "lib/obsidian-semantic-discovery-flow.js",
+  "lib/obsidian-vault-confirmation-flow.js",
+  "lib/obsidian/adversarial-deep.js",
+  "lib/obsidian/archive-rotation.js",
+  "lib/obsidian/bases-generator.js",
+  "lib/obsidian/conflict-collector.js",
+  "lib/obsidian/conflict-report.js",
+  "lib/obsidian/dashboard-generator.js",
+  "lib/obsidian/dataview-generator.js",
+  "lib/obsidian/evidence-scorer.js",
+  "lib/obsidian/frontmatter.js",
+  "lib/obsidian/graph-link-writer.js",
+  "lib/obsidian/impact-analysis.js",
+  "lib/obsidian/link-hygiene.js",
+  "lib/obsidian/link-suggestions.js",
+  "lib/obsidian/maintenance-deep.js",
+  "lib/obsidian/managed-blocks.js",
+  "lib/obsidian/memory-explain-builder.js",
+  "lib/obsidian/project-hub-builder.js",
+  "lib/obsidian/property-normalizer.js",
+  "lib/obsidian/provenance-graph.js",
+  "lib/obsidian/record-index.js",
+  "lib/obsidian/record-schema.js",
+  "lib/obsidian/record-writer.js",
+  "lib/obsidian/safe-paths.js",
+  "lib/obsidian/semantic-conflict-graph.js",
+  "lib/obsidian/semantic-duplicate-scan.js",
+  "lib/obsidian/tasks-generator.js",
+  "lib/obsidian/weekly-synthesis.js",
+  "lib/pattern-detector-embedding.js",
+  "lib/pattern-detector.js",
+  "lib/proactive-nudge.js",
+  "lib/query-refiner.js",
+  "lib/temporal-parser.js",
 ];
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;
+const RELATIVE_IMPORT_RE = /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.{1,2}\/[^"']+)["']/g;
+
+function resolveRelativeModule(fromDir, specifier) {
+  const base = resolvePath(fromDir, specifier);
+  const candidates = [base, `${base}.js`, `${base}.mjs`, join(base, "index.js")];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+/**
+ * Returns the deterministic static relative-import closure for an entry file.
+ * Paths are repository-relative POSIX strings and may never escape repoDir.
+ *
+ * @param {string} entryRelativePath
+ * @param {string} repoDir
+ * @returns {string[]}
+ */
+export function collectRelativeImports(entryRelativePath, repoDir) {
+  const root = resolvePath(repoDir);
+  const pending = [entryRelativePath];
+  const seen = new Set();
+
+  while (pending.length > 0) {
+    const relativePath = pending.shift();
+    if (seen.has(relativePath)) continue;
+    const absolutePath = resolvePath(root, relativePath);
+    if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) {
+      throw new Error(`deploy-integrity import escapes repository: ${relativePath}`);
+    }
+    if (!existsSync(absolutePath)) {
+      throw new Error(`deploy-integrity import is missing: ${relativePath}`);
+    }
+
+    seen.add(relativePath);
+    const source = readFileSync(absolutePath, "utf8");
+    for (const match of source.matchAll(RELATIVE_IMPORT_RE)) {
+      const resolved = resolveRelativeModule(dirname(absolutePath), match[1]);
+      if (!resolved) {
+        throw new Error(`deploy-integrity cannot resolve ${match[1]} from ${relativePath}`);
+      }
+      const importedRelative = relative(root, resolved).split(sep).join("/");
+      if (!seen.has(importedRelative)) pending.push(importedRelative);
+    }
+  }
+
+  return [...seen].sort();
+}
 
 function sha256(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");

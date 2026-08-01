@@ -11,6 +11,7 @@ import {
   validateDeployment,
   DEPLOY_FILES,
 } from "../scripts/lib/deploy-integrity.mjs";
+import * as deployIntegrity from "../scripts/lib/deploy-integrity.mjs";
 
 let dir;
 
@@ -222,6 +223,25 @@ describe("validateDeployment", () => {
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "../..");
 
 describe("DEPLOY_FILES coverage", () => {
+  it("contains every reachable relative runtime import from index.js", () => {
+    assert.strictEqual(typeof deployIntegrity.collectRelativeImports, "function");
+    const reachable = deployIntegrity.collectRelativeImports("index.js", REPO_ROOT);
+    const missing = reachable.filter((file) => !DEPLOY_FILES.includes(file));
+    assert.deepStrictEqual(missing, [], `reachable runtime files missing from DEPLOY_FILES: ${missing.join(", ")}`);
+  });
+
+  it("discovers transitive relative runtime imports", () => {
+    writeFileSync(join(dir, "repo", "index.js"), 'import "./lib/a.js";\nexport default {};\n');
+    writeFileSync(join(dir, "repo", "lib", "a.js"), 'export { b } from "./b.js";\n');
+    writeFileSync(join(dir, "repo", "lib", "b.js"), "export const b = true;\n");
+
+    assert.strictEqual(typeof deployIntegrity.collectRelativeImports, "function");
+    assert.deepStrictEqual(
+      deployIntegrity.collectRelativeImports("index.js", join(dir, "repo")),
+      ["index.js", "lib/a.js", "lib/b.js"],
+    );
+  });
+
   it("contains the shared LLM router runtime module", () => {
     assert.ok(DEPLOY_FILES.includes("lib/llm-router.js"));
   });
