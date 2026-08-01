@@ -21,6 +21,7 @@ import { findDeployDir } from "./lib/find-deploy-dir.mjs";
 
 // Named exports confirmed to exist in the real files (no guessing).
 const EXPORT_EXPECTATIONS = [
+  { file: "index.js", exports: ["default"] },
   { file: "lib/neo-arch.js", exports: ["buildNeoWorkspaceAliases", "isInjectedContextText"] },
   { file: "lib/relevant-memory-context.js", exports: ["formatRelevantMemoriesContext"] },
   { file: "lib/memory-merge-safety.js", exports: ["isSafeDuplicate", "normalizeMemoryText"] },
