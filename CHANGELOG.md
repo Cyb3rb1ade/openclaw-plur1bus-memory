@@ -7,6 +7,54 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.2.0] — 2026-08-01
+
+### Hinzugefügt
+
+- **Sichere Reindex-Bridge für promotete Erinnerungen.**
+  `scripts/embed-promoted-memories.mjs` ersetzt den bei der früheren
+  `sys/`-/Privacy-Migration entfernten lokalen Helfer. Die Bridge liest die
+  effektive OpenClaw-Konfiguration, respektiert aktive Schreib-Namespaces,
+  übernimmt kompatiblen Vorgängerzustand und arbeitet standardmäßig als
+  schreibfreier Dry-Run.
+- **Explizite Versionsbindung für Deploy-Prüfung und Reparatur.** Die
+  Wartungs-CLIs akzeptieren eine erwartete PLUR1BUS-Version und weisen fehlende
+  oder widersprüchliche Release-Metadaten eindeutig aus.
+
+### Geändert
+
+- **Daily Consolidation wird pro Agent um 15 Minuten gestaffelt.** Exakt
+  PLUR1BUS-eigene Jobs laufen bei drei Agenten um 04:00, 04:15 und 04:30. Nur
+  ausgelieferte Legacy-Identitäten und -Zeitpläne werden migriert;
+  benutzerdefinierte oder ähnlich benannte Jobs bleiben unverändert.
+- **Deploy-Integrität umfasst den vollständigen Runtime-Importgraphen.** Neben
+  statischen werden auch literale dynamische Imports erfasst und vor einer
+  Reparatur vollständig geprüft.
+
+### Behoben
+
+- **Keine gemischten Releases bei Teilfehlern oder wechselnden Quellen.**
+  Paket- und Manifestversion werden aus denselben gepufferten Bytes wie der
+  SHA-256-Quellsnapshot gelesen. Jede fehlgeschlagene Kopie, nachträgliche
+  Source-Änderung oder Endvalidierung rollt die gesamte Deploy-Transaktion auf
+  den vorherigen Stand zurück.
+- **Redigierte Provider-Credentials werden fail-closed behandelt.** Der
+  Reindex reicht weder OpenClaws Redaktions-Sentinel noch ein redigiertes
+  Literal als echten Schlüssel weiter; ein expliziter, validierter
+  Environment-Variablenname kann für Apply-Läufe angegeben werden.
+- **Vorgänger-Promotionen werden nicht doppelt eingebettet.** Stabile IDs,
+  bestehende semantisch identische Promotionen und kompatible Legacy-Marker
+  werden vor dem Schreiben erkannt.
+
+### Kompatibilität
+
+- Der Reindex schreibt niemals ohne `--apply`; Update- und Reparaturpfade
+  führen ihn ausschließlich als Dry-Run aus.
+- Bestehende benutzerdefinierte Cron-Zeitpläne, Delivery-Ziele und fremde Jobs
+  werden nicht übernommen oder überschrieben.
+- Die Paketidentität `@cyb3rb1ade/plur1bus-memory` und die Plugin-ID
+  `memory-lancedb-namespaced` bleiben unverändert.
+
 ## [7.1.9] — 2026-07-30
 
 ### Geändert
