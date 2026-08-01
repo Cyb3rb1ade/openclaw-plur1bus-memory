@@ -2,13 +2,30 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.1.9 — lower background token usage**
+**PLUR1BUS 7.2.0 — safer OpenClaw updates**
 
-Current version: **7.1.9** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.1.9`. See the [changelog](CHANGELOG.md) for the full history.
+Current version: **7.2.0** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.2.0`. See the [changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.2.0 — safer OpenClaw updates
+
+- **Complete, version-bound deploy verification** — repair checks cover all
+  static and literal dynamic runtime imports, bind package and manifest
+  identity to one immutable source snapshot, and roll back the complete
+  deployment if any copy or final validation fails.
+- **Safe promoted-memory reindex bridge** — the replacement maintenance CLI is
+  configuration-aware, namespace-aware, idempotent, dry-run by default, and
+  compatible with predecessor marker state without forwarding redacted
+  credentials.
+- **Staggered daily consolidation** — exact PLUR1BUS-owned per-agent jobs are
+  scheduled 15 minutes apart, avoiding simultaneous consolidation pressure;
+  custom or look-alike jobs remain untouched.
+- **Explicit recovery tooling** — deploy verification and repair accept an
+  expected release version and report missing source/preflight reasons instead
+  of producing a mixed installation.
 
 ### New in v7.1.9 — lower background token usage
 
