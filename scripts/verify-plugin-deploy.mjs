@@ -11,7 +11,7 @@
 // docs/superpowers/plans/2026-06-16-installer-deploy-integrity-followup.md
 //
 // Usage:
-//   node scripts/verify-plugin-deploy.mjs [--repair] [--dry-run] [--repo-dir DIR] [--deploy-dir DIR]
+//   node scripts/verify-plugin-deploy.mjs [--repair] [--dry-run] [--expected-version VERSION] [--repo-dir DIR] [--deploy-dir DIR]
 //
 // Exit code 0 = healthy (or successfully repaired). Non-zero = unresolved violations.
 
@@ -30,13 +30,14 @@ const EXPORT_EXPECTATIONS = [
 ];
 
 function parseArgs(argv) {
-  const opts = { repair: false, dryRun: false, repoDir: process.cwd(), deployDir: null };
+  const opts = { repair: false, dryRun: false, repoDir: process.cwd(), deployDir: null, expectedVersion: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--repair") opts.repair = true;
     else if (arg === "--dry-run") opts.dryRun = true;
     else if (arg === "--repo-dir") opts.repoDir = argv[++i];
     else if (arg === "--deploy-dir") opts.deployDir = argv[++i];
+    else if (arg === "--expected-version") opts.expectedVersion = argv[++i];
   }
   if (!opts.deployDir) {
     opts.deployDir = findDeployDir(opts.repoDir);
@@ -60,7 +61,13 @@ async function main() {
     files: DEPLOY_FILES,
     repair: opts.repair,
     dryRun: opts.dryRun,
+    expectedVersion: opts.expectedVersion,
   });
+
+  if (!report.preflight.ok) {
+    console.log(`  PREFLIGHT FAIL (${report.preflight.reasons.join(", ")})`);
+    for (const file of report.preflight.missingSources) console.log(`  MISSING SOURCE ${file}`);
+  }
 
   for (const r of report.results) {
     if (r.ok) {

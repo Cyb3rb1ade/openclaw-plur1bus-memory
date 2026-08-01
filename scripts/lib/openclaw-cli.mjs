@@ -10,9 +10,10 @@ import { spawnSync } from "node:child_process";
 /**
  * @param {string[]} args — argv passed to the `openclaw` binary
  * @param {number} [timeout] — timeout in ms (default 15000)
+ * @param {{env?: object}} [options] — optional environment override
  * @returns {{ok: boolean, stdout: string, stderr: string, status: number|null, error: Error|undefined}}
  */
-export function openclaw(args, timeout = 15000) {
-  const r = spawnSync("openclaw", args, { encoding: "utf8", timeout });
+export function openclaw(args, timeout = 15000, options = {}) {
+  const r = spawnSync("openclaw", args, { encoding: "utf8", timeout, ...(options.env ? { env: options.env } : {}) });
   return { ok: r.status === 0 && !r.error, stdout: r.stdout ?? "", stderr: r.stderr ?? "", status: r.status, error: r.error };
 }

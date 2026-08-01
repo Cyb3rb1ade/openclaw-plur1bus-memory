@@ -126,6 +126,99 @@ describe("promoted memory reindex execution", () => {
     assert.doesNotMatch(JSON.stringify(result), /secret text/);
   });
 
+  it("routes writes through configured baseDbPath and activeWriteNamespace", async () => {
+    const { planPromotionReindex, resolvePromotionDbRoot } = await loadModule();
+    const home = makeHome();
+    const workspace = join(home, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    const memoryPath = join(workspace, "MEMORY.md");
+    writeFileSync(memoryPath, "<!-- openclaw-memory-promotion:new -->\n- A promoted fact long enough to embed\n");
+    const pluginConfig = {
+      baseDbPath: join(home, "memory", "namespaces"),
+      namespaces: {
+        activeWriteNamespace: "lancedb-local",
+        activeRecallNamespaces: ["lancedb-local"],
+      },
+    };
+
+    const dbRoot = resolvePromotionDbRoot(pluginConfig, home);
+    const plan = planPromotionReindex({
+      targets: [{ agentId: "main", workspaceDir: workspace, workspaceKey: "workspace", memoryPath }],
+      openclawHome: home,
+      dbRoot,
+    });
+    assert.strictEqual(plan.targets[0].dbPath, join(home, "memory", "namespaces", "lancedb-local", "main"));
+  });
+
+  it("recognizes predecessor marker state and reports only outstanding work", async () => {
+    const { applyPromotionReindex, planPromotionReindex } = await loadModule();
+    const home = makeHome();
+    const workspace = join(home, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    const memoryPath = join(workspace, "MEMORY.md");
+    writeFileSync(memoryPath, [
+      "<!-- openclaw-memory-promotion:old-marker -->",
+      "- Already embedded by the predecessor bridge",
+      "<!-- openclaw-memory-promotion:new-marker -->",
+      "- Newly promoted memory that still needs embedding",
+    ].join("\n"));
+    const stateDir = join(home, ".embed-promotions-state");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(stateDir, "main-promotions.json"), JSON.stringify({ embedded: ["old-marker"] }));
+
+    const plan = planPromotionReindex({
+      targets: [{ agentId: "main", workspaceDir: workspace, workspaceKey: "workspace", memoryPath }],
+      openclawHome: home,
+      dbRoot: join(home, "memory", "lancedb-namespaced"),
+    });
+    const result = await applyPromotionReindex(plan, { apply: false });
+    assert.strictEqual(plan.targets[0].promotions.length, 1);
+    assert.deepStrictEqual(result.counts, { planned: 1, inserted: 0, skipped: 1, failed: 0 });
+  });
+
+  it("does not apply legacy predecessor state to a different active writer", async () => {
+    const { planPromotionReindex } = await loadModule();
+    const home = makeHome();
+    const workspace = join(home, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    const memoryPath = join(workspace, "MEMORY.md");
+    writeFileSync(memoryPath, "<!-- openclaw-memory-promotion:old-marker -->\n- Must be populated in the new writer too\n");
+    mkdirSync(join(home, ".embed-promotions-state"), { recursive: true });
+    writeFileSync(join(home, ".embed-promotions-state", "main-promotions.json"), JSON.stringify({ embedded: ["old-marker"] }));
+    const activeRoot = join(home, "memory", "lancedb-local");
+    const plan = planPromotionReindex({
+      targets: [{ agentId: "main", workspaceDir: workspace, workspaceKey: "workspace", memoryPath }],
+      openclawHome: home,
+      dbRoot: activeRoot,
+    });
+    assert.strictEqual(plan.targets[0].alreadyEmbedded, 0);
+    assert.strictEqual(plan.targets[0].promotions.length, 1);
+  });
+
+  it("skips an existing random-ID predecessor record with identical promotion text", async () => {
+    const { applyPromotionReindex, stablePromotionId } = await loadModule();
+    let stored = 0;
+    const text = "Fact embedded by the predecessor implementation";
+    const result = await applyPromotionReindex({ targets: [{
+      agentId: "main",
+      workspaceKey: "workspace",
+      dbPath: "/safe/db/main",
+      promotions: [{ id: stablePromotionId("main", "marker"), markerHash: "h", text }],
+      alreadyEmbedded: 0,
+    }] }, {
+      apply: true,
+      createEmbedder: async () => ({ dimensions: 3, embed: async () => [0.1, 0.2, 0.3] }),
+      createMemoryDb: () => ({
+        getById: async () => null,
+        search: async () => [{ entry: { id: "random-old-id", origin: "dreaming-promotion", text } }],
+        store: async () => { stored += 1; },
+        shutdown: async () => {},
+      }),
+    });
+    assert.strictEqual(stored, 0);
+    assert.deepStrictEqual(result.counts, { planned: 1, inserted: 0, skipped: 1, failed: 0 });
+  });
+
   it("propagates provider dimensions, skips stable duplicates, and redacts partial failures", async () => {
     const { applyPromotionReindex, stablePromotionId } = await loadModule();
     const seen = { vectorDim: null, closed: 0, stored: [] };
