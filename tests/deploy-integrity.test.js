@@ -11,6 +11,7 @@ import {
   validateDeployment,
   DEPLOY_FILES,
 } from "../scripts/lib/deploy-integrity.mjs";
+import * as deployIntegrity from "../scripts/lib/deploy-integrity.mjs";
 
 let dir;
 
@@ -179,6 +180,144 @@ describe("validateDeployment", () => {
     assert.strictEqual(report.ok, true);
   });
 
+  it("preflights every repo source before changing any deployed file", () => {
+    writeFileSync(join(dir, "repo", "lib", "a.js"), "export const a = 2;\n");
+    writeFileSync(join(dir, "deploy", "lib", "a.js"), "export const a = 1;\n");
+    writeFileSync(join(dir, "deploy", "lib", "b.js"), "export const b = 1;\n");
+
+    const report = validateDeployment({
+      deployDir: join(dir, "deploy"),
+      repoDir: join(dir, "repo"),
+      files: ["lib/a.js", "lib/b.js"],
+      repair: true,
+      dryRun: false,
+    });
+
+    assert.strictEqual(report.ok, false);
+    assert.strictEqual(report.preflight.ok, false);
+    assert.strictEqual(readFileSync(join(dir, "deploy", "lib", "a.js"), "utf8"), "export const a = 1;\n");
+  });
+
+  it("rejects a source tree whose package and plugin versions disagree", () => {
+    writeFileSync(join(dir, "repo", "package.json"), JSON.stringify({ version: "7.1.9" }));
+    writeFileSync(join(dir, "repo", "openclaw.plugin.json"), JSON.stringify({ version: "7.1.8" }));
+    writeFileSync(join(dir, "deploy", "openclaw.plugin.json"), JSON.stringify({ version: "7.1.8" }));
+
+    const report = validateDeployment({
+      deployDir: join(dir, "deploy"),
+      repoDir: join(dir, "repo"),
+      files: ["openclaw.plugin.json"],
+      repair: true,
+    });
+
+    assert.strictEqual(report.ok, false);
+    assert.ok(report.preflight.reasons.includes("source-version-mismatch"));
+  });
+
+  it("binds repairs to the deployed version unless an upgrade version is explicit", () => {
+    writeFileSync(join(dir, "repo", "package.json"), JSON.stringify({ version: "6.9.11" }));
+    writeFileSync(join(dir, "repo", "openclaw.plugin.json"), JSON.stringify({ version: "6.9.11" }));
+    writeFileSync(join(dir, "deploy", "openclaw.plugin.json"), JSON.stringify({ version: "7.1.9" }));
+    const report = validateDeployment({
+      deployDir: join(dir, "deploy"), repoDir: join(dir, "repo"),
+      files: ["openclaw.plugin.json"], repair: true,
+    });
+    assert.strictEqual(report.ok, false);
+    assert.ok(report.preflight.reasons.includes("unexpected-source-version"));
+    assert.match(readFileSync(join(dir, "deploy", "openclaw.plugin.json"), "utf8"), /7\.1\.9/);
+  });
+
+  it("enforces an explicit expected version in check-only mode", () => {
+    writeFileSync(join(dir, "repo", "package.json"), JSON.stringify({ version: "6.9.11" }));
+    writeFileSync(join(dir, "repo", "openclaw.plugin.json"), JSON.stringify({ version: "6.9.11" }));
+    writeFileSync(join(dir, "deploy", "openclaw.plugin.json"), JSON.stringify({ version: "6.9.11" }));
+    const report = validateDeployment({
+      deployDir: join(dir, "deploy"), repoDir: join(dir, "repo"),
+      files: ["openclaw.plugin.json"], expectedVersion: "7.1.9",
+    });
+    assert.strictEqual(report.ok, false);
+    assert.ok(report.preflight.reasons.includes("unexpected-source-version"));
+  });
+
+  it("parses release identity from the same captured bytes used for source digests", () => {
+    writeFileSync(join(dir, "repo", "package.json"), JSON.stringify({ version: "7.1.9" }));
+    writeFileSync(join(dir, "repo", "openclaw.plugin.json"), JSON.stringify({ version: "7.1.9" }));
+    writeFileSync(join(dir, "deploy", "openclaw.plugin.json"), JSON.stringify({ version: "7.1.9" }));
+    const report = validateDeployment({
+      deployDir: join(dir, "deploy"), repoDir: join(dir, "repo"),
+      files: ["openclaw.plugin.json"], expectedVersion: "7.1.9",
+      readSourceFile: (sourcePath) => sourcePath.endsWith("package.json")
+        ? Buffer.from(JSON.stringify({ version: "8.0.0" }))
+        : readFileSync(sourcePath),
+    });
+    assert.strictEqual(report.ok, false);
+    assert.ok(report.preflight.reasons.includes("source-version-mismatch"));
+  });
+
+  it("rolls back earlier copies when a later repair copy fails", () => {
+    for (const file of ["a.js", "b.js"]) {
+      writeFileSync(join(dir, "repo", "lib", file), `export const value = "new-${file}";\n`);
+      writeFileSync(join(dir, "deploy", "lib", file), `export const value = "old-${file}";\n`);
+    }
+    let copies = 0;
+    const report = validateDeployment({
+      deployDir: join(dir, "deploy"), repoDir: join(dir, "repo"),
+      files: ["lib/a.js", "lib/b.js"], repair: true,
+      copyFile: (source, target) => {
+        copies += 1;
+        if (copies === 2) return;
+        writeFileSync(target, readFileSync(source));
+      },
+    });
+    assert.strictEqual(report.ok, false);
+    assert.ok(report.preflight.reasons.includes("repair-transaction-rolled-back"));
+    assert.match(readFileSync(join(dir, "deploy", "lib", "a.js"), "utf8"), /old-a\.js/);
+  });
+
+  it("rolls back earlier copies when a later source disappears after preflight", () => {
+    for (const file of ["a.js", "b.js"]) {
+      writeFileSync(join(dir, "repo", "lib", file), `export const value = "new-${file}";\n`);
+      writeFileSync(join(dir, "deploy", "lib", file), `export const value = "old-${file}";\n`);
+    }
+    let copies = 0;
+    const report = validateDeployment({
+      deployDir: join(dir, "deploy"), repoDir: join(dir, "repo"),
+      files: ["lib/a.js", "lib/b.js"], repair: true,
+      copyFile: (source, target) => {
+        writeFileSync(target, readFileSync(source));
+        copies += 1;
+        if (copies === 1) rmSync(join(dir, "repo", "lib", "b.js"));
+      },
+    });
+    assert.strictEqual(report.ok, false);
+    assert.ok(report.preflight.reasons.includes("repair-transaction-rolled-back"));
+    assert.match(readFileSync(join(dir, "deploy", "lib", "a.js"), "utf8"), /old-a\.js/);
+    assert.match(readFileSync(join(dir, "deploy", "lib", "b.js"), "utf8"), /old-b\.js/);
+  });
+
+  it("rolls back when the source tree changes between successful copies", () => {
+    for (const file of ["a.js", "b.js"]) {
+      writeFileSync(join(dir, "repo", "lib", file), `export const value = "new-${file}";\n`);
+      writeFileSync(join(dir, "deploy", "lib", file), `export const value = "old-${file}";\n`);
+    }
+    let copies = 0;
+    const report = validateDeployment({
+      deployDir: join(dir, "deploy"), repoDir: join(dir, "repo"),
+      files: ["lib/a.js", "lib/b.js"], repair: true,
+      copyFile: (source, target) => {
+        writeFileSync(target, readFileSync(source));
+        copies += 1;
+        if (copies === 1) {
+          writeFileSync(join(dir, "repo", "lib", "b.js"), 'export const value = "changed-b.js";\n');
+        }
+      },
+    });
+    assert.strictEqual(report.ok, false);
+    assert.ok(report.preflight.reasons.includes("repair-transaction-rolled-back"));
+    assert.match(readFileSync(join(dir, "deploy", "lib", "a.js"), "utf8"), /old-a\.js/);
+    assert.match(readFileSync(join(dir, "deploy", "lib", "b.js"), "utf8"), /old-b\.js/);
+  });
+
   it("dry-run reports violations but writes nothing", () => {
     writeFileSync(join(dir, "repo", "lib", "a.js"), "export const a = 1;\n");
     writeFileSync(join(dir, "deploy", "lib", "a.js"), 'export * from "../../lib/a.js";\n');
@@ -222,6 +361,35 @@ describe("validateDeployment", () => {
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "../..");
 
 describe("DEPLOY_FILES coverage", () => {
+  it("contains every reachable relative runtime import from index.js", () => {
+    assert.strictEqual(typeof deployIntegrity.collectRelativeImports, "function");
+    const reachable = deployIntegrity.collectRelativeImports("index.js", REPO_ROOT);
+    const missing = reachable.filter((file) => !DEPLOY_FILES.includes(file));
+    assert.deepStrictEqual(missing, [], `reachable runtime files missing from DEPLOY_FILES: ${missing.join(", ")}`);
+  });
+
+  it("discovers transitive relative runtime imports", () => {
+    writeFileSync(join(dir, "repo", "index.js"), 'import "./lib/a.js";\nexport default {};\n');
+    writeFileSync(join(dir, "repo", "lib", "a.js"), 'export { b } from "./b.js";\n');
+    writeFileSync(join(dir, "repo", "lib", "b.js"), "export const b = true;\n");
+
+    assert.strictEqual(typeof deployIntegrity.collectRelativeImports, "function");
+    assert.deepStrictEqual(
+      deployIntegrity.collectRelativeImports("index.js", join(dir, "repo")),
+      ["index.js", "lib/a.js", "lib/b.js"],
+    );
+  });
+
+  it("discovers relative dynamic imports", () => {
+    writeFileSync(join(dir, "repo", "index.js"), 'export async function load() { return import("./lib/a.js"); }\n');
+    writeFileSync(join(dir, "repo", "lib", "a.js"), "export const a = true;\n");
+
+    assert.deepStrictEqual(
+      deployIntegrity.collectRelativeImports("index.js", join(dir, "repo")),
+      ["index.js", "lib/a.js"],
+    );
+  });
+
   it("contains the shared LLM router runtime module", () => {
     assert.ok(DEPLOY_FILES.includes("lib/llm-router.js"));
   });
@@ -256,6 +424,15 @@ describe("DEPLOY_FILES coverage", () => {
     ];
     const missing = featureCronRuntime.filter((f) => !DEPLOY_FILES.includes(f));
     assert.deepStrictEqual(missing, [], `feature-cron runtime files missing from DEPLOY_FILES: ${missing.join(", ")}`);
+  });
+
+  it("contains the promoted-memory reindex runtime files", () => {
+    const reindexRuntime = [
+      "lib/promoted-memory-reindex.js",
+      "scripts/embed-promoted-memories.mjs",
+    ];
+    const missing = reindexRuntime.filter((file) => !DEPLOY_FILES.includes(file));
+    assert.deepStrictEqual(missing, [], `promoted-memory reindex files missing from DEPLOY_FILES: ${missing.join(", ")}`);
   });
 
   it("every file in DEPLOY_FILES exists on disk in the repo", () => {

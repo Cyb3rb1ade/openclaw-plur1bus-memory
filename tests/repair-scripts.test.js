@@ -184,6 +184,10 @@ describe("repair-installed-plugin — backup before repair", () => {
         writeFileSync(join(deployDir, f), `// real ${f}\nexport const x = 1;\n`);
       }
     }
+    const releaseVersion = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")).version;
+    writeFileSync(join(repoDir, "package.json"), JSON.stringify({ version: releaseVersion }));
+    writeFileSync(join(repoDir, "openclaw.plugin.json"), JSON.stringify({ version: releaseVersion }));
+    writeFileSync(join(deployDir, "openclaw.plugin.json"), JSON.stringify({ version: releaseVersion }));
 
     const result = runScript(REPAIR_SCRIPT, ["--deploy-dir", deployDir, "--no-smoke"], {
       // Override home so backups land in our temp dir
