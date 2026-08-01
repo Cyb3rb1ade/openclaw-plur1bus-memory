@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 
@@ -235,6 +235,7 @@ export const DEPLOY_FILES = [
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;
 const RELATIVE_IMPORT_RE = /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.{1,2}\/[^"']+)["']/g;
+const RELATIVE_DYNAMIC_IMPORT_RE = /import\s*\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g;
 
 function resolveRelativeModule(fromDir, specifier) {
   const base = resolvePath(fromDir, specifier);
@@ -268,7 +269,12 @@ export function collectRelativeImports(entryRelativePath, repoDir) {
 
     seen.add(relativePath);
     const source = readFileSync(absolutePath, "utf8");
-    for (const match of source.matchAll(RELATIVE_IMPORT_RE)) {
+    const importMatches = [
+      ...source.matchAll(RELATIVE_IMPORT_RE),
+      ...source.matchAll(RELATIVE_DYNAMIC_IMPORT_RE),
+    ];
+    for (const match of importMatches) {
+      if (match[1].includes("${")) continue;
       const resolved = resolveRelativeModule(dirname(absolutePath), match[1]);
       if (!resolved) {
         throw new Error(`deploy-integrity cannot resolve ${match[1]} from ${relativePath}`);
@@ -283,6 +289,10 @@ export function collectRelativeImports(entryRelativePath, repoDir) {
 
 function sha256(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+function sha256Content(content) {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 /**
@@ -347,8 +357,11 @@ export function validateFile({ deployPath, repoPath }) {
 /**
  * Copies the repo source over the deployed file. No-op (reports only) in
  * dry-run mode.
+ *
+ * @param {{deployPath: string, repoPath: string, dryRun?: boolean, copyFile?: Function}} options
+ * @returns {{repaired: boolean, dryRun: boolean, reason?: string}}
  */
-export function repairFile({ deployPath, repoPath, dryRun = false }) {
+export function repairFile({ deployPath, repoPath, dryRun = false, copyFile = copyFileSync }) {
   if (!existsSync(repoPath)) {
     return { repaired: false, dryRun, reason: "missing-repo-source" };
   }
@@ -356,7 +369,7 @@ export function repairFile({ deployPath, repoPath, dryRun = false }) {
     return { repaired: false, dryRun, reason: "dry-run" };
   }
   mkdirSync(dirname(deployPath), { recursive: true });
-  copyFileSync(repoPath, deployPath);
+  copyFile(repoPath, deployPath);
   return { repaired: true, dryRun };
 }
 
@@ -364,28 +377,173 @@ export function repairFile({ deployPath, repoPath, dryRun = false }) {
  * Validates a list of repo-relative file paths between a repo directory and
  * a deployed directory. With repair=true, broken/mismatched files are
  * restored from the repo source (skipped entirely in dry-run mode).
+ *
+ * @param {{deployDir: string, repoDir: string, files: string[], repair?: boolean, dryRun?: boolean, expectedVersion?: string|null, copyFile?: Function, readSourceFile?: Function}} options
+ * @returns {{ok: boolean, preflight: object, results: object[]}}
  */
-export function validateDeployment({ deployDir, repoDir, files, repair = false, dryRun = false }) {
+export function validateDeployment({
+  deployDir,
+  repoDir,
+  files,
+  repair = false,
+  dryRun = false,
+  expectedVersion = null,
+  copyFile = copyFileSync,
+  readSourceFile = readFileSync,
+}) {
+  const preflightReasons = [];
+  const missingSources = files.filter((file) => !existsSync(join(repoDir, file)));
+  if (missingSources.length > 0) preflightReasons.push("missing-repo-source");
+
+  const packagePath = join(repoDir, "package.json");
+  const manifestPath = join(repoDir, "openclaw.plugin.json");
+  const isVersionedRepair = files.includes("openclaw.plugin.json") && (repair || Boolean(expectedVersion));
+  const hasReleaseMetadata = existsSync(packagePath) && existsSync(manifestPath);
+  const snapshotFiles = new Set(files);
+  if (isVersionedRepair || hasReleaseMetadata) {
+    snapshotFiles.add("package.json");
+    snapshotFiles.add("openclaw.plugin.json");
+  }
+  const sourceBuffers = new Map();
+  const sourceDigests = new Map();
+  if (missingSources.length === 0 && (!isVersionedRepair || hasReleaseMetadata)) {
+    try {
+      for (const file of snapshotFiles) {
+        const content = readSourceFile(join(repoDir, file));
+        const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
+        sourceBuffers.set(file, buffer);
+        sourceDigests.set(file, sha256Content(buffer));
+      }
+    } catch {
+      preflightReasons.push("source-snapshot-failed");
+    }
+  }
+  let sourceVersion = null;
+  if (isVersionedRepair && !hasReleaseMetadata) {
+    preflightReasons.push("source-release-metadata-missing");
+  } else if (hasReleaseMetadata && sourceBuffers.has("package.json") && sourceBuffers.has("openclaw.plugin.json")) {
+    try {
+      const packageVersion = JSON.parse(sourceBuffers.get("package.json").toString("utf8"))?.version;
+      const manifestVersion = JSON.parse(sourceBuffers.get("openclaw.plugin.json").toString("utf8"))?.version;
+      sourceVersion = manifestVersion;
+      if (!packageVersion || !manifestVersion || packageVersion !== manifestVersion) {
+        preflightReasons.push("source-version-mismatch");
+      }
+    } catch {
+      preflightReasons.push("source-version-invalid");
+    }
+  }
+  if (isVersionedRepair && sourceVersion) {
+    let selectedVersion = expectedVersion;
+    const deployedManifestPath = join(deployDir, "openclaw.plugin.json");
+    if (!selectedVersion && existsSync(deployedManifestPath)) {
+      try {
+        selectedVersion = JSON.parse(readFileSync(deployedManifestPath, "utf8"))?.version || null;
+      } catch {
+        preflightReasons.push("deployed-version-invalid");
+      }
+    }
+    if (!selectedVersion) preflightReasons.push("expected-source-version-missing");
+    else if (sourceVersion !== selectedVersion) preflightReasons.push("unexpected-source-version");
+  }
+  const preflight = {
+    ok: preflightReasons.length === 0,
+    reasons: [...new Set(preflightReasons)],
+    missingSources,
+  };
+  const sourceSnapshotMatches = () => {
+    try {
+      for (const [file, digest] of sourceDigests) {
+        const sourcePath = join(repoDir, file);
+        if (!existsSync(sourcePath) || sha256(sourcePath) !== digest) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const mayRepair = repair && preflight.ok;
+  const snapshots = new Map();
+  if (mayRepair && !dryRun) {
+    for (const file of files) {
+      const deployPath = join(deployDir, file);
+      snapshots.set(file, existsSync(deployPath) ? readFileSync(deployPath) : null);
+    }
+  }
+  let transactionFailed = false;
   const results = files.map((file) => {
     const deployPath = join(deployDir, file);
     const repoPath = join(repoDir, file);
     let { ok, reasons } = validateFile({ deployPath, repoPath });
     let repaired = false;
 
-    if (!ok && repair) {
-      const outcome = repairFile({ deployPath, repoPath, dryRun });
-      repaired = outcome.repaired;
-      if (repaired) {
-        const revalidated = validateFile({ deployPath, repoPath });
-        ok = revalidated.ok;
-        reasons = revalidated.reasons;
+    if (!ok && mayRepair && !transactionFailed) {
+      try {
+        if (!dryRun && !sourceSnapshotMatches()) {
+          transactionFailed = true;
+          ok = false;
+          reasons = ["source-snapshot-changed"];
+        } else {
+          const outcome = repairFile({ deployPath, repoPath, dryRun, copyFile });
+          repaired = outcome.repaired;
+          if (!repaired && !dryRun) {
+            transactionFailed = true;
+            ok = false;
+            reasons = [outcome.reason || "repair-incomplete"];
+          } else if (repaired) {
+            const revalidated = validateFile({ deployPath, repoPath });
+            ok = revalidated.ok;
+            reasons = revalidated.reasons;
+            if (!ok || !sourceSnapshotMatches()) {
+              transactionFailed = true;
+              ok = false;
+              if (revalidated.ok) reasons = ["source-snapshot-changed"];
+            }
+          }
+        }
+      } catch {
+        transactionFailed = true;
+        ok = false;
+        repaired = false;
+        reasons = ["repair-copy-failed"];
       }
     }
 
     return { file, ok, reasons, repaired };
   });
 
-  return { ok: results.every((r) => r.ok), results };
+  if (mayRepair && !dryRun && !transactionFailed) {
+    const finalValidation = files.map((file) => validateFile({
+      deployPath: join(deployDir, file),
+      repoPath: join(repoDir, file),
+    }));
+    if (!sourceSnapshotMatches() || finalValidation.some((result) => !result.ok)) {
+      transactionFailed = true;
+    }
+  }
+
+  if (transactionFailed) {
+    for (const [file, content] of snapshots) {
+      const deployPath = join(deployDir, file);
+      if (content === null) {
+        if (existsSync(deployPath)) unlinkSync(deployPath);
+      } else {
+        mkdirSync(dirname(deployPath), { recursive: true });
+        writeFileSync(deployPath, content);
+      }
+    }
+    preflight.ok = false;
+    preflight.reasons.push("repair-transaction-rolled-back");
+    for (const result of results) {
+      if (result.repaired) {
+        result.repaired = false;
+        result.ok = false;
+        result.reasons = ["repair-transaction-rolled-back"];
+      }
+    }
+  }
+
+  return { ok: preflight.ok && results.every((r) => r.ok), preflight, results };
 }
 
 /**
