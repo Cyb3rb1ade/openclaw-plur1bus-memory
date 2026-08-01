@@ -755,7 +755,8 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     };
     assert.strictEqual(schedule("plur1bus persona-evolve main", "--cron"), "15 4 * * 0");
     assert.strictEqual(schedule("plur1bus afterthought main", "--every"), "10800s");
-    assert.strictEqual(schedule("plur1bus consolidate-daily main", "--cron"), "0 3 * * *");
+    assert.strictEqual(schedule("plur1bus consolidate-daily main", "--cron"), "0 4 * * *");
+    assert.strictEqual(schedule("plur1bus consolidate-daily main", "--tz"), "Europe/Berlin");
     assert.strictEqual(schedule("plur1bus classify-recent main", "--every"), "10800s");
     assert.strictEqual(schedule("plur1bus rem-dream main", "--cron"), "15 1 * * *");
     assert.strictEqual(schedule("plur1bus rem-dream main", "--tz"), "Europe/Berlin");
@@ -777,6 +778,57 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       assert.ok(args.includes("--no-deliver"));
       assert.ok(!args.includes("--announce"));
     }
+  });
+
+  it("migrates shipped consolidation schedules with timezone through cron edit", async () => {
+    const cronEdits = [];
+    const jobs = [
+      ["c-main", "main", "0 3 * * *"],
+      ["c-bernhardine", "bernhardine", "0 4 * * *"],
+      ["c-heisenberg", "heisenberg", "0 4 * * *"],
+    ].map(([id, agentId, expr]) => ({
+      id,
+      agentId,
+      name: `plur1bus consolidate-daily ${agentId}`,
+      enabled: true,
+      payload: { message: "/plur1bus internal consolidate-daily" },
+      schedule: { kind: "cron", expr },
+      delivery: { mode: "none" },
+    }));
+    const snapshot = validCronConfigSnapshot({ pluginConfig: { dailyConsolidation: { enabled: true } } });
+    const result = await runJsonSetupDirect((args) => {
+      if (args[0] === "--version") return { ok: true, stdout: "ok", stderr: "", status: 0 };
+      if (args.join(" ") === "gateway call config.get --json") {
+        return { ok: true, stdout: JSON.stringify(snapshot), stderr: "", status: 0 };
+      }
+      if (args[0] === "cron" && args[1] === "list") {
+        return { ok: true, stdout: JSON.stringify({ jobs }), stderr: "", status: 0 };
+      }
+      if (args[0] === "agents" && args[1] === "list") {
+        return {
+          ok: true,
+          stdout: JSON.stringify({ agents: [
+            { id: "main", bindings: 1, isDefault: true, workspace: "/ws/main" },
+            { id: "bernhardine", bindings: 1, workspace: "/ws/bernhardine" },
+            { id: "heisenberg", bindings: 1, workspace: "/ws/heisenberg" },
+          ] }),
+          stderr: "",
+          status: 0,
+        };
+      }
+      if (args[0] === "cron" && args[1] === "edit") {
+        cronEdits.push(args);
+        return { ok: true, stdout: "{}", stderr: "", status: 0 };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected", status: 1 };
+    });
+
+    assert.strictEqual(result.exitCode, 0);
+    assert.deepStrictEqual(cronEdits, [
+      ["cron", "edit", "c-main", "--cron", "0 4 * * *", "--tz", "Europe/Berlin"],
+      ["cron", "edit", "c-bernhardine", "--cron", "15 4 * * *", "--tz", "Europe/Berlin"],
+      ["cron", "edit", "c-heisenberg", "--cron", "30 4 * * *", "--tz", "Europe/Berlin"],
+    ]);
   });
 
   it("never provisions from feature flags that exist only in runtimeConfig", async () => {
