@@ -40,6 +40,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/auto-capture-lancedb.mjs
 !scripts/build-code-index.mjs
 !scripts/reindex-provider.mjs
+!scripts/embed-promoted-memories.mjs
 !scripts/install-memory-system.sh
 !scripts/provider-wizard.mjs
 !scripts/setup-feature-crons.mjs

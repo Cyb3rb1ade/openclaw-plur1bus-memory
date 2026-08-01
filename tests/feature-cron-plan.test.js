@@ -13,6 +13,7 @@ import {
   selectEnabledFeatureCronSpecs,
   staggerPersonaEvolveSchedule,
 } from "../lib/setup/feature-cron-plan.js";
+import * as featureCronPlan from "../lib/setup/feature-cron-plan.js";
 
 const LEGACY_TWO_FEATURE_CRONS = REQUIRED_FEATURE_CRONS.filter(
   (spec) => spec.feature === "persona-evolve" || spec.feature === "afterthought",
@@ -513,6 +514,112 @@ describe("staggerPersonaEvolveSchedule", () => {
   it("leaves non-cron schedules unchanged", () => {
     const every = { kind: "every", everyMs: 1000 };
     assert.deepStrictEqual(staggerPersonaEvolveSchedule(every, 5), every);
+  });
+});
+
+describe("daily consolidation staggering and migration", () => {
+  const consolidationSpec = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "consolidate-daily");
+  const agents = [
+    { id: "main", isDefault: true },
+    { id: "bernhardine", isDefault: false },
+    { id: "heisenberg", isDefault: false },
+  ];
+
+  function consolidationJob(id, agentId, expr) {
+    return {
+      id,
+      name: `plur1bus consolidate-daily ${agentId}`,
+      agentId,
+      enabled: true,
+      payload: { message: "/plur1bus internal consolidate-daily" },
+      schedule: { kind: "cron", expr, tz: "Europe/Berlin" },
+      delivery: { mode: "none" },
+    };
+  }
+
+  it("staggerConsolidationSchedule assigns 04:00, 04:15, and 04:30", () => {
+    assert.strictEqual(typeof featureCronPlan.staggerConsolidationSchedule, "function");
+    const base = { kind: "cron", expr: "0 4 * * *" };
+    assert.deepStrictEqual(featureCronPlan.staggerConsolidationSchedule(base, 0), { kind: "cron", expr: "0 4 * * *" });
+    assert.deepStrictEqual(featureCronPlan.staggerConsolidationSchedule(base, 1), { kind: "cron", expr: "15 4 * * *" });
+    assert.deepStrictEqual(featureCronPlan.staggerConsolidationSchedule(base, 2), { kind: "cron", expr: "30 4 * * *" });
+  });
+
+  it("creates new consolidation jobs with deterministic staggering", () => {
+    const plan = planFeatureCrons([], [consolidationSpec], { agents });
+    assert.deepStrictEqual(
+      plan.create.map((job) => [job.agent, job.schedule.expr, job.timezone]),
+      [
+        ["main", "0 4 * * *", "Europe/Berlin"],
+        ["bernhardine", "15 4 * * *", "Europe/Berlin"],
+        ["heisenberg", "30 4 * * *", "Europe/Berlin"],
+      ],
+    );
+  });
+
+  it("migrates only exact previously shipped consolidation schedules", () => {
+    const existing = [
+      consolidationJob("c-main", "main", "0 3 * * *"),
+      consolidationJob("c-bernhardine", "bernhardine", "0 4 * * *"),
+      consolidationJob("c-heisenberg", "heisenberg", "0 4 * * *"),
+    ];
+    const plan = planFeatureCrons(existing, [consolidationSpec], { agents });
+    assert.deepStrictEqual(plan.update, [
+      { id: "c-main", name: "plur1bus consolidate-daily main", schedule: { kind: "cron", expr: "0 4 * * *" }, timezone: "Europe/Berlin" },
+      { id: "c-bernhardine", name: "plur1bus consolidate-daily bernhardine", schedule: { kind: "cron", expr: "15 4 * * *" }, timezone: "Europe/Berlin" },
+      { id: "c-heisenberg", name: "plur1bus consolidate-daily heisenberg", schedule: { kind: "cron", expr: "30 4 * * *" }, timezone: "Europe/Berlin" },
+    ]);
+  });
+
+  it("preserves custom schedules and is idempotent after migration", () => {
+    const existing = [
+      consolidationJob("c-main", "main", "7 5 * * *"),
+      consolidationJob("c-bernhardine", "bernhardine", "15 4 * * *"),
+      consolidationJob("c-heisenberg", "heisenberg", "30 4 * * *"),
+    ];
+    const plan = planFeatureCrons(existing, [consolidationSpec], { agents });
+    assert.deepStrictEqual(plan.update, []);
+    assert.strictEqual(plan.create.length, 0);
+  });
+
+  it("does not claim jobs with only a matching name or only a matching payload", () => {
+    const impostors = [
+      { ...consolidationJob("name-only", "main", "0 3 * * *"), payload: { message: "/different" } },
+      { ...consolidationJob("payload-only", "bernhardine", "0 4 * * *"), name: "operator custom job" },
+    ];
+    const plan = planFeatureCrons(impostors, [consolidationSpec], { agents: agents.slice(0, 2) });
+    assert.deepStrictEqual(plan.update, []);
+    assert.deepStrictEqual(plan.create.map((job) => job.agent), ["main", "bernhardine"]);
+  });
+
+  it("does not claim a default-agent legacy consolidation name with a custom payload", () => {
+    const legacyImpostor = consolidationJob("legacy-impostor", "main", "0 3 * * *");
+    legacyImpostor.name = "plur1bus consolidate-daily";
+    legacyImpostor.payload.message = "/operator custom";
+    const plan = planFeatureCrons([legacyImpostor], [consolidationSpec], { agents: agents.slice(0, 1) });
+    assert.strictEqual(plan.create.length, 1);
+    assert.deepStrictEqual(plan.update, []);
+  });
+
+  it("does not claim the same legacy consolidation impostor in single-agent mode", () => {
+    const legacyImpostor = consolidationJob("legacy-single", "main", "0 3 * * *");
+    legacyImpostor.name = "plur1bus consolidate-daily";
+    legacyImpostor.payload.message = "/operator custom";
+    const plan = planFeatureCrons([legacyImpostor], [consolidationSpec], { agent: "main" });
+    assert.strictEqual(plan.create.length, 1);
+    assert.deepStrictEqual(plan.update, []);
+  });
+
+  it("migrates the shipped consolidation timezone even when the expression is current", () => {
+    const job = consolidationJob("c-main", "main", "0 4 * * *");
+    job.schedule.tz = "UTC";
+    const plan = planFeatureCrons([job], [consolidationSpec], { agents: agents.slice(0, 1) });
+    assert.deepStrictEqual(plan.update, [{
+      id: "c-main",
+      name: "plur1bus consolidate-daily main",
+      schedule: { kind: "cron", expr: "0 4 * * *" },
+      timezone: "Europe/Berlin",
+    }]);
   });
 });
 

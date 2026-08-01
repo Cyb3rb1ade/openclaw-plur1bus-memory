@@ -17,6 +17,7 @@
  *   --maintain-lancedb  Also prune LanceDB versions (to 50) where elevated
  *   --run-cron          Also trigger the Dreaming Promotion cron if status=error
  *   --deploy-dir DIR    Override auto-detected deploy directory
+ *   --expected-version  Explicitly authorize repair from this release version
  *   --help              Show this help
  *
  * Exit codes:
@@ -43,13 +44,14 @@ const SMOKE_EXPECTATIONS = [
 ];
 
 function parseArgs(argv) {
-  const opts = { dryRun: false, maintainLancedb: false, runCron: false, deployDir: null, noSmoke: false, help: false };
+  const opts = { dryRun: false, maintainLancedb: false, runCron: false, deployDir: null, expectedVersion: null, noSmoke: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run")           opts.dryRun = true;
     else if (a === "--maintain-lancedb") opts.maintainLancedb = true;
     else if (a === "--run-cron")     opts.runCron = true;
     else if (a === "--deploy-dir")   opts.deployDir = argv[++i];
+    else if (a === "--expected-version") opts.expectedVersion = argv[++i];
     else if (a === "--no-smoke")     opts.noSmoke = true;
     else if (a === "--help")         opts.help = true;
   }
@@ -160,7 +162,7 @@ export function assertSuccessfulMaintenanceResult(result) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  if (opts.help) { console.log("Usage: node scripts/repair-installed-plugin.mjs [--dry-run] [--maintain-lancedb] [--run-cron] [--deploy-dir DIR]"); process.exit(0); }
+  if (opts.help) { console.log("Usage: node scripts/repair-installed-plugin.mjs [--dry-run] [--maintain-lancedb] [--run-cron] [--deploy-dir DIR] [--expected-version VERSION]"); process.exit(0); }
 
   const repoDir = resolve(process.cwd());
   const deployDir = resolve(opts.deployDir ?? findDeployDir(repoDir));
@@ -182,7 +184,14 @@ async function main() {
 
   // Check-only pass first so we know whether a backup is needed before any
   // files are modified.
-  const checkReport = validateDeployment({ deployDir, repoDir, files: DEPLOY_FILES, repair: false });
+  const checkReport = validateDeployment({
+    deployDir,
+    repoDir,
+    files: DEPLOY_FILES,
+    repair: true,
+    dryRun: true,
+    expectedVersion: opts.expectedVersion,
+  });
   const hasViolations = !checkReport.ok;
   if (hasViolations && mutationAllowed) {
     const backupDir = backupDeployDir(deployDir, DEPLOY_FILES);
@@ -194,9 +203,13 @@ async function main() {
     deployDir,
     repoDir,
     files: DEPLOY_FILES,
-    repair: mutationAllowed,
+    repair: true,
     dryRun: !mutationAllowed,
+    expectedVersion: opts.expectedVersion,
   });
+  if (!report.preflight.ok) {
+    console.log(`  preflight: FAIL (${report.preflight.reasons.join(", ")})`);
+  }
   for (const r of report.results) {
     const icon = r.ok || r.repaired ? "✓" : "✗";
     const label = r.ok ? "OK   " : r.repaired ? "FIXED" : "FAIL ";
