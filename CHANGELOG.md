@@ -7,6 +7,61 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.2.1] — 2026-08-03
+
+Wartungs-Release. Behebt mehrere Fehler, die das episodische Gedächtnis in
+der Praxis unbrauchbar gemacht haben.
+
+### Behoben
+
+- **Verwaiste Write-Locks blockierten den NEO-Layer dauerhaft.**
+  `.neo-write.lock` ist ein Verzeichnis-Mutex ohne Stale-Recovery: Starb der
+  Halter im kritischen Abschnitt — etwa bei einem Gateway-Absturz —, blieb das
+  Verzeichnis für immer liegen und **jeder** weitere NEO-Schreibvorgang lief in
+  `NEO_WRITE_BACKPRESSURE`. Das Lock trägt jetzt PID und Zeitstempel und wird
+  übernommen, wenn der Halter nachweislich weg ist. Ein lebender Halter wird
+  ausdrücklich nicht verdrängt.
+- **`pruneAll` sprengte die eigene Lock-Deadline.** Der Wartungslauf hielt ein
+  einziges Lock über alle Dateien, inklusive des dreistellig großen
+  Turn-Journals, und ließ damit parallele Schreiber auflaufen. Das Lock wird
+  jetzt pro Datei genommen; Wartungsläufe haben eine eigene, längere Deadline.
+- **Episoden gingen bei Fehlern dauerhaft verloren.** Das High-Watermark
+  `lastProcessedMessageCount` wurde synchron hochgezählt, während die
+  Episoden-Extraktion fire-and-forget lief. Schlug sie fehl, lagen die
+  betroffenen Turns anschließend unterhalb des Watermarks und wurden nie wieder
+  betrachtet. Das Watermark rückt jetzt erst nach erfolgreicher Nachverarbeitung
+  vor; Dedup läuft dabei über Turn-IDs statt über den Batch-Digest, weil ein
+  Wiederholungslauf eine breitere Slice verarbeitet.
+- **Alle Turns eines Batches trugen denselben Zeitstempel.** Dadurch war in
+  jeder Episode `startTime === endTime` und `durationMinutes` gleich 0, und die
+  zeitlückenbasierte Gruppierung trennte nie nach Gesprächspausen. Turns
+  übernehmen jetzt den Zeitstempel ihrer Nachricht.
+- **Der Legacy-Workspace-Pfad wurde entgegengenommen, aber nie gelesen.**
+  Workspaces, die auf das gehashte Namensschema migriert sind, verloren damit
+  den Zugriff auf ältere Einträge. Lesezugriffe führen kanonischen und
+  Legacy-Pfad jetzt zusammen — allerdings nur, wenn der Legacy-Name eine
+  verlustfreie Ableitung des Workspace-Keys ist, da die Pfad-Sanitisierung
+  mehrdeutig sein kann.
+- **Tool-Ergebnisse landeten nie im Gedächtnis.** Der Host liefert sie als
+  `role: "toolResult"` mit `toolCallId`; das Plugin filterte auf `role: "tool"`
+  und las `tool_call_id`. Beides traf nie zu, entsprechende
+  Klassifizierungszweige waren toter Code. Tool-Ergebnisse werden jetzt erfasst
+  — gefiltert nach Tool-Art (Shell- und Datei-Rohausgaben bleiben draußen,
+  Fehler immer drin) und auf 5000 Zeichen gekürzt. Sie gelten als
+  `agent_private`, da sie Dateiinhalte oder Kommandoausgaben tragen können.
+- **Systemrauschen wurde als Nutzereingabe erfasst.** Heartbeat-Polls des Hosts
+  und die Dream-Generierung des Host-Plugins `memory-core` landeten als
+  vermeintliche User-Turns im Journal.
+
+### Hinzugefügt
+
+- **`scripts/migrate-neo-workspace-generations.mjs`** führt historische
+  Workspace-Generationen einmalig in den kanonischen Workspace zusammen.
+  Dry-Run ist Voreinstellung, geschrieben wird nur mit `--apply` und erst nach
+  einem Backup. `reaction-ledger` und `behavior-cards` sind bewusst
+  ausgenommen: Der Append-Cap behält die jüngsten Einträge, migrierte Datensätze
+  sind älter und würden aktuelle verdrängen.
+
 ## [7.2.0] — 2026-08-01
 
 ### Hinzugefügt
