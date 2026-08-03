@@ -7,6 +7,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.2.2] — 2026-08-03
+
+### Behoben
+
+- **`package.json` wurde geprüft, aber nie ausgeliefert.** Die Datei stand in
+  der Snapshot-Liste des Deploy-Verifiers, nicht aber im Deploy-Manifest: Sie
+  wurde für die Versionsprüfung gelesen und beim Kopieren übergangen. Die
+  ausgelieferte Datei blieb dadurch auf dem Stand, den ein früherer
+  Installationsweg hinterlassen hatte — beim 7.2.1-Deploy wies sie 7.1.7 aus,
+  während `openclaw.plugin.json` korrekt 7.2.1 zeigte. Funktional folgenlos,
+  da die Laufzeit-Identität aus dem Plugin-Manifest stammt; zwei
+  widersprechende Versionsangaben im selben Verzeichnis führen aber jede
+  Diagnose in die Irre.
+
 ## [7.2.1] — 2026-08-03
 
 Wartungs-Release. Behebt mehrere Fehler, die das episodische Gedächtnis in
