@@ -14,6 +14,14 @@ import { dirname, join, relative, resolve as resolvePath, sep } from "node:path"
 export const DEPLOY_FILES = [
   "index.js",
   "openclaw.plugin.json",
+  // package.json wurde bis 7.2.1 nur fuer die Versionspruefung GELESEN, aber
+  // nie ausgeliefert (es stand in snapshotFiles, nicht in dieser Liste).
+  // Folge: die deployte package.json blieb auf dem Stand, den irgendein
+  // frueherer Installationsweg hinterlassen hatte — beim 7.2.1-Deploy stand
+  // dort 7.1.7, waehrend openclaw.plugin.json korrekt 7.2.1 auswies. Die
+  // Laufzeit nimmt zwar das Plugin-Manifest, aber zwei widersprechende
+  // Versionsangaben im selben Verzeichnis fuehren jede Diagnose in die Irre.
+  "package.json",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
   "lib/neo-worker-runner.js",
