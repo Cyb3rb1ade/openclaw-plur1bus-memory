@@ -14,6 +14,7 @@ import {
   isMemorableToolResult,
   normalizeTurnRole,
   truncateToolResult,
+  isInjectedContextText,
 } from "../lib/neo-arch.js";
 
 const BASE = { workspaceKey: "workspace", agentId: "main", sessionId: "s1", createdAt: "2026-08-03T10:00:00.000Z" };
@@ -134,5 +135,37 @@ describe("turnEventsFromMessages — Tool-Turns", () => {
     assert.deepEqual(turns.map((t) => t.role), ["user", "assistant"]);
     assert.equal(turns[1].visibility.scope, "agent_private");
     assert.equal(turns[0].visibility.scope, "workspace_shared");
+  });
+});
+
+describe("isInjectedContextText — System-Rauschen", () => {
+  it("filtert Heartbeat-Polls des Hosts", () => {
+    assert.equal(isInjectedContextText("[OpenClaw heartbeat poll]"), true);
+  });
+
+  it("filtert die Dream-Generierung des Host-Plugins memory-core", () => {
+    assert.equal(
+      isInjectedContextText("Write a dream diary entry from these memory fragments:\n\n- Assistant: ..."),
+      true,
+    );
+  });
+
+  it("laesst echte Nutzertexte unangetastet", () => {
+    for (const text of [
+      "Kannst du mir was über Träume erzählen?",
+      "Schreib mir bitte eine Zusammenfassung.",
+      "heartbeat war gestern kaputt, weißt du warum?",
+    ]) {
+      assert.equal(isInjectedContextText(text), false, text);
+    }
+  });
+
+  it("erfasst diese Turns folglich gar nicht erst", () => {
+    const turns = turnEventsFromMessages([
+      { role: "user", content: "[OpenClaw heartbeat poll]", timestamp: Date.parse("2026-08-03T10:00:00Z") },
+      { role: "user", content: "Echte Frage von Erik?", timestamp: Date.parse("2026-08-03T10:00:01Z") },
+    ], BASE);
+    assert.equal(turns.length, 1);
+    assert.match(turns[0].content, /Echte Frage/);
   });
 });
