@@ -265,6 +265,7 @@ import { readPendingReminders, writePendingReminders, removePendingReminder } fr
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
 import { buildRemPartition, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
+import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
 import {
   buildEdgesForSession,
   buildEpisodeAnchorEdges,
@@ -309,6 +310,15 @@ const OPENAI_PLUGIN_PATH  = join(__pluginDir, "node_modules/openai/index.js");
 const DEFAULT_BASE_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb-namespaced");
 const DEFAULT_MODEL = LEGACY_DEFAULT_MODEL;
 const MAX_PROMPT_REPLY_OUTCOME_READ_BYTES = 2 * 1024 * 1024;
+// Wie viele bereits episodierte Turn-IDs im Hook-State vorgehalten werden.
+// Dedup laeuft ueber Turn-IDs statt ueber den Batch-Digest, weil ein
+// haengendes Watermark die naechste Slice verbreitert und den Digest damit
+// aendert — die Turn-IDs bleiben dagegen stabil.
+const EPISODED_TURN_ID_MEMORY = 2000;
+// Nach so vielen erfolglosen Nachverarbeitungslaeufen wird das Watermark
+// nachgezogen, damit ein dauerhaft kaputter Pfad die Slice nicht unbegrenzt
+// wachsen laesst. Der uebersprungene Bereich wird dabei laut protokolliert.
+const MAX_POSTPROCESSING_RETRIES = 5;
 
 // PLUGIN_VERSION: read once from openclaw.plugin.json (Single Source of
 // Truth, see file header). Used only for the fail-open feature-cron notice
@@ -7156,6 +7166,14 @@ const plugin = {
               const { createHash } = await import("node:crypto");
               const digestHash = createHash("sha256").update(sessionDigest).digest("hex").slice(0, 16);
 
+              // Die beiden folgenden Pfade (Light-Dream, Episoden) laufen
+              // fire-and-forget. Das High-Watermark darf erst hochgezaehlt
+              // werden, wenn sie durch sind — sonst liegen die Turns eines
+              // fehlgeschlagenen Laufs darunter und werden NIE wieder
+              // betrachtet (dauerhafter Episodenverlust, im Feld beobachtet).
+              // Jeder Eintrag ist ein Promise<boolean>: true = erledigt.
+              const postProcessing = [];
+
               // v5.3.0 — Light Dreaming: Nach-Session-Reflexion (fire-and-forget)
               if (!background && mergingEnabled && isLlmRouteAvailable(conversationInsightsLlmCfg) && neoEnabled) {
                 const processedDreams = hooks?.agent_end?.processedDreams || [];
@@ -7195,7 +7213,7 @@ const plugin = {
                       ? { scope: "user", agentId: lightRequestContext.agentId, workspaceIdentity: "", ownerUserId: lightRequestContext.userPrincipal }
                       : { scope: "workspace", agentId: lightRequestContext.agentId, workspaceIdentity: lightRequestContext.workspaceIdentity, ownerUserId: "" })
                     : null;
-                  lightDream({
+                  postProcessing.push(lightDream({
                     turns: normalizedTurns,
                     neoStore,
                     db,
@@ -7245,9 +7263,11 @@ const plugin = {
                     const mergedDreams = [...processedDreams.slice(-100), digestHash];
                     throwIfAborted(signal, "light dream commit aborted");
                     neoStore.recordHook("agent_end", { processedDreams: mergedDreams });
+                    return true;
                   }).catch((dreamErr) => {
                     api.logger.warn?.(`memory-lancedb-namespaced: light dream failed: ${String(dreamErr)}`);
-                  });
+                    return false;
+                  }));
                 }
               }
 
@@ -7257,8 +7277,17 @@ const plugin = {
                 if (processedEpisodes.includes(digestHash)) {
                   api.logger.info(`memory-lancedb-namespaced: episodes already processed for this session (digest=${digestHash})`);
                 } else {
+                  // Dedup MUSS pro Turn greifen, nicht pro Batch: Bleibt das
+                  // Watermark nach einem Fehlschlag stehen, ist die naechste
+                  // Slice BREITER (currentCount ist gewachsen) und damit auch
+                  // der digestHash ein anderer — processedEpisodes wuerde nicht
+                  // greifen und bereits geschriebene Spannen doppelt anlegen.
+                  // Die Turn-IDs dagegen sind stabil, solange der Slice-START
+                  // gleich bleibt, und genau das garantiert das haengende
+                  // Watermark.
+                  const episodedTurnIds = new Set(hooks?.agent_end?.episodedTurnIds || []);
                   // Fire-and-forget: nicht awaiten, damit der Hook nicht blockiert
-                  extractEpisodesFromTurns(normalizedTurns, {
+                  postProcessing.push(extractEpisodesFromTurns(normalizedTurns, {
                     workspaceKey: ctx?.workspaceKey,
                     agentId,
                     llmCfg: mergingEnabled ? withLlmCallContext(
@@ -7271,12 +7300,18 @@ const plugin = {
                     signal,
                   }).then((episodes) => {
                     throwIfAborted(signal, "episode commit aborted");
-                    if (episodes.length > 0) {
+                    // Nur vollstaendig bereits episodierte Spannen verwerfen.
+                    // Teilueberlappung bleibt erhalten — sie enthaelt neue Turns.
+                    const { fresh, skipped } = filterAlreadyEpisoded(episodes, episodedTurnIds);
+                    if (skipped > 0) {
+                      api.logger.info(`memory-lancedb-namespaced: ${skipped} bereits episodierte Spanne(n) uebersprungen (agent=${agentId})`);
+                    }
+                    if (fresh.length > 0) {
                       throwIfAborted(signal, "episode commit aborted");
-                      neoStore.appendEpisodes(episodes);
-                      api.logger.info(`memory-lancedb-namespaced: ${episodes.length} episode(s) extracted for agent=${agentId}`);
+                      neoStore.appendEpisodes(fresh);
+                      api.logger.info(`memory-lancedb-namespaced: ${fresh.length} episode(s) extracted for agent=${agentId}`);
                       if (ctx?.workspaceDir) {
-                        for (const ep of episodes) {
+                        for (const ep of fresh) {
                           throwIfAborted(signal, "episode commit aborted");
                           writeEpisodeToVault(ep, ctx.workspaceDir);
                         }
@@ -7285,15 +7320,51 @@ const plugin = {
                     // Markiere als verarbeitet
                     const mergedEpisodes = [...processedEpisodes.slice(-100), digestHash];
                     throwIfAborted(signal, "episode commit aborted");
-                    neoStore.recordHook("agent_end", { processedEpisodes: mergedEpisodes });
+                    neoStore.recordHook("agent_end", {
+                      processedEpisodes: mergedEpisodes,
+                      episodedTurnIds: mergeEpisodedTurnIds(episodedTurnIds, fresh, EPISODED_TURN_ID_MEMORY),
+                    });
+                    return true;
                   }).catch((epErr) => {
                     api.logger.warn?.(`memory-lancedb-namespaced: episode extraction failed: ${String(epErr)}`);
-                  });
+                    return false;
+                  }));
                 }
               }
 
-              // High-Watermark aktualisieren
-              neoStore.recordHook("agent_end", { lastProcessedMessageCount: currentCount });
+              // High-Watermark aktualisieren — aber erst, wenn die
+              // fire-and-forget-Nachverarbeitung durch ist. Wird es wie
+              // frueher synchron hochgezaehlt, sind die Turns eines
+              // fehlgeschlagenen Laufs dauerhaft verloren.
+              const advanceWatermark = () => {
+                neoStore.recordHook("agent_end", {
+                  lastProcessedMessageCount: currentCount,
+                  postProcessingFailures: 0,
+                });
+              };
+              if (postProcessing.length === 0) {
+                advanceWatermark();
+              } else {
+                const failures = Number(hooks?.agent_end?.postProcessingFailures) || 0;
+                Promise.all(postProcessing).then((results) => {
+                  const decision = resolveWatermarkAdvance({
+                    results,
+                    failures,
+                    maxRetries: MAX_POSTPROCESSING_RETRIES,
+                  });
+                  if (decision.gaveUp) {
+                    api.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung ${MAX_POSTPROCESSING_RETRIES}x gescheitert — Watermark wird nachgezogen, Turns ${lastCount}..${currentCount} bleiben unverarbeitet (agent=${agentId})`);
+                  }
+                  if (decision.advance) {
+                    advanceWatermark();
+                    return;
+                  }
+                  api.logger.warn?.(`memory-lancedb-namespaced: Nachverarbeitung unvollstaendig — Watermark bleibt bei ${lastCount}, Bereich wird erneut versucht (${decision.nextFailures}/${MAX_POSTPROCESSING_RETRIES}, agent=${agentId})`);
+                  neoStore.recordHook("agent_end", { postProcessingFailures: decision.nextFailures });
+                }).catch((aggErr) => {
+                  api.logger.warn?.(`memory-lancedb-namespaced: Watermark-Nachlauf fehlgeschlagen: ${String(aggErr)}`);
+                });
+              }
             }
 
             // v5.4.0 — Memory-Graph: Assoziative Verknüpfung

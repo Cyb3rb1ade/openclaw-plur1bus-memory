@@ -135,6 +135,7 @@ export const DEPLOY_FILES = [
   "lib/dreaming/dream-narrative.js",
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",
+  "lib/episode-watermark.js",
   "lib/episodes.js",
   "lib/jobs/auto-accept-stale-criticals.js",
   "lib/jobs/critical-classifier.js",
