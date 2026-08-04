@@ -1,10 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import plugin, * as pluginModule from "../index.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 
 const routingCapability = Object.freeze({
@@ -22,6 +23,18 @@ const routingCapability = Object.freeze({
     return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
   },
 });
+
+// realpathSync: macOS tmpdir is a symlink (/var -> /private/var) while production
+// code resolves real paths, so temp base dirs must be canonical for comparisons.
+function makeTempDir(prefix) {
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+// Explicit named namespace routing needs fd-backed directory capabilities,
+// which this platform may lack (e.g. darwin); those cases run only where supported.
+const namedRoutingSkip = stableDirectoryCapabilitiesSupported()
+  ? false
+  : "explicit named namespace routing requires stable directory capabilities";
 
 function makeApi(pluginConfig) {
   const calls = {
@@ -74,7 +87,7 @@ function minimalConfig(baseDbPath, override = {}) {
 
 describe("runtime config contract", () => {
   async function capturePublicStoreAndRecallPaths(t, pluginConfig, expectedPath, options = {}) {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-runtime-route-ws-"));
+    const workspaceDir = makeTempDir("plur1bus-runtime-route-ws-");
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const seen = { store: [], init: [] };
     const originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
@@ -129,7 +142,7 @@ describe("runtime config contract", () => {
   }
 
   it("uses the exact custom flat base for public store and recall when namespaces are absent", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-flat-"));
+    const baseDbPath = makeTempDir("plur1bus-runtime-flat-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     await capturePublicStoreAndRecallPaths(
       t,
@@ -138,8 +151,8 @@ describe("runtime config contract", () => {
     );
   });
 
-  it("routes an explicit named root through its active writer", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-root-"));
+  it("routes an explicit named root through its active writer", { skip: namedRoutingSkip }, async (t) => {
+    const baseDbPath = makeTempDir("plur1bus-runtime-root-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     await capturePublicStoreAndRecallPaths(t, minimalConfig(baseDbPath, {
       merging: { enabled: false },
@@ -147,8 +160,8 @@ describe("runtime config contract", () => {
     }), join(baseDbPath, "ns-write", "route-agent"));
   });
 
-  it("preserves an explicit active namespace leaf without duplicating it", async (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-runtime-leaf-"));
+  it("preserves an explicit active namespace leaf without duplicating it", { skip: namedRoutingSkip }, async (t) => {
+    const root = makeTempDir("plur1bus-runtime-leaf-");
     const baseDbPath = join(root, "ns-write");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     await capturePublicStoreAndRecallPaths(t, minimalConfig(baseDbPath, {
@@ -157,8 +170,8 @@ describe("runtime config contract", () => {
     }), join(baseDbPath, "route-agent"));
   });
 
-  it("creates and uses a missing explicit named root through public store and recall", async (t) => {
-    const parent = mkdtempSync(join(tmpdir(), "plur1bus-runtime-missing-root-parent-"));
+  it("creates and uses a missing explicit named root through public store and recall", { skip: namedRoutingSkip }, async (t) => {
+    const parent = makeTempDir("plur1bus-runtime-missing-root-parent-");
     const baseDbPath = join(parent, "missing-root");
     const agentPath = join(baseDbPath, "ns-write", "route-agent");
     t.after(() => rmSync(parent, { recursive: true, force: true }));
@@ -195,7 +208,7 @@ describe("runtime config contract", () => {
   });
 
   async function runBeforePromptLegacyInit(t, initLegacy) {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-hook-legacy-"));
+    const baseDbPath = makeTempDir("plur1bus-runtime-hook-legacy-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     const originalInit = pluginModule.MemoryDB.prototype.init;
@@ -244,7 +257,7 @@ describe("runtime config contract", () => {
     return { result, activeTableUses, logs: api.logs, baseDbPath };
   }
 
-  it("before_prompt_build skips an absent legacy DB and completes active recall", async (t) => {
+  it("before_prompt_build skips an absent legacy DB and completes active recall", { skip: namedRoutingSkip }, async (t) => {
     const state = await runBeforePromptLegacyInit(t, async function missingLegacy() {
       this.table = null;
       return false;
@@ -255,7 +268,7 @@ describe("runtime config contract", () => {
     assert.equal(existsSync(join(state.baseDbPath, "legacy")), false, "read-only legacy route must stay absent");
   });
 
-  it("before_prompt_build aborts without active partial recall when legacy init throws", async (t) => {
+  it("before_prompt_build aborts without active partial recall when legacy init throws", { skip: namedRoutingSkip }, async (t) => {
     const state = await runBeforePromptLegacyInit(t, async function failingLegacy() {
       this.table = null;
       throw new Error("hook legacy init failure");
@@ -266,8 +279,8 @@ describe("runtime config contract", () => {
     assert.equal(existsSync(join(state.baseDbPath, "legacy")), false, "failed read-only legacy route must stay absent");
   });
 
-  it("skips an absent read-only legacy DB during public recall", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-legacy-missing-"));
+  it("skips an absent read-only legacy DB during public recall", { skip: namedRoutingSkip }, async (t) => {
+    const baseDbPath = makeTempDir("plur1bus-runtime-legacy-missing-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const { recallResult, seen } = await capturePublicStoreAndRecallPaths(t, minimalConfig(baseDbPath, {
       merging: { enabled: false },
@@ -284,8 +297,8 @@ describe("runtime config contract", () => {
     assert.match(recallResult.content[0].text, /no relevant memories/i);
   });
 
-  it("fails the whole public recall when a legacy DB init throws", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-runtime-legacy-error-"));
+  it("fails the whole public recall when a legacy DB init throws", { skip: namedRoutingSkip }, async (t) => {
+    const baseDbPath = makeTempDir("plur1bus-runtime-legacy-error-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const { recallResult } = await capturePublicStoreAndRecallPaths(t, minimalConfig(baseDbPath, {
       merging: { enabled: false },
@@ -302,7 +315,7 @@ describe("runtime config contract", () => {
   });
 
   it("rejects an explicit base ending in a configured non-writer at the exact namespaces path", () => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-runtime-nonwriter-"));
+    const root = makeTempDir("plur1bus-runtime-nonwriter-");
     const api = makeApi(minimalConfig(join(root, "ns-read"), {
       namespaces: {
         activeWriteNamespace: "ns-write",
@@ -322,7 +335,7 @@ describe("runtime config contract", () => {
   });
 
   it("rejects invalid namespace config before the first API or filesystem action", () => {
-    const parent = mkdtempSync(join(tmpdir(), "plur1bus-runtime-invalid-ns-"));
+    const parent = makeTempDir("plur1bus-runtime-invalid-ns-");
     const baseDbPath = join(parent, "must-not-exist");
     const api = makeApi(minimalConfig(baseDbPath, {
       namespaces: { activeWriteNamespace: "../escape" },
@@ -340,7 +353,7 @@ describe("runtime config contract", () => {
   });
 
   it("rejects an invalid timezone before the first API call or filesystem setup", () => {
-    const parent = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-"));
+    const parent = makeTempDir("plur1bus-config-contract-");
     const baseDbPath = join(parent, "must-not-exist");
     const api = makeApi(minimalConfig(baseDbPath, {
       afterthought: { timezone: "Not/AZone" },
@@ -373,7 +386,7 @@ describe("runtime config contract", () => {
 
   for (const timezone of ["UTC", "Europe/Berlin", undefined, null, ""]) {
     it(`accepts ${JSON.stringify(timezone)} timezone compatibility input`, () => {
-      const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-valid-"));
+      const baseDbPath = makeTempDir("plur1bus-config-contract-valid-");
       const afterthought = timezone === undefined ? {} : { timezone };
       const api = makeApi(minimalConfig(baseDbPath, { afterthought }));
       try {
@@ -387,7 +400,7 @@ describe("runtime config contract", () => {
   }
 
   it("keeps enabled model-less core LLM features active without registration-time calls", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-native-"));
+    const baseDbPath = makeTempDir("plur1bus-config-contract-native-");
     let llmCalls = 0;
     const api = makeApi(minimalConfig(baseDbPath, {
       merging: { enabled: true },
@@ -414,7 +427,7 @@ describe("runtime config contract", () => {
   });
 
   it("describes Neo LLM availability in route terms instead of requiring merging.model", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-neo-route-"));
+    const baseDbPath = makeTempDir("plur1bus-config-contract-neo-route-");
     const api = makeApi(minimalConfig(baseDbPath, {
       neo: { enabled: true },
       merging: { enabled: false },
@@ -430,7 +443,7 @@ describe("runtime config contract", () => {
   });
 
   it("treats an unresolved feature-local chat credential as unavailable without aborting registration", () => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-config-contract-credential-"));
+    const baseDbPath = makeTempDir("plur1bus-config-contract-credential-");
     const missingEnv = "PLUR1BUS_TEST_MISSING_CHAT_CREDENTIAL_90210";
     const previous = process.env[missingEnv];
     delete process.env[missingEnv];

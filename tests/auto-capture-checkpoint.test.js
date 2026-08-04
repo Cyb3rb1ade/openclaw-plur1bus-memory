@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -237,7 +238,10 @@ export async function connect(dbPath) {
 }
 
 function createFixture(sessionText) {
-  const root = mkdtempSync(join(tmpdir(), "plur1bus-auto-capture-checkpoint-"));
+  // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
+  // production code resolves real paths (resolveInside -> realpathSync), so
+  // the preload's path comparison must see the resolved path too.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-auto-capture-checkpoint-")));
   tempDirs.push(root);
   const homeDir = join(root, "home");
   const pluginDir = join(root, "plugin");

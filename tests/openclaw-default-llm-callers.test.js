@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { lightDream } from "../lib/dreaming/light-dream.js";
 import { runRemDream } from "../lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns } from "../lib/episodes.js";
@@ -517,6 +518,13 @@ test("tool and auto-recall query summaries carry global agent and scheduler cont
 });
 
 test("verified auto-recall tickets and /memory compose authorized shared pools", async (t) => {
+  // Shared pool reads route through fd-backed directory capabilities; platforms
+  // without a stat-verifiable fd alias (e.g. darwin, see lib/directory-capability.js)
+  // fail closed and disable shared reads, so the composed pools stay empty there.
+  if (!stableDirectoryCapabilitiesSupported()) {
+    t.skip("stable directory capabilities are unavailable on this platform; shared pool reads are disabled");
+    return;
+  }
   const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-shared-runtime-recall-"));
   t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
   const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;

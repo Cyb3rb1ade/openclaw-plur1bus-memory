@@ -20,6 +20,13 @@ import {
   writeLegacyRepairReport,
 } from "../lib/shared-memory-migration.js";
 import { normalizeAndFreezeWorkspaceAliases } from "../lib/memory-request-context.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
+
+// Report publishing routes through fd-backed directory capabilities, which are only
+// verifiable on platforms with a stat-verifiable fd alias (Linux; see lib/directory-capability.js).
+const requiresDirectoryCapabilities = stableDirectoryCapabilitiesSupported()
+  ? {}
+  : { skip: `fd-backed directory capabilities are unavailable on ${process.platform}` };
 
 const roots = [];
 afterEach(() => {
@@ -269,7 +276,7 @@ function fixture(sourceRows, {
 }
 
 describe("legacy workspace_shared migration", () => {
-  it("dry-run writes only the bounded audit report and never mutates memory", async () => {
+  it("dry-run writes only the bounded audit report and never mutates memory", requiresDirectoryCapabilities, async () => {
     const sourceRows = [row()];
     const f = fixture(sourceRows);
     const result = await migrateLegacySharedRows({
@@ -288,7 +295,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(JSON.parse(readFileSync(result.reportPath, "utf8")).dryRun, true);
   });
 
-  it("copies, verifies, then writes the source migration marker", async () => {
+  it("copies, verifies, then writes the source migration marker", requiresDirectoryCapabilities, async () => {
     const sourceRows = [row()];
     const f = fixture(sourceRows);
     const result = await migrateLegacySharedRows({
@@ -308,7 +315,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(f.targetRows[0].shareProvenance.includes("legacy_workspace_shared_migration"), true);
   });
 
-  it("leaves unbound or conflicting rows untouched and writes a private repair report", async () => {
+  it("leaves unbound or conflicting rows untouched and writes a private repair report", requiresDirectoryCapabilities, async () => {
     const sourceRows = [
       row("11111111-1111-4111-8111-111111111111", { workspaceId: "", workspaceKey: "" }),
       row("22222222-2222-4222-8222-222222222222", { workspaceId: "workspace-a", workspaceKey: "workspace-b" }),
@@ -336,7 +343,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(lstatSync(result.reportPath).mode & 0o777, 0o600);
   });
 
-  it("does not mark a source when target readback fails and retries idempotently", async () => {
+  it("does not mark a source when target readback fails and retries idempotently", requiresDirectoryCapabilities, async () => {
     const sourceRows = [row()];
     const first = fixture(sourceRows, { readbackFails: true });
     const result = await migrateLegacySharedRows({
@@ -352,7 +359,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(first.sourceUpdateCalls.length, 0);
   });
 
-  it("skips inactive, expired, and invalid-expiry rows before provider or target work", async () => {
+  it("skips inactive, expired, and invalid-expiry rows before provider or target work", requiresDirectoryCapabilities, async () => {
     const sourceRows = [
       row("11111111-1111-4111-8111-111111111111", { status: "archived" }),
       row("22222222-2222-4222-8222-222222222222", { expiresAt: 1_000 }),
@@ -373,7 +380,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(f.operationOrder.length, 0);
   });
 
-  it("passes allowSensitiveShare only on the destructively authorized apply path", async () => {
+  it("passes allowSensitiveShare only on the destructively authorized apply path", requiresDirectoryCapabilities, async () => {
     const sourceRows = [row(undefined, {
       category: "credential",
       memoryClass: "core",
@@ -391,7 +398,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(result.migrated, 1);
   });
 
-  it("uses terminal offsets and a mode-bound checksummed continuation token", async () => {
+  it("uses terminal offsets and a mode-bound checksummed continuation token", requiresDirectoryCapabilities, async () => {
     const sourceRows = [
       row("11111111-1111-4111-8111-111111111111"),
       row("22222222-2222-4222-8222-222222222222"),
@@ -431,7 +438,7 @@ describe("legacy workspace_shared migration", () => {
     }), /mode|restart without a cursor/i);
   });
 
-  it("checks out the pinned version before inspecting its schema on resume", async () => {
+  it("checks out the pinned version before inspecting its schema on resume", requiresDirectoryCapabilities, async () => {
     const sourceRows = [
       row("11111111-1111-4111-8111-111111111111"),
       row("22222222-2222-4222-8222-222222222222"),
@@ -459,7 +466,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(result.nextOffset, 2);
   });
 
-  it("stops before aggregate byte/provider/time bounds without consuming the current row", async () => {
+  it("stops before aggregate byte/provider/time bounds without consuming the current row", requiresDirectoryCapabilities, async () => {
     const sourceRows = [
       row("11111111-1111-4111-8111-111111111111", { text: "1234", summary: "" }),
       row("22222222-2222-4222-8222-222222222222", { text: "5678", summary: "" }),
@@ -504,7 +511,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(timeResult.terminallyConsumedRows, 0);
   });
 
-  it("honors abort barriers before start and after embedding", async () => {
+  it("honors abort barriers before start and after embedding", requiresDirectoryCapabilities, async () => {
     const before = new AbortController();
     before.abort();
     const sourceRows = [row()];
@@ -536,7 +543,7 @@ describe("legacy workspace_shared migration", () => {
     assert.equal(result.terminallyConsumedRows, 0);
   });
 
-  it("bounds every hanging migration DB phase and leaves the current offset resumable", async () => {
+  it("bounds every hanging migration DB phase and leaves the current offset resumable", requiresDirectoryCapabilities, async () => {
     const lateFailures = [];
     const onUnhandled = (error) => lateFailures.push(error);
     process.on("unhandledRejection", onUnhandled);
@@ -650,7 +657,7 @@ describe("legacy marker schema and parser", () => {
 });
 
 describe("legacy migration repair report", () => {
-  it("publishes private no-clobber output and preserves an existing destination", () => {
+  it("publishes private no-clobber output and preserves an existing destination", requiresDirectoryCapabilities, () => {
     const root = reportRoot();
     const first = writeLegacyRepairReport({
       workspaceDir: root,
@@ -667,7 +674,7 @@ describe("legacy migration repair report", () => {
     assert.equal(readFileSync(first, "utf8"), original);
   });
 
-  it("rejects symlinked directory and destination routes", () => {
+  it("rejects symlinked directory and destination routes", requiresDirectoryCapabilities, () => {
     const root = reportRoot();
     const outside = reportRoot();
     symlinkSync(outside, join(root, ".plur1bus"));
@@ -694,7 +701,7 @@ describe("legacy migration repair report", () => {
     }), /EEXIST|exist|symlink/i);
   });
 
-  it("bounds repair entries and serialized output without leaking row content", () => {
+  it("bounds repair entries and serialized output without leaking row content", requiresDirectoryCapabilities, () => {
     const repair = Array.from({ length: 1_100 }, (_, index) => ({
       memoryId: String(index),
       agentId: "agent-a",

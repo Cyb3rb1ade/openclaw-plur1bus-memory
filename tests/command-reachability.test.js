@@ -4,6 +4,14 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
+
+// Explicit shared memory requires verified fd-backed directory aliases, which
+// are unavailable on darwin; the share write path fails closed there.
+const directoryCapabilitiesUnavailable = stableDirectoryCapabilitiesSupported()
+  ? false
+  : "stable directory capabilities are unavailable on this platform";
+
 const VECTOR_DIM = 384;
 const OWNER = "owner-user";
 const OTHER_ALLOWED_USER = "other-allowed-user";
@@ -268,7 +276,11 @@ describe("registered memory command reachability", () => {
     assert.match(recalled.text, /B1 corrected value/);
   });
 
-  it("registers /share and /teile aliases and shares a normal card without changing its source", async () => {
+  it("registers /share and /teile aliases and shares a normal card without changing its source", async (t) => {
+    if (directoryCapabilitiesUnavailable) {
+      t.skip(directoryCapabilitiesUnavailable);
+      return;
+    }
     const agentId = "b13-share";
     const memoryId = await store(agentId, "B13 workspace share target");
     const baseCtx = commandContext(workspaceDir, agentId, memoryId);
@@ -283,7 +295,11 @@ describe("registered memory command reachability", () => {
     assert.match(sourceStillActive.text, /B13 workspace share target/);
   });
 
-  it("binds sensitive /share confirmation to the exact user and conversation", async () => {
+  it("binds sensitive /share confirmation to the exact user and conversation", async (t) => {
+    if (directoryCapabilitiesUnavailable) {
+      t.skip(directoryCapabilitiesUnavailable);
+      return;
+    }
     const agentId = "b13-share-sensitive";
     const memoryId = await store(agentId, "B13 sensitive share target", api, "secret");
     const baseCtx = commandContext(workspaceDir, agentId, memoryId);
