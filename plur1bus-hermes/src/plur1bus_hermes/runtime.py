@@ -254,10 +254,19 @@ class RerankerBackend:
             return rows
         try:
             return self._rerank_with(self.config, query, rows)
-        except Exception:
+        except Exception as primary_error:
             if self.config.get("fallbackProvider") != "local-transformers":
                 return rows
-            return self._rerank_with({"provider": "local-transformers", "model": self.config.get("fallbackModel", "BAAI/bge-reranker-v2-m3")}, query, rows)
+            try:
+                return self._rerank_with({"provider": "local-transformers", "model": self.config.get("fallbackModel", "BAAI/bge-reranker-v2-m3")}, query, rows)
+            except Exception as fallback_error:
+                # JS parity (reranker-chained): fail open with unreranked rows.
+                LOGGER.warning(
+                    "reranker primary (%s) and local fallback (%s) failed; returning unreranked results",
+                    primary_error,
+                    fallback_error,
+                )
+                return rows
 
     def _rerank_with(self, config: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if config.get("provider") == "cohere":
