@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { shareCard as productionShareCard } from "../lib/telegram-commands/memory-edit.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 
@@ -388,6 +389,10 @@ describe("B13 authoritative registered share handlers", () => {
   });
 
   it("treats a named legacy-namespace-only UUID exactly like missing and performs no embed or target work", async (t) => {
+    if (!stableDirectoryCapabilitiesSupported()) {
+      t.skip("stable directory capabilities are unavailable on this platform; explicit named namespace routing is disabled");
+      return;
+    }
     const namespaces = {
       activeWriteNamespace: "active",
       activeRecallNamespaces: ["active"],

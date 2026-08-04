@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 import { workspacePoolKey } from "../lib/memory-request-context.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { AgentDbPool } from "../index.js";
 
 class FakeAgentDbPool {
@@ -18,11 +19,23 @@ const workspaceA = { workspaceIdentity: "workspace:v1:alpha" };
 const workspaceB = { workspaceIdentity: "workspace:v1:beta" };
 const userA = { userPrincipal: "user:v1:telegram:one" };
 
+// Explicit shared memory requires fd-backed directory routing; platforms without
+// it (e.g. darwin, where /dev/fd cannot resolve children) must fail closed.
+const sharedCapabilitiesSupported = stableDirectoryCapabilitiesSupported();
+
 describe("B13 shared memory pool", () => {
   it("routes workspaces and users to separate hashed physical roots", async () => {
     const base = mkdtempSync("/tmp/b13-shared-");
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
+      if (!sharedCapabilitiesSupported) {
+        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), /stable directory capabilities are unavailable/);
+        await assert.rejects(pool.withUserDb(userA, async () => {}), /stable directory capabilities are unavailable/);
+        await pool.withWorkspaceReadDb(workspaceA, async (db) => assert.equal(db, null));
+        assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
+        await pool.shutdown();
+        return;
+      }
       let workspacePath;
       await pool.withWorkspaceDb(workspaceA, async (db) => { workspacePath = db.path; assert.match(db.path, /\.plur1bus-shared\/workspaces\/w-[a-f0-9]{62}$/); });
       await pool.withWorkspaceDb(workspaceB, async (db) => assert.notEqual(db.path, workspacePath));
@@ -40,7 +53,12 @@ describe("B13 shared memory pool", () => {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
       await assert.rejects(pool.withWorkspaceDb({}, async () => {}), /bound workspace/);
       await assert.rejects(pool.withUserDb({}, async () => {}), /authenticated user principal/);
-      await pool.withWorkspaceDb({ workspaceIdentity: "../victim" }, async (db) => assert.equal(db.path.includes("../victim"), false));
+      if (!sharedCapabilitiesSupported) {
+        await assert.rejects(pool.withWorkspaceDb({ workspaceIdentity: "../victim" }, async () => {}), /stable directory capabilities are unavailable/);
+        assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
+      } else {
+        await pool.withWorkspaceDb({ workspaceIdentity: "../victim" }, async (db) => assert.equal(db.path.includes("../victim"), false));
+      }
       await pool.shutdown();
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
@@ -63,6 +81,12 @@ describe("B13 shared memory pool", () => {
       const pool = new SharedMemoryPool(base, 4, AgentDbPool);
       await pool.withWorkspaceReadDb(workspaceA, async (db) => assert.equal(db, null));
       assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
+      if (!sharedCapabilitiesSupported) {
+        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), /stable directory capabilities are unavailable/);
+        assert.equal(existsSync(join(base, ".plur1bus-shared")), false);
+        await pool.shutdown();
+        return;
+      }
       await pool.withWorkspaceDb(workspaceA, async (db) => {
         assert.match(db.dbPath, /\.plur1bus-shared\/workspaces\/w-[a-f0-9]{62}$/);
       });
@@ -79,11 +103,13 @@ describe("B13 shared memory pool", () => {
       await pool.withUserReadDb(userA, async (db) => assert.equal(db, null));
       assert.equal(existsSync(join(base, ".plur1bus-shared", "workspaces")), false);
       assert.equal(existsSync(join(base, ".plur1bus-shared", "users")), false);
-      mkdirSync(join(base, ".plur1bus-shared", "workspaces", workspacePoolKey(workspaceA.workspaceIdentity)), { recursive: true });
-      await pool.withWorkspaceReadDb(workspaceA, async (db) => assert.ok(db));
-      await pool.withWorkspaceReadDb(workspaceB, async (db) => assert.equal(db, null));
-      assert.equal(existsSync(join(base, ".plur1bus-shared", "workspaces", workspacePoolKey(workspaceB.workspaceIdentity))), false);
-      assert.deepEqual(pool.workspaceReadPool.calls, [workspacePoolKey(workspaceA.workspaceIdentity)]);
+      if (sharedCapabilitiesSupported) {
+        mkdirSync(join(base, ".plur1bus-shared", "workspaces", workspacePoolKey(workspaceA.workspaceIdentity)), { recursive: true });
+        await pool.withWorkspaceReadDb(workspaceA, async (db) => assert.ok(db));
+        await pool.withWorkspaceReadDb(workspaceB, async (db) => assert.equal(db, null));
+        assert.equal(existsSync(join(base, ".plur1bus-shared", "workspaces", workspacePoolKey(workspaceB.workspaceIdentity))), false);
+        assert.deepEqual(pool.workspaceReadPool.calls, [workspacePoolKey(workspaceA.workspaceIdentity)]);
+      }
       await pool.shutdown();
     } finally { rmSync(base, { recursive: true, force: true }); }
   });
@@ -92,6 +118,11 @@ describe("B13 shared memory pool", () => {
     const base = mkdtempSync("/tmp/b13-shared-");
     try {
       const pool = new SharedMemoryPool(base, 4, FakeAgentDbPool);
+      if (!sharedCapabilitiesSupported) {
+        await assert.rejects(pool.withWorkspaceDb(workspaceA, async () => {}), /stable directory capabilities are unavailable/);
+        await pool.shutdown();
+        return;
+      }
       let release; const gate = new Promise((resolve) => { release = resolve; });
       const running = pool.withWorkspaceDb(workspaceA, async () => gate);
       await new Promise((resolve) => setImmediate(resolve));

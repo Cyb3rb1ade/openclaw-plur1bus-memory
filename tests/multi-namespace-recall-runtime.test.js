@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import plugin, { MemoryDB } from "../index.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { createNeoStore } from "../lib/neo-arch.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { TimeoutError } from "../lib/with-timeout.js";
@@ -114,7 +115,11 @@ async function storeFixture(dbPath, id, text, summary) {
   return db;
 }
 
-describe("multi-namespace registered recall", () => {
+const namespaceRoutingOptions = stableDirectoryCapabilitiesSupported()
+  ? {}
+  : { skip: "fd-backed directory capabilities are unavailable on this platform; named namespace routing is disabled" };
+
+describe("multi-namespace registered recall", namespaceRoutingOptions, () => {
   it("merges same-agent namespace records globally for memory_recall, memory_search, and before_prompt_build without writing legacy storage", async (t) => {
     const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-namespace-runtime-"));
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-namespace-workspace-"));
