@@ -5,7 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import plugin from "../index.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
+
+// Migration report publication requires verified fd-backed directory aliases,
+// which are unavailable on darwin; the migration write path fails closed there.
+const directoryCapabilitiesUnavailable = stableDirectoryCapabilitiesSupported()
+  ? false
+  : "stable directory capabilities are unavailable on this platform";
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
@@ -189,7 +196,7 @@ describe("/plur1bus mutating command auth gates", () => {
     });
   });
 
-  it("runs an authorized dry-run through the official host-shaped command context", async () => {
+  it("runs an authorized dry-run through the official host-shaped command context", { skip: directoryCapabilitiesUnavailable }, async () => {
     await withPlugin(async ({ command, baseDbPath }) => {
       const result = await command.handler({
         args: "migrate-legacy-shared --report official-host.json",

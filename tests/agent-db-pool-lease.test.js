@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,19 @@ import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-l
 import { TimeoutError } from "../lib/with-timeout.js";
 
 const VECTOR_DIM = 3;
+
+function makeTempDir(prefix) {
+  // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
+  // production code resolves real paths, so expectations must match.
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+}
+
+// Directory capabilities only exist where fd-backed routing is supported
+// (unavailable on darwin), so close-state assertions apply only when the
+// pool actually created a capability.
+function assertCapabilityState(capability, expected, message) {
+  if (capability !== null) assert.equal(capability.closed, expected, message);
+}
 
 function deferred() {
   let resolve;
@@ -124,8 +137,8 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   });
 
   it("creates a missing writable base safely and blocks an existing outside agent symlink", (t) => {
-    const root = mkdtempSync(join(tmpdir(), "plur1bus-agent-route-root-"));
-    const outside = mkdtempSync(join(tmpdir(), "plur1bus-agent-route-outside-"));
+    const root = makeTempDir("plur1bus-agent-route-root-");
+    const outside = makeTempDir("plur1bus-agent-route-outside-");
     t.after(() => rmSync(root, { recursive: true, force: true }));
     t.after(() => rmSync(outside, { recursive: true, force: true }));
 
@@ -138,7 +151,7 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   });
 
   it("keeps a timed-out operation leased until its attached raw settlement", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b3-agent-pool-timeout-"));
+    const baseDbPath = makeTempDir("plur1bus-b3-agent-pool-timeout-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
       info() {}, warn() {}, error() {}, debug() {},
@@ -164,8 +177,8 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   });
 
   it("keeps the oldest of 51 agent DBs open until its operation settles", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b7-agent-pool-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b7-agent-pool-ws-"));
+    const baseDbPath = makeTempDir("plur1bus-b7-agent-pool-");
+    const workspaceDir = makeTempDir("plur1bus-b7-agent-pool-ws-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
 
@@ -217,8 +230,8 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   });
 
   it("waits for active work and logs contextual shutdown failures", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b7-agent-shutdown-"));
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b7-agent-shutdown-ws-"));
+    const baseDbPath = makeTempDir("plur1bus-b7-agent-shutdown-");
+    const workspaceDir = makeTempDir("plur1bus-b7-agent-shutdown-ws-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
 
@@ -245,7 +258,7 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   });
 
   it("finishes terminal cleanup and preserves DB plus logger failures when shutdown logging throws", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-shutdown-logger-"));
+    const baseDbPath = makeTempDir("plur1bus-b12-agent-shutdown-logger-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const firstCloseError = new Error("injected first shutdown close failure");
     const secondCloseError = new Error("injected second shutdown close failure");
@@ -269,15 +282,15 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       assert.ok(errorTreeIncludes(error, loggerError), "the logger failure remains observable");
       return true;
     });
-    assert.deepEqual(agentCapabilities.map((capability) => capability.closed), [true, true]);
-    assert.equal(baseCapability.closed, true, "terminal shutdown still closes the base capability");
+    for (const capability of agentCapabilities) assertCapabilityState(capability, true);
+    assertCapabilityState(baseCapability, true, "terminal shutdown still closes the base capability");
     assert.equal(pool.baseDirectoryCapability, null);
     assert.equal(pool.dbs.entries().length, 0, "terminal shutdown clears cached DB references");
     await assert.doesNotReject(() => pool.shutdown(), "terminal retry remains an idempotent no-op");
   });
 
   it("finishes terminal cleanup when the thrown logger value has hostile accessors", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-shutdown-hostile-logger-"));
+    const baseDbPath = makeTempDir("plur1bus-b12-agent-shutdown-hostile-logger-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const firstCloseError = new Error("injected first hostile shutdown close failure");
     const secondCloseError = new Error("injected second hostile shutdown close failure");
@@ -305,14 +318,14 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       assert.ok(errorTreeIncludes(error, loggerError));
       return true;
     });
-    assert.deepEqual(agentCapabilities.map((capability) => capability.closed), [true, true]);
-    assert.equal(baseCapability.closed, true);
+    for (const capability of agentCapabilities) assertCapabilityState(capability, true);
+    assertCapabilityState(baseCapability, true);
     assert.equal(pool.baseDirectoryCapability, null);
     assert.equal(pool.dbs.entries().length, 0);
   });
 
   it("observes rejecting logger thenables while finishing terminal cleanup", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-shutdown-async-logger-"));
+    const baseDbPath = makeTempDir("plur1bus-b12-agent-shutdown-async-logger-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const closeError = new Error("injected async logger shutdown close failure");
     const loggerError = new Error("injected async shutdown logger failure");
@@ -340,13 +353,13 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       return true;
     });
     assert.equal(rejectionHandlerAttached, true);
-    assert.equal(agentCapability.closed, true);
-    assert.equal(baseCapability.closed, true);
+    assertCapabilityState(agentCapability, true);
+    assertCapabilityState(baseCapability, true);
     assert.equal(pool.dbs.entries().length, 0);
   });
 
   it("bounds a non-settling logger and still completes terminal cleanup", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-shutdown-hung-logger-"));
+    const baseDbPath = makeTempDir("plur1bus-b12-agent-shutdown-hung-logger-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const closeError = new Error("injected hung logger shutdown close failure");
     const pool = new pluginModule.AgentDbPool(baseDbPath, VECTOR_DIM, {
@@ -366,13 +379,13 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       return true;
     });
     assert.ok(Date.now() - startedAt < 1_000, "logger timeout remains bounded");
-    assert.equal(agentCapability.closed, true);
-    assert.equal(baseCapability.closed, true);
+    assertCapabilityState(agentCapability, true);
+    assertCapabilityState(baseCapability, true);
     assert.equal(pool.dbs.entries().length, 0);
   });
 
   it("clears cached DBs and preserves DB plus logger failures when clear logging throws", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-clear-logger-"));
+    const baseDbPath = makeTempDir("plur1bus-b12-agent-clear-logger-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const closeError = new Error("injected clear close failure");
     const loggerError = new Error("injected clear logger failure");
@@ -391,8 +404,8 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       assert.ok(errorTreeIncludes(error, loggerError), "the logger failure remains observable");
       return true;
     });
-    assert.equal(agentCapability.closed, true);
-    assert.equal(baseCapability.closed, false, "a reusable clear retains the base capability");
+    assertCapabilityState(agentCapability, true);
+    assertCapabilityState(baseCapability, false, "a reusable clear retains the base capability");
     assert.equal(pool.dbs.entries().length, 0, "clear removes the failed DB from the cache");
 
     const replacement = pool.getDb("agent-clear");
@@ -401,7 +414,7 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
   });
 
   it("keeps eviction and logger failures observable without retaining the evicted DB", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-eviction-logger-"));
+    const baseDbPath = makeTempDir("plur1bus-b12-agent-eviction-logger-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const closeError = new Error("injected eviction close failure");
     const loggerError = new Error("injected eviction logger failure");
@@ -423,13 +436,13 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       assert.ok(errorTreeIncludes(error, loggerError), "the eviction logger failure remains observable");
       return true;
     });
-    assert.equal(evictedCapability.closed, true);
+    assertCapabilityState(evictedCapability, true);
     assert.equal(pool.dbs.has("agent-00"), false, "the failed eviction does not retain its cache entry");
     await pool.shutdown();
   });
 
   it("settles a late-operation lease when warning delivery throws and reports it during shutdown", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-late-logger-"));
+    const baseDbPath = makeTempDir("plur1bus-b12-agent-late-logger-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const lateError = new Error("injected late operation failure");
     const loggerError = new Error("injected late logger failure");
@@ -446,7 +459,7 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
 
     const operation = pool.withDb("agent-late", async (db) => {
       baseCapability = pool.baseDirectoryCapability;
-      db.shutdown = async () => { db.directoryCapability.close(); };
+      db.shutdown = async () => { db.directoryCapability?.close(); };
       throw timeoutError;
     });
     await assert.rejects(operation, (error) => error === timeoutError);
@@ -464,12 +477,12 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
       assert.ok(errorTreeIncludes(error, loggerError), "the deferred logger failure remains observable");
       return true;
     });
-    assert.equal(baseCapability.closed, true, "shutdown still closes the base capability");
+    assertCapabilityState(baseCapability, true, "shutdown still closes the base capability");
     assert.equal(pool.dbs.entries().length, 0);
   });
 
   it("redacts late-settlement credentials before warning delivery", async (t) => {
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b12-agent-late-redaction-"));
+    const baseDbPath = makeTempDir("plur1bus-b12-agent-late-redaction-");
     t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
     const credentials = [
       "sk-proj-AbCdEf0123456789+/=_-more",
@@ -490,7 +503,7 @@ describe("AgentDbPool operation leases", { concurrency: false }, () => {
     const timeoutError = new TimeoutError("MemoryDB.store", 15, rawSettlement.promise);
 
     const operation = pool.withDb("agent-late-redaction", async (db) => {
-      db.shutdown = async () => { db.directoryCapability.close(); };
+      db.shutdown = async () => { db.directoryCapability?.close(); };
       throw timeoutError;
     });
     await assert.rejects(operation, (error) => error === timeoutError);
