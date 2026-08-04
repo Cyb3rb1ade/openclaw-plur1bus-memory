@@ -25,6 +25,8 @@
     "scripts/",
     "plur1bus-hermes/",
     "plur1bus-controls/",
+    "mtplx-embed/",
+    "hermes-model-providers/",
     "docs/audits/",
     "docs/runbooks/",
     "docs/configuration.md",
