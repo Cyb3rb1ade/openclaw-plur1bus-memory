@@ -346,6 +346,40 @@ fall back to the model carrier.
 
 Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
 
+## Hermes port (beta)
+
+PLUR1BUS also ships as a Python memory provider for Hermes — no Node.js
+runtime is required on the Hermes side.
+
+**Requirements:** Hermes 0.19 or newer, Python 3.11 or newer. If Hermes runs
+inside a virtual environment, export `HERMES_PYTHON=/path/to/that/python`
+before installing so the runtime and the PLUR1BUS dependencies land in the
+same environment.
+
+Install both packages from the `hermes-v0.1.0` tag:
+
+```bash
+pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.1.0#subdirectory=plur1bus-hermes"
+pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.1.0#subdirectory=plur1bus-controls"
+```
+
+The default embedding and reranking backends are local models
+(`intfloat/multilingual-e5-base`, `BAAI/bge-reranker-v2-m3`); the first
+install downloads several GB of dependencies (torch, sentence-transformers,
+LanceDB).
+
+For the full setup — credential prompts, `memory.provider: plur1bus`,
+disabling Hermes' built-in `MEMORY.md`/`USER.md` injection, and enabling the
+controls plugin — clone this repository and run:
+
+```bash
+scripts/install-hermes-plugins.sh
+```
+
+**Beta status:** the provider is installable and lifecycle-correct, but full
+PLUR1BUS feature parity is still tracked in the migration plan — do not use
+it for a production cutover yet. See `plur1bus-hermes/README.md` for details.
+
 ## Configuration
 
 Minimal config block in `openclaw.json`. This is an explicit override example:
