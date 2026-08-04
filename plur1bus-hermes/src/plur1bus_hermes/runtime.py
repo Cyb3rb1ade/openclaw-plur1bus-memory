@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import urllib.error
@@ -30,6 +31,11 @@ def _utcnow() -> str:
 
 
 OMLX_BASE_URL = "http://127.0.0.1:8000/v1"
+
+LOGGER = logging.getLogger(__name__)
+
+# Mirror of upstream PLUR1BUS MAX_POSTPROCESSING_RETRIES (7.2.1 parity).
+MAX_CAPTURE_RETRIES = 5
 
 
 def _omlx_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -376,8 +382,128 @@ class Plur1busRuntime:
         self._lock = threading.RLock()
 
     def capture_async(self, user: str, assistant: str, session_id: str) -> None:
-        future = self._executor.submit(self._capture_turn, user, assistant, session_id)
-        self._track_future(future)
+        self._resubmit_capture_retries()
+        self._submit_capture(
+            {"user": user, "assistant": assistant, "sessionId": session_id},
+            attempts=0,
+        )
+
+    def _submit_capture(self, payload: dict[str, Any], attempts: int) -> None:
+        future = self._executor.submit(
+            self._capture_turn,
+            str(payload.get("user") or ""),
+            str(payload.get("assistant") or ""),
+            str(payload.get("sessionId") or ""),
+        )
+        with self._lock:
+            self._futures.add(future)
+        future.add_done_callback(
+            lambda done: self._finish_capture_future(done, payload, attempts)
+        )
+
+    def _finish_capture_future(self, future: Future[None], payload: dict[str, Any], attempts: int) -> None:
+        with self._lock:
+            self._futures.discard(future)
+        try:
+            future.result()
+        except Exception as error:
+            self._log_capture_error(error)
+            self._record_capture_retry(payload, attempts + 1)
+
+    def _capture_retry_path(self) -> Path:
+        return self.data_dir / "state" / "capture-retry.jsonl"
+
+    @staticmethod
+    def _retry_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+        return (
+            str(entry.get("user") or ""),
+            str(entry.get("assistant") or ""),
+            str(entry.get("sessionId") or ""),
+        )
+
+    def _read_capture_retries(self) -> list[dict[str, Any]]:
+        """Read pending capture retries, skipping corrupt lines instead of failing."""
+        try:
+            text = self._capture_retry_path().read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return []
+        entries = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+        return entries
+
+    def _write_capture_retries(self, entries: list[dict[str, Any]]) -> None:
+        """Atomically rewrite the retry queue via a tmp file and os.replace."""
+        path = self._capture_retry_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(path.name + ".tmp")
+        temp_path.write_text(
+            "".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries),
+            encoding="utf-8",
+        )
+        os.replace(temp_path, path)
+
+    def _resubmit_capture_retries(self) -> None:
+        """Requeue pending retries through the normal capture future path.
+
+        Resubmitted payloads leave the retry file here; a failed retry appends
+        itself back with an incremented attempts counter, so a payload is never
+        queued twice at the same time.
+        """
+        with self._lock:
+            entries = self._read_capture_retries()
+            if not entries:
+                return
+            pending = []
+            for entry in entries:
+                try:
+                    attempts = int(entry.get("attempts", 0))
+                except (TypeError, ValueError):
+                    attempts = 0
+                if attempts >= MAX_CAPTURE_RETRIES:
+                    LOGGER.warning(
+                        "capture retry exhausted after %d attempts; giving up on session %s",
+                        attempts,
+                        entry.get("sessionId"),
+                    )
+                    continue
+                pending.append((entry, attempts))
+            self._write_capture_retries([])
+        for entry, attempts in pending:
+            self._submit_capture(entry, attempts)
+
+    def _record_capture_retry(self, payload: dict[str, Any], attempts: int) -> None:
+        """Requeue a failed capture payload, or give up once attempts hit the cap."""
+        key = self._retry_key(payload)
+        with self._lock:
+            entries = [
+                entry
+                for entry in self._read_capture_retries()
+                if self._retry_key(entry) != key
+            ]
+            if attempts >= MAX_CAPTURE_RETRIES:
+                LOGGER.warning(
+                    "capture retry exhausted after %d attempts; giving up on session %s",
+                    attempts,
+                    key[2],
+                )
+            else:
+                entries.append({
+                    "user": key[0],
+                    "assistant": key[1],
+                    "sessionId": key[2],
+                    "attempts": attempts,
+                    "lastErrorAt": _utcnow(),
+                })
+            self._write_capture_retries(entries)
 
     def recall(self, query: str, limit: int = 5, explain: bool = False) -> str:
         prepared = prepare_semantic_input(query)
@@ -474,15 +600,18 @@ class Plur1busRuntime:
         try:
             future.result()
         except Exception as error:
-            state_dir = self.data_dir / "state"
-            state_dir.mkdir(parents=True, exist_ok=True)
-            with (state_dir / "capture-errors.jsonl").open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps({
-                    "at": _utcnow(),
-                    "agentId": self.agent_id,
-                    "errorType": type(error).__name__,
-                    "error": str(error),
-                }, sort_keys=True) + "\n")
+            self._log_capture_error(error)
+
+    def _log_capture_error(self, error: Exception) -> None:
+        state_dir = self.data_dir / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        with (state_dir / "capture-errors.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({
+                "at": _utcnow(),
+                "agentId": self.agent_id,
+                "errorType": type(error).__name__,
+                "error": str(error),
+            }, sort_keys=True) + "\n")
 
     def forget(self, memory_id: str) -> bool:
         """Archive a card before marking it inactive; never hard-delete it."""
