@@ -1,6 +1,6 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,7 +10,9 @@ const SCRIPT_PATH = join(TEST_DIR, "..", "scripts", "embed-promoted-memories.mjs
 const tempDirs = [];
 
 function makeRuntimeFixture() {
-  const home = mkdtempSync(join(tmpdir(), "plur1bus-reindex-cli-"));
+  // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
+  // production code resolves real paths, so expectations must match.
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-reindex-cli-")));
   tempDirs.push(home);
   const workspace = join(home, "workspace");
   mkdirSync(workspace, { recursive: true });
