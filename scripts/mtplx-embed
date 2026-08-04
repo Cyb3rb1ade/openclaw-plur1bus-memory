@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Launch the MTPLX embedding/reranking sidecar with an interpreter that already
+# has mlx-lm, FastAPI and uvicorn — by default the MTPLX runtime venv, so the
+# sidecar needs no separate dependency install.
+#
+# Runs from either layout:
+#   repo      <repo>/scripts/mtplx-embed        → <repo>/mtplx-embed/src
+#   installed $HERMES_HOME/bin/mtplx-embed      → $HERMES_HOME/mtplx-embed
+#
+# The installed copy must live outside ~/Documents: a LaunchAgent runs without
+# Full Disk Access and macOS TCC denies it execute access there (exit 126).
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+parent_dir="$(cd "$script_dir/.." && pwd)"
+
+if [[ -d "$parent_dir/mtplx-embed/src/mtplx_embed" ]]; then
+  package_root="$parent_dir/mtplx-embed/src"
+elif [[ -d "$parent_dir/mtplx-embed/mtplx_embed" ]]; then
+  package_root="$parent_dir/mtplx-embed"
+else
+  printf 'mtplx-embed: cannot locate the mtplx_embed package near %s\n' "$parent_dir" >&2
+  exit 1
+fi
+
+mtplx_python="${MTPLX_PYTHON:-$HOME/Library/Application Support/MTPLX/runtime-venv/bin/python}"
+if [[ -x "$mtplx_python" ]]; then
+  python_bin="$mtplx_python"
+else
+  python_bin="${MTPLX_EMBED_PYTHON:-python3}"
+  printf 'mtplx-embed: MTPLX runtime venv not found, falling back to %s\n' "$python_bin" >&2
+fi
+
+export PYTHONPATH="$package_root${PYTHONPATH:+:$PYTHONPATH}"
+exec "$python_bin" -m mtplx_embed "$@"

@@ -45,6 +45,18 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/install-memory-system.sh
 !scripts/provider-wizard.mjs
 !scripts/setup-feature-crons.mjs
+# Hermes/MTPLX deploy scripts referenced by CHANGELOG.md and the subproject
+# READMEs (plur1bus-hermes, mtplx-embed).
+!scripts/configure-hermes-omlx.sh
+!scripts/create-openclaw-memory-snapshot.sh
+!scripts/install-hermes-plugins.sh
+!scripts/install-mtplx-agent.sh
+!scripts/install-mtplx-embed-agent.sh
+!scripts/install-mtplx-embed.sh
+!scripts/mtplx-bind-agent.sh
+!scripts/mtplx-embed
+!scripts/mtplx-hermes-up
+!scripts/run-hermes-workspace-migration-job.sh
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
 !scripts/lib/find-deploy-dir.mjs

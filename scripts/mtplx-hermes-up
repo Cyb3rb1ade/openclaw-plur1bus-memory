@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Point the root Hermes at MTPLX for chat, and back again.
+#
+# MTPLX ships its own `mtplx start hermes`, but that writes a profile-scoped
+# HERMES_HOME under ~/.hermes/profiles/mtplx — a sandbox without the PLUR1BUS
+# memory plugin, the gateway, or the messaging platforms. This script binds
+# MTPLX into the *root* Hermes instead, via the `mtplx` model-provider plugin.
+#
+# The switch only happens once the daemon answers /v1/models, so a failed start
+# never leaves the live gateway pointing at a dead endpoint.
+set -euo pipefail
+
+hermes_home="${HERMES_HOME:-$HOME/.hermes}"
+port="${MTPLX_PORT:-18085}"
+api_key="${MTPLX_API_KEY:-mtplx-local}"
+mtplx_bin="${MTPLX_BIN:-$HOME/.mtplx/bin/mtplx}"
+hermes_bin="${HERMES_BIN:-hermes}"
+state_file="$hermes_home/state/mtplx-hermes-previous-model.json"
+log_file="$hermes_home/logs/mtplx-server.log"
+wait_seconds="${MTPLX_WAIT_SECONDS:-600}"
+
+usage() {
+  printf 'Usage: %s [--down] [--no-start]\n' "$0" >&2
+  exit 2
+}
+
+action="up"
+start_server=1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --down) action="down"; shift ;;
+    --no-start) start_server=0; shift ;;
+    *) usage ;;
+  esac
+done
+
+hermes_config_get() {
+  HERMES_HOME="$hermes_home" "$hermes_bin" config get "$1" 2>/dev/null | tail -1
+}
+
+hermes_config_set() {
+  HERMES_HOME="$hermes_home" "$hermes_bin" config set "$1" "$2"
+}
+
+if [[ "$action" == "down" ]]; then
+  if [[ ! -f "$state_file" ]]; then
+    printf 'no saved model configuration at %s\n' "$state_file" >&2
+    exit 1
+  fi
+  provider="$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["provider"])' "$state_file")"
+  base_url="$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["base_url"])' "$state_file")"
+  default_model="$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["default"])' "$state_file")"
+  hermes_config_set model.provider "$provider"
+  hermes_config_set model.base_url "$base_url"
+  hermes_config_set model.default "$default_model"
+  printf 'restored Hermes model: provider=%s model=%s\n' "$provider" "$default_model"
+  exit 0
+fi
+
+install -d "$hermes_home/state" "$hermes_home/logs"
+
+# MTPLX gates every route behind the API key, /health included, so an
+# unauthenticated probe answers 401 forever and never reports readiness.
+mtplx_ready() {
+  curl -fsS -m 3 -H "Authorization: Bearer $api_key" \
+    "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1
+}
+
+if [[ "$start_server" == "1" ]] && ! mtplx_ready; then
+  printf 'starting MTPLX on port %s (log: %s)\n' "$port" "$log_file"
+  nohup "$mtplx_bin" quickstart --port "$port" --api-key "$api_key" --yes >>"$log_file" 2>&1 &
+fi
+
+printf 'waiting for MTPLX to answer on port %s' "$port"
+deadline=$((SECONDS + wait_seconds))
+until mtplx_ready; do
+  if (( SECONDS >= deadline )); then
+    printf '\nMTPLX did not come up within %ss — Hermes left unchanged (see %s)\n' "$wait_seconds" "$log_file" >&2
+    exit 1
+  fi
+  printf '.'
+  sleep 3
+done
+printf ' ready\n'
+
+served_model="$(curl -fsS -m 5 -H "Authorization: Bearer $api_key" "http://127.0.0.1:$port/v1/models" \
+  | /usr/bin/python3 -c 'import json,sys;print(json.load(sys.stdin)["data"][0]["id"])')"
+
+/usr/bin/python3 - "$state_file" "$(hermes_config_get model.provider)" \
+  "$(hermes_config_get model.base_url)" "$(hermes_config_get model.default)" <<'PY'
+import json
+import sys
+
+path, provider, base_url, default_model = sys.argv[1:5]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"provider": provider, "base_url": base_url, "default": default_model}, handle, indent=2)
+PY
+
+hermes_config_set model.provider mtplx
+hermes_config_set model.base_url "http://127.0.0.1:$port/v1"
+hermes_config_set model.default "$served_model"
+
+printf 'Hermes now uses MTPLX: model=%s endpoint=http://127.0.0.1:%s/v1\n' "$served_model" "$port"
+printf 'previous configuration saved to %s (restore with --down)\n' "$state_file"
