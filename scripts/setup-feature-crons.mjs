@@ -596,6 +596,9 @@ export async function runSetupFeatureCrons(options = {}) {
       if (typeof u.rename === "string") editArgs.push("--name", u.rename);
       if (typeof u.message === "string") editArgs.push("--message", u.message);
       if (u.schedule) editArgs.push(...scheduleArgs(u.schedule));
+      if (u.schedule?.kind === "cron" && typeof u.timezone === "string" && u.timezone.length > 0) {
+        editArgs.push("--tz", u.timezone);
+      }
       if (u.enable) editArgs.push("--enable");
       if (u.disable) editArgs.push("--disable");
       if (u.noDeliver) editArgs.push("--no-deliver");

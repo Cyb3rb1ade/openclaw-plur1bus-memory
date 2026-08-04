@@ -16,6 +16,123 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **`scripts/mtplx-bind-agent.sh`** — bind one Hermes home (root or a profile) to the MTPLX stack: chat + internal memory LLM on MTPLX, embeddings and reranking on the sidecar, oMLX demoted to embedding fallback. Idempotent and backed up per file, because each profile carries its own `config.yaml`, `.env`, `plugins/model-providers/`, and `plugins/plur1bus/config.json`. Re-running never collapses the embedding fallback into a copy of the primary, which would leave recall with no second chance when the sidecar is the thing that is down. The served model id is read from the daemon rather than guessed — MTPLX derives it from the artifact, so it does not match the Hugging Face repo name.
 - **`mtplx-embed` sidecar.** MTPLX serves only chat/completions/messages; it has no `/v1/embeddings` and no `/v1/rerank`, so an MTPLX-only stack had no retrieval backend. The sidecar serves `mlx-community/Qwen3-Embedding-8B-4bit-DWQ` (4096-dim) and `vserifsaglam/Qwen3-Reranker-4B-4bit-MLX` over the OpenAI and Cohere/Jina shapes that PLUR1BUS already speaks, running both causal LMs directly (last-token pooling, yes/no logit softmax) on the MTPLX runtime venv — no extra dependency install. Measured against a live oMLX server, worst-case cosine similarity is 0.9998 with identical reranker ordering, so existing LanceDB vectors need no re-embedding. Installed via `scripts/install-mtplx-embed.sh` outside `~/Documents`, because a LaunchAgent has no Full Disk Access and macOS TCC denies it execute access there.
 
+## [7.2.2] — 2026-08-03
+
+### Behoben
+
+- **`package.json` wurde geprüft, aber nie ausgeliefert.** Die Datei stand in
+  der Snapshot-Liste des Deploy-Verifiers, nicht aber im Deploy-Manifest: Sie
+  wurde für die Versionsprüfung gelesen und beim Kopieren übergangen. Die
+  ausgelieferte Datei blieb dadurch auf dem Stand, den ein früherer
+  Installationsweg hinterlassen hatte — beim 7.2.1-Deploy wies sie 7.1.7 aus,
+  während `openclaw.plugin.json` korrekt 7.2.1 zeigte. Funktional folgenlos,
+  da die Laufzeit-Identität aus dem Plugin-Manifest stammt; zwei
+  widersprechende Versionsangaben im selben Verzeichnis führen aber jede
+  Diagnose in die Irre.
+
+## [7.2.1] — 2026-08-03
+
+Wartungs-Release. Behebt mehrere Fehler, die das episodische Gedächtnis in
+der Praxis unbrauchbar gemacht haben.
+
+### Behoben
+
+- **Verwaiste Write-Locks blockierten den NEO-Layer dauerhaft.**
+  `.neo-write.lock` ist ein Verzeichnis-Mutex ohne Stale-Recovery: Starb der
+  Halter im kritischen Abschnitt — etwa bei einem Gateway-Absturz —, blieb das
+  Verzeichnis für immer liegen und **jeder** weitere NEO-Schreibvorgang lief in
+  `NEO_WRITE_BACKPRESSURE`. Das Lock trägt jetzt PID und Zeitstempel und wird
+  übernommen, wenn der Halter nachweislich weg ist. Ein lebender Halter wird
+  ausdrücklich nicht verdrängt.
+- **`pruneAll` sprengte die eigene Lock-Deadline.** Der Wartungslauf hielt ein
+  einziges Lock über alle Dateien, inklusive des dreistellig großen
+  Turn-Journals, und ließ damit parallele Schreiber auflaufen. Das Lock wird
+  jetzt pro Datei genommen; Wartungsläufe haben eine eigene, längere Deadline.
+- **Episoden gingen bei Fehlern dauerhaft verloren.** Das High-Watermark
+  `lastProcessedMessageCount` wurde synchron hochgezählt, während die
+  Episoden-Extraktion fire-and-forget lief. Schlug sie fehl, lagen die
+  betroffenen Turns anschließend unterhalb des Watermarks und wurden nie wieder
+  betrachtet. Das Watermark rückt jetzt erst nach erfolgreicher Nachverarbeitung
+  vor; Dedup läuft dabei über Turn-IDs statt über den Batch-Digest, weil ein
+  Wiederholungslauf eine breitere Slice verarbeitet.
+- **Alle Turns eines Batches trugen denselben Zeitstempel.** Dadurch war in
+  jeder Episode `startTime === endTime` und `durationMinutes` gleich 0, und die
+  zeitlückenbasierte Gruppierung trennte nie nach Gesprächspausen. Turns
+  übernehmen jetzt den Zeitstempel ihrer Nachricht.
+- **Der Legacy-Workspace-Pfad wurde entgegengenommen, aber nie gelesen.**
+  Workspaces, die auf das gehashte Namensschema migriert sind, verloren damit
+  den Zugriff auf ältere Einträge. Lesezugriffe führen kanonischen und
+  Legacy-Pfad jetzt zusammen — allerdings nur, wenn der Legacy-Name eine
+  verlustfreie Ableitung des Workspace-Keys ist, da die Pfad-Sanitisierung
+  mehrdeutig sein kann.
+- **Tool-Ergebnisse landeten nie im Gedächtnis.** Der Host liefert sie als
+  `role: "toolResult"` mit `toolCallId`; das Plugin filterte auf `role: "tool"`
+  und las `tool_call_id`. Beides traf nie zu, entsprechende
+  Klassifizierungszweige waren toter Code. Tool-Ergebnisse werden jetzt erfasst
+  — gefiltert nach Tool-Art (Shell- und Datei-Rohausgaben bleiben draußen,
+  Fehler immer drin) und auf 5000 Zeichen gekürzt. Sie gelten als
+  `agent_private`, da sie Dateiinhalte oder Kommandoausgaben tragen können.
+- **Systemrauschen wurde als Nutzereingabe erfasst.** Heartbeat-Polls des Hosts
+  und die Dream-Generierung des Host-Plugins `memory-core` landeten als
+  vermeintliche User-Turns im Journal.
+
+### Hinzugefügt
+
+- **`scripts/migrate-neo-workspace-generations.mjs`** führt historische
+  Workspace-Generationen einmalig in den kanonischen Workspace zusammen.
+  Dry-Run ist Voreinstellung, geschrieben wird nur mit `--apply` und erst nach
+  einem Backup. `reaction-ledger` und `behavior-cards` sind bewusst
+  ausgenommen: Der Append-Cap behält die jüngsten Einträge, migrierte Datensätze
+  sind älter und würden aktuelle verdrängen.
+
+## [7.2.0] — 2026-08-01
+
+### Hinzugefügt
+
+- **Sichere Reindex-Bridge für promotete Erinnerungen.**
+  `scripts/embed-promoted-memories.mjs` ersetzt den bei der früheren
+  `sys/`-/Privacy-Migration entfernten lokalen Helfer. Die Bridge liest die
+  effektive OpenClaw-Konfiguration, respektiert aktive Schreib-Namespaces,
+  übernimmt kompatiblen Vorgängerzustand und arbeitet standardmäßig als
+  schreibfreier Dry-Run.
+- **Explizite Versionsbindung für Deploy-Prüfung und Reparatur.** Die
+  Wartungs-CLIs akzeptieren eine erwartete PLUR1BUS-Version und weisen fehlende
+  oder widersprüchliche Release-Metadaten eindeutig aus.
+
+### Geändert
+
+- **Daily Consolidation wird pro Agent um 15 Minuten gestaffelt.** Exakt
+  PLUR1BUS-eigene Jobs laufen bei drei Agenten um 04:00, 04:15 und 04:30. Nur
+  ausgelieferte Legacy-Identitäten und -Zeitpläne werden migriert;
+  benutzerdefinierte oder ähnlich benannte Jobs bleiben unverändert.
+- **Deploy-Integrität umfasst den vollständigen Runtime-Importgraphen.** Neben
+  statischen werden auch literale dynamische Imports erfasst und vor einer
+  Reparatur vollständig geprüft.
+
+### Behoben
+
+- **Keine gemischten Releases bei Teilfehlern oder wechselnden Quellen.**
+  Paket- und Manifestversion werden aus denselben gepufferten Bytes wie der
+  SHA-256-Quellsnapshot gelesen. Jede fehlgeschlagene Kopie, nachträgliche
+  Source-Änderung oder Endvalidierung rollt die gesamte Deploy-Transaktion auf
+  den vorherigen Stand zurück.
+- **Redigierte Provider-Credentials werden fail-closed behandelt.** Der
+  Reindex reicht weder OpenClaws Redaktions-Sentinel noch ein redigiertes
+  Literal als echten Schlüssel weiter; ein expliziter, validierter
+  Environment-Variablenname kann für Apply-Läufe angegeben werden.
+- **Vorgänger-Promotionen werden nicht doppelt eingebettet.** Stabile IDs,
+  bestehende semantisch identische Promotionen und kompatible Legacy-Marker
+  werden vor dem Schreiben erkannt.
+
+### Kompatibilität
+
+- Der Reindex schreibt niemals ohne `--apply`; Update- und Reparaturpfade
+  führen ihn ausschließlich als Dry-Run aus.
+- Bestehende benutzerdefinierte Cron-Zeitpläne, Delivery-Ziele und fremde Jobs
+  werden nicht übernommen oder überschrieben.
+- Die Paketidentität `@cyb3rb1ade/plur1bus-memory` und die Plugin-ID
+  `memory-lancedb-namespaced` bleiben unverändert.
+
 ## [7.1.9] — 2026-07-30
 
 ### Geändert

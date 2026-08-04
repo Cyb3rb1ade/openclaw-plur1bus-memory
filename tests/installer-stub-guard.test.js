@@ -44,6 +44,16 @@ afterEach(() => {
 });
 
 describe("smokeTestExports", () => {
+  it("imports a plugin entry point and verifies its default export", async () => {
+    const filePath = join(dir, "index.mjs");
+    writeFileSync(filePath, "export default { id: 'memory-lancedb-namespaced' };\n");
+
+    const report = await smokeTestExports([{ filePath, exports: ["default"] }]);
+
+    assert.strictEqual(report.ok, true);
+    assert.deepStrictEqual(report.results[0].missing, []);
+  });
+
   it("passes when every expected export is present and the right kind", async () => {
     const filePath = join(dir, "lib", "neo-arch.mjs");
     writeFileSync(

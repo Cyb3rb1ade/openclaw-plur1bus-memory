@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, copyFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, copyFileSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { dirname, join, resolve as resolvePath } from "node:path";
+import { dirname, join, relative, resolve as resolvePath, sep } from "node:path";
 
 /**
  * Canonical list of files that must be present and byte-identical in the
@@ -14,6 +14,14 @@ import { dirname, join, resolve as resolvePath } from "node:path";
 export const DEPLOY_FILES = [
   "index.js",
   "openclaw.plugin.json",
+  // package.json wurde bis 7.2.1 nur fuer die Versionspruefung GELESEN, aber
+  // nie ausgeliefert (es stand in snapshotFiles, nicht in dieser Liste).
+  // Folge: die deployte package.json blieb auf dem Stand, den irgendein
+  // frueherer Installationsweg hinterlassen hatte — beim 7.2.1-Deploy stand
+  // dort 7.1.7, waehrend openclaw.plugin.json korrekt 7.2.1 auswies. Die
+  // Laufzeit nimmt zwar das Plugin-Manifest, aber zwei widersprechende
+  // Versionsangaben im selben Verzeichnis fuehren jede Diagnose in die Irre.
+  "package.json",
   // ── core runtime ──────────────────────────────────────────────────────────
   "lib/neo-arch.js",
   "lib/neo-worker-runner.js",
@@ -135,6 +143,7 @@ export const DEPLOY_FILES = [
   "lib/dreaming/dream-narrative.js",
   "lib/dreaming/light-dream.js",
   "lib/dreaming/rem-dream.js",
+  "lib/episode-watermark.js",
   "lib/episodes.js",
   "lib/jobs/auto-accept-stale-criticals.js",
   "lib/jobs/critical-classifier.js",
@@ -174,12 +183,125 @@ export const DEPLOY_FILES = [
   "lib/speaker-segment-schema.js",
   "lib/speaker-mapping-store.js",
   "lib/speaker-proposer.js",
+  "lib/promoted-memory-reindex.js",
+  "scripts/embed-promoted-memories.mjs",
+  // ── transitive index.js runtime closure ───────────────────────────────────
+  "lib/atomic-json.js",
+  "lib/critical-push-classifier.js",
+  "lib/critical-push-state.js",
+  "lib/fetch-with-timeout.js",
+  "lib/filter-parser.js",
+  "lib/garbage-collector.js",
+  "lib/graph-index.js",
+  "lib/i18n-dictionary.js",
+  "lib/install/soul-patcher.js",
+  "lib/job-lock.js",
+  "lib/job-rate-limit.js",
+  "lib/jobs/conflict-resolver.js",
+  "lib/jobs/consolidation-report.js",
+  "lib/jobs/memory-compaction.js",
+  "lib/jobs/memory-dynamics-maintenance.js",
+  "lib/jobs/skill-miner/evidence-aggregator.js",
+  "lib/jobs/skill-miner/llm-extractor.js",
+  "lib/jobs/skill-miner/skill-md-renderer.js",
+  "lib/metrics-debounce.js",
+  "lib/obsidian-review-authority.js",
+  "lib/obsidian-semantic-discovery-flow.js",
+  "lib/obsidian-vault-confirmation-flow.js",
+  "lib/obsidian/adversarial-deep.js",
+  "lib/obsidian/archive-rotation.js",
+  "lib/obsidian/bases-generator.js",
+  "lib/obsidian/conflict-collector.js",
+  "lib/obsidian/conflict-report.js",
+  "lib/obsidian/dashboard-generator.js",
+  "lib/obsidian/dataview-generator.js",
+  "lib/obsidian/evidence-scorer.js",
+  "lib/obsidian/frontmatter.js",
+  "lib/obsidian/graph-link-writer.js",
+  "lib/obsidian/impact-analysis.js",
+  "lib/obsidian/link-hygiene.js",
+  "lib/obsidian/link-suggestions.js",
+  "lib/obsidian/maintenance-deep.js",
+  "lib/obsidian/managed-blocks.js",
+  "lib/obsidian/memory-explain-builder.js",
+  "lib/obsidian/project-hub-builder.js",
+  "lib/obsidian/property-normalizer.js",
+  "lib/obsidian/provenance-graph.js",
+  "lib/obsidian/record-index.js",
+  "lib/obsidian/record-schema.js",
+  "lib/obsidian/record-writer.js",
+  "lib/obsidian/safe-paths.js",
+  "lib/obsidian/semantic-conflict-graph.js",
+  "lib/obsidian/semantic-duplicate-scan.js",
+  "lib/obsidian/tasks-generator.js",
+  "lib/obsidian/weekly-synthesis.js",
+  "lib/pattern-detector-embedding.js",
+  "lib/pattern-detector.js",
+  "lib/proactive-nudge.js",
+  "lib/query-refiner.js",
+  "lib/temporal-parser.js",
 ];
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;
+const RELATIVE_IMPORT_RE = /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["'](\.{1,2}\/[^"']+)["']/g;
+const RELATIVE_DYNAMIC_IMPORT_RE = /import\s*\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)/g;
+
+function resolveRelativeModule(fromDir, specifier) {
+  const base = resolvePath(fromDir, specifier);
+  const candidates = [base, `${base}.js`, `${base}.mjs`, join(base, "index.js")];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+/**
+ * Returns the deterministic static relative-import closure for an entry file.
+ * Paths are repository-relative POSIX strings and may never escape repoDir.
+ *
+ * @param {string} entryRelativePath
+ * @param {string} repoDir
+ * @returns {string[]}
+ */
+export function collectRelativeImports(entryRelativePath, repoDir) {
+  const root = resolvePath(repoDir);
+  const pending = [entryRelativePath];
+  const seen = new Set();
+
+  while (pending.length > 0) {
+    const relativePath = pending.shift();
+    if (seen.has(relativePath)) continue;
+    const absolutePath = resolvePath(root, relativePath);
+    if (absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) {
+      throw new Error(`deploy-integrity import escapes repository: ${relativePath}`);
+    }
+    if (!existsSync(absolutePath)) {
+      throw new Error(`deploy-integrity import is missing: ${relativePath}`);
+    }
+
+    seen.add(relativePath);
+    const source = readFileSync(absolutePath, "utf8");
+    const importMatches = [
+      ...source.matchAll(RELATIVE_IMPORT_RE),
+      ...source.matchAll(RELATIVE_DYNAMIC_IMPORT_RE),
+    ];
+    for (const match of importMatches) {
+      if (match[1].includes("${")) continue;
+      const resolved = resolveRelativeModule(dirname(absolutePath), match[1]);
+      if (!resolved) {
+        throw new Error(`deploy-integrity cannot resolve ${match[1]} from ${relativePath}`);
+      }
+      const importedRelative = relative(root, resolved).split(sep).join("/");
+      if (!seen.has(importedRelative)) pending.push(importedRelative);
+    }
+  }
+
+  return [...seen].sort();
+}
 
 function sha256(filePath) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+function sha256Content(content) {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 /**
@@ -244,8 +366,11 @@ export function validateFile({ deployPath, repoPath }) {
 /**
  * Copies the repo source over the deployed file. No-op (reports only) in
  * dry-run mode.
+ *
+ * @param {{deployPath: string, repoPath: string, dryRun?: boolean, copyFile?: Function}} options
+ * @returns {{repaired: boolean, dryRun: boolean, reason?: string}}
  */
-export function repairFile({ deployPath, repoPath, dryRun = false }) {
+export function repairFile({ deployPath, repoPath, dryRun = false, copyFile = copyFileSync }) {
   if (!existsSync(repoPath)) {
     return { repaired: false, dryRun, reason: "missing-repo-source" };
   }
@@ -253,7 +378,7 @@ export function repairFile({ deployPath, repoPath, dryRun = false }) {
     return { repaired: false, dryRun, reason: "dry-run" };
   }
   mkdirSync(dirname(deployPath), { recursive: true });
-  copyFileSync(repoPath, deployPath);
+  copyFile(repoPath, deployPath);
   return { repaired: true, dryRun };
 }
 
@@ -261,28 +386,173 @@ export function repairFile({ deployPath, repoPath, dryRun = false }) {
  * Validates a list of repo-relative file paths between a repo directory and
  * a deployed directory. With repair=true, broken/mismatched files are
  * restored from the repo source (skipped entirely in dry-run mode).
+ *
+ * @param {{deployDir: string, repoDir: string, files: string[], repair?: boolean, dryRun?: boolean, expectedVersion?: string|null, copyFile?: Function, readSourceFile?: Function}} options
+ * @returns {{ok: boolean, preflight: object, results: object[]}}
  */
-export function validateDeployment({ deployDir, repoDir, files, repair = false, dryRun = false }) {
+export function validateDeployment({
+  deployDir,
+  repoDir,
+  files,
+  repair = false,
+  dryRun = false,
+  expectedVersion = null,
+  copyFile = copyFileSync,
+  readSourceFile = readFileSync,
+}) {
+  const preflightReasons = [];
+  const missingSources = files.filter((file) => !existsSync(join(repoDir, file)));
+  if (missingSources.length > 0) preflightReasons.push("missing-repo-source");
+
+  const packagePath = join(repoDir, "package.json");
+  const manifestPath = join(repoDir, "openclaw.plugin.json");
+  const isVersionedRepair = files.includes("openclaw.plugin.json") && (repair || Boolean(expectedVersion));
+  const hasReleaseMetadata = existsSync(packagePath) && existsSync(manifestPath);
+  const snapshotFiles = new Set(files);
+  if (isVersionedRepair || hasReleaseMetadata) {
+    snapshotFiles.add("package.json");
+    snapshotFiles.add("openclaw.plugin.json");
+  }
+  const sourceBuffers = new Map();
+  const sourceDigests = new Map();
+  if (missingSources.length === 0 && (!isVersionedRepair || hasReleaseMetadata)) {
+    try {
+      for (const file of snapshotFiles) {
+        const content = readSourceFile(join(repoDir, file));
+        const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
+        sourceBuffers.set(file, buffer);
+        sourceDigests.set(file, sha256Content(buffer));
+      }
+    } catch {
+      preflightReasons.push("source-snapshot-failed");
+    }
+  }
+  let sourceVersion = null;
+  if (isVersionedRepair && !hasReleaseMetadata) {
+    preflightReasons.push("source-release-metadata-missing");
+  } else if (hasReleaseMetadata && sourceBuffers.has("package.json") && sourceBuffers.has("openclaw.plugin.json")) {
+    try {
+      const packageVersion = JSON.parse(sourceBuffers.get("package.json").toString("utf8"))?.version;
+      const manifestVersion = JSON.parse(sourceBuffers.get("openclaw.plugin.json").toString("utf8"))?.version;
+      sourceVersion = manifestVersion;
+      if (!packageVersion || !manifestVersion || packageVersion !== manifestVersion) {
+        preflightReasons.push("source-version-mismatch");
+      }
+    } catch {
+      preflightReasons.push("source-version-invalid");
+    }
+  }
+  if (isVersionedRepair && sourceVersion) {
+    let selectedVersion = expectedVersion;
+    const deployedManifestPath = join(deployDir, "openclaw.plugin.json");
+    if (!selectedVersion && existsSync(deployedManifestPath)) {
+      try {
+        selectedVersion = JSON.parse(readFileSync(deployedManifestPath, "utf8"))?.version || null;
+      } catch {
+        preflightReasons.push("deployed-version-invalid");
+      }
+    }
+    if (!selectedVersion) preflightReasons.push("expected-source-version-missing");
+    else if (sourceVersion !== selectedVersion) preflightReasons.push("unexpected-source-version");
+  }
+  const preflight = {
+    ok: preflightReasons.length === 0,
+    reasons: [...new Set(preflightReasons)],
+    missingSources,
+  };
+  const sourceSnapshotMatches = () => {
+    try {
+      for (const [file, digest] of sourceDigests) {
+        const sourcePath = join(repoDir, file);
+        if (!existsSync(sourcePath) || sha256(sourcePath) !== digest) return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const mayRepair = repair && preflight.ok;
+  const snapshots = new Map();
+  if (mayRepair && !dryRun) {
+    for (const file of files) {
+      const deployPath = join(deployDir, file);
+      snapshots.set(file, existsSync(deployPath) ? readFileSync(deployPath) : null);
+    }
+  }
+  let transactionFailed = false;
   const results = files.map((file) => {
     const deployPath = join(deployDir, file);
     const repoPath = join(repoDir, file);
     let { ok, reasons } = validateFile({ deployPath, repoPath });
     let repaired = false;
 
-    if (!ok && repair) {
-      const outcome = repairFile({ deployPath, repoPath, dryRun });
-      repaired = outcome.repaired;
-      if (repaired) {
-        const revalidated = validateFile({ deployPath, repoPath });
-        ok = revalidated.ok;
-        reasons = revalidated.reasons;
+    if (!ok && mayRepair && !transactionFailed) {
+      try {
+        if (!dryRun && !sourceSnapshotMatches()) {
+          transactionFailed = true;
+          ok = false;
+          reasons = ["source-snapshot-changed"];
+        } else {
+          const outcome = repairFile({ deployPath, repoPath, dryRun, copyFile });
+          repaired = outcome.repaired;
+          if (!repaired && !dryRun) {
+            transactionFailed = true;
+            ok = false;
+            reasons = [outcome.reason || "repair-incomplete"];
+          } else if (repaired) {
+            const revalidated = validateFile({ deployPath, repoPath });
+            ok = revalidated.ok;
+            reasons = revalidated.reasons;
+            if (!ok || !sourceSnapshotMatches()) {
+              transactionFailed = true;
+              ok = false;
+              if (revalidated.ok) reasons = ["source-snapshot-changed"];
+            }
+          }
+        }
+      } catch {
+        transactionFailed = true;
+        ok = false;
+        repaired = false;
+        reasons = ["repair-copy-failed"];
       }
     }
 
     return { file, ok, reasons, repaired };
   });
 
-  return { ok: results.every((r) => r.ok), results };
+  if (mayRepair && !dryRun && !transactionFailed) {
+    const finalValidation = files.map((file) => validateFile({
+      deployPath: join(deployDir, file),
+      repoPath: join(repoDir, file),
+    }));
+    if (!sourceSnapshotMatches() || finalValidation.some((result) => !result.ok)) {
+      transactionFailed = true;
+    }
+  }
+
+  if (transactionFailed) {
+    for (const [file, content] of snapshots) {
+      const deployPath = join(deployDir, file);
+      if (content === null) {
+        if (existsSync(deployPath)) unlinkSync(deployPath);
+      } else {
+        mkdirSync(dirname(deployPath), { recursive: true });
+        writeFileSync(deployPath, content);
+      }
+    }
+    preflight.ok = false;
+    preflight.reasons.push("repair-transaction-rolled-back");
+    for (const result of results) {
+      if (result.repaired) {
+        result.repaired = false;
+        result.ok = false;
+        result.reasons = ["repair-transaction-rolled-back"];
+      }
+    }
+  }
+
+  return { ok: preflight.ok && results.every((r) => r.ok), preflight, results };
 }
 
 /**

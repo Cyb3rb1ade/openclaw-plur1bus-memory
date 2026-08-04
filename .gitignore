@@ -27,6 +27,7 @@ scripts/*
 !scripts/backup-snapshot.sh
 !scripts/restore-snapshot.sh
 !scripts/migrate-missing-columns.mjs
+!scripts/migrate-neo-workspace-generations.mjs
 BREAKING_CHANGE_AUDIT.md
 !scripts/cleanup-vault-missing-tasks.mjs
 !scripts/run-graph-links-once.mjs
@@ -40,6 +41,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/auto-capture-lancedb.mjs
 !scripts/build-code-index.mjs
 !scripts/reindex-provider.mjs
+!scripts/embed-promoted-memories.mjs
 !scripts/install-memory-system.sh
 !scripts/provider-wizard.mjs
 !scripts/setup-feature-crons.mjs
