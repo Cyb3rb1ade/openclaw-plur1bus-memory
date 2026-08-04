@@ -139,6 +139,13 @@ function makeElevatedHome(root, count = 501) {
   return versionsDir;
 }
 
+// The GNU compat shims are only needed where the host userland lacks the GNU
+// flags (macOS/BSD). On Linux they must NOT be installed into PATH: the stat
+// shim translates `stat -c` into BSD `stat -f`, which GNU coreutils reads as
+// --file-system, so shadowing the real tools breaks the guard's identity
+// checks ("source root cannot be identified").
+const needsGnuCompatShims = process.platform === "darwin";
+
 function installGnuCompatShims(binDir) {
   // scripts/protect-plur1bus-deploy.sh is written for GNU userland
   // (`stat -c`, `realpath -e/--`); macOS ships BSD stat/realpath without
@@ -198,7 +205,9 @@ function makeDeployFixture({ checkerMode = "valid", sourceContent, deployContent
   writeFileSync(sourceFile, sourceContent);
   writeFileSync(deployFile, deployContent);
   const compatBinDir = join(root, "compat-bin");
-  installGnuCompatShims(compatBinDir);
+  if (needsGnuCompatShims) {
+    installGnuCompatShims(compatBinDir);
+  }
   return {
     root,
     scriptPath,
@@ -214,6 +223,7 @@ function makeDeployFixture({ checkerMode = "valid", sourceContent, deployContent
 
 function runDeployGuard(fixture, env = {}) {
   const { PATH: envPath, ...restEnv } = env;
+  const basePath = envPath ?? process.env.PATH;
   const result = spawnSync("bash", [fixture.scriptPath], {
     cwd: fixture.root,
     encoding: "utf8",
@@ -227,7 +237,7 @@ function runDeployGuard(fixture, env = {}) {
       PLUR1BUS_BACKUP_DIR: fixture.backupRoot,
       PLUR1BUS_NO_RESTART: "1",
       ...restEnv,
-      PATH: `${fixture.compatBinDir}:${envPath ?? process.env.PATH}`,
+      PATH: needsGnuCompatShims ? `${fixture.compatBinDir}:${basePath}` : basePath,
     },
     timeout: 30_000,
   });
