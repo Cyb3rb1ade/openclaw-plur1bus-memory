@@ -17,8 +17,15 @@ import * as lancedb from "@lancedb/lancedb";
 import { AgentDbPool, MemoryDB } from "../index.js";
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 
 const VECTOR_DIM = 3;
+
+// Capability-based routing is disabled on platforms without stable directory
+// capabilities (e.g. darwin); tests that exercise it are skipped there.
+const DIRECTORY_CAPABILITY_SKIP = stableDirectoryCapabilitiesSupported()
+  ? false
+  : "stable directory capabilities are unavailable on this platform";
 
 function snapshotTree(root) {
   const rows = [];
@@ -69,7 +76,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     );
   });
 
-  it("pins the agent directory before a final guard return can pivot the configured path", async (t) => {
+  it("pins the agent directory before a final guard return can pivot the configured path", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-race-root-"));
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-capability-race-outside-"));
     const displaced = join(root, "agent-a-held");
@@ -104,7 +111,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
-  it("opens an existing read-only table through the held agent capability after an openTable pivot", async (t) => {
+  it("opens an existing read-only table through the held agent capability after an openTable pivot", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-read-root-"));
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-capability-read-outside-"));
     const insideAgent = join(root, "legacy", "agent-a");
@@ -147,7 +154,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
-  it("retains a capability across failed init retry and closes capabilities on eviction and shutdown", async (t) => {
+  it("retains a capability across failed init retry and closes capabilities on eviction and shutdown", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-capability-lifecycle-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
     let failConnect = true;
@@ -184,7 +191,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     assert.equal(rootCapability.closed, true, "root capability closes after MultiNamespacePool shutdown");
   });
 
-  it("pins legacy-flat agent writes through the same stable directory capability", async (t) => {
+  it("pins legacy-flat agent writes through the same stable directory capability", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const basePath = mkdtempSync(join(tmpdir(), "plur1bus-flat-capability-base-"));
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-flat-capability-outside-"));
     const displaced = join(basePath, "flat-agent-held");
@@ -214,7 +221,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
-  it("keeps a symlinked legacy-flat base usable through its held directory", async (t) => {
+  it("keeps a symlinked legacy-flat base usable through its held directory", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-flat-symlink-base-"));
     const physicalBase = join(root, "physical");
     const configuredBase = join(root, "legacy");
@@ -232,7 +239,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
-  it("closes cached directory capabilities when a reusable pool is cleared", async (t) => {
+  it("closes cached directory capabilities when a reusable pool is cleared", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const basePath = mkdtempSync(join(tmpdir(), "plur1bus-agent-pool-clear-"));
     t.after(() => rmSync(basePath, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM);
@@ -278,7 +285,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
-  it("closes the base capability when a concurrent clear reports a DB close failure", async (t) => {
+  it("closes the base capability when a concurrent clear reports a DB close failure", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const basePath = mkdtempSync(join(tmpdir(), "plur1bus-agent-pool-clear-failure-"));
     t.after(() => rmSync(basePath, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM);
@@ -447,7 +454,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
-  it("securely acquires a read-only agent that appears after an earlier missing lookup", async (t) => {
+  it("securely acquires a read-only agent that appears after an earlier missing lookup", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-readonly-late-agent-"));
     const basePath = join(root, "legacy");
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -469,7 +476,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
-  it("rejects an active namespace swapped outside after MemoryDB caching and never writes there", async (t) => {
+  it("rejects an active namespace swapped outside after MemoryDB caching and never writes there", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-open-guard-active-root-"));
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-open-guard-active-outside-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -495,7 +502,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     await pool.shutdown();
   });
 
-  it("rejects a legacy namespace swapped outside after MemoryDB caching and never reads or mutates it", async (t) => {
+  it("rejects a legacy namespace swapped outside after MemoryDB caching and never reads or mutates it", { skip: DIRECTORY_CAPABILITY_SKIP }, async (t) => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-open-guard-legacy-root-"));
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-open-guard-legacy-outside-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -562,7 +569,7 @@ describe("read-only MemoryDB", { concurrency: false }, () => {
     t.after(() => rmSync(outside, { recursive: true, force: true }));
     const pool = new AgentDbPool(basePath, VECTOR_DIM);
     const db = pool.getDb("agent-a");
-    rmSync(join(basePath, "agent-a"), { recursive: true });
+    rmSync(join(basePath, "agent-a"), { recursive: true, force: true });
     symlinkSync(outside, join(basePath, "agent-a"));
 
     await assert.rejects(

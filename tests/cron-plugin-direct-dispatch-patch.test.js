@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -141,7 +142,7 @@ afterEach(() => {
 
 describe("cron plugin direct-dispatch host patch", () => {
   it("discovers a non-standard OpenClaw dist from the active CLI symlink", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "plur1bus-openclaw-prefix-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-openclaw-prefix-")));
     workDirs.push(root);
     const packageRoot = path.join(root, "custom", "lib", "node_modules", "openclaw");
     const distDir = path.join(packageRoot, "dist");
@@ -159,7 +160,7 @@ describe("cron plugin direct-dispatch host patch", () => {
   });
 
   it("discovers OpenClaw from the running entry and preserves an explicit override", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "plur1bus-openclaw-entry-"));
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-openclaw-entry-")));
     workDirs.push(root);
     const packageRoot = path.join(root, "openclaw");
     const distDir = path.join(packageRoot, "dist");
@@ -240,7 +241,7 @@ describe("cron plugin direct-dispatch host patch", () => {
   });
 
   it("patches one runtime bundle atomically and keeps a rollback copy", () => {
-    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-patch-"));
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-patch-")));
     workDirs.push(distDir);
     const target = path.join(distDir, "isolated-agent-example.js");
     writeFileSync(target, fixtureSource());
@@ -267,7 +268,7 @@ describe("cron plugin direct-dispatch host patch", () => {
   });
 
   it("installs the complete dispatcher into an unpatched OpenClaw bundle", async () => {
-    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-vanilla-"));
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-vanilla-")));
     workDirs.push(distDir);
     const target = path.join(distDir, "isolated-agent-vanilla.js");
     writeFileSync(target, `
@@ -307,7 +308,7 @@ async function runCronIsolatedAgentTurn(params) {
   });
 
   it("fails closed instead of reusing a corrupt hash-bound rollback copy", () => {
-    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-backup-"));
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-backup-")));
     workDirs.push(distDir);
     const target = path.join(distDir, "isolated-agent-example.js");
     writeFileSync(target, fixtureSource());
@@ -324,7 +325,7 @@ async function runCronIsolatedAgentTurn(params) {
   });
 
   it("executes exact feature commands through finalization without calling the model", async () => {
-    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
     workDirs.push(distDir);
     const target = path.join(distDir, "isolated-agent-runtime.mjs");
     const reply = {
@@ -354,7 +355,7 @@ async function runCronIsolatedAgentTurn(params) {
   });
 
   it("keeps multiline carrier prompts on the legacy model path", async () => {
-    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
     workDirs.push(distDir);
     const target = path.join(distDir, "isolated-agent-runtime.mjs");
     const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
@@ -381,7 +382,7 @@ async function runCronIsolatedAgentTurn(params) {
       " /plur1bus internal afterthought",
       "/plur1bus internal classify-recent ",
     ].entries()) {
-      const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+      const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
       workDirs.push(distDir);
       const target = path.join(distDir, "isolated-agent-runtime.mjs");
       const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
@@ -402,7 +403,7 @@ async function runCronIsolatedAgentTurn(params) {
   });
 
   it("fails exact feature commands closed when the plugin command is unavailable", async () => {
-    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
     workDirs.push(distDir);
     const target = path.join(distDir, "isolated-agent-runtime.mjs");
     const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
@@ -422,7 +423,7 @@ async function runCronIsolatedAgentTurn(params) {
   });
 
   it("fails exact feature commands closed when their handler returns no reply", async () => {
-    const distDir = mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-"));
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
     workDirs.push(distDir);
     const target = path.join(distDir, "isolated-agent-runtime.mjs");
     const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());

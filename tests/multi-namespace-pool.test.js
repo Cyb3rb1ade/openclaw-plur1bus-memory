@@ -1,6 +1,7 @@
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -8,6 +9,15 @@ import { tmpdir } from "node:os";
 
 const TMP_BASE = mkdtempSync(join(tmpdir(), "plur1bus-multi-ns-"));
 after(() => rmSync(TMP_BASE, { recursive: true, force: true }));
+
+// Named-mode routing requires fd-backed directory capabilities. The production
+// probe reports them as unavailable on darwin (stat via /dev/fd reports a
+// different st_dev than fstat on the same directory), so named-mode tests gate
+// on the exact probe the pool constructor uses.
+const namedRoutingSupported = stableDirectoryCapabilitiesSupported();
+const itNamed = namedRoutingSupported
+  ? it
+  : (name, fn) => it(name, { skip: "stable directory capabilities are unavailable on this platform" }, fn);
 
 function namedLayout(nsCfg) {
   return resolveNamespaceLayout(TMP_BASE, nsCfg, { explicit: true });
@@ -82,7 +92,7 @@ describe("MultiNamespacePool", () => {
     assert.deepEqual(pool.getReadDbs("agent-a").map(({ namespace }) => namespace), [null]);
   });
 
-  it("getWriteDb gives DB from activeWriteNamespace", () => {
+  itNamed("getWriteDb gives DB from activeWriteNamespace", () => {
     const nsCfg = { activeWriteNamespace: "lancedb-local", activeRecallNamespaces: ["lancedb-local"] };
     const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const db = pool.getWriteDb("default");
@@ -90,7 +100,7 @@ describe("MultiNamespacePool", () => {
     assert.ok(db.dbPath.includes("lancedb-local"), `Expected lancedb-local in: ${db.dbPath}`);
   });
 
-  it("getWriteDb does NOT return a legacyReadOnly namespace", () => {
+  itNamed("getWriteDb does NOT return a legacyReadOnly namespace", () => {
     const nsCfg = {
       activeWriteNamespace: "lancedb-new",
       legacyReadOnlyNamespaces: ["lancedb-old"],
@@ -100,7 +110,7 @@ describe("MultiNamespacePool", () => {
     assert.ok(!db.dbPath.includes("lancedb-old"), `Write-DB points to legacyReadOnly: ${db.dbPath}`);
   });
 
-  it("getReadDbs returns active + legacy when crossNamespaceRecall=true", () => {
+  itNamed("getReadDbs returns active + legacy when crossNamespaceRecall=true", () => {
     const nsCfg = {
       activeWriteNamespace: "lancedb-new",
       activeRecallNamespaces: ["lancedb-new"],
@@ -114,7 +124,7 @@ describe("MultiNamespacePool", () => {
     assert.ok(dbs.some(d => d.namespace === "lancedb-old"));
   });
 
-  it("getReadDbs returns only active when crossNamespaceRecall=false", () => {
+  itNamed("getReadDbs returns only active when crossNamespaceRecall=false", () => {
     const nsCfg = {
       activeWriteNamespace: "lancedb-new",
       activeRecallNamespaces: ["lancedb-new"],
@@ -127,7 +137,7 @@ describe("MultiNamespacePool", () => {
     assert.strictEqual(dbs[0].namespace, "lancedb-new");
   });
 
-  it("getDb (backward-compat) delegates to getWriteDb", () => {
+  itNamed("getDb (backward-compat) delegates to getWriteDb", () => {
     const nsCfg = { activeWriteNamespace: "lancedb-local" };
     const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const a = pool.getDb("default");
@@ -135,7 +145,7 @@ describe("MultiNamespacePool", () => {
     assert.strictEqual(a.dbPath, b.dbPath);
   });
 
-  it("withWriteDb holds only the active write namespace through callback settlement", async () => {
+  itNamed("withWriteDb holds only the active write namespace through callback settlement", async () => {
     const nsCfg = {
       activeWriteNamespace: "lancedb-new",
       activeRecallNamespaces: ["lancedb-new"],
@@ -164,7 +174,7 @@ describe("MultiNamespacePool", () => {
     assert.equal(pool._pools.get("lancedb-new").active.has("agent-a"), false);
   });
 
-  it("leases a separate read-only pool rooted at exactly the active writer route", async () => {
+  itNamed("leases a separate read-only pool rooted at exactly the active writer route", async () => {
     const pool = new MultiNamespacePool(namedLayout({
       activeWriteNamespace: "active",
       activeRecallNamespaces: ["active", "other"],
@@ -195,7 +205,7 @@ describe("MultiNamespacePool", () => {
     assert.ok(reader);
   });
 
-  it("withReadDbs preserves configured order and holds every namespace lease", async () => {
+  itNamed("withReadDbs preserves configured order and holds every namespace lease", async () => {
     const nsCfg = {
       activeWriteNamespace: "lancedb-new",
       activeRecallNamespaces: ["lancedb-new", "lancedb-second"],
@@ -226,7 +236,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("releases every namespace lease when the callback rejects", async () => {
+  itNamed("releases every namespace lease when the callback rejects", async () => {
     const nsCfg = {
       activeWriteNamespace: "lancedb-new",
       activeRecallNamespaces: ["lancedb-new"],
@@ -245,7 +255,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("withDb remains a backward-compatible lease alias for withWriteDb", async () => {
+  itNamed("withDb remains a backward-compatible lease alias for withWriteDb", async () => {
     const nsCfg = { activeWriteNamespace: "lancedb-local" };
     const pool = new MultiNamespacePool(namedLayout(nsCfg), 384, FakeAgentDbPool);
     const result = await pool.withDb("agent-a", async (db) => db.dbPath);
@@ -253,7 +263,7 @@ describe("MultiNamespacePool", () => {
     assert.equal(pool._pools.get("lancedb-local").active.has("agent-a"), false);
   });
 
-  it("shutdown destroys all pools", async () => {
+  itNamed("shutdown destroys all pools", async () => {
     const nsCfg = {
       activeWriteNamespace: "lancedb-new",
       activeRecallNamespaces: ["lancedb-new"],
@@ -265,7 +275,7 @@ describe("MultiNamespacePool", () => {
     await assert.doesNotReject(() => pool.shutdown());
   });
 
-  it("aggregates namespace-contextual shutdown failures", async () => {
+  itNamed("aggregates namespace-contextual shutdown failures", async () => {
     const failures = new Map([
       ["lancedb-new", new Error("new namespace close failed")],
       ["lancedb-old", new Error("old namespace close failed")],
@@ -296,7 +306,7 @@ describe("MultiNamespacePool", () => {
     assert.equal(pool._pools.size, 0, "pool state clears even when namespace shutdown fails");
   });
 
-  it("finishes terminal cleanup and preserves child plus logger failures when shutdown logging throws", async () => {
+  itNamed("finishes terminal cleanup and preserves child plus logger failures when shutdown logging throws", async () => {
     const childError = new Error("injected child shutdown failure");
     const loggerError = new Error("injected namespace logger failure");
     class FailingAgentDbPool extends FakeAgentDbPool {
@@ -330,7 +340,7 @@ describe("MultiNamespacePool", () => {
     await assert.doesNotReject(() => pool.shutdown(), "terminal retry remains an idempotent no-op");
   });
 
-  it("finishes terminal cleanup when namespace logger errors have hostile accessors", async () => {
+  itNamed("finishes terminal cleanup when namespace logger errors have hostile accessors", async () => {
     const childError = new Error("injected hostile namespace child failure");
     const loggerError = new Error("hidden hostile namespace logger failure");
     Object.defineProperty(loggerError, "message", {
@@ -367,7 +377,7 @@ describe("MultiNamespacePool", () => {
     assert.equal(pool._baseCapability, null);
   });
 
-  it("observes rejecting namespace logger thenables and still closes the root", async () => {
+  itNamed("observes rejecting namespace logger thenables and still closes the root", async () => {
     const childError = new Error("injected async namespace child failure");
     const loggerError = new Error("injected async namespace logger failure");
     let rejectionHandlerAttached = false;
@@ -409,7 +419,7 @@ describe("MultiNamespacePool", () => {
     assert.equal(pool._baseCapability, null);
   });
 
-  it("rejects child creation and leased work after terminal shutdown", async () => {
+  itNamed("rejects child creation and leased work after terminal shutdown", async () => {
     const pool = new MultiNamespacePool(namedLayout({ activeWriteNamespace: "lancedb-new" }), 384, FakeAgentDbPool);
 
     await pool.shutdown();
@@ -422,7 +432,7 @@ describe("MultiNamespacePool", () => {
     await assert.doesNotReject(() => pool.shutdown(), "terminal shutdown remains idempotent");
   });
 
-  it("waits for an active namespace lease and coalesces concurrent shutdown", async () => {
+  itNamed("waits for an active namespace lease and coalesces concurrent shutdown", async () => {
     let releaseOperation;
     let markOperationStarted;
     const operationGate = new Promise((resolve) => { releaseOperation = resolve; });
@@ -472,7 +482,7 @@ describe("MultiNamespacePool", () => {
     assert.equal(child.shutdownCalls, 1, "repeated shutdown must remain idempotent");
   });
 
-  it("validates malicious agent IDs through every public alias before child use", async () => {
+  itNamed("validates malicious agent IDs through every public alias before child use", async () => {
     const pool = new MultiNamespacePool(namedLayout({ activeWriteNamespace: "active" }), 384, FakeAgentDbPool);
     const invalidIds = ["../escape", "bad/name", "bad\\name", ".", 7, { id: "agent" }];
     for (const agentId of invalidIds) {
@@ -487,7 +497,7 @@ describe("MultiNamespacePool", () => {
     assert.equal(pool._pools.size, 0);
   });
 
-  it("rejects an outside symlink and canonical route collision before creating a child", () => {
+  itNamed("rejects an outside symlink and canonical route collision before creating a child", () => {
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-outside-"));
     const symlinkRoot = mkdtempSync(join(tmpdir(), "plur1bus-route-root-"));
     try {
@@ -515,7 +525,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("revalidates all routes before creating each late child", () => {
+  itNamed("revalidates all routes before creating each late child", () => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-late-route-root-"));
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-late-route-outside-"));
     try {
@@ -542,7 +552,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("rejects a cached legacy read route swapped to an outside symlink before reuse", () => {
+  itNamed("rejects a cached legacy read route swapped to an outside symlink before reuse", () => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-cached-legacy-root-"));
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-legacy-outside-"));
     try {
@@ -573,7 +583,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("rejects a cached active writer route swapped to an outside symlink before reuse", () => {
+  itNamed("rejects a cached active writer route swapped to an outside symlink before reuse", () => {
     const root = mkdtempSync(join(tmpdir(), "plur1bus-cached-writer-root-"));
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-writer-outside-"));
     try {
@@ -597,7 +607,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("rejects whole named-root substitution before the first child is created", () => {
+  itNamed("rejects whole named-root substitution before the first child is created", () => {
     const parent = mkdtempSync(join(tmpdir(), "plur1bus-root-swap-parent-"));
     const root = join(parent, "named-root");
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-root-swap-outside-"));
@@ -618,7 +628,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("rejects whole named-root substitution before reusing a cached writer", () => {
+  itNamed("rejects whole named-root substitution before reusing a cached writer", () => {
     const parent = mkdtempSync(join(tmpdir(), "plur1bus-cached-root-swap-parent-"));
     const root = join(parent, "named-root");
     const outside = mkdtempSync(join(tmpdir(), "plur1bus-cached-root-swap-outside-"));
@@ -642,7 +652,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("pins existing namespace targets and rejects later in-root substitutions", () => {
+  itNamed("pins existing namespace targets and rejects later in-root substitutions", () => {
     for (const route of ["active", "legacy"]) {
       const root = mkdtempSync(join(tmpdir(), `plur1bus-pinned-${route}-root-`));
       try {
@@ -675,7 +685,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("pins initially absent namespace targets before any child is created", () => {
+  itNamed("pins initially absent namespace targets before any child is created", () => {
     for (const route of ["active", "legacy"]) {
       const root = mkdtempSync(join(tmpdir(), `plur1bus-pinned-missing-${route}-root-`));
       try {
@@ -730,7 +740,7 @@ describe("MultiNamespacePool", () => {
     assert.equal(getterCalls, 0, "validation must inspect descriptors instead of invoking untrusted getters");
   });
 
-  it("creates a nested missing named root at the canonical target derived from its existing ancestor", () => {
+  itNamed("creates a nested missing named root at the canonical target derived from its existing ancestor", () => {
     const parent = mkdtempSync(join(tmpdir(), "plur1bus-canonical-missing-parent-"));
     const root = join(parent, "one", "two", "named-root");
     try {
@@ -794,7 +804,7 @@ describe("MultiNamespacePool", () => {
     }
   });
 
-  it("clones and freezes routes, marks only legacy children read-only, and never writes legacy", () => {
+  itNamed("clones and freezes routes, marks only legacy children read-only, and never writes legacy", () => {
     const source = {
       activeWriteNamespace: "active",
       activeRecallNamespaces: ["active"],
