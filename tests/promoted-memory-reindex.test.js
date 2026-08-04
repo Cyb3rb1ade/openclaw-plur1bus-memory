@@ -1,6 +1,6 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -15,7 +15,9 @@ async function loadModule() {
 }
 
 function makeHome() {
-  const dir = mkdtempSync(join(tmpdir(), "plur1bus-promoted-reindex-"));
+  // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
+  // production code resolves real paths, so expectations must match.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-promoted-reindex-")));
   tempDirs.push(dir);
   return dir;
 }

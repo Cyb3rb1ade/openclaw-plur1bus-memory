@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   mkdirSync,
@@ -415,7 +416,9 @@ describe("wiki-command smoke", () => {
   let archiveDir;
 
   before(() => {
-    archiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-archive-"));
+    // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
+    // production code resolves real paths, so expectations must match.
+    archiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-archive-")));
     mkdirSync(join(archiveDir, "test-agent"), { recursive: true });
   });
 
@@ -1038,8 +1041,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("makes denied UUID deletion indistinguishable from missing", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-denied-id-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-denied-id-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-denied-id-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-denied-id-archive-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(localArchiveDir, { recursive: true, force: true });
@@ -1101,7 +1104,7 @@ describe("wiki-command smoke", () => {
   });
 
   it("fails closed before UUID archive or delete when the canonical audit workspace is missing", async (t) => {
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-missing-audit-archive-"));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-missing-audit-archive-")));
     t.after(() => {
       rmSync(localArchiveDir, { recursive: true, force: true });
     });
@@ -1124,8 +1127,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("fails closed before archive or delete when the canonical audit directory is a file", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-file-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-file-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-file-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-file-archive-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(localArchiveDir, { recursive: true, force: true });
@@ -1153,8 +1156,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("fails closed before archive or delete when the canonical audit directory is not writable", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-readonly-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-readonly-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-readonly-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-readonly-archive-")));
     const auditDir = join(workspaceDir, ".adaptive-learning");
     mkdirSync(auditDir);
     chmodSync(auditDir, 0o555);
@@ -1185,8 +1188,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("fails closed before archive or delete when the audit parent is a broken symlink", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-parent-link-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-parent-link-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-parent-link-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-parent-link-archive-")));
     const auditDir = join(workspaceDir, ".adaptive-learning");
     symlinkSync("missing-audit-parent", auditDir);
     t.after(() => {
@@ -1215,8 +1218,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("fails closed before archive or delete when the existing audit target is a directory", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-dir-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-dir-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-dir-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-dir-archive-")));
     const auditDir = join(workspaceDir, ".adaptive-learning");
     const auditPath = join(auditDir, "destructive-ops.jsonl");
     mkdirSync(auditPath, { recursive: true });
@@ -1246,8 +1249,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("fails closed before archive or delete when the existing audit target is unwritable", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-readonly-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-readonly-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-readonly-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-readonly-archive-")));
     const auditDir = join(workspaceDir, ".adaptive-learning");
     const auditPath = join(auditDir, "destructive-ops.jsonl");
     mkdirSync(auditDir);
@@ -1280,8 +1283,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("fails closed before archive or delete when the existing audit target is a symlink", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-link-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-link-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-link-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-link-archive-")));
     const auditDir = join(workspaceDir, ".adaptive-learning");
     const auditPath = join(auditDir, "destructive-ops.jsonl");
     mkdirSync(auditDir);
@@ -1312,8 +1315,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("keeps an existing writable regular audit target", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-file-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-file-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-file-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-target-file-archive-")));
     const auditDir = join(workspaceDir, ".adaptive-learning");
     const auditPath = join(auditDir, "destructive-ops.jsonl");
     mkdirSync(auditDir);
@@ -1342,9 +1345,9 @@ describe("wiki-command smoke", () => {
   });
 
   it("fails closed before query archive or delete when the supplied audit workspace is not canonical", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-canonical-ws-"));
-    const otherWorkspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-other-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-invalid-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-canonical-ws-")));
+    const otherWorkspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-other-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-audit-invalid-archive-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(otherWorkspaceDir, { recursive: true, force: true });
@@ -1376,8 +1379,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("archives first, awaits UUID delete, then writes exactly one destructive audit entry", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-audit-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-audit-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-audit-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-audit-archive-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(localArchiveDir, { recursive: true, force: true });
@@ -1426,8 +1429,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("does not audit when the UUID delete fails after archiving", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-fail-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-fail-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-fail-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-id-fail-archive-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(localArchiveDir, { recursive: true, force: true });
@@ -1520,8 +1523,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("filters higher-ranked foreign candidates before query-delete top-k", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-delete-topk-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-delete-topk-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-delete-topk-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-delete-topk-archive-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(localArchiveDir, { recursive: true, force: true });
@@ -1561,8 +1564,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("uses query embedding purpose and audits one successful query delete after settlement", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-query-audit-ws-"));
-    const localArchiveDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-query-audit-archive-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-query-audit-ws-")));
+    const localArchiveDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-query-audit-archive-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(localArchiveDir, { recursive: true, force: true });
@@ -1668,8 +1671,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("registered handler returns usage for missing or null args without route, runtime, DB, or provider work", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-null-ws-"));
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-null-db-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-null-ws-")));
+    const baseDbPath = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-null-db-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(baseDbPath, { recursive: true, force: true });
@@ -1692,8 +1695,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("registered handler rejects malformed add and UUID grammar before route, runtime, DB, or provider work", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-grammar-ws-"));
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-grammar-db-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-grammar-ws-")));
+    const baseDbPath = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-grammar-db-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(baseDbPath, { recursive: true, force: true });
@@ -1722,8 +1725,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("registered handler returns usage and invalid-input errors without route, DB, or provider work", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-usage-ws-"));
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-usage-db-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-usage-ws-")));
+    const baseDbPath = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-usage-db-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(baseDbPath, { recursive: true, force: true });
@@ -1742,8 +1745,8 @@ describe("wiki-command smoke", () => {
   });
 
   it("registered handler authorizes the official context before touching runtime LLM, DB, or provider", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-denied-ws-"));
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-denied-db-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-denied-ws-")));
+    const baseDbPath = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-denied-db-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(baseDbPath, { recursive: true, force: true });
@@ -1767,9 +1770,9 @@ describe("wiki-command smoke", () => {
   });
 
   it("registered handler stores the exact canonical ownership tuple from an official context", async (t) => {
-    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-owner-ws-"));
-    const otherWorkspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-other-ws-"));
-    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-owner-db-"));
+    const workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-owner-ws-")));
+    const otherWorkspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-other-ws-")));
+    const baseDbPath = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-wiki-handler-owner-db-")));
     t.after(() => {
       rmSync(workspaceDir, { recursive: true, force: true });
       rmSync(otherWorkspaceDir, { recursive: true, force: true });

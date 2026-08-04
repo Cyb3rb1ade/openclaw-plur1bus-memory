@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -133,11 +134,13 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
   }
 
   before(async () => {
-    basePath = mkdtempSync(join(tmpdir(), "plur1bus-merge-"));
-    workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-merge-ws-"));
+    // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
+    // production code resolves real paths, so compare against resolved paths.
+    basePath = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-merge-")));
+    workspaceDir = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-merge-ws-")));
 
     originalOpenClawHome = process.env.OPENCLAW_HOME;
-    openclawHome = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    openclawHome = realpathSync(mkdtempSync(join(tmpdir(), "openclaw-test-")));
     process.env.OPENCLAW_HOME = openclawHome;
     archiveDir = join(openclawHome, ".openclaw", "memory", "_archive");
 

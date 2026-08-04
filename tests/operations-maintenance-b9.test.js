@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   rmSync,
   statSync,
@@ -32,7 +33,9 @@ const REINDEX_SCRIPT = join(REPO_ROOT, "scripts", "reindex-provider.mjs");
 const DREAMING_CRON_ID = "12345678-1234-1234-1234-123456789abc";
 
 function makeTempDir(prefix) {
-  return mkdtempSync(join(tmpdir(), prefix));
+  // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
+  // production code resolves real paths, so expectations must match.
+  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
 function removeTempDir(dir) {
@@ -136,6 +139,41 @@ function makeElevatedHome(root, count = 501) {
   return versionsDir;
 }
 
+// The GNU compat shims are only needed where the host userland lacks the GNU
+// flags (macOS/BSD). On Linux they must NOT be installed into PATH: the stat
+// shim translates `stat -c` into BSD `stat -f`, which GNU coreutils reads as
+// --file-system, so shadowing the real tools breaks the guard's identity
+// checks ("source root cannot be identified").
+const needsGnuCompatShims = process.platform === "darwin";
+
+function installGnuCompatShims(binDir) {
+  // scripts/protect-plur1bus-deploy.sh is written for GNU userland
+  // (`stat -c`, `realpath -e/--`); macOS ships BSD stat/realpath without
+  // those flags. Shim the two GNU-isms so the tests exercise the guard's
+  // logic instead of host tool availability.
+  writeExecutable(join(binDir, "stat"), `#!/bin/sh
+if [ "x$1" = "x-c" ]; then
+  fmt="$2"
+  shift 2
+  [ "x$1" = "x--" ] && shift
+  exec /usr/bin/stat -f "$fmt" "$@"
+fi
+exec /usr/bin/stat "$@"
+`);
+  writeExecutable(join(binDir, "realpath"), `#!/bin/sh
+must_exist=0
+if [ "x$1" = "x-e" ]; then
+  must_exist=1
+  shift
+fi
+[ "x$1" = "x--" ] && shift
+if [ "$must_exist" = 1 ] && [ ! -e "$1" ]; then
+  exit 1
+fi
+exec /bin/realpath "$1"
+`);
+}
+
 function copyDeployGuard(root, checkerMode = "valid") {
   const scriptPath = join(root, "repo", "scripts", "protect-plur1bus-deploy.sh");
   const checkerPath = join(root, "repo", "scripts", "lib", "deploy-integrity.mjs");
@@ -166,6 +204,10 @@ function makeDeployFixture({ checkerMode = "valid", sourceContent, deployContent
   mkdirSync(dirname(deployFile), { recursive: true });
   writeFileSync(sourceFile, sourceContent);
   writeFileSync(deployFile, deployContent);
+  const compatBinDir = join(root, "compat-bin");
+  if (needsGnuCompatShims) {
+    installGnuCompatShims(compatBinDir);
+  }
   return {
     root,
     scriptPath,
@@ -173,12 +215,15 @@ function makeDeployFixture({ checkerMode = "valid", sourceContent, deployContent
     deployDir,
     sourceFile,
     deployFile,
+    compatBinDir,
     logPath: join(root, "protect.log"),
     backupRoot: join(root, "backups"),
   };
 }
 
 function runDeployGuard(fixture, env = {}) {
+  const { PATH: envPath, ...restEnv } = env;
+  const basePath = envPath ?? process.env.PATH;
   const result = spawnSync("bash", [fixture.scriptPath], {
     cwd: fixture.root,
     encoding: "utf8",
@@ -191,7 +236,8 @@ function runDeployGuard(fixture, env = {}) {
       PLUR1BUS_LOG: fixture.logPath,
       PLUR1BUS_BACKUP_DIR: fixture.backupRoot,
       PLUR1BUS_NO_RESTART: "1",
-      ...env,
+      ...restEnv,
+      PATH: needsGnuCompatShims ? `${fixture.compatBinDir}:${basePath}` : basePath,
     },
     timeout: 30_000,
   });
@@ -202,6 +248,18 @@ function runDeployGuard(fixture, env = {}) {
     log: existsSync(fixture.logPath) ? readFileSync(fixture.logPath, "utf8") : "",
   };
 }
+
+// scripts/protect-plur1bus-deploy.sh requires bash >= 4 (associative arrays,
+// `declare -A`); runDeployGuard invokes `bash` resolved from PATH, so probe
+// exactly that interpreter. macOS ships bash 3.2, where the full-restore-path
+// tests below cannot run — on Linux (bash 4+) they execute unchanged.
+const requiresModernBash = (() => {
+  const probe = spawnSync("bash", ["-c", 'printf "%s" "$BASH_VERSINFO"'], { encoding: "utf8" });
+  const major = Number.parseInt(probe.stdout ?? "", 10);
+  return major >= 4
+    ? {}
+    : { skip: "protect-plur1bus-deploy.sh requires bash >= 4 (associative arrays); not available on this host" };
+})();
 
 describe("B9 maintain-lancedb retention boundary", () => {
   const invalidKeepCases = [
@@ -709,7 +767,7 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
     });
   }
 
-  it("preserves installed-guard repair via the checker in the canonical source repository", () => {
+  it("preserves installed-guard repair via the checker in the canonical source repository", requiresModernBash, () => {
     const fixture = makeDeployFixture({ checkerMode: "missing", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const sourceChecker = join(fixture.sourceDir, "scripts", "lib", "deploy-integrity.mjs");
@@ -726,7 +784,7 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
     }
   });
 
-  it("fails before backup when a candidate source is a broken re-export stub", () => {
+  it("fails before backup when a candidate source is a broken re-export stub", requiresModernBash, () => {
     const brokenSource = 'export * from "../../missing/neo-arch.js";\n';
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: brokenSource, deployContent: oldDeploy });
     try {
@@ -807,7 +865,7 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
     }
   });
 
-  it("accepts a canonical source reached through a source-root symlink", () => {
+  it("accepts a canonical source reached through a source-root symlink", requiresModernBash, () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const sourceAlias = join(fixture.root, "source-alias");
@@ -838,7 +896,7 @@ describe("B9 protect-plur1bus-deploy fail-closed checker", () => {
     }
   });
 
-  it("revalidates a source-parent swap after backup and before the first restore copy", () => {
+  it("revalidates a source-parent swap after backup and before the first restore copy", requiresModernBash, () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const externalLib = join(fixture.root, "external-lib");
@@ -873,7 +931,7 @@ exec /bin/cp "$@"
     }
   });
 
-  it("rejects a regular source replacement after preflight and before restore copy", () => {
+  it("rejects a regular source replacement after preflight and before restore copy", requiresModernBash, () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const binDir = join(fixture.root, "bin");
@@ -904,7 +962,7 @@ exec /bin/cp "$@"
     }
   });
 
-  it("fails verified restore when copy reports success without changing the deploy", () => {
+  it("fails verified restore when copy reports success without changing the deploy", requiresModernBash, () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const binDir = join(fixture.root, "bin");
@@ -919,7 +977,7 @@ exec /bin/cp "$@"
     }
   });
 
-  it("backs up drift, restores a legitimate source, verifies hashes, and honors restart suppression", () => {
+  it("backs up drift, restores a legitimate source, verifies hashes, and honors restart suppression", requiresModernBash, () => {
     const fixture = makeDeployFixture({ checkerMode: "valid", sourceContent: safeSource, deployContent: oldDeploy });
     try {
       const metadata = [
