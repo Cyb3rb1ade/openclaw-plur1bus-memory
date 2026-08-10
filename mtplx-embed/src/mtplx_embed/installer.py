@@ -9,15 +9,18 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-
-JINA_EMBEDDING_TRANSFORMERS = "jinaai/jina-embeddings-v5-text-small"
-JINA_RERANKER_TRANSFORMERS = "jinaai/jina-reranker-v3.5"
-JINA_EMBEDDING_MLX = "jinaai/jina-embeddings-v5-text-small-mlx"
-JINA_RERANKER_MLX = "jinaai/jina-reranker-v3.5-mlx"
+from .models import (
+    JINA_EMBEDDING_MLX,
+    JINA_EMBEDDING_TRANSFORMERS,
+    JINA_MODEL_REVISIONS,
+    JINA_RERANKER_MLX,
+    JINA_RERANKER_TRANSFORMERS,
+    PINNED_REVISION_FILE,
+)
 
 
 def download_models(*, model_dir: Path, backend: str) -> tuple[str, str]:
-    """Download complete Jina snapshots into a stable, caller-owned cache."""
+    """Download audited Jina revisions into a stable, caller-owned cache."""
     try:
         from huggingface_hub import snapshot_download
     except ImportError as error:
@@ -30,7 +33,15 @@ def download_models(*, model_dir: Path, backend: str) -> tuple[str, str]:
         raise ValueError(f"unsupported Jina backend: {backend}")
     model_dir.mkdir(parents=True, exist_ok=True)
     for model in (embedding, reranker):
-        snapshot_download(repo_id=model, local_dir=str(model_dir / model), local_dir_use_symlinks=False)
+        destination = model_dir / model
+        revision = JINA_MODEL_REVISIONS[model]
+        snapshot_download(
+            repo_id=model,
+            revision=revision,
+            local_dir=str(destination),
+            local_dir_use_symlinks=False,
+        )
+        (destination / PINNED_REVISION_FILE).write_text(f"{revision}\n", encoding="ascii")
     return embedding, reranker
 
 

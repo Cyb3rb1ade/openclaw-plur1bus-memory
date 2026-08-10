@@ -46,6 +46,26 @@ Batches are padded on the **right**. With causal attention a real token never
 attends to a later pad token, so right padding leaves every real position
 bit-identical to the unpadded run — left padding would corrupt it.
 
+## Pinned third-party model code
+
+Jina is opt-in because these CC-BY-NC-4.0 checkpoints include third-party
+Python model code. The sidecar executes that code only from the following
+audited, immutable Hugging Face revisions; it never resolves mutable `main`.
+The installer downloads one embedding/reranker pair for the selected backend.
+
+| Backend | Repository | Pinned revision |
+| --- | --- | --- |
+| Transformers | `jinaai/jina-embeddings-v5-text-small` | `dd76d535f5447ca3897a9c893fb1e612ead98192` |
+| Transformers | `jinaai/jina-reranker-v3.5` | `e8a93f33f0b22108f8c2364f8484ce3422552fbc` |
+| MLX | `jinaai/jina-embeddings-v5-text-small-mlx` | `fe69cad2caa9a4adc37eaecc9d12c7be304caa36` |
+| MLX | `jinaai/jina-reranker-v3.5-mlx` | `3dd4ac901ccdcac85abe3815df0a0aaaf44e4a21` |
+
+The revisions were resolved from the repositories' authoritative Hugging Face
+Git refs on 2026-08-10. A successful installer download writes a revision
+marker beside each local snapshot. Runtime loading accepts that verified local
+snapshot or fetches the same immutable revision into the Hugging Face cache;
+`trust_remote_code=True` is never used against an unpinned remote ref.
+
 ## Full installation
 
 ```bash
@@ -60,16 +80,19 @@ PLUR1BUS_INSTALL_JINA=1 PLUR1BUS_ACCEPT_JINA_LICENSE=1 PLUR1BUS_NONINTERACTIVE=1
 Before any files are copied, the full and direct sidecar installers use the
 same Hermes-home resolver. `--hermes-home` has highest precedence, then an
 exported `HERMES_HOME`; otherwise known local Hermes installations are
-discovered. A single installation is selected automatically. Multiple homes
-require a numbered interactive choice, while noninteractive zero/ambiguous
-selection exits nonzero and requires an explicit path. Hermes profiles within
-one home are not treated as separate installations.
+discovered only for interactive selection. Interactive mode auto-selects one
+installation and prompts when multiple homes exist. Every noninteractive or
+no-TTY invocation requires explicit `--hermes-home PATH` or `HERMES_HOME` and
+exits before writes without one. Hermes profiles within one home are not
+treated as separate installations.
 The selected home's `hermes-agent/venv` is also the default bootstrap runtime;
 `MTPLX_EMBED_PYTHON` and then `HERMES_PYTHON` are explicit overrides. Sidecar
 dependencies themselves remain isolated in `$HERMES_HOME/mtplx-embed/venv`.
 
 Jina is recommended for a new, empty PLUR1BUS store but is never installed by
 default. Both models are **CC-BY-NC-4.0** and require explicit acceptance.
+Opting in also accepts execution of their third-party repository model code at
+the pinned revisions listed above.
 Without it, on native Windows, after a failed smoke test, or with an existing
 LanceDB store, no Jina route is activated and PLUR1BUS stays on local E5/BGE.
 The installed code and stable model cache live under `$HERMES_HOME/mtplx-embed`.

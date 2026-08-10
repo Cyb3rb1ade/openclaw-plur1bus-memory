@@ -20,6 +20,13 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from .models import (
+    JINA_EMBEDDING_MLX,
+    JINA_MODEL_REVISIONS,
+    JINA_RERANKER_MLX,
+    PINNED_REVISION_FILE,
+)
+
 try:  # Keep the sidecar importable on non-Apple platforms.
     import mlx.core as mx
     from mlx_lm import load
@@ -31,8 +38,8 @@ DEFAULT_EMBEDDING_MODEL = "mlx-community/Qwen3-Embedding-8B-4bit-DWQ"
 DEFAULT_RERANKER_MODEL = "vserifsaglam/Qwen3-Reranker-4B-4bit-MLX"
 # jina ships MLX inference code inside the checkpoint. Both are CC-BY-NC-4.0,
 # so they are offered, never defaulted to.
-DEFAULT_JINA_EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-text-small-mlx"
-DEFAULT_JINA_RERANKER_MODEL = "jinaai/jina-reranker-v3.5-mlx"
+DEFAULT_JINA_EMBEDDING_MODEL = JINA_EMBEDDING_MLX
+DEFAULT_JINA_RERANKER_MODEL = JINA_RERANKER_MLX
 
 DEFAULT_EMBEDDING_MAX_TOKENS = 8192
 DEFAULT_RERANKER_MAX_TOKENS = 8192
@@ -67,6 +74,36 @@ def _resolve_model_path(reference: str, search_dirs: tuple[Path, ...]) -> str:
         if local.is_dir():
             return str(local)
     return reference
+
+
+def _resolve_pinned_model_path(
+    reference: str,
+    revision: str | None,
+    search_dirs: tuple[Path, ...],
+) -> str:
+    """Resolve a verified local snapshot or fetch one immutable revision."""
+    resolved = _resolve_model_path(reference, search_dirs)
+    directory = Path(resolved)
+    if directory.is_dir():
+        if revision is None:
+            return resolved
+        marker = directory / PINNED_REVISION_FILE
+        try:
+            if marker.read_text(encoding="ascii").strip() == revision:
+                return resolved
+        except OSError:
+            pass
+    if revision is None or len(revision) != 40 or any(
+        character not in "0123456789abcdef" for character in revision
+    ):
+        raise RuntimeError(
+            f"remote model code requires an audited immutable revision: {reference}"
+        )
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as error:
+        raise RuntimeError("pinned Jina loading requires huggingface_hub") from error
+    return str(snapshot_download(repo_id=reference, revision=revision))
 
 
 def model_alias(reference: str) -> str:
@@ -245,6 +282,8 @@ class JinaV5Embedder:
     ) -> None:
         self.reference = reference
         self.path = _resolve_model_path(reference, search_dirs)
+        self.revision = JINA_MODEL_REVISIONS.get(reference)
+        self.search_dirs = search_dirs
         self.batch_size = max(1, int(batch_size))
         self.lock = threading.RLock()
         self._model: Any = None
@@ -261,6 +300,9 @@ class JinaV5Embedder:
     def ensure_loaded(self) -> Any:
         with self.lock:
             if self._model is None:
+                self.path = _resolve_pinned_model_path(
+                    self.reference, self.revision, self.search_dirs
+                )
                 utils = _load_sibling_module(Path(self.path), "utils.py", "jina_v5_utils")
                 model = utils.load_model(str(self.path))
                 model.switch_task("retrieval")
@@ -410,6 +452,8 @@ class JinaReranker:
     ) -> None:
         self.reference = reference
         self.path = _resolve_model_path(reference, search_dirs)
+        self.revision = JINA_MODEL_REVISIONS.get(reference)
+        self.search_dirs = search_dirs
         self.lock = threading.RLock()
         self._model: Any = None
 
@@ -422,6 +466,9 @@ class JinaReranker:
             if self._model is None:
                 import sys
 
+                self.path = _resolve_pinned_model_path(
+                    self.reference, self.revision, self.search_dirs
+                )
                 directory = Path(self.path)
                 # rerank.py does `import modeling`, a bare name that only
                 # resolves if the checkpoint directory is importable. Registering
@@ -499,6 +546,8 @@ class JinaTransformersEmbedder:
     def __init__(self, reference: str, *, search_dirs: tuple[Path, ...] = (), batch_size: int = 32) -> None:
         self.reference = reference
         self.path = _resolve_model_path(reference, search_dirs)
+        self.revision = JINA_MODEL_REVISIONS.get(reference)
+        self.search_dirs = search_dirs
         self.batch_size = max(1, int(batch_size))
         self.lock = threading.RLock()
         self._model: Any = None
@@ -519,7 +568,15 @@ class JinaTransformersEmbedder:
                     from transformers import AutoModel
                 except ImportError as error:
                     raise RuntimeError("portable Jina requires transformers, torch, and safetensors") from error
-                model = AutoModel.from_pretrained(self.path, trust_remote_code=True)
+                self.path = _resolve_pinned_model_path(
+                    self.reference, self.revision, self.search_dirs
+                )
+                model = AutoModel.from_pretrained(
+                    self.path,
+                    trust_remote_code=True,
+                    revision=self.revision,
+                    local_files_only=True,
+                )
                 if hasattr(model, "eval"):
                     model.eval()
                 self._model = model
@@ -556,6 +613,8 @@ class JinaTransformersReranker:
     def __init__(self, reference: str, *, search_dirs: tuple[Path, ...] = ()) -> None:
         self.reference = reference
         self.path = _resolve_model_path(reference, search_dirs)
+        self.revision = JINA_MODEL_REVISIONS.get(reference)
+        self.search_dirs = search_dirs
         self.lock = threading.RLock()
         self._model: Any = None
 
@@ -570,7 +629,15 @@ class JinaTransformersReranker:
                     from transformers import AutoModel
                 except ImportError as error:
                     raise RuntimeError("portable Jina requires transformers, torch, and safetensors") from error
-                model = AutoModel.from_pretrained(self.path, trust_remote_code=True)
+                self.path = _resolve_pinned_model_path(
+                    self.reference, self.revision, self.search_dirs
+                )
+                model = AutoModel.from_pretrained(
+                    self.path,
+                    trust_remote_code=True,
+                    revision=self.revision,
+                    local_files_only=True,
+                )
                 if hasattr(model, "eval"):
                     model.eval()
                 self._model = model
@@ -629,7 +696,9 @@ def build_embedder(
     if backend not in {"auto", "mlx"}:
         raise ValueError(f"unsupported embedding backend: {backend}")
     directory = Path(_resolve_model_path(reference, search_dirs))
-    if (directory / "utils.py").is_file() and (directory / "model.py").is_file():
+    if reference == DEFAULT_JINA_EMBEDDING_MODEL or (
+        (directory / "utils.py").is_file() and (directory / "model.py").is_file()
+    ):
         return JinaV5Embedder(reference, search_dirs=search_dirs, batch_size=batch_size)
     return Qwen3Embedder(
         reference,
@@ -658,7 +727,10 @@ def build_reranker(
     if backend not in {"auto", "mlx"}:
         raise ValueError(f"unsupported reranking backend: {backend}")
     directory = Path(_resolve_model_path(reference, search_dirs))
-    if (directory / "rerank.py").is_file() and (directory / "projector.safetensors").is_file():
+    if reference == DEFAULT_JINA_RERANKER_MODEL or (
+        (directory / "rerank.py").is_file()
+        and (directory / "projector.safetensors").is_file()
+    ):
         return JinaReranker(reference, search_dirs=search_dirs)
     return Qwen3Reranker(
         reference,

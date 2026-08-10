@@ -196,6 +196,10 @@ resolve_hermes_home() {
     _hermes_home_select_explicit "$HERMES_HOME" 'HERMES_HOME'
     return
   fi
+  if [[ "$non_interactive" == "1" || ! -t 0 ]]; then
+    printf 'Noninteractive Hermes home selection requires --hermes-home PATH or HERMES_HOME. Nothing was written.\n' >&2
+    return 4
+  fi
 
   _hermes_home_add_candidate "$HERMES_HOME_DISCOVERY_ROOT/.hermes"
   for sibling in "$HERMES_HOME_DISCOVERY_ROOT"/.hermes-*; do
@@ -221,11 +225,6 @@ resolve_hermes_home() {
     index=$((index + 1))
     printf '  %d) %s\n' "$index" "$candidate" >&2
   done
-  if [[ "$non_interactive" == "1" || ! -t 0 ]]; then
-    printf 'Selection is ambiguous and no files were changed. Re-run with --hermes-home PATH or export HERMES_HOME.\n' >&2
-    return 4
-  fi
-
   while true; do
     read -r -p "Select Hermes home [1-${#HERMES_HOME_CANDIDATES[@]}]: " selection
     if [[ "$selection" =~ ^[0-9]+$ ]] && (( selection >= 1 && selection <= ${#HERMES_HOME_CANDIDATES[@]} )); then

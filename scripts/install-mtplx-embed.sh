@@ -120,6 +120,8 @@ if [[ "$want_jina" != "1" && "$non_interactive" != "1" && -t 0 ]]; then
 Jina retrieval is recommended for a new empty PLUR1BUS store.
 Models: jina-embeddings-v5-text-small and jina-reranker-v3.5
 License: CC-BY-NC-4.0 (non-commercial use only).
+Security: these models execute third-party repository code only at the pinned
+revisions documented in mtplx-embed/README.md and mtplx_embed/models.py.
 NOTICE
   read -r -p 'Download and enable Jina now? [y/N] ' answer
   [[ "$answer" == "y" || "$answer" == "Y" ]] && want_jina=1
@@ -132,6 +134,7 @@ if [[ "$accept_license" != "1" && "$non_interactive" != "1" && -t 0 ]]; then
   cat >&2 <<'LICENSE'
 Jina models are licensed under CC-BY-NC-4.0.
 They may only be used under that licence, including its non-commercial restriction.
+They include third-party model code executed only at the documented pinned revisions.
 LICENSE
   read -r -p 'I have reviewed and accept CC-BY-NC-4.0 for these Jina models [y/N] ' license_answer
   [[ "$license_answer" == "y" || "$license_answer" == "Y" ]] && accept_license=1
