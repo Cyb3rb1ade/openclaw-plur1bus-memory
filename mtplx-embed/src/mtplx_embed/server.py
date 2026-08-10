@@ -18,6 +18,7 @@ Routes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -57,6 +58,8 @@ class ServiceConfig:
         reranker_batch_size: int = 4,
         query_instruction: str | None = None,
         reranker_instruction: str = RERANKER_DEFAULT_INSTRUCTION,
+        backend: str = "auto",
+        idle_seconds: int = 300,
     ) -> None:
         self.embedding_model = embedding_model
         self.reranker_model = reranker_model
@@ -67,6 +70,8 @@ class ServiceConfig:
         self.reranker_batch_size = reranker_batch_size
         self.query_instruction = query_instruction
         self.reranker_instruction = reranker_instruction
+        self.backend = backend
+        self.idle_seconds = max(0, int(idle_seconds))
 
 
 def _authorised(request: Request) -> bool:
@@ -102,17 +107,47 @@ def create_app(config: ServiceConfig) -> FastAPI:
         search_dirs=config.search_dirs,
         max_tokens=config.embedding_max_tokens,
         batch_size=config.embedding_batch_size,
+        backend=config.backend,
     )
     reranker = build_reranker(
         config.reranker_model,
         search_dirs=config.search_dirs,
         max_tokens=config.reranker_max_tokens,
         batch_size=config.reranker_batch_size,
+        backend=config.backend,
     )
     app = FastAPI(title="MTPLX Embed", version="1.0.0")
     app.state.config = config
     app.state.embedder = embedder
     app.state.reranker = reranker
+    app.state.last_model_use = time.monotonic()
+    app.state.idle_task = None
+
+    def _unload_if_idle() -> None:
+        if not config.idle_seconds or time.monotonic() - app.state.last_model_use < config.idle_seconds:
+            return
+        for backend in (embedder, reranker):
+            if backend.loaded:
+                backend.unload()
+        LOGGER.info("unloaded idle retrieval models after %ss", config.idle_seconds)
+
+    @app.on_event("startup")
+    async def _start_idle_unloader() -> None:
+        async def _run() -> None:
+            while True:
+                await asyncio.sleep(max(1, min(60, config.idle_seconds or 60)))
+                await asyncio.to_thread(_unload_if_idle)
+        app.state.idle_task = asyncio.create_task(_run())
+
+    @app.on_event("shutdown")
+    async def _stop_idle_unloader() -> None:
+        task = app.state.idle_task
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        for backend in (embedder, reranker):
+            backend.unload()
 
     @app.middleware("http")
     async def _authorise(request: Request, call_next):
@@ -172,6 +207,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
         vectors = await asyncio.to_thread(
             embedder.embed, texts, instruction=str(instruction) if instruction else None
         )
+        app.state.last_model_use = time.monotonic()
         LOGGER.info(
             "embedded %d text(s) in %.2fs", len(texts), time.perf_counter() - started
         )
@@ -205,6 +241,7 @@ def create_app(config: ServiceConfig) -> FastAPI:
         scores = await asyncio.to_thread(
             reranker.score, query, documents, instruction=instruction
         )
+        app.state.last_model_use = time.monotonic()
         LOGGER.info(
             "reranked %d document(s) in %.2fs", len(documents), time.perf_counter() - started
         )

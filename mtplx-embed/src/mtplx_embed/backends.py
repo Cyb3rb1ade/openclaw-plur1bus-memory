@@ -20,8 +20,12 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import mlx.core as mx
-from mlx_lm import load
+try:  # Keep the sidecar importable on non-Apple platforms.
+    import mlx.core as mx
+    from mlx_lm import load
+except ImportError:  # pragma: no cover - exercised by the portable backend
+    mx = None  # type: ignore[assignment]
+    load = None  # type: ignore[assignment]
 
 DEFAULT_EMBEDDING_MODEL = "mlx-community/Qwen3-Embedding-8B-4bit-DWQ"
 DEFAULT_RERANKER_MODEL = "vserifsaglam/Qwen3-Reranker-4B-4bit-MLX"
@@ -101,8 +105,18 @@ class _MlxModel:
     def ensure_loaded(self) -> tuple[Any, Any]:
         with self.lock:
             if self._model is None:
+                if load is None:
+                    raise RuntimeError("MLX is unavailable; choose the transformers Jina backend")
                 self._model, self._tokenizer = load(self.path)
             return self._model, self._tokenizer
+
+    def unload(self) -> None:
+        """Release the checkpoint after the sidecar has been idle."""
+        with self.lock:
+            self._model = None
+            self._tokenizer = None
+            if mx is not None:
+                mx.clear_cache()
 
 
 def _padded_batch(sequences: list[list[int]], pad_id: int) -> tuple[mx.array, list[int]]:
@@ -146,6 +160,9 @@ class Qwen3Embedder:
         """Load the model and return its embedding dimensionality."""
         vector = self.embed(["warmup"])[0]
         return len(vector)
+
+    def unload(self) -> None:
+        self._backend.unload()
 
     def _encode(self, tokenizer: Any, text: str) -> list[int]:
         eod_id = tokenizer.convert_tokens_to_ids(EMBEDDING_EOD_TOKEN)
@@ -253,6 +270,12 @@ class JinaV5Embedder:
     def warmup(self) -> int:
         return len(self.embed(["warmup"])[0])
 
+    def unload(self) -> None:
+        with self.lock:
+            self._model = None
+            if mx is not None:
+                mx.clear_cache()
+
     def embed(self, texts: list[str], *, instruction: str | None = None) -> list[list[float]]:
         """Embed texts in input order, as questions when an instruction is given.
 
@@ -309,6 +332,9 @@ class Qwen3Reranker:
     def warmup(self) -> None:
         """Load the model by scoring one throwaway pair."""
         self.score("warmup", ["warmup"])
+
+    def unload(self) -> None:
+        self._backend.unload()
 
     def _encode(self, tokenizer: Any, query: str, document: str, instruction: str) -> list[int]:
         prefix = tokenizer.encode(RERANKER_PREFIX, add_special_tokens=False)
@@ -421,6 +447,12 @@ class JinaReranker:
         """Load the model by scoring one throwaway pair."""
         self.score("warmup", ["warmup"])
 
+    def unload(self) -> None:
+        with self.lock:
+            self._model = None
+            if mx is not None:
+                mx.clear_cache()
+
     def score(
         self,
         query: str,
@@ -444,12 +476,147 @@ class JinaReranker:
         return scores
 
 
+def _normalise_rows(value: Any) -> list[list[float]]:
+    """Convert a torch/numpy/list embedding response to unit Python vectors."""
+    if hasattr(value, "detach"):
+        value = value.detach().float().cpu().tolist()
+    elif hasattr(value, "tolist"):
+        value = value.tolist()
+    rows = value if isinstance(value, list) and value and isinstance(value[0], list) else [value]
+    normalised: list[list[float]] = []
+    for row in rows:
+        numbers = [float(item) for item in row]
+        magnitude = sum(item * item for item in numbers) ** 0.5
+        if not numbers or magnitude == 0:
+            raise RuntimeError("Jina embedding backend returned an empty or zero vector")
+        normalised.append([item / magnitude for item in numbers])
+    return normalised
+
+
+class JinaTransformersEmbedder:
+    """Portable official Jina Transformers/Safetensors embedding backend."""
+
+    def __init__(self, reference: str, *, search_dirs: tuple[Path, ...] = (), batch_size: int = 32) -> None:
+        self.reference = reference
+        self.path = _resolve_model_path(reference, search_dirs)
+        self.batch_size = max(1, int(batch_size))
+        self.lock = threading.RLock()
+        self._model: Any = None
+        self._dimensions: int | None = None
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
+
+    @property
+    def dimensions(self) -> int | None:
+        return self._dimensions
+
+    def ensure_loaded(self) -> Any:
+        with self.lock:
+            if self._model is None:
+                try:
+                    from transformers import AutoModel
+                except ImportError as error:
+                    raise RuntimeError("portable Jina requires transformers, torch, and safetensors") from error
+                model = AutoModel.from_pretrained(self.path, trust_remote_code=True)
+                if hasattr(model, "eval"):
+                    model.eval()
+                self._model = model
+            return self._model
+
+    def warmup(self) -> int:
+        return len(self.embed(["warmup"])[0])
+
+    def unload(self) -> None:
+        with self.lock:
+            self._model = None
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
+    def embed(self, texts: list[str], *, instruction: str | None = None) -> list[list[float]]:
+        if not texts:
+            return []
+        model = self.ensure_loaded()
+        prompt_name = "query" if instruction else "document"
+        with self.lock:
+            encoded = model.encode(texts=texts, task="retrieval", prompt_name=prompt_name)
+        vectors = _normalise_rows(encoded)
+        self._dimensions = len(vectors[0])
+        return vectors
+
+
+class JinaTransformersReranker:
+    """Portable official Jina Transformers/Safetensors reranking backend."""
+
+    def __init__(self, reference: str, *, search_dirs: tuple[Path, ...] = ()) -> None:
+        self.reference = reference
+        self.path = _resolve_model_path(reference, search_dirs)
+        self.lock = threading.RLock()
+        self._model: Any = None
+
+    @property
+    def loaded(self) -> bool:
+        return self._model is not None
+
+    def ensure_loaded(self) -> Any:
+        with self.lock:
+            if self._model is None:
+                try:
+                    from transformers import AutoModel
+                except ImportError as error:
+                    raise RuntimeError("portable Jina requires transformers, torch, and safetensors") from error
+                model = AutoModel.from_pretrained(self.path, trust_remote_code=True)
+                if hasattr(model, "eval"):
+                    model.eval()
+                self._model = model
+            return self._model
+
+    def warmup(self) -> None:
+        self.score("warmup", ["warmup"])
+
+    def unload(self) -> None:
+        with self.lock:
+            self._model = None
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
+
+    def score(self, query: str, documents: list[str], *, instruction: str = RERANKER_DEFAULT_INSTRUCTION) -> list[float]:
+        del instruction
+        if not documents:
+            return []
+        model = self.ensure_loaded()
+        with self.lock:
+            results = model.rerank(query, documents)
+        if isinstance(results, dict):
+            results = results.get("results", results.get("data", []))
+        scores = [0.0] * len(documents)
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            index = entry.get("index")
+            if isinstance(index, int) and 0 <= index < len(scores):
+                scores[index] = float(entry.get("relevance_score", entry.get("score", 0.0)))
+        if not any(scores):
+            raise RuntimeError("Jina reranker returned no usable scores")
+        return scores
+
+
 def build_embedder(
     reference: str,
     *,
     search_dirs: tuple[Path, ...] = (),
     max_tokens: int = DEFAULT_EMBEDDING_MAX_TOKENS,
     batch_size: int = 8,
+    backend: str = "auto",
 ) -> Any:
     """Pick the embedding backend a checkpoint needs.
 
@@ -457,6 +624,10 @@ def build_embedder(
     ships its own ``model.py``/``utils.py`` carries a loader ``mlx_lm.load``
     cannot use, so a renamed or vendored copy is still recognised.
     """
+    if backend == "transformers":
+        return JinaTransformersEmbedder(reference, search_dirs=search_dirs, batch_size=batch_size)
+    if backend not in {"auto", "mlx"}:
+        raise ValueError(f"unsupported embedding backend: {backend}")
     directory = Path(_resolve_model_path(reference, search_dirs))
     if (directory / "utils.py").is_file() and (directory / "model.py").is_file():
         return JinaV5Embedder(reference, search_dirs=search_dirs, batch_size=batch_size)
@@ -474,6 +645,7 @@ def build_reranker(
     search_dirs: tuple[Path, ...] = (),
     max_tokens: int = DEFAULT_RERANKER_MAX_TOKENS,
     batch_size: int = 4,
+    backend: str = "auto",
 ) -> Any:
     """Pick the reranking backend a checkpoint needs.
 
@@ -481,6 +653,10 @@ def build_reranker(
     head rather than from ``yes``/``no`` logits, which is what separates the
     listwise jina reranker from the Qwen3 pairwise one.
     """
+    if backend == "transformers":
+        return JinaTransformersReranker(reference, search_dirs=search_dirs)
+    if backend not in {"auto", "mlx"}:
+        raise ValueError(f"unsupported reranking backend: {backend}")
     directory = Path(_resolve_model_path(reference, search_dirs))
     if (directory / "rerank.py").is_file() and (directory / "projector.safetensors").is_file():
         return JinaReranker(reference, search_dirs=search_dirs)

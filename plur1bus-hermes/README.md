@@ -11,27 +11,67 @@ Current scope in this milestone:
 
 It intentionally runs without a Node.js dependency and is designed to run
 inside Hermes' plugin process. Install it with `scripts/install-hermes-plugins.sh`;
-the provider is copied to `~/.hermes/plugins/plur1bus/` and controls to
-`~/.hermes/plugins/plur1bus-controls/`.
+the provider and controls are copied below the selected Hermes home.
 
 The adapter is installable and lifecycle-correct, but the full PLUR1BUS domain
 parity (LanceDB recall/capture, graph, Obsidian, dreaming, and migration copy)
 is still tracked in the migration plan and must not be used as a production
 cutover yet.
 
-### Credential and local-model setup
+### Retrieval configuration
 
-Run `scripts/install-hermes-plugins.sh`. When Hermes is available, it starts
-`hermes memory setup`; otherwise it prints the exact command. Hermes writes the
-optional remote keys to `$HERMES_HOME/.env` as `PLUR1BUS_EMBEDDING_API_KEY` and
-`PLUR1BUS_RERANKER_API_KEY`. They are never stored in `config.json`.
+Run `scripts/install-hermes-plugins.sh` for the complete Hermes-plugin path.
+Its pip step alone is not a complete installation: it does not copy plugins,
+configure Hermes, or install the optional retrieval sidecar. The installer
+offers Jina only for a new store, displays its CC-BY-NC-4.0 license, and
+requires explicit acceptance. Declining, unsupported platforms, a failed smoke
+test, or an existing LanceDB store leaves local E5/BGE active.
 
-The setup defaults to local `intfloat/multilingual-e5-base` embeddings (768
-dimensions) and local `BAAI/bge-reranker-v2-m3` reranking. Remote OpenAI-
-compatible embeddings and Cohere reranking remain selectable. Both have a
-local-model failure fallback: `intfloat/multilingual-e5-base` for embeddings
-and `BAAI/bge-reranker-v2-m3` for reranking. Any embedding fallback must use
-the same vector dimension as its primary backend.
+The installer resolves the Hermes home before writing anything. An explicit
+`--hermes-home PATH` wins, followed by an exported `HERMES_HOME`. Otherwise it
+discovers valid installations from `~/.hermes`, sibling `~/.hermes-*`
+directories, `hermes config path`, macOS LaunchAgents, and Linux user-systemd
+units. One installation is selected automatically; multiple installations get
+a numbered TTY prompt. In noninteractive use, zero or multiple candidates are
+an error, so CI and multi-instance hosts should always pass `--hermes-home` or
+export `HERMES_HOME`. Profiles below one home are not separate installations.
+After selection, the installer uses that instance's
+`hermes-agent/venv/bin/python` (or the portable `Scripts/python.exe` layout)
+for package installation and passes it to the retrieval installer. An explicit
+`HERMES_PYTHON` remains authoritative.
+
+PLUR1BUS reads the active provider in `config.yaml` plus the active profile's
+`profiles/<name>/config.yaml`. It uses a route only when that provider declares
+the capability and gives that capability its own URL, model, and (for
+embeddings) dimensions. Chat `base_url` and chat model are never reused for
+retrieval. For example:
+
+```yaml
+providers:
+  jina-router:
+    retrieval:
+      embeddings:
+        base_url: http://127.0.0.1:18087/v1
+        model: jina-embeddings-v5-text-small
+        dimensions: 1024
+        api_key: sidecar-local
+      rerank:
+        base_url: http://127.0.0.1:18087/v1
+        model: jina-reranker-v3.5
+        api_key: sidecar-local
+```
+
+If either capability is absent or incomplete, it independently falls back to
+local `intfloat/multilingual-e5-base` embeddings (768 dimensions) and local
+`BAAI/bge-reranker-v2-m3` reranking. A remote 768-dimensional embedding route
+also gets that local model as a failure fallback; other dimensions cannot safely
+fall back into a different LanceDB vector space.
+
+Experts may retain a hand-managed plugin route by setting
+`retrieval: {mode: plur1bus}` in `plugins/plur1bus/config.json`. Unmarked
+legacy routes are ignored for new/empty stores. For a populated LanceDB store,
+the configured legacy route is preserved; a central route is adopted only when
+embedding model ID and dimensions match the existing vector space.
 
 At completion the installer sets `memory.provider: plur1bus`, disables Hermes'
 built-in `MEMORY.md` and `USER.md` injection, and enables `plur1bus-controls`.

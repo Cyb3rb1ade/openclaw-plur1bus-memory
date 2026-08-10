@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Launch the MTPLX embedding/reranking sidecar with an interpreter that already
-# has mlx-lm, FastAPI and uvicorn — by default the MTPLX runtime venv, so the
-# sidecar needs no separate dependency install.
+# Launch the MTPLX embedding/reranking sidecar from its dedicated installer
+# venv. This deliberately never shares Hermes or the MTPLX desktop runtime's
+# Python packages.
 #
 # Runs from either layout:
 #   repo      <repo>/scripts/mtplx-embed        → <repo>/mtplx-embed/src
@@ -23,13 +23,38 @@ else
   exit 1
 fi
 
-mtplx_python="${MTPLX_PYTHON:-$HOME/Library/Application Support/MTPLX/runtime-venv/bin/python}"
-if [[ -x "$mtplx_python" ]]; then
-  python_bin="$mtplx_python"
-else
-  python_bin="${MTPLX_EMBED_PYTHON:-python3}"
-  printf 'mtplx-embed: MTPLX runtime venv not found, falling back to %s\n' "$python_bin" >&2
+# The installer writes this limited key/value file only after its download and
+# smoke gates pass. Parse it rather than sourcing it so a model path can never
+# become shell code.
+service_config="$parent_dir/mtplx-embed/service.env"
+backend="${MTPLX_EMBED_BACKEND:-auto}"
+embedding_model="${MTPLX_EMBEDDING_MODEL:-}"
+reranker_model="${MTPLX_RERANKER_MODEL:-}"
+model_dir="${MTPLX_EMBED_MODEL_DIR:-}"
+idle_seconds="${MTPLX_EMBED_IDLE_SECONDS:-300}"
+python_bin="${MTPLX_EMBED_PYTHON:-}"
+if [[ -f "$service_config" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      MTPLX_EMBED_BACKEND) backend="$value" ;;
+      MTPLX_EMBEDDING_MODEL) embedding_model="$value" ;;
+      MTPLX_RERANKER_MODEL) reranker_model="$value" ;;
+      MTPLX_EMBED_MODEL_DIR) model_dir="$value" ;;
+      MTPLX_EMBED_IDLE_SECONDS) idle_seconds="$value" ;;
+      MTPLX_EMBED_PYTHON) python_bin="$value" ;;
+    esac
+  done < "$service_config"
+fi
+
+if [[ -z "$python_bin" ]]; then
+  printf 'mtplx-embed: no dedicated sidecar venv is configured; reinstall with scripts/install-mtplx-embed.sh\n' >&2
+  exit 1
 fi
 
 export PYTHONPATH="$package_root${PYTHONPATH:+:$PYTHONPATH}"
-exec "$python_bin" -m mtplx_embed "$@"
+
+args=(--backend "$backend" --idle-seconds "$idle_seconds")
+[[ -n "$embedding_model" ]] && args+=(--embedding-model "$embedding_model")
+[[ -n "$reranker_model" ]] && args+=(--reranker-model "$reranker_model")
+[[ -n "$model_dir" ]] && args+=(--model-dir "$model_dir")
+exec "$python_bin" -m mtplx_embed "${args[@]}" "$@"

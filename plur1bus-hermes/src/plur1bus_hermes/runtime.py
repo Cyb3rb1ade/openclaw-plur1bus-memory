@@ -49,7 +49,7 @@ def _omlx_config(config: dict[str, Any]) -> dict[str, Any]:
 
 def _request_json(url: str, payload: dict[str, Any], config: dict[str, Any], *, default_key_env: str) -> dict[str, Any]:
     """Post an OpenAI-compatible request and return its JSON response."""
-    key = os.environ.get(str(config.get("apiKeyEnv", default_key_env)), "")
+    key = os.environ.get(str(config.get("apiKeyEnv", default_key_env)), "") or str(config.get("apiKey", ""))
     if not key and url.startswith("http://127.0.0.1:"):
         key = "local"
     if not key:
@@ -271,7 +271,7 @@ class RerankerBackend:
     def _rerank_with(self, config: dict[str, Any], query: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if config.get("provider") == "cohere":
             return self._rerank_cohere(config, query, rows)
-        if config.get("provider") == "omlx":
+        if config.get("provider") in {"omlx", "openai-compatible"}:
             return self._rerank_omlx(config, query, rows)
         if config.get("provider") != "local-transformers":
             raise RuntimeError("unsupported reranking provider")

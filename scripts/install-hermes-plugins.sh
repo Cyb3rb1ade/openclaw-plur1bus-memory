@@ -2,14 +2,19 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-hermes_home="${HERMES_HOME:-$HOME/.hermes}"
+hermes_home_arg=""
+hermes_home=""
+hermes_python=""
 run_setup=1
 install_deps=1
+install_retrieval=1
+retrieval_args=()
+non_interactive="${PLUR1BUS_NONINTERACTIVE:-0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --hermes-home)
-      hermes_home="${2:?missing path after --hermes-home}"
+      hermes_home_arg="${2:?missing path after --hermes-home}"
       shift 2
       ;;
     --no-setup)
@@ -20,12 +25,35 @@ while [[ $# -gt 0 ]]; do
       install_deps=0
       shift
       ;;
+    --no-retrieval)
+      install_retrieval=0
+      shift
+      ;;
+    --non-interactive)
+      non_interactive=1
+      retrieval_args+=("$1")
+      shift
+      ;;
+    --jina|--accept-jina-license|--no-agent|--no-smoke)
+      retrieval_args+=("$1")
+      shift
+      ;;
     *)
-      printf 'Usage: %s [--hermes-home PATH] [--no-setup] [--no-deps]\n' "$0" >&2
+      printf 'Usage: %s [--hermes-home PATH] [--no-setup] [--no-deps] [--no-retrieval] [--jina --accept-jina-license] [--non-interactive]\n' "$0" >&2
       exit 2
       ;;
   esac
 done
+
+# Resolve before creating plugin directories or installing dependencies.
+source "$repo_dir/scripts/lib/hermes-home.sh"
+resolve_hermes_home "$hermes_home_arg" "$non_interactive"
+hermes_home="$HERMES_HOME_RESOLVED"
+export HERMES_HOME="$hermes_home"
+if [[ "$install_deps" == "1" || "$install_retrieval" == "1" ]]; then
+  resolve_hermes_python "$hermes_home" 0
+  hermes_python="$HERMES_PYTHON_RESOLVED"
+fi
 
 memory_target="$hermes_home/plugins/plur1bus"
 controls_target="$hermes_home/plugins/plur1bus-controls"
@@ -43,11 +71,15 @@ install -m 0755 "$repo_dir/scripts/run-hermes-workspace-migration-job.sh" "$bin_
 install -m 0755 "$repo_dir/scripts/mtplx-hermes-up" "$bin_target/"
 
 if [[ "$install_deps" == "1" ]]; then
-  "${HERMES_PYTHON:-python3}" -m pip install --disable-pip-version-check "$repo_dir/plur1bus-hermes"
+  "$hermes_python" -m pip install --disable-pip-version-check "$repo_dir/plur1bus-hermes"
+fi
+
+if [[ "$install_retrieval" == "1" ]]; then
+  HERMES_HOME="$hermes_home" HERMES_PYTHON="$hermes_python" \
+    "$repo_dir/scripts/install-mtplx-embed.sh" --hermes-home "$hermes_home" "${retrieval_args[@]}"
 fi
 
 if [[ "$run_setup" == "1" && -x "$(command -v hermes || true)" ]]; then
-  HERMES_HOME="$hermes_home" hermes memory setup
   HERMES_HOME="$hermes_home" hermes config set memory.provider plur1bus
   HERMES_HOME="$hermes_home" hermes config set memory.memory_enabled false
   HERMES_HOME="$hermes_home" hermes config set memory.user_profile_enabled true
@@ -55,9 +87,11 @@ if [[ "$run_setup" == "1" && -x "$(command -v hermes || true)" ]]; then
     printf 'Warning: enable controls manually with: HERMES_HOME="%s" hermes plugins enable plur1bus-controls\n' "$hermes_home" >&2
 else
   cat <<EOF
-Run the native setup wizard to choose local or remote embeddings, reranking,
-and to store optional API keys safely in $hermes_home/.env:
-  HERMES_HOME="$hermes_home" hermes memory setup
+PLUR1BUS resolves retrieval from the active Hermes provider automatically.
+To activate it after Hermes is available:
+  HERMES_HOME="$hermes_home" hermes config set memory.provider plur1bus
+  HERMES_HOME="$hermes_home" hermes config set memory.memory_enabled false
+  HERMES_HOME="$hermes_home" hermes plugins enable plur1bus-controls
 EOF
 fi
 

@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 dependencies = [
   "lancedb==0.34.0",
   "numpy==2.2.0",
+  "PyYAML>=6,<7",
   "sentence-transformers>=3.0,<4",
 ]
 

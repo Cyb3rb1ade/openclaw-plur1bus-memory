@@ -9,11 +9,16 @@ import os
 import re
 import threading
 from collections.abc import Mapping
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Full, Queue
 from typing import Any
+
+try:  # PyYAML is supplied by the Hermes runtime and declared by this package.
+    import yaml
+except ImportError:  # pragma: no cover - only reachable in a broken install
+    yaml = None  # type: ignore[assignment]
 
 try:  # Allows package metadata and CLI inspection outside a Hermes runtime.
     from agent.memory_provider import MemoryProvider
@@ -29,6 +34,12 @@ from .validation import ValidationError, normalize_text_payload, resolve_inside,
 # Hermes profile names are single path segments; anything else must never be joined
 # into a config path.
 _PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_DEFAULT_EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
+_DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+# Hermes applies an 8 s external provider deadline. Keep recall below it while
+# allowing the embedding and reranking round-trip to finish on a normal turn.
+_CURRENT_RECALL_WAIT_SECONDS = 7.0
+_MAX_CURRENT_RECALL_WAIT_SECONDS = 7.0
 
 
 def _utcnow_iso() -> str:
@@ -58,7 +69,9 @@ class Plur1busMemoryProvider(MemoryProvider):
         self._closed = False
         self._capture_queue: Queue[dict[str, Any]] = Queue(maxsize=1024)
         self._runtime: Plur1busRuntime | None = None
-        self._prefetch_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plur1bus-prefetch")
+        # One completed-turn prefetch must never prevent the next turn's current
+        # query from being recalled during Hermes's bounded prefetch hook.
+        self._prefetch_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="plur1bus-prefetch")
         self._prefetch_cache: dict[str, str] = {}
         self._prefetch_futures: dict[str, Future[str]] = {}
         self._prefetch_lock = threading.RLock()
@@ -82,7 +95,10 @@ class Plur1busMemoryProvider(MemoryProvider):
             return False
         if (local_embedding_needed or local_reranker_needed) and importlib.util.find_spec("sentence_transformers") is None:
             return False
-        return provider in {"local-transformers", "omlx"} or bool(os.environ.get(str(embedding.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY"))))
+        return provider in {"local-transformers", "omlx", "openai-compatible"} or bool(
+            embedding.get("apiKey")
+            or os.environ.get(str(embedding.get("apiKeyEnv", "PLUR1BUS_EMBEDDING_API_KEY")))
+        )
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         """Initialize the provider for one Hermes session."""
@@ -132,18 +148,39 @@ class Plur1busMemoryProvider(MemoryProvider):
         )
 
     def prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> str:
-        """Return prepared recall only, keeping Hermes's turn hook non-blocking."""
+        """Return only this query's recall after a short, fail-open bounded wait."""
         del kwargs
         if session_id:
             self._session_id = session_id
-        if not str(query).strip():
+        text = str(query).strip()
+        if not text:
             return ""
-        key = self._prefetch_key(str(query), self._session_id)
+        key = self._prefetch_key(text, self._session_id)
         with self._prefetch_lock:
             result = self._prefetch_cache.pop(key, "")
-        if not result:
-            self._queue_recall(str(query), self._session_id, key)
+        if result:
+            return f"<memory-context>\n{result}\n</memory-context>"
+
+        future = self._queue_recall(text, self._session_id, key)
+        if future is None:
+            # A background callback may have completed between the cache check
+            # and queue lookup. It is still safe only for this exact query key.
+            with self._prefetch_lock:
+                result = self._prefetch_cache.pop(key, "")
+            return f"<memory-context>\n{result}\n</memory-context>" if result else ""
+        try:
+            result = future.result(timeout=self._current_recall_wait_seconds())
+        except TimeoutError:
             return ""
+        except Exception:
+            return ""
+        if not result:
+            return ""
+        # Consume a synchronously observed result so the callback cannot inject
+        # it again on a later turn. Other completed async keys stay retained.
+        with self._prefetch_lock:
+            self._prefetch_futures.pop(key, None)
+            self._prefetch_cache.pop(key, None)
         return f"<memory-context>\n{result}\n</memory-context>"
 
     def queue_prefetch(self, query: str, *, session_id: str = "", **kwargs: Any) -> None:
@@ -232,25 +269,13 @@ class Plur1busMemoryProvider(MemoryProvider):
         ]
 
     def get_config_schema(self) -> list[dict[str, Any]]:
-        """Declare setup-wizard fields; Hermes persists secrets in ``.env``."""
-        return [
-            {"key": "dataDir", "description": "PLUR1BUS data directory relative to HERMES_HOME.", "default": "plur1bus"},
-            {"key": "agentId", "description": "Default PLUR1BUS agent/profile identifier.", "default": "default"},
-            {"key": "embeddingProvider", "description": "Embedding backend.", "default": "local-transformers", "choices": ["local-transformers", "omlx", "openai-compatible"]},
-            {"key": "embeddingModel", "description": "Embedding model identifier.", "default": "intfloat/multilingual-e5-base"},
-            {"key": "embeddingDimensions", "description": "Embedding vector dimensions. Existing LanceDB stores require an unchanged value.", "default": "768"},
-            {"key": "embeddingBaseUrl", "description": "Embedding base URL. oMLX defaults to http://127.0.0.1:8000/v1 when empty.", "default": ""},
-            {"key": "embeddingApiKey", "description": "API key for an OpenAI-compatible embedding endpoint.", "secret": True, "required": False, "env_var": "PLUR1BUS_EMBEDDING_API_KEY"},
-            {"key": "embeddingFallbackProvider", "description": "Embedding failure fallback.", "default": "local-transformers", "choices": ["local-transformers", "disabled"]},
-            {"key": "embeddingFallbackModel", "description": "Local embedding fallback model.", "default": "intfloat/multilingual-e5-base"},
-            {"key": "embeddingFallbackDimensions", "description": "Fallback vector dimensions; must equal the primary dimensions.", "default": "768"},
-            {"key": "rerankerProvider", "description": "Reranking backend.", "default": "local-transformers", "choices": ["local-transformers", "omlx", "cohere", "disabled"]},
-            {"key": "rerankerModel", "description": "Reranker model identifier.", "default": "BAAI/bge-reranker-v2-m3"},
-            {"key": "rerankerBaseUrl", "description": "Reranking base URL. oMLX defaults to http://127.0.0.1:8000/v1 when empty.", "default": ""},
-            {"key": "rerankerApiKey", "description": "Cohere API key when rerankerProvider is cohere.", "secret": True, "required": False, "env_var": "PLUR1BUS_RERANKER_API_KEY"},
-            {"key": "rerankerFallback", "description": "Cohere failure fallback.", "default": "local-transformers", "choices": ["local-transformers", "disabled"]},
-            {"key": "rerankerFallbackModel", "description": "Local fallback reranker model.", "default": "BAAI/bge-reranker-v2-m3"},
-        ]
+        """Keep normal Hermes setup free of separate retrieval configuration.
+
+        Retrieval follows the active Hermes provider's declared capabilities.
+        Experts can still use :meth:`save_config` or edit the plugin config with
+        ``retrieval.mode: plur1bus`` to pin an explicit PLUR1BUS route.
+        """
+        return []
 
     def save_config(self, values: Mapping[str, Any], hermes_home: str, **kwargs: Any) -> None:
         del kwargs
@@ -266,17 +291,17 @@ class Plur1busMemoryProvider(MemoryProvider):
             "embedding": {
                 **dict(existing.get("embedding", {})),
                 "provider": str(values.get("embeddingProvider", existing.get("embedding", {}).get("provider", "local-transformers"))),
-                "model": str(values.get("embeddingModel", existing.get("embedding", {}).get("model", "intfloat/multilingual-e5-base"))),
+                "model": str(values.get("embeddingModel", existing.get("embedding", {}).get("model", _DEFAULT_EMBEDDING_MODEL))),
                 "dimensions": self._positive_int(values.get("embeddingDimensions", existing.get("embedding", {}).get("dimensions", 768)), "embeddingDimensions"),
                 "apiKeyEnv": "PLUR1BUS_EMBEDDING_API_KEY",
             },
             "reranker": {
                 **dict(existing.get("reranker", {})),
                 "provider": str(values.get("rerankerProvider", existing.get("reranker", {}).get("provider", "local-transformers"))),
-                "model": str(values.get("rerankerModel", existing.get("reranker", {}).get("model", "BAAI/bge-reranker-v2-m3"))),
+                "model": str(values.get("rerankerModel", existing.get("reranker", {}).get("model", _DEFAULT_RERANKER_MODEL))),
                 "apiKeyEnv": "PLUR1BUS_RERANKER_API_KEY",
                 "fallbackProvider": str(values.get("rerankerFallback", existing.get("reranker", {}).get("fallbackProvider", "local-transformers"))),
-                "fallbackModel": str(values.get("rerankerFallbackModel", existing.get("reranker", {}).get("fallbackModel", "BAAI/bge-reranker-v2-m3"))),
+                "fallbackModel": str(values.get("rerankerFallbackModel", existing.get("reranker", {}).get("fallbackModel", _DEFAULT_RERANKER_MODEL))),
             },
         }
         base_url = str(values.get("embeddingBaseUrl", "")).strip()
@@ -299,9 +324,10 @@ class Plur1busMemoryProvider(MemoryProvider):
         else:
             merged["embedding"]["fallback"] = {
                 "provider": "local-transformers",
-                "model": str(values.get("embeddingFallbackModel", existing.get("embedding", {}).get("fallback", {}).get("model", "intfloat/multilingual-e5-base"))),
+                "model": str(values.get("embeddingFallbackModel", existing.get("embedding", {}).get("fallback", {}).get("model", _DEFAULT_EMBEDDING_MODEL))),
                 "dimensions": self._positive_int(values.get("embeddingFallbackDimensions", existing.get("embedding", {}).get("fallback", {}).get("dimensions", merged["embedding"]["dimensions"])), "embeddingFallbackDimensions"),
             }
+        merged["retrieval"] = {"mode": "plur1bus"}
         self.config = merged
         self._validate_runtime_config()
         target.write_text(json.dumps(merged, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -342,14 +368,18 @@ class Plur1busMemoryProvider(MemoryProvider):
         """Return a stable cache key for a session-scoped recall request."""
         return f"{session_id}:{_fingerprint(query)}"
 
-    def _queue_recall(self, query: str, session_id: str, key: str) -> None:
-        """Submit a recall once per key and retain successful results briefly."""
+    def _queue_recall(self, query: str, session_id: str, key: str) -> Future[str] | None:
+        """Submit one recall per key and return its future for the current turn."""
         with self._prefetch_lock:
-            if key in self._prefetch_cache or key in self._prefetch_futures:
-                return
+            if key in self._prefetch_cache:
+                return None
+            existing = self._prefetch_futures.get(key)
+            if existing is not None:
+                return existing
             future = self._prefetch_executor.submit(self._run_recall, query, session_id)
             self._prefetch_futures[key] = future
         future.add_done_callback(lambda completed: self._store_prefetch_result(key, completed))
+        return future
 
     def _run_recall(self, query: str, session_id: str) -> str:
         """Run one provider recall outside the synchronous Hermes lifecycle hook."""
@@ -385,7 +415,227 @@ class Plur1busMemoryProvider(MemoryProvider):
             merged.update(self._read_json(
                 self._hermes_home / "profiles" / profile / "plugins" / "plur1bus" / "config.json"
             ))
+        retrieval_override = merged.get("retrieval")
+        override_enabled = (
+            isinstance(retrieval_override, Mapping)
+            and str(retrieval_override.get("mode") or "").lower() in {"plur1bus", "manual", "override"}
+        )
+        central = self._central_hermes_retrieval_config(profile)
+        if override_enabled:
+            merged.setdefault("embedding", self._local_embedding_config())
+            merged.setdefault("reranker", self._local_reranker_config())
+        elif self._has_populated_store(merged):
+            # A populated LanceDB table is tied to its existing vector space.
+            # Preserve legacy plugin routes without requiring old installations
+            # to gain a retrieval.mode marker retroactively. A central Hermes
+            # route is allowed to replace them only in the same vector space.
+            if central is not None and self._central_route_is_store_compatible(merged, central):
+                merged.update(central)
+            else:
+                merged.setdefault("embedding", self._local_embedding_config())
+                merged.setdefault("reranker", self._local_reranker_config())
+        elif central is not None:
+            merged.update(central)
+        else:
+            # Do not let a copied profile config outlive its router.  The only
+            # source of automatic retrieval routes is the active Hermes YAML.
+            merged.update(self._hermes_retrieval_config(profile))
         return {**merged, **self._supplied_config}
+
+    def _hermes_retrieval_config(self, profile: str) -> dict[str, Any]:
+        """Resolve explicitly declared retrieval capabilities from active Hermes YAML.
+
+        A chat endpoint is deliberately not a retrieval endpoint.  A capability
+        must therefore provide its own URL and model; otherwise PLUR1BUS uses the
+        local backend for that capability.
+        """
+        central = self._central_hermes_retrieval_config(profile)
+        if central is not None:
+            return central
+        config = self._active_hermes_config(profile)
+        model_config = config.get("model")
+        providers = config.get("providers")
+        if not isinstance(model_config, Mapping) or not isinstance(providers, Mapping):
+            return self._local_retrieval_config()
+        provider_name = str(model_config.get("provider") or "").strip()
+        provider_config = providers.get(provider_name)
+        if isinstance(provider_config, str):
+            try:
+                provider_config = json.loads(provider_config)
+            except json.JSONDecodeError:
+                provider_config = {}
+        if not isinstance(provider_config, Mapping):
+            return self._local_retrieval_config()
+        embedding = self._hermes_capability_route(provider_config, "embedding")
+        reranker = self._hermes_capability_route(provider_config, "rerank")
+        return {
+            "embedding": embedding or self._local_embedding_config(),
+            "reranker": reranker or self._local_reranker_config(),
+        }
+
+    def _central_hermes_retrieval_config(self, profile: str) -> dict[str, Any] | None:
+        """Return the active central Hermes retrieval declaration, if complete."""
+        config = self._active_hermes_config(profile)
+        central = config.get("retrieval")
+        if isinstance(central, Mapping):
+            embedding = self._hermes_capability_route({"retrieval": central}, "embedding")
+            reranker = self._hermes_capability_route({"retrieval": central}, "rerank")
+            if embedding is not None or reranker is not None:
+                return {
+                    "embedding": embedding or self._local_embedding_config(),
+                    "reranker": reranker or self._local_reranker_config(),
+                }
+        return None
+
+    def _active_hermes_config(self, profile: str) -> dict[str, Any]:
+        """Read root Hermes YAML with the active profile's overlay."""
+        config = self._read_hermes_yaml(self._hermes_home / "config.yaml")
+        if _PROFILE_NAME.fullmatch(profile or ""):
+            config = self._deep_merge(config, self._read_hermes_yaml(
+                self._hermes_home / "profiles" / profile / "config.yaml"
+            ))
+        return config
+
+    def _has_populated_store(self, config: Mapping[str, Any]) -> bool:
+        """Return whether the configured data root already contains LanceDB data."""
+        data_dir = Path(str(config.get("dataDir", "plur1bus"))).expanduser()
+        root = data_dir if data_dir.is_absolute() else self._hermes_home / data_dir
+        try:
+            for directory in root.iterdir():
+                if directory.is_dir() and directory.name.startswith("lancedb") and any(directory.iterdir()):
+                    return True
+        except OSError:
+            return False
+        return False
+
+    def _central_route_is_store_compatible(
+        self, existing: Mapping[str, Any], central: Mapping[str, Any]
+    ) -> bool:
+        """Allow central adoption only when model ID and embedding width match."""
+        existing_embedding = existing.get("embedding")
+        central_embedding = central.get("embedding")
+        if not isinstance(existing_embedding, Mapping) or not isinstance(central_embedding, Mapping):
+            return False
+        try:
+            dimensions_match = self._positive_int(existing_embedding.get("dimensions"), "embedding.dimensions") == self._positive_int(
+                central_embedding.get("dimensions"), "retrieval.embeddings.dimensions"
+            )
+        except ValidationError:
+            return False
+        existing_model = str(existing_embedding.get("model") or "").strip()
+        central_model = str(central_embedding.get("model") or "").strip()
+        return dimensions_match and bool(existing_model) and existing_model == central_model
+
+    def _current_recall_wait_seconds(self) -> float:
+        """Read a bounded per-plugin current-query recall wait in seconds."""
+        configured = self.config.get("currentRecallWaitSeconds", _CURRENT_RECALL_WAIT_SECONDS)
+        try:
+            seconds = float(configured)
+        except (TypeError, ValueError):
+            return _CURRENT_RECALL_WAIT_SECONDS
+        if seconds <= 0:
+            return _CURRENT_RECALL_WAIT_SECONDS
+        return min(seconds, _MAX_CURRENT_RECALL_WAIT_SECONDS)
+
+    @classmethod
+    def _hermes_capability_route(
+        cls, provider_config: Mapping[str, Any], capability: str
+    ) -> dict[str, Any] | None:
+        """Return a complete, explicitly declared capability route, if any."""
+        aliases = ("embeddings", "embedding") if capability == "embedding" else ("rerank", "reranking", "reranker")
+        route: Mapping[str, Any] | None = None
+        for container_name in ("retrieval", "capabilities"):
+            container = provider_config.get(container_name)
+            if isinstance(container, Mapping):
+                for alias in aliases:
+                    candidate = container.get(alias)
+                    if isinstance(candidate, Mapping):
+                        route = candidate
+                        break
+            if route is not None:
+                break
+        if route is None:
+            for alias in aliases:
+                candidate = provider_config.get(alias)
+                if isinstance(candidate, Mapping):
+                    route = candidate
+                    break
+        if route is None or route.get("enabled") is False:
+            return None
+        base_url = str(route.get("base_url") or route.get("baseUrl") or "").strip()
+        model = str(route.get("model") or "").strip()
+        if not base_url or not model:
+            return None
+        result: dict[str, Any] = {
+            "provider": str(route.get("provider") or "omlx"),
+            "baseUrl": base_url,
+            "model": model,
+        }
+        for source, target in (
+            ("api_key", "apiKey"), ("apiKey", "apiKey"),
+            ("key_env", "apiKeyEnv"), ("api_key_env", "apiKeyEnv"), ("apiKeyEnv", "apiKeyEnv"),
+            ("timeout_seconds", "timeoutSeconds"), ("timeoutSeconds", "timeoutSeconds"),
+            ("query_instruction", "queryInstruction"), ("queryInstruction", "queryInstruction"),
+        ):
+            if route.get(source) not in (None, ""):
+                result[target] = route[source]
+        if capability == "embedding":
+            try:
+                dimensions = cls._positive_int(route.get("dimensions"), "retrieval.embeddings.dimensions")
+            except ValidationError:
+                return None
+            result["dimensions"] = dimensions
+            # The local model has 768 dimensions.  Retain an automatic failure
+            # fallback only when its vector space is schema-compatible.
+            if dimensions == 768:
+                result["fallback"] = cls._local_embedding_config()
+        else:
+            result.update({
+                "fallbackProvider": "local-transformers",
+                "fallbackModel": _DEFAULT_RERANKER_MODEL,
+            })
+        return result
+
+    @staticmethod
+    def _local_embedding_config() -> dict[str, Any]:
+        """Return the provider-independent embedding fallback configuration."""
+        return {
+            "provider": "local-transformers",
+            "model": _DEFAULT_EMBEDDING_MODEL,
+            "dimensions": 768,
+        }
+
+    @staticmethod
+    def _local_reranker_config() -> dict[str, Any]:
+        """Return the provider-independent reranking fallback configuration."""
+        return {"provider": "local-transformers", "model": _DEFAULT_RERANKER_MODEL}
+
+    @classmethod
+    def _local_retrieval_config(cls) -> dict[str, Any]:
+        """Return independent local fallbacks for both retrieval capabilities."""
+        return {"embedding": cls._local_embedding_config(), "reranker": cls._local_reranker_config()}
+
+    @staticmethod
+    def _deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
+        """Merge nested Hermes YAML maps while letting the active profile win."""
+        result = dict(base)
+        for key, value in overlay.items():
+            if isinstance(result.get(key), Mapping) and isinstance(value, Mapping):
+                result[key] = Plur1busMemoryProvider._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
+
+    @staticmethod
+    def _read_hermes_yaml(path: Path) -> dict[str, Any]:
+        """Read one Hermes YAML config, failing closed to an empty mapping."""
+        if yaml is None or not path.is_file():
+            return {}
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
 
     def _validate_runtime_config(self) -> None:
         embedding = self.config.get("embedding", {})

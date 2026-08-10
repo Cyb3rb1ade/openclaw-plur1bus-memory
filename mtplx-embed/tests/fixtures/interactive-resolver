@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source "${HERMES_TEST_HELPER:?HERMES_TEST_HELPER is required}"
+resolve_hermes_home "" 0
+printf 'interactive-resolved=%s\n' "$HERMES_HOME_RESOLVED"

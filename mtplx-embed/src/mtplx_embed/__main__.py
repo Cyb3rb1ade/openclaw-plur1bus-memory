@@ -34,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"bind port (default: {DEFAULT_PORT})")
     parser.add_argument("--embedding-model", default=DEFAULT_EMBEDDING_MODEL)
     parser.add_argument("--reranker-model", default=DEFAULT_RERANKER_MODEL)
+    parser.add_argument("--backend", choices=("auto", "mlx", "transformers"), default="auto")
     parser.add_argument(
         "--model-dir",
         action="append",
@@ -51,6 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--reranker-instruction", default=RERANKER_DEFAULT_INSTRUCTION)
     parser.add_argument(
+        "--idle-seconds", type=int, default=300,
+        help="unload idle checkpoints after this many seconds (0 disables unloading)",
+    )
+    parser.add_argument(
         "--preload",
         action="store_true",
         help="load both models at startup instead of on first request",
@@ -66,7 +71,10 @@ def main(argv: list[str] | None = None) -> int:
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    search_dirs = tuple(Path(value) for value in args.model_dir) + DEFAULT_SEARCH_DIRS
+    hermes_home = Path(__import__("os").environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    search_dirs = tuple(Path(value) for value in args.model_dir) + (
+        hermes_home / "mtplx-embed" / "models",
+    ) + DEFAULT_SEARCH_DIRS
     config = ServiceConfig(
         embedding_model=args.embedding_model,
         reranker_model=args.reranker_model,
@@ -77,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
         reranker_batch_size=args.reranker_batch_size,
         query_instruction=args.query_instruction,
         reranker_instruction=args.reranker_instruction,
+        backend=args.backend,
+        idle_seconds=args.idle_seconds,
     )
     app = create_app(config)
     if args.preload:
