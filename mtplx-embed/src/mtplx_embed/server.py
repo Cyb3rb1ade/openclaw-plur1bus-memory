@@ -22,6 +22,8 @@ import contextlib
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -116,13 +118,6 @@ def create_app(config: ServiceConfig) -> FastAPI:
         batch_size=config.reranker_batch_size,
         backend=config.backend,
     )
-    app = FastAPI(title="MTPLX Embed", version="1.0.0")
-    app.state.config = config
-    app.state.embedder = embedder
-    app.state.reranker = reranker
-    app.state.last_model_use = time.monotonic()
-    app.state.idle_task = None
-
     def _unload_if_idle() -> None:
         if not config.idle_seconds or time.monotonic() - app.state.last_model_use < config.idle_seconds:
             return
@@ -131,23 +126,31 @@ def create_app(config: ServiceConfig) -> FastAPI:
                 backend.unload()
         LOGGER.info("unloaded idle retrieval models after %ss", config.idle_seconds)
 
-    @app.on_event("startup")
-    async def _start_idle_unloader() -> None:
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Manage the idle-model task for the application's complete lifetime."""
         async def _run() -> None:
             while True:
                 await asyncio.sleep(max(1, min(60, config.idle_seconds or 60)))
                 await asyncio.to_thread(_unload_if_idle)
         app.state.idle_task = asyncio.create_task(_run())
+        try:
+            yield
+        finally:
+            task = app.state.idle_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            for backend in (embedder, reranker):
+                backend.unload()
 
-    @app.on_event("shutdown")
-    async def _stop_idle_unloader() -> None:
-        task = app.state.idle_task
-        if task is not None:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        for backend in (embedder, reranker):
-            backend.unload()
+    app = FastAPI(title="MTPLX Embed", version="1.0.0", lifespan=_lifespan)
+    app.state.config = config
+    app.state.embedder = embedder
+    app.state.reranker = reranker
+    app.state.last_model_use = time.monotonic()
+    app.state.idle_task = None
 
     @app.middleware("http")
     async def _authorise(request: Request, call_next):

@@ -236,16 +236,28 @@ if [[ "$smoke_ok" != "1" ]]; then
 fi
 
 if command -v hermes >/dev/null 2>&1; then
-  HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.provider omlx
-  HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.base_url "http://127.0.0.1:$port/v1"
-  HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.model "$embedding_model"
-  HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.dimensions 1024
-  HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.api_key_env MTPLX_EMBED_API_KEY
-  HERMES_HOME="$hermes_home" hermes config set retrieval.rerank.provider omlx
-  HERMES_HOME="$hermes_home" hermes config set retrieval.rerank.base_url "http://127.0.0.1:$port/v1"
-  HERMES_HOME="$hermes_home" hermes config set retrieval.rerank.model "$reranker_model"
-  HERMES_HOME="$hermes_home" hermes config set retrieval.rerank.api_key_env MTPLX_EMBED_API_KEY
-  printf 'central Hermes retrieval declaration enabled after smoke success.\n'
+  if ! {
+    HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.provider omlx &&
+    HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.base_url "http://127.0.0.1:$port/v1" &&
+    HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.model "$embedding_model" &&
+    HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.dimensions 1024 &&
+    HERMES_HOME="$hermes_home" hermes config set retrieval.embeddings.api_key_env MTPLX_EMBED_API_KEY &&
+    HERMES_HOME="$hermes_home" hermes config set retrieval.rerank.provider omlx &&
+    HERMES_HOME="$hermes_home" hermes config set retrieval.rerank.base_url "http://127.0.0.1:$port/v1" &&
+    HERMES_HOME="$hermes_home" hermes config set retrieval.rerank.model "$reranker_model" &&
+    HERMES_HOME="$hermes_home" hermes config set retrieval.rerank.api_key_env MTPLX_EMBED_API_KEY
+  }; then
+    printf 'Hermes retrieval configuration could not be written; central retrieval was not activated. PLUR1BUS remains on E5/BGE.\n' >&2
+    exit 1
+  fi
+  # The gateway inherited its environment at process start. Restart it only
+  # after the sidecar smoke and central declaration both succeed so the new
+  # MTPLX_EMBED_API_KEY is available to the live PLUR1BUS provider.
+  if ! HERMES_HOME="$hermes_home" hermes gateway restart; then
+    printf 'Hermes retrieval configuration was written, but the Hermes gateway reload failed; central retrieval was not activated. Restart it with: HERMES_HOME="%s" hermes gateway restart\n' "$hermes_home" >&2
+    exit 1
+  fi
+  printf 'central Hermes retrieval declaration enabled after smoke success and gateway reload.\n'
 else
   printf 'Hermes CLI not found; Jina sidecar is installed but not activated. PLUR1BUS remains on E5/BGE.\n' >&2
 fi

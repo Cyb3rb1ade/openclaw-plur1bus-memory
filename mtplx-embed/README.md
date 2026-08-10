@@ -84,7 +84,10 @@ scripts/mtplx-embed --port 18086 --preload
 
 Models load lazily and unload after 300 seconds idle. The installer activates
 the central Hermes `retrieval` declaration only after `/v1/models`, a normalized
-1024-dimension embedding, and a plausible rerank ordering all pass.
+1024-dimension embedding, a plausible rerank ordering, and a successful
+`hermes gateway restart`. The restart is required because the gateway must read
+the newly persisted `MTPLX_EMBED_API_KEY`; if it fails, the installer reports
+that retrieval is not active and leaves the recovery command.
 
 ## Authentication
 

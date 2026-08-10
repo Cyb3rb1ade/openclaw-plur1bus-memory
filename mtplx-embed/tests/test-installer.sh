@@ -73,6 +73,22 @@ output="$(run_installer "$case_dir" --jina --accept-jina-license 2>&1)"
 grep -Fq -- '--api-key shared-existing-key' "$case_dir/record" || fail 'smoke did not use the existing API key'
 grep -Fq 'Environment=MTPLX_EMBED_API_KEY=shared-existing-key' "$case_dir/home/.config/systemd/user/com.plur1bus.mtplx-embed.service" || fail 'service did not use the existing API key'
 grep -q '^hermes:config set retrieval.embeddings.provider omlx$' "$case_dir/record" || fail 'smoke success did not activate central retrieval'
+grep -q '^hermes:gateway restart$' "$case_dir/record" || fail 'smoke success did not reload the Hermes gateway'
 [[ "$(grep -c '^MTPLX_EMBED_API_KEY=' "$case_dir/hermes/.env")" == '1' ]] || fail 'API key env entry was duplicated'
+
+# A gateway launched before this run cannot read the newly written key until it
+# restarts. If that restart fails, retain the written recovery configuration but
+# fail the install and never claim the route is active.
+prepare_case reload-failure
+set +e
+output="$(MTPLX_TEST_HERMES_RELOAD_FAIL=1 run_installer "$case_dir" --jina --accept-jina-license 2>&1)"
+status=$?
+set -e
+[[ "$status" -ne 0 ]] || fail 'gateway reload failure succeeded'
+[[ "$output" == *'gateway reload failed; central retrieval was not activated'* ]] || fail 'gateway reload failure was not reported accurately'
+[[ "$output" != *'declaration enabled after smoke success'* ]] || fail 'gateway reload failure falsely claimed activation'
+grep -q '^hermes:config set retrieval.embeddings.api_key_env MTPLX_EMBED_API_KEY$' "$case_dir/record" || fail 'new-key route was not configured before reload'
+grep -q '^hermes:gateway restart$' "$case_dir/record" || fail 'new-key route did not attempt gateway reload'
+[[ "$(grep -c '^MTPLX_EMBED_API_KEY=' "$case_dir/hermes/.env")" == '1' ]] || fail 'new API key was not persisted once for the restart'
 
 printf 'installer shell regressions passed\n'
