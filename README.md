@@ -356,24 +356,68 @@ inside a virtual environment, export `HERMES_PYTHON=/path/to/that/python`
 before installing so the runtime and the PLUR1BUS dependencies land in the
 same environment.
 
-Install both packages from the `hermes-v0.1.0` tag:
+This release commit defines the Hermes 0.2.0 coordinates: the release process
+will create the immutable `hermes-v0.2.0` tag. Once that tag exists, install
+both Python packages from it with the Hermes runtime's Python:
 
 ```bash
-pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.1.0#subdirectory=plur1bus-hermes"
-pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.1.0#subdirectory=plur1bus-controls"
+export HERMES_PYTHON="${HERMES_PYTHON:-python3}"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.2.0#subdirectory=plur1bus-hermes"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.2.0#subdirectory=plur1bus-controls"
 ```
 
-The default embedding and reranking backends are local models
-(`intfloat/multilingual-e5-base`, `BAAI/bge-reranker-v2-m3`); the first
-install downloads several GB of dependencies (torch, sentence-transformers,
-LanceDB).
-
-For the full setup — credential prompts, `memory.provider: plur1bus`,
-disabling Hermes' built-in `MEMORY.md`/`USER.md` injection, and enabling the
-controls plugin — clone this repository and run:
+The Hermes npm/OpenClaw package is a separate channel. The release process
+will publish `7.2.3-hermes.1` to GitHub Packages with the `hermes` dist-tag,
+never `latest`; `publishConfig` enforces that registry and tag for a plain
+`npm publish`. After authenticating `@cyb3rb1ade` for
+`https://npm.pkg.github.com`, use either command once the package is available:
 
 ```bash
-scripts/install-hermes-plugins.sh
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.2.3-hermes.1 --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@hermes --pin
+```
+
+These Hermes-channel commands are additional to, and do not replace, the
+general OpenClaw release instructions above.
+
+Once the release tag exists, use the recommended full setup to clone it and run
+the installer:
+
+```bash
+git clone --branch hermes-v0.2.0 --depth 1 \
+  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git
+cd openclaw-plur1bus-memory
+./scripts/install-hermes-plugins.sh
+```
+
+The installer resolves the Hermes home before it writes: `--hermes-home PATH`
+takes precedence, followed by `HERMES_HOME`. In an interactive terminal it can
+discover valid homes from the Hermes CLI, standard homes, macOS LaunchAgents,
+and Linux user-systemd units; if more than one is found, it asks which one to
+use. In noninteractive use (including no TTY), discovery is deliberately not
+used: pass `--hermes-home PATH` or export `HERMES_HOME`, otherwise the script
+stops before making changes.
+
+After selecting a home, the script copies the PLUR1BUS provider, controls,
+model-provider plugins, and helpers there; uses that Hermes instance's Python
+to install the provider dependencies; and, when the Hermes CLI is available,
+configures the memory provider and enables `plur1bus-controls`. It does not
+choose or replace Hermes' chat provider or model: Hermes' existing
+`model.provider`, endpoint, and model settings remain authoritative.
+
+The default retrieval backends are local E5/BGE models
+(`intfloat/multilingual-e5-base`, `BAAI/bge-reranker-v2-m3`). For a new empty
+store, the installer offers the platform-aware Jina sidecar recommendation. It
+downloads and enables Jina only after explicit selection and acceptance of the
+CC-BY-NC-4.0 license; a supported setup must also pass its sidecar smoke gate
+before Hermes retrieval is configured. Unsupported platforms, an existing
+LanceDB store, declined license, failed download, or failed smoke test leave
+the local E5/BGE fallback active. To request Jina noninteractively after
+reviewing that license:
+
+```bash
+./scripts/install-hermes-plugins.sh --hermes-home PATH \
+  --non-interactive --jina --accept-jina-license
 ```
 
 **Beta status:** the provider is installable and lifecycle-correct, but full

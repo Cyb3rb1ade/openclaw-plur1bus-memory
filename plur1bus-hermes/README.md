@@ -20,21 +20,31 @@ cutover yet.
 
 ### Retrieval configuration
 
-Run `scripts/install-hermes-plugins.sh` for the complete Hermes-plugin path.
-Its pip step alone is not a complete installation: it does not copy plugins,
-configure Hermes, or install the optional retrieval sidecar. The installer
-offers Jina only for a new store, displays its CC-BY-NC-4.0 license, and
-requires explicit acceptance. Declining, unsupported platforms, a failed smoke
-test, or an existing LanceDB store leaves local E5/BGE active.
+The Hermes 0.2.0 release process will create `hermes-v0.2.0`. Once that tag
+exists, install the release packages from it, or clone it and run
+`scripts/install-hermes-plugins.sh` for the complete Hermes-plugin path. Its
+pip step alone is not a complete installation: the full installer copies the
+provider, controls, model-provider plugins, and helpers into the selected
+Hermes home, installs provider dependencies with that instance's Python, and
+configures the PLUR1BUS memory provider when the Hermes CLI is available. It
+does not select or replace Hermes' chat provider or model settings.
+
+For a new empty store, the installer makes a platform-aware Jina sidecar
+recommendation. Jina is downloaded and enabled only after explicit acceptance
+of its CC-BY-NC-4.0 license, and Hermes retrieval is configured only after the
+sidecar smoke gate succeeds. Declining, unsupported platforms, a failed
+download or smoke test, or an existing LanceDB store leaves local E5/BGE
+active.
 
 The installer resolves the Hermes home before writing anything. An explicit
 `--hermes-home PATH` wins, followed by an exported `HERMES_HOME`. Otherwise it
 discovers valid installations from `~/.hermes`, sibling `~/.hermes-*`
 directories, `hermes config path`, macOS LaunchAgents, and Linux user-systemd
 units. One installation is selected automatically; multiple installations get
-a numbered TTY prompt. In noninteractive use, zero or multiple candidates are
-an error, so CI and multi-instance hosts should always pass `--hermes-home` or
-export `HERMES_HOME`. Profiles below one home are not separate installations.
+a numbered TTY prompt. In noninteractive use (including no TTY), discovery is
+not attempted: CI and multi-instance hosts must pass `--hermes-home` or export
+`HERMES_HOME`, or the installer exits before writing. Profiles below one home
+are not separate installations.
 After selection, the installer uses that instance's
 `hermes-agent/venv/bin/python` (or the portable `Scripts/python.exe` layout)
 for package installation and passes it to the retrieval installer. An explicit

@@ -1,10 +1,14 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "7.2.3",
+  "version": "7.2.3-hermes.1",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
   "license": "MIT",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "tag": "hermes"
+  },
   "openclaw": {
     "extensions": [
       "./index.js"
