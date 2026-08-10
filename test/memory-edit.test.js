@@ -219,9 +219,18 @@ function makeFakeTable(initialRows = [], schemaFields = []) {
     query() {
       let _where = null;
       let _limit = Infinity;
+      let _select = null;
       const builder = {
         where(expr) { _where = expr; return builder; },
         limit(n) { _limit = n; return builder; },
+        // Spalten-Projektion wie der echte LanceDB-Query-Builder. Ohne diese
+        // Methode wirft jeder select()-Aufruf einen TypeError, den der
+        // catch-Block in db-adapter zu einem leeren Ergebnis verschluckt —
+        // der Test sähe dann "nichts gefunden" statt des echten Fehlers.
+        select(cols) {
+          _select = Array.isArray(cols) ? [...cols] : null;
+          return builder;
+        },
         async toArray() {
           let out = rows;
           if (_where) {
@@ -229,7 +238,13 @@ function makeFakeTable(initialRows = [], schemaFields = []) {
             // `createdAt >= NUM`, `createdAt <= NUM`, AND-Kombinationen.
             out = rows.filter(r => evalWhere(r, _where));
           }
-          return out.slice(0, _limit);
+          out = out.slice(0, _limit);
+          if (_select) {
+            out = out.map(r => Object.fromEntries(
+              Object.entries(r).filter(([k]) => _select.includes(k)),
+            ));
+          }
+          return out;
         },
       };
       return builder;
@@ -269,20 +284,69 @@ function makeFakeTable(initialRows = [], schemaFields = []) {
   return table;
 }
 
+/** Trennt `expr` am Operator, aber nur auf Klammer-Ebene 0. */
+function splitTopLevel(expr, op) {
+  const parts = [];
+  const re = new RegExp(`\\s${op}\\s`, 'ig');
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < expr.length; i += 1) {
+    const ch = expr[i];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    if (depth !== 0) continue;
+    re.lastIndex = i;
+    const m = re.exec(expr);
+    if (m && m.index === i) {
+      parts.push(expr.slice(start, i));
+      i = re.lastIndex - 1;
+      start = re.lastIndex;
+    }
+  }
+  parts.push(expr.slice(start));
+  return parts.length > 1 ? parts : null;
+}
+
 function evalWhere(row, expr) {
   if (!expr) return true;
-  // AND
-  if (/\sAND\s/i.test(expr)) {
-    return expr.split(/\sAND\s/i).every(p => evalWhere(row, p.trim()));
+  let e = String(expr).trim();
+
+  // Aeussere Klammern abstreifen, solange sie den ganzen Ausdruck umschliessen.
+  for (;;) {
+    if (!(e.startsWith('(') && e.endsWith(')'))) break;
+    const inner = e.slice(1, -1);
+    let depth = 0;
+    let wraps = true;
+    for (const ch of inner) {
+      if (ch === '(') depth += 1;
+      else if (ch === ')') depth -= 1;
+      if (depth < 0) { wraps = false; break; }
+    }
+    if (!wraps || depth !== 0) break;
+    e = inner.trim();
   }
+
+  // OR bindet schwaecher als AND, deshalb zuerst darauf trennen — beides
+  // klammer-sensitiv, sonst zerlegt `a AND (b OR c)` falsch.
+  const orParts = splitTopLevel(e, 'OR');
+  if (orParts) return orParts.some(p => evalWhere(row, p.trim()));
+  const andParts = splitTopLevel(e, 'AND');
+  if (andParts) return andParts.every(p => evalWhere(row, p.trim()));
+
   // id = "X" or id = 'X'
-  let m = expr.match(/^id\s*=\s*['"]([^'"]+)['"]$/);
+  let m = e.match(/^id\s*=\s*['"]([^'"]+)['"]$/);
   if (m) return String(row.id) === m[1];
   // createdAt >= N
-  m = expr.match(/^createdAt\s*>=\s*([0-9.]+)$/);
+  m = e.match(/^createdAt\s*>=\s*([0-9.]+)$/);
   if (m) return Number(row.createdAt) >= Number(m[1]);
-  m = expr.match(/^createdAt\s*<=\s*([0-9.]+)$/);
+  m = e.match(/^createdAt\s*<=\s*([0-9.]+)$/);
   if (m) return Number(row.createdAt) <= Number(m[1]);
+  // `spalte IS NULL` — Wert fehlt oder ist null
+  m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+IS\s+NULL$/i);
+  if (m) return row[m[1]] === undefined || row[m[1]] === null;
+  // `spalte = 'wert'`, inklusive leerem String
+  m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([^']*)'$/);
+  if (m) return String(row[m[1]] ?? '') === m[2];
   return false;
 }
 
@@ -338,10 +402,17 @@ test('db-adapter updateCard ohne Embedder: hard-fail (rückwärts-kompatibel)', 
 
 test('db-adapter findRecentUnclassified: filtert leeres type + sinceMinutes', async () => {
   const now = Date.now();
+  // Schema mit type-Spalte, wie es nach ensureClassificationColumns aussieht.
+  // Ohne sie waere die Fixture unrealistisch: LanceDB kann keinen Wert in einer
+  // Spalte fuehren, die das Schema nicht kennt — und findRecentUnclassified
+  // leitet seine Projektion aus genau diesem Schema ab.
   const fakeTable = makeFakeTable([
     { id: 'r1', text: 'frisch ohne type', vector: [0], createdAt: now - 5 * 60_000, origin: 'dm' },
     { id: 'r2', text: 'frisch mit type', vector: [0], createdAt: now - 5 * 60_000, origin: 'dm', type: 'person' },
     { id: 'r3', text: 'alt ohne type', vector: [0], createdAt: now - 60 * 60_000, origin: 'dm' },
+  ], [
+    { name: 'id' }, { name: 'text' }, { name: 'summary' }, { name: 'vector' },
+    { name: 'createdAt' }, { name: 'origin' }, { name: 'category' }, { name: 'type' },
   ]);
   const adapter = createDbAdapter({ getTable: async () => fakeTable });
   const out = await adapter.findRecentUnclassified('agent', { sinceMinutes: 30 });
