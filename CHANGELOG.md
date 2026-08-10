@@ -16,6 +16,53 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **`scripts/mtplx-bind-agent.sh`** — bind one Hermes home (root or a profile) to the MTPLX stack: chat + internal memory LLM on MTPLX, embeddings and reranking on the sidecar, oMLX demoted to embedding fallback. Idempotent and backed up per file, because each profile carries its own `config.yaml`, `.env`, `plugins/model-providers/`, and `plugins/plur1bus/config.json`. Re-running never collapses the embedding fallback into a copy of the primary, which would leave recall with no second chance when the sidecar is the thing that is down. The served model id is read from the daemon rather than guessed — MTPLX derives it from the artifact, so it does not match the Hugging Face repo name.
 - **`mtplx-embed` sidecar.** MTPLX serves only chat/completions/messages; it has no `/v1/embeddings` and no `/v1/rerank`, so an MTPLX-only stack had no retrieval backend. The sidecar serves `mlx-community/Qwen3-Embedding-8B-4bit-DWQ` (4096-dim) and `vserifsaglam/Qwen3-Reranker-4B-4bit-MLX` over the OpenAI and Cohere/Jina shapes that PLUR1BUS already speaks, running both causal LMs directly (last-token pooling, yes/no logit softmax) on the MTPLX runtime venv — no extra dependency install. Measured against a live oMLX server, worst-case cosine similarity is 0.9998 with identical reranker ordering, so existing LanceDB vectors need no re-embedding. Installed via `scripts/install-mtplx-embed.sh` outside `~/Documents`, because a LaunchAgent has no Full Disk Access and macOS TCC denies it execute access there.
 
+## [7.2.3] — 2026-08-10
+
+Wartungs-Release. Behebt die LanceDB-Timeouts, die `classify-recent` unter Last
+reihenweise scheitern ließen, und macht die Testsuite auf macOS lauffähig.
+
+### Behoben
+
+- **`findRecentUnclassified` materialisierte pro gescannter Zeile den kompletten
+  Embedding-Vektor.** Die Abfrage selektierte alle Spalten, also auch `vector`
+  mit 1536 Dimensionen, und filterte `type` erst lokal im Anschluss. Unter
+  Embedding-Drain-Last wuchsen Full-Scans dadurch von rund 60 ms auf über 13
+  Sekunden und rissen das Read-Timeout. Die Abfrage wählt jetzt alle Spalten
+  außer `vector` und zieht den `type`-Filter in die WHERE-Clause, sodass
+  LanceDB früher aussortiert. Die Spaltenliste stammt aus dem Live-Schema,
+  damit spätere `ensureXColumns`-Erweiterungen nicht brechen; der lokale
+  `type`-Filter bleibt als Guard für Zeilen ohne `type`-Spalte (alte Schemas,
+  injizierte Tabellen).
+- **Das Read-Timeout von 10 s war für reale LanceDB-Last zu knapp.**
+  `findRecentUnclassified` und `classify-recent` liefen wiederkehrend hinein
+  („timed out after 10000ms" in den Cron-Logs vom 2026-08-02).
+  `DEFAULT_READ_TIMEOUT_MS` steht jetzt auf 30 s; das Write-Timeout bleibt
+  unverändert bei 25 s.
+
+### Hinzugefügt
+
+- **`optimizeTable()` — LanceDB-Fragment-Kompaktierung.** Jeder `add()`- und
+  `update()`-Lauf erzeugt neue Fragments. Ohne Kompaktierung sammeln sich
+  tausende Mini-Datafiles an (beobachtet: rund 6000 Dateien bei 9000 Zeilen)
+  und ziehen Full-Scans in das Read-Timeout. Die Funktion kapselt
+  `table.optimize()` für einen periodischen Wartungsjob und arbeitet mit einem
+  bewusst großzügigen Timeout von 10 Minuten, weil `optimize()` auf großen
+  Tabellen das normale Write-Timeout deutlich überschreitet. Alte Versionen
+  werden gepruned (Standard: älter als 7 Tage), ein Rollback bleibt über die
+  LanceDB-Versionierung möglich.
+
+### Sicherheit
+
+- `brace-expansion` angehoben, um das npm-Audit-Gate zu entsperren
+  (GHSA-rgw5-rvv9-x895).
+
+### Intern
+
+- Testsuite läuft jetzt auch auf macOS: `realpath`-Auflösung für temporäre
+  Verzeichnisse, plattformspezifische Tests werden gezielt übersprungen, und
+  die GNU-Kompatibilitäts-Shims greifen nur noch dort, sodass Linux-CI die
+  echten `stat`/`realpath` verwendet.
+
 ## [7.2.2] — 2026-08-03
 
 ### Behoben
