@@ -20,7 +20,7 @@ cutover yet.
 
 ### Retrieval configuration
 
-The Hermes 0.2.0 release process will create `hermes-v0.2.0`. Once that tag
+The Hermes 0.3.0 release process will create `hermes-v0.3.0`. Once that tag
 exists, install the release packages from it, or clone it and run
 `scripts/install-hermes-plugins.sh` for the complete Hermes-plugin path. Its
 pip step alone is not a complete installation: the full installer copies the
