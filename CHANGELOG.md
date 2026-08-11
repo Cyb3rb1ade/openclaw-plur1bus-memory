@@ -7,6 +7,68 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.2.4] — 2026-08-11
+
+Korrektheits-Release für den Recall-Lesepfad. Erinnerungen tragen im Prompt
+wieder ihr tatsächliches Alter, die Statusstrafe für degradierte Records wirkt
+überhaupt erst, und `/correct` zeigt vor dem Überschreiben, was es überschreibt.
+
+### Behoben
+
+- **Recall-Treffer erschienen dauerhaft mit `age="unknown"` und
+  `freshness="unknown"`.** Nicht die Datenbank war schuld — eine Read-only-Probe
+  über alle Namespaces fand 25.550 Zeilen, davon 0 ohne `createdAt`. Der Defekt
+  saß in der Mapping-Schicht: Drei von vier Produzenten von Prompt-Items ließen
+  die Zeitstempel fallen. Canonical-Treffer aus `KNOWLEDGE.md` trugen
+  strukturell nie einen (sie nutzen jetzt die Datei-mtime und werden als
+  `authoritative` vom Operational-Guard ausgenommen, weil kanonische Dokumente
+  die Referenz sind, *gegen* die verifiziert wird); Semantic-Lens-Treffer
+  verloren `createdAt` im Mapping, obwohl der Eintrag es trug; der
+  Reactivation-Block rendete `age`/`freshness` gar nicht.
+- **`buildTemporalProvenance` warf `RangeError` bei Zeitstempeln außerhalb des
+  darstellbaren `Date`-Bereichs** und hätte damit das gesamte
+  Recall-Rendering abgerissen. `parseMemoryTimestamp` verwirft solche Werte
+  jetzt wie einen fehlenden Zeitstempel. Damit ist zugleich garantiert, dass
+  `ageLabel` immer `/^(unknown|\d+[mhd] ago)$/` genügt — relevant, weil der
+  Reactivation-Block `untrusted="true"` trägt.
+- **Die Statusstrafe für `demoted`/`conflict` lief vollständig ins Leere.** Die
+  JSONL-Stores sind append-only Event-Logs: `transitionRecordStatus` hängt eine
+  neue Zeile unter derselben ID an, statt die alte zu ersetzen. `routeNeoRecall`
+  deduplizierte am Eingang nach Array-Reihenfolge und behielt damit die Kopie
+  von *vor* der Transition — ein degradierter Record wurde also mit seinem alten
+  `active`-Status bewertet. Gemessen: `active=0.371` gegen `demoted=-0.116` bei
+  einem Live-`minScore` von 0.08; die veraltete Kopie kam durch, die aktuelle
+  wäre herausgefiltert worden. Die Dedup wählt jetzt die jüngste Revision.
+- **Das Modell konnte den Status ohnehin nicht sehen.** Das Neo-Template
+  rendete `lane`/`category`/`trust`/`id`/`score`, aber kein `status` — obwohl
+  das Memory-Prompt-Supplement anweist, `active`/`promoted` gegenüber
+  konfligierenden Karten zu bevorzugen. Die Anweisung setzte eine
+  Unterscheidung voraus, die das Datenformat nicht lieferte.
+- **`/correct` bestätigte einen Titel und überschrieb den Volltext.** Die
+  Zielkarte wird unscharf gesucht (`searchByTopic` ohne Mindestscore;
+  „eindeutig" heißt nur, dass der Top-Score den zweiten um mehr als 0.15
+  schlägt), der Dialog zeigte aber nur einen 80-Zeichen-Titel. Er zeigt jetzt
+  Alt- und Neu-Text im Klartext. Damit stimmt auch die Provenance:
+  `payload.oldText` trug bisher den *Suchbegriff* statt des ersetzten Inhalts,
+  woraus `updateEvidence` seine Beweiszeile baute.
+
+### Geändert
+
+- `createdAt` erhält in `normalizeEntryForTable` einen Default. Es war als
+  einziges von rund 50 Feldern ohne Absicherung; Defense-in-depth, kein
+  beobachteter Fall.
+- `formatReactivationContext` nimmt ein `now`-Argument, analog zum
+  Schwester-Formatter, damit das Alter testbar ist.
+
+### Entfernt
+
+- Verzeichnis `plur1bus/` — verwaistes Staging-Verzeichnis aus der
+  5.0.0-Umstellung, zuletzt zur Zeit von v6.6.0 angefasst, von nichts
+  importiert, in keiner Test-Glob und in keinem Release enthalten (geprüft per
+  `npm pack --dry-run` und am Release-Artefakt 6.8.7). Es war nicht einmal
+  lauffähig: `plur1bus/index.js` importierte ein nicht existierendes
+  `./lib/categorize.js`.
+
 ## [7.2.3] — 2026-08-10
 
 Wartungs-Release. Behebt die LanceDB-Timeouts, die `classify-recent` unter Last
