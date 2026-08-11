@@ -1377,6 +1377,11 @@ class MemoryDB {
     if (normalized.status == null) normalized.status = "active";
     if (normalized.versionCreatedAt == null) normalized.versionCreatedAt = 0;
     if (normalized.updatedAt == null) normalized.updatedAt = 0;
+    // createdAt war als einziges Zeitfeld ohne Default. Ein Writer, der es
+    // vergisst, würde eine Zeile ohne Alter erzeugen, die im Recall dauerhaft
+    // als age="unknown" erscheint. Jetzt-Zeitpunkt ist die einzig sinnvolle
+    // Näherung für eine gerade entstehende Zeile.
+    if (normalized.createdAt == null) normalized.createdAt = Date.now();
     if (normalized.workspaceId == null) normalized.workspaceId = "";
     if (normalized.workspaceKey == null) normalized.workspaceKey = "";
     if (normalized.memoryKind == null) normalized.memoryKind = "memory";
@@ -8533,7 +8538,17 @@ const plugin = {
           for (const c of canonicalHits) {
             const head = c.heading.replace(/\s+/g, " ").slice(0, 80);
             const snippet = libGenerateSummary(c.text.replace(/^#+\s+.+\n/, "").trim(), 60);
-            const item = { id: `canonical:${head}`, category: "canonical", source: "knowledge", display: `${head} — ${snippet}` };
+            // Canonical-Sections haben kein eigenes createdAt — als Alter dient die
+            // mtime von KNOWLEDGE.md. `authoritative` nimmt sie vom Operational-Guard
+            // aus: kanonische Docs sind die Referenz, gegen die verifiziert wird.
+            const item = {
+              id: `canonical:${head}`,
+              category: "canonical",
+              source: "knowledge",
+              display: `${head} — ${snippet}`,
+              createdAt: c.mtimeMs ?? 0,
+              authoritative: true,
+            };
             if (traceEnabled) {
               attachTraceToMemory(item, { sourceStage: "canonical", score: c.score, reason: "canonical KNOWLEDGE.md hit" });
             }
@@ -8594,6 +8609,11 @@ const plugin = {
             updateSource: r.entry.updateSource || "",
             status: r.entry.status || "active",
             versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
+            // Ohne diese drei Felder rendert jeder Lens-Treffer age="unknown",
+            // obwohl r.entry die Zeitstempel trägt (siehe Vektor-Mapping oben).
+            createdAt: r.entry.createdAt ?? 0,
+            updatedAt: r.entry.updatedAt ?? undefined,
+            lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
           }));
           if (semanticLensItems.length > 0) {
             api.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);
