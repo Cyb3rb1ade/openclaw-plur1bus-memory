@@ -240,6 +240,33 @@ export const DEPLOY_FILES = [
   "lib/proactive-nudge.js",
   "lib/query-refiner.js",
   "lib/temporal-parser.js",
+  // ── Operator- und Wartungsskripte ─────────────────────────────────────────
+  // Das Paket liefert `scripts/` vollständig aus, das Manifest deckte davon
+  // aber nur die vier Laufzeit-nahen Einträge oben ab. Alles andere blieb im
+  // Deploy auf dem Stand der letzten Paket-Installation stehen und veraltete
+  // still: am 2026-08-11 war `maintain-lancedb.mjs` im Deploy zwei Wochen alt
+  // (231 statt 276 Zeilen) und enthielt den 7.2.5-Fix nicht, obwohl das Deploy
+  // sich als 7.2.5 auswies. Manifest-Einträge werden nur kopiert und per
+  // Prüfsumme verglichen — der Smoke-Test importiert ausschließlich Dateien
+  // aus EXPORT_EXPECTATIONS, diese Skripte werden also nicht ausgeführt.
+  "scripts/auto-capture-lancedb.mjs",
+  "scripts/build-code-index.mjs",
+  "scripts/cleanup-vault-missing-tasks.mjs",
+  "scripts/maintain-lancedb.mjs",
+  "scripts/migrate-missing-columns.mjs",
+  "scripts/migrate-neo-workspace-generations.mjs",
+  "scripts/provider-wizard.mjs",
+  "scripts/reindex-provider.mjs",
+  "scripts/repair-dreaming-cron.mjs",
+  "scripts/repair-installed-plugin.mjs",
+  "scripts/run-graph-links-once.mjs",
+  "scripts/run-semantic-discover-once.mjs",
+  "scripts/run-semantic-link-index-phase43c.mjs",
+  "scripts/verify-plugin-deploy.mjs",
+  "scripts/verify-workspace-writer.mjs",
+  "scripts/lib/deploy-integrity.mjs",
+  "scripts/lib/installer-config.mjs",
+  "scripts/lib/patch-agents-memory-instructions.mjs",
 ];
 
 const REEXPORT_LINE_RE = /^\s*export\s+(?:\*|\{[^}]*\})\s*(?:as\s+[A-Za-z0-9_$]+\s*)?from\s*["']([^"']+)["']\s*;?\s*$/;
