@@ -7,6 +7,31 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.2.5] — 2026-08-11
+
+Wartungs-Release. Ein einziges Backup-Verzeichnis konnte die komplette
+LanceDB-Wartung lahmlegen.
+
+### Behoben
+
+- **`maintain-lancedb.mjs` brach ab, sobald im Namespace-Root ein Verzeichnis
+  ohne gültige Agent-ID lag.** `discoverVersionDirs` rief `safeAgentId()` auf
+  jedem Unterverzeichnis auf und warf bei allem, was nicht dem Agent-ID-Muster
+  entspricht. Im Live-System liegen dort neben den Agenten auch Backup-Kopien
+  wie `bernhardine.bak-20260804` — deren Punkt im Namen ließ das Skript sofort
+  aussteigen, sodass für **keinen** Agenten mehr Manifeste geprunt wurden. Die
+  Wartung lief damit seit dem Anlegen der Backups am 2026-08-04 ins Leere.
+
+  Folge in der Praxis: `bernhardine` stand bei **1333** Manifest-Versionen,
+  `main` bei 507, `heisenberg` bei 302 — genau der Zustand, vor dem der
+  Skript-Header warnt („making connection startup visibly slow and causing
+  gateway timeouts"), und eine plausible Ursache der beobachteten
+  `recall timed out`-Meldungen.
+
+  Solche Verzeichnisse werden jetzt übersprungen statt zu werfen, und dabei
+  sichtbar im Output gemeldet — Backups bleiben unangetastet, aber sie
+  verschwinden auch nicht stillschweigend.
+
 ## [7.2.4] — 2026-08-11
 
 Korrektheits-Release für den Recall-Lesepfad. Erinnerungen tragen im Prompt
