@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plur1bus-hermes"
-version = "0.3.0"
+version = "0.3.1"
 description = "Hermes Python runtime implementation of the PLUR1BUS memory provider and migration tooling."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -75,8 +75,13 @@ if [[ "$install_deps" == "1" ]]; then
 fi
 
 if [[ "$install_retrieval" == "1" ]]; then
-  HERMES_HOME="$hermes_home" HERMES_PYTHON="$hermes_python" \
-    "$repo_dir/scripts/install-mtplx-embed.sh" --hermes-home "$hermes_home" "${retrieval_args[@]}"
+  if [[ "${#retrieval_args[@]}" -gt 0 ]]; then
+    HERMES_HOME="$hermes_home" HERMES_PYTHON="$hermes_python" \
+      "$repo_dir/scripts/install-mtplx-embed.sh" --hermes-home "$hermes_home" "${retrieval_args[@]}"
+  else
+    HERMES_HOME="$hermes_home" HERMES_PYTHON="$hermes_python" \
+      "$repo_dir/scripts/install-mtplx-embed.sh" --hermes-home "$hermes_home"
+  fi
 fi
 
 if [[ "$run_setup" == "1" && -x "$(command -v hermes || true)" ]]; then

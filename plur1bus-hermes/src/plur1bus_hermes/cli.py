@@ -19,7 +19,7 @@ def plur1bus_command(args) -> int:
     if getattr(args, "plur1bus_command", None) == "migrate":
         return migrate_main(getattr(args, "remaining_args", None))
     provider = Plur1busMemoryProvider()
-    print(json.dumps({"provider": provider.name, "available": provider.is_available(), "version": "0.3.0"}, sort_keys=True))
+    print(json.dumps({"provider": provider.name, "available": provider.is_available(), "version": "0.3.1"}, sort_keys=True))
     return 0
 
 

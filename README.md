@@ -356,24 +356,24 @@ inside a virtual environment, export `HERMES_PYTHON=/path/to/that/python`
 before installing so the runtime and the PLUR1BUS dependencies land in the
 same environment.
 
-This release commit defines the Hermes 0.3.0 coordinates: the release process
-will create the immutable `hermes-v0.3.0` tag. Once that tag exists, install
+This release commit defines the Hermes 0.3.1 coordinates: the release process
+will create the immutable `hermes-v0.3.1` tag. Once that tag exists, install
 both Python packages from it with the Hermes runtime's Python:
 
 ```bash
 export HERMES_PYTHON="${HERMES_PYTHON:-python3}"
-"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.3.0#subdirectory=plur1bus-hermes"
-"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.3.0#subdirectory=plur1bus-controls"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.3.1#subdirectory=plur1bus-hermes"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@hermes-v0.3.1#subdirectory=plur1bus-controls"
 ```
 
 The Hermes npm/OpenClaw package is a separate channel. The release process
-will publish `7.2.6-hermes.1` to GitHub Packages with the `hermes` dist-tag,
+will publish `7.2.6-hermes.2` to GitHub Packages with the `hermes` dist-tag,
 never `latest`; `publishConfig` enforces that registry and tag for a plain
 `npm publish`. After authenticating `@cyb3rb1ade` for
 `https://npm.pkg.github.com`, use either command once the package is available:
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.2.6-hermes.1 --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.2.6-hermes.2 --pin
 openclaw plugins install @cyb3rb1ade/plur1bus-memory@hermes --pin
 ```
 
@@ -384,7 +384,7 @@ Once the release tag exists, use the recommended full setup to clone it and run
 the installer:
 
 ```bash
-git clone --branch hermes-v0.3.0 --depth 1 \
+git clone --branch hermes-v0.3.1 --depth 1 \
   https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git
 cd openclaw-plur1bus-memory
 ./scripts/install-hermes-plugins.sh

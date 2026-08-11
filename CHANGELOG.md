@@ -16,6 +16,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **`scripts/mtplx-bind-agent.sh`** — bind one Hermes home (root or a profile) to the MTPLX stack: chat + internal memory LLM on MTPLX, embeddings and reranking on the sidecar, oMLX demoted to embedding fallback. Idempotent and backed up per file, because each profile carries its own `config.yaml`, `.env`, `plugins/model-providers/`, and `plugins/plur1bus/config.json`. Re-running never collapses the embedding fallback into a copy of the primary, which would leave recall with no second chance when the sidecar is the thing that is down. The served model id is read from the daemon rather than guessed — MTPLX derives it from the artifact, so it does not match the Hugging Face repo name.
 - **`mtplx-embed` sidecar.** MTPLX serves only chat/completions/messages; it has no `/v1/embeddings` and no `/v1/rerank`, so an MTPLX-only stack had no retrieval backend. The sidecar serves `mlx-community/Qwen3-Embedding-8B-4bit-DWQ` (4096-dim) and `vserifsaglam/Qwen3-Reranker-4B-4bit-MLX` over the OpenAI and Cohere/Jina shapes that PLUR1BUS already speaks, running both causal LMs directly (last-token pooling, yes/no logit softmax) on the MTPLX runtime venv — no extra dependency install. Measured against a live oMLX server, worst-case cosine similarity is 0.9998 with identical reranker ordering, so existing LanceDB vectors need no re-embedding. Installed via `scripts/install-mtplx-embed.sh` outside `~/Documents`, because a LaunchAgent has no Full Disk Access and macOS TCC denies it execute access there.
 
+## [Hermes 0.3.1 / 7.2.6-hermes.2] — 2026-08-12
+
+### Fixed
+
+- Bash-3.2 installer compatibility: with `nounset` enabled, avoid expanding an
+  empty `retrieval_args` array so Hermes activation continues after the
+  optional retrieval step.
+
 ## [Hermes 0.3.0 / 7.2.6-hermes.1] — 2026-08-11
 
 This release integrates PLUR1BUS 7.2.6 while preserving the 0.2.0 installer
