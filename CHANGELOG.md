@@ -36,6 +36,119 @@ general OpenClaw `latest` channel is unchanged.
   under Hermes' ownership. Jina remains an explicit, CC-BY-NC-4.0-gated option
   for new stores; it is activated only after a successful download and smoke
   check, otherwise local E5/BGE remains active.
+## [7.2.6] — 2026-08-11
+
+Wartungs-Release. Das Deploy-Manifest deckte nur einen Bruchteil der
+ausgelieferten Skripte ab, wodurch Operator-Werkzeuge im Deploy still
+veralteten.
+
+### Behoben
+
+- **`verify-plugin-deploy.mjs --repair` synchronisierte 18 der 22
+  ausgelieferten Skripte nie.** Das Paket liefert `scripts/` vollständig aus,
+  `DEPLOY_FILES` führte davon aber nur vier Laufzeit-nahe Einträge. Alles
+  andere blieb im Deploy auf dem Stand der letzten Paket-Installation stehen —
+  und veraltete unbemerkt, weil der Integritätscheck nur meldet, was er kennt.
+
+  Aufgefallen am 2026-08-11: Das Deploy wies sich als 7.2.5 aus, die dortige
+  `maintain-lancedb.mjs` war aber zwei Wochen alt (231 statt 276 Zeilen) und
+  enthielt den 7.2.5-Fix nicht. Betroffen waren fünf Dateien, darunter eine,
+  die im Deploy komplett fehlte (`migrate-neo-workspace-generations.mjs`).
+
+  Alle ausgelieferten Skripte stehen jetzt im Manifest. Das ist reine Kopie-
+  und Prüfsummen-Abdeckung: Der Smoke-Test importiert ausschließlich Dateien
+  aus `EXPORT_EXPECTATIONS`, die Skripte werden also nicht ausgeführt.
+
+- Ein Test hält Manifest und `scripts/`-Verzeichnis künftig deckungsgleich, in
+  beide Richtungen — neue Skripte müssen aufgenommen werden, und
+  Manifest-Einträge ohne Datei fallen auf.
+
+## [7.2.5] — 2026-08-11
+
+Wartungs-Release. Ein einziges Backup-Verzeichnis konnte die komplette
+LanceDB-Wartung lahmlegen.
+
+### Behoben
+
+- **`maintain-lancedb.mjs` brach ab, sobald im Namespace-Root ein Verzeichnis
+  ohne gültige Agent-ID lag.** `discoverVersionDirs` rief `safeAgentId()` auf
+  jedem Unterverzeichnis auf und warf bei allem, was nicht dem Agent-ID-Muster
+  entspricht. Im Live-System liegen dort neben den Agenten auch Backup-Kopien
+  wie `bernhardine.bak-20260804` — deren Punkt im Namen ließ das Skript sofort
+  aussteigen, sodass für **keinen** Agenten mehr Manifeste geprunt wurden. Die
+  Wartung lief damit seit dem Anlegen der Backups am 2026-08-04 ins Leere.
+
+  Folge in der Praxis: `bernhardine` stand bei **1333** Manifest-Versionen,
+  `main` bei 507, `heisenberg` bei 302 — genau der Zustand, vor dem der
+  Skript-Header warnt („making connection startup visibly slow and causing
+  gateway timeouts"), und eine plausible Ursache der beobachteten
+  `recall timed out`-Meldungen.
+
+  Solche Verzeichnisse werden jetzt übersprungen statt zu werfen, und dabei
+  sichtbar im Output gemeldet — Backups bleiben unangetastet, aber sie
+  verschwinden auch nicht stillschweigend.
+
+## [7.2.4] — 2026-08-11
+
+Korrektheits-Release für den Recall-Lesepfad. Erinnerungen tragen im Prompt
+wieder ihr tatsächliches Alter, die Statusstrafe für degradierte Records wirkt
+überhaupt erst, und `/correct` zeigt vor dem Überschreiben, was es überschreibt.
+
+### Behoben
+
+- **Recall-Treffer erschienen dauerhaft mit `age="unknown"` und
+  `freshness="unknown"`.** Nicht die Datenbank war schuld — eine Read-only-Probe
+  über alle Namespaces fand 25.550 Zeilen, davon 0 ohne `createdAt`. Der Defekt
+  saß in der Mapping-Schicht: Drei von vier Produzenten von Prompt-Items ließen
+  die Zeitstempel fallen. Canonical-Treffer aus `KNOWLEDGE.md` trugen
+  strukturell nie einen (sie nutzen jetzt die Datei-mtime und werden als
+  `authoritative` vom Operational-Guard ausgenommen, weil kanonische Dokumente
+  die Referenz sind, *gegen* die verifiziert wird); Semantic-Lens-Treffer
+  verloren `createdAt` im Mapping, obwohl der Eintrag es trug; der
+  Reactivation-Block rendete `age`/`freshness` gar nicht.
+- **`buildTemporalProvenance` warf `RangeError` bei Zeitstempeln außerhalb des
+  darstellbaren `Date`-Bereichs** und hätte damit das gesamte
+  Recall-Rendering abgerissen. `parseMemoryTimestamp` verwirft solche Werte
+  jetzt wie einen fehlenden Zeitstempel. Damit ist zugleich garantiert, dass
+  `ageLabel` immer `/^(unknown|\d+[mhd] ago)$/` genügt — relevant, weil der
+  Reactivation-Block `untrusted="true"` trägt.
+- **Die Statusstrafe für `demoted`/`conflict` lief vollständig ins Leere.** Die
+  JSONL-Stores sind append-only Event-Logs: `transitionRecordStatus` hängt eine
+  neue Zeile unter derselben ID an, statt die alte zu ersetzen. `routeNeoRecall`
+  deduplizierte am Eingang nach Array-Reihenfolge und behielt damit die Kopie
+  von *vor* der Transition — ein degradierter Record wurde also mit seinem alten
+  `active`-Status bewertet. Gemessen: `active=0.371` gegen `demoted=-0.116` bei
+  einem Live-`minScore` von 0.08; die veraltete Kopie kam durch, die aktuelle
+  wäre herausgefiltert worden. Die Dedup wählt jetzt die jüngste Revision.
+- **Das Modell konnte den Status ohnehin nicht sehen.** Das Neo-Template
+  rendete `lane`/`category`/`trust`/`id`/`score`, aber kein `status` — obwohl
+  das Memory-Prompt-Supplement anweist, `active`/`promoted` gegenüber
+  konfligierenden Karten zu bevorzugen. Die Anweisung setzte eine
+  Unterscheidung voraus, die das Datenformat nicht lieferte.
+- **`/correct` bestätigte einen Titel und überschrieb den Volltext.** Die
+  Zielkarte wird unscharf gesucht (`searchByTopic` ohne Mindestscore;
+  „eindeutig" heißt nur, dass der Top-Score den zweiten um mehr als 0.15
+  schlägt), der Dialog zeigte aber nur einen 80-Zeichen-Titel. Er zeigt jetzt
+  Alt- und Neu-Text im Klartext. Damit stimmt auch die Provenance:
+  `payload.oldText` trug bisher den *Suchbegriff* statt des ersetzten Inhalts,
+  woraus `updateEvidence` seine Beweiszeile baute.
+
+### Geändert
+
+- `createdAt` erhält in `normalizeEntryForTable` einen Default. Es war als
+  einziges von rund 50 Feldern ohne Absicherung; Defense-in-depth, kein
+  beobachteter Fall.
+- `formatReactivationContext` nimmt ein `now`-Argument, analog zum
+  Schwester-Formatter, damit das Alter testbar ist.
+
+### Entfernt
+
+- Verzeichnis `plur1bus/` — verwaistes Staging-Verzeichnis aus der
+  5.0.0-Umstellung, zuletzt zur Zeit von v6.6.0 angefasst, von nichts
+  importiert, in keiner Test-Glob und in keinem Release enthalten (geprüft per
+  `npm pack --dry-run` und am Release-Artefakt 6.8.7). Es war nicht einmal
+  lauffähig: `plur1bus/index.js` importierte ein nicht existierendes
+  `./lib/categorize.js`.
 
 ## [7.2.3] — 2026-08-10
 

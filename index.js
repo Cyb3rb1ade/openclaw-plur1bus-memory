@@ -320,6 +320,11 @@ const EPISODED_TURN_ID_MEMORY = 2000;
 // wachsen laesst. Der uebersprungene Bereich wird dabei laut protokolliert.
 const MAX_POSTPROCESSING_RETRIES = 5;
 
+// Wie viele Zeichen von Alt- und Neu-Text die /correct-Bestätigung zeigt. Lang
+// genug, damit erkennbar ist, welche Erinnerung überschrieben wird; kurz genug,
+// dass zwei Auszüge plus Anleitung in eine Chat-Nachricht passen.
+const CORRECTION_PREVIEW_CHARS = 300;
+
 // PLUGIN_VERSION: read once from openclaw.plugin.json (Single Source of
 // Truth, see file header). Used only for the fail-open feature-cron notice
 // below — never for anything version-gating behavior.
@@ -1377,6 +1382,11 @@ class MemoryDB {
     if (normalized.status == null) normalized.status = "active";
     if (normalized.versionCreatedAt == null) normalized.versionCreatedAt = 0;
     if (normalized.updatedAt == null) normalized.updatedAt = 0;
+    // createdAt war als einziges Zeitfeld ohne Default. Ein Writer, der es
+    // vergisst, würde eine Zeile ohne Alter erzeugen, die im Recall dauerhaft
+    // als age="unknown" erscheint. Jetzt-Zeitpunkt ist die einzig sinnvolle
+    // Näherung für eine gerade entstehende Zeile.
+    if (normalized.createdAt == null) normalized.createdAt = Date.now();
     if (normalized.workspaceId == null) normalized.workspaceId = "";
     if (normalized.workspaceKey == null) normalized.workspaceKey = "";
     if (normalized.memoryKind == null) normalized.memoryKind = "memory";
@@ -6415,14 +6425,24 @@ const plugin = {
                       { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
                       {
                         updateSource: "telegram:/correct",
+                        // payload.oldText ist der gespeicherte Vorher-Text (nicht
+                        // der Suchbegriff), gekappt damit die Beweiszeile bei
+                        // langen Erinnerungen nicht ausufert.
                         updateEvidence: pending.payload?.oldText
-                          ? `User corrected "${pending.payload.oldText}" to "${newContent}"`
+                          ? `User corrected "${sanitizeMemoryTextForPrompt(pending.payload.oldText, CORRECTION_PREVIEW_CHARS)}" to "${newContent}"`
                           : `User correction via /correct`,
                         confidence: 1,
                       },
                       {
                         neoStore,
                         logger: api.logger,
+                        // Bewusst übersprungen: /correct ist eine per Nonce
+                        // bestätigte Nutzeraktion, und der Bestätigungsdialog
+                        // zeigt Alt- und Neu-Text im Klartext. Eine hohe
+                        // semantische Drift ist hier also gewollt und informiert
+                        // abgesegnet — das Gate würde legitime große Korrekturen
+                        // mit einer Exception blockieren. Die Drift wird trotzdem
+                        // als `semanticDrift` ins Reconsolidation-Event geschrieben.
                         skipDriftGate: true,
                         workspaceAliases: memoryCtx.workspaceAliases,
                       },
@@ -6483,9 +6503,20 @@ const plugin = {
               command: "correct",
               targetId: card.id,
             });
-            confirm.payload = { newText: newNorm.canonicalText, oldText: oldNorm.canonicalText };
+            // `oldText` ist der tatsächlich gespeicherte Inhalt, NICHT der
+            // Suchbegriff des Nutzers. Der Suchbegriff findet die Karte nur
+            // unscharf (resolveCandidates ohne Mindestscore), also muss der
+            // Nutzer vor dem Bestätigen sehen, was er wirklich überschreibt —
+            // ein 80-Zeichen-Titel reicht dafür nicht. Gleichzeitig protokolliert
+            // `updateEvidence` damit den echten Vorher-Zustand statt der Suchanfrage.
+            confirm.payload = { newText: newNorm.canonicalText, oldText: card.text || card.summary || "" };
             rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
-            return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
+            return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: {
+              title: card.title || card.id,
+              oldText: sanitizeMemoryTextForPrompt(confirm.payload.oldText, CORRECTION_PREVIEW_CHARS),
+              newText: sanitizeMemoryTextForPrompt(newNorm.canonicalText, CORRECTION_PREVIEW_CHARS),
+              token: confirm.nonce,
+            } }) };
           } catch (err) {
             const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: err?.message || err } }) };
@@ -8533,7 +8564,17 @@ const plugin = {
           for (const c of canonicalHits) {
             const head = c.heading.replace(/\s+/g, " ").slice(0, 80);
             const snippet = libGenerateSummary(c.text.replace(/^#+\s+.+\n/, "").trim(), 60);
-            const item = { id: `canonical:${head}`, category: "canonical", source: "knowledge", display: `${head} — ${snippet}` };
+            // Canonical-Sections haben kein eigenes createdAt — als Alter dient die
+            // mtime von KNOWLEDGE.md. `authoritative` nimmt sie vom Operational-Guard
+            // aus: kanonische Docs sind die Referenz, gegen die verifiziert wird.
+            const item = {
+              id: `canonical:${head}`,
+              category: "canonical",
+              source: "knowledge",
+              display: `${head} — ${snippet}`,
+              createdAt: c.mtimeMs ?? 0,
+              authoritative: true,
+            };
             if (traceEnabled) {
               attachTraceToMemory(item, { sourceStage: "canonical", score: c.score, reason: "canonical KNOWLEDGE.md hit" });
             }
@@ -8594,6 +8635,11 @@ const plugin = {
             updateSource: r.entry.updateSource || "",
             status: r.entry.status || "active",
             versionCreatedAt: r.entry.versionCreatedAt ?? r.entry.createdAt ?? 0,
+            // Ohne diese drei Felder rendert jeder Lens-Treffer age="unknown",
+            // obwohl r.entry die Zeitstempel trägt (siehe Vektor-Mapping oben).
+            createdAt: r.entry.createdAt ?? 0,
+            updatedAt: r.entry.updatedAt ?? undefined,
+            lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
           }));
           if (semanticLensItems.length > 0) {
             api.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);
