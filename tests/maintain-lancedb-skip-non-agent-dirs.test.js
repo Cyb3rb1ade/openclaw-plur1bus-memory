@@ -29,9 +29,13 @@ function makeTable(base, agentDir, manifestCount) {
   return versions;
 }
 
+// HOME muss auf das Fixture zeigen: der Prune-Lauf legt seine Sicherung unter
+// `homedir()/.openclaw-backups` an. Ohne diese Isolation schreiben Testläufe in
+// das echte Backup-Verzeichnis des Hosts.
 function run(base, extraArgs = []) {
   return execFileSync(process.execPath, [SCRIPT, "--db-path", base, ...extraArgs], {
     encoding: "utf8",
+    env: { ...process.env, HOME: base },
   });
 }
 
