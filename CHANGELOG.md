@@ -7,6 +7,33 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.2.6] — 2026-08-11
+
+Wartungs-Release. Das Deploy-Manifest deckte nur einen Bruchteil der
+ausgelieferten Skripte ab, wodurch Operator-Werkzeuge im Deploy still
+veralteten.
+
+### Behoben
+
+- **`verify-plugin-deploy.mjs --repair` synchronisierte 18 der 22
+  ausgelieferten Skripte nie.** Das Paket liefert `scripts/` vollständig aus,
+  `DEPLOY_FILES` führte davon aber nur vier Laufzeit-nahe Einträge. Alles
+  andere blieb im Deploy auf dem Stand der letzten Paket-Installation stehen —
+  und veraltete unbemerkt, weil der Integritätscheck nur meldet, was er kennt.
+
+  Aufgefallen am 2026-08-11: Das Deploy wies sich als 7.2.5 aus, die dortige
+  `maintain-lancedb.mjs` war aber zwei Wochen alt (231 statt 276 Zeilen) und
+  enthielt den 7.2.5-Fix nicht. Betroffen waren fünf Dateien, darunter eine,
+  die im Deploy komplett fehlte (`migrate-neo-workspace-generations.mjs`).
+
+  Alle ausgelieferten Skripte stehen jetzt im Manifest. Das ist reine Kopie-
+  und Prüfsummen-Abdeckung: Der Smoke-Test importiert ausschließlich Dateien
+  aus `EXPORT_EXPECTATIONS`, die Skripte werden also nicht ausgeführt.
+
+- Ein Test hält Manifest und `scripts/`-Verzeichnis künftig deckungsgleich, in
+  beide Richtungen — neue Skripte müssen aufgenommen werden, und
+  Manifest-Einträge ohne Datei fallen auf.
+
 ## [7.2.5] — 2026-08-11
 
 Wartungs-Release. Ein einziges Backup-Verzeichnis konnte die komplette
