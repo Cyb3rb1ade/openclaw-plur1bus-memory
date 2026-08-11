@@ -134,16 +134,57 @@ function pruneTable(base, versionsDir, keep, apply, backupRoot) {
   return { removed: apply ? toRemove.length : 0, total, status };
 }
 
+/**
+ * Ob ein Verzeichnisname als Pfadkomponente gefährlich ist.
+ *
+ * Trennt echte Traversal-Versuche ("bad..agent", "a/b", "..") von Namen, die
+ * bloß keine gültige Agent-ID sind ("bernhardine.bak-20260804"). Nur Erstere
+ * dürfen die Wartung abbrechen.
+ *
+ * @param {string} name
+ * @returns {boolean}
+ */
+function isUnsafePathComponent(name) {
+  return typeof name !== "string"
+    || name.length === 0
+    || name === "."
+    || name === ".."
+    || name.includes("..")
+    || name.includes("/")
+    || name.includes("\\")
+    || name.includes("\0");
+}
+
 function discoverVersionDirs(base) {
   if (lstatSync(base).isSymbolicLink()) throw new Error(`Unsafe DB base symlink: ${base}`);
   const resolvedBase = resolveInside(base);
   const versionsDirs = [];
   const agentEntries = readdirSync(resolvedBase, { withFileTypes: true });
 
+  const skipped = [];
+
   for (const entry of agentEntries) {
     if (entry.isSymbolicLink()) throw new Error(`Unsafe agent symlink: ${entry.name}`);
     if (!entry.isDirectory()) continue;
-    const agent = safeAgentId(entry.name);
+    // Namen, die keine gültige Agent-ID sind, in zwei Klassen trennen:
+    //
+    // 1. Gefährlich (Path-Traversal, Separatoren) → weiterhin harter Abbruch,
+    //    bevor irgendetwas geprunt wird. Das ist die eigentliche
+    //    Sicherheitseigenschaft dieses Guards.
+    // 2. Lediglich kein Agent-Name → überspringen. Im Namespace-Root liegen
+    //    neben den Agenten auch Backup-Kopien (z.B.
+    //    "bernhardine.bak-20260804"). Diese ließen das Skript bisher sofort
+    //    aussteigen, sodass für KEINEN Agenten mehr geprunt wurde — die
+    //    Wartung lief still ins Leere. Sie werden übersprungen, aber sichtbar
+    //    gemeldet statt stillschweigend ignoriert.
+    let agent;
+    try {
+      agent = safeAgentId(entry.name);
+    } catch (err) {
+      if (isUnsafePathComponent(entry.name)) throw err;
+      skipped.push(entry.name);
+      continue;
+    }
     const agentPath = resolveInside(resolvedBase, agent);
     const tableEntries = readdirSync(agentPath, { withFileTypes: true });
 
@@ -165,7 +206,7 @@ function discoverVersionDirs(base) {
     }
   }
 
-  return { base: resolvedBase, versionsDirs };
+  return { base: resolvedBase, versionsDirs, skipped };
 }
 
 async function main() {
@@ -181,6 +222,10 @@ async function main() {
   }
 
   const discovered = discoverVersionDirs(base);
+  if (discovered.skipped.length > 0) {
+    console.log(`  ⚠ ${discovered.skipped.length} Verzeichnis(se) ohne gültige Agent-ID übersprungen (z.B. Backups):`);
+    for (const name of discovered.skipped) console.log(`      ${name}`);
+  }
   const plannedRemovalCount = discovered.versionsDirs.reduce(
     (count, versionsDir) => count + Math.max(0, sortedManifests(versionsDir).length - opts.keep),
     0,
