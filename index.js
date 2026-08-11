@@ -320,6 +320,11 @@ const EPISODED_TURN_ID_MEMORY = 2000;
 // wachsen laesst. Der uebersprungene Bereich wird dabei laut protokolliert.
 const MAX_POSTPROCESSING_RETRIES = 5;
 
+// Wie viele Zeichen von Alt- und Neu-Text die /correct-Bestätigung zeigt. Lang
+// genug, damit erkennbar ist, welche Erinnerung überschrieben wird; kurz genug,
+// dass zwei Auszüge plus Anleitung in eine Chat-Nachricht passen.
+const CORRECTION_PREVIEW_CHARS = 300;
+
 // PLUGIN_VERSION: read once from openclaw.plugin.json (Single Source of
 // Truth, see file header). Used only for the fail-open feature-cron notice
 // below — never for anything version-gating behavior.
@@ -6415,14 +6420,24 @@ const plugin = {
                       { text: newContent, summary: newContent.split(/\r?\n/)[0].slice(0, 200), vector },
                       {
                         updateSource: "telegram:/correct",
+                        // payload.oldText ist der gespeicherte Vorher-Text (nicht
+                        // der Suchbegriff), gekappt damit die Beweiszeile bei
+                        // langen Erinnerungen nicht ausufert.
                         updateEvidence: pending.payload?.oldText
-                          ? `User corrected "${pending.payload.oldText}" to "${newContent}"`
+                          ? `User corrected "${sanitizeMemoryTextForPrompt(pending.payload.oldText, CORRECTION_PREVIEW_CHARS)}" to "${newContent}"`
                           : `User correction via /correct`,
                         confidence: 1,
                       },
                       {
                         neoStore,
                         logger: api.logger,
+                        // Bewusst übersprungen: /correct ist eine per Nonce
+                        // bestätigte Nutzeraktion, und der Bestätigungsdialog
+                        // zeigt Alt- und Neu-Text im Klartext. Eine hohe
+                        // semantische Drift ist hier also gewollt und informiert
+                        // abgesegnet — das Gate würde legitime große Korrekturen
+                        // mit einer Exception blockieren. Die Drift wird trotzdem
+                        // als `semanticDrift` ins Reconsolidation-Event geschrieben.
                         skipDriftGate: true,
                         workspaceAliases: memoryCtx.workspaceAliases,
                       },
@@ -6483,9 +6498,20 @@ const plugin = {
               command: "correct",
               targetId: card.id,
             });
-            confirm.payload = { newText: newNorm.canonicalText, oldText: oldNorm.canonicalText };
+            // `oldText` ist der tatsächlich gespeicherte Inhalt, NICHT der
+            // Suchbegriff des Nutzers. Der Suchbegriff findet die Karte nur
+            // unscharf (resolveCandidates ohne Mindestscore), also muss der
+            // Nutzer vor dem Bestätigen sehen, was er wirklich überschreibt —
+            // ein 80-Zeichen-Titel reicht dafür nicht. Gleichzeitig protokolliert
+            // `updateEvidence` damit den echten Vorher-Zustand statt der Suchanfrage.
+            confirm.payload = { newText: newNorm.canonicalText, oldText: card.text || card.summary || "" };
             rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
-            return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: { title: card.title || card.id, token: confirm.nonce } }) };
+            return { text: t("plur1bus.correct_confirm_text", { lang, tone, vars: {
+              title: card.title || card.id,
+              oldText: sanitizeMemoryTextForPrompt(confirm.payload.oldText, CORRECTION_PREVIEW_CHARS),
+              newText: sanitizeMemoryTextForPrompt(newNorm.canonicalText, CORRECTION_PREVIEW_CHARS),
+              token: confirm.nonce,
+            } }) };
           } catch (err) {
             const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: err?.message || err } }) };
