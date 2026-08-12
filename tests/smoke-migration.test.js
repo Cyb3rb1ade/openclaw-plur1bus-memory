@@ -83,6 +83,11 @@ const TABLE_NAME = "memories";
       "lastDispatchAttemptAt",
       "nextDispatchAttemptAt",
       "workspaceKey",
+      "epistemicStatus",
+      "epistemicStatusUpdatedAt",
+      "epistemicStatusActor",
+      "epistemicStatusReason",
+      "previousEpistemicStatus",
     ];
 
     for (const col of v6Columns) {
@@ -181,6 +186,11 @@ const TABLE_NAME = "memories";
         nextDispatchAttemptAt: 0,
         workspaceId: "",
         workspaceKey: "",
+        epistemicStatus: "",
+        epistemicStatusUpdatedAt: 0,
+        epistemicStatusActor: "",
+        epistemicStatusReason: "",
+        previousEpistemicStatus: "",
       },
     ]);
 
