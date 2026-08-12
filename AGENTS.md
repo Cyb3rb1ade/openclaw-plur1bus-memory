@@ -144,7 +144,7 @@ node --test tests/*.test.js
 
 - Tests are unit-level and DB-free.
 - Every phase must add its own regression tests.
-- Current baseline: 1,931 tests, all passing.
+- Current baseline: 3,512 tests (3,511 passing, 1 skipped), 610 suites.
 
 ## Dependency Audit
 

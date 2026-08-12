@@ -7,6 +7,71 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Explicit Trust State (`epistemicStatus`).** Neues, von `origin.trustLevel`
+  (WER hat etwas behauptet) und `confidence` (numerische Sicherheit) bewusst
+  getrenntes Feld: `untrusted | observed | corroborated | trusted | disputed |
+  invalidated` — eine claim-level Einschätzung, wie sehr einer Erinnerung
+  gerade vertraut werden soll. Neu in `lib/epistemic-status.js`:
+  Übergangsmatrix (Permission-Matrix nach Actor-Tier `human` /
+  `system:tombstone-cascade`, nicht State-Machine), Versionsgrenzen-Regel
+  (`disputed`/`invalidated` vererben sich unbedingt vorwärts,
+  `trusted`/`corroborated` fallen bei inhaltlicher Bearbeitung auf `observed`
+  zurück, Legacy-Zeilen ohne gespeichertes Feld bleiben ein echtes No-op —
+  nie ein implizites `untrusted`), Merge-Regel (der konservativere der beiden
+  Ausgangsstatus gewinnt, `disputed` ist sticky).
+- LanceDB-Schema-Migration um fünf Spalten erweitert
+  (`epistemicStatus`, `epistemicStatusUpdatedAt`, `epistemicStatusActor`,
+  `epistemicStatusReason`, `previousEpistemicStatus`), idempotent über das
+  bestehende `addColumns`/`valueSql`-Muster.
+- Recall-Ausschluss: `invalidated` wird an allen bekannten Lese-/Fallback-Pfaden
+  ausgeschlossen (LanceDB-Vektorsuche, `searchByTopic`, NEO-Recall,
+  REM-Dream-Kandidaten, Skill-Miner-Evidenz, Wiki-Suche, Kompaktierungs-
+  Kandidaten) — sowohl in der SQL-`WHERE`-Klausel als auch in der jeweiligen
+  JS-Fallback-Kette, wo eine existiert.
+- Weiches Recall-Scoring (`epistemicScoreBoost`) in der LanceDB- und der
+  NEO-Recall-Pipeline: legacy/fehlende Werte scoren neutral (0), nur explizit
+  gesetzte Werte wirken sich aus.
+- Prompt-Labeling: `epistemic="…"` als gerendertes Attribut in
+  `formatRelevantMemoriesContext` und `formatNeoRecallContext`.
+- Neuer Schreibpfad: `/correct trust <status> <query>` — nutzt dieselbe
+  Nonce-Bestätigung und denselben `checkAccess`/Autorisierungs-Gate wie die
+  bestehende Inhaltskorrektur; keine neue Berechtigungsstufe.
+- `applyEpistemicStatusToNeo` (`index.js`) fail-closed via `isNeoRecordAccessible()`
+  abgesichert — das NEO-Gegenstück zu `applyEpistemicStatusToLanceDb`s
+  `checkAccess()`-Gate fehlte bis zum zweiten Review-Durchlauf; die Funktion
+  ist aktuell nirgends verdrahtet, aber eine exportierte Mutations-API ohne
+  Autorisierungsprüfung wäre beim ersten Verdrahten ein stiller
+  Scope-Bypass gewesen.
+- 61 neue Tests, verteilt über `tests/epistemic-status.test.js` (57),
+  `tests/rem-dream-acl.test.js` (+2, Fallback-Pfad-Abdeckung) und
+  `tests/smoke-wiki-command.test.js` (+2, Fallback-Pfad-Abdeckung).
+  Ergänzt nach zwei unabhängigen Reviews um: Requirement 3 (Assistant-/
+  Agent-generierter Content wird nie automatisch `trusted`, über den echten
+  `applyDynamicsDefaults → normalizeEntryForTable → store`-Pfad, für alle
+  vier `MEMORY_ORIGINS`), Requirement 10 (Reindexing reaktiviert kein
+  `invalidated`-Memory, über den echten `db.search → vectorSearchActive`-Pfad),
+  die vier bislang ungetesteten Fallback-Zweige aus Auflage B
+  (`loadCandidateMemories` ohne `where()`/mit werfendem `where()`;
+  `searchByKind`/`isActiveKindRow` ohne `where()`/mit werfendem `where()`,
+  über den echten `runWikiCommand`-Pfad), und die Ablehnungsfälle für den
+  neuen `applyEpistemicStatusToNeo`-ACL-Gate.
+
+### Bekannte Lücken (bewusst offen)
+
+- `system:tombstone-cascade` (die Actor-Stufe, die eine Erinnerung nur auf
+  `invalidated` setzen darf) ist implementiert und isoliert getestet, aber
+  nirgends verdrahtet: `/forget` löscht Zeilen hart
+  (`lib/telegram-commands/memory-edit.js`s `forgetCard` →
+  `db.deleteCard`), es bleibt also keine Zeile übrig, auf der die Kaskade
+  etwas markieren könnte.
+- Der Merge-Zweig in `lib/jobs/memory-compaction.js`s `executeActions()` ist
+  mit der korrekten `epistemicStatus`-Kombinationsregel ausgestattet, aber in
+  der aktuellen Codebasis über `isLowRiskAutoApplyAction()` auf
+  `type==="delete"` beschränkt — der Merge-Zweig wird nie automatisch
+  ausgeführt (nur als Proposal persistiert), unabhängig von diesem Feature.
+
 ## [7.2.6] — 2026-08-11
 
 Wartungs-Release. Das Deploy-Manifest deckte nur einen Bruchteil der

@@ -92,6 +92,7 @@ export function makeRow(opts) {
     agent_id: opts.agent_id ?? opts.agentId ?? null,
     workspaceId: opts.workspaceId ?? opts.workspace_id ?? null,
     workspace_id: opts.workspace_id ?? opts.workspaceId ?? null,
+    epistemicStatus: opts.epistemicStatus ?? "",
   };
 }
 

@@ -95,6 +95,7 @@ import {
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
+import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition } from "./lib/epistemic-status.js";
 import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
@@ -185,6 +186,7 @@ import {
   findLatestNeoRecord,
   formatNeoRecallContext,
   isInjectedContextText,
+  isNeoRecordAccessible,
   migrateNeoWorkspaces,
   neoSessionKeysFromContext,
   routeNeoRecall,
@@ -1400,6 +1402,11 @@ class MemoryDB {
     if (normalized.dispatchCount == null) normalized.dispatchCount = 0;
     if (normalized.lastDispatchAttemptAt == null) normalized.lastDispatchAttemptAt = 0;
     if (normalized.nextDispatchAttemptAt == null) normalized.nextDispatchAttemptAt = 0;
+    if (normalized.epistemicStatus == null) normalized.epistemicStatus = "";
+    if (normalized.epistemicStatusUpdatedAt == null) normalized.epistemicStatusUpdatedAt = 0;
+    if (normalized.epistemicStatusActor == null) normalized.epistemicStatusActor = "";
+    if (normalized.epistemicStatusReason == null) normalized.epistemicStatusReason = "";
+    if (normalized.previousEpistemicStatus == null) normalized.previousEpistemicStatus = "";
     if (!this.schemaFieldNames) return normalized;
     const filtered = {};
     for (const [key, value] of Object.entries(normalized)) {
@@ -1513,6 +1520,14 @@ class MemoryDB {
             { name: 'nextDispatchAttemptAt', valueSql: '0' },
             { name: 'workspaceId', type: textField.type, valueSql: "''", securityCritical: true },
             { name: 'workspaceKey', valueSql: "''" },
+            // Phase 1 — Explicit Trust State (epistemicStatus). See
+            // lib/epistemic-status.js for the enum/matrix; absent/'' means
+            // "legacy, resolves conservatively" (see plan §5), never "trusted".
+            { name: 'epistemicStatus', valueSql: "''" },
+            { name: 'epistemicStatusUpdatedAt', valueSql: '0' },
+            { name: 'epistemicStatusActor', valueSql: "''" },
+            { name: 'epistemicStatusReason', valueSql: "''" },
+            { name: 'previousEpistemicStatus', valueSql: "''" },
           ];
 
           for (const col of allColumns) {
@@ -1784,6 +1799,7 @@ class MemoryDB {
         dispatchCount: r.dispatchCount ?? 0,
         lastDispatchAttemptAt: r.lastDispatchAttemptAt ?? 0,
         nextDispatchAttemptAt: r.nextDispatchAttemptAt ?? 0,
+        epistemicStatus: r.epistemicStatus || "",
       },
       score: distanceToScore(r._distance),
     }));
@@ -1834,7 +1850,11 @@ class MemoryDB {
     try {
       const builder = this.table.vectorSearch(vector);
       if (typeof builder.where === "function") {
-        return await this._read(builder.where("status = 'active' OR status IS NULL").limit(limit).toArray(), "MemoryDB.vectorSearchActive");
+        // (status = 'active' OR status IS NULL) parenthesized on its own —
+        // AND binds tighter than OR in SQL, so appending the epistemicStatus
+        // clause unparenthesized here would let an invalidated row with
+        // status='active' through.
+        return await this._read(builder.where("(status = 'active' OR status IS NULL) AND epistemicStatus != 'invalidated'").limit(limit).toArray(), "MemoryDB.vectorSearchActive");
       }
     } catch (err) {
       // Older LanceDB/query-builder surfaces and old schemas fall back here.
@@ -1842,7 +1862,7 @@ class MemoryDB {
       if (err instanceof TimeoutError) throw err;
     }
     const rows = await this._read(this.table.vectorSearch(vector).limit(fetchLimit).toArray(), "MemoryDB.vectorSearchActive.fallback");
-    return rows.filter((row) => !row.status || row.status === "active").slice(0, limit);
+    return rows.filter((row) => (!row.status || row.status === "active") && row.epistemicStatus !== "invalidated").slice(0, limit);
   }
 
   async delete(id) {
@@ -2019,6 +2039,114 @@ function deriveExpectedCanonicalTarget(path) {
       ? resolveInside(canonicalAncestor, ...missingParts)
       : canonicalAncestor,
   };
+}
+
+/**
+ * Applies an epistemic-status transition to a LanceDB memory row.
+ *
+ * Thin persistence adapter — the actual matrix/actor-tier/authorization
+ * validation lives in transitionEpistemicStatus() (lib/epistemic-status.js).
+ * This function only: (1) enforces the same fail-closed checkAccess() gate
+ * every other memory mutation goes through, (2) persists via the existing
+ * MemoryDB.update() in-place patch mechanism, (3) writes the existing
+ * destructive-op audit log — no new authorization surface, no new audit file.
+ *
+ * @param {object} db MemoryDB instance (getById()/update()).
+ * @param {string} id memory id
+ * @param {string} nextStatus target epistemicStatus
+ * @param {{ctx: object, actor: string, actorTier?: string, reason?: string, evidence?: string, authorized?: boolean, workspaceDir?: string, now?: number}} opts
+ * @returns {Promise<{ok: boolean, patch?: object, reason?: string}>}
+ */
+export async function applyEpistemicStatusToLanceDb(db, id, nextStatus, opts = {}) {
+  const record = await db.getById(id);
+  if (!record) return { ok: false, reason: "not_found" };
+  const acl = checkAccess(opts.ctx, record);
+  if (!acl.allowed) return { ok: false, reason: acl.reason };
+  const patch = transitionEpistemicStatus(record, nextStatus, opts);
+  // Log before mutating, not after. appendDestructiveOpLog is synchronous
+  // and swallows its own errors (lib/sql-safety.js), so this ordering costs
+  // nothing on the happy path. It matters on the unhappy path: if the
+  // process dies between the two calls, "log written, mutation never
+  // happened" is audit noise (a stray line describing an attempt), while
+  // "mutation happened, log never written" is a silent, unaudited trust
+  // change — worse for a feature whose purpose is to make trust changes
+  // legible. This is a narrower, simpler ordering choice than
+  // deleteWithAuditContinuation's late-settlement machinery, which is not
+  // replicated here (out of scope, see plan §9).
+  appendDestructiveOpLog(opts.workspaceDir, {
+    operation: "trust_transition",
+    memoryId: id,
+    previousEpistemicStatus: patch.previousEpistemicStatus,
+    newEpistemicStatus: patch.epistemicStatus,
+    actor: patch.epistemicStatusActor,
+    reason: patch.epistemicStatusReason,
+    evidence: opts.evidence || "",
+    agentId: opts.ctx?.agentId || null,
+    userPrincipal: opts.ctx?.userPrincipal || null,
+    timestamp: new Date().toISOString(),
+  });
+  await db.update(id, patch);
+  return { ok: true, patch };
+}
+
+/**
+ * Maps a canonical memory request ctx onto the requester shape
+ * isNeoRecordAccessible() expects. Same field-precedence style as the
+ * plugin-internal neoRequester(ctx, event) helper (workspaceKey preferred
+ * over a bare workspaceId; this module-level function has no access to
+ * that closure, so the mapping is duplicated rather than shared) — but NOT
+ * an exact copy: this accepts the canonical memory-request-context shape
+ * (ctx.workspaceIdentity, ctx.userPrincipal) that checkAccess() and
+ * applyEpistemicStatusToLanceDb() already use, since that is the ctx shape
+ * a symmetric caller of this function's LanceDB sibling would pass, not
+ * the narrower ctx+event shape neoRequester() is tuned for.
+ *
+ * @param {object} [ctx]
+ * @returns {{requesterAgentId: string, requesterWorkspaceKey: string, requesterOwnerId: string}}
+ */
+function deriveNeoRequesterFromCtx(ctx = {}) {
+  return {
+    requesterAgentId: typeof ctx?.agentId === "string" ? ctx.agentId.trim() : "",
+    requesterWorkspaceKey: [ctx?.workspaceKey, ctx?.workspaceIdentity, ctx?.workspaceId]
+      .find((value) => typeof value === "string" && value.trim()) || "",
+    requesterOwnerId: [ctx?.ownerId, ctx?.userPrincipal, ctx?.userId]
+      .find((value) => typeof value === "string" && value.trim()) || "",
+  };
+}
+
+/**
+ * Applies an epistemic-status transition to a NEO record (candidate or
+ * behavior card), persisted the same way transitionRecordStatus() results
+ * already are — an append to the NEO store's candidates/behavior-cards log.
+ *
+ * Fail-closed like its LanceDB sibling applyEpistemicStatusToLanceDb(): NEO
+ * records use their own scope model (visibility.scope / origin.scope +
+ * isNeoRecordAccessible()), not checkAccess(), so this calls that instead.
+ * This function is not wired into any command handler yet (see plan §11/
+ * final report) — the gate exists anyway, on the same "no unauthorized
+ * mutation API, wired or not" principle as every other mutation path in
+ * this file.
+ *
+ * @param {object} store NEO store (appendCandidates()/appendBehaviorCards()/appendEmbeddingQueue()).
+ * @param {object} item current NEO record.
+ * @param {string} nextStatus target epistemicStatus.
+ * @param {{ctx?: object, actor: string, actorTier?: string, reason?: string, evidence?: string, authorized?: boolean, now?: number, isBehaviorCard?: boolean}} opts
+ * @returns {{ok: boolean, updated?: object, reason?: string}}
+ */
+export function applyEpistemicStatusToNeo(store, item, nextStatus, opts = {}) {
+  const requester = deriveNeoRequesterFromCtx(opts.ctx);
+  if (!isNeoRecordAccessible(item, requester)) {
+    return { ok: false, reason: "acl.denied" };
+  }
+  const patch = transitionEpistemicStatus(item, nextStatus, opts);
+  const updated = { ...item, ...patch };
+  if (opts.isBehaviorCard) {
+    store.appendBehaviorCards([updated]);
+  } else {
+    store.appendCandidates([updated]);
+  }
+  store.appendEmbeddingQueue?.([updated]);
+  return { ok: true, updated };
 }
 
 /** Per-agent MemoryDB cache with callback-scoped operation leases. */
@@ -6404,6 +6532,38 @@ const plugin = {
                 nonce: confirmation.nonce,
               });
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
+
+              // Step 12 (plan) — explicit trust-status transition surface,
+              // folded into /correct's existing confirmation flow rather
+              // than a new command. Same nonce machinery, same
+              // checkMemoryAuth(destructive: true) gate already passed
+              // above — no new authorization surface.
+              if (pending.payload?.trustStatus) {
+                const targetStatus = pending.payload.trustStatus;
+                try {
+                  const result = await pool.withDb(agentId, async (rawDb) => {
+                    await rawDb.init();
+                    return applyEpistemicStatusToLanceDb(rawDb, pending.targetId, targetStatus, {
+                      ctx: memoryCtx,
+                      actor: memoryCtx?.userPrincipal || memoryCtx?.userId || "telegram:/correct",
+                      actorTier: "human",
+                      reason: "human review via /correct trust",
+                      // Authorized by reaching this point at all: destructive-op
+                      // auth already checked above, and the nonce-confirmation
+                      // round-trip (same UX as content correction) already
+                      // completed — the same security bar transitionEpistemicStatus()
+                      // requires for "trusted"/"invalidated" targets.
+                      authorized: true,
+                      workspaceDir: memoryCtx.workspaceDir,
+                    });
+                  });
+                  if (!result.ok) return { text: t("plur1bus.correct_trust_failed", { lang, tone, vars: { error: result.reason || "unknown" } }) };
+                  return { text: t("plur1bus.correct_trust_done", { lang, tone, vars: { id: pending.targetId, status: targetStatus } }) };
+                } catch (err) {
+                  return { text: t("plur1bus.correct_trust_failed", { lang, tone, vars: { error: err?.message || String(err) } }) };
+                }
+              }
+
               const newText = pending.payload?.newText || "";
               if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
               const validated = validateCorrectionText(newText);
@@ -6465,6 +6625,48 @@ const plugin = {
 
             // Initiation
             if (!args) return { text: t("plur1bus.correct_usage", { lang, tone }) };
+
+            // Trust-status initiation: "/correct trust <status> <query>".
+            // Deliberately a distinct, unambiguous prefix so it can never be
+            // confused with parseCorrection's "<old> zu <new>" / "<old> -> <new>"
+            // content-correction grammar.
+            const trustMatch = args.match(/^trust\s+(\S+)\s+(.+)$/i);
+            if (trustMatch) {
+              const requestedStatus = trustMatch[1].toLowerCase();
+              const trustQuery = trustMatch[2].trim();
+              if (!EPISTEMIC_STATUSES.includes(requestedStatus)) {
+                return { text: t("plur1bus.correct_trust_invalid_status", { lang, tone, vars: { status: trustMatch[1], valid: EPISTEMIC_STATUSES.join(", ") } }) };
+              }
+              const trustCandidates = await resolveCandidates(memoryDbAdapter, agentId, trustQuery, { ctx: memoryCtx });
+              if (trustCandidates.none) {
+                return { text: t("plur1bus.correct_not_found", { lang, tone, vars: { query: trustQuery } }) };
+              }
+              if (!trustCandidates.unique) {
+                const choice = renderCandidateChoice(trustCandidates.candidates, "correct", { lang, tone });
+                return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
+              }
+              const trustCard = trustCandidates.card;
+              const currentStatus = normalizeEpistemicStatus(trustCard.epistemicStatus);
+              if (!isLegalEpistemicTransition(currentStatus, requestedStatus, "human")) {
+                return { text: t("plur1bus.correct_trust_illegal_transition", { lang, tone, vars: { from: currentStatus, to: requestedStatus } }) };
+              }
+              const trustConfirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+              const trustConfirm = createConfirmation({
+                userId: trustConfirmationIdentity.userId,
+                chatId: trustConfirmationIdentity.chatId,
+                command: "correct",
+                targetId: trustCard.id,
+              });
+              trustConfirm.payload = { trustStatus: requestedStatus, oldStatus: currentStatus };
+              rememberPendingConfirmation(confirmationStore, confirmationIndex, trustConfirm);
+              return { text: t("plur1bus.correct_trust_confirm_text", { lang, tone, vars: {
+                title: trustCard.title || trustCard.id,
+                from: currentStatus,
+                to: requestedStatus,
+                token: trustConfirm.nonce,
+              } }) };
+            }
+
             const parsed = parseCorrection(args);
             if (!parsed) {
               return { text: t("plur1bus.correct_no_separator", { lang, tone }) };
@@ -8052,7 +8254,12 @@ const plugin = {
                   } else {
                     const rows = await db.table.query().where(`id IN (${inList})`).toArray();
                     const keyById = new Map(agentPending.map(p => [p.memoryId, p.key]));
-                    pendingTexts = rows.map(r => ({ id: r.id, text: r.text, category: r.category || "fact", scope: r.scope || "agent-private", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
+                    // Never promote an invalidated memory into canonical
+                    // KNOWLEDGE.md — that store has no per-chapter status once
+                    // written, so this is the only exclusion point available.
+                    pendingTexts = rows
+                      .filter(r => normalizeEpistemicStatus(r.epistemicStatus) !== "invalidated")
+                      .map(r => ({ id: r.id, text: r.text, category: r.category || "fact", scope: r.scope || "agent-private", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
                   }
                 } catch (fetchErr) {
                   api.logger.warn(`memory-lancedb-namespaced: knowledge_update DB fetch failed: ${String(fetchErr)}`);
