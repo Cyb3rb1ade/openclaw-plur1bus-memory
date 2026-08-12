@@ -88,6 +88,8 @@ const TABLE_NAME = "memories";
       "epistemicStatusActor",
       "epistemicStatusReason",
       "previousEpistemicStatus",
+      "validFrom",
+      "validUntil",
     ];
 
     for (const col of v6Columns) {
@@ -116,6 +118,10 @@ const TABLE_NAME = "memories";
     assert.ok(oldRow.neverForget == 0, "default neverForget = 0");
     assert.strictEqual(oldRow.previousVersion, "", "default previousVersion = empty");
     assert.strictEqual(oldRow.supersededBy, "", "default supersededBy = empty");
+    assert.ok(oldRow.validFrom == 0, "default validFrom = 0 (no known bound, never derived from createdAt)");
+    assert.ok(oldRow.validUntil == 0, "default validUntil = 0 (no known bound, still open)");
+    assert.equal(typeof oldRow.validFrom, "bigint", "migrated LanceDB int64 validFrom must exercise the native BigInt path");
+    assert.equal(typeof oldRow.validUntil, "bigint", "migrated LanceDB int64 validUntil must exercise the native BigInt path");
 
     // 6. Verify idempotency: init() again should not throw
     await memoryDb.init();
@@ -191,6 +197,8 @@ const TABLE_NAME = "memories";
         epistemicStatusActor: "",
         epistemicStatusReason: "",
         previousEpistemicStatus: "",
+        validFrom: 0,
+        validUntil: 0,
       },
     ]);
 
@@ -204,5 +212,72 @@ const TABLE_NAME = "memories";
     const recalled = await memoryDb.table.query().where("text LIKE '%Legacy%'").toArray();
     assert.strictEqual(recalled.length, 1, "old row recallable by text");
     assert.strictEqual(recalled[0].status, "active", "recalled row has active status");
+
+    // 9. Test 24 (§12): a real, non-zero validFrom/validUntil set on an
+    // already-migrated row must survive unchanged — the migration logic only
+    // fills columns that are MISSING (see index.js's `if (hasCol) continue;`),
+    // it must never touch a column that already exists and already carries a
+    // real value.
+    const knownValidFrom = Date.parse("2025-01-01T00:00:00.000Z");
+    const knownValidUntil = Date.parse("2025-06-01T00:00:00.000Z");
+    await memoryDb.table.update({
+      where: `id = '${oldRow.id}'`,
+      values: { validFrom: knownValidFrom, validUntil: knownValidUntil },
+    });
+    const rowsAfterSet = await memoryDb.table.query().toArray();
+    const rowAfterSet = rowsAfterSet.find((r) => r.id === "old-1");
+    assert.ok(rowAfterSet.validFrom == knownValidFrom, "validFrom should be set to the real value written");
+    assert.ok(rowAfterSet.validUntil == knownValidUntil, "validUntil should be set to the real value written");
+
+    // 10. Test 25 (§12): migration does not overwrite historical data, only
+    // fills unset columns — a further init() (mirrors the idempotency check
+    // at step 6 above) must not reset the just-set validFrom/validUntil back
+    // to 0, since both columns already exist by this point.
+    await memoryDb.init();
+    const rowsAfterSecondInit = await memoryDb.table.query().toArray();
+    const rowAfterSecondInit = rowsAfterSecondInit.find((r) => r.id === "old-1");
+    assert.ok(rowAfterSecondInit.validFrom == knownValidFrom, "a further init() must not reset a previously-set validFrom back to 0");
+    assert.ok(rowAfterSecondInit.validUntil == knownValidUntil, "a further init() must not reset a previously-set validUntil back to 0");
+  });
+
+  it("brand-new table persists all seven Phase 1/2 fields on the first store", async () => {
+    const freshDir = mkdtempSync(join(tmpdir(), "plur1bus-migration-smoke-fresh-"));
+    const memoryDb = new MemoryDB(freshDir, VECTOR_DIM);
+
+    const knownValidFrom = Date.parse("2025-03-01T00:00:00.000Z");
+    const knownValidUntil = Date.parse("2025-09-01T00:00:00.000Z");
+    await memoryDb.store({
+      id: "fresh-1",
+      text: "Freshly created memory in a brand-new agent database",
+      vector: new Float32Array(VECTOR_DIM).fill(0.3),
+      importance: 0.5,
+      category: "fact",
+      createdAt: Date.now(),
+      epistemicStatus: "trusted",
+      epistemicStatusUpdatedAt: Date.parse("2025-03-02T00:00:00.000Z"),
+      epistemicStatusActor: "human:owner",
+      epistemicStatusReason: "direct confirmation",
+      previousEpistemicStatus: "observed",
+      validFrom: knownValidFrom,
+      validUntil: knownValidUntil,
+    });
+
+    const rows = await memoryDb.table.query().toArray();
+    const row = rows.find((r) => r.id === "fresh-1");
+    assert.ok(row, "freshly stored row should exist");
+    assert.strictEqual(
+      row.epistemicStatus,
+      "trusted",
+      "epistemicStatus supplied on the very first store() into a brand-new table must not be silently dropped",
+    );
+    assert.ok(
+      row.validFrom == knownValidFrom,
+      "validFrom supplied on the very first store() into a brand-new table must not be silently dropped either",
+    );
+    assert.ok(row.validUntil == knownValidUntil, "validUntil must persist on the first store too");
+    assert.ok(row.epistemicStatusUpdatedAt == Date.parse("2025-03-02T00:00:00.000Z"));
+    assert.equal(row.epistemicStatusActor, "human:owner");
+    assert.equal(row.epistemicStatusReason, "direct confirmation");
+    assert.equal(row.previousEpistemicStatus, "observed");
   });
 });

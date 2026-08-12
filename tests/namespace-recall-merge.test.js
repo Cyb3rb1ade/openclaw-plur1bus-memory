@@ -90,6 +90,82 @@ function saturatedTrace(namespace, count) {
 }
 
 describe("mergeNamespaceRecallResults", () => {
+  it("keeps text duplicates from disjoint known validity windows across namespaces", () => {
+    const text = "Alex worked at Firma A.";
+    const first = memory("history-a", 0.9, text, {
+      validFrom: Date.parse("2024-01-01"), validUntil: Date.parse("2025-01-01"),
+    });
+    const second = memory("history-b", 0.8, text, {
+      validFrom: Date.parse("2025-01-01"), validUntil: Date.parse("2026-01-01"),
+    });
+    const overlapping = memory("history-overlap", 0.7, text, {
+      validFrom: Date.parse("2025-06-01"), validUntil: Date.parse("2026-06-01"),
+    });
+    const merged = mergeNamespaceRecallResults([
+      { namespace: "ns-a", memories: [first] },
+      { namespace: "ns-b", memories: [second, overlapping] },
+    ], { maxOut: 5, dedupEnabled: true, dedupJaccard: 0.78 });
+    assert.deepEqual(merged.memories.map((item) => item.entry.id), ["history-a", "history-b"]);
+  });
+
+  it("keeps canonical-origin copies when their known validity windows are disjoint", () => {
+    const first = memory("origin-history-a", 0.9, "same origin history", {
+      sourceAgentId: "agent-a", sourceMemoryId: "source-row",
+      validFrom: Date.parse("2024-01-01"), validUntil: Date.parse("2025-01-01"),
+    });
+    const second = memory("origin-history-b", 0.8, "same origin history", {
+      sourceAgentId: "agent-a", sourceMemoryId: "source-row",
+      validFrom: Date.parse("2025-01-01"), validUntil: Date.parse("2026-01-01"),
+    });
+    const merged = mergeNamespaceRecallResults([
+      { namespace: "ns-a", sourceKind: "private", memories: [first] },
+      { namespace: "ns-b", sourceKind: "workspace", memories: [second] },
+    ], { maxOut: 5, dedupEnabled: false });
+    assert.deepEqual(merged.memories.map((item) => item.entry.id), ["origin-history-a", "origin-history-b"]);
+  });
+
+  it("lets a higher-priority canonical-origin bridge replace every overlapping winner", () => {
+    const origin = { sourceAgentId: "agent-a", sourceMemoryId: "source-row" };
+    const first = memory("origin-a", 0.9, "first historical version", {
+      ...origin, validFrom: Date.parse("2024-01-01"), validUntil: Date.parse("2025-01-01"),
+    });
+    const second = memory("origin-b", 0.8, "second historical version", {
+      ...origin, validFrom: Date.parse("2025-01-01"), validUntil: Date.parse("2026-01-01"),
+    });
+    const bridge = memory("origin-bridge", 0.7, "bridging historical version", {
+      ...origin, validFrom: Date.parse("2024-06-01"), validUntil: Date.parse("2025-06-01"),
+    });
+
+    const merged = mergeNamespaceRecallResults([
+      { namespace: "workspace-a", sourceKind: "workspace", memories: [first] },
+      { namespace: "workspace-b", sourceKind: "workspace", memories: [second] },
+      { namespace: "private", sourceKind: "private", memories: [bridge] },
+    ], { maxOut: 2, dedupEnabled: false });
+
+    assert.deepEqual(merged.memories.map((item) => item.entry.id), ["origin-bridge"]);
+  });
+
+  it("keeps disjoint canonical-origin winners when a lower-priority bridge overlaps both", () => {
+    const origin = { sourceAgentId: "agent-a", sourceMemoryId: "source-row" };
+    const first = memory("origin-a", 0.9, "first historical version", {
+      ...origin, validFrom: Date.parse("2024-01-01"), validUntil: Date.parse("2025-01-01"),
+    });
+    const second = memory("origin-b", 0.8, "second historical version", {
+      ...origin, validFrom: Date.parse("2025-01-01"), validUntil: Date.parse("2026-01-01"),
+    });
+    const bridge = memory("origin-bridge", 0.99, "bridging historical version", {
+      ...origin, validFrom: Date.parse("2024-06-01"), validUntil: Date.parse("2025-06-01"),
+    });
+
+    const merged = mergeNamespaceRecallResults([
+      { namespace: "private-a", sourceKind: "private", memories: [first] },
+      { namespace: "private-b", sourceKind: "private", memories: [second] },
+      { namespace: "workspace", sourceKind: "workspace", memories: [bridge] },
+    ], { maxOut: 2, dedupEnabled: false });
+
+    assert.deepEqual(merged.memories.map((item) => item.entry.id), ["origin-a", "origin-b"]);
+  });
+
   it("globally orders, collapses IDs, deduplicates canonical content, and preserves ownership without mutating inputs", () => {
     const aHigh = memory("a-high", 0.95, "active namespace release plan");
     const aLow = memory("a-low", 0.80, "local diagnostics changed after restart", {

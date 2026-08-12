@@ -96,6 +96,7 @@ import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition } from "./lib/epistemic-status.js";
+import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
 import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
@@ -1407,6 +1408,10 @@ class MemoryDB {
     if (normalized.epistemicStatusActor == null) normalized.epistemicStatusActor = "";
     if (normalized.epistemicStatusReason == null) normalized.epistemicStatusReason = "";
     if (normalized.previousEpistemicStatus == null) normalized.previousEpistemicStatus = "";
+    // Phase 2 — Bi-Temporal Memory. `0` = "no known bound in that direction",
+    // never derived from createdAt/updatedAt (see lib/valid-time.js).
+    if (normalized.validFrom == null) normalized.validFrom = 0;
+    if (normalized.validUntil == null) normalized.validUntil = 0;
     if (!this.schemaFieldNames) return normalized;
     const filtered = {};
     for (const [key, value] of Object.entries(normalized)) {
@@ -1528,6 +1533,11 @@ class MemoryDB {
             { name: 'epistemicStatusActor', valueSql: "''" },
             { name: 'epistemicStatusReason', valueSql: "''" },
             { name: 'previousEpistemicStatus', valueSql: "''" },
+            // Phase 2 — Bi-Temporal Memory (validFrom/validUntil). See
+            // lib/valid-time.js for the semantics; `0` = "no known bound in
+            // that direction", not the Unix epoch.
+            { name: 'validFrom', valueSql: '0' },
+            { name: 'validUntil', valueSql: '0' },
           ];
 
           for (const col of allColumns) {
@@ -1608,6 +1618,19 @@ class MemoryDB {
             updatedAt: 0,
             workspaceId: "",
             workspaceKey: "",
+            // Phase 1 — Explicit Trust State (epistemicStatus). See
+            // lib/epistemic-status.js for the enum/matrix; absent/'' means
+            // "legacy, resolves conservatively" (see plan §5), never "trusted".
+            epistemicStatus: "",
+            epistemicStatusUpdatedAt: 0,
+            epistemicStatusActor: "",
+            epistemicStatusReason: "",
+            previousEpistemicStatus: "",
+            // Phase 2 — Bi-Temporal Memory (validFrom/validUntil). See
+            // lib/valid-time.js for the semantics; `0` = "no known bound in
+            // that direction", not the Unix epoch.
+            validFrom: 0,
+            validUntil: 0,
           },
         ]), "MemoryDB.createTable", "created-table", false);
       }
@@ -1836,6 +1859,8 @@ class MemoryDB {
           workspaceKey: r.workspaceKey || "",
           scope: r.scope || "agent-private",
           ownerUserId: r.ownerUserId || "",
+          validFrom: r.validFrom ?? 0,
+          validUntil: r.validUntil ?? 0,
         },
         score: distanceToScore(r._distance),
       }))
@@ -2086,6 +2111,47 @@ export async function applyEpistemicStatusToLanceDb(db, id, nextStatus, opts = {
     timestamp: new Date().toISOString(),
   });
   await db.update(id, patch);
+  return { ok: true, patch };
+}
+
+/**
+ * Closes an existing memory row's validity window (Phase 2 — Bi-Temporal
+ * Memory) with a real, asserted boundary — NOT a version-chain edit (see
+ * plan §0/§7a): "Firma A" stays `status: "active"`, only its `validUntil`
+ * is set. Mirrors applyEpistemicStatusToLanceDb()'s structure exactly: same
+ * fail-closed checkAccess() gate, same in-place MemoryDB.update() patch
+ * mechanism, same destructive-op audit log (no new audit file).
+ *
+ * @param {object} db MemoryDB instance (getById()/update()).
+ * @param {string} id memory id
+ * @param {*} validUntil caller-asserted end-of-validity boundary (ISO date/ms/etc.)
+ * @param {{ctx: object, actor: string, reason?: string, workspaceDir?: string, now?: number}} opts
+ * @returns {Promise<{ok: boolean, patch?: object, reason?: string}>}
+ */
+export async function applyValidTimeCloseToLanceDb(db, id, validUntil, opts = {}) {
+  const safeId = safeUuid(id);
+  const record = await db.getById(safeId);
+  if (!record) return { ok: false, reason: "not_found" };
+  const acl = checkAccess(opts.ctx, record);
+  if (!acl.allowed) return { ok: false, reason: acl.reason };
+  const patch = buildValidTimeClosePatch(record, {
+    validUntil,
+    actor: opts.actor,
+    reason: opts.reason,
+    now: opts.now,
+  });
+  appendDestructiveOpLog(opts.workspaceDir, {
+    operation: "validity_close",
+    memoryId: safeId,
+    previousValidUntil: Number(record.validUntil || 0),
+    newValidUntil: patch.validUntil,
+    actor: opts.actor,
+    reason: opts.reason || "",
+    agentId: opts.ctx?.agentId || null,
+    userPrincipal: opts.ctx?.userPrincipal || null,
+    timestamp: new Date().toISOString(),
+  });
+  await db.update(safeId, patch);
   return { ok: true, patch };
 }
 
@@ -2822,6 +2888,20 @@ function resolveNeoHooksConfig(api, commandConfig) {
 
 function formatJsonCommandResult(value) {
   return { text: JSON.stringify(value, null, 2) };
+}
+
+function formatKnownValidityLabel(entry) {
+  const validFrom = Number(entry?.validFrom ?? 0);
+  const validUntil = Number(entry?.validUntil ?? 0);
+  const fromLabel = Number.isFinite(validFrom) && validFrom > 0
+    ? new Date(validFrom).toISOString()
+    : "unknown";
+  const untilLabel = Number.isFinite(validUntil) && validUntil > 0
+    ? new Date(validUntil).toISOString()
+    : "open";
+  return validFrom > 0 || validUntil > 0
+    ? `, valid: [${fromLabel}, ${untilLabel})`
+    : "";
 }
 
 /**
@@ -4443,7 +4523,19 @@ const plugin = {
       return checkAccess(accessCtx, candidate.entry).allowed;
     }
 
+    function findSafeDuplicateForValidity(candidates, text, validityWindow) {
+      return candidates.find((candidate) => (
+        isSafeDuplicate(candidate.entry.text, text)
+        && !hasDisjointValidityWindows(candidate.entry, validityWindow)
+      ));
+    }
+
     const durableMergeQueues = new Map();
+
+    function stableValidTimeValue(value) {
+      const numeric = Number(value || 0);
+      return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : 0;
+    }
 
     function durableMergeWriteKey({
       workspaceKey,
@@ -4456,6 +4548,8 @@ const plugin = {
       evidenceQuote,
       scope,
       ownerUserId,
+      validFrom,
+      validUntil,
     }) {
       return JSON.stringify([
         workspaceKey,
@@ -4468,6 +4562,8 @@ const plugin = {
         evidenceQuote,
         scope,
         ownerUserId,
+        stableValidTimeValue(validFrom),
+        stableValidTimeValue(validUntil),
       ]);
     }
 
@@ -4526,7 +4622,14 @@ const plugin = {
       appendDeletionLog();
     }
 
-    function isExpectedMergeReplacement(entry, replacementId, candidateId, expectedEntry) {
+    function durableMergeLineage(candidate) {
+      return [
+        candidate.id,
+        `valid-time:${stableValidTimeValue(candidate.validFrom)}:${stableValidTimeValue(candidate.validUntil)}`,
+      ];
+    }
+
+    function isExpectedMergeReplacement(entry, replacementId, candidateId, expectedEntry, expectedCandidate) {
       if (!entry || entry.id !== replacementId || entry.text !== expectedEntry.text) return false;
       if (entry.status && entry.status !== "active") return false;
       const stableFields = [
@@ -4540,12 +4643,27 @@ const plugin = {
         "evidenceQuote",
       ];
       if (stableFields.some((field) => entry[field] !== expectedEntry[field])) return false;
+      if (Number(entry.validFrom || 0) !== Number(expectedEntry.validFrom || 0)) return false;
+      if (Number(entry.validUntil || 0) !== Number(expectedEntry.validUntil || 0)) return false;
       try {
-        return JSON.parse(entry.mergedFrom || "[]").includes(candidateId);
+        const lineage = JSON.parse(entry.mergedFrom || "[]");
+        if (!Array.isArray(lineage)) {
+          api.logger?.debug?.(`memory-lancedb-namespaced: invalid mergedFrom shape for replacement=${replacementId}`);
+          return false;
+        }
+        return durableMergeLineage(expectedCandidate).every((marker) => lineage.includes(marker));
       } catch (error) {
         api.logger?.debug?.(`memory-lancedb-namespaced: invalid mergedFrom for replacement=${replacementId}: ${String(error)}`);
         return false;
       }
+    }
+
+    function isExpectedMergeCandidate(entry, expectedEntry, candidateId, accessCtx) {
+      if (!entry || entry.id !== candidateId || entry.text !== expectedEntry.text) return false;
+      if (entry.status && entry.status !== "active") return false;
+      if (stableValidTimeValue(entry.validFrom) !== stableValidTimeValue(expectedEntry.validFrom)) return false;
+      if (stableValidTimeValue(entry.validUntil) !== stableValidTimeValue(expectedEntry.validUntil)) return false;
+      return candidateVisibleForStore({ entry }, accessCtx);
     }
 
     function runDurableMergeQueued(queueKey, operation) {
@@ -4591,27 +4709,31 @@ const plugin = {
       const candidateId = safeUuid(selectedCandidate?.entry?.id);
       const selectedText = selectedCandidate?.entry?.text;
       const queueKey = JSON.stringify([agentId, candidateId]);
-      const { idempotencyKey, replacementId } = durableMergeIdentity(
-        agentId,
-        candidateId,
-        writeKey || selectedText,
-      );
       return runDurableMergeQueued(queueKey, async () => {
         const authoritativeCandidate = await db.getById(candidateId);
-        const candidateIsActive = authoritativeCandidate
-          && (!authoritativeCandidate.status || authoritativeCandidate.status === "active");
-        const candidateMatchesSelection = authoritativeCandidate?.id === candidateId
-          && authoritativeCandidate?.text === selectedText;
-        const candidateStillVisible = authoritativeCandidate
-          && candidateVisibleForStore({ entry: authoritativeCandidate }, accessCtx);
-        if (!candidateIsActive || !candidateMatchesSelection || !candidateStillVisible) {
+        if (!isExpectedMergeCandidate(authoritativeCandidate, selectedCandidate.entry, candidateId, accessCtx)) {
           const staleErr = new Error("merge candidate is stale, no longer active, or no longer authorized");
           api.logger?.warn?.(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${staleErr.message}`);
           throw staleErr;
         }
 
+        const { idempotencyKey, replacementId } = durableMergeIdentity(agentId, candidateId, writeKey || selectedText);
+
         const preparedResult = await prepareReplacement(authoritativeCandidate, replacementId);
         if (!preparedResult) return null;
+
+        let candidateAfterPreparation;
+        try {
+          candidateAfterPreparation = await db.getById(candidateId);
+        } catch (revalidationErr) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge post-prepare revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(revalidationErr)}`);
+          throw revalidationErr;
+        }
+        if (!isExpectedMergeCandidate(candidateAfterPreparation, authoritativeCandidate, candidateId, accessCtx)) {
+          const staleErr = new Error("stale merge candidate changed during replacement preparation");
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge post-prepare revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${staleErr.message}`);
+          throw staleErr;
+        }
 
         const mergedEntry = { ...preparedResult.mergedEntry, id: safeUuid(replacementId) };
         const prepared = { ...preparedResult, mergedEntry };
@@ -4631,10 +4753,23 @@ const plugin = {
             api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
             throw verificationErr;
           }
-          if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry)) {
+          if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry, authoritativeCandidate)) {
             const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
             api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
             throw verificationErr;
+          }
+
+          let candidateBeforeDelete;
+          try {
+            candidateBeforeDelete = await db.getById(candidateId);
+          } catch (revalidationErr) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge pre-delete revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(revalidationErr)}`);
+            throw revalidationErr;
+          }
+          if (!isExpectedMergeCandidate(candidateBeforeDelete, authoritativeCandidate, candidateId, accessCtx)) {
+            const staleErr = new Error("stale merge candidate changed before original deletion");
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge pre-delete revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${staleErr.message}`);
+            throw staleErr;
           }
 
           try {
@@ -4670,7 +4805,7 @@ const plugin = {
           throw idempotencyReadError;
         }
         if (existingReplacement) {
-          if (!isExpectedMergeReplacement(existingReplacement, replacementId, candidateId, mergedEntry)) {
+          if (!isExpectedMergeReplacement(existingReplacement, replacementId, candidateId, mergedEntry, authoritativeCandidate)) {
             throw new Error(`durable merge idempotency collision for ${replacementId}`);
           }
           return finishDurableMerge();
@@ -4717,6 +4852,8 @@ const plugin = {
       if (!textValidation.ok) {
         return { error: textValidation.error };
       }
+      const validTimeValidation = validateValidTimeInputFields(params, ["validFrom", "validUntil"]);
+      if (!validTimeValidation.ok) return { error: validTimeValidation.error };
       const trace = createRecallDecisionTrace({
         query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
         mode: "store",
@@ -4749,12 +4886,19 @@ const plugin = {
         const storeAccessCtx = memoryCtx;
         const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
         const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
+        // Phase 2 — Bi-Temporal Memory (§7): caller-supplied only, never
+        // guessed/extracted from text. Unparseable/absent -> 0 (unknown).
+        const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: api.logger });
 
         // 1. Duplicate check
         const existing = (await storeDb.findSimilar(vector, params.text, duplicateThreshold))
           .filter((candidate) => candidateVisibleForStore(candidate, storeAccessCtx));
         if (existing.length > 0) {
-          const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
+          const safeDuplicate = findSafeDuplicateForValidity(
+            existing,
+            params.text,
+            { validFrom: capturedValidFrom, validUntil: capturedValidUntil },
+          );
           if (!safeDuplicate) {
             api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
             addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
@@ -4788,6 +4932,8 @@ const plugin = {
                 evidenceQuote,
                 scope,
                 ownerUserId,
+                validFrom: capturedValidFrom,
+                validUntil: capturedValidUntil,
               }),
               prepareReplacement: async (authoritativeCandidate, replacementId) => {
                 let mergeResult = null;
@@ -4825,9 +4971,15 @@ const plugin = {
                   addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                   return null;
                 }
+                if (hasDisjointValidityWindows(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil })) {
+                  api.logger?.warn?.(`[memory-merge-safety] disjoint validity windows; aborting merge and storing separately`);
+                  addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "disjoint validity windows" });
+                  return null;
+                }
                 const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
-                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]), expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+                const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
+                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides);
                 return { mergedEntry, mergeResult, mergedImportance };
               },
             });
@@ -4853,7 +5005,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -7742,11 +7894,16 @@ const plugin = {
               query: { type: "string", description: "What to search for in memory" },
               limit: { type: "number", description: "Max results (default 5)" },
               full_text: { type: "boolean", description: "Return full text instead of summary (default false)" },
+              validAt: { type: "string", description: "Optional: restrict recall to facts valid at this specific point in time (ISO date, e.g. '2025-06-01') when the user asks about a dated state explicitly ('where did he work in 2025', 'what was true as of last year'). Requires an actual date or a date you can resolve with certainty from context; omit it rather than guessing for vague phrases such as 'a while ago'. When omitted, recall is not Valid-Time-filtered: historical rows may be returned and known validity bounds are labeled in the output." },
             },
             required: ["query"],
           },
           async execute(_toolCallId, params) {
             try {
+              const validTimeValidation = validateValidTimeInputFields(params, ["validAt"]);
+              if (!validTimeValidation.ok) {
+                return { content: [{ type: "text", text: `Memory recall rejected: ${validTimeValidation.error}` }] };
+              }
               return await withAccessReadDbs(
                 pool,
                 sharedMemoryPool,
@@ -7784,6 +7941,14 @@ const plugin = {
               });
               const _recallBaseParams = {
                 query: params.query,
+                // Phase 2 — Bi-Temporal Memory (§5d). Caller-supplied only,
+                // never inferred/defaulted to "now" — an unparseable or
+                // omitted value normalizes to 0, mapped to null so the
+                // pipeline applies zero temporal filtering by default.
+                validAt: (() => {
+                  const v = normalizeCapturedTimestamp(params.validAt);
+                  return v === 0 ? null : v;
+                })(),
                 phaseTimer,
                 softBudgetFallback,
                 embeddings,
@@ -7860,7 +8025,7 @@ const plugin = {
                   display = `🌙 [Traum${dreamDate ? ` vom ${dreamDate}` : ""}] ${display} (geträumt, nicht geschehen)`;
                 }
                 const orig = DISPLAY_SOURCES.has(r.entry.origin) ? `|${r.entry.origin}` : "";
-                lines.push(`[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id})`);
+                lines.push(`[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id}${formatKnownValidityLabel(r.entry)})`);
               }
               if (traceEnabled && returnedTrace) {
                 const summary = summarizeTrace(returnedTrace);
@@ -7898,6 +8063,8 @@ const plugin = {
               sourceUrl: { type: "string", description: "Optional URL this memory is derived from (provenance)" },
               evidenceQuote: { type: "string", description: "Optional original quote (≤200 chars) that backs this memory" },
               scope: { type: "string", enum: MEMORY_SCOPES, description: "Visibility scope: 'agent-private' (default), 'workspace' (shared within workspace), 'user' (shared across all agents of one user)" },
+              validFrom: { type: "string", description: "Optional: when this fact became true in the real world (ISO date), if the user stated or clearly implied an actual date or a date you can resolve with certainty (e.g. 'since March 2026', 'starting last Monday' relative to today's known date). Do NOT set this for vague relative phrasing with no resolvable anchor — 'seit letztem Monat', 'vor einer Weile', 'damals', 'irgendwann' — leave the parameter out entirely in those cases; the original wording is preserved in the memory text regardless, so nothing is lost by omitting this. Never guess a date to fill the field." },
+              validUntil: { type: "string", description: "Optional: when this fact stopped being true, ONLY if the user is stating a fact that has definitely ended (e.g. 'I worked there until June 2026', a correction of a previous fact with a known end date). Do NOT set this for something still ongoing or of unknown end — leave unset; unset means 'still valid / unknown', not 'ended now'. Never infer an end date from silence or from a new fact alone." },
             },
             required: ["text"],
           },
@@ -7910,6 +8077,13 @@ const plugin = {
                 return {
                   content: [{ type: "text", text: `Memory store rejected: ${textValidation.error}` }],
                   details: { action: "rejected", reason: "invalid_text" },
+                };
+              }
+              const validTimeValidation = validateValidTimeInputFields(params, ["validFrom", "validUntil"]);
+              if (!validTimeValidation.ok) {
+                return {
+                  content: [{ type: "text", text: `Memory store rejected: ${validTimeValidation.error}` }],
+                  details: { action: "rejected", reason: "invalid_valid_time" },
                 };
               }
               const scopeAccess = resolveStoreScopeAccess(memoryCtx, params.scope);
@@ -7952,12 +8126,19 @@ const plugin = {
               const storeAccessCtx = memoryCtx;
               const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
               const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
+              // Phase 2 — Bi-Temporal Memory (§7): caller-supplied only, never
+              // guessed/extracted from text. Unparseable/absent -> 0 (unknown).
+              const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: api.logger });
 
               // 1. Duplicate check
               const existing = (await db.findSimilar(vector, params.text, duplicateThreshold))
                 .filter((candidate) => candidateVisibleForStore(candidate, storeAccessCtx));
               if (existing.length > 0) {
-                const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
+                  const safeDuplicate = findSafeDuplicateForValidity(
+                    existing,
+                    params.text,
+                    { validFrom: capturedValidFrom, validUntil: capturedValidUntil },
+                  );
                 if (!safeDuplicate) {
                   api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
                   addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
@@ -7991,6 +8172,8 @@ const plugin = {
                       evidenceQuote,
                       scope,
                       ownerUserId,
+                      validFrom: capturedValidFrom,
+                      validUntil: capturedValidUntil,
                     }),
                     prepareReplacement: async (authoritativeCandidate, replacementId) => {
                       let mergeResult = null;
@@ -8023,18 +8206,25 @@ const plugin = {
                         addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                         return null;
                       }
+                      if (hasDisjointValidityWindows(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil })) {
+                        api.logger?.warn?.(`[memory-merge-safety] disjoint validity windows; aborting merge and storing separately`);
+                        addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "disjoint validity windows" });
+                        return null;
+                      }
                       const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                       const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
                       const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user", null, { agentId });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
+                      const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
                       const mergedEntry = applyDynamicsDefaults({
                         id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
-                        importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]),
+                        importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)),
                         expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
                         emotionalValence: serializeEmotionalValence(mergedEmotion),
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
+                        validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
                       }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
                       return { mergedEntry, mergeResult, mergedImportance };
                     },
@@ -8072,6 +8262,7 @@ const plugin = {
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
+                validFrom: capturedValidFrom, validUntil: capturedValidUntil,
               }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
@@ -8810,6 +9001,8 @@ const plugin = {
               updatedAt: r.entry.updatedAt ?? undefined,
               lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
               memoryClass: r.entry.memoryClass || "standard",
+              validFrom: r.entry.validFrom ?? 0,
+              validUntil: r.entry.validUntil ?? 0,
             };
             if (traceEnabled) {
               attachTraceToMemory(item, {
@@ -8847,6 +9040,8 @@ const plugin = {
             createdAt: r.entry.createdAt ?? 0,
             updatedAt: r.entry.updatedAt ?? undefined,
             lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
+            validFrom: r.entry.validFrom ?? 0,
+            validUntil: r.entry.validUntil ?? 0,
           }));
           if (semanticLensItems.length > 0) {
             api.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);
