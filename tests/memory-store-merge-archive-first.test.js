@@ -369,7 +369,7 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     assert.ok(replacement, "returned replacement ID must exist");
     assert.equal(replacement.text, mergedText(ORIGINAL_TEXT, incomingText));
     assert.equal(replacement.status, "active");
-    assert.deepEqual(JSON.parse(replacement.mergedFrom), [ORIGINAL_ID]);
+    assert.deepEqual(JSON.parse(replacement.mergedFrom), [ORIGINAL_ID, "valid-time:0:0"]);
 
     const archives = readArchiveEntries();
     assert.equal(archives.length, 1);
@@ -635,6 +635,41 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     assert.equal(acknowledged?.importance, 0.81);
   });
 
+  it("uses validity-window input in the deterministic replacement identity", async () => {
+    let deleteAttempts = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() {
+      return [];
+    };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await originalGetById.call(this, ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    MemoryDB.prototype.delete = async function failFirstOriginalDelete(id) {
+      if (id === ORIGINAL_ID) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) throw new Error("injected first delete failure");
+      }
+      return originalDelete.call(this, id);
+    };
+
+    const first = await executeStore("Additional cat fact", {
+      validFrom: "2025-01-01",
+      validUntil: "2025-06-01",
+    });
+    assert.match(first.content[0].text, /Memory store failed:.*delete failure/i);
+    const firstReplacement = (await readRows()).find((row) => (
+      JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)
+    ));
+    assert.ok(firstReplacement);
+
+    const second = await executeStore("Additional cat fact", {
+      validFrom: "2025-02-01",
+      validUntil: "2025-07-01",
+    });
+    assert.equal(second.details?.action, "merged");
+    assert.notEqual(second.details.id, firstReplacement.id);
+  });
+
   it("rejects an existing deterministic replacement with mismatched provenance", async () => {
     let deleteAttempts = 0;
     MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() {
@@ -688,5 +723,232 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     const afterRetry = await readRows();
     assert.ok(afterRetry.some((row) => row.id === ORIGINAL_ID));
     assert.deepEqual(readDestructiveOps(), []);
+  });
+
+  it("rejects an existing deterministic replacement with a mismatched validity window", async () => {
+    let deleteAttempts = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() { return []; };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await originalGetById.call(this, ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    MemoryDB.prototype.delete = async function failFirstOriginalDelete(id) {
+      if (id === ORIGINAL_ID) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) throw new Error("injected first delete failure");
+      }
+      return originalDelete.call(this, id);
+    };
+
+    const input = { validFrom: "2025-01-01", validUntil: "2025-06-01" };
+    const first = await executeStore("Additional cat fact", input);
+    assert.match(first.content[0].text, /Memory store failed:.*delete failure/i);
+    const replacement = (await readRows()).find((row) => (
+      JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)
+    ));
+    assert.ok(replacement);
+
+    MemoryDB.prototype.getById = async function exposeMismatchedWindow(id) {
+      const row = await originalGetById.call(this, id);
+      return id === replacement.id && row ? { ...row, validFrom: 123n } : row;
+    };
+    const retry = await executeStore("Additional cat fact", input);
+    assert.match(retry.content[0].text, /idempotency collision/i);
+    assert.equal(deleteAttempts, 1);
+  });
+
+  it("rejects a non-array mergedFrom string even when it contains both lineage markers", async () => {
+    let deleteAttempts = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() { return []; };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await originalGetById.call(this, ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    MemoryDB.prototype.delete = async function failFirstOriginalDelete(id) {
+      if (id === ORIGINAL_ID) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) throw new Error("injected first delete failure");
+      }
+      return originalDelete.call(this, id);
+    };
+
+    const first = await executeStore();
+    assert.match(first.content[0].text, /Memory store failed:.*delete failure/i);
+    const replacement = (await readRows()).find((row) => (
+      JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)
+    ));
+    assert.ok(replacement);
+    MemoryDB.prototype.getById = async function exposeStringLineage(id) {
+      const row = await originalGetById.call(this, id);
+      return id === replacement.id && row
+        ? { ...row, mergedFrom: JSON.stringify(`${ORIGINAL_ID} valid-time:0:0`) }
+        : row;
+    };
+
+    const retry = await executeStore();
+    assert.match(retry.content[0].text, /idempotency collision/i);
+    assert.notEqual(retry.details?.action, "merged");
+    assert.equal(deleteAttempts, 1);
+    assert.ok((await readRows()).some((row) => row.id === ORIGINAL_ID));
+  });
+
+  it("rejects a legacy mergedFrom array that lacks the validity fingerprint", async () => {
+    let deleteAttempts = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() { return []; };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await originalGetById.call(this, ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    MemoryDB.prototype.delete = async function failFirstOriginalDelete(id) {
+      if (id === ORIGINAL_ID) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) throw new Error("injected first delete failure");
+      }
+      return originalDelete.call(this, id);
+    };
+
+    const first = await executeStore();
+    assert.match(first.content[0].text, /Memory store failed:.*delete failure/i);
+    const replacement = (await readRows()).find((row) => (
+      JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)
+    ));
+    assert.ok(replacement);
+    MemoryDB.prototype.getById = async function exposeLegacyLineage(id) {
+      const row = await originalGetById.call(this, id);
+      return id === replacement.id && row
+        ? { ...row, mergedFrom: JSON.stringify([ORIGINAL_ID]) }
+        : row;
+    };
+
+    const retry = await executeStore();
+    assert.match(retry.content[0].text, /idempotency collision/i);
+    assert.notEqual(retry.details?.action, "merged");
+    assert.equal(deleteAttempts, 1);
+    assert.ok((await readRows()).some((row) => row.id === ORIGINAL_ID));
+  });
+
+  it("rejects a retry when candidate validity changes but the conservative union stays unchanged", async () => {
+    let deleteAttempts = 0;
+    let candidateWindowChanged = false;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() { return []; };
+    MemoryDB.prototype.getById = async function exposeCurrentCandidateWindow(id) {
+      const row = await originalGetById.call(this, id);
+      if (!row || id !== ORIGINAL_ID || !candidateWindowChanged) return row;
+      return {
+        ...row,
+        validUntil: BigInt(Date.parse("2025-03-01")),
+      };
+    };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await this.getById(ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    MemoryDB.prototype.delete = async function failFirstOriginalDelete(id) {
+      if (id === ORIGINAL_ID) {
+        deleteAttempts += 1;
+        if (deleteAttempts === 1) throw new Error("injected first delete failure");
+      }
+      return originalDelete.call(this, id);
+    };
+    const input = { validFrom: "2025-01-01" };
+    const first = await executeStore("Additional cat fact", input);
+    assert.match(first.content[0].text, /Memory store failed:.*delete failure/i);
+    const firstReplacement = (await readRows()).find((row) => (
+      JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)
+    ));
+    assert.ok(firstReplacement);
+    assert.ok((await readRows()).some((row) => row.id === ORIGINAL_ID), "failed delete must keep the original");
+
+    await seedDb.update(ORIGINAL_ID, {
+      validUntil: Date.parse("2025-03-01"),
+    });
+    candidateWindowChanged = true;
+    const mutatedOriginal = await originalGetById.call(seedDb, ORIGINAL_ID);
+    assert.ok(mutatedOriginal.validFrom == 0);
+    assert.ok(mutatedOriginal.validUntil == Date.parse("2025-03-01"));
+    const retry = await executeStore("Additional cat fact", input);
+    assert.notEqual(retry.details?.action, "merged");
+    assert.match(retry.content[0].text, /stale|idempotency|collision|validity/i);
+
+    const rows = await readRows();
+    const replacements = rows.filter((row) => JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID));
+    assert.deepEqual(replacements.map((row) => row.id), [firstReplacement.id]);
+    assert.ok(rows.some((row) => row.id === ORIGINAL_ID), "a conflicting retry must preserve the original");
+    assert.equal(deleteAttempts, 1, "the rejected retry must not delete the original");
+  });
+
+  it("revalidates candidate validity after replacement preparation before storing or deleting", async () => {
+    let mutateCandidate = false;
+    let embedCalls = 0;
+    let replacementStoreCalls = 0;
+    let originalDeleteCalls = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() { return []; };
+    MemoryDB.prototype.getById = async function exposeMutationDuringPreparation(id) {
+      const row = await originalGetById.call(this, id);
+      if (!row || id !== ORIGINAL_ID || !mutateCandidate) return row;
+      return { ...row, validFrom: BigInt(Date.parse("2025-01-01")) };
+    };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await this.getById(ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mutateOnMergedEmbedding() {
+      embedCalls += 1;
+      if (embedCalls === 2) mutateCandidate = true;
+      return makeVector(0.25);
+    };
+    MemoryDB.prototype.store = async function trackReplacementStore(entry) {
+      if (entry.id !== ORIGINAL_ID) replacementStoreCalls += 1;
+      return originalStore.call(this, entry);
+    };
+    MemoryDB.prototype.delete = async function trackOriginalDelete(id) {
+      if (id === ORIGINAL_ID) originalDeleteCalls += 1;
+      return originalDelete.call(this, id);
+    };
+
+    const result = await executeStore();
+
+    assert.notEqual(result.details?.action, "merged");
+    assert.match(result.content[0].text, /stale|revalidation|validity/i);
+    assert.equal(replacementStoreCalls, 0);
+    assert.equal(originalDeleteCalls, 0);
+    assert.ok((await readRows()).some((row) => row.id === ORIGINAL_ID));
+  });
+
+  it("revalidates candidate validity after replacement readback before deleting the original", async () => {
+    let mutateCandidate = false;
+    let originalDeleteCalls = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() { return []; };
+    MemoryDB.prototype.getById = async function mutateAfterReplacementReadback(id) {
+      const row = await originalGetById.call(this, id);
+      if (id === ORIGINAL_ID && row && mutateCandidate) {
+        return { ...row, validFrom: BigInt(Date.parse("2025-01-01")) };
+      }
+      if (id !== ORIGINAL_ID && row && JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)) {
+        mutateCandidate = true;
+      }
+      return row;
+    };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await this.getById(ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    MemoryDB.prototype.delete = async function trackOriginalDelete(id) {
+      if (id === ORIGINAL_ID) originalDeleteCalls += 1;
+      return originalDelete.call(this, id);
+    };
+
+    const result = await executeStore();
+
+    assert.notEqual(result.details?.action, "merged");
+    assert.match(result.content[0].text, /stale|revalidation|validity/i);
+    assert.equal(originalDeleteCalls, 0);
+    const rows = await readRows();
+    assert.ok(rows.some((row) => row.id === ORIGINAL_ID));
+    assert.equal(
+      rows.filter((row) => JSON.parse(row.mergedFrom || "[]").includes(ORIGINAL_ID)).length,
+      1,
+      "the verified replacement remains repairable without deleting the changed original",
+    );
   });
 });

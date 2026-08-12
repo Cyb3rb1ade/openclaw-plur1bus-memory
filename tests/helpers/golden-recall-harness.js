@@ -93,6 +93,9 @@ export function makeRow(opts) {
     workspaceId: opts.workspaceId ?? opts.workspace_id ?? null,
     workspace_id: opts.workspace_id ?? opts.workspaceId ?? null,
     epistemicStatus: opts.epistemicStatus ?? "",
+    validFrom: opts.validFrom ?? 0,
+    validUntil: opts.validUntil ?? 0,
+    expiresAt: opts.expiresAt ?? undefined,
   };
 }
 
