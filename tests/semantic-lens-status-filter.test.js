@@ -47,4 +47,47 @@ describe("semantic lens status filter", () => {
     assert.ok(!ids.includes("mem-superseded"), "superseded memory must not be surfaced by the lens");
     assert.ok(ids.includes("mem-active"), "active memory should still be surfaced");
   });
+
+  it("does not surface an epistemically invalidated active memory", async () => {
+    const baseMemories = [
+      { id: "base1", text: "Projekt Alpha nutzt den Auth-Service intern" },
+    ];
+    const index = {
+      version: 1,
+      memoryToCommunity: { base1: "c1" },
+      communities: {
+        c1: {
+          id: "c1",
+          size: 3,
+          representativeMemoryIds: ["mem-invalidated", "mem-active"],
+          bridgeMemoryIds: [],
+          fadedCandidateMemoryIds: [],
+        },
+      },
+    };
+    const memoryById = new Map([
+      ["mem-invalidated", {
+        id: "mem-invalidated",
+        text: "Projekt Alpha nutzt den Auth-Service extern",
+        status: "active",
+        epistemicStatus: "invalidated",
+      }],
+      ["mem-active", {
+        id: "mem-active",
+        text: "Projekt Alpha nutzt den Auth-Service zentral",
+        status: "active",
+        epistemicStatus: "trusted",
+      }],
+    ]);
+
+    const result = await applySemanticLensToRecall(baseMemories, {
+      semanticLens: { enabled: true },
+      index,
+      memoryById,
+    });
+
+    const ids = result.lensMemories.map((memory) => memory.entry.id);
+    assert.ok(!ids.includes("mem-invalidated"));
+    assert.ok(ids.includes("mem-active"));
+  });
 });

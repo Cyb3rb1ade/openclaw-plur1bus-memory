@@ -95,6 +95,8 @@ import {
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
+import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
+import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
 import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
@@ -185,6 +187,7 @@ import {
   findLatestNeoRecord,
   formatNeoRecallContext,
   isInjectedContextText,
+  isNeoRecordAccessible,
   migrateNeoWorkspaces,
   neoSessionKeysFromContext,
   routeNeoRecall,
@@ -1400,6 +1403,15 @@ class MemoryDB {
     if (normalized.dispatchCount == null) normalized.dispatchCount = 0;
     if (normalized.lastDispatchAttemptAt == null) normalized.lastDispatchAttemptAt = 0;
     if (normalized.nextDispatchAttemptAt == null) normalized.nextDispatchAttemptAt = 0;
+    if (normalized.epistemicStatus == null) normalized.epistemicStatus = "";
+    if (normalized.epistemicStatusUpdatedAt == null) normalized.epistemicStatusUpdatedAt = 0;
+    if (normalized.epistemicStatusActor == null) normalized.epistemicStatusActor = "";
+    if (normalized.epistemicStatusReason == null) normalized.epistemicStatusReason = "";
+    if (normalized.previousEpistemicStatus == null) normalized.previousEpistemicStatus = "";
+    // Phase 2 — Bi-Temporal Memory. `0` = "no known bound in that direction",
+    // never derived from createdAt/updatedAt (see lib/valid-time.js).
+    if (normalized.validFrom == null) normalized.validFrom = 0;
+    if (normalized.validUntil == null) normalized.validUntil = 0;
     if (!this.schemaFieldNames) return normalized;
     const filtered = {};
     for (const [key, value] of Object.entries(normalized)) {
@@ -1513,6 +1525,19 @@ class MemoryDB {
             { name: 'nextDispatchAttemptAt', valueSql: '0' },
             { name: 'workspaceId', type: textField.type, valueSql: "''", securityCritical: true },
             { name: 'workspaceKey', valueSql: "''" },
+            // Phase 1 — Explicit Trust State (epistemicStatus). See
+            // lib/epistemic-status.js for the enum/matrix; absent/'' means
+            // "legacy, resolves conservatively" (see plan §5), never "trusted".
+            { name: 'epistemicStatus', valueSql: "''" },
+            { name: 'epistemicStatusUpdatedAt', valueSql: '0' },
+            { name: 'epistemicStatusActor', valueSql: "''" },
+            { name: 'epistemicStatusReason', valueSql: "''" },
+            { name: 'previousEpistemicStatus', valueSql: "''" },
+            // Phase 2 — Bi-Temporal Memory (validFrom/validUntil). See
+            // lib/valid-time.js for the semantics; `0` = "no known bound in
+            // that direction", not the Unix epoch.
+            { name: 'validFrom', valueSql: '0' },
+            { name: 'validUntil', valueSql: '0' },
           ];
 
           for (const col of allColumns) {
@@ -1593,6 +1618,19 @@ class MemoryDB {
             updatedAt: 0,
             workspaceId: "",
             workspaceKey: "",
+            // Phase 1 — Explicit Trust State (epistemicStatus). See
+            // lib/epistemic-status.js for the enum/matrix; absent/'' means
+            // "legacy, resolves conservatively" (see plan §5), never "trusted".
+            epistemicStatus: "",
+            epistemicStatusUpdatedAt: 0,
+            epistemicStatusActor: "",
+            epistemicStatusReason: "",
+            previousEpistemicStatus: "",
+            // Phase 2 — Bi-Temporal Memory (validFrom/validUntil). See
+            // lib/valid-time.js for the semantics; `0` = "no known bound in
+            // that direction", not the Unix epoch.
+            validFrom: 0,
+            validUntil: 0,
           },
         ]), "MemoryDB.createTable", "created-table", false);
       }
@@ -1784,6 +1822,7 @@ class MemoryDB {
         dispatchCount: r.dispatchCount ?? 0,
         lastDispatchAttemptAt: r.lastDispatchAttemptAt ?? 0,
         nextDispatchAttemptAt: r.nextDispatchAttemptAt ?? 0,
+        epistemicStatus: r.epistemicStatus || "",
       },
       score: distanceToScore(r._distance),
     }));
@@ -1820,6 +1859,13 @@ class MemoryDB {
           workspaceKey: r.workspaceKey || "",
           scope: r.scope || "agent-private",
           ownerUserId: r.ownerUserId || "",
+          epistemicStatus: r.epistemicStatus || "",
+          epistemicStatusActor: r.epistemicStatusActor || "",
+          epistemicStatusReason: r.epistemicStatusReason || "",
+          epistemicStatusUpdatedAt: r.epistemicStatusUpdatedAt ?? 0,
+          previousEpistemicStatus: r.previousEpistemicStatus || "",
+          validFrom: r.validFrom ?? 0,
+          validUntil: r.validUntil ?? 0,
         },
         score: distanceToScore(r._distance),
       }))
@@ -1834,7 +1880,11 @@ class MemoryDB {
     try {
       const builder = this.table.vectorSearch(vector);
       if (typeof builder.where === "function") {
-        return await this._read(builder.where("status = 'active' OR status IS NULL").limit(limit).toArray(), "MemoryDB.vectorSearchActive");
+        // (status = 'active' OR status IS NULL) parenthesized on its own —
+        // AND binds tighter than OR in SQL, so appending the epistemicStatus
+        // clause unparenthesized here would let an invalidated row with
+        // status='active' through.
+        return await this._read(builder.where("(status = 'active' OR status IS NULL) AND epistemicStatus != 'invalidated'").limit(limit).toArray(), "MemoryDB.vectorSearchActive");
       }
     } catch (err) {
       // Older LanceDB/query-builder surfaces and old schemas fall back here.
@@ -1842,7 +1892,7 @@ class MemoryDB {
       if (err instanceof TimeoutError) throw err;
     }
     const rows = await this._read(this.table.vectorSearch(vector).limit(fetchLimit).toArray(), "MemoryDB.vectorSearchActive.fallback");
-    return rows.filter((row) => !row.status || row.status === "active").slice(0, limit);
+    return rows.filter((row) => (!row.status || row.status === "active") && row.epistemicStatus !== "invalidated").slice(0, limit);
   }
 
   async delete(id) {
@@ -2019,6 +2069,155 @@ function deriveExpectedCanonicalTarget(path) {
       ? resolveInside(canonicalAncestor, ...missingParts)
       : canonicalAncestor,
   };
+}
+
+/**
+ * Applies an epistemic-status transition to a LanceDB memory row.
+ *
+ * Thin persistence adapter — the actual matrix/actor-tier/authorization
+ * validation lives in transitionEpistemicStatus() (lib/epistemic-status.js).
+ * This function only: (1) enforces the same fail-closed checkAccess() gate
+ * every other memory mutation goes through, (2) persists via the existing
+ * MemoryDB.update() in-place patch mechanism, (3) writes the existing
+ * destructive-op audit log — no new authorization surface, no new audit file.
+ *
+ * @param {object} db MemoryDB instance (getById()/update()).
+ * @param {string} id memory id
+ * @param {string} nextStatus target epistemicStatus
+ * @param {{ctx: object, actor: string, actorTier?: string, reason?: string, evidence?: string, authorized?: boolean, workspaceDir?: string, now?: number}} opts
+ * @returns {Promise<{ok: boolean, patch?: object, reason?: string}>}
+ */
+export async function applyEpistemicStatusToLanceDb(db, id, nextStatus, opts = {}) {
+  const record = await db.getById(id);
+  if (!record) return { ok: false, reason: "not_found" };
+  const acl = checkAccess(opts.ctx, record);
+  if (!acl.allowed) return { ok: false, reason: acl.reason };
+  const patch = transitionEpistemicStatus(record, nextStatus, opts);
+  // Log before mutating, not after. appendDestructiveOpLog is synchronous
+  // and swallows its own errors (lib/sql-safety.js), so this ordering costs
+  // nothing on the happy path. It matters on the unhappy path: if the
+  // process dies between the two calls, "log written, mutation never
+  // happened" is audit noise (a stray line describing an attempt), while
+  // "mutation happened, log never written" is a silent, unaudited trust
+  // change — worse for a feature whose purpose is to make trust changes
+  // legible. This is a narrower, simpler ordering choice than
+  // deleteWithAuditContinuation's late-settlement machinery, which is not
+  // replicated here (out of scope, see plan §9).
+  appendDestructiveOpLog(opts.workspaceDir, {
+    operation: "trust_transition",
+    memoryId: id,
+    previousEpistemicStatus: patch.previousEpistemicStatus,
+    newEpistemicStatus: patch.epistemicStatus,
+    actor: patch.epistemicStatusActor,
+    reason: patch.epistemicStatusReason,
+    evidence: opts.evidence || "",
+    agentId: opts.ctx?.agentId || null,
+    userPrincipal: opts.ctx?.userPrincipal || null,
+    timestamp: new Date().toISOString(),
+  });
+  await db.update(id, patch);
+  return { ok: true, patch };
+}
+
+/**
+ * Closes an existing memory row's validity window (Phase 2 — Bi-Temporal
+ * Memory) with a real, asserted boundary — NOT a version-chain edit (see
+ * plan §0/§7a): "Firma A" stays `status: "active"`, only its `validUntil`
+ * is set. Mirrors applyEpistemicStatusToLanceDb()'s structure exactly: same
+ * fail-closed checkAccess() gate, same in-place MemoryDB.update() patch
+ * mechanism, same destructive-op audit log (no new audit file).
+ *
+ * @param {object} db MemoryDB instance (getById()/update()).
+ * @param {string} id memory id
+ * @param {*} validUntil caller-asserted end-of-validity boundary (ISO date/ms/etc.)
+ * @param {{ctx: object, actor: string, reason?: string, workspaceDir?: string, now?: number}} opts
+ * @returns {Promise<{ok: boolean, patch?: object, reason?: string}>}
+ */
+export async function applyValidTimeCloseToLanceDb(db, id, validUntil, opts = {}) {
+  const safeId = safeUuid(id);
+  const record = await db.getById(safeId);
+  if (!record) return { ok: false, reason: "not_found" };
+  const acl = checkAccess(opts.ctx, record);
+  if (!acl.allowed) return { ok: false, reason: acl.reason };
+  const patch = buildValidTimeClosePatch(record, {
+    validUntil,
+    actor: opts.actor,
+    reason: opts.reason,
+    now: opts.now,
+  });
+  appendDestructiveOpLog(opts.workspaceDir, {
+    operation: "validity_close",
+    memoryId: safeId,
+    previousValidUntil: Number(record.validUntil || 0),
+    newValidUntil: patch.validUntil,
+    actor: opts.actor,
+    reason: opts.reason || "",
+    agentId: opts.ctx?.agentId || null,
+    userPrincipal: opts.ctx?.userPrincipal || null,
+    timestamp: new Date().toISOString(),
+  });
+  await db.update(safeId, patch);
+  return { ok: true, patch };
+}
+
+/**
+ * Maps a canonical memory request ctx onto the requester shape
+ * isNeoRecordAccessible() expects. Same field-precedence style as the
+ * plugin-internal neoRequester(ctx, event) helper (workspaceKey preferred
+ * over a bare workspaceId; this module-level function has no access to
+ * that closure, so the mapping is duplicated rather than shared) — but NOT
+ * an exact copy: this accepts the canonical memory-request-context shape
+ * (ctx.workspaceIdentity, ctx.userPrincipal) that checkAccess() and
+ * applyEpistemicStatusToLanceDb() already use, since that is the ctx shape
+ * a symmetric caller of this function's LanceDB sibling would pass, not
+ * the narrower ctx+event shape neoRequester() is tuned for.
+ *
+ * @param {object} [ctx]
+ * @returns {{requesterAgentId: string, requesterWorkspaceKey: string, requesterOwnerId: string}}
+ */
+function deriveNeoRequesterFromCtx(ctx = {}) {
+  return {
+    requesterAgentId: typeof ctx?.agentId === "string" ? ctx.agentId.trim() : "",
+    requesterWorkspaceKey: [ctx?.workspaceKey, ctx?.workspaceIdentity, ctx?.workspaceId]
+      .find((value) => typeof value === "string" && value.trim()) || "",
+    requesterOwnerId: [ctx?.ownerId, ctx?.userPrincipal, ctx?.userId]
+      .find((value) => typeof value === "string" && value.trim()) || "",
+  };
+}
+
+/**
+ * Applies an epistemic-status transition to a NEO record (candidate or
+ * behavior card), persisted the same way transitionRecordStatus() results
+ * already are — an append to the NEO store's candidates/behavior-cards log.
+ *
+ * Fail-closed like its LanceDB sibling applyEpistemicStatusToLanceDb(): NEO
+ * records use their own scope model (visibility.scope / origin.scope +
+ * isNeoRecordAccessible()), not checkAccess(), so this calls that instead.
+ * This function is not wired into any command handler yet (see plan §11/
+ * final report) — the gate exists anyway, on the same "no unauthorized
+ * mutation API, wired or not" principle as every other mutation path in
+ * this file.
+ *
+ * @param {object} store NEO store (appendCandidates()/appendBehaviorCards()/appendEmbeddingQueue()).
+ * @param {object} item current NEO record.
+ * @param {string} nextStatus target epistemicStatus.
+ * @param {{ctx?: object, actor: string, actorTier?: string, reason?: string, evidence?: string, authorized?: boolean, now?: number, isBehaviorCard?: boolean}} opts
+ * @returns {{ok: boolean, updated?: object, reason?: string}}
+ */
+export function applyEpistemicStatusToNeo(store, item, nextStatus, opts = {}) {
+  const requester = deriveNeoRequesterFromCtx(opts.ctx);
+  if (!isNeoRecordAccessible(item, requester)) {
+    return { ok: false, reason: "acl.denied" };
+  }
+  const patch = transitionEpistemicStatus(item, nextStatus, opts);
+  const updated = { ...item, ...patch };
+  if (opts.isBehaviorCard) {
+    store.appendBehaviorCards([updated]);
+  } else {
+    store.appendCandidates([updated]);
+  }
+  store.appendEmbeddingQueue?.([updated]);
+  return { ok: true, updated };
 }
 
 /** Per-agent MemoryDB cache with callback-scoped operation leases. */
@@ -2694,6 +2893,20 @@ function resolveNeoHooksConfig(api, commandConfig) {
 
 function formatJsonCommandResult(value) {
   return { text: JSON.stringify(value, null, 2) };
+}
+
+function formatKnownValidityLabel(entry) {
+  const validFrom = Number(entry?.validFrom ?? 0);
+  const validUntil = Number(entry?.validUntil ?? 0);
+  const fromLabel = Number.isFinite(validFrom) && validFrom > 0
+    ? new Date(validFrom).toISOString()
+    : "unknown";
+  const untilLabel = Number.isFinite(validUntil) && validUntil > 0
+    ? new Date(validUntil).toISOString()
+    : "open";
+  return validFrom > 0 || validUntil > 0
+    ? `, valid: [${fromLabel}, ${untilLabel})`
+    : "";
 }
 
 /**
@@ -4315,7 +4528,44 @@ const plugin = {
       return checkAccess(accessCtx, candidate.entry).allowed;
     }
 
+    function findSafeDuplicateForValidity(candidates, text, validityWindow) {
+      return candidates.find((candidate) => (
+        isSafeDuplicate(candidate.entry.text, text)
+        && stableValidTimeValue(candidate.entry.validFrom) === stableValidTimeValue(validityWindow.validFrom)
+        && stableValidTimeValue(candidate.entry.validUntil) === stableValidTimeValue(validityWindow.validUntil)
+      ));
+    }
+
     const durableMergeQueues = new Map();
+
+    function stableValidTimeValue(value) {
+      const numeric = Number(value || 0);
+      return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : 0;
+    }
+
+    function hasEquivalentEpistemicMetadata(left, right, { includeUpdatedAt = true } = {}) {
+      const stringFields = [
+        "epistemicStatus",
+        "epistemicStatusActor",
+        "epistemicStatusReason",
+        "previousEpistemicStatus",
+      ];
+      if (stringFields.some((field) => String(left?.[field] ?? "") !== String(right?.[field] ?? ""))) {
+        return false;
+      }
+      return !includeUpdatedAt
+        || stableValidTimeValue(left?.epistemicStatusUpdatedAt) === stableValidTimeValue(right?.epistemicStatusUpdatedAt);
+    }
+
+    function durableMergeEpistemicMetadata(candidate) {
+      return {
+        epistemicStatus: combineEpistemicStatusForMerge(candidate.epistemicStatus, undefined),
+        previousEpistemicStatus: normalizeEpistemicStatus(candidate.epistemicStatus),
+        epistemicStatusActor: "system:merge",
+        epistemicStatusReason: `memory_store merge with ${candidate.id}`,
+        epistemicStatusUpdatedAt: Date.now(),
+      };
+    }
 
     function durableMergeWriteKey({
       workspaceKey,
@@ -4328,6 +4578,8 @@ const plugin = {
       evidenceQuote,
       scope,
       ownerUserId,
+      validFrom,
+      validUntil,
     }) {
       return JSON.stringify([
         workspaceKey,
@@ -4340,6 +4592,8 @@ const plugin = {
         evidenceQuote,
         scope,
         ownerUserId,
+        stableValidTimeValue(validFrom),
+        stableValidTimeValue(validUntil),
       ]);
     }
 
@@ -4398,7 +4652,14 @@ const plugin = {
       appendDeletionLog();
     }
 
-    function isExpectedMergeReplacement(entry, replacementId, candidateId, expectedEntry) {
+    function durableMergeLineage(candidate) {
+      return [
+        candidate.id,
+        `valid-time:${stableValidTimeValue(candidate.validFrom)}:${stableValidTimeValue(candidate.validUntil)}`,
+      ];
+    }
+
+    function isExpectedMergeReplacement(entry, replacementId, candidateId, expectedEntry, expectedCandidate) {
       if (!entry || entry.id !== replacementId || entry.text !== expectedEntry.text) return false;
       if (entry.status && entry.status !== "active") return false;
       const stableFields = [
@@ -4412,12 +4673,29 @@ const plugin = {
         "evidenceQuote",
       ];
       if (stableFields.some((field) => entry[field] !== expectedEntry[field])) return false;
+      if (!hasEquivalentEpistemicMetadata(entry, expectedEntry, { includeUpdatedAt: false })) return false;
+      if (Number(entry.validFrom || 0) !== Number(expectedEntry.validFrom || 0)) return false;
+      if (Number(entry.validUntil || 0) !== Number(expectedEntry.validUntil || 0)) return false;
       try {
-        return JSON.parse(entry.mergedFrom || "[]").includes(candidateId);
+        const lineage = JSON.parse(entry.mergedFrom || "[]");
+        if (!Array.isArray(lineage)) {
+          api.logger?.debug?.(`memory-lancedb-namespaced: invalid mergedFrom shape for replacement=${replacementId}`);
+          return false;
+        }
+        return durableMergeLineage(expectedCandidate).every((marker) => lineage.includes(marker));
       } catch (error) {
         api.logger?.debug?.(`memory-lancedb-namespaced: invalid mergedFrom for replacement=${replacementId}: ${String(error)}`);
         return false;
       }
+    }
+
+    function isExpectedMergeCandidate(entry, expectedEntry, candidateId, accessCtx) {
+      if (!entry || entry.id !== candidateId || entry.text !== expectedEntry.text) return false;
+      if (entry.status && entry.status !== "active") return false;
+      if (!hasEquivalentEpistemicMetadata(entry, expectedEntry)) return false;
+      if (stableValidTimeValue(entry.validFrom) !== stableValidTimeValue(expectedEntry.validFrom)) return false;
+      if (stableValidTimeValue(entry.validUntil) !== stableValidTimeValue(expectedEntry.validUntil)) return false;
+      return candidateVisibleForStore({ entry }, accessCtx);
     }
 
     function runDurableMergeQueued(queueKey, operation) {
@@ -4463,27 +4741,31 @@ const plugin = {
       const candidateId = safeUuid(selectedCandidate?.entry?.id);
       const selectedText = selectedCandidate?.entry?.text;
       const queueKey = JSON.stringify([agentId, candidateId]);
-      const { idempotencyKey, replacementId } = durableMergeIdentity(
-        agentId,
-        candidateId,
-        writeKey || selectedText,
-      );
       return runDurableMergeQueued(queueKey, async () => {
         const authoritativeCandidate = await db.getById(candidateId);
-        const candidateIsActive = authoritativeCandidate
-          && (!authoritativeCandidate.status || authoritativeCandidate.status === "active");
-        const candidateMatchesSelection = authoritativeCandidate?.id === candidateId
-          && authoritativeCandidate?.text === selectedText;
-        const candidateStillVisible = authoritativeCandidate
-          && candidateVisibleForStore({ entry: authoritativeCandidate }, accessCtx);
-        if (!candidateIsActive || !candidateMatchesSelection || !candidateStillVisible) {
+        if (!isExpectedMergeCandidate(authoritativeCandidate, selectedCandidate.entry, candidateId, accessCtx)) {
           const staleErr = new Error("merge candidate is stale, no longer active, or no longer authorized");
           api.logger?.warn?.(`memory-lancedb-namespaced: durable merge revalidation failed for agent=${agentId} candidate=${candidateId}: ${staleErr.message}`);
           throw staleErr;
         }
 
+        const { idempotencyKey, replacementId } = durableMergeIdentity(agentId, candidateId, writeKey || selectedText);
+
         const preparedResult = await prepareReplacement(authoritativeCandidate, replacementId);
         if (!preparedResult) return null;
+
+        let candidateAfterPreparation;
+        try {
+          candidateAfterPreparation = await db.getById(candidateId);
+        } catch (revalidationErr) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge post-prepare revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${String(revalidationErr)}`);
+          throw revalidationErr;
+        }
+        if (!isExpectedMergeCandidate(candidateAfterPreparation, authoritativeCandidate, candidateId, accessCtx)) {
+          const staleErr = new Error("stale merge candidate changed during replacement preparation");
+          api.logger?.warn?.(`memory-lancedb-namespaced: durable merge post-prepare revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId}: ${staleErr.message}`);
+          throw staleErr;
+        }
 
         const mergedEntry = { ...preparedResult.mergedEntry, id: safeUuid(replacementId) };
         const prepared = { ...preparedResult, mergedEntry };
@@ -4503,10 +4785,23 @@ const plugin = {
             api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(verificationErr)}`);
             throw verificationErr;
           }
-          if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry)) {
+          if (!isExpectedMergeReplacement(verifiedReplacement, replacementId, candidateId, mergedEntry, authoritativeCandidate)) {
             const verificationErr = new Error(`merge replacement verification failed for ${replacementId}`);
             api.logger?.warn?.(`memory-lancedb-namespaced: durable merge verification failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${verificationErr.message}`);
             throw verificationErr;
+          }
+
+          let candidateBeforeDelete;
+          try {
+            candidateBeforeDelete = await db.getById(candidateId);
+          } catch (revalidationErr) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge pre-delete revalidation read failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${String(revalidationErr)}`);
+            throw revalidationErr;
+          }
+          if (!isExpectedMergeCandidate(candidateBeforeDelete, authoritativeCandidate, candidateId, accessCtx)) {
+            const staleErr = new Error("stale merge candidate changed before original deletion");
+            api.logger?.warn?.(`memory-lancedb-namespaced: durable merge pre-delete revalidation failed for agent=${agentId} candidate=${candidateId} replacement=${replacementId} archive=${archivePath}: ${staleErr.message}`);
+            throw staleErr;
           }
 
           try {
@@ -4542,7 +4837,7 @@ const plugin = {
           throw idempotencyReadError;
         }
         if (existingReplacement) {
-          if (!isExpectedMergeReplacement(existingReplacement, replacementId, candidateId, mergedEntry)) {
+          if (!isExpectedMergeReplacement(existingReplacement, replacementId, candidateId, mergedEntry, authoritativeCandidate)) {
             throw new Error(`durable merge idempotency collision for ${replacementId}`);
           }
           return finishDurableMerge();
@@ -4589,6 +4884,8 @@ const plugin = {
       if (!textValidation.ok) {
         return { error: textValidation.error };
       }
+      const validTimeValidation = validateValidTimeInputFields(params, ["validFrom", "validUntil"]);
+      if (!validTimeValidation.ok) return { error: validTimeValidation.error };
       const trace = createRecallDecisionTrace({
         query: textPreview(params.text, traceCfg.maxTextPreviewChars ?? 160),
         mode: "store",
@@ -4621,12 +4918,19 @@ const plugin = {
         const storeAccessCtx = memoryCtx;
         const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
         const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
+        // Phase 2 — Bi-Temporal Memory (§7): caller-supplied only, never
+        // guessed/extracted from text. Unparseable/absent -> 0 (unknown).
+        const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: api.logger });
 
         // 1. Duplicate check
         const existing = (await storeDb.findSimilar(vector, params.text, duplicateThreshold))
           .filter((candidate) => candidateVisibleForStore(candidate, storeAccessCtx));
         if (existing.length > 0) {
-          const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
+          const safeDuplicate = findSafeDuplicateForValidity(
+            existing,
+            params.text,
+            { validFrom: capturedValidFrom, validUntil: capturedValidUntil },
+          );
           if (!safeDuplicate) {
             api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
             addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
@@ -4660,6 +4964,8 @@ const plugin = {
                 evidenceQuote,
                 scope,
                 ownerUserId,
+                validFrom: capturedValidFrom,
+                validUntil: capturedValidUntil,
               }),
               prepareReplacement: async (authoritativeCandidate, replacementId) => {
                 let mergeResult = null;
@@ -4697,9 +5003,15 @@ const plugin = {
                   addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                   return null;
                 }
+                if (hasDisjointValidityWindows(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil })) {
+                  api.logger?.warn?.(`[memory-merge-safety] disjoint validity windows; aborting merge and storing separately`);
+                  addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "disjoint validity windows" });
+                  return null;
+                }
                 const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
-                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]), expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+                const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
+                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides);
                 return { mergedEntry, mergeResult, mergedImportance };
               },
             });
@@ -4725,7 +5037,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -6404,6 +6716,38 @@ const plugin = {
                 nonce: confirmation.nonce,
               });
               if (error) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: error } }) };
+
+              // Step 12 (plan) — explicit trust-status transition surface,
+              // folded into /correct's existing confirmation flow rather
+              // than a new command. Same nonce machinery, same
+              // checkMemoryAuth(destructive: true) gate already passed
+              // above — no new authorization surface.
+              if (pending.payload?.trustStatus) {
+                const targetStatus = pending.payload.trustStatus;
+                try {
+                  const result = await pool.withDb(agentId, async (rawDb) => {
+                    await rawDb.init();
+                    return applyEpistemicStatusToLanceDb(rawDb, pending.targetId, targetStatus, {
+                      ctx: memoryCtx,
+                      actor: memoryCtx?.userPrincipal || memoryCtx?.userId || "telegram:/correct",
+                      actorTier: "human",
+                      reason: "human review via /correct trust",
+                      // Authorized by reaching this point at all: destructive-op
+                      // auth already checked above, and the nonce-confirmation
+                      // round-trip (same UX as content correction) already
+                      // completed — the same security bar transitionEpistemicStatus()
+                      // requires for "trusted"/"invalidated" targets.
+                      authorized: true,
+                      workspaceDir: memoryCtx.workspaceDir,
+                    });
+                  });
+                  if (!result.ok) return { text: t("plur1bus.correct_trust_failed", { lang, tone, vars: { error: result.reason || "unknown" } }) };
+                  return { text: t("plur1bus.correct_trust_done", { lang, tone, vars: { id: pending.targetId, status: targetStatus } }) };
+                } catch (err) {
+                  return { text: t("plur1bus.correct_trust_failed", { lang, tone, vars: { error: err?.message || String(err) } }) };
+                }
+              }
+
               const newText = pending.payload?.newText || "";
               if (!newText) return { text: t("plur1bus.confirm_failed", { lang, tone, vars: { reason: "missing_payload" } }) };
               const validated = validateCorrectionText(newText);
@@ -6465,6 +6809,48 @@ const plugin = {
 
             // Initiation
             if (!args) return { text: t("plur1bus.correct_usage", { lang, tone }) };
+
+            // Trust-status initiation: "/correct trust <status> <query>".
+            // Deliberately a distinct, unambiguous prefix so it can never be
+            // confused with parseCorrection's "<old> zu <new>" / "<old> -> <new>"
+            // content-correction grammar.
+            const trustMatch = args.match(/^trust\s+(\S+)\s+(.+)$/i);
+            if (trustMatch) {
+              const requestedStatus = trustMatch[1].toLowerCase();
+              const trustQuery = trustMatch[2].trim();
+              if (!EPISTEMIC_STATUSES.includes(requestedStatus)) {
+                return { text: t("plur1bus.correct_trust_invalid_status", { lang, tone, vars: { status: trustMatch[1], valid: EPISTEMIC_STATUSES.join(", ") } }) };
+              }
+              const trustCandidates = await resolveCandidates(memoryDbAdapter, agentId, trustQuery, { ctx: memoryCtx });
+              if (trustCandidates.none) {
+                return { text: t("plur1bus.correct_not_found", { lang, tone, vars: { query: trustQuery } }) };
+              }
+              if (!trustCandidates.unique) {
+                const choice = renderCandidateChoice(trustCandidates.candidates, "correct", { lang, tone });
+                return { text: `${choice.text}\n\n${t("plur1bus.refine_hint", { lang, tone })}` };
+              }
+              const trustCard = trustCandidates.card;
+              const currentStatus = normalizeEpistemicStatus(trustCard.epistemicStatus);
+              if (!isLegalEpistemicTransition(currentStatus, requestedStatus, "human")) {
+                return { text: t("plur1bus.correct_trust_illegal_transition", { lang, tone, vars: { from: currentStatus, to: requestedStatus } }) };
+              }
+              const trustConfirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+              const trustConfirm = createConfirmation({
+                userId: trustConfirmationIdentity.userId,
+                chatId: trustConfirmationIdentity.chatId,
+                command: "correct",
+                targetId: trustCard.id,
+              });
+              trustConfirm.payload = { trustStatus: requestedStatus, oldStatus: currentStatus };
+              rememberPendingConfirmation(confirmationStore, confirmationIndex, trustConfirm);
+              return { text: t("plur1bus.correct_trust_confirm_text", { lang, tone, vars: {
+                title: trustCard.title || trustCard.id,
+                from: currentStatus,
+                to: requestedStatus,
+                token: trustConfirm.nonce,
+              } }) };
+            }
+
             const parsed = parseCorrection(args);
             if (!parsed) {
               return { text: t("plur1bus.correct_no_separator", { lang, tone }) };
@@ -7540,11 +7926,16 @@ const plugin = {
               query: { type: "string", description: "What to search for in memory" },
               limit: { type: "number", description: "Max results (default 5)" },
               full_text: { type: "boolean", description: "Return full text instead of summary (default false)" },
+              validAt: { type: "string", description: "Optional: restrict recall to facts valid at this specific point in time (ISO date, e.g. '2025-06-01') when the user asks about a dated state explicitly ('where did he work in 2025', 'what was true as of last year'). Requires an actual date or a date you can resolve with certainty from context; omit it rather than guessing for vague phrases such as 'a while ago'. When omitted, recall is not Valid-Time-filtered: historical rows may be returned and known validity bounds are labeled in the output." },
             },
             required: ["query"],
           },
           async execute(_toolCallId, params) {
             try {
+              const validTimeValidation = validateValidTimeInputFields(params, ["validAt"]);
+              if (!validTimeValidation.ok) {
+                return { content: [{ type: "text", text: `Memory recall rejected: ${validTimeValidation.error}` }] };
+              }
               return await withAccessReadDbs(
                 pool,
                 sharedMemoryPool,
@@ -7582,6 +7973,14 @@ const plugin = {
               });
               const _recallBaseParams = {
                 query: params.query,
+                // Phase 2 — Bi-Temporal Memory (§5d). Caller-supplied only,
+                // never inferred/defaulted to "now" — an unparseable or
+                // omitted value normalizes to 0, mapped to null so the
+                // pipeline applies zero temporal filtering by default.
+                validAt: (() => {
+                  const v = normalizeCapturedTimestamp(params.validAt);
+                  return v === 0 ? null : v;
+                })(),
                 phaseTimer,
                 softBudgetFallback,
                 embeddings,
@@ -7658,7 +8057,7 @@ const plugin = {
                   display = `🌙 [Traum${dreamDate ? ` vom ${dreamDate}` : ""}] ${display} (geträumt, nicht geschehen)`;
                 }
                 const orig = DISPLAY_SOURCES.has(r.entry.origin) ? `|${r.entry.origin}` : "";
-                lines.push(`[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id})`);
+                lines.push(`[${r.entry.category}${orig}] ${display} (score: ${r.score.toFixed(2)}, ID: ${r.entry.id}${formatKnownValidityLabel(r.entry)})`);
               }
               if (traceEnabled && returnedTrace) {
                 const summary = summarizeTrace(returnedTrace);
@@ -7696,6 +8095,8 @@ const plugin = {
               sourceUrl: { type: "string", description: "Optional URL this memory is derived from (provenance)" },
               evidenceQuote: { type: "string", description: "Optional original quote (≤200 chars) that backs this memory" },
               scope: { type: "string", enum: MEMORY_SCOPES, description: "Visibility scope: 'agent-private' (default), 'workspace' (shared within workspace), 'user' (shared across all agents of one user)" },
+              validFrom: { type: "string", description: "Optional: when this fact became true in the real world (ISO date), if the user stated or clearly implied an actual date or a date you can resolve with certainty (e.g. 'since March 2026', 'starting last Monday' relative to today's known date). Do NOT set this for vague relative phrasing with no resolvable anchor — 'seit letztem Monat', 'vor einer Weile', 'damals', 'irgendwann' — leave the parameter out entirely in those cases; the original wording is preserved in the memory text regardless, so nothing is lost by omitting this. Never guess a date to fill the field." },
+              validUntil: { type: "string", description: "Optional: when this fact stopped being true, ONLY if the user is stating a fact that has definitely ended (e.g. 'I worked there until June 2026', a correction of a previous fact with a known end date). Do NOT set this for something still ongoing or of unknown end — leave unset; unset means 'still valid / unknown', not 'ended now'. Never infer an end date from silence or from a new fact alone." },
             },
             required: ["text"],
           },
@@ -7708,6 +8109,13 @@ const plugin = {
                 return {
                   content: [{ type: "text", text: `Memory store rejected: ${textValidation.error}` }],
                   details: { action: "rejected", reason: "invalid_text" },
+                };
+              }
+              const validTimeValidation = validateValidTimeInputFields(params, ["validFrom", "validUntil"]);
+              if (!validTimeValidation.ok) {
+                return {
+                  content: [{ type: "text", text: `Memory store rejected: ${validTimeValidation.error}` }],
+                  details: { action: "rejected", reason: "invalid_valid_time" },
                 };
               }
               const scopeAccess = resolveStoreScopeAccess(memoryCtx, params.scope);
@@ -7750,12 +8158,19 @@ const plugin = {
               const storeAccessCtx = memoryCtx;
               const sourceUrl = typeof params.sourceUrl === "string" ? params.sourceUrl.slice(0, 500) : "";
               const evidenceQuote = typeof params.evidenceQuote === "string" ? params.evidenceQuote.slice(0, 200) : "";
+              // Phase 2 — Bi-Temporal Memory (§7): caller-supplied only, never
+              // guessed/extracted from text. Unparseable/absent -> 0 (unknown).
+              const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: api.logger });
 
               // 1. Duplicate check
               const existing = (await db.findSimilar(vector, params.text, duplicateThreshold))
                 .filter((candidate) => candidateVisibleForStore(candidate, storeAccessCtx));
               if (existing.length > 0) {
-                const safeDuplicate = existing.find((e) => isSafeDuplicate(e.entry.text, params.text));
+                  const safeDuplicate = findSafeDuplicateForValidity(
+                    existing,
+                    params.text,
+                    { validFrom: capturedValidFrom, validUntil: capturedValidUntil },
+                  );
                 if (!safeDuplicate) {
                   api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
                   addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
@@ -7789,6 +8204,8 @@ const plugin = {
                       evidenceQuote,
                       scope,
                       ownerUserId,
+                      validFrom: capturedValidFrom,
+                      validUntil: capturedValidUntil,
                     }),
                     prepareReplacement: async (authoritativeCandidate, replacementId) => {
                       let mergeResult = null;
@@ -7821,18 +8238,26 @@ const plugin = {
                         addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "LLM mergedText loses facts" });
                         return null;
                       }
+                      if (hasDisjointValidityWindows(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil })) {
+                        api.logger?.warn?.(`[memory-merge-safety] disjoint validity windows; aborting merge and storing separately`);
+                        addTraceStoreDecision(trace, { action: "merge_aborted", memoryId: authoritativeCandidate.id, reason: "disjoint validity windows" });
+                        return null;
+                      }
                       const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                       const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId });
                       const mergedEmotion = await inferEmotionalValenceAsync(mergeResult.mergedText, "user", null, { agentId });
                       const mergedMoodContext = emotionalPool.snapshot(agentId);
+                      const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
                       const mergedEntry = applyDynamicsDefaults({
                         id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
-                        importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify([authoritativeCandidate.id]),
+                        importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)),
                         expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                        ...durableMergeEpistemicMetadata(authoritativeCandidate),
                         emotionalValence: serializeEmotionalValence(mergedEmotion),
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
                         moodContextAtCapture: serializeEmotionalValence(mergedMoodContext),
+                        validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil,
                       }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
                       return { mergedEntry, mergeResult, mergedImportance };
                     },
@@ -7870,6 +8295,7 @@ const plugin = {
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
                 moodContextAtCapture: serializeEmotionalValence(moodContext),
+                validFrom: capturedValidFrom, validUntil: capturedValidUntil,
               }, Date.now(), halfLifeOverrides, { intensityHalfLifeFactor: emotionIntensityHalfLifeFactor });
               await db.store(entry);
               if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.stored", timestamp: new Date().toISOString(), agentId, memoryId: entry.id, text: params.text.slice(0, 200), category, origin, reason: "stored", relatedId: null });
@@ -8052,7 +8478,12 @@ const plugin = {
                   } else {
                     const rows = await db.table.query().where(`id IN (${inList})`).toArray();
                     const keyById = new Map(agentPending.map(p => [p.memoryId, p.key]));
-                    pendingTexts = rows.map(r => ({ id: r.id, text: r.text, category: r.category || "fact", scope: r.scope || "agent-private", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
+                    // Never promote an invalidated memory into canonical
+                    // KNOWLEDGE.md — that store has no per-chapter status once
+                    // written, so this is the only exclusion point available.
+                    pendingTexts = rows
+                      .filter(r => normalizeEpistemicStatus(r.epistemicStatus) !== "invalidated")
+                      .map(r => ({ id: r.id, text: r.text, category: r.category || "fact", scope: r.scope || "agent-private", importance: r.importance ?? 0.5, pendingKey: keyById.get(r.id) }));
                   }
                 } catch (fetchErr) {
                   api.logger.warn(`memory-lancedb-namespaced: knowledge_update DB fetch failed: ${String(fetchErr)}`);
@@ -8603,6 +9034,9 @@ const plugin = {
               updatedAt: r.entry.updatedAt ?? undefined,
               lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
               memoryClass: r.entry.memoryClass || "standard",
+              validFrom: r.entry.validFrom ?? 0,
+              validUntil: r.entry.validUntil ?? 0,
+              epistemicStatus: r.entry.epistemicStatus,
             };
             if (traceEnabled) {
               attachTraceToMemory(item, {
@@ -8640,6 +9074,9 @@ const plugin = {
             createdAt: r.entry.createdAt ?? 0,
             updatedAt: r.entry.updatedAt ?? undefined,
             lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
+            validFrom: r.entry.validFrom ?? 0,
+            validUntil: r.entry.validUntil ?? 0,
+            epistemicStatus: r.entry.epistemicStatus,
           }));
           if (semanticLensItems.length > 0) {
             api.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);

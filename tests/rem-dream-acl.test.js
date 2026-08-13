@@ -220,3 +220,67 @@ test("REM vault output retains the ownership binding for protected evidence", (t
   assert.match(markdown, new RegExp(`owner_user_id: ${REQUEST_CONTEXT.userPrincipal}`));
   assert.match(markdown, /scope: user/);
 });
+
+// ─── Lücke 3 (epistemicStatus, Auflage B): fallback-path exclusion ────────
+//
+// loadCandidateMemories() has three load paths (where()-available,
+// no-where() branch, catch-fallback on a throwing where()) that all
+// converge into one shared JS-side .filter() (see lib/dreaming/rem-dream.js,
+// the epistemicStatus check right after the __schema__/status checks). The
+// tests above (and lib/epistemic-status.js's own db-adapter/index.js tests)
+// only exercise the where()-available path. These two exercise the actual
+// fallback paths and prove an invalidated row is still excluded there too.
+
+function dbForNoWhere(rows) {
+  return {
+    table: {
+      // No .where() on the query() result at all -> loadCandidateMemories's
+      // `typeof query.where === "function"` check is false, forcing the
+      // no-where() branch (`rows = await query.limit(maxMemories).toArray()`).
+      query() { return { limit() { return { async toArray() { return rows; } }; } }; },
+      vectorSearch() { return { limit() { return { async toArray() { return rows.map((item) => ({ ...item, _distance: 0 })); } }; } }; },
+    },
+  };
+}
+
+function dbForThrowingWhere(rows) {
+  return {
+    table: {
+      // .where() exists but throws -> forces the catch-fallback branch
+      // (`rows = await db.table.query().limit(maxMemories).toArray()`).
+      query() {
+        return {
+          where() { throw new Error("simulated where() failure"); },
+          limit() { return { async toArray() { return rows; } }; },
+        };
+      },
+      vectorSearch() { return { limit() { return { async toArray() { return rows.map((item) => ({ ...item, _distance: 0 })); } }; } }; },
+    },
+  };
+}
+
+test("REM candidate loading (no-where() fallback path) still excludes an invalidated row via the shared JS filter", async () => {
+  const rows = [
+    row("live-1", "still-valid material"),
+    row("invalid-1", "retracted material", { epistemicStatus: "invalidated" }),
+  ];
+  const candidates = await loadCandidateMemories(dbForNoWhere(rows), {
+    weekStartMs: NOW - 1_000,
+    requestContext: REQUEST_CONTEXT,
+    aclPartition: WORKSPACE_PARTITION,
+  });
+  assert.deepEqual(candidates.map((candidate) => candidate.id), ["live-1"]);
+});
+
+test("REM candidate loading (throwing-where() catch-fallback path) still excludes an invalidated row via the shared JS filter", async () => {
+  const rows = [
+    row("live-2", "still-valid material"),
+    row("invalid-2", "retracted material", { epistemicStatus: "invalidated" }),
+  ];
+  const candidates = await loadCandidateMemories(dbForThrowingWhere(rows), {
+    weekStartMs: NOW - 1_000,
+    requestContext: REQUEST_CONTEXT,
+    aclPartition: WORKSPACE_PARTITION,
+  });
+  assert.deepEqual(candidates.map((candidate) => candidate.id), ["live-2"]);
+});

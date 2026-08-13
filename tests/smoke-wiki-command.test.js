@@ -989,6 +989,82 @@ describe("wiki-command smoke", () => {
     assert.doesNotMatch(result.text, /fallback secret/i);
   });
 
+  it("Lücke 3 (epistemicStatus, Auflage B): fallback search (supportsWhere:false) excludes an invalidated wiki entry via isActiveKindRow, even when it outranks the live entry", async () => {
+    const ctx = memoryContextFor(makeCtx("trust fallback"));
+    const invalidatedEntry = workspaceWiki(ctx, {
+      id: SECOND_OWNER_WIKI_ID,
+      _distance: 0.05, // closer / higher-ranked than the live entry below
+      text: "trust fallback invalidated entry",
+      summary: "trust fallback invalidated entry",
+      epistemicStatus: "invalidated",
+    });
+    const liveEntry = workspaceWiki(ctx, {
+      _distance: 0.2,
+      text: "trust fallback live entry",
+      summary: "trust fallback live entry",
+    });
+    // supportsWhere:false -> searchByKind's `typeof builder.where === "function"`
+    // check is false, forcing the fallback branch (plain vectorSearch().limit()
+    // .toArray(), filtered only by the JS-side isActiveKindRow()) — the same
+    // fallback path proven for foreign-workspace exclusion above, now proven
+    // for epistemicStatus exclusion.
+    const db = makeDb({ wikiRows: [invalidatedEntry, liveEntry], supportsWhere: false });
+
+    const prompts = [];
+    const result = await runDirect("trust fallback", db, {
+      ctx,
+      archiveDir,
+      callLlm: async (messages) => {
+        prompts.push(messages[0].content);
+        return "trust fallback answer";
+      },
+    });
+
+    assert.match(result.text, /trust fallback answer/);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /trust fallback live entry/);
+    assert.doesNotMatch(prompts[0], /trust fallback invalidated entry/);
+  });
+
+  it("Lücke 3 (epistemicStatus, Auflage B): a throwing where() (catch-fallback path) still excludes an invalidated wiki entry", async () => {
+    const ctx = memoryContextFor(makeCtx("trust throw fallback"));
+    const invalidatedEntry = workspaceWiki(ctx, {
+      id: SECOND_OWNER_WIKI_ID,
+      _distance: 0.05,
+      text: "trust throw fallback invalidated entry",
+      summary: "trust throw fallback invalidated entry",
+      epistemicStatus: "invalidated",
+    });
+    const liveEntry = workspaceWiki(ctx, {
+      _distance: 0.2,
+      text: "trust throw fallback live entry",
+      summary: "trust throw fallback live entry",
+    });
+    // where() exists and is offered, but its own query rejects — forces the
+    // outer catch-fallback branch (distinct trigger from supportsWhere:false
+    // above; same downstream isActiveKindRow() safety net).
+    const db = makeDb({
+      wikiRows: [invalidatedEntry, liveEntry],
+      supportsWhere: true,
+      whereError: new Error("simulated where() query failure"),
+    });
+
+    const prompts = [];
+    const result = await runDirect("trust throw fallback", db, {
+      ctx,
+      archiveDir,
+      callLlm: async (messages) => {
+        prompts.push(messages[0].content);
+        return "trust throw fallback answer";
+      },
+    });
+
+    assert.match(result.text, /trust throw fallback answer/);
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /trust throw fallback live entry/);
+    assert.doesNotMatch(prompts[0], /trust throw fallback invalidated entry/);
+  });
+
   it("safely logs both search failures without record content", async () => {
     const ctx = memoryContextFor(makeCtx("safe failure"));
     const debugCalls = [];

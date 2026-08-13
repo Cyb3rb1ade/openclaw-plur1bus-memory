@@ -190,6 +190,27 @@ describe("conversation-reactivation-recall", () => {
       assert.strictEqual(result.memories.length, 0);
     });
 
+    it("does not reactivate an epistemically invalidated active memory", async () => {
+      const result = await selectReactivationMemories({
+        prompt: "continue dashboard architecture decisions",
+        baseRecallIds: new Set(),
+        semanticLens: {
+          communities: [{ id: "c1", representativeMemoryIds: ["invalidated-1"] }],
+          memories: [{
+            id: "invalidated-1",
+            category: "project",
+            display: "dashboard architecture decisions plan",
+            status: "active",
+            epistemicStatus: "invalidated",
+          }],
+          entries: {},
+        },
+        cfg: baseCfg,
+      });
+
+      assert.deepStrictEqual(result.memories, []);
+    });
+
     it("selects community representatives matching prompt", async () => {
       const memory = {
         id: "m1",
