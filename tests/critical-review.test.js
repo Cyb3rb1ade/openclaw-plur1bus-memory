@@ -23,7 +23,6 @@ import {
   sanitizePreview,
   buildPreview,
   SHORT_REF_MIN_LEN,
-  shortestUniqueSuffix,
   assignShortRefs,
   normalizeShortRef,
   resolveShortRef,
@@ -149,17 +148,11 @@ describe("Vorschau- und Datenschutzpolitik", () => {
 describe("Kurzreferenzen", () => {
   it("erzeugt das kürzeste eindeutige Suffix (min. 5 Zeichen)", () => {
     assert.equal(SHORT_REF_MIN_LEN, 5);
-    assert.equal(shortestUniqueSuffix(UUID_A, new Set(), 5), "9a018");
+    const map = assignShortRefs([UUID_A], 5);
+    assert.equal(map.get(UUID_A), "9a018");
   });
 
-  it("verlängert bei Kollision automatisch", () => {
-    const taken = new Set(["9a018"]);
-    const ref = shortestUniqueSuffix(UUID_A, taken, 5);
-    assert.ok(ref.length > 5);
-    assert.ok(!taken.has(ref));
-  });
-
-  it("assignShortRefs weist kollisionsfrei und eindeutig zu", () => {
+  it("assignShortRefs erzeugt für jede UUID eine eindeutig auflösbare Referenz", () => {
     const ids = [
       "00000000-0000-4000-8000-000000000001",
       "00000000-0000-4000-8000-000000000002",
@@ -168,6 +161,74 @@ describe("Kurzreferenzen", () => {
     const refs = [...map.values()];
     assert.equal(new Set(refs).size, refs.length, "alle Referenzen eindeutig");
     for (const ref of refs) assert.ok(ref.length >= 5);
+    // Roundtrip: jede Referenz löst exakt die ursprüngliche UUID auf.
+    const pending = ids.map((id) => ({ id }));
+    for (const id of ids) {
+      const resolved = resolveShortRef(map.get(id), pending);
+      assert.equal(resolved.ok, true);
+      assert.equal(resolved.id, id);
+    }
+  });
+
+  it("löst Kollisionen bei identischer 5-Zeichen-Endung eindeutig auf", () => {
+    // Beide enden auf ...abcde (identisches 5-Zeichen-Suffix).
+    const id1 = "00000000-0000-4000-8000-aaaaaaaabcde";
+    const id2 = "00000000-0000-4000-8000-bbbbbbbabcde";
+    const pending = [{ id: id1 }, { id: id2 }];
+    const map = assignShortRefs([id1, id2], 5);
+
+    const ref1 = map.get(id1);
+    const ref2 = map.get(id2);
+    assert.ok(ref1.length >= 6, `Ref1 muss länger als 5 sein, war ${ref1}`);
+    assert.ok(ref2.length >= 6, `Ref2 muss länger als 5 sein, war ${ref2}`);
+    assert.notEqual(ref1, ref2);
+
+    assert.deepEqual(resolveShortRef(ref1, pending), { ok: true, id: id1 });
+    assert.deepEqual(resolveShortRef(ref2, pending), { ok: true, id: id2 });
+  });
+
+  it("löst Kollisionen bei identischer 6-Zeichen- und längerer Endung auf", () => {
+    // Identisches 6-Zeichen-Suffix ...0abcde.
+    const id1 = "00000000-0000-4000-8000-aaaaaa0abcde";
+    const id2 = "00000000-0000-4000-8000-bbbbbb0abcde";
+    const pending = [{ id: id1 }, { id: id2 }];
+    const map = assignShortRefs([id1, id2], 5);
+
+    for (const id of [id1, id2]) {
+      const ref = map.get(id);
+      assert.ok(ref.length >= 7, `Ref muss länger als 6 sein, war ${ref}`);
+      const resolved = resolveShortRef(ref, pending);
+      assert.deepEqual(resolved, { ok: true, id });
+    }
+  });
+
+  it("löst mehrere UUIDs mit identischer Endung deterministisch auf", () => {
+    const ids = [
+      "00000000-0000-4000-8000-aaaaaaaabcde",
+      "00000000-0000-4000-8000-bbbbbbbabcde",
+      "00000000-0000-4000-8000-cccccccabcde",
+    ];
+    const pending = ids.map((id) => ({ id }));
+    const map = assignShortRefs(ids, 5);
+    const refs = [...map.values()];
+    assert.equal(new Set(refs).size, ids.length, "keine doppelten Referenzen");
+    for (const id of ids) {
+      const resolved = resolveShortRef(map.get(id), pending);
+      assert.deepEqual(resolved, { ok: true, id });
+    }
+  });
+
+  it("ist unabhängig von der Eingabereihenfolge", () => {
+    const ids = [
+      "00000000-0000-4000-8000-aaaaaaaabcde",
+      "00000000-0000-4000-8000-bbbbbbbabcde",
+      "00000000-0000-4000-8000-cccccccabcde",
+    ];
+    const mapA = assignShortRefs([...ids], 5);
+    const mapB = assignShortRefs([...ids].reverse(), 5);
+    for (const id of ids) {
+      assert.equal(mapA.get(id), mapB.get(id), `Referenz für ${id} muss reihenfolgeunabhängig sein`);
+    }
   });
 
   it("normalisiert nur strenge Hex-Suffixe oder vollständige UUIDs", () => {
@@ -197,12 +258,18 @@ describe("Kurzreferenzen", () => {
     // Zwei gültige UUIDs, die sich das letzte 5-Zeichen-Suffix teilen.
     const id1 = "00000000-0000-4000-8000-aaaaaaaabcde";
     const id2 = "00000000-0000-4000-8000-bbbbbbbabcde";
-    const r = resolveShortRef("abcde", [{ id: id1 }, { id: id2 }]);
+    const pending = [{ id: id1 }, { id: id2 }];
+    const r = resolveShortRef("abcde", pending);
     assert.equal(r.ok, false);
     assert.equal(r.error, "ambiguous");
     assert.ok(Array.isArray(r.suggestions));
     assert.equal(r.suggestions.length, 2);
-    assert.ok(r.suggestions.every((s) => s.length >= 5));
+    assert.equal(new Set(r.suggestions).size, 2, "keine doppelten Vorschläge");
+    // Jeder Vorschlag muss exakt eine UUID treffen.
+    for (const suggestion of r.suggestions) {
+      const resolved = resolveShortRef(suggestion, pending);
+      assert.equal(resolved.ok, true);
+    }
   });
 
   it("vollständige UUID bleibt kompatibler Fallback", () => {
@@ -224,7 +291,7 @@ describe("Kurzreferenzen", () => {
   });
 });
 
-describe("Nachricht + Buttons (UX-Vertrag)", () => {
+describe("Nachricht (UX-Vertrag)", () => {
   const card = {
     id: UUID_A,
     type: "geburtstag",
@@ -243,7 +310,7 @@ describe("Nachricht + Buttons (UX-Vertrag)", () => {
     assert.doesNotMatch(msg.text, /reason=/);
   });
 
-  it("zeigt Kurzreferenz und Textbefehls-Fallback", () => {
+  it("zeigt Kurzreferenz und funktionierende Textbefehle", () => {
     const msg = buildCriticalMessage(card, { lang: "de" });
     assert.match(msg.text, /Referenz: 9a018/);
     assert.match(msg.text, /\/plur1bus critical accept 9a018/);
@@ -251,14 +318,13 @@ describe("Nachricht + Buttons (UX-Vertrag)", () => {
     assert.match(msg.text, /\/plur1bus critical edit 9a018/);
   });
 
-  it("Buttons sind verständlich und nicht destruktiv beschriftet", () => {
+  it("rendert keine toten Schalter oder Callback-Daten", () => {
     const msg = buildCriticalMessage(card, { lang: "de" });
-    const flat = msg.inline_keyboard.flat();
-    assert.equal(flat.length, 3);
-    assert.deepEqual(flat.map((b) => b.text), ["Bestätigen", "Nicht hervorheben", "Korrigieren"]);
-    assert.equal(flat[0].callback_data, `crit:ok:${UUID_A}`);
-    assert.equal(flat[1].callback_data, `crit:no:${UUID_A}`);
-    assert.equal(flat[2].callback_data, `crit:edit:${UUID_A}`);
+    assert.equal(msg.inline_keyboard, undefined);
+    assert.doesNotMatch(msg.text, /crit:ok/);
+    assert.doesNotMatch(msg.text, /crit:no/);
+    assert.doesNotMatch(msg.text, /crit:edit/);
+    assert.doesNotMatch(msg.text, /callback/);
   });
 
   it("Reject-Hinweis stellt klar, dass nichts gelöscht wird", () => {
@@ -266,16 +332,13 @@ describe("Nachricht + Buttons (UX-Vertrag)", () => {
     assert.match(msg.text, /löscht die Erinnerung nicht/);
   });
 
-  it("Callback-Daten enthalten keine Memory-Inhalte", () => {
+  it("Nachricht enthält keine Memory-Inhalte bei unterdrückter Vorschau", () => {
     const sensitive = {
       ...card,
       type: "zugang_passwort",
       text: "api-key=supergeheim",
     };
     const msg = buildCriticalMessage(sensitive, { lang: "de" });
-    const flat = JSON.stringify(msg.inline_keyboard);
-    assert.doesNotMatch(flat, /supergeheim/);
-    assert.doesNotMatch(flat, /api-key/);
     assert.doesNotMatch(msg.text, /supergeheim/);
     assert.doesNotMatch(msg.text, /api-key/);
   });

@@ -56,7 +56,7 @@ describe("formatClassifierCronReply", () => {
     );
   });
 
-  it("preserves classifier confirmation callbacks as portable presentation buttons", () => {
+  it("renders pushes as plain text without any presentation buttons", () => {
     const result = formatClassifierCronReply({
       pushed: 1,
       pushMessages: [{
@@ -69,19 +69,9 @@ describe("formatClassifierCronReply", () => {
     });
 
     assert.equal(result.text, "kritische Nachricht");
-    assert.equal(result.presentationTextMode, "fallback");
-    assert.deepStrictEqual(result.presentation, {
-      blocks: [
-        { type: "text", text: "kritische Nachricht" },
-        {
-          type: "buttons",
-          buttons: [
-            { label: "✅ OK", action: { type: "callback", value: "crit:ok:card-id" } },
-            { label: "❌ Falsch", action: { type: "callback", value: "crit:no:card-id" } },
-          ],
-        },
-      ],
-    });
+    assert.equal(result.presentation, undefined);
+    assert.equal(result.presentationTextMode, undefined);
+    assert.doesNotMatch(result.text, /crit:ok|crit:no|callback/);
   });
 
   it("turns a top-level classifier error into a failed cron invocation", () => {
@@ -126,7 +116,7 @@ describe("formatClassifierCronReply", () => {
     );
   });
 
-  it("includes partial-failure warnings in structured button presentations", () => {
+  it("appends partial-failure warnings to plain text without buttons", () => {
     const result = formatClassifierCronReply({
       pushed: 1,
       pushMessages: [{
@@ -142,12 +132,6 @@ describe("formatClassifierCronReply", () => {
       result.text,
       "kritische Nachricht\n\n⚠️ 1 weitere Karte konnte in diesem Lauf nicht verarbeitet werden.",
     );
-    assert.deepStrictEqual(result.presentation.blocks.slice(-2), [
-      { type: "divider" },
-      {
-        type: "text",
-        text: "⚠️ 1 weitere Karte konnte in diesem Lauf nicht verarbeitet werden.",
-      },
-    ]);
+    assert.equal(result.presentation, undefined);
   });
 });
