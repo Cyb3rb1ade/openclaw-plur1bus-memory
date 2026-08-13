@@ -166,7 +166,7 @@ import {
   normalizeWorkspaceTarget,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
-import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture } from "./lib/tombstone.js";
+import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
 import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
@@ -1389,6 +1389,7 @@ class MemoryDB {
     if (normalized.updateEvidence == null) normalized.updateEvidence = "";
     if (normalized.reconsolidationConfidence == null) normalized.reconsolidationConfidence = 0.0;
     if (normalized.status == null) normalized.status = "active";
+    else if (normalized.status !== "") normalized.status = safeStatus(normalized.status);
     if (normalized.versionCreatedAt == null) normalized.versionCreatedAt = 0;
     if (normalized.updatedAt == null) normalized.updatedAt = 0;
     // createdAt war als einziges Zeitfeld ohne Default. Ein Writer, der es
@@ -1953,6 +1954,10 @@ class MemoryDB {
     }
     const existing = rows[0];
     const patchObject = patch && typeof patch === "object" ? patch : {};
+    // Statusvalidierung: unbekannte Statuswerte dürfen nie gespeichert werden.
+    if (Object.hasOwn(patchObject, "status") && patchObject.status !== "") {
+      patchObject.status = safeStatus(patchObject.status);
+    }
     const schemaFields = this.schemaFieldNames || new Set(Object.keys(existing));
     if (typeof this.table.update === "function") {
       const values = {};
@@ -4718,7 +4723,9 @@ const plugin = {
       let committed = false;
       const commitTombstone = (already) => {
         if (committed) return;
-        committed = true;
+        // In-Memory-Commit-Flag erst NACH erfolgreicher Persistierung setzen,
+        // damit ein fehlgeschlagener Append keinen falschen "committed"-Zustand
+        // vortäuscht und ein erneuter Forget nachtragen kann.
         if (baseDbPath && !already) {
           appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "committed" });
         }
@@ -4735,6 +4742,7 @@ const plugin = {
           result: already ? "already_tombstoned" : "committed",
           timestamp: new Date().toISOString(),
         });
+        committed = true;
       };
       const failTombstone = (errorClass) => {
         if (baseDbPath) {
@@ -4787,6 +4795,41 @@ const plugin = {
           appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "failed" });
         }
         return { ok: false, notFound: true };
+      }
+      if (result?.alreadyTombstoned) {
+        // Crash-Recovery: Zeile bereits deleted — fehlenden committed Tombstone
+        // und Audit nachtragen.
+        if (baseDbPath) {
+          try {
+            const backfill = backfillCommittedTombstone(baseDbPath, card, {
+              agentId,
+              actor,
+              actorType,
+              reason,
+              sourceOp: source,
+              archiveRef: archivePath,
+              previousVersion: String(card?.previousVersion || ""),
+            });
+            if (!backfill.alreadyCommitted) {
+              appendDestructiveOpLog(workspaceDir, {
+                event: "memory.deleted",
+                source,
+                agentId,
+                memoryId,
+                canonicalOriginId: backfill.tombstone.canonicalOriginId,
+                via,
+                query,
+                archivePath,
+                tombstoneId: backfill.tombstone.tombstoneId,
+                result: "committed",
+                timestamp: new Date().toISOString(),
+              });
+            }
+          } catch (backfillErr) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget tombstone backfill failed for agent=${agentId} memory=${memoryId}: ${String(backfillErr)}`);
+          }
+        }
+        return { ok: true, alreadyTombstoned: true };
       }
       // Phase 2: committed erst nach bestätigter Mutation.
       commitTombstone(Boolean(result?.alreadyTombstoned));
@@ -5073,10 +5116,13 @@ const plugin = {
           ownerUserId,
         });
         if (blockingTombstone) {
+          if (blockingTombstone._blockReason) {
+            api.logger?.warn?.(`memory-lancedb-namespaced: tombstone registry ${blockingTombstone._blockReason} for agent=${storeAgentId}: ${blockingTombstone._diagnostic || ""} — blocking capture fail-closed`);
+          }
           addTraceStoreDecision(trace, {
             action: "tombstone_blocked",
             memoryId: blockingTombstone.memoryId,
-            reason: `forgotten memory fingerprint match (scope=${scope})`,
+            reason: blockingTombstone._blockReason || `forgotten memory fingerprint match (scope=${scope})`,
           });
           return {
             content: [{ type: "text", text: "This information was previously forgotten and cannot be silently re-stored." }],
@@ -8437,10 +8483,13 @@ const plugin = {
                 ownerUserId,
               });
               if (blockingTombstone) {
+                if (blockingTombstone._blockReason) {
+                  api.logger?.warn?.(`memory-lancedb-namespaced: tombstone registry ${blockingTombstone._blockReason} for agent=${agentId}: ${blockingTombstone._diagnostic || ""} — blocking capture fail-closed`);
+                }
                 addTraceStoreDecision(trace, {
                   action: "tombstone_blocked",
                   memoryId: blockingTombstone.memoryId,
-                  reason: `forgotten memory fingerprint match (scope=${scope})`,
+                  reason: blockingTombstone._blockReason || `forgotten memory fingerprint match (scope=${scope})`,
                 });
                 return {
                   content: [{ type: "text", text: "This information was previously forgotten and cannot be silently re-stored." }],
