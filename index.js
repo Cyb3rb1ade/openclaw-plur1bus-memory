@@ -1905,24 +1905,33 @@ class MemoryDB {
   /**
    * Audit-Recovery-Suche: findet bereits soft-deleted Zeilen (status="deleted").
    * Nur für die Idempotenz-/Audit-Recovery des memory_forget-Query-Pfads gedacht —
-   * normale Suche verwendet ausschließlich vectorSearchActive.
+   * normale Suche verwendet ausschließlich vectorSearchActive. Bewertet
+   * `_distance` exakt wie `search()` und filtert nach `minScore`. Liefert nur
+   * IDs + Score, niemals Klartext gelöschter Inhalte.
    */
-  async searchDeleted(vector, limit) {
+  async searchDeleted(vector, limit, minScore = 0.3) {
     this._assertTrustedPath();
     await this.init();
     const count = await this._read(this.table.countRows(), "MemoryDB.searchDeleted.countRows");
     if (count === 0) return [];
     const fetchLimit = Math.max(limit, Math.min(limit * 3, 100));
+    let rows = null;
     try {
       const builder = this.table.vectorSearch(vector);
       if (typeof builder.where === "function") {
-        return await this._read(builder.where("status = 'deleted'").limit(limit).toArray(), "MemoryDB.searchDeleted");
+        rows = await this._read(builder.where("status = 'deleted'").limit(limit).toArray(), "MemoryDB.searchDeleted");
       }
     } catch (err) {
       if (err instanceof TimeoutError) throw err;
     }
-    const rows = await this._read(this.table.vectorSearch(vector).limit(fetchLimit).toArray(), "MemoryDB.searchDeleted.fallback");
-    return rows.filter((row) => row.status === "deleted").slice(0, limit);
+    if (rows === null) {
+      rows = await this._read(this.table.vectorSearch(vector).limit(fetchLimit).toArray(), "MemoryDB.searchDeleted.fallback");
+    }
+    return (rows || [])
+      .filter((row) => row.status === "deleted")
+      .map((row) => ({ id: row.id, score: distanceToScore(row._distance) }))
+      .filter((r) => r.score >= minScore)
+      .slice(0, limit);
   }
 
   async delete(id) {
@@ -8735,16 +8744,22 @@ const plugin = {
                 if (results.length === 0) {
                   // Audit-Recovery: die Query kann eine bereits gelöschte Karte
                   // treffen (z. B. nach einem Forget mit fehlgeschlagenem Audit).
-                  // Gelöschte Kandidaten gezielt auflösen und recovery-fähig machen.
-                  const deleted = await db.searchDeleted(vector, 5);
+                  // Gelöschte Kandidaten gezielt auflösen, mit forgetThreshold
+                  // bewertet, und recovery-fähig machen. KEIN Klartext gelöschter
+                  // Inhalte in Kandidatenlisten oder Erfolgsmeldungen.
+                  const deleted = await db.searchDeleted(vector, 5, forgetThreshold);
                   if (deleted.length === 0) {
                     return { content: [{ type: "text", text: "No matching memory found." }] };
                   }
                   if (deleted.length > 1) {
-                    const list = deleted.map((r) => `${r.id}: ${r.text}`).join("\n");
+                    const list = deleted.map((r) => r.id).join("\n");
                     return { content: [{ type: "text", text: `Found ${deleted.length} already-forgotten candidates. Specify memoryId:\n${list}` }] };
                   }
-                  const deletedCard = deleted[0];
+                  const deletedId = deleted[0].id;
+                  const deletedCard = await db.getById(deletedId);
+                  if (!deletedCard) {
+                    return { content: [{ type: "text", text: "No matching memory found." }] };
+                  }
                   try {
                     await tombstoneMemoryWithAudit({
                       db, card: deletedCard, agentId,
@@ -8756,10 +8771,10 @@ const plugin = {
                       archivePath: "",
                     });
                   } catch (err) {
-                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedCard.id}: ${String(err)}`);
-                    return { content: [{ type: "text", text: `Memory forget failed for ${deletedCard.id}: ${String(err)}` }] };
+                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedId}: ${String(err)}`);
+                    return { content: [{ type: "text", text: `Memory forget failed for ${deletedId}: ${String(err)}` }] };
                   }
-                  return { content: [{ type: "text", text: `Forgotten: "${deletedCard.text}" (tombstoned).` }] };
+                  return { content: [{ type: "text", text: `Forgotten (audit recovered for ${deletedId}).` }] };
                 }
                 if (results.length > 1) {
                   const list = results.map((r) => `${r.entry.id}: ${r.entry.text}`).join("\n");
