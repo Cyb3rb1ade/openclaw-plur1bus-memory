@@ -248,3 +248,56 @@ class BackfillTests(unittest.TestCase):
         self.assertTrue(again["alreadyCommitted"])
         committed = [t for t in read_tombstones_from_registry(self.base, "agent-a") if t["status"] == "committed"]
         self.assertEqual(len(committed), 1)
+
+
+class AgentBindingAndPrincipalValidationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.base = Path(self.temporary.name)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _base_valid(self):
+        return {
+            "schemaVersion": 1,
+            "memoryId": UUID_A,
+            "agentId": "agent-a",
+            "scope": "agent-private",
+            "status": "committed",
+            "contentFingerprint": "a" * 64,
+        }
+
+    def test_tombstone_with_foreign_agent_in_registry_file_is_corrupt(self) -> None:
+        from plur1bus_hermes.tombstone import (
+            append_tombstone_to_registry,
+            find_blocking_tombstone_for_capture,
+        )
+        from plur1bus_hermes.tombstone import build_tombstone
+        tombstone = build_tombstone(
+            card={"id": UUID_A, "content": "Fakt", "scope": "agent-private"}, agent_id="agent-b"
+        )
+        append_tombstone_to_registry(self.base, "agent-a", {**tombstone, "status": "committed"})
+
+        blocking = find_blocking_tombstone_for_capture(self.base, {"agentId": "agent-a", "text": "Fakt", "scope": "agent-private"})
+        self.assertIsNotNone(blocking, "Agent-Mismatch muss fail-closed blockieren")
+        self.assertEqual(blocking["_blockReason"], "registry_corrupt_lines")
+
+    def test_principal_type_and_fingerprint_validation(self) -> None:
+        from plur1bus_hermes.tombstone import is_valid_tombstone
+
+        base = self._base_valid()
+        self.assertTrue(is_valid_tombstone(base, "agent-a"))
+        self.assertFalse(is_valid_tombstone({**base, "scope": "workspace", "workspaceId": 123}, "agent-a"))
+        self.assertFalse(is_valid_tombstone({**base, "scope": "workspace", "workspaceId": "   "}, "agent-a"))
+        self.assertFalse(is_valid_tombstone({**base, "scope": "user", "ownerUserId": 123}, "agent-a"))
+        self.assertFalse(is_valid_tombstone({**base, "contentFingerprint": "abc"}, "agent-a"))
+        self.assertFalse(is_valid_tombstone(base, "agent-b"), "Agent-Bindung")
+        self.assertTrue(is_valid_tombstone({**base, "scope": "workspace", "workspaceId": "ws-1"}, "agent-a"))
+        self.assertTrue(is_valid_tombstone({**base, "scope": "user", "ownerUserId": "user:v1:aaa"}, "agent-a"))
+
+    def test_unsafe_agent_id_is_rejected(self) -> None:
+        from plur1bus_hermes.tombstone import is_valid_tombstone
+
+        base = self._base_valid()
+        self.assertFalse(is_valid_tombstone({**base, "agentId": "../x"}, "agent-a"))

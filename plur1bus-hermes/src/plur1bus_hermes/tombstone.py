@@ -186,10 +186,13 @@ def is_valid_tombstone(parsed: Any, expected_agent_id: str | None = None) -> boo
     scope = parsed.get("scope")
     if scope not in _VALID_SCOPES:
         return False
-    # Principal-Bindung: workspace braucht Workspace-Principal, user einen Owner.
-    if scope == "workspace" and not (parsed.get("workspaceId") or parsed.get("workspaceKey")):
+    # Principal-Bindung: getrimmter, nicht leerer STRING (kein Typ-/Whitespace-Bypass).
+    if scope == "workspace" and not (
+        _non_empty_string(parsed.get("workspaceId"))
+        or _non_empty_string(parsed.get("workspaceKey"))
+    ):
         return False
-    if scope == "user" and not parsed.get("ownerUserId"):
+    if scope == "user" and not _non_empty_string(parsed.get("ownerUserId")):
         return False
     if parsed.get("status") not in _VALID_STATUSES:
         return False
@@ -197,6 +200,10 @@ def is_valid_tombstone(parsed: Any, expected_agent_id: str | None = None) -> boo
     if not isinstance(fingerprint, str) or not _FINGERPRINT_RE.fullmatch(fingerprint):
         return False
     return True
+
+
+def _non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and value.strip() != ""
 
 
 def find_tombstone_by_fingerprint(base_dir: Path, agent_id: str, fingerprint: str) -> dict[str, Any] | None:
