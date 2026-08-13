@@ -103,16 +103,25 @@ describe("Scope-Bindung (tombstoneBlocksCapture)", () => {
     assert.equal(tombstoneBlocksCapture({ ...base, scope: "agent-private" }, { agentId: "agent-a" }), true);
   });
 
-  it("Workspace-Tombstone blockiert nur denselben Workspace", () => {
+  it("Workspace-Tombstone blockiert nur denselben Workspace (exakter Scope-Typ)", () => {
     const t = { ...base, scope: "workspace", workspaceId: "ws-1" };
-    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", workspaceIdentity: "ws-2" }), false);
-    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", workspaceIdentity: "ws-1" }), true);
+    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", scope: "workspace", workspaceIdentity: "ws-2" }), false);
+    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", scope: "workspace", workspaceIdentity: "ws-1" }), true);
+    // workspace blockiert keinen agent-private-Capture
+    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", scope: "agent-private" }), false);
   });
 
-  it("User-Tombstone ist an den korrekten User gebunden", () => {
+  it("User-Tombstone ist an den korrekten User gebunden (exakter Scope-Typ)", () => {
     const t = { ...base, scope: "user", ownerUserId: "user:v1:aaa" };
-    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", ownerUserId: "user:v1:bbb" }), false);
-    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", ownerUserId: "user:v1:aaa" }), true);
+    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", scope: "user", ownerUserId: "user:v1:bbb" }), false);
+    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", scope: "user", ownerUserId: "user:v1:aaa" }), true);
+    // user blockiert keinen agent-private-Capture
+    assert.equal(tombstoneBlocksCapture(t, { agentId: "agent-a", scope: "agent-private" }), false);
+  });
+
+  it("agent-private blockiert nur agent-private, nicht workspace/user", () => {
+    assert.equal(tombstoneBlocksCapture({ ...base, scope: "agent-private" }, { agentId: "agent-a", scope: "workspace", workspaceIdentity: "ws-1" }), false);
+    assert.equal(tombstoneBlocksCapture({ ...base, scope: "agent-private" }, { agentId: "agent-a", scope: "user", ownerUserId: "user:v1:aaa" }), false);
   });
 
   it("failed-Tombstone blockiert nicht", () => {
@@ -323,14 +332,16 @@ describe("Scope-Auflösung (alle Treffer)", () => {
     }
   });
 
-  it("agent-private blockiert den ganzen Agenten, workspace/user nur ihren Principal", () => {
+  it("agent-private blockiert nur agent-private; workspace/user nur ihren Principal", () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-scope-ap-"));
     const baseDbPath = join(dir, "lancedb-namespaced");
     try {
       const text = "Privater Fakt";
       appendCommitted(baseDbPath, { id: "aaaaaaaa-1111-4111-8111-111111111111", text }, "agent-a", "agent-private");
-      assert.ok(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "workspace", workspaceIdentity: "ws-1" }));
-      assert.ok(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "user", ownerUserId: "user:v1:aaa" }));
+      // agent-private blockiert NUR agent-private, nicht workspace/user.
+      assert.ok(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "agent-private" }));
+      assert.equal(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "workspace", workspaceIdentity: "ws-1" }), null);
+      assert.equal(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "user", ownerUserId: "user:v1:aaa" }), null);
       assert.equal(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-b", text, scope: "agent-private" }), null);
     } finally {
       rmSync(dir, { recursive: true, force: true });
