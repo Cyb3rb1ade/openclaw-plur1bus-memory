@@ -69,12 +69,13 @@ const owner = {
 };
 
 const directReads = [["memory", "project"], ["state", ""], ["wiki", "project"], ["speaker", "list"], ["speaker", "proposals"]];
-const plur1busReads = ["start", "temperament", "persona", "skills review", "skills list", "skills show proposal-id", "reminders list", "reminders show reminder-id", "curation", "memory origin record-id", "memory explain record-id", "memory overlays", "memory overlay", "memory contradictions", "memory doctor", "recall why record-id", "origin trace record-id", "behavior show", "behavior candidates", "behavior explain record-id", "embeddings", "dreaming", "status", "doctor", "state"];
+const plur1busReads = ["start", "temperament", "persona", "skills review", "skills list", "skills show proposal-id", "reminders list", "reminders show reminder-id", "curation", "memory origin record-id", "memory explain record-id", "memory overlays", "memory overlay", "memory contradictions", "memory doctor", "recall why record-id", "origin trace record-id", "behavior show", "behavior candidates", "behavior explain record-id", "embeddings", "dreaming", "status", "doctor", "state", "critical"];
 
 const ACTION_FIXTURES = [
   ["public-help", ""], ["public-help", "help"], ["public-help", "unknown"],
   ["public-help", "skills bogus"], ["public-help", "neo bogus"], ["public-help", "recall bogus"], ["public-help", "origin bogus"], ["public-help", "persona bogus"], ["public-help", "behavior bogus"], ["public-help", "reminders bogus"], ["public-help", "curation bogus"],
   ["sensitive-read", "start"], ["sensitive-read", "temperament"], ["sensitive-read", "persona"],
+  ["sensitive-read", "critical"],
   ["sensitive-read", "skills review"], ["sensitive-read", "skills list"], ["sensitive-read", "skills show proposal-id"],
   ["sensitive-read", "reminder list"], ["sensitive-read", "reminder show reminder-id"], ["sensitive-read", "reminder help"],
   ["sensitive-read", "reminders list"], ["sensitive-read", "reminders show reminder-id"], ["sensitive-read", "reminders help"],
@@ -85,6 +86,7 @@ const ACTION_FIXTURES = [
   ["sensitive-read", "behavior show"], ["sensitive-read", "behavior candidates"], ["sensitive-read", "behavior explain record-id"],
   ["sensitive-read", "embeddings"], ["sensitive-read", "dreaming"], ["sensitive-read", "neo workspaces migrate --dry-run"],
   ["destructive", "setup safe"], ["destructive", "enable"], ["destructive", "disable"], ["destructive", "forget record-id"], ["destructive", "correct record-id text"],
+  ["destructive", "critical accept 9a018"], ["destructive", "critical reject 9a018"], ["destructive", "critical edit 9a018"],
   ["destructive", "temperament calm"], ["destructive", "persona regenerate"], ["destructive", "persona accept"],
   ["destructive", "skills approve proposal-id"], ["destructive", "skills reject proposal-id"],
   ["destructive", "reminder cancel reminder-id"], ["destructive", "reminders delete reminder-id"],
@@ -100,7 +102,7 @@ describe("B13 sensitive command-read authorization matrix", () => {
     const observed = new Set([...source.matchAll(/if \(action(?:Key)? === "([a-z-]+)"/g)].map((match) => match[1]));
     const classes = {
       "public-help": new Set(),
-      "sensitive-read": new Set(["behavior", "curation", "doctor", "dreaming", "embeddings", "memory", "origin", "persona", "recall", "reminder", "reminders", "skills", "start", "state", "status", "temperament", "neo"]),
+      "sensitive-read": new Set(["behavior", "curation", "doctor", "dreaming", "embeddings", "memory", "origin", "persona", "recall", "reminder", "reminders", "skills", "start", "state", "status", "temperament", "neo", "critical"]),
       destructive: new Set(["setup", "enable", "disable", "forget", "correct", "migrate-legacy-shared"]),
       "internal-cron": new Set(["internal"]),
       "B14-obsidian": new Set(["obsidian", "conflicts", "cron", "dashboards", "evening", "evening-review", "morning", "morning-review", "review"]),

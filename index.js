@@ -134,6 +134,11 @@ import {
 import { PLUGIN_CONFIG_PATH, resolveEffectiveConfig } from "./lib/setup/config-contract.js";
 import { runClassifier as runCriticalClassifier } from "./lib/jobs/critical-classifier.js";
 import {
+  assignShortRefs,
+  resolveShortRef,
+  translateType,
+} from "./lib/critical-review.js";
+import {
   formatAfterthoughtCronReply,
   formatClassifierCronReply,
 } from "./lib/internal-cron-reply.js";
@@ -5285,6 +5290,7 @@ const plugin = {
         ]);
         const isSensitiveChatRead = (actionKey, subKey) => {
           if (actionKey === "neo") return subKey === "workspaces";
+          if (actionKey === "critical") return ["", "list"].includes(subKey);
           if (!SENSITIVE_READ_ACTIONS.has(actionKey)) return false;
           if (actionKey === "skills") return ["review", "list", "show"].includes(subKey);
           if (actionKey === "reminder" || actionKey === "reminders") return ["", "list", "show", "help"].includes(subKey);
@@ -5299,6 +5305,7 @@ const plugin = {
           || actionKey === "disable"
           || actionKey === "forget"
           || actionKey === "correct"
+          || (actionKey === "critical" && ["accept", "reject", "edit"].includes(subKey))
           || (actionKey === "temperament" && Boolean(subKey))
           || (actionKey === "persona" && ["regenerate", "accept"].includes(subKey))
           || (actionKey === "skills" && ["approve", "reject"].includes(subKey))
@@ -5309,7 +5316,7 @@ const plugin = {
         );
         const knownPlur1busActions = new Set([
           ...SENSITIVE_READ_ACTIONS, "setup", "enable", "disable", "forget", "correct",
-          "internal", "migrate-legacy-shared", "neo",
+          "internal", "migrate-legacy-shared", "neo", "critical",
         ]);
         const callCommandLlm = async (messages, llmCfg) => {
           emitCommandRuntimeHook("onLlmCallContext", llmCfg?.callContext);
@@ -6344,6 +6351,9 @@ const plugin = {
             if (actionKey === "correct") {
               return runCorrectCommand(commandCtx, memoryCtx);
             }
+            if (actionKey === "critical") {
+              return runCriticalCommand(commandCtx, memoryCtx);
+            }
             return plur1busHelp("quick", resolveCommandLocale(commandCtx));
           };
         const plur1busCommands = [
@@ -6359,6 +6369,7 @@ const plugin = {
           { name: "plur1bus_memory", description: "Recall memories via PLUR1BUS.", acceptsArgs: true, prefixTokens: ["memory"] },
           { name: "plur1bus_forget", description: "Forget a memory via PLUR1BUS.", acceptsArgs: true, prefixTokens: ["forget"] },
           { name: "plur1bus_correct", description: "Correct a memory via PLUR1BUS.", acceptsArgs: true, prefixTokens: ["correct"] },
+          { name: "plur1bus_critical", description: "Review PLUR1BUS critical memories.", acceptsArgs: true, prefixTokens: ["critical"] },
           { name: "plur1bus_dashboards", description: "Build PLUR1BUS dashboards.", acceptsArgs: true, prefixTokens: ["obsidian", "dashboards", "build"] },
           { name: "plur1bus_conflicts", description: "Build PLUR1BUS conflict reports.", acceptsArgs: true, prefixTokens: ["obsidian", "conflicts", "build"] },
         ];
@@ -6372,6 +6383,7 @@ const plugin = {
               if (command.name === "plur1bus_memory") return runMemoryCommand(commandCtx);
               if (command.name === "plur1bus_forget") return runForgetCommand(commandCtx);
               if (command.name === "plur1bus_correct") return runCorrectCommand(commandCtx);
+              if (command.name === "plur1bus_critical") return runCriticalCommand(commandCtx);
               return runPlur1busCommand(commandCtx, command.prefixTokens);
             },
           });
@@ -6906,6 +6918,98 @@ const plugin = {
           } catch (err) {
             const { lang, tone } = resolveDenialLocale(commandCtx);
             return { text: t("plur1bus.correct_failed", { lang, tone, vars: { error: err?.message || err } }) };
+          }
+        };
+
+        /**
+         * Critical-Memory-Review: Listenansicht und die Aktionen accept /
+         * reject / edit über Kurzreferenzen (oder vollständige UUID als
+         * Kompatibilitätsfallback). Accept/Reject/Edit teilen denselben
+         * Resolver. Reject ist nicht-destruktiv (verwirft nur die besondere
+         * Kennzeichnung). Löschen/Archivieren bleibt die getrennte, bestätigte
+         * /forget-Aktion.
+         */
+        const runCriticalCommand = async (commandCtx, suppliedMemoryCtx = null) => {
+          try {
+            const deniedLen = checkSemanticArgsLength(commandCtx);
+            if (deniedLen) return deniedLen;
+            const memoryCtx = suppliedMemoryCtx || await resolveRegisteredMemoryContext(commandCtx);
+            const { lang, tone } = resolveCommandLocale(commandCtx);
+            const agentId = memoryCtx.agentId;
+            let tokens = (commandCtx.args || "").trim().split(/\s+/).filter(Boolean);
+            if ((tokens[0] || "").toLowerCase() === "critical") tokens = tokens.slice(1);
+            const subKey = (tokens[0] || "").toLowerCase();
+            const ref = tokens[1] || "";
+
+            let pending = [];
+            try {
+              pending = await memoryDbAdapter.findPendingCriticalReviews(agentId);
+            } catch (err) {
+              api.logger?.warn?.(`plur1bus critical[${agentId}]: findPendingCriticalReviews failed: ${err.message}`);
+            }
+            const refMap = assignShortRefs((pending || []).map((c) => c.id));
+
+            // Listenansicht
+            if (!subKey) {
+              const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
+              if (denied) return denied;
+              if (!pending || pending.length === 0) {
+                return { text: t("critical.list_empty", { lang, tone }) };
+              }
+              const lines = [t("critical.list_headline", { lang, tone })];
+              pending.forEach((card, index) => {
+                lines.push(t("critical.list_item", {
+                  lang, tone,
+                  vars: { index: index + 1, ref: refMap.get(card.id) || "", type: translateType(card.type, lang) },
+                }));
+              });
+              lines.push("", t("critical.usage", { lang, tone }));
+              return { text: lines.join("\n") };
+            }
+
+            if (!["accept", "reject", "edit"].includes(subKey)) {
+              return { text: t("critical.usage", { lang, tone }) };
+            }
+
+            // Mutation → destructive Auth (fail-closed in Gruppen/ohne Whitelist).
+            const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+            if (denied) return denied;
+
+            if (!ref) return { text: t("critical.usage", { lang, tone }) };
+
+            const resolved = resolveShortRef(ref, pending || []);
+            if (!resolved.ok) {
+              if (resolved.error === "ambiguous") {
+                const suggestions = (resolved.suggestions || []).join(" oder ");
+                return { text: t("critical.ambiguous", { lang, tone, vars: { ref, suggestions } }) };
+              }
+              if (resolved.error === "invalid_format") {
+                return { text: t("critical.invalid_ref", { lang, tone }) };
+              }
+              return { text: t("critical.not_found", { lang, tone, vars: { ref } }) };
+            }
+            const fullId = resolved.id;
+
+            if (subKey === "accept") {
+              const result = await memoryDbAdapter.markCriticalAccepted(agentId, fullId);
+              if (!result?.ok) return { text: t("critical.failed", { lang, tone }) };
+              return { text: t("critical.accepted", { lang, tone }) };
+            }
+            if (subKey === "reject") {
+              const result = await memoryDbAdapter.markCriticalRejected(agentId, fullId);
+              if (!result?.ok) return { text: t("critical.failed", { lang, tone }) };
+              return { text: t("critical.rejected", { lang, tone }) };
+            }
+            // edit → in den vorhandenen sicheren Korrekturablauf führen.
+            const card = (pending || []).find((c) => c.id === fullId);
+            const title = card?.title || "";
+            const command = title
+              ? `/plur1bus correct ${title} zu <korrigierter Text>`
+              : "/plur1bus correct <Beschreibung> zu <korrigierter Text>";
+            return { text: t("critical.edit_hint", { lang, tone, vars: { command } }) };
+          } catch (err) {
+            const { lang, tone } = resolveDenialLocale(commandCtx);
+            return { text: t("critical.failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
 

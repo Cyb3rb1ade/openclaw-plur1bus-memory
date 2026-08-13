@@ -306,3 +306,77 @@ test('cleanupOldCounts entfernt Einträge älter als 7 Tage', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ─── Source-Role / Provenienz im Classifier ────────────────────────────────
+
+const CRIT_UUID_A = 'a4563cc9-7611-4528-992a-075f8889a018';
+const CRIT_UUID_B = 'b4563cc9-7611-4528-992a-075f8889a019';
+
+test('runClassifier: Assistant-False-Positive wird nicht gepusht (kein explizites Signal)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'plur1bus-cls-prov-'));
+  try {
+    const updates = [];
+    const fakeDb = {
+      findRecentUnclassified: async () => [
+        { id: CRIT_UUID_A, content: 'Dein API-Key ist nicht konfiguriert.', title: 'x', sourceMessageRole: 'assistant' },
+      ],
+      updateCardType: async (agent, id, type) => { updates.push({ id, type }); },
+    };
+    const fakeModel = { complete: async () => ({ text: 'zugang_passwort' }) };
+    const result = await runClassifier(fakeDb, 'agent-prov', {
+      model: fakeModel,
+      statePath: stateDir,
+    });
+    assert.strictEqual(result.pushed, 0, 'Assistenten-Klassifikation ohne Wichtigkeitssignal darf nicht pushen');
+    assert.strictEqual((result.pushMessages || []).length, 0);
+    assert.deepStrictEqual(updates, [{ id: CRIT_UUID_A, type: 'note' }], 'Treffer wird auf gewöhnliche Notiz deklassifiziert');
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('runClassifier: neverForget in Assistentenquelle bleibt wirksam', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'plur1bus-cls-prov2-'));
+  try {
+    const updates = [];
+    const fakeDb = {
+      findRecentUnclassified: async () => [
+        { id: CRIT_UUID_B, content: 'Wichtige Regel', title: 'x', sourceMessageRole: 'assistant', neverForget: 1 },
+      ],
+      updateCardType: async (agent, id, type) => { updates.push({ id, type }); },
+    };
+    const fakeModel = { complete: async () => ({ text: 'person' }) };
+    const result = await runClassifier(fakeDb, 'agent-prov2', {
+      model: fakeModel,
+      statePath: stateDir,
+    });
+    assert.strictEqual(result.pushed, 1);
+    assert.deepStrictEqual(updates, [{ id: CRIT_UUID_B, type: 'person' }], 'neverForget bleibt als kritisch klassifiziert');
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('runClassifier: Push-Nachricht enthält Kurzreferenz statt voller UUID', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'plur1bus-cls-ref-'));
+  try {
+    const fakeDb = {
+      findRecentUnclassified: async () => [
+        { id: CRIT_UUID_A, content: 'Eva ist Projektleiterin.', title: 'x', sourceMessageRole: 'user' },
+      ],
+      updateCardType: async () => {},
+    };
+    const fakeModel = { complete: async () => ({ text: 'person' }) };
+    const result = await runClassifier(fakeDb, 'agent-ref', {
+      model: fakeModel,
+      statePath: stateDir,
+    });
+    assert.strictEqual(result.pushed, 1);
+    const msg = result.pushMessages[0];
+    assert.strictEqual(msg.shortRef, '9a018');
+    assert.ok(msg.text.includes('9a018'));
+    assert.ok(!msg.text.includes(CRIT_UUID_A), 'vollständige UUID darf nicht im Benutzertext erscheinen');
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
