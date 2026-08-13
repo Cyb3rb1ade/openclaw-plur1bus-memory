@@ -4722,14 +4722,14 @@ const plugin = {
 
       let committed = false;
       const commitTombstone = (already) => {
-        if (committed) return;
+        if (committed) return true;
         // In-Memory-Commit-Flag erst NACH erfolgreicher Persistierung setzen,
         // damit ein fehlgeschlagener Append keinen falschen "committed"-Zustand
         // vortäuscht und ein erneuter Forget nachtragen kann.
         if (baseDbPath && !already) {
           appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "committed" });
         }
-        appendDestructiveOpLog(workspaceDir, {
+        const auditOk = appendDestructiveOpLog(workspaceDir, {
           event: "memory.deleted",
           source,
           agentId,
@@ -4742,7 +4742,8 @@ const plugin = {
           result: already ? "already_tombstoned" : "committed",
           timestamp: new Date().toISOString(),
         });
-        committed = true;
+        committed = auditOk;
+        return auditOk;
       };
       const failTombstone = (errorClass) => {
         if (baseDbPath) {
@@ -4812,7 +4813,7 @@ const plugin = {
           });
           // Audit IMMER schreiben (auch bei alreadyCommitted), damit ein zuvor
           // verschluckter Audit-Schreibfehler nicht dauerhaft unerfasst bleibt.
-          appendDestructiveOpLog(workspaceDir, {
+          const backfillAuditOk = appendDestructiveOpLog(workspaceDir, {
             event: "memory.deleted",
             source,
             agentId,
@@ -4825,11 +4826,16 @@ const plugin = {
             result: backfill.alreadyCommitted ? "already_tombstoned" : "committed",
             timestamp: new Date().toISOString(),
           });
+          if (!backfillAuditOk) {
+            throw new Error("tombstone audit write failed");
+          }
         }
         return { ok: true, alreadyTombstoned: true };
       }
       // Phase 2: committed erst nach bestätigter Mutation.
-      commitTombstone(Boolean(result?.alreadyTombstoned));
+      if (!commitTombstone(Boolean(result?.alreadyTombstoned))) {
+        throw new Error("tombstone audit write failed");
+      }
       return { ok: true, alreadyTombstoned: Boolean(result?.alreadyTombstoned) };
     }
 
