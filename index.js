@@ -1902,6 +1902,29 @@ class MemoryDB {
     return rows.filter((row) => (!row.status || row.status === "active") && row.epistemicStatus !== "invalidated").slice(0, limit);
   }
 
+  /**
+   * Audit-Recovery-Suche: findet bereits soft-deleted Zeilen (status="deleted").
+   * Nur für die Idempotenz-/Audit-Recovery des memory_forget-Query-Pfads gedacht —
+   * normale Suche verwendet ausschließlich vectorSearchActive.
+   */
+  async searchDeleted(vector, limit) {
+    this._assertTrustedPath();
+    await this.init();
+    const count = await this._read(this.table.countRows(), "MemoryDB.searchDeleted.countRows");
+    if (count === 0) return [];
+    const fetchLimit = Math.max(limit, Math.min(limit * 3, 100));
+    try {
+      const builder = this.table.vectorSearch(vector);
+      if (typeof builder.where === "function") {
+        return await this._read(builder.where("status = 'deleted'").limit(limit).toArray(), "MemoryDB.searchDeleted");
+      }
+    } catch (err) {
+      if (err instanceof TimeoutError) throw err;
+    }
+    const rows = await this._read(this.table.vectorSearch(vector).limit(fetchLimit).toArray(), "MemoryDB.searchDeleted.fallback");
+    return rows.filter((row) => row.status === "deleted").slice(0, limit);
+  }
+
   async delete(id) {
     this._assertWritable("delete");
     await this.init();
@@ -8709,7 +8732,35 @@ const plugin = {
                   ? await embeddings.embedQuery(params.query, { agentId })
                   : await embeddings.embed(params.query, { agentId });
                 const results = await db.search(vector, 5, forgetThreshold);
-                if (results.length === 0) return { content: [{ type: "text", text: "No matching memory found." }] };
+                if (results.length === 0) {
+                  // Audit-Recovery: die Query kann eine bereits gelöschte Karte
+                  // treffen (z. B. nach einem Forget mit fehlgeschlagenem Audit).
+                  // Gelöschte Kandidaten gezielt auflösen und recovery-fähig machen.
+                  const deleted = await db.searchDeleted(vector, 5);
+                  if (deleted.length === 0) {
+                    return { content: [{ type: "text", text: "No matching memory found." }] };
+                  }
+                  if (deleted.length > 1) {
+                    const list = deleted.map((r) => `${r.id}: ${r.text}`).join("\n");
+                    return { content: [{ type: "text", text: `Found ${deleted.length} already-forgotten candidates. Specify memoryId:\n${list}` }] };
+                  }
+                  const deletedCard = deleted[0];
+                  try {
+                    await tombstoneMemoryWithAudit({
+                      db, card: deletedCard, agentId,
+                      workspaceDir: ctx?.workspaceDir,
+                      baseDbPath,
+                      source: "memory_forget",
+                      via: "query",
+                      query: params.query.slice(0, 200),
+                      archivePath: "",
+                    });
+                  } catch (err) {
+                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget recovery failed for agent=${agentId} memory=${deletedCard.id}: ${String(err)}`);
+                    return { content: [{ type: "text", text: `Memory forget failed for ${deletedCard.id}: ${String(err)}` }] };
+                  }
+                  return { content: [{ type: "text", text: `Forgotten: "${deletedCard.text}" (tombstoned).` }] };
+                }
                 if (results.length > 1) {
                   const list = results.map((r) => `${r.entry.id}: ${r.entry.text}`).join("\n");
                   return { content: [{ type: "text", text: `Found ${results.length} candidates. Specify memoryId:\n${list}` }] };
@@ -8737,7 +8788,7 @@ const plugin = {
                   });
                 } catch (err) {
                   api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${targetId}: ${String(err)}`);
-                  return { content: [{ type: "text", text: `Memory forget failed: ${String(err)}` }] };
+                  return { content: [{ type: "text", text: `Memory forget failed for ${targetId}: ${String(err)}` }] };
                 }
                 return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (tombstoned).` }] };
               }
