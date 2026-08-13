@@ -328,15 +328,10 @@ async function runCronIsolatedAgentTurn(params) {
     const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
     workDirs.push(distDir);
     const target = path.join(distDir, "isolated-agent-runtime.mjs");
+    // classify-recent liefert seit dem Critical-Review-UX-Fix reine Text-Zustellung
+    // (keine Presentation-/Button-Blöcke mehr).
     const reply = {
       text: "kritische Nachricht",
-      presentation: {
-        blocks: [{
-          type: "buttons",
-          buttons: [{ label: "✅ OK", action: { type: "callback", value: "crit:ok:id" } }],
-        }],
-      },
-      presentationTextMode: "fallback",
     };
     const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
     writeFileSync(target, patched.source);

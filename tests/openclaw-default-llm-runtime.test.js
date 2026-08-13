@@ -700,15 +700,10 @@ test("Critical Push direct override works without a host runtime", async (t) => 
 
   assert.match(result.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
   assert.doesNotMatch(result.text, /"pushMessages"/);
-  assert.equal(result.presentationTextMode, "fallback");
-  assert.deepStrictEqual(
-    result.presentation.blocks[1].buttons.map((button) => button.action.value),
-    [
-      `crit:ok:${memoryId}`,
-      `crit:no:${memoryId}`,
-      `crit:edit:${memoryId}`,
-    ],
-  );
+  assert.equal(result.presentation, undefined);
+  assert.equal(result.presentationTextMode, undefined);
+  assert.doesNotMatch(result.text, /crit:ok|crit:no|crit:edit/);
+  assert.match(result.text, /\/plur1bus critical accept /);
   assert.equal(directCalls.length, 1);
   assert.equal(directCalls[0].body.model, "direct/critical-model");
   assert.equal(stored.type, "person");
