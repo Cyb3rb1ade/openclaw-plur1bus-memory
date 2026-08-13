@@ -45,13 +45,14 @@ const DEFAULT_BASE_DB = join(process.env.OPENCLAW_HOME || homedir(), ".openclaw"
 const DEFAULT_ARCHIVE = join(process.env.OPENCLAW_HOME || homedir(), ".openclaw", "memory", "_archive");
 
 function readJsonl(path) {
-  if (!existsSync(path)) return [];
-  const out = [];
+  if (!existsSync(path)) return { records: [], corruptLines: 0 };
+  const records = [];
+  let corruptLines = 0;
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (!line.trim()) continue;
-    try { out.push(JSON.parse(line)); } catch { /* skip */ }
+    try { records.push(JSON.parse(line)); } catch { corruptLines += 1; }
   }
-  return out;
+  return { records, corruptLines };
 }
 
 function findDestructiveOpsFiles(root) {
@@ -86,12 +87,21 @@ function findArchiveJsonFiles(archiveDir) {
   return results;
 }
 
+// Kollisionsbewusste Namenszuordnung: ein Basename darf nur dann verwendet
+// werden, wenn er eindeutig ist. Bei mehrdeutigen Dateinamen wird nicht geraten.
 function archiveByFilenameMap(files) {
   const map = new Map();
+  const collisions = new Set();
   for (const file of files) {
-    map.set(basename(file), file);
+    const name = basename(file);
+    if (map.has(name)) {
+      collisions.add(name);
+      map.delete(name);
+    } else if (!collisions.has(name)) {
+      map.set(name, file);
+    }
   }
-  return map;
+  return { map, collisions };
 }
 
 function main() {
@@ -104,16 +114,26 @@ function main() {
     : findDestructiveOpsFiles(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
 
   const archiveFiles = findArchiveJsonFiles(archiveDir);
-  const archiveByName = archiveByFilenameMap(archiveFiles);
+  const { map: archiveByName, collisions: archiveNameCollisions } = archiveByFilenameMap(archiveFiles);
 
   const reconstructed = [];
   const skipped = [];
   const conflicted = [];
   const missingContent = [];
+  let corruptLines = 0;
+  let failedEventsSkipped = 0;
 
   for (const opsFile of destructiveOpsFiles) {
-    for (const event of readJsonl(opsFile)) {
+    const { records, corruptLines: fileCorrupt } = readJsonl(opsFile);
+    corruptLines += fileCorrupt;
+    for (const event of records) {
       if (event.event !== "memory.deleted") continue;
+      // result="failed" darf NIEMALS als committed rekonstruiert werden.
+      if (event.result === "failed") {
+        failedEventsSkipped += 1;
+        skipped.push({ memoryId: event.memoryId, agentId: event.agentId, reason: "failed_event" });
+        continue;
+      }
       const memoryId = event.memoryId;
       const agentId = event.agentId;
       const archivePath = event.archivePath;
@@ -127,15 +147,29 @@ function main() {
       }
 
       // Dedup gegen vorhandene committed Tombstones.
-      if (findTombstoneByOriginId(baseDbPath, agentId, memoryId)) {
-        skipped.push({ memoryId, agentId, reason: "already_tombstoned" });
+      try {
+        if (findTombstoneByOriginId(baseDbPath, agentId, memoryId)) {
+          skipped.push({ memoryId, agentId, reason: "already_tombstoned" });
+          continue;
+        }
+      } catch (err) {
+        conflicted.push({ memoryId, agentId, reason: `registry_read_error: ${err?.message || err}` });
         continue;
       }
 
-      // Karteninhalt aus dem Archiv laden (für Fingerprint/Scope).
-      const archiveFile = archivePath && existsSync(archivePath)
-        ? archivePath
-        : archiveByName.get(archivePath ? basename(archivePath) : "");
+      // Karteninhalt aus dem Archiv laden (für Fingerprint/Scope). Nur den
+      // expliziten archivePath verwenden; Basename-Fallback nur bei Eindeutigkeit.
+      let archiveFile = null;
+      if (archivePath && existsSync(archivePath)) {
+        archiveFile = archivePath;
+      } else if (archivePath) {
+        const name = basename(archivePath);
+        if (archiveNameCollisions.has(name)) {
+          conflicted.push({ memoryId, agentId, reason: "archive_filename_collision" });
+          continue;
+        }
+        archiveFile = archiveByName.get(name) || null;
+      }
       let card = null;
       if (archiveFile && existsSync(archiveFile)) {
         try { card = JSON.parse(readFileSync(archiveFile, "utf8")); } catch { card = null; }
@@ -183,6 +217,8 @@ function main() {
     skipped: skipped.length,
     conflicted: conflicted.length,
     missingContent: missingContent.length,
+    corruptLines,
+    failedEventsSkipped,
     reconstructedIds: reconstructed.map((r) => r.memoryId),
     skippedDetails: skipped,
     conflictedDetails: conflicted,

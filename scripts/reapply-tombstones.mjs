@@ -13,7 +13,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { readTombstonesFromRegistry, tombstoneRegistryDir } from "../lib/tombstone.js";
+import { readTombstoneRegistry, tombstoneRegistryDir } from "../lib/tombstone.js";
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 
@@ -41,12 +41,25 @@ async function main() {
     }
   }
 
-  const report = { mode: args.apply ? "apply" : "dry-run", applied: [], alreadyTombstoned: [], notFound: [], errors: [] };
+  const report = {
+    mode: args.apply ? "apply" : "dry-run",
+    applied: [],
+    alreadyTombstoned: [],
+    notFound: [],
+    errors: [],
+    registryErrors: [],
+    activeAfterReapply: [],
+  };
 
   for (const agent of agents) {
     let safeAgent;
     try { safeAgent = safeAgentId(agent); } catch { continue; }
-    const tombstones = readTombstonesFromRegistry(baseDbPath, safeAgent).filter((t) => t.status === "committed");
+    const registry = readTombstoneRegistry(baseDbPath, safeAgent);
+    if (!registry.ok) {
+      report.registryErrors.push({ agent: safeAgent, error: registry.readError });
+      continue;
+    }
+    const tombstones = registry.tombstones.filter((t) => t.status === "committed");
     if (tombstones.length === 0) continue;
     const adapter = createDbAdapter({ basePath: baseDbPath, logger: { info() {}, warn() {} } });
     for (const tombstone of tombstones) {
@@ -65,13 +78,32 @@ async function main() {
         report.errors.push({ agent: safeAgent, memoryId: id, error: err?.message || String(err) });
       }
     }
+    // Verifikation: keine durch committed Tombstone adressierte Zeile darf aktiv
+    // geblieben sein (Resurrection-Schutz).
+    for (const tombstone of tombstones) {
+      const id = tombstone.memoryId;
+      if (!id) continue;
+      try {
+        const card = await adapter.getCard(safeAgent, id);
+        if (card && String(card.status || "") === "active") {
+          report.activeAfterReapply.push({ agent: safeAgent, memoryId: id });
+        }
+      } catch {
+        /* getCard-Fehler wird über errors abgedeckt */
+      }
+    }
     await adapter.shutdown();
   }
 
   process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+
+  const failed = report.errors.length > 0 || report.registryErrors.length > 0 || report.activeAfterReapply.length > 0;
+  return failed ? 1 : 0;
 }
 
-main().catch((err) => {
+main().then((code) => {
+  process.exitCode = code;
+}).catch((err) => {
   process.stderr.write(`reapply-tombstones failed: ${err?.message || err}\n`);
   process.exitCode = 1;
 });
