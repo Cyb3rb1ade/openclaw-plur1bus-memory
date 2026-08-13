@@ -624,7 +624,7 @@ test("critical classifier command prefers its session-bound runtime and does not
     runtimeContext: { llm: sessionRuntime },
   });
 
-  assert.match(result.text, /^🔔 \*Neue kritische Erinnerung\*/);
+  assert.match(result.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
   assert.doesNotMatch(result.text, /"pushMessages"/);
   assert.equal(globalCalls.length, 0);
   assert.equal(sessionCalls.length, 1);
@@ -698,7 +698,7 @@ test("Critical Push direct override works without a host runtime", async (t) => 
   });
   const stored = await readMemory(pluginModule, baseDbPath, agentId, memoryId);
 
-  assert.match(result.text, /^🔔 \*Neue kritische Erinnerung\*/);
+  assert.match(result.text, /^🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt\./);
   assert.doesNotMatch(result.text, /"pushMessages"/);
   assert.equal(result.presentationTextMode, "fallback");
   assert.deepStrictEqual(

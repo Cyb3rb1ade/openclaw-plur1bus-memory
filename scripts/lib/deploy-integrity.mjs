@@ -189,6 +189,7 @@ export const DEPLOY_FILES = [
   "lib/atomic-json.js",
   "lib/critical-push-classifier.js",
   "lib/critical-push-state.js",
+  "lib/critical-review.js",
   "lib/fetch-with-timeout.js",
   "lib/filter-parser.js",
   "lib/garbage-collector.js",
