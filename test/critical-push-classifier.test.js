@@ -101,7 +101,7 @@ test('shouldPush benutzt Default-Limit wenn opts leer', () => {
 
 // ─── buildPushMessage ────────────────────────────────────────────────────
 
-test('buildPushMessage rendert Telegram-Karte mit 3 Buttons', () => {
+test('buildPushMessage rendert verständliche Textbefehle ohne Buttons', () => {
   const card = {
     id: 'card-1',
     type: 'geburtstag',
@@ -109,17 +109,20 @@ test('buildPushMessage rendert Telegram-Karte mit 3 Buttons', () => {
     text: 'Eva hat am 3. Juni Geburtstag.',
     source: 'konversation',
     date: '2026-05-28',
+    shortRef: '9a018',
   };
   const msg = buildPushMessage(card);
-  assert.ok(msg.text.includes('🔔') || msg.text.includes('🧠'));
+  assert.ok(msg.text.includes('🧠'));
   assert.ok(msg.text.includes('Geburtstag'));
-  assert.ok(Array.isArray(msg.inline_keyboard));
-  // Erwartet 3 Buttons: OK / nein / korrigieren
-  const flat = msg.inline_keyboard.flat();
-  assert.strictEqual(flat.length, 3);
-  assert.ok(flat.some(b => b.callback_data === 'crit:ok:card-1'));
-  assert.ok(flat.some(b => b.callback_data === 'crit:no:card-1'));
-  assert.ok(flat.some(b => b.callback_data === 'crit:edit:card-1'));
+  // Keine toten Schalter: keine inline_keyboard / callback-Daten.
+  assert.strictEqual(msg.inline_keyboard, undefined);
+  assert.ok(!msg.text.includes('crit:ok'));
+  assert.ok(!msg.text.includes('crit:no'));
+  assert.ok(!msg.text.includes('crit:edit'));
+  // Funktionierende Textbefehle mit Kurzreferenz.
+  assert.ok(msg.text.includes('/plur1bus critical accept 9a018'));
+  assert.ok(msg.text.includes('/plur1bus critical reject 9a018'));
+  assert.ok(msg.text.includes('/plur1bus critical edit 9a018'));
 });
 
 // ─── State ──────────────────────────────────────────────────────────────
