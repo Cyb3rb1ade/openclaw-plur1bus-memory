@@ -148,7 +148,7 @@ describe("registered memory command reachability", () => {
     }
     if (previousOpenclawHome === undefined) delete process.env.OPENCLAW_HOME;
     else process.env.OPENCLAW_HOME = previousOpenclawHome;
-    for (const dir of [baseDbPath, workspaceDir, openclawHome]) {
+    for (const dir of [baseDbPath, workspaceDir, openclawHome, join(baseDbPath, "..", "_tombstones")]) {
       if (dir) rmSync(dir, { recursive: true, force: true });
     }
   });

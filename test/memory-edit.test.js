@@ -93,32 +93,33 @@ test('resolveCandidates reicht ACL-Kontext an searchByTopic weiter', async () =>
 
 // ─── forgetCard — Archive-First-Garantie ─────────────────────────────────
 
-test('forgetCard archiviert ZUERST, dann löscht', async () => {
+test('forgetCard archiviert ZUERST, dann tombstoned', async () => {
   const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-forget-'));
   try {
     const order = [];
+    const id = '11111111-1111-4111-8111-111111111111';
     const fakeDb = {
       getCard: async (agent, id) => {
         order.push('getCard');
-        return { id, title: 'Test', text: 'Test-Inhalt', source: 'notiz', date: '2026-05-28' };
+        return { id, title: 'Test', text: 'Test-Inhalt', source: 'notiz', date: '2026-05-28', scope: 'agent-private' };
       },
-      deleteCard: async (agent, id) => {
-        order.push('deleteCard');
+      tombstoneCard: async (agent, id) => {
+        order.push('tombstoneCard');
         return { ok: true, id };
       },
     };
-    const result = await forgetCard(fakeDb, 'agent-x', 'card-123', { archiveDir: tmpRoot });
+    const result = await forgetCard(fakeDb, 'agent-x', id, { archiveDir: tmpRoot });
     assert.strictEqual(result.ok, true);
-    // Reihenfolge: getCard → archive-write → deleteCard
-    assert.deepStrictEqual(order, ['getCard', 'deleteCard']);
+    // Reihenfolge: getCard → archive-write → tombstoneCard (kein physischer Delete)
+    assert.deepStrictEqual(order, ['getCard', 'tombstoneCard']);
     // Archive existiert
     const agentDir = join(tmpRoot, 'agent-x');
     assert.ok(existsSync(agentDir), 'agent-dir existiert');
     const files = readdirSync(agentDir);
     assert.strictEqual(files.length, 1);
-    assert.match(files[0], /card-123\.json$/);
+    assert.match(files[0], /11111111-1111-4111-8111-111111111111\.json$/);
     const archived = JSON.parse(readFileSync(join(agentDir, files[0]), 'utf8'));
-    assert.strictEqual(archived.id, 'card-123');
+    assert.strictEqual(archived.id, id);
     assert.strictEqual(archived.title, 'Test');
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
@@ -130,9 +131,9 @@ test('forgetCard scheitert wenn Card nicht existiert', async () => {
   try {
     const fakeDb = {
       getCard: async () => null,
-      deleteCard: async () => { throw new Error('should not delete'); },
+      tombstoneCard: async () => { throw new Error('should not tombstone'); },
     };
-    const result = await forgetCard(fakeDb, 'agent', 'nope', { archiveDir: tmpRoot, lang: 'de' });
+    const result = await forgetCard(fakeDb, 'agent', '11111111-1111-4111-8111-111111111111', { archiveDir: tmpRoot, lang: 'de' });
     assert.strictEqual(result.ok, false);
     assert.match(result.error, /nicht gefunden/i);
   } finally {
@@ -140,20 +141,20 @@ test('forgetCard scheitert wenn Card nicht existiert', async () => {
   }
 });
 
-test('forgetCard löscht NICHT wenn Archive-Schreiben fehlschlägt', async () => {
+test('forgetCard tombstoned NICHT wenn Archive-Schreiben fehlschlägt', async () => {
   // archiveDir zeigt auf eine EXISTIERENDE Datei (nicht Verzeichnis) → mkdir scheitert
   const tmpRoot = mkdtempSync(join(tmpdir(), 'plur1bus-fail-'));
   const fakeFile = join(tmpRoot, 'a-file-not-a-dir');
   writeFileSync(fakeFile, 'not a dir');
-  let deleted = false;
+  let tombstoned = false;
   const fakeDb = {
-    getCard: async (a, id) => ({ id, title: 'T', text: 'x' }),
-    deleteCard: async () => { deleted = true; return { ok: true }; },
+    getCard: async (a, id) => ({ id, title: 'T', text: 'x', scope: 'agent-private' }),
+    tombstoneCard: async () => { tombstoned = true; return { ok: true }; },
   };
   try {
-    const result = await forgetCard(fakeDb, 'agent', 'card-1', { archiveDir: fakeFile });
+    const result = await forgetCard(fakeDb, 'agent', '11111111-1111-4111-8111-111111111111', { archiveDir: fakeFile });
     assert.strictEqual(result.ok, false, 'sollte fehlschlagen');
-    assert.strictEqual(deleted, false, 'deleteCard wurde NICHT aufgerufen');
+    assert.strictEqual(tombstoned, false, 'tombstoneCard wurde NICHT aufgerufen');
   } finally {
     rmSync(tmpRoot, { recursive: true, force: true });
   }
