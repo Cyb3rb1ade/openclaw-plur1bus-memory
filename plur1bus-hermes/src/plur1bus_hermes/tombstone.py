@@ -63,7 +63,7 @@ def build_tombstone(
         "sourceOp": source_op,
         "archiveRef": str(archive_ref or ""),
         "previousVersion": str(previous_version or ""),
-        "contentFingerprint": content_fingerprint(content) if content else "",
+        "contentFingerprint": content_fingerprint(content),
         "sourceFingerprint": "",
         "refs": {},
         "status": "committed",
@@ -122,6 +122,8 @@ def read_tombstones_from_registry(base_dir: Path, agent_id: str) -> list[dict[st
     result = read_tombstone_registry(base_dir, agent_id)
     if not result["ok"]:
         raise TombstoneRegistryReadError(result["readError"])
+    if result["corruptLines"] > 0:
+        raise TombstoneRegistryReadError(f"corrupt registry lines: {result['corruptLines']}")
     return result["tombstones"]
 
 
@@ -144,7 +146,7 @@ def read_tombstone_registry(base_dir: Path, agent_id: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             corrupt_lines += 1
             continue
-        if is_valid_tombstone(parsed):
+        if is_valid_tombstone(parsed, agent_id):
             tombstones.append(parsed)
         else:
             corrupt_lines += 1
@@ -153,10 +155,11 @@ def read_tombstone_registry(base_dir: Path, agent_id: str) -> dict[str, Any]:
 
 _VALID_SCOPES = {"agent-private", "workspace", "user"}
 _VALID_STATUSES = {"attempted", "committed", "failed"}
+_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
-def is_valid_tombstone(parsed: Any) -> bool:
-    """Vollständige Schema-/Enum-/UUID-Validierung einer Tombstone-Zeile."""
+def is_valid_tombstone(parsed: Any, expected_agent_id: str | None = None) -> bool:
+    """Vollständige Schema-/Enum-/UUID-/Principal-Validierung einer Tombstone-Zeile."""
     if not isinstance(parsed, dict):
         return False
     if parsed.get("schemaVersion") != TOMBSTONE_SCHEMA_VERSION:
@@ -171,11 +174,27 @@ def is_valid_tombstone(parsed: Any) -> bool:
     agent_id = parsed.get("agentId")
     if not isinstance(agent_id, str) or not agent_id:
         return False
-    if parsed.get("scope") not in _VALID_SCOPES:
+    from .validation import safe_agent_id
+
+    try:
+        safe_agent_id(agent_id)
+    except Exception:
+        return False
+    # Registry-Agent-Bindung: die Zeile gehört exakt zum Agenten der Datei.
+    if expected_agent_id is not None and agent_id != expected_agent_id:
+        return False
+    scope = parsed.get("scope")
+    if scope not in _VALID_SCOPES:
+        return False
+    # Principal-Bindung: workspace braucht Workspace-Principal, user einen Owner.
+    if scope == "workspace" and not (parsed.get("workspaceId") or parsed.get("workspaceKey")):
+        return False
+    if scope == "user" and not parsed.get("ownerUserId"):
         return False
     if parsed.get("status") not in _VALID_STATUSES:
         return False
-    if not isinstance(parsed.get("contentFingerprint"), str):
+    fingerprint = parsed.get("contentFingerprint")
+    if not isinstance(fingerprint, str) or not _FINGERPRINT_RE.fullmatch(fingerprint):
         return False
     return True
 
