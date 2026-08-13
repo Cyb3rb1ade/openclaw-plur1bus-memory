@@ -4776,9 +4776,12 @@ const plugin = {
         // Keine sofortige failed-Audit — das Ergebnis steht erst bei Settlement fest.
         if (err instanceof TimeoutError && err.settlement) {
           const rawSettlement = err.settlement;
-          err.settlement = rawSettlement.then(
+          const derived = rawSettlement.then(
             (value) => {
-              commitTombstone(false);
+              // Audit-Fehler beim Late-Settlement muss das Settlement ablehnen.
+              if (!commitTombstone(false)) {
+                throw new Error("tombstone audit write failed (late settlement)");
+              }
               return value;
             },
             (lateErr) => {
@@ -4786,6 +4789,12 @@ const plugin = {
               throw lateErr;
             },
           );
+          // Rejection beobachten, damit ein Late-Audit-Fehler nicht als
+          // unhandled rejection den Prozess beendet; das Settlement bleibt abgelehnt.
+          derived.catch((lateErr) => {
+            api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget late settlement audit failed for agent=${agentId} memory=${memoryId}: ${String(lateErr)}`);
+          });
+          err.settlement = derived;
           throw err;
         }
         failTombstone(err?.name || "Error");
@@ -8667,16 +8676,18 @@ const plugin = {
               return await pool.withWriteDb(agentId, async (db) => {
               if (params.memoryId) {
                 // Kanonischer Tombstone-Vorgang (Archive-First, kein physischer Delete).
+                // Bereits gelöschte Karten laufen durch denselben Recovery-Vertrag
+                // (tombstoneMemoryWithAudit trägt fehlendes Audit nach) — kein
+                // früher Return, der die Audit-Recovery umgehen würde.
                 const card = await db.getById(params.memoryId);
                 if (!card) return { content: [{ type: "text", text: `Memory ${params.memoryId} not found.` }] };
-                if (String(card.status || "") === "deleted") {
-                  return { content: [{ type: "text", text: `Memory ${params.memoryId} is already forgotten.` }] };
-                }
-                let archivePath;
-                try {
-                  archivePath = archiveCard(card, agentId || "default");
-                } catch (archiveErr) {
-                  return { content: [{ type: "text", text: `Archive failed — NOT tombstoned: ${String(archiveErr)}` }] };
+                let archivePath = "";
+                if (String(card.status || "") !== "deleted") {
+                  try {
+                    archivePath = archiveCard(card, agentId || "default");
+                  } catch (archiveErr) {
+                    return { content: [{ type: "text", text: `Archive failed — NOT tombstoned: ${String(archiveErr)}` }] };
+                  }
                 }
                 try {
                   await tombstoneMemoryWithAudit({
@@ -8704,16 +8715,15 @@ const plugin = {
                   return { content: [{ type: "text", text: `Found ${results.length} candidates. Specify memoryId:\n${list}` }] };
                 }
                 const targetId = results[0].entry.id;
-                let archivePath;
+                let archivePath = "";
                 let card;
                 try {
                   card = await db.getById(targetId);
-                  archivePath = archiveCard(card || results[0].entry, agentId || "default");
+                  if (String(card?.status || "") !== "deleted") {
+                    archivePath = archiveCard(card || results[0].entry, agentId || "default");
+                  }
                 } catch (archiveErr) {
                   return { content: [{ type: "text", text: `Archive failed — NOT tombstoned: ${String(archiveErr)}` }] };
-                }
-                if (String(card?.status || "") === "deleted") {
-                  return { content: [{ type: "text", text: `Memory ${targetId} is already forgotten.` }] };
                 }
                 try {
                   await tombstoneMemoryWithAudit({
