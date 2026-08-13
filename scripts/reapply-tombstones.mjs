@@ -59,7 +59,10 @@ async function main() {
 
   for (const agent of agents) {
     let safeAgent;
-    try { safeAgent = safeAgentId(agent); } catch { continue; }
+    try { safeAgent = safeAgentId(agent); } catch {
+      report.registryErrors.push({ agent, error: "invalid registry filename" });
+      continue;
+    }
     const registry = readTombstoneRegistry(baseDbPath, safeAgent);
     if (!registry.ok) {
       report.registryErrors.push({ agent: safeAgent, error: registry.readError });
@@ -90,16 +93,20 @@ async function main() {
         report.errors.push({ agent: safeAgent, memoryId: id, error: err?.message || String(err) });
       }
     }
-    // Verifikation: keine durch committed Tombstone adressierte Zeile darf aktiv
-    // geblieben sein (Resurrection-Schutz). Verifikationsfehler werden NICHT
-    // verschluckt — sie führen zum Fehlschlag.
+    // Verifikation: keine durch committed Tombstone adressierte Zeile darf
+    // recallbar/aktiv geblieben sein (Resurrection-Schutz). Verifikationsfehler
+    // werden NICHT verschluckt — sie führen zum Fehlschlag. "active", "" und null
+    // gelten als legacy-recallbar.
     for (const tombstone of tombstones) {
       const id = tombstone.memoryId;
       if (!id) continue;
       try {
-        const card = await adapter.getCard(safeAgent, id);
-        if (card && String(card.status || "") === "active") {
-          report.activeAfterReapply.push({ agent: safeAgent, memoryId: id });
+        const row = await adapter.getCardRaw(safeAgent, id);
+        if (row) {
+          const status = String(row.status ?? "");
+          if (status === "active" || status === "") {
+            report.activeAfterReapply.push({ agent: safeAgent, memoryId: id, status });
+          }
         }
       } catch (err) {
         report.errors.push({ agent: safeAgent, memoryId: id, error: `verify: ${err?.message || String(err)}` });
