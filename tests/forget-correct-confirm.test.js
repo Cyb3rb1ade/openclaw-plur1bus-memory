@@ -29,6 +29,7 @@ function mockDb(initial = []) {
   return {
     cards,
     async getCard(_agent, id) { return cards.get(id) || null; },
+    async tombstoneCard(_agent, id) { const c = cards.get(id); if (c) { c.status = "deleted"; c.epistemicStatus = "invalidated"; } return { ok: true, id }; },
     async deleteCard(_agent, id) { cards.delete(id); return { ok: true }; },
     async updateCard(_agent, id, newContent) { const c = cards.get(id); if (c) c.text = newContent; return { ok: true }; },
   };
@@ -122,9 +123,9 @@ function requireConfirmationHelpers() {
 }
 
 describe("forget/correct confirmation completion", () => {
-  it("forget: create → validate → forgetCard deletes (archive-first) and consumes token", async () => {
+  it("forget: create → validate → forgetCard tombstoned (archive-first) and consumes token", async () => {
     const id = "11111111-1111-1111-1111-111111111111";
-    const db = mockDb([{ id, text: "secret note", title: "secret" }]);
+    const db = mockDb([{ id, text: "secret note", title: "secret", scope: "agent-private" }]);
     const store = new Map();
     const c = createConfirmation({ userId: "u1", chatId: "c1", command: "forget", targetId: id });
     store.set(`${c.nonce}:${c.targetId}`, c);
@@ -135,8 +136,10 @@ describe("forget/correct confirmation completion", () => {
 
     const res = await forgetCard(db, "default", v.targetId, { archiveDir });
     assert.strictEqual(res.ok, true);
-    assert.ok(res.archivePath, "should write an archive before deleting");
-    assert.strictEqual(db.cards.has(id), false, "card must be deleted");
+    assert.ok(res.archivePath, "should write an archive before tombstoning");
+    assert.strictEqual(db.cards.has(id), true, "tombstone keeps the row (soft-delete)");
+    assert.strictEqual(db.cards.get(id).status, "deleted", "row must be soft-deleted");
+    assert.strictEqual(db.cards.get(id).epistemicStatus, "invalidated", "trust must be invalidated");
     assert.strictEqual(store.size, 0, "confirmation token must be consumed");
   });
 
@@ -636,7 +639,7 @@ describe("forget/correct confirmation completion", () => {
     assert.strictEqual(db.cards.has(id), true, "foreign user must not delete the card");
   });
 
-  it("forgetCard still allows the owning user to delete a user-scoped memory", async () => {
+  it("forgetCard still allows the owning user to tombstone a user-scoped memory", async () => {
     const id = "bbbbbbbb-2222-2222-2222-222222222222";
     const owner = `user:v1:${"a".repeat(64)}`;
     const db = mockDb([{ id, text: "user-scoped note", scope: "user", ownerUserId: owner }]);
@@ -647,6 +650,7 @@ describe("forget/correct confirmation completion", () => {
     });
 
     assert.strictEqual(result.ok, true);
-    assert.strictEqual(db.cards.has(id), false, "owner should still be able to delete the card");
+    assert.strictEqual(db.cards.has(id), true, "tombstone keeps the row");
+    assert.strictEqual(db.cards.get(id).status, "deleted");
   });
 });
