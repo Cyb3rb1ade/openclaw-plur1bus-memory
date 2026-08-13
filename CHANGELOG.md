@@ -187,6 +187,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   der aktuellen Codebasis über `isLowRiskAutoApplyAction()` auf
   `type==="delete"` beschränkt — der Merge-Zweig wird nie automatisch
   ausgeführt (nur als Proposal persistiert), unabhängig von diesem Feature.
+- `durableMergeWriteKey` (index.js) hängt seit Phase 2 zwei zusätzliche
+  Elemente an das JSON-Array an, das zu einem SHA256 verhasht wird — auch
+  wenn beide Gültigkeitsgrenzen unbekannt (`0`) sind. Der
+  Idempotenz-Vertrag („gleicher Retry ⇒ gleicher `replacementId`") hält
+  nicht über die Versionsgrenze: Ein Merge, der VOR dem Upgrade abgestürzt
+  ist, wird beim Retry NACH dem Upgrade nicht wiedererkannt
+  (`db.getById(replacementId)` findet die alte Zeile nicht), sodass eine
+  zweite Replacement-Zeile neben der verwaisten alten entsteht. Fenster eng
+  (Absturz mitten im Merge), kein Datenverlust, kein Fehlerabbruch.
+  Das ist ein anderer Mechanismus als der bereits getestete Fall in
+  `tests/memory-store-merge-archive-first.test.js` („rejects a legacy
+  mergedFrom array that lacks the validity fingerprint"). Jener Test erzwingt die
+  Wiederauffindung der alten Zeile per Mock und belegt, dass der
+  Fail-Closed-Wächter dann korrekt greift — er belegt nicht, dass die alte
+  Zeile im Realbetrieb überhaupt gefunden wird.
 
 ## [7.2.6] — 2026-08-11
 
