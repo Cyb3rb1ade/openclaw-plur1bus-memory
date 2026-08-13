@@ -636,8 +636,32 @@ class Plur1busRuntime:
         if not rows:
             return False
         card = rows[0]
+        # Crash-Recovery/Idempotenz: bereits deleted → fehlenden committed
+        # Tombstone und Audit nachtragen, statt einen zweiten widersprüchlichen
+        # Delete zu erzeugen.
         if str(card.get("status") or "") == "deleted":
-            return True  # idempotent: bereits tombstoned
+            from .tombstone import backfill_committed_tombstone
+
+            try:
+                backfill = backfill_committed_tombstone(
+                    self.data_dir, card,
+                    agent_id=self.agent_id,
+                    actor=self.request_scope.get("user") or "hermes",
+                    actor_type="human",
+                    reason="user forget",
+                    source_op="forget",
+                )
+            except Exception as error:
+                raise RuntimeError(f"tombstone backfill failed: {error}") from error
+            if not backfill["alreadyCommitted"]:
+                self._domain.audit_mutation({
+                    "event": "memory.deleted",
+                    "agentId": self.agent_id,
+                    "memoryId": card_id,
+                    "tombstoneId": backfill["tombstone"]["tombstoneId"],
+                    "result": "committed",
+                })
+            return True
         archive_dir = self.data_dir / "archives"
         archive_dir.mkdir(parents=True, exist_ok=True)
         archive_ref = archive_dir / f"{card_id}.json"
@@ -725,6 +749,22 @@ class Plur1busRuntime:
     def _remember(self, content: str, session_id: str, source_role: str) -> None:
         content = content.strip()
         if not content:
+            return
+        # Tombstone-Block VOR Embedding und LanceDB-Insert: eine gleichlautende,
+        # zuvor gelöschte Erinnerung im selben Agent-/Scope-Kontext darf nicht
+        # still reaktiviert werden.
+        from .tombstone import find_blocking_tombstone_for_capture
+
+        blocking = find_blocking_tombstone_for_capture(self.data_dir, {
+            "agentId": self.agent_id,
+            "text": content,
+            "scope": "agent-private",
+            "workspaceIdentity": str(self.request_scope.get("workspace") or ""),
+            "userPrincipal": str(self.request_scope.get("user") or ""),
+        })
+        if blocking is not None:
+            reason = blocking.get("_blockReason") or "fingerprint match"
+            self._log_capture_error(RuntimeError(f"tombstone_blocked ({reason})"))
             return
         vector = self._embedding.embed(content)
         record = {

@@ -108,19 +108,41 @@ def append_tombstone_to_registry(base_dir: Path, agent_id: str, tombstone: dict[
     return file
 
 
+class TombstoneRegistryReadError(Exception):
+    """Registry konnte nicht (sicher) gelesen werden — Capture/Restore blockieren."""
+
+
 def read_tombstones_from_registry(base_dir: Path, agent_id: str) -> list[dict[str, Any]]:
+    result = read_tombstone_registry(base_dir, agent_id)
+    if not result["ok"]:
+        raise TombstoneRegistryReadError(result["readError"])
+    return result["tombstones"]
+
+
+def read_tombstone_registry(base_dir: Path, agent_id: str) -> dict[str, Any]:
+    """Strukturiertes Lesen: unterscheidet leer/ok, Lesefehler, beschädigte Zeilen."""
     file = _registry_file(base_dir, agent_id)
     if not file.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    for line in file.read_text(encoding="utf-8").splitlines():
+        return {"ok": True, "tombstones": [], "corruptLines": 0, "readError": None}
+    try:
+        text = file.read_text(encoding="utf-8")
+    except OSError as error:
+        return {"ok": False, "tombstones": [], "corruptLines": 0, "readError": str(error)}
+    tombstones: list[dict[str, Any]] = []
+    corrupt_lines = 0
+    for line in text.splitlines():
+        if not line.strip():
+            continue
         try:
             parsed = json.loads(line)
         except json.JSONDecodeError:
+            corrupt_lines += 1
             continue
         if parsed and parsed.get("schemaVersion"):
-            out.append(parsed)
-    return out
+            tombstones.append(parsed)
+        else:
+            corrupt_lines += 1
+    return {"ok": True, "tombstones": tombstones, "corruptLines": corrupt_lines, "readError": None}
 
 
 def find_tombstone_by_fingerprint(base_dir: Path, agent_id: str, fingerprint: str) -> dict[str, Any] | None:
@@ -133,11 +155,64 @@ def find_blocking_tombstone_for_capture(base_dir: Path, opts: dict[str, Any]) ->
     text = str(opts.get("text") or "")
     if not text:
         return None
+    agent_id = str(opts.get("agentId") or "")
+    result = read_tombstone_registry(base_dir, agent_id)
+    if not result["ok"]:
+        # Fail-closed: Lesefehler → konservativ blockieren (diagnostiziert).
+        return {
+            "schemaVersion": TOMBSTONE_SCHEMA_VERSION,
+            "memoryId": "",
+            "canonicalOriginId": "",
+            "agentId": agent_id,
+            "scope": "agent-private",
+            "status": "committed",
+            "contentFingerprint": "",
+            "_blockReason": "registry_read_error",
+            "_diagnostic": result["readError"],
+        }
+    if result["corruptLines"] > 0:
+        return {
+            "schemaVersion": TOMBSTONE_SCHEMA_VERSION,
+            "memoryId": "",
+            "canonicalOriginId": "",
+            "agentId": agent_id,
+            "scope": "agent-private",
+            "status": "committed",
+            "contentFingerprint": "",
+            "_blockReason": "registry_corrupt_lines",
+            "_diagnostic": f"corrupt lines: {result['corruptLines']}",
+        }
     fingerprint = content_fingerprint(text)
-    tombstone = find_tombstone_by_fingerprint(base_dir, opts.get("agentId"), fingerprint)
-    if not tombstone:
-        return None
-    return tombstone if tombstone_blocks_capture(tombstone, opts) else None
+    matches = [
+        t
+        for t in result["tombstones"]
+        if t.get("status") == "committed" and t.get("contentFingerprint") and t["contentFingerprint"] == fingerprint
+    ]
+    for tombstone in matches:
+        if tombstone_blocks_capture(tombstone, opts):
+            return tombstone
+    return None
+
+
+def find_tombstone_by_origin_id(base_dir: Path, agent_id: str, origin_id: str) -> dict[str, Any] | None:
+    committed = [t for t in read_tombstones_from_registry(base_dir, agent_id) if t.get("status") == "committed"]
+    matches = [t for t in committed if t.get("canonicalOriginId") == origin_id or t.get("memoryId") == origin_id]
+    return matches[-1] if matches else None
+
+
+def backfill_committed_tombstone(
+    base_dir: Path, card: dict[str, Any], *, agent_id: str, actor: str = "", actor_type: str = "human",
+    reason: str = "", source_op: str = "forget", archive_ref: str = "", previous_version: str = "",
+) -> dict[str, Any]:
+    existing = find_tombstone_by_origin_id(base_dir, agent_id, str(card.get("id") or ""))
+    if existing:
+        return {"alreadyCommitted": True, "tombstone": existing}
+    tombstone = build_tombstone(
+        card=card, agent_id=agent_id, actor=actor, actor_type=actor_type, reason=reason,
+        source_op=source_op, archive_ref=archive_ref, previous_version=previous_version,
+    )
+    append_tombstone_to_registry(base_dir, agent_id, {**tombstone, "status": "committed"})
+    return {"alreadyCommitted": False, "tombstone": tombstone}
 
 
 def _utcnow() -> str:
