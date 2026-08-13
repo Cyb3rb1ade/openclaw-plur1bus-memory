@@ -8706,6 +8706,12 @@ const plugin = {
                 return blockModelDestructiveTool("memory_forget");
               }
               return await pool.withWriteDb(agentId, async (db) => {
+              // Fail-closed Scope-Gate: jeder Treffer (ID, aktiv, gelöscht) wird
+              // vor Archivierung, Tombstone oder Audit-Recovery ACL-geprüft.
+              const cardAllowedForForget = (card) => {
+                if (!card) return false;
+                return checkAccess(memoryCtx, card).allowed;
+              };
               if (params.memoryId) {
                 // Kanonischer Tombstone-Vorgang (Archive-First, kein physischer Delete).
                 // Bereits gelöschte Karten laufen durch denselben Recovery-Vertrag
@@ -8713,6 +8719,9 @@ const plugin = {
                 // früher Return, der die Audit-Recovery umgehen würde.
                 const card = await db.getById(params.memoryId);
                 if (!card) return { content: [{ type: "text", text: `Memory ${params.memoryId} not found.` }] };
+                if (!cardAllowedForForget(card)) {
+                  return { content: [{ type: "text", text: "No matching memory found." }] };
+                }
                 let archivePath = "";
                 if (String(card.status || "") !== "deleted") {
                   try {
@@ -8740,22 +8749,29 @@ const plugin = {
                 const vector = typeof embeddings.embedQuery === "function"
                   ? await embeddings.embedQuery(params.query, { agentId })
                   : await embeddings.embed(params.query, { agentId });
-                const results = await db.search(vector, 5, forgetThreshold);
+                // Aktive Treffer vor Zählung/Anzeige ACL-filtern; unberechtigte
+                // Treffer werden wie "No matching memory found" behandelt.
+                const results = (await db.search(vector, 5, forgetThreshold))
+                  .filter((r) => cardAllowedForForget(r.entry));
                 if (results.length === 0) {
                   // Audit-Recovery: die Query kann eine bereits gelöschte Karte
                   // treffen (z. B. nach einem Forget mit fehlgeschlagenem Audit).
                   // Gelöschte Kandidaten gezielt auflösen, mit forgetThreshold
-                  // bewertet, und recovery-fähig machen. KEIN Klartext gelöschter
-                  // Inhalte in Kandidatenlisten oder Erfolgsmeldungen.
+                  // bewertet, ACL-geprüft, und recovery-fähig machen. KEIN Klartext
+                  // gelöschter Inhalte in Kandidatenlisten oder Erfolgsmeldungen.
                   const deleted = await db.searchDeleted(vector, 5, forgetThreshold);
-                  if (deleted.length === 0) {
+                  const accessibleIds = [];
+                  for (const deletedRow of deleted) {
+                    const deletedCard = await db.getById(deletedRow.id);
+                    if (cardAllowedForForget(deletedCard)) accessibleIds.push(deletedRow.id);
+                  }
+                  if (accessibleIds.length === 0) {
                     return { content: [{ type: "text", text: "No matching memory found." }] };
                   }
-                  if (deleted.length > 1) {
-                    const list = deleted.map((r) => r.id).join("\n");
-                    return { content: [{ type: "text", text: `Found ${deleted.length} already-forgotten candidates. Specify memoryId:\n${list}` }] };
+                  if (accessibleIds.length > 1) {
+                    return { content: [{ type: "text", text: `Found ${accessibleIds.length} already-forgotten candidates. Specify memoryId:\n${accessibleIds.join("\n")}` }] };
                   }
-                  const deletedId = deleted[0].id;
+                  const deletedId = accessibleIds[0];
                   const deletedCard = await db.getById(deletedId);
                   if (!deletedCard) {
                     return { content: [{ type: "text", text: "No matching memory found." }] };
