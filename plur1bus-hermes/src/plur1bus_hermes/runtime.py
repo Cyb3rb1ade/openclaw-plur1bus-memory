@@ -623,7 +623,11 @@ class Plur1busRuntime:
             }, sort_keys=True) + "\n")
 
     def forget(self, memory_id: str) -> bool:
-        """Archive a card before marking it inactive; never hard-delete it."""
+        """Kanonischer Tombstone-Vorgang: archivieren, soft-delete, Tombstone persistieren.
+
+        Setzt `status="deleted"` (statt physisch zu löschen), schreibt einen
+        dauerhaften Tombstone in die append-only Registry und einen Audit-Eintrag.
+        """
         card_id = safe_memory_id(memory_id)
         table, _ = self._table(create=False)
         if table is None:
@@ -631,10 +635,42 @@ class Plur1busRuntime:
         rows = table.search().where(f"id = '{card_id}' AND agentId = '{self.agent_id}' AND scopeKey = '{self.scope_key}'").limit(1).to_list()
         if not rows:
             return False
+        card = rows[0]
+        if str(card.get("status") or "") == "deleted":
+            return True  # idempotent: bereits tombstoned
         archive_dir = self.data_dir / "archives"
         archive_dir.mkdir(parents=True, exist_ok=True)
-        (archive_dir / f"{card_id}.json").write_text(json.dumps(rows[0], indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        table.update(where=f"id = '{card_id}'", values={"status": "archived"})
+        archive_ref = archive_dir / f"{card_id}.json"
+        archive_ref.write_text(json.dumps(card, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        from .tombstone import append_tombstone_to_registry, build_tombstone
+
+        tombstone = build_tombstone(
+            card=card,
+            agent_id=self.agent_id,
+            actor=self.request_scope.get("user") or "hermes",
+            actor_type="human",
+            reason="user forget",
+            source_op="forget",
+            archive_ref=str(archive_ref),
+        )
+        try:
+            append_tombstone_to_registry(self.data_dir, self.agent_id, {**tombstone, "status": "attempted"})
+        except OSError:
+            return False
+        try:
+            table.update(where=f"id = '{card_id}'", values={"status": "deleted"})
+        except Exception:
+            append_tombstone_to_registry(self.data_dir, self.agent_id, {**tombstone, "status": "failed"})
+            raise
+        append_tombstone_to_registry(self.data_dir, self.agent_id, {**tombstone, "status": "committed"})
+        self._domain.audit_mutation({
+            "event": "memory.deleted",
+            "agentId": self.agent_id,
+            "memoryId": card_id,
+            "tombstoneId": tombstone["tombstoneId"],
+            "result": "committed",
+        })
         return True
 
     def correct_async(self, memory_id: str, replacement: str, session_id: str) -> bool:

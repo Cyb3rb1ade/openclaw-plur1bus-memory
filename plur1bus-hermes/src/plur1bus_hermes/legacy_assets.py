@@ -10,6 +10,9 @@ from typing import Any
 from .identity_migrate import ensure_hermes_identity, sanitize_hermes_context_files
 
 SAFE_STATUSES = {"active", "superseded", "archived", "deleted"}
+# Dokumentierter Legacy-Kompatibilitätspfad: OpenClaw-Workflow-Zustände, die in
+# alten Stores recallbar waren und deshalb als "active" übernommen werden.
+LEGACY_RECALLABLE_STATUSES = {"", "review", "pending", "draft", "candidate"}
 ID_REFERENCE_KEYS = {
     "memoryId", "memoryIds", "sourceMemoryIds", "usedMemoryIds",
     "activatedMemoryIds", "strengthenedMemoryIds", "selectedIds",
@@ -21,9 +24,19 @@ SKIP_DIRECTORIES = {".git", ".secrets", "node_modules", "__pycache__", ".venv", 
 
 
 def normalize_legacy_status(value: Any) -> str:
-    """Map OpenClaw workflow states to a recall-safe Hermes card status."""
+    """Map OpenClaw workflow states to a recall-safe Hermes card status.
+
+    Fail-closed: ein unbekannter Status wird NIEMALS als aktiv interpretiert,
+    sondern konservativ als "archived" (nicht recallbar) übernommen — so kann
+    eine Migration keinen gelöschten/tombstoned/invalidated Inhalt reaktivieren.
+    Nur bekannte Legacy-Workflow-Zustände und der leere Wert gelten als aktiv.
+    """
     status = str(value or "").strip().lower()
-    return status if status in SAFE_STATUSES else "active"
+    if status in SAFE_STATUSES:
+        return status
+    if status in LEGACY_RECALLABLE_STATUSES:
+        return "active"
+    return "archived"
 
 
 def stage_card_metadata(

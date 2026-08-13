@@ -1090,6 +1090,13 @@ class Plur1busDomain:
         with self._lock, path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str) + "\n")
 
+    def audit_mutation(self, entry: dict[str, Any]) -> None:
+        """Append-only Mutations-Audit (destructive-operations.jsonl)."""
+        self._append_jsonl(
+            self.state_dir / "destructive-operations.jsonl",
+            {**entry, "timestamp": _utcnow()},
+        )
+
     @staticmethod
     def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         if not path.is_file():
