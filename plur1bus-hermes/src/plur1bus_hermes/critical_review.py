@@ -176,32 +176,44 @@ def _uuid_hex(memory_id: str) -> str:
     return str(memory_id).replace("-", "").lower()
 
 
-def shortest_unique_suffix(
-    memory_id: str, taken: set[str], min_len: int = SHORT_REF_MIN_LEN
-) -> str:
-    hex_value = _uuid_hex(memory_id)
-    if len(hex_value) != 32 or not _HEX_SUFFIX_RE.fullmatch(hex_value):
-        base = re.sub(r"[^0-9a-f]", "", hex_value)[-max(1, min_len):] or "mem"
-        candidate = base
-        n = 0
-        while candidate in taken and n < 10000:
-            n += 1
-            candidate = f"{base}{n:x}"
-        return candidate
+def _shortest_unique_suffix_among(hex_value: str, others: list[str], min_len: int) -> str:
+    """Kürzestes Suffix von ``hex_value`` (min. ``min_len``), das von keinem
+    Hex-String in ``others`` als Suffix geteilt wird. Damit ist die Referenz
+    gegen den gesamten autorisierten Scope eindeutig."""
     for length in range(max(1, min_len), len(hex_value) + 1):
         suffix = hex_value[-length:]
-        if suffix not in taken:
+        if not any(other.endswith(suffix) for other in others):
             return suffix
     return hex_value
 
 
 def assign_short_refs(ids: list[str], min_len: int = SHORT_REF_MIN_LEN) -> dict[str, str]:
+    """Weist jeder UUID eine eindeutige Kurzreferenz zu. Deterministisch und
+    unabhängig von der Eingabereihenfolge: jede Referenz ist das kürzeste Suffix
+    (min. ``min_len`` Hex-Zeichen), das exakt eine der UUIDs trifft."""
     result: dict[str, str] = {}
-    taken: set[str] = set()
-    for memory_id in ids:
-        ref = shortest_unique_suffix(memory_id, taken, min_len)
-        taken.add(ref)
-        result[memory_id] = ref
+    entries = [(memory_id, _uuid_hex(memory_id)) for memory_id in ids]
+    taken_fallback: set[str] = set()
+
+    for index, (memory_id, hex_value) in enumerate(entries):
+        if len(hex_value) == 32 and _HEX_SUFFIX_RE.fullmatch(hex_value):
+            others = [
+                other_hex
+                for other_index, (_, other_hex) in enumerate(entries)
+                if other_index != index
+                and len(other_hex) == 32
+                and _HEX_SUFFIX_RE.fullmatch(other_hex)
+            ]
+            result[memory_id] = _shortest_unique_suffix_among(hex_value, others, min_len)
+        else:
+            base = re.sub(r"[^0-9a-f]", "", hex_value)[-max(1, min_len):] or "mem"
+            candidate = base
+            n = 0
+            while candidate in taken_fallback and n < 10000:
+                n += 1
+                candidate = f"{base}{n:x}"
+            taken_fallback.add(candidate)
+            result[memory_id] = candidate
     return result
 
 
@@ -255,8 +267,14 @@ def resolve_short_ref(
             return {"ok": False, "error": "not_found"}
         return {"ok": True, "id": validated}
 
-    suggestions = []
-    for match in matches:
-        others = {_uuid_hex(m["id"])[-32:] for m in matches if m["id"] != match["id"]}
-        suggestions.append(shortest_unique_suffix(match["id"], others, len(suffix) + 1))
+    # Kollision: automatisch längere, im Scope eindeutige Referenzen vorschlagen.
+    match_hexes = [_uuid_hex(m["id"]) for m in matches]
+    suggestions = [
+        _shortest_unique_suffix_among(
+            _uuid_hex(m["id"]),
+            [h for h in match_hexes if h != _uuid_hex(m["id"])],
+            len(suffix) + 1,
+        )
+        for m in matches
+    ]
     return {"ok": False, "error": "ambiguous", "suggestions": suggestions}

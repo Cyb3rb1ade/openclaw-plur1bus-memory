@@ -6,7 +6,6 @@ from plur1bus_hermes.critical_review import (
     build_preview,
     resolve_short_ref,
     sanitize_preview,
-    shortest_unique_suffix,
     translate_reason,
     translate_source_role,
     translate_type,
@@ -97,21 +96,64 @@ class PreviewPrivacyTests(unittest.TestCase):
 
 class ShortReferenceTests(unittest.TestCase):
     def test_shortest_unique_suffix_min_five(self):
-        self.assertEqual(shortest_unique_suffix(UUID_A, set(), 5), "9a018")
+        refs = assign_short_refs([UUID_A], 5)
+        self.assertEqual(refs[UUID_A], "9a018")
 
-    def test_collision_lengthens(self):
-        taken = {"9a018"}
-        ref = shortest_unique_suffix(UUID_A, taken, 5)
-        self.assertGreater(len(ref), 5)
-        self.assertNotIn(ref, taken)
-
-    def test_assign_short_refs_are_unique(self):
+    def test_assign_short_refs_roundtrip_resolves_exactly(self):
         ids = [
             "00000000-0000-4000-8000-000000000001",
             "00000000-0000-4000-8000-000000000002",
         ]
-        refs = list(assign_short_refs(ids, 5).values())
-        self.assertEqual(len(set(refs)), len(refs))
+        refs = assign_short_refs(ids, 5)
+        self.assertEqual(len(set(refs.values())), len(ids))
+        pending = [{"id": memory_id} for memory_id in ids]
+        for memory_id in ids:
+            result = resolve_short_ref(refs[memory_id], pending)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["id"], memory_id)
+
+    def test_collision_identical_five_char_ending_resolves(self):
+        id1 = "00000000-0000-4000-8000-aaaaaaaabcde"
+        id2 = "00000000-0000-4000-8000-bbbbbbbabcde"
+        pending = [{"id": id1}, {"id": id2}]
+        refs = assign_short_refs([id1, id2], 5)
+        self.assertGreaterEqual(len(refs[id1]), 6)
+        self.assertGreaterEqual(len(refs[id2]), 6)
+        self.assertNotEqual(refs[id1], refs[id2])
+        self.assertEqual(resolve_short_ref(refs[id1], pending), {"ok": True, "id": id1})
+        self.assertEqual(resolve_short_ref(refs[id2], pending), {"ok": True, "id": id2})
+
+    def test_collision_identical_six_char_ending_resolves(self):
+        id1 = "00000000-0000-4000-8000-aaaaaa0abcde"
+        id2 = "00000000-0000-4000-8000-bbbbbb0abcde"
+        pending = [{"id": id1}, {"id": id2}]
+        refs = assign_short_refs([id1, id2], 5)
+        for memory_id in (id1, id2):
+            self.assertGreaterEqual(len(refs[memory_id]), 7)
+            self.assertEqual(resolve_short_ref(refs[memory_id], pending), {"ok": True, "id": memory_id})
+
+    def test_multiple_identical_endings_resolve(self):
+        ids = [
+            "00000000-0000-4000-8000-aaaaaaaabcde",
+            "00000000-0000-4000-8000-bbbbbbbabcde",
+            "00000000-0000-4000-8000-cccccccabcde",
+        ]
+        pending = [{"id": memory_id} for memory_id in ids]
+        refs = assign_short_refs(ids, 5)
+        self.assertEqual(len(set(refs.values())), len(ids))
+        for memory_id in ids:
+            self.assertEqual(resolve_short_ref(refs[memory_id], pending), {"ok": True, "id": memory_id})
+
+    def test_order_independence(self):
+        ids = [
+            "00000000-0000-4000-8000-aaaaaaaabcde",
+            "00000000-0000-4000-8000-bbbbbbbabcde",
+            "00000000-0000-4000-8000-cccccccabcde",
+        ]
+        refs_a = assign_short_refs(ids, 5)
+        refs_b = assign_short_refs(list(reversed(ids)), 5)
+        for memory_id in ids:
+            self.assertEqual(refs_a[memory_id], refs_b[memory_id])
 
     def test_resolve_unique_reference(self):
         result = resolve_short_ref("9a018", [{"id": UUID_A}])
@@ -123,13 +165,17 @@ class ShortReferenceTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "not_found")
 
-    def test_resolve_collision_is_ambiguous_with_suggestions(self):
+    def test_resolve_collision_is_ambiguous_with_unique_suggestions(self):
         id1 = "00000000-0000-4000-8000-aaaaaaaabcde"
         id2 = "00000000-0000-4000-8000-bbbbbbbabcde"
-        result = resolve_short_ref("abcde", [{"id": id1}, {"id": id2}])
+        pending = [{"id": id1}, {"id": id2}]
+        result = resolve_short_ref("abcde", pending)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "ambiguous")
         self.assertEqual(len(result["suggestions"]), 2)
+        self.assertEqual(len(set(result["suggestions"])), 2)
+        for suggestion in result["suggestions"]:
+            self.assertTrue(resolve_short_ref(suggestion, pending)["ok"])
 
     def test_full_uuid_is_compatible_fallback(self):
         result = resolve_short_ref(UUID_A, [{"id": UUID_A}])
