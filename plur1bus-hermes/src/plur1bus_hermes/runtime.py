@@ -653,14 +653,16 @@ class Plur1busRuntime:
                 )
             except Exception as error:
                 raise RuntimeError(f"tombstone backfill failed: {error}") from error
-            if not backfill["alreadyCommitted"]:
-                self._domain.audit_mutation({
-                    "event": "memory.deleted",
-                    "agentId": self.agent_id,
-                    "memoryId": card_id,
-                    "tombstoneId": backfill["tombstone"]["tombstoneId"],
-                    "result": "committed",
-                })
+            # Audit IMMER schreiben (auch bei alreadyCommitted), damit ein zuvor
+            # fehlgeschlagener Audit-Schreibvorgang nicht dauerhaft unerfasst bleibt.
+            # _append_jsonl propagiert OSError → Forget schlägt fail-closed fehl.
+            self._domain.audit_mutation({
+                "event": "memory.deleted",
+                "agentId": self.agent_id,
+                "memoryId": card_id,
+                "tombstoneId": backfill["tombstone"]["tombstoneId"],
+                "result": "already_tombstoned" if backfill["alreadyCommitted"] else "committed",
+            })
             return True
         archive_dir = self.data_dir / "archives"
         archive_dir.mkdir(parents=True, exist_ok=True)

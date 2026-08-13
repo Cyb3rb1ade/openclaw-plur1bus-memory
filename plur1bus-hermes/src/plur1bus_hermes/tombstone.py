@@ -144,11 +144,40 @@ def read_tombstone_registry(base_dir: Path, agent_id: str) -> dict[str, Any]:
         except json.JSONDecodeError:
             corrupt_lines += 1
             continue
-        if parsed and parsed.get("schemaVersion"):
+        if is_valid_tombstone(parsed):
             tombstones.append(parsed)
         else:
             corrupt_lines += 1
     return {"ok": True, "tombstones": tombstones, "corruptLines": corrupt_lines, "readError": None}
+
+
+_VALID_SCOPES = {"agent-private", "workspace", "user"}
+_VALID_STATUSES = {"attempted", "committed", "failed"}
+
+
+def is_valid_tombstone(parsed: Any) -> bool:
+    """Vollständige Schema-/Enum-/UUID-Validierung einer Tombstone-Zeile."""
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("schemaVersion") != TOMBSTONE_SCHEMA_VERSION:
+        return False
+    memory_id = parsed.get("memoryId")
+    if not isinstance(memory_id, str):
+        return False
+    try:
+        uuid.UUID(memory_id)
+    except (ValueError, AttributeError):
+        return False
+    agent_id = parsed.get("agentId")
+    if not isinstance(agent_id, str) or not agent_id:
+        return False
+    if parsed.get("scope") not in _VALID_SCOPES:
+        return False
+    if parsed.get("status") not in _VALID_STATUSES:
+        return False
+    if not isinstance(parsed.get("contentFingerprint"), str):
+        return False
+    return True
 
 
 def find_tombstone_by_fingerprint(base_dir: Path, agent_id: str, fingerprint: str) -> dict[str, Any] | None:
