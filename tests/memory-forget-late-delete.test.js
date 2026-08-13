@@ -250,4 +250,61 @@ describe("memory_forget late tombstone audit continuation", () => {
     assert.equal(logs[0].result, "committed");
     assert.ok(logs[0].tombstoneId);
   });
+
+  it("Late-Settlement mit Audit-Fehler erzeugt kein falsches Commit-Audit und wird bei Wiederholung nachgetragen", async (t) => {
+    const gate = deferred();
+    const started = deferred();
+    let rawTombstone;
+
+    const { agentId, workspaceDir, memoryId } = await createCase();
+
+    // Audit-Pfad blockieren: destructive-ops.jsonl als VERZEICHNIS anlegen.
+    const { mkdirSync, rmSync } = await import("node:fs");
+    mkdirSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true });
+
+    MemoryDB.prototype.tombstone = function timedOutIdTombstone(id) {
+      if (id !== memoryId) return originalTombstone.call(this, id);
+      rawTombstone = (async () => {
+        started.resolve();
+        await gate.promise;
+        return originalTombstone.call(this, id);
+      })();
+      return withTimeout(rawTombstone, 20, `MemoryDB.tombstone:${id}`);
+    };
+    t.after(async () => {
+      gate.resolve();
+      await Promise.allSettled([rawTombstone].filter(Boolean));
+    });
+
+    const execution = (await api._toolFactory({ agentId, workspaceDir }))
+      .find((tool) => tool.name === "memory_forget")
+      .execute("forget-id-late-audit", { memoryId });
+    await started.promise;
+    const result = await execution;
+    assert.match(result.content[0].text, /Memory forget failed:.*timed out/i);
+
+    gate.resolve();
+    await rawTombstone;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Mutation ist durch, aber das Late-Settlement musste wegen Audit-Fehler
+    // abgelehnt werden: KEIN falsches Commit-Audit (Pfad ist weiterhin das
+    // blockierende Verzeichnis).
+    const auditPath = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
+    if (existsSync(auditPath)) {
+      const { statSync } = await import("node:fs");
+      assert.ok(statSync(auditPath).isDirectory(), "kein falsches Commit-Audit (Pfad bleibt blockiert)");
+    }
+
+    // Pfad freigeben → Wiederholung trägt das Audit nach.
+    MemoryDB.prototype.tombstone = originalTombstone;
+    rmSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true, force: true });
+    const second = await (await api._toolFactory({ agentId, workspaceDir }))
+      .find((tool) => tool.name === "memory_forget")
+      .execute("forget-id-repeat", { memoryId });
+    assert.match(second.content[0].text, /forgotten/i);
+    assert.ok(existsSync(auditPath), "Audit muss nach Wiederholung existieren");
+    const events = readFileSync(auditPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(events.some((e) => e.memoryId === memoryId && (e.result === "committed" || e.result === "already_tombstoned")));
+  });
 });
