@@ -342,7 +342,8 @@ describe("auto-recall decision trace integration", () => {
     const result = await runRecallFor(agentId, "Base memory", false, false, {
       workspaceDir,
       pluginConfig: {
-        semanticLens: { enabled: true, maxLensMemories: 1, maxCommunities: 1, timeoutMs: 50 },
+        // Generous timeoutMs: test subject is valid-time bounds survival, not timeout mechanism (covered separately in semantic-lens-index.test.js with timeoutMs: 1). Tight budget races Promise.race under load.
+        semanticLens: { enabled: true, maxLensMemories: 1, maxCommunities: 1, timeoutMs: 30000 },
         recall: { maxPromptMemories: 1 },
       },
     });
