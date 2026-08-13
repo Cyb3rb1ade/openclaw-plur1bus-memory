@@ -17,7 +17,13 @@ import { readTombstoneRegistry, tombstoneRegistryDir } from "../lib/tombstone.js
 import { createDbAdapter } from "../lib/db-adapter.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 
-const DEFAULT_BASE_DB = join(process.env.OPENCLAW_HOME || homedir(), ".openclaw", "memory", "lancedb-namespaced");
+const DEFAULT_BASE_DB = join(openclawHome(), "memory", "lancedb-namespaced");
+
+function openclawHome() {
+  // OPENCLAW_HOME zeigt auf das OpenClaw-Verzeichnis selbst (wie index.js);
+  // nur wenn es fehlt, wird ~/.openclaw angenommen. Kein doppeltes .openclaw.
+  return process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
+}
 
 function parseArgs(argv) {
   const args = { apply: false, baseDbPath: null };
@@ -59,6 +65,12 @@ async function main() {
       report.registryErrors.push({ agent: safeAgent, error: registry.readError });
       continue;
     }
+    if (registry.corruptLines > 0) {
+      // Fail-closed: beschädigte Zeilen könnten einen committed Tombstone
+      // verbergen — das Restore darf nicht still "ok" melden.
+      report.registryErrors.push({ agent: safeAgent, error: `corrupt registry lines: ${registry.corruptLines}` });
+      continue;
+    }
     const tombstones = registry.tombstones.filter((t) => t.status === "committed");
     if (tombstones.length === 0) continue;
     const adapter = createDbAdapter({ basePath: baseDbPath, logger: { info() {}, warn() {} } });
@@ -79,7 +91,8 @@ async function main() {
       }
     }
     // Verifikation: keine durch committed Tombstone adressierte Zeile darf aktiv
-    // geblieben sein (Resurrection-Schutz).
+    // geblieben sein (Resurrection-Schutz). Verifikationsfehler werden NICHT
+    // verschluckt — sie führen zum Fehlschlag.
     for (const tombstone of tombstones) {
       const id = tombstone.memoryId;
       if (!id) continue;
@@ -88,8 +101,8 @@ async function main() {
         if (card && String(card.status || "") === "active") {
           report.activeAfterReapply.push({ agent: safeAgent, memoryId: id });
         }
-      } catch {
-        /* getCard-Fehler wird über errors abgedeckt */
+      } catch (err) {
+        report.errors.push({ agent: safeAgent, memoryId: id, error: `verify: ${err?.message || String(err)}` });
       }
     }
     await adapter.shutdown();

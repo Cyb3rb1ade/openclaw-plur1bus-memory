@@ -41,8 +41,14 @@ function parseArgs(argv) {
   return args;
 }
 
-const DEFAULT_BASE_DB = join(process.env.OPENCLAW_HOME || homedir(), ".openclaw", "memory", "lancedb-namespaced");
-const DEFAULT_ARCHIVE = join(process.env.OPENCLAW_HOME || homedir(), ".openclaw", "memory", "_archive");
+function openclawHome() {
+  // OPENCLAW_HOME zeigt auf das OpenClaw-Verzeichnis selbst (wie index.js);
+  // nur wenn es fehlt, wird ~/.openclaw angenommen. Kein doppeltes .openclaw.
+  return process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
+}
+
+const DEFAULT_BASE_DB = join(openclawHome(), "memory", "lancedb-namespaced");
+const DEFAULT_ARCHIVE = join(openclawHome(), "memory", "_archive");
 
 function readJsonl(path) {
   if (!existsSync(path)) return { records: [], corruptLines: 0 };
@@ -122,16 +128,26 @@ function main() {
   const missingContent = [];
   let corruptLines = 0;
   let failedEventsSkipped = 0;
+  let unconfirmedEventsSkipped = 0;
+
+  // Whitelist: NUR explizit bestätigte oder klar definierte historische Events
+  // (ohne result-Feld) werden als committed rekonstruiert. attempted, failed und
+  // unbekannte/unbestätigte Zustände werden übersprungen und gemeldet.
+  const RECONSTRUCTABLE_RESULTS = new Set(["committed", "already_tombstoned"]);
 
   for (const opsFile of destructiveOpsFiles) {
     const { records, corruptLines: fileCorrupt } = readJsonl(opsFile);
     corruptLines += fileCorrupt;
     for (const event of records) {
       if (event.event !== "memory.deleted") continue;
-      // result="failed" darf NIEMALS als committed rekonstruiert werden.
       if (event.result === "failed") {
         failedEventsSkipped += 1;
         skipped.push({ memoryId: event.memoryId, agentId: event.agentId, reason: "failed_event" });
+        continue;
+      }
+      if (event.result !== undefined && !RECONSTRUCTABLE_RESULTS.has(event.result)) {
+        unconfirmedEventsSkipped += 1;
+        skipped.push({ memoryId: event.memoryId, agentId: event.agentId, reason: `unconfirmed_result:${event.result}` });
         continue;
       }
       const memoryId = event.memoryId;
@@ -219,6 +235,7 @@ function main() {
     missingContent: missingContent.length,
     corruptLines,
     failedEventsSkipped,
+    unconfirmedEventsSkipped,
     reconstructedIds: reconstructed.map((r) => r.memoryId),
     skippedDetails: skipped,
     conflictedDetails: conflicted,

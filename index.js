@@ -4798,36 +4798,33 @@ const plugin = {
       }
       if (result?.alreadyTombstoned) {
         // Crash-Recovery: Zeile bereits deleted — fehlenden committed Tombstone
-        // und Audit nachtragen.
+        // und Audit nachtragen. Fehlschlag des Backfills ist ein Fehler (fail-closed),
+        // kein stilles ok:true.
         if (baseDbPath) {
-          try {
-            const backfill = backfillCommittedTombstone(baseDbPath, card, {
-              agentId,
-              actor,
-              actorType,
-              reason,
-              sourceOp: source,
-              archiveRef: archivePath,
-              previousVersion: String(card?.previousVersion || ""),
-            });
-            if (!backfill.alreadyCommitted) {
-              appendDestructiveOpLog(workspaceDir, {
-                event: "memory.deleted",
-                source,
-                agentId,
-                memoryId,
-                canonicalOriginId: backfill.tombstone.canonicalOriginId,
-                via,
-                query,
-                archivePath,
-                tombstoneId: backfill.tombstone.tombstoneId,
-                result: "committed",
-                timestamp: new Date().toISOString(),
-              });
-            }
-          } catch (backfillErr) {
-            api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget tombstone backfill failed for agent=${agentId} memory=${memoryId}: ${String(backfillErr)}`);
-          }
+          const backfill = backfillCommittedTombstone(baseDbPath, card, {
+            agentId,
+            actor,
+            actorType,
+            reason,
+            sourceOp: source,
+            archiveRef: archivePath,
+            previousVersion: String(card?.previousVersion || ""),
+          });
+          // Audit IMMER schreiben (auch bei alreadyCommitted), damit ein zuvor
+          // verschluckter Audit-Schreibfehler nicht dauerhaft unerfasst bleibt.
+          appendDestructiveOpLog(workspaceDir, {
+            event: "memory.deleted",
+            source,
+            agentId,
+            memoryId,
+            canonicalOriginId: backfill.tombstone.canonicalOriginId,
+            via,
+            query,
+            archivePath,
+            tombstoneId: backfill.tombstone.tombstoneId,
+            result: backfill.alreadyCommitted ? "already_tombstoned" : "committed",
+            timestamp: new Date().toISOString(),
+          });
         }
         return { ok: true, alreadyTombstoned: true };
       }
