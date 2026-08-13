@@ -160,7 +160,7 @@ describe("memory_forget late tombstone audit continuation", () => {
     const execution = testCase.forgetTool.execute("forget-id-late", { memoryId: testCase.memoryId });
     await started.promise;
     const result = await execution;
-    assert.match(result.content[0].text, /Memory forget failed:.*timed out/i);
+    assert.match(result.content[0].text, /Memory forget failed.*timed out/i);
     assert.equal((await readMemory(testCase.agentId, testCase.memoryId)).status, "active", "the prompt timeout must occur before raw tombstone settlement");
     assert.equal(readDestructiveOps(testCase.workspaceDir).length, 0);
 
@@ -202,7 +202,7 @@ describe("memory_forget late tombstone audit continuation", () => {
     const execution = testCase.forgetTool.execute("forget-query-late", { query });
     await started.promise;
     const result = await execution;
-    assert.match(result.content[0].text, /Memory forget failed:.*timed out/i);
+    assert.match(result.content[0].text, /Memory forget failed.*timed out/i);
     assert.equal((await readMemory(testCase.agentId, testCase.memoryId)).status, "active");
     assert.equal(readDestructiveOps(testCase.workspaceDir).length, 0);
 
@@ -281,7 +281,7 @@ describe("memory_forget late tombstone audit continuation", () => {
       .execute("forget-id-late-audit", { memoryId });
     await started.promise;
     const result = await execution;
-    assert.match(result.content[0].text, /Memory forget failed:.*timed out/i);
+    assert.match(result.content[0].text, /Memory forget failed.*timed out/i);
 
     gate.resolve();
     await rawTombstone;

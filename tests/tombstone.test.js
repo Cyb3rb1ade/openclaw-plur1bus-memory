@@ -486,3 +486,24 @@ describe("Registry-Agent-Bindung und Validierung", () => {
     }
   });
 });
+
+describe("Principal-Typ-Validierung", () => {
+  it("Nicht-String-/Whitespace-Principals sind corrupt", () => {
+    const base = {
+      schemaVersion: TOMBSTONE_SCHEMA_VERSION,
+      memoryId: "aaaaaaaa-1111-4111-8111-111111111111",
+      agentId: "agent-a",
+      status: "committed",
+      contentFingerprint: "a".repeat(64),
+    };
+    // workspace mit Zahl
+    assert.equal(isValidTombstone({ ...base, scope: "workspace", workspaceId: 123 }, "agent-a"), false);
+    // workspace mit Whitespace-String
+    assert.equal(isValidTombstone({ ...base, scope: "workspace", workspaceId: "   " }, "agent-a"), false);
+    // user mit Zahl
+    assert.equal(isValidTombstone({ ...base, scope: "user", ownerUserId: 123 }, "agent-a"), false);
+    // gültige Formen
+    assert.equal(isValidTombstone({ ...base, scope: "workspace", workspaceId: "ws-1" }, "agent-a"), true);
+    assert.equal(isValidTombstone({ ...base, scope: "user", ownerUserId: "user:v1:aaa" }, "agent-a"), true);
+  });
+});

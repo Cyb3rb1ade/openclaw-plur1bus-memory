@@ -74,6 +74,12 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
     return forgetTool.execute("forget", { memoryId });
   }
 
+  async function forgetByQuery(agentId, workspaceDir, query) {
+    const tools = toolsFor(agentId, workspaceDir);
+    const forgetTool = tools.find((t) => t.name === "memory_forget");
+    return forgetTool.execute("forget-query", { query });
+  }
+
   async function readMemory(agentId, memoryId) {
     const db = new MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
     await db.init();
@@ -135,6 +141,36 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
     rmSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true, force: true });
     const secondForget = await forgetById(agentId, workspaceDir, memoryId);
     assert.match(secondForget.content[0].text, /forgotten/i, "zweiter Forget muss gelingen");
+
+    const auditPath = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
+    assert.ok(existsSync(auditPath), "Audit-Datei muss nach der Wiederholung existieren");
+    const events = readFileSync(auditPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const committed = events.filter((e) => e.memoryId === memoryId && (e.result === "committed" || e.result === "already_tombstoned"));
+    assert.ok(committed.length >= 1, "Audit muss den gelöschten Memory enthalten");
+    rmSync(workspaceDir, { recursive: true, force: true });
+  });
+
+  it("Query-Forget mit Audit-Fehler → Wiederholung derselben Query trägt das Audit nach", async () => {
+    const agentId = "e2e-query-audit-agent";
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-e2e-query-ws-"));
+    const text = `E2E query recovery target ${randomUUID()}`;
+
+    const stored = await store(agentId, workspaceDir, text);
+    assert.equal(stored.details.action, "stored");
+    const memoryId = stored.details.id;
+
+    // Audit-Pfad blockieren.
+    mkdirSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true });
+
+    const firstForget = await forgetByQuery(agentId, workspaceDir, text);
+    assert.match(firstForget.content[0].text, /Memory forget failed for/, "erster Query-Forget muss fehlschlagen");
+    assert.match(firstForget.content[0].text, new RegExp(memoryId), "Fehlermeldung muss die Ziel-ID nennen");
+
+    // Pfad freigeben → Wiederholung DERSELBEN Query findet die gelöschte Karte
+    // über die Audit-Recovery-Suche und trägt das Audit nach.
+    rmSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true, force: true });
+    const secondForget = await forgetByQuery(agentId, workspaceDir, text);
+    assert.match(secondForget.content[0].text, /Forgotten:/, "Wiederholung muss die Recovery erreichen");
 
     const auditPath = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
     assert.ok(existsSync(auditPath), "Audit-Datei muss nach der Wiederholung existieren");
