@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
@@ -113,5 +113,34 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
     assert.equal(otherStore.details.action, "stored", "fremder Agent darf nicht blockiert werden");
     rmSync(wsA, { recursive: true, force: true });
     rmSync(wsB, { recursive: true, force: true });
+  });
+
+  it("Audit-Fehler → Wiederholung trägt das Audit tatsächlich nach", async () => {
+    const agentId = "e2e-audit-agent";
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-e2e-audit-ws-"));
+    const text = `E2E audit recovery target ${randomUUID()}`;
+
+    const stored = await store(agentId, workspaceDir, text);
+    assert.equal(stored.details.action, "stored");
+    const memoryId = stored.details.id;
+
+    // Audit-Pfad blockieren: destructive-ops.jsonl als VERZEICHNIS anlegen,
+    // damit der appendFileSync des Audit-Writers fehlschlägt.
+    mkdirSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true });
+
+    const firstForget = await forgetById(agentId, workspaceDir, memoryId);
+    assert.match(firstForget.content[0].text, /Memory forget failed/i, "erster Forget muss bei Audit-Fehler fehlschlagen");
+
+    // Pfad wieder freigeben → Wiederholung trägt Audit nach.
+    rmSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true, force: true });
+    const secondForget = await forgetById(agentId, workspaceDir, memoryId);
+    assert.match(secondForget.content[0].text, /forgotten/i, "zweiter Forget muss gelingen");
+
+    const auditPath = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
+    assert.ok(existsSync(auditPath), "Audit-Datei muss nach der Wiederholung existieren");
+    const events = readFileSync(auditPath, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const committed = events.filter((e) => e.memoryId === memoryId && (e.result === "committed" || e.result === "already_tombstoned"));
+    assert.ok(committed.length >= 1, "Audit muss den gelöschten Memory enthalten");
+    rmSync(workspaceDir, { recursive: true, force: true });
   });
 });

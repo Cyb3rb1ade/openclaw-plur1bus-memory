@@ -23,6 +23,8 @@ import {
   readTombstonesFromRegistry,
   normalizeContentForFingerprint,
   contentFingerprint,
+  isValidTombstone,
+  backfillCommittedTombstone,
 } from "../lib/tombstone.js";
 import { forgetCard } from "../lib/telegram-commands/memory-edit.js";
 import { createDbAdapter } from "../lib/db-adapter.js";
@@ -423,6 +425,62 @@ describe("Forget crash-recovery + ACL vor Idempotenz", () => {
       });
       assert.equal(result.ok, false);
       assert.match(result.error, /access denied/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Registry-Agent-Bindung + Principal-/Fingerprint-Validierung ────────────
+
+describe("Registry-Agent-Bindung und Validierung", () => {
+  it("Tombstone mit fremder agentId in agent-a.jsonl gilt als corrupt und blockiert konservativ", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-agent-bind-"));
+    const baseDbPath = join(dir, "lancedb-namespaced");
+    try {
+      const tombstone = buildTombstone({
+        card: { id: "aaaaaaaa-1111-4111-8111-111111111111", text: "Fakt", scope: "agent-private" },
+        agentId: "agent-b",
+      });
+      appendTombstoneToRegistry(baseDbPath, "agent-a", { ...tombstone, status: "committed" });
+
+      const blocking = findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text: "Fakt", scope: "agent-private" });
+      assert.ok(blocking, "Agent-Mismatch muss fail-closed blockieren");
+      assert.equal(blocking._blockReason, "registry_corrupt_lines");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("isValidTombstone: workspace/user ohne Principal und ungültige Fingerprints sind corrupt", () => {
+    const base = {
+      schemaVersion: TOMBSTONE_SCHEMA_VERSION,
+      memoryId: "aaaaaaaa-1111-4111-8111-111111111111",
+      agentId: "agent-a",
+      scope: "agent-private",
+      status: "committed",
+      contentFingerprint: "a".repeat(64),
+    };
+    assert.equal(isValidTombstone(base, "agent-a"), true);
+    assert.equal(isValidTombstone({ ...base, scope: "workspace" }, "agent-a"), false, "workspace ohne Principal");
+    assert.equal(isValidTombstone({ ...base, scope: "user" }, "agent-a"), false, "user ohne Owner");
+    assert.equal(isValidTombstone({ ...base, contentFingerprint: "abc" }, "agent-a"), false, "beliebiger Fingerprint");
+    assert.equal(isValidTombstone({ ...base, contentFingerprint: "" }, "agent-a"), false, "leerer Fingerprint");
+    assert.equal(isValidTombstone(base, "agent-b"), false, "Agent-Bindung verletzt");
+    assert.equal(isValidTombstone({ schemaVersion: 1, status: "committed" }, "agent-a"), false, "nur schemaVersion");
+  });
+
+  it("corrupt Registry blockiert Backfill (fail-closed)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-backfill-corrupt-"));
+    const baseDbPath = join(dir, "lancedb-namespaced");
+    const registryDir = join(dir, "_tombstones");
+    try {
+      mkdirSync(join(registryDir, "agent-a.jsonl").replace(/agent-a\.jsonl$/, ""), { recursive: true });
+      writeFileSync(join(registryDir, "agent-a.jsonl"), "NOT JSON\n", "utf8");
+      assert.throws(
+        () => backfillCommittedTombstone(baseDbPath, { id: "aaaaaaaa-1111-4111-8111-111111111111", text: "x", scope: "agent-private" }, { agentId: "agent-a" }),
+        /corrupt|registry/i,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
