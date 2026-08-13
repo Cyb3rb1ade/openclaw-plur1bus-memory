@@ -46,12 +46,16 @@ class TombstoneContractTests(unittest.TestCase):
             card={"id": UUID_A, "content": "x", "scope": "agent-private"},
             agent_id="agent-a",
         )
-        self.assertTrue(tombstone_blocks_capture(base, {"agentId": "agent-a"}))
-        self.assertFalse(tombstone_blocks_capture(base, {"agentId": "agent-b"}))
+        self.assertTrue(tombstone_blocks_capture(base, {"agentId": "agent-a", "scope": "agent-private"}))
+        self.assertFalse(tombstone_blocks_capture(base, {"agentId": "agent-b", "scope": "agent-private"}))
+        # agent-private blockiert NUR agent-private.
+        self.assertFalse(tombstone_blocks_capture(base, {"agentId": "agent-a", "scope": "workspace", "workspaceIdentity": "ws-1"}))
+        self.assertFalse(tombstone_blocks_capture(base, {"agentId": "agent-a", "scope": "user", "ownerUserId": "user:v1:aaa"}))
 
         ws = build_tombstone(card={"id": UUID_A, "content": "x", "scope": "workspace", "workspaceKey": "ws-1"}, agent_id="agent-a")
-        self.assertTrue(tombstone_blocks_capture(ws, {"agentId": "agent-a", "workspaceIdentity": "ws-1"}))
-        self.assertFalse(tombstone_blocks_capture(ws, {"agentId": "agent-a", "workspaceIdentity": "ws-2"}))
+        self.assertTrue(tombstone_blocks_capture(ws, {"agentId": "agent-a", "scope": "workspace", "workspaceIdentity": "ws-1"}))
+        self.assertFalse(tombstone_blocks_capture(ws, {"agentId": "agent-a", "scope": "workspace", "workspaceIdentity": "ws-2"}))
+        self.assertFalse(tombstone_blocks_capture(ws, {"agentId": "agent-a", "scope": "agent-private"}))
 
     def test_registry_roundtrip_and_fingerprint_block(self) -> None:
         tombstone = build_tombstone(

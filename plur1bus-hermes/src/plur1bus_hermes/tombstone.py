@@ -76,13 +76,19 @@ def tombstone_blocks_capture(tombstone: dict[str, Any], ctx: dict[str, Any]) -> 
     if str(tombstone.get("agentId") or "") != str(ctx.get("agentId") or ""):
         return False
     scope = str(tombstone.get("scope") or "agent-private")
+    ctx_scope = str(ctx.get("scope") or "agent-private")
     if scope == "agent-private":
-        return True
+        # Exakte Scope-Typ-Bindung: agent-private blockiert NUR agent-private.
+        return ctx_scope == "agent-private"
     if scope == "workspace":
+        if ctx_scope != "workspace":
+            return False
         tomb_ws = tombstone.get("workspaceId") or tombstone.get("workspaceKey") or ""
         ctx_ws = ctx.get("workspaceIdentity") or ctx.get("workspaceKey") or ""
         return bool(tomb_ws) and tomb_ws == ctx_ws
     if scope == "user":
+        if ctx_scope != "user":
+            return False
         tomb_user = tombstone.get("ownerUserId") or ""
         ctx_user = ctx.get("ownerUserId") or ctx.get("userPrincipal") or ""
         return bool(tomb_user) and tomb_user == ctx_user
