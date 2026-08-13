@@ -12,6 +12,12 @@ from typing import Any
 from plur1bus_hermes.domain import Plur1busDomain
 from plur1bus_hermes.provider import Plur1busMemoryProvider
 from plur1bus_hermes.runtime import Plur1busRuntime
+from plur1bus_hermes.critical_review import (
+    build_preview,
+    translate_reason,
+    translate_source_role,
+    translate_type,
+)
 
 from .commands import CANONICAL_SUBCOMMANDS, build_command_table
 from .hooks import HookCollector
@@ -34,9 +40,40 @@ class Plur1busControlsPlugin:
         self._delivery_tasks: set[str] = set()
         self._confirmations = ConfirmationStore()
 
+    def _is_control_event(self, event: Any) -> bool:
+        """Konservativ Slash-/Control-Ereignisse erkennen.
+
+        Pending-Reviews dürfen nicht wie eine Antwort auf einen Slash-Befehl,
+        einen abgelehnten ``/learn``-Befehl oder einen Mid-Turn-Fehler wirken.
+        Falls der Adapter keinen besseren Lifecycle-Hook anbietet, filtert diese
+        Prüfung konservativ; fehlende Felder bedeuten „kein Control-Event“.
+        """
+        text = None
+        for attr in ("text", "message", "content", "body"):
+            raw = getattr(event, attr, None)
+            if isinstance(raw, str):
+                text = raw
+                break
+            if isinstance(raw, dict):
+                text = str(raw.get("text") or raw.get("content") or raw.get("body") or "")
+                break
+        if text is not None and str(text).strip().startswith("/"):
+            return True
+        kind = str(
+            getattr(event, "type", None)
+            or getattr(event, "kind", None)
+            or getattr(event, "event_type", None)
+            or ""
+        ).lower()
+        if kind in {"command", "control", "slash", "learn", "system", "error", "internal"}:
+            return True
+        return False
+
     def _on_gateway_dispatch(self, event: Any, gateway: Any, identity: Any) -> None:
         """Schedule one non-blocking proactive delivery pass for an authorized route."""
         if event is None or gateway is None or identity is None:
+            return
+        if self._is_control_event(event):
             return
         agent = identity.profile or self.config.get("defaultAgentId") or "default"
         try:
@@ -74,6 +111,38 @@ class Plur1busControlsPlugin:
 
         task.add_done_callback(completed)
 
+    def _render_critical_message(self, item: dict[str, Any], ref: str) -> str:
+        """Verständliche Critical-Review-Nachricht statt ``reason=...``-Rohwerten."""
+        reason = translate_reason(
+            str(item.get("reason") or ""),
+            type_fallback=str(item.get("type") or ""),
+            lang="de",
+        )
+        source = translate_source_role(str(item.get("sourceRole") or ""), "de")
+        preview = build_preview(item, lang="de")
+        lines = [
+            "🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt.",
+            "",
+        ]
+        if preview["suppressed"]:
+            lines.append(f"„{preview['reason']}“")
+        elif preview["text"]:
+            lines.append(f"„{preview['text']}“")
+        lines.extend([
+            f"Grund: {reason}",
+            f"Quelle: {source}",
+            f"Referenz: {ref}",
+            "",
+            "Soll diese Erinnerung besonders hervorgehoben werden?",
+            "",
+            f"Bestätigen: /plur1bus critical accept {ref}",
+            f"Nicht hervorheben: /plur1bus critical reject {ref}",
+            f"Korrigieren: /plur1bus critical edit {ref}",
+            "",
+            "Hinweis: „Nicht hervorheben“ löscht die Erinnerung nicht, sondern verwirft nur die besondere Kennzeichnung.",
+        ])
+        return "\n".join(lines)
+
     async def _deliver_proactive(self, event: Any, gateway: Any, runtime: Any) -> None:
         """Deliver due reminders and pending critical reviews through the live adapter."""
         source = getattr(event, "source", None)
@@ -91,6 +160,7 @@ class Plur1busControlsPlugin:
         proactive = domain.proactive_messages()
         if not reminders and not criticals and not proactive:
             return
+        ref_map = domain.critical_reference_map()
         lines = []
         if reminders:
             lines.append("PLUR1BUS reminders:")
@@ -99,11 +169,9 @@ class Plur1busControlsPlugin:
                 for item in reminders
             )
         if criticals:
-            lines.append("PLUR1BUS critical memories require review:")
-            lines.extend(
-                f"- [{item['id']}] reason={item.get('reason', 'critical')}"
-                for item in criticals
-            )
+            for item in criticals:
+                ref = ref_map.get(str(item["id"]), "")
+                lines.append(self._render_critical_message(item, ref))
         if proactive:
             lines.extend(str(item.get("text") or "") for item in proactive)
         metadata = {}
@@ -112,7 +180,7 @@ class Plur1busControlsPlugin:
             metadata["thread_id"] = thread_id
         await adapter.send(
             str(source.chat_id),
-            "\n".join(lines),
+            "\n\n".join(lines),
             metadata=metadata or None,
         )
         for reminder in reminders:
@@ -158,7 +226,7 @@ class Plur1busControlsPlugin:
             mutating_command = mutating_command or (
                 command in {"dreams", "obsidian", "jobs", "critical", "reminders", "speakers", "temperament", "code"}
                 and bool(arguments)
-                and arguments[0] in {"run", "rebuild", "sync", "maintain", "map", "accept", "reject", "acknowledge", "cancel"}
+                and arguments[0] in {"run", "rebuild", "sync", "maintain", "map", "accept", "reject", "edit", "acknowledge", "cancel"}
             )
             if mutating_command and not is_mutation_authorized(
                 runtime.config, current_identity()
@@ -323,15 +391,41 @@ class Plur1busControlsPlugin:
                 )
             if command == "critical":
                 if not arguments:
-                    return json.dumps(
-                        {"pending": domain.critical_items()},
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                if len(arguments) != 2 or arguments[0] not in {"accept", "reject"}:
-                    return "Usage: /plur1bus critical [--agent ID] accept|reject MEMORY_ID"
+                    pending = domain.critical_items()
+                    ref_map = domain.critical_reference_map()
+                    items = [
+                        {
+                            "ref": ref_map.get(str(item["id"]), ""),
+                            "id": str(item["id"]),
+                            "type": translate_type(str(item.get("type") or ""), "de"),
+                            "reason": translate_reason(str(item.get("reason") or ""), str(item.get("type") or ""), "de"),
+                            "source": translate_source_role(str(item.get("sourceRole") or ""), "de"),
+                            "contentSuppressed": bool(item.get("contentSuppressed")),
+                            "status": item.get("status"),
+                        }
+                        for item in pending
+                    ]
+                    return json.dumps({"pending": items}, ensure_ascii=False, indent=2)
+                if len(arguments) != 2 or arguments[0] not in {"accept", "reject", "edit"}:
+                    return "Usage: /plur1bus critical [--agent ID] accept|reject|edit REFERENZ"
+                decision = arguments[0]
+                reference = arguments[1]
+                if decision == "edit":
+                    resolved = domain.resolve_critical_reference(reference)
+                    if not resolved["ok"]:
+                        return json.dumps(
+                            {"updated": False, "reason": resolved["error"], "reference": reference},
+                            ensure_ascii=False,
+                        )
+                    return json.dumps({
+                        "editHint": (
+                            f"✏️ Um diese Erinnerung zu korrigieren, verwende "
+                            f"/plur1bus correct <Beschreibung> zu <korrigierter Text> "
+                            f"(Referenz {reference} → {resolved['id']})."
+                        ),
+                    }, ensure_ascii=False, indent=2)
                 return json.dumps(
-                    domain.review_critical(arguments[1], arguments[0]),
+                    domain.review_critical_by_reference(reference, decision),
                     ensure_ascii=False,
                     indent=2,
                 )

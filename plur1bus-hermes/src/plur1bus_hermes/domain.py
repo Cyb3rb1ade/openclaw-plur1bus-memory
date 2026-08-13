@@ -20,6 +20,7 @@ from .cognition import (
 )
 from .code_index import query_code_index, rebuild_code_index
 from .critical import classify_critical
+from .critical_review import assign_short_refs, resolve_short_ref
 from .dreaming import build_rem_dream
 from .obsidian_maintenance import generate_obsidian_control_room
 from .mood import MoodEngine
@@ -150,7 +151,12 @@ class Plur1busDomain:
         self._write_obsidian_note(record)
         self._build_graph_edges(record, table)
         metadata = self._metadata_for(record)
-        critical = classify_critical(str(record.get("content") or ""), metadata)
+        source_role = str(record.get("sourceRole") or "")
+        critical = classify_critical(
+            str(record.get("content") or ""),
+            metadata,
+            source_role=source_role,
+        )
         classifications = self._read_jsonl(
             self.state_dir / "critical-classification.jsonl"
         )
@@ -182,6 +188,7 @@ class Plur1busDomain:
                 "agentId": self.agent_id,
                 "importance": critical["importance"],
                 "reason": critical["reason"],
+                "sourceRole": source_role,
                 "contentSuppressed": critical["suppressContent"],
                 "status": "pending_review",
                 "createdAt": _utcnow(),
@@ -192,6 +199,7 @@ class Plur1busDomain:
                 "agentId": self.agent_id,
                 "importance": critical["importance"],
                 "reason": critical["reason"],
+                "sourceRole": source_role,
                 "status": "budget_suppressed",
                 "createdAt": _utcnow(),
             })
@@ -628,6 +636,25 @@ class Plur1busDomain:
         if status is not None:
             values = [item for item in values if item.get("status") == status]
         return values
+
+    def critical_reference_map(self) -> dict[str, str]:
+        """Kürzeste eindeutige Kurzreferenz je ausstehender Critical-Review."""
+        pending = self.critical_items("pending_review")
+        return assign_short_refs([str(item["id"]) for item in pending])
+
+    def resolve_critical_reference(self, reference: str) -> dict[str, Any]:
+        """Löst eine Kurzreferenz (oder vollständige UUID) gegen ausstehende
+        Reviews auf. Liefert ``{"ok": True, "id": ...}`` oder ein Fehlerobjekt.
+        """
+        pending = self.critical_items("pending_review")
+        return resolve_short_ref(reference, pending)
+
+    def review_critical_by_reference(self, reference: str, decision: str) -> dict[str, Any]:
+        """Accept/Reject über Kurzreferenz oder vollständige UUID."""
+        resolved = self.resolve_critical_reference(reference)
+        if not resolved["ok"]:
+            return {"updated": False, "reason": resolved["error"], "reference": reference}
+        return self.review_critical(resolved["id"], decision)
 
     def speaker_mappings(self) -> dict[str, str]:
         """Return the current agent-local speaker alias mappings."""

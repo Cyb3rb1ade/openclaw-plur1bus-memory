@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .critical_review import keyword_eligible
+
 
 _CRITICAL_PATTERNS = (
     r"\b(never forget|nie vergessen|unbedingt merken)\b",
@@ -16,8 +18,16 @@ _CRITICAL_PATTERNS = (
 def classify_critical(
     text: str,
     metadata: dict[str, Any],
+    source_role: str = "user",
 ) -> dict[str, Any]:
-    """Classify critical-push eligibility without exposing secret-like content."""
+    """Classify critical-push eligibility without exposing secret-like content.
+
+    Ein bloßer Schlüsselwort-Treffer zählt nur für geeignete Quellen (``user``,
+    ``correction``, ``obsidian``, ``note`` …). Assistentenantworten wie
+    „Dein API-Key ist nicht konfiguriert." werden weiterhin gespeichert, lösen
+    aber keinen Critical-Push aus — ``neverForget`` und echte Importance-Signale
+    bleiben unabhängig von der Quelle wirksam.
+    """
     value = str(text or "")
     importance = float(metadata.get("importance") or 0)
     never_forget = bool(metadata.get("neverForget"))
@@ -30,14 +40,15 @@ def classify_critical(
         re.search(pattern, value, re.IGNORECASE)
         for pattern in _CRITICAL_PATTERNS[-1:]
     )
-    eligible = never_forget or importance >= 0.9 or bool(matched)
+    keyword_signal = bool(matched) and keyword_eligible(source_role)
+    eligible = never_forget or importance >= 0.9 or keyword_signal
     reason = (
         "never_forget"
         if never_forget
         else "high_importance"
         if importance >= 0.9
         else "explicit_critical_language"
-        if matched
+        if keyword_signal
         else "not_critical"
     )
     return {
@@ -46,4 +57,5 @@ def classify_critical(
         "importance": importance,
         "requiresReview": eligible,
         "suppressContent": secret_like,
+        "sourceRole": str(source_role or ""),
     }
