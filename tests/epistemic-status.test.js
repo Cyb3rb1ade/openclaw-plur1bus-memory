@@ -666,6 +666,64 @@ describe("epistemic-status — lib/jobs/memory-compaction.js (§7a/§7b, real ru
     assert.equal(table._added.length, 0, "no merge should ever be constructed from/into an invalidated row");
   });
 
+  it("does not auto-archive identical text when the rows carry different epistemic evidence", async () => {
+    const now = Date.now();
+    const disputedId = "7c82b440-0e5d-4e6e-b3b1-adea8b574997";
+    const rows = [
+      {
+        id: "81d38141-96b8-4656-9e6c-d57e7d534ef1",
+        text: "alpha beta gamma",
+        vector: [1, 0, 0],
+        createdAt: now,
+        importance: 0.5,
+        category: "other",
+        origin: "dm",
+        storedBy: "",
+        confirmed: false,
+        epistemicStatus: "trusted",
+        epistemicStatusActor: "human:reviewer",
+        epistemicStatusReason: "verified source",
+        epistemicStatusUpdatedAt: now,
+        previousEpistemicStatus: "corroborated",
+      },
+      {
+        id: disputedId,
+        text: "alpha beta gamma",
+        vector: [1, 0, 0],
+        createdAt: now - 1000,
+        importance: 0.5,
+        category: "other",
+        origin: "dm",
+        storedBy: "",
+        confirmed: false,
+        epistemicStatus: "disputed",
+        epistemicStatusActor: "human:reviewer",
+        epistemicStatusReason: "conflicting source",
+        epistemicStatusUpdatedAt: now - 500,
+        previousEpistemicStatus: "observed",
+      },
+    ];
+    const table = makeDbTable(rows);
+    const workspaceDir = tmpRoot("plur1bus-compaction-trust-conflict-");
+
+    const result = await runMemoryCompaction(
+      { table },
+      {
+        similarityThreshold: 0.5,
+        lookbackDays: 30,
+        maxBatchSize: 50,
+        dryRun: false,
+        autoApply: true,
+        logger: { info() {}, warn() {} },
+        workspaceDir,
+      },
+    );
+
+    assert.equal(table._archived.has(disputedId), false);
+    assert.equal(result.executed, 0);
+    assert.equal(result.proposals, 1);
+  });
+
   // §7b integration-test note: `executeActions`'s "merge" case (the code
   // this Auflage-B fix targets) is only ever reached when an action passes
   // isLowRiskAutoApplyAction(), which — independent of this feature, and

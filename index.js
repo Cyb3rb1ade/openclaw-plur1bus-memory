@@ -95,7 +95,7 @@ import {
 import { normalizeCommandInput } from "./lib/semantic-input.js";
 import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validateCallbackData, validateMemoryText, validateSearchQuery, validateCorrectionText } from "./lib/input-limits.js";
 import { createDbAdapter } from "./lib/db-adapter.js";
-import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition } from "./lib/epistemic-status.js";
+import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
 import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
 import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
@@ -1859,6 +1859,11 @@ class MemoryDB {
           workspaceKey: r.workspaceKey || "",
           scope: r.scope || "agent-private",
           ownerUserId: r.ownerUserId || "",
+          epistemicStatus: r.epistemicStatus || "",
+          epistemicStatusActor: r.epistemicStatusActor || "",
+          epistemicStatusReason: r.epistemicStatusReason || "",
+          epistemicStatusUpdatedAt: r.epistemicStatusUpdatedAt ?? 0,
+          previousEpistemicStatus: r.previousEpistemicStatus || "",
           validFrom: r.validFrom ?? 0,
           validUntil: r.validUntil ?? 0,
         },
@@ -4526,7 +4531,8 @@ const plugin = {
     function findSafeDuplicateForValidity(candidates, text, validityWindow) {
       return candidates.find((candidate) => (
         isSafeDuplicate(candidate.entry.text, text)
-        && !hasDisjointValidityWindows(candidate.entry, validityWindow)
+        && stableValidTimeValue(candidate.entry.validFrom) === stableValidTimeValue(validityWindow.validFrom)
+        && stableValidTimeValue(candidate.entry.validUntil) === stableValidTimeValue(validityWindow.validUntil)
       ));
     }
 
@@ -4535,6 +4541,30 @@ const plugin = {
     function stableValidTimeValue(value) {
       const numeric = Number(value || 0);
       return Number.isSafeInteger(numeric) && numeric > 0 ? numeric : 0;
+    }
+
+    function hasEquivalentEpistemicMetadata(left, right, { includeUpdatedAt = true } = {}) {
+      const stringFields = [
+        "epistemicStatus",
+        "epistemicStatusActor",
+        "epistemicStatusReason",
+        "previousEpistemicStatus",
+      ];
+      if (stringFields.some((field) => String(left?.[field] ?? "") !== String(right?.[field] ?? ""))) {
+        return false;
+      }
+      return !includeUpdatedAt
+        || stableValidTimeValue(left?.epistemicStatusUpdatedAt) === stableValidTimeValue(right?.epistemicStatusUpdatedAt);
+    }
+
+    function durableMergeEpistemicMetadata(candidate) {
+      return {
+        epistemicStatus: combineEpistemicStatusForMerge(candidate.epistemicStatus, undefined),
+        previousEpistemicStatus: normalizeEpistemicStatus(candidate.epistemicStatus),
+        epistemicStatusActor: "system:merge",
+        epistemicStatusReason: `memory_store merge with ${candidate.id}`,
+        epistemicStatusUpdatedAt: Date.now(),
+      };
     }
 
     function durableMergeWriteKey({
@@ -4643,6 +4673,7 @@ const plugin = {
         "evidenceQuote",
       ];
       if (stableFields.some((field) => entry[field] !== expectedEntry[field])) return false;
+      if (!hasEquivalentEpistemicMetadata(entry, expectedEntry, { includeUpdatedAt: false })) return false;
       if (Number(entry.validFrom || 0) !== Number(expectedEntry.validFrom || 0)) return false;
       if (Number(entry.validUntil || 0) !== Number(expectedEntry.validUntil || 0)) return false;
       try {
@@ -4661,6 +4692,7 @@ const plugin = {
     function isExpectedMergeCandidate(entry, expectedEntry, candidateId, accessCtx) {
       if (!entry || entry.id !== candidateId || entry.text !== expectedEntry.text) return false;
       if (entry.status && entry.status !== "active") return false;
+      if (!hasEquivalentEpistemicMetadata(entry, expectedEntry)) return false;
       if (stableValidTimeValue(entry.validFrom) !== stableValidTimeValue(expectedEntry.validFrom)) return false;
       if (stableValidTimeValue(entry.validUntil) !== stableValidTimeValue(expectedEntry.validUntil)) return false;
       return candidateVisibleForStore({ entry }, accessCtx);
@@ -4979,7 +5011,7 @@ const plugin = {
                 const mergedImportance = Math.max(importance, authoritativeCandidate.importance ?? 0.5);
                 const mergedVector = await embeddings.embed(mergeResult.mergedText, { agentId: storeAgentId });
                 const mergedValidTime = combineValidTimeForMerge(authoritativeCandidate, { validFrom: capturedValidFrom, validUntil: capturedValidUntil });
-                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides);
+                const mergedEntry = applyDynamicsDefaults({ id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector, importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)), expiresAt, ...ownershipFields, ...durableMergeEpistemicMetadata(authoritativeCandidate), sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: mergedValidTime.validFrom, validUntil: mergedValidTime.validUntil }, Date.now(), halfLifeOverrides);
                 return { mergedEntry, mergeResult, mergedImportance };
               },
             });
@@ -8220,6 +8252,7 @@ const plugin = {
                         id: replacementId, text: mergeResult.mergedText, summary: generateSummary(mergeResult.mergedText, summaryMaxWords), origin, vector: mergedVector,
                         importance: mergedImportance, category, createdAt: Date.now(), mergedFrom: JSON.stringify(durableMergeLineage(authoritativeCandidate)),
                         expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                        ...durableMergeEpistemicMetadata(authoritativeCandidate),
                         emotionalValence: serializeEmotionalValence(mergedEmotion),
                         emotionalIntensity: mergedEmotion.emotionalIntensity,
                         emotionalDominant: mergedEmotion.emotionalDominant,
@@ -9003,6 +9036,7 @@ const plugin = {
               memoryClass: r.entry.memoryClass || "standard",
               validFrom: r.entry.validFrom ?? 0,
               validUntil: r.entry.validUntil ?? 0,
+              epistemicStatus: r.entry.epistemicStatus,
             };
             if (traceEnabled) {
               attachTraceToMemory(item, {
@@ -9042,6 +9076,7 @@ const plugin = {
             lastRetrievedAt: r.entry.lastRetrievedAt ?? undefined,
             validFrom: r.entry.validFrom ?? 0,
             validUntil: r.entry.validUntil ?? 0,
+            epistemicStatus: r.entry.epistemicStatus,
           }));
           if (semanticLensItems.length > 0) {
             api.logger.info?.(`memory-lancedb-namespaced: semantic lens added ${semanticLensItems.length} memories for agent=${agentId || "default"}`);

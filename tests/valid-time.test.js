@@ -1670,4 +1670,52 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
     assert.ok(rows.some((row) => row.id === candidateId));
     assert.ok(rows.some((row) => row.id !== candidateId && row.validFrom == Date.parse("2025-07-01")));
   });
+
+  it("exact text with an overlapping but different window remains available after the old window closes", async () => {
+    const agentId = "testagent-validtime-overlap-duplicate";
+    const candidateId = "77777777-7777-4777-8777-777777777778";
+    const text = "Alex worked on Project Delta.";
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mockedEmbed() {
+      return validTimeStoreVector(0.31);
+    };
+    const localDb = await initValidTimeSchema(join(basePath, agentId));
+    await localDb.store({
+      id: candidateId,
+      text,
+      vector: validTimeStoreVector(0.31),
+      category: "fact",
+      createdAt: Date.now() - 1000,
+      storedBy: agentId,
+      validFrom: Date.parse("2020-01-01"),
+      validUntil: Date.parse("2025-01-01"),
+    });
+
+    const api = makeMockApi();
+    api.pluginConfig.merging.enabled = false;
+    plugin.register(api);
+    const tools = api._toolFactory({ agentId, workspaceDir });
+    const memoryStore = tools.find((tool) => tool.name === "memory_store");
+    const result = await memoryStore.execute("call-overlap-exact", {
+      text,
+      category: "fact",
+      validFrom: "2024-01-01",
+      validUntil: "2030-01-01",
+    });
+    assert.equal(result.details.action, "stored");
+
+    const checkDb = new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM);
+    await checkDb.init();
+    const rows = await checkDb.table.query().toArray();
+    assert.equal(rows.filter((row) => row.status === "active").length, 2);
+    assert.ok(rows.some((row) => row.id === result.details.id && row.validUntil == Date.parse("2030-01-01")));
+
+    const memoryRecall = tools.find((tool) => tool.name === "memory_recall");
+    const recalled = await memoryRecall.execute("call-overlap-recall", {
+      query: "Where did Alex work?",
+      limit: 5,
+      validAt: "2027-01-01",
+    });
+    assert.match(recalled.content[0].text, /Alex worked on Project Delta\./);
+    assert.match(recalled.content[0].text, /valid: \[2024-01-01T00:00:00\.000Z, 2030-01-01T00:00:00\.000Z\)/);
+  });
 });

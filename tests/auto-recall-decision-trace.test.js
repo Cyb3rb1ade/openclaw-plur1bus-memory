@@ -299,6 +299,26 @@ describe("auto-recall decision trace integration", () => {
     assert.match(result?.prependContext || "", /valid-until="2025-06-01T00:00:00\.000Z"/);
   });
 
+  it("before_prompt_build preserves epistemic status on primary recall projection", async () => {
+    const agentId = `${AGENT_PREFIX}-epistemic-label`;
+    const db = new MemoryDB(join(basePath, agentId), VECTOR_DIM);
+    await db.store({
+      id: "88888888-8888-4888-8888-888888888888",
+      text: "The migration date is disputed.",
+      vector: makeVector(),
+      category: "fact",
+      createdAt: Date.now(),
+      storedBy: agentId,
+      epistemicStatus: "disputed",
+    });
+
+    const result = await runRecallFor(agentId, "What is disputed about the migration?", false, false);
+    assert.match(
+      result?.prependContext || "",
+      /id="88888888-8888-4888-8888-888888888888"[^>]*epistemic="disputed"/,
+    );
+  });
+
   it("before_prompt_build preserves known valid-time bounds on Semantic Lens projection", async () => {
     const agentId = `${AGENT_PREFIX}-semantic-lens-valid-time`;
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-semantic-lens-valid-time-"));
@@ -335,6 +355,7 @@ describe("auto-recall decision trace integration", () => {
       category: "fact",
       createdAt: Date.now(),
       storedBy: agentId,
+      epistemicStatus: "trusted",
       validFrom: Date.parse("2024-01-01T00:00:00.000Z"),
       validUntil: Date.parse("2024-12-01T00:00:00.000Z"),
     });
@@ -351,6 +372,7 @@ describe("auto-recall decision trace integration", () => {
     assert.match(context, /<memory-semantic-lens>/);
     assert.match(context, /id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*valid-from="2024-01-01T00:00:00\.000Z"/);
     assert.match(context, /id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*valid-until="2024-12-01T00:00:00\.000Z"/);
+    assert.match(context, /id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*epistemic="trusted"/);
     rmSync(workspaceDir, { recursive: true, force: true });
   });
 
