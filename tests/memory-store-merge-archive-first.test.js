@@ -383,6 +383,28 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
     assert.equal(mergeLogs[0].archivePath, archives[0].path);
   });
 
+  it("preserves disputed epistemic state and records merge provenance on the replacement", async () => {
+    const updatedAt = Date.now() - 1000;
+    await seedDb.update(ORIGINAL_ID, {
+      epistemicStatus: "disputed",
+      previousEpistemicStatus: "observed",
+      epistemicStatusActor: "human:reviewer",
+      epistemicStatusReason: "conflicting evidence",
+      epistemicStatusUpdatedAt: updatedAt,
+    });
+
+    const result = await executeStore();
+
+    assert.equal(result.details?.action, "merged");
+    const replacement = (await readRows()).find((row) => row.id === result.details.id);
+    assert.ok(replacement);
+    assert.equal(replacement.epistemicStatus, "disputed");
+    assert.equal(replacement.previousEpistemicStatus, "disputed");
+    assert.equal(replacement.epistemicStatusActor, "system:merge");
+    assert.match(replacement.epistemicStatusReason, new RegExp(ORIGINAL_ID));
+    assert.ok(Number(replacement.epistemicStatusUpdatedAt) > updatedAt);
+  });
+
   it("continues the same-candidate queue after failure and rejects a stale waiter before LLM", async () => {
     let arrivals = 0;
     let releaseBarrier;
@@ -910,6 +932,51 @@ describe("memory_store durable merge boundary (BUG-02 / BUG-09)", () => {
 
     assert.notEqual(result.details?.action, "merged");
     assert.match(result.content[0].text, /stale|revalidation|validity/i);
+    assert.equal(replacementStoreCalls, 0);
+    assert.equal(originalDeleteCalls, 0);
+    assert.ok((await readRows()).some((row) => row.id === ORIGINAL_ID));
+  });
+
+  it("revalidates candidate epistemic metadata after replacement preparation before storing or deleting", async () => {
+    let mutateCandidate = false;
+    let embedCalls = 0;
+    let replacementStoreCalls = 0;
+    let originalDeleteCalls = 0;
+    MemoryDB.prototype.findSimilar = async function bypassReplacementDuplicate() { return []; };
+    MemoryDB.prototype.getById = async function exposeTrustMutationDuringPreparation(id) {
+      const row = await originalGetById.call(this, id);
+      if (!row || id !== ORIGINAL_ID || !mutateCandidate) return row;
+      return {
+        ...row,
+        epistemicStatus: "disputed",
+        previousEpistemicStatus: "observed",
+        epistemicStatusActor: "human:reviewer",
+        epistemicStatusReason: "new conflicting evidence",
+        epistemicStatusUpdatedAt: BigInt(Date.now()),
+      };
+    };
+    MemoryDB.prototype.findMergeCandidate = async function selectOriginalCandidate() {
+      const entry = await this.getById(ORIGINAL_ID);
+      return entry ? { entry, score: 0.95 } : null;
+    };
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mutateOnMergedEmbedding() {
+      embedCalls += 1;
+      if (embedCalls === 2) mutateCandidate = true;
+      return makeVector(0.25);
+    };
+    MemoryDB.prototype.store = async function trackReplacementStore(entry) {
+      if (entry.id !== ORIGINAL_ID) replacementStoreCalls += 1;
+      return originalStore.call(this, entry);
+    };
+    MemoryDB.prototype.delete = async function trackOriginalDelete(id) {
+      if (id === ORIGINAL_ID) originalDeleteCalls += 1;
+      return originalDelete.call(this, id);
+    };
+
+    const result = await executeStore();
+
+    assert.notEqual(result.details?.action, "merged");
+    assert.match(result.content[0].text, /stale|revalidation|epistemic/i);
     assert.equal(replacementStoreCalls, 0);
     assert.equal(originalDeleteCalls, 0);
     assert.ok((await readRows()).some((row) => row.id === ORIGINAL_ID));
