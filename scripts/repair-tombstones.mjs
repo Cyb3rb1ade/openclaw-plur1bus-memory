@@ -162,9 +162,11 @@ function main() {
         continue;
       }
 
-      // Dedup gegen vorhandene committed Tombstones.
+      // Dedup gegen vorhandene committed Tombstones. Ohne --apply strikt
+      // read-only — die Torn-Tail-Reparatur ist ein Schreibvorgang und würde
+      // sonst die Zusage „nicht destruktiv, überschreibt nichts" brechen.
       try {
-        if (findTombstoneByOriginId(baseDbPath, agentId, memoryId)) {
+        if (findTombstoneByOriginId(baseDbPath, agentId, memoryId, { repairTornTail: args.apply })) {
           skipped.push({ memoryId, agentId, reason: "already_tombstoned" });
           continue;
         }

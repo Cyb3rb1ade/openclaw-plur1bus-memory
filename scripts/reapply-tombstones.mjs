@@ -63,7 +63,10 @@ async function main() {
       report.registryErrors.push({ agent, error: "invalid registry filename" });
       continue;
     }
-    const registry = readTombstoneRegistry(baseDbPath, safeAgent);
+    // Im Dry-Run strikt read-only: die Torn-Tail-Reparatur ist ein Schreibvorgang
+    // und darf ohne --apply nicht laufen. Ein abgebrochener Append wird dann als
+    // beschädigte Zeile gemeldet — der Operator sieht, dass --apply nötig ist.
+    const registry = readTombstoneRegistry(baseDbPath, safeAgent, { repairTornTail: args.apply });
     if (!registry.ok) {
       report.registryErrors.push({ agent: safeAgent, error: registry.readError });
       continue;
