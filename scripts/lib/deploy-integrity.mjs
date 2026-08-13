@@ -49,6 +49,8 @@ export const DEPLOY_FILES = [
   "lib/conversation-reactivation-recall.js",
   "lib/db-adapter.js",
   "lib/embedding-cache.js",
+  "lib/epistemic-status.js",
+  "lib/valid-time.js",
   "lib/event-loop-lag-snapshot.js",
   "lib/explainability.js",
   "lib/feedback-log.js",

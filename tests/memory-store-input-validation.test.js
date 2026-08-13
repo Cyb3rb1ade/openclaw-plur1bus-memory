@@ -108,6 +108,61 @@ describe("memory_store input validation", () => {
     assert.strictEqual(rows.filter((r) => r.id !== "__schema__").length, 0, "no oversized memory may be persisted");
   });
 
+  it("rejects overlong validFrom and validUntil before database or embedding work", async () => {
+    const originalInit = MemoryDB.prototype.init;
+    const originalPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+    MemoryDB.prototype.init = async function forbiddenInit() {
+      throw new Error("database touched before valid-time validation");
+    };
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async function forbiddenEmbed() {
+      throw new Error("embedding touched before valid-time validation");
+    };
+    try {
+      for (const field of ["validFrom", "validUntil"]) {
+        const api = makeMockApi(basePath);
+        plugin.register(api);
+        const storeTool = api._toolFactory(toolContext(`${AGENT_ID}-${field.toLowerCase()}`))
+          .find((tool) => tool.name === "memory_store");
+        const result = await storeTool.execute(`call-overlong-${field}`, {
+          text: `bounded validation for ${field}`,
+          category: "fact",
+          [field]: "x".repeat(129),
+        });
+        assert.match(result.content[0].text, new RegExp(`${field} exceeds maximum length of 128`));
+        assert.equal(result.details?.action, "rejected");
+      }
+    } finally {
+      MemoryDB.prototype.init = originalInit;
+      LocalTransformersEmbeddingProvider.prototype.embedPassage = originalPassage;
+    }
+  });
+
+  it("rejects overlong validAt in memory_recall and memory_search before database or embedding work", async () => {
+    const originalInit = MemoryDB.prototype.init;
+    const originalPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+    MemoryDB.prototype.init = async function forbiddenInit() {
+      throw new Error("database touched before valid-time validation");
+    };
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async function forbiddenEmbed() {
+      throw new Error("embedding touched before valid-time validation");
+    };
+    try {
+      const api = makeMockApi(basePath);
+      plugin.register(api);
+      const tools = api._toolFactory(toolContext(`${AGENT_ID}-recall-validat`));
+      for (const name of ["memory_recall", "memory_search"]) {
+        const result = await tools.find((tool) => tool.name === name).execute(`call-${name}-validAt`, {
+          query: "bounded validAt validation",
+          validAt: "x".repeat(129),
+        });
+        assert.match(result.content[0].text, /validAt exceeds maximum length of 128/);
+      }
+    } finally {
+      MemoryDB.prototype.init = originalInit;
+      LocalTransformersEmbeddingProvider.prototype.embedPassage = originalPassage;
+    }
+  });
+
   it('rejects scope="user" when no user identity is available', async () => {
     const api = makeMockApi(basePath);
     plugin.register(api);
