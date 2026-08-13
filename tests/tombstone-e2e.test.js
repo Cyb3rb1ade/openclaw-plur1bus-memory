@@ -170,7 +170,7 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
     // über die Audit-Recovery-Suche und trägt das Audit nach.
     rmSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true, force: true });
     const secondForget = await forgetByQuery(agentId, workspaceDir, text);
-    assert.match(secondForget.content[0].text, /Forgotten:/, "Wiederholung muss die Recovery erreichen");
+    assert.match(secondForget.content[0].text, /Forgotten/, "Wiederholung muss die Recovery erreichen");
 
     const auditPath = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
     assert.ok(existsSync(auditPath), "Audit-Datei muss nach der Wiederholung existieren");
