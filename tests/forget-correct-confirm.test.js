@@ -134,7 +134,7 @@ describe("forget/correct confirmation completion", () => {
     assert.strictEqual(v.valid, true);
     assert.strictEqual(v.targetId, id);
 
-    const res = await forgetCard(db, "default", v.targetId, { archiveDir });
+    const res = await forgetCard(db, "default", v.targetId, { archiveDir, workspaceDir: archiveDir });
     assert.strictEqual(res.ok, true);
     assert.ok(res.archivePath, "should write an archive before tombstoning");
     assert.strictEqual(db.cards.has(id), true, "tombstone keeps the row (soft-delete)");
@@ -646,6 +646,7 @@ describe("forget/correct confirmation completion", () => {
 
     const result = await forgetCard(db, "default", id, {
       archiveDir,
+      workspaceDir: archiveDir,
       ctx: { agentId: "default", userPrincipal: owner, workspaceDir: archiveDir },
     });
 

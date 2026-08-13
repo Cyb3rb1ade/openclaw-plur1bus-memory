@@ -183,8 +183,9 @@ describe("forgetCard kanonischer Vorgang", () => {
     const dir = mkdtempSync(join(tmpdir(), "plur1bus-forget-idem-"));
     try {
       const db = makeTombstoneDb({ [UUID_A]: { text: "x", title: "x", scope: "agent-private" } });
-      const first = await forgetCard(db, "agent-a", UUID_A, { archiveDir: join(dir, "a") });
-      const second = await forgetCard(db, "agent-a", UUID_A, { archiveDir: join(dir, "a") });
+      const ws = join(dir, "ws");
+      const first = await forgetCard(db, "agent-a", UUID_A, { archiveDir: join(dir, "a"), workspaceDir: ws });
+      const second = await forgetCard(db, "agent-a", UUID_A, { archiveDir: join(dir, "a"), workspaceDir: ws });
       assert.equal(first.ok, true);
       assert.equal(second.ok, true);
       assert.equal(second.alreadyTombstoned, true);
