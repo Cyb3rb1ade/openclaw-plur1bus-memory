@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -281,5 +281,138 @@ describe("safeStatus Fail-Closed", () => {
 
   it("Normalisierung für Fingerprint kollabiert Whitespace", () => {
     assert.equal(normalizeContentForFingerprint("  a   b\nc  "), "a b c");
+  });
+});
+
+// ─── Issue 2: Scope-Auflösung (alle Treffer, nicht nur der neueste) ─────────
+
+describe("Scope-Auflösung (alle Treffer)", () => {
+  function appendCommitted(baseDbPath, card, agentId, scope, workspaceKey = "", ownerUserId = "") {
+    const tombstone = buildTombstone({
+      card: { ...card, scope, workspaceKey, ownerUserId },
+      agentId,
+      actor: "user",
+      actorType: "human",
+      reason: "test",
+      sourceOp: "forget",
+    });
+    appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "committed" });
+    return tombstone;
+  }
+
+  it("mehrere gleichlautende Tombstones in verschiedenen Workspaces blockieren jeweils den richtigen Workspace", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-scope-multi-"));
+    const baseDbPath = join(dir, "lancedb-namespaced");
+    try {
+      const text = "Gelöschter Inhalt";
+      appendCommitted(baseDbPath, { id: "aaaaaaaa-1111-4111-8111-111111111111", text }, "agent-a", "workspace", "ws-1");
+      // neuerer Tombstone in einem ANDEREN Workspace darf den ws-1-Tombstone nicht verdecken
+      appendCommitted(baseDbPath, { id: "bbbbbbbb-2222-4222-8222-222222222222", text }, "agent-a", "workspace", "ws-2");
+
+      const blockingWs1 = findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "workspace", workspaceIdentity: "ws-1" });
+      assert.ok(blockingWs1, "Capture in ws-1 muss durch den ws-1-Tombstone blockiert werden");
+      assert.equal(blockingWs1.workspaceKey, "ws-1");
+
+      const blockingWs2 = findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "workspace", workspaceIdentity: "ws-2" });
+      assert.ok(blockingWs2, "Capture in ws-2 muss durch den ws-2-Tombstone blockiert werden");
+
+      const foreign = findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "workspace", workspaceIdentity: "ws-3" });
+      assert.equal(foreign, null, "fremder Workspace darf nicht blockiert werden");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("agent-private blockiert den ganzen Agenten, workspace/user nur ihren Principal", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-scope-ap-"));
+    const baseDbPath = join(dir, "lancedb-namespaced");
+    try {
+      const text = "Privater Fakt";
+      appendCommitted(baseDbPath, { id: "aaaaaaaa-1111-4111-8111-111111111111", text }, "agent-a", "agent-private");
+      assert.ok(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "workspace", workspaceIdentity: "ws-1" }));
+      assert.ok(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text, scope: "user", ownerUserId: "user:v1:aaa" }));
+      assert.equal(findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-b", text, scope: "agent-private" }), null);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Issue 3: Registry fail-safe ────────────────────────────────────────────
+
+describe("Registry fail-safe", () => {
+  it("beschädigte JSONL-Zeile blockiert Capture konservativ", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-corrupt-"));
+    const baseDbPath = join(dir, "lancedb-namespaced");
+    const registryDir = join(dir, "_tombstones");
+    try {
+      const file = join(registryDir, "agent-a.jsonl");
+      mkdirSync(registryDir, { recursive: true });
+      writeFileSync(file, "NOT JSON AT ALL\n", "utf8");
+      const blocking = findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text: "irgendwas", scope: "agent-private" });
+      assert.ok(blocking, "beschädigte Zeile muss konservativ blockieren");
+      assert.equal(blocking._blockReason, "registry_corrupt_lines");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("Lesefehler blockiert Capture konservativ statt still \"kein Tombstone\"", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-readerr-"));
+    const baseDbPath = join(dir, "lancedb-namespaced");
+    const registryDir = join(dir, "_tombstones");
+    try {
+      // Registry-Datei als VERZEICHNIS anlegen → readFileSync wirft EISDIR.
+      mkdirSync(join(registryDir, "agent-a.jsonl"), { recursive: true });
+      const blocking = findBlockingTombstoneForCapture(baseDbPath, { agentId: "agent-a", text: "irgendwas", scope: "agent-private" });
+      assert.ok(blocking, "Lesefehler muss konservativ blockieren");
+      assert.equal(blocking._blockReason, "registry_read_error");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── Issue 4: Forget crash-recoverable + ACL vor Idempotenz ─────────────────
+
+describe("Forget crash-recovery + ACL vor Idempotenz", () => {
+  it("wiederholtes Forget einer bereits gelöschten Karte trägt fehlenden committed Tombstone nach", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-backfill-"));
+    const baseDbPath = join(dir, "lancedb-namespaced");
+    const ws = join(dir, "ws");
+    try {
+      const id = "aaaaaaaa-1111-4111-8111-111111111111";
+      const db = {
+        async getCard() { return { id, text: "x", scope: "agent-private", status: "deleted", previousVersion: "" }; },
+        async tombstoneCard() { throw new Error("should not re-tombstone"); },
+      };
+      const result = await forgetCard(db, "agent-a", id, { archiveDir: join(dir, "a"), workspaceDir: ws, baseDbPath });
+      assert.equal(result.ok, true);
+      assert.equal(result.alreadyTombstoned, true);
+      const backfilled = findTombstoneByOriginId(baseDbPath, "agent-a", id);
+      assert.ok(backfilled, "fehlender committed Tombstone muss nachgetragen werden");
+      assert.equal(backfilled.status, "committed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ACL wird vor der idempotenten Erfolgsauskunft geprüft (kein Information-Leak)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-acl-idem-"));
+    try {
+      const id = "aaaaaaaa-1111-4111-8111-111111111111";
+      const db = {
+        async getCard() { return { id, text: "x", scope: "agent-private", agentId: "other-agent", status: "deleted" }; },
+        async tombstoneCard() { throw new Error("should not tombstone"); },
+      };
+      const result = await forgetCard(db, "agent-a", id, {
+        archiveDir: join(dir, "a"),
+        ctx: { agentId: "agent-a", workspaceDir: join(dir, "ws") },
+      });
+      assert.equal(result.ok, false);
+      assert.match(result.error, /access denied/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
