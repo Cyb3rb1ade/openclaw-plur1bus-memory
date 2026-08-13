@@ -108,7 +108,7 @@ test('forgetCard archiviert ZUERST, dann tombstoned', async () => {
         return { ok: true, id };
       },
     };
-    const result = await forgetCard(fakeDb, 'agent-x', id, { archiveDir: tmpRoot });
+    const result = await forgetCard(fakeDb, 'agent-x', id, { archiveDir: tmpRoot, workspaceDir: tmpRoot });
     assert.strictEqual(result.ok, true);
     // Reihenfolge: getCard → archive-write → tombstoneCard (kein physischer Delete)
     assert.deepStrictEqual(order, ['getCard', 'tombstoneCard']);

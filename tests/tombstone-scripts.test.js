@@ -141,3 +141,62 @@ describe("repair-tombstones.mjs Whitelist + Kollision", () => {
     }
   });
 });
+
+describe("repair --apply Idempotenz + semantisch invalider Tombstone", () => {
+  const MEMORY_ID = "a4563cc9-7611-4528-992a-075f8889a018";
+
+  it("--apply ist idempotent (zweiter Lauf rekonstruiert nichts erneut)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-repair-apply-"));
+    const baseDbPath = join(dir, "lancedb-namespaced");
+    const archiveDir = join(dir, "archive");
+    try {
+      const ws = mkdtempSync(join(tmpdir(), "plur1bus-repair-apply-ws-"));
+      mkdirSync(join(ws, ".adaptive-learning"), { recursive: true });
+      const archivePath = join(archiveDir, "agent-a", `${MEMORY_ID}.json`);
+      mkdirSync(join(archiveDir, "agent-a"), { recursive: true });
+      writeFileSync(archivePath, JSON.stringify({ id: MEMORY_ID, text: "Gelöschter Fakt", scope: "agent-private" }), "utf8");
+      writeFileSync(join(ws, ".adaptive-learning", "destructive-ops.jsonl"),
+        JSON.stringify({ event: "memory.deleted", result: "committed", memoryId: MEMORY_ID, agentId: "agent-a", archivePath }) + "\n", "utf8");
+
+      const first = run("repair-tombstones.mjs", ["--apply", "--workspace", ws, "--base-db-path", baseDbPath, "--archive-dir", archiveDir]);
+      assert.equal(first.report.reconstructed, 1);
+
+      const second = run("repair-tombstones.mjs", ["--apply", "--workspace", ws, "--base-db-path", baseDbPath, "--archive-dir", archiveDir]);
+      assert.equal(second.report.reconstructed, 0, "zweiter Lauf darf nicht erneut rekonstruieren");
+      assert.equal(second.report.skipped, 1);
+      rmSync(ws, { recursive: true, force: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("semantisch invalider Tombstone (valid JSON ohne memoryId) → Exit 1", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-reapply-invalid-"));
+    try {
+      const baseDbPath = join(dir, "lancedb-namespaced");
+      mkdirSync(join(dir, "_tombstones"), { recursive: true });
+      writeFileSync(join(dir, "_tombstones", "agent-a.jsonl"), '{"schemaVersion":1,"status":"committed"}\n', "utf8");
+
+      const { status, report } = run("reapply-tombstones.mjs", ["--apply", "--base-db-path", baseDbPath]);
+      assert.notEqual(status, 0, "semantisch invalider Tombstone muss zu Exit != 0 führen");
+      assert.ok(report.registryErrors.length > 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ungültiger Registry-Dateiname (bad agent.jsonl) → Exit 1", () => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-reapply-badname-"));
+    try {
+      const baseDbPath = join(dir, "lancedb-namespaced");
+      mkdirSync(join(dir, "_tombstones"), { recursive: true });
+      writeFileSync(join(dir, "_tombstones", "bad agent.jsonl"), "ignored\n", "utf8");
+
+      const { status, report } = run("reapply-tombstones.mjs", ["--apply", "--base-db-path", baseDbPath]);
+      assert.notEqual(status, 0, "ungültiger Dateiname muss zu Exit != 0 führen");
+      assert.ok(report.registryErrors.some((e) => /invalid registry filename/.test(e.error)));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
