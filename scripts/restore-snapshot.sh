@@ -82,6 +82,10 @@ RESTORE_PATHS=(
   "memory/merge-proposals.jsonl"
 )
 
+# Tombstone-Registry: wird NICHT aus dem Snapshot restauriert (der Snapshot ist
+# älter). Sie bleibt erhalten und wird nach dem Restore erneut angewendet.
+TOMBSTONE_REGISTRY="memory/_tombstones"
+
 # Safety backup of current state before live restore
 if ! $DRY_RUN; then
   SAFETY_TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -89,7 +93,7 @@ if ! $DRY_RUN; then
   mkdir -p "$SAFETY_PATH"
   echo "Creating safety backup: $SAFETY_PATH"
 
-  for rel in "${RESTORE_PATHS[@]}"; do
+  for rel in "${RESTORE_PATHS[@]}" "$TOMBSTONE_REGISTRY"; do
     src="$OPENCLAW_HOME/$rel"
     dest="$SAFETY_PATH/$rel"
     if [[ -e "$src" ]]; then
@@ -160,6 +164,24 @@ echo "======================"
 echo "Restored:    $RESTORED_COUNT items"
 echo "Skipped:     $SKIPPED_COUNT items"
 echo "======================"
+
+# Tombstone-Reconciliation: nach dem Restore die erhaltene Tombstone-Registry
+# erneut auf die wiederhergestellte LanceDB anwenden, damit keine nach dem
+# Snapshot gelöschte Erinnerung reaktiviert wird.
+if ! $DRY_RUN; then
+  echo ""
+  echo "Reapplying tombstones to restored state..."
+  REAPPLY_OUTPUT="$(node "$(dirname "$0")/reapply-tombstones.mjs" --apply --base-db-path "$OPENCLAW_HOME/memory/lancedb-namespaced" 2>&1)" || {
+    echo "ERROR: tombstone reconciliation failed — restore is INCOMPLETE (recovery state preserved at $SAFETY_PATH)."
+    echo "$REAPPLY_OUTPUT"
+    exit 1
+  }
+  echo "$REAPPLY_OUTPUT"
+  echo "Tombstone reconciliation complete."
+else
+  echo ""
+  echo "[DRY-RUN] Would reapply tombstones from $OPENCLAW_HOME/$TOMBSTONE_REGISTRY to the restored state."
+fi
 
 if ! $DRY_RUN; then
   echo ""

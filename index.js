@@ -165,7 +165,8 @@ import {
   resolveToolMemoryRequestContext,
   normalizeWorkspaceTarget,
 } from "./lib/memory-request-context.js";
-import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog } from "./lib/sql-safety.js";
+import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
+import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture } from "./lib/tombstone.js";
 import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
@@ -1705,7 +1706,7 @@ class MemoryDB {
     try {
       let rows = await this._read(
         this.table.query()
-          .where("memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = ''")
+          .where("(memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = '') AND (status IS NULL OR status = 'active' OR status = '') AND epistemicStatus != 'invalidated'")
           .limit(limit * 2)
           .toArray(),
         "MemoryDB.getRecentForGraph",
@@ -1908,6 +1909,33 @@ class MemoryDB {
     await this._write(this.table.delete(`id = "${safe}"`), `MemoryDB.delete:${safe}`);
   }
 
+  /**
+   * Kanonischer Tombstone-Vorgang (soft-delete statt physischer Löschung).
+   * Setzt `status="deleted"` und `epistemicStatus="invalidated"`; die Zeile
+   * bleibt erhalten (Fingerprint/Audit), ist aber aus Active-Scans ausgeschlossen.
+   *
+   * @param {string} id
+   * @param {object} [patch] zusätzliche Spaltenwerte
+   * @returns {Promise<{ok: boolean, id: string, alreadyTombstoned?: boolean, notFound?: boolean}>}
+   */
+  async tombstone(id, patch = {}) {
+    this._assertWritable("tombstone");
+    await this.init();
+    const safe = safeUuid(id);
+    const rows = await this._read(this.table.query().where(`id = "${safe}"`).limit(1).toArray(), `MemoryDB.tombstone.query:${safe}`);
+    if (!rows || rows.length === 0) {
+      return { ok: false, notFound: true, id: safe };
+    }
+    if (String(rows[0].status || "") === "deleted") {
+      return { ok: true, alreadyTombstoned: true, id: safe };
+    }
+    const values = { ...(patch || {}) };
+    values.status = safeStatus("deleted");
+    values.epistemicStatus = "invalidated";
+    await this._write(this.table.update({ where: `id = "${safe}"`, values }), `MemoryDB.tombstone:${safe}`);
+    return { ok: true, id: safe };
+  }
+
   async getById(id) {
     await this.init();
     const safe = safeUuid(id);
@@ -1985,8 +2013,12 @@ class MemoryDB {
 
   buildActiveScanQuery() {
     this._assertTrustedPath();
+    // Fail-closed Whitelist: NUR "active" (oder legacy NULL/leer) gilt als aktiv.
+    // Ein unbekannter/falsch geschriebener Status (z. B. "archvied") wird NICHT
+    // als aktiv interpretiert. (Vorher: Negativliste != deleted/archived, die
+    // jeden Tippfehler als aktiv durchließ.)
     let query = this.table.query()
-      .where("status IS NULL OR (status != 'deleted' AND status != 'archived')");
+      .where("status IS NULL OR status = 'active' OR status = ''");
     if (typeof query.select === "function") {
       query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "ownerUserId", "status", "neverForget", "memoryClass"]);
     }
@@ -4657,6 +4689,110 @@ const plugin = {
       appendDeletionLog();
     }
 
+    async function tombstoneMemoryWithAudit({
+      db,
+      card,
+      agentId,
+      workspaceDir,
+      baseDbPath,
+      source,
+      via,
+      query,
+      archivePath,
+      actor = "memory_forget",
+      actorType = "tool",
+      reason = "memory_forget tool",
+    }) {
+      const memoryId = String(card?.id || "");
+      const tombstone = buildTombstone({
+        card,
+        agentId,
+        actor,
+        actorType,
+        reason,
+        sourceOp: source,
+        archiveRef: archivePath,
+        previousVersion: String(card?.previousVersion || ""),
+      });
+
+      let committed = false;
+      const commitTombstone = (already) => {
+        if (committed) return;
+        committed = true;
+        if (baseDbPath && !already) {
+          appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "committed" });
+        }
+        appendDestructiveOpLog(workspaceDir, {
+          event: "memory.deleted",
+          source,
+          agentId,
+          memoryId,
+          canonicalOriginId: tombstone.canonicalOriginId,
+          via,
+          query,
+          archivePath,
+          tombstoneId: tombstone.tombstoneId,
+          result: already ? "already_tombstoned" : "committed",
+          timestamp: new Date().toISOString(),
+        });
+      };
+      const failTombstone = (errorClass) => {
+        if (baseDbPath) {
+          appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "failed" });
+        }
+        appendDestructiveOpLog(workspaceDir, {
+          event: "memory.deleted",
+          source,
+          agentId,
+          memoryId,
+          via,
+          query,
+          archivePath,
+          tombstoneId: tombstone.tombstoneId,
+          result: "failed",
+          errorClass: errorClass || "Error",
+          timestamp: new Date().toISOString(),
+        });
+      };
+
+      // Phase 1: attempted (vor der Mutation).
+      if (baseDbPath) {
+        appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "attempted" });
+      }
+      let result;
+      try {
+        result = await db.tombstone(memoryId);
+      } catch (err) {
+        // LanceDB-Schreib-Timeout: die Mutation kann trotzdem "spät" committen.
+        // Keine sofortige failed-Audit — das Ergebnis steht erst bei Settlement fest.
+        if (err instanceof TimeoutError && err.settlement) {
+          const rawSettlement = err.settlement;
+          err.settlement = rawSettlement.then(
+            (value) => {
+              commitTombstone(false);
+              return value;
+            },
+            (lateErr) => {
+              failTombstone(lateErr?.name || "Error");
+              throw lateErr;
+            },
+          );
+          throw err;
+        }
+        failTombstone(err?.name || "Error");
+        throw err;
+      }
+      if (result?.notFound) {
+        if (baseDbPath) {
+          appendTombstoneToRegistry(baseDbPath, agentId, { ...tombstone, status: "failed" });
+        }
+        return { ok: false, notFound: true };
+      }
+      // Phase 2: committed erst nach bestätigter Mutation.
+      commitTombstone(Boolean(result?.alreadyTombstoned));
+      return { ok: true, alreadyTombstoned: Boolean(result?.alreadyTombstoned) };
+    }
+
     function durableMergeLineage(candidate) {
       return [
         candidate.id,
@@ -4926,6 +5062,27 @@ const plugin = {
         // Phase 2 — Bi-Temporal Memory (§7): caller-supplied only, never
         // guessed/extracted from text. Unparseable/absent -> 0 (unknown).
         const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: api.logger });
+
+        // 0. Tombstone-Block: eine gleichlautende, zuvor gelöschte Erinnerung im
+        // selben autorisierten Scope darf nicht still reaktiviert werden.
+        const blockingTombstone = findBlockingTombstoneForCapture(baseDbPath, {
+          agentId: storeAgentId,
+          text: params.text,
+          scope,
+          workspaceIdentity: ownershipFields.workspaceId || ownershipFields.workspaceKey,
+          ownerUserId,
+        });
+        if (blockingTombstone) {
+          addTraceStoreDecision(trace, {
+            action: "tombstone_blocked",
+            memoryId: blockingTombstone.memoryId,
+            reason: `forgotten memory fingerprint match (scope=${scope})`,
+          });
+          return {
+            content: [{ type: "text", text: "This information was previously forgotten and cannot be silently re-stored." }],
+            details: { action: "tombstone_blocked", id: blockingTombstone.memoryId, decisionTrace: trace },
+          };
+        }
 
         // 1. Duplicate check
         const existing = (await storeDb.findSimilar(vector, params.text, duplicateThreshold))
@@ -6665,6 +6822,10 @@ const plugin = {
                 workspaceDir: memoryCtx.workspaceDir,
                 logger: api.logger,
                 ctx: memoryCtx,
+                baseDbPath,
+                actor: memoryCtx?.userPrincipal || memoryCtx?.userId || "telegram:/forget",
+                actorType: "human",
+                reason: "user /forget command",
               });
               if (!result.ok) return { text: t("plur1bus.forget_failed", { lang, tone, vars: { error: result.error } }) };
               return { text: t("plur1bus.forget_done", { lang, tone, vars: { id: pending.targetId } }) };
@@ -8266,6 +8427,27 @@ const plugin = {
               // guessed/extracted from text. Unparseable/absent -> 0 (unknown).
               const { validFrom: capturedValidFrom, validUntil: capturedValidUntil } = normalizeCapturedValidityWindow(params, { logger: api.logger });
 
+              // 0. Tombstone-Block: gleichlautende, zuvor gelöschte Erinnerung
+              // im selben autorisierten Scope darf nicht still reaktiviert werden.
+              const blockingTombstone = findBlockingTombstoneForCapture(baseDbPath, {
+                agentId,
+                text: params.text,
+                scope,
+                workspaceIdentity: ownershipFields.workspaceId || ownershipFields.workspaceKey,
+                ownerUserId,
+              });
+              if (blockingTombstone) {
+                addTraceStoreDecision(trace, {
+                  action: "tombstone_blocked",
+                  memoryId: blockingTombstone.memoryId,
+                  reason: `forgotten memory fingerprint match (scope=${scope})`,
+                });
+                return {
+                  content: [{ type: "text", text: "This information was previously forgotten and cannot be silently re-stored." }],
+                  details: { action: "tombstone_blocked", id: blockingTombstone.memoryId, decisionTrace: trace },
+                };
+              }
+
               // 1. Duplicate check
               const existing = (await db.findSimilar(vector, params.text, duplicateThreshold))
                 .filter((candidate) => candidateVisibleForStore(candidate, storeAccessCtx));
@@ -8432,33 +8614,32 @@ const plugin = {
               }
               return await pool.withWriteDb(agentId, async (db) => {
               if (params.memoryId) {
-                // Archive-First: vor dem Löschen ein JSON-Backup schreiben.
-                // Schlägt das Archiv fehl, NICHT löschen (wie bei /forget).
+                // Kanonischer Tombstone-Vorgang (Archive-First, kein physischer Delete).
                 const card = await db.getById(params.memoryId);
                 if (!card) return { content: [{ type: "text", text: `Memory ${params.memoryId} not found.` }] };
+                if (String(card.status || "") === "deleted") {
+                  return { content: [{ type: "text", text: `Memory ${params.memoryId} is already forgotten.` }] };
+                }
                 let archivePath;
                 try {
                   archivePath = archiveCard(card, agentId || "default");
                 } catch (archiveErr) {
-                  return { content: [{ type: "text", text: `Archive failed — NOT deleted: ${String(archiveErr)}` }] };
+                  return { content: [{ type: "text", text: `Archive failed — NOT tombstoned: ${String(archiveErr)}` }] };
                 }
-                await deleteWithAuditContinuation({
-                  db,
-                  memoryId: params.memoryId,
-                  workspaceDir: ctx?.workspaceDir,
-                  logEntry: {
-                    event: "memory.deleted",
+                try {
+                  await tombstoneMemoryWithAudit({
+                    db, card, agentId,
+                    workspaceDir: ctx?.workspaceDir,
+                    baseDbPath,
                     source: "memory_forget",
-                    agentId,
                     via: "id",
                     archivePath,
-                    timestamp: new Date().toISOString(),
-                  },
-                  onLateFailure: (lateDeleteError) => {
-                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget late ID delete failed for agent=${agentId} memory=${params.memoryId} archive=${archivePath}: ${String(lateDeleteError)}`);
-                  },
-                });
-                return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (archived).` }] };
+                  });
+                } catch (err) {
+                  api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${params.memoryId}: ${String(err)}`);
+                  return { content: [{ type: "text", text: `Memory forget failed: ${String(err)}` }] };
+                }
+                return { content: [{ type: "text", text: `Memory ${params.memoryId} forgotten (tombstoned).` }] };
               }
               if (params.query) {
                 const vector = typeof embeddings.embedQuery === "function"
@@ -8471,32 +8652,32 @@ const plugin = {
                   return { content: [{ type: "text", text: `Found ${results.length} candidates. Specify memoryId:\n${list}` }] };
                 }
                 const targetId = results[0].entry.id;
-                // Archive-First: vor dem Löschen ein JSON-Backup schreiben.
                 let archivePath;
+                let card;
                 try {
-                  const card = await db.getById(targetId);
+                  card = await db.getById(targetId);
                   archivePath = archiveCard(card || results[0].entry, agentId || "default");
                 } catch (archiveErr) {
-                  return { content: [{ type: "text", text: `Archive failed — NOT deleted: ${String(archiveErr)}` }] };
+                  return { content: [{ type: "text", text: `Archive failed — NOT tombstoned: ${String(archiveErr)}` }] };
                 }
-                await deleteWithAuditContinuation({
-                  db,
-                  memoryId: targetId,
-                  workspaceDir: ctx?.workspaceDir,
-                  logEntry: {
-                    event: "memory.deleted",
+                if (String(card?.status || "") === "deleted") {
+                  return { content: [{ type: "text", text: `Memory ${targetId} is already forgotten.` }] };
+                }
+                try {
+                  await tombstoneMemoryWithAudit({
+                    db, card: card || results[0].entry, agentId,
+                    workspaceDir: ctx?.workspaceDir,
+                    baseDbPath,
                     source: "memory_forget",
-                    agentId,
                     via: "query",
                     query: params.query.slice(0, 200),
                     archivePath,
-                    timestamp: new Date().toISOString(),
-                  },
-                  onLateFailure: (lateDeleteError) => {
-                    api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget late query delete failed for agent=${agentId} memory=${targetId} archive=${archivePath}: ${String(lateDeleteError)}`);
-                  },
-                });
-                return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (archived).` }] };
+                  });
+                } catch (err) {
+                  api.logger?.warn?.(`memory-lancedb-namespaced: memory_forget tombstone failed for agent=${agentId} memory=${targetId}: ${String(err)}`);
+                  return { content: [{ type: "text", text: `Memory forget failed: ${String(err)}` }] };
+                }
+                return { content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}" (tombstoned).` }] };
               }
               return { content: [{ type: "text", text: "Provide query or memoryId." }] };
               });
