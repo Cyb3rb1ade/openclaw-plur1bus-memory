@@ -2048,33 +2048,54 @@ class MemoryDB {
     };
   }
 
-  buildActiveScanQuery() {
+  // Scan-Spalten sind für Active- und Collectable-Scan identisch.
+  _buildScanQuery(statusWhere) {
     this._assertTrustedPath();
-    // Fail-closed Whitelist: NUR "active" (oder legacy NULL/leer) gilt als aktiv.
-    // Ein unbekannter/falsch geschriebener Status (z. B. "archvied") wird NICHT
-    // als aktiv interpretiert. (Vorher: Negativliste != deleted/archived, die
-    // jeden Tippfehler als aktiv durchließ.)
-    let query = this.table.query()
-      .where("status IS NULL OR status = 'active' OR status = ''");
+    let query = this.table.query().where(statusWhere);
     if (typeof query.select === "function") {
       query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "ownerUserId", "status", "neverForget", "memoryClass"]);
     }
     return query;
   }
 
-  async *scanActiveBatches(options = {}) {
+  buildActiveScanQuery() {
+    // Fail-closed Whitelist: NUR "active" (oder legacy NULL/leer) gilt als aktiv.
+    // Ein unbekannter/falsch geschriebener Status (z. B. "archvied") wird NICHT
+    // als aktiv interpretiert. (Vorher: Negativliste != deleted/archived, die
+    // jeden Tippfehler als aktiv durchließ.)
+    //
+    // `superseded` ist hier bewusst NICHT enthalten: Recall, Shared Search und
+    // die Vault-Notizen sollen keine überholten Fassungen sehen. Der GC braucht
+    // sie trotzdem — dafür gibt es buildCollectableScanQuery().
+    return this._buildScanQuery("status IS NULL OR status = 'active' OR status = ''");
+  }
+
+  /**
+   * Scan für die Garbage Collection: alles, was noch Platz belegt und noch nicht
+   * archiviert oder getombsteint ist — also zusätzlich `superseded`.
+   *
+   * Muss mit der Sammelbarkeits-Definition in lib/garbage-collector.js
+   * (alles außer "archived"/"deleted") übereinstimmen. Seit Forget nur noch
+   * soft-deleted, ist dies der einzige Pfad, über den überholte Fassungen
+   * überhaupt noch Archivkandidaten werden können.
+   */
+  buildCollectableScanQuery() {
+    return this._buildScanQuery("status IS NULL OR status = 'active' OR status = '' OR status = 'superseded'");
+  }
+
+  async *_scanBatches(buildQuery, label, options = {}) {
     await this.init();
     const batchSize = Math.max(1, Math.min(Number(options.batchSize || 500), 5000));
     let offset = 0;
     while (true) {
-      let query = this.buildActiveScanQuery().limit(batchSize);
+      let query = buildQuery().limit(batchSize);
       if (offset > 0) {
         if (typeof query.offset !== "function") break;
         query = query.offset(offset);
       }
       const rows = await this._read(
         query.toArray({ maxBatchLength: batchSize }),
-        `MemoryDB.scanActiveBatches:${offset}`,
+        `${label}:${offset}`,
       );
       if (!rows || rows.length === 0) break;
       yield rows.map((r) => this.normalizeActiveScanRow(r));
@@ -2083,9 +2104,25 @@ class MemoryDB {
     }
   }
 
+  async *scanActiveBatches(options = {}) {
+    yield* this._scanBatches(() => this.buildActiveScanQuery(), "MemoryDB.scanActiveBatches", options);
+  }
+
+  async *scanCollectableBatches(options = {}) {
+    yield* this._scanBatches(() => this.buildCollectableScanQuery(), "MemoryDB.scanCollectableBatches", options);
+  }
+
   async scanActive(options = {}) {
     const rows = [];
     for await (const batch of this.scanActiveBatches(options)) {
+      rows.push(...batch);
+    }
+    return rows;
+  }
+
+  async scanCollectable(options = {}) {
+    const rows = [];
+    for await (const batch of this.scanCollectableBatches(options)) {
       rows.push(...batch);
     }
     return rows;

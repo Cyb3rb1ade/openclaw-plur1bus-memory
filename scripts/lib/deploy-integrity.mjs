@@ -193,6 +193,7 @@ export const DEPLOY_FILES = [
   "lib/critical-push-state.js",
   "lib/critical-review.js",
   "lib/tombstone.js",
+  "lib/registry-lock.js",
   "lib/fetch-with-timeout.js",
   "lib/filter-parser.js",
   "lib/garbage-collector.js",
