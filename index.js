@@ -5852,7 +5852,9 @@ const plugin = {
                 const result = await runCriticalClassifier(memoryDbAdapter, internalAgent, {
                   logger: api.logger,
                   model: criticalModel,
-                  sinceMinutes: 30,
+                  // Ohne Konfiguration greift der Default aus
+                  // findRecentUnclassified, der das 3h-Cron-Intervall überdeckt.
+                  sinceMinutes: cpCfg.sinceMinutes,
                   maxPerDay: cpCfg.maxPerDay ?? 3,
                 });
                 api.logger?.info?.(`plur1bus internal classify-recent[${internalAgent}]: ${JSON.stringify(result)}`);
