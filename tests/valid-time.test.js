@@ -48,7 +48,31 @@ function at(offsetMs) {
 const DAY = 86400000;
 
 const roots = [];
-afterEach(() => {
+const liveMemoryDbs = new Set();
+const gatewayStopHandlers = new Set();
+
+function trackMemoryDb(db) {
+  liveMemoryDbs.add(db);
+  return db;
+}
+
+async function shutdownMemoryDb(db) {
+  liveMemoryDbs.delete(db);
+  await db.shutdown();
+}
+
+async function shutdownTestResources() {
+  const handlers = [...gatewayStopHandlers];
+  gatewayStopHandlers.clear();
+  for (const handler of handlers) await handler({}, {});
+
+  const dbs = [...liveMemoryDbs];
+  liveMemoryDbs.clear();
+  for (const db of dbs) await db.shutdown();
+}
+
+afterEach(async () => {
+  await shutdownTestResources();
   while (roots.length) rmSync(roots.pop(), { recursive: true, force: true });
 });
 function tmpRoot(prefix) {
@@ -493,7 +517,7 @@ describe("valid-time — lib/db-adapter.js migration + rowToCard (real paths)", 
 
 describe("valid-time — index.js MemoryDB.findMergeCandidate (real projection path, §8a)", () => {
   it("carries validFrom/validUntil through the merge-candidate projection", async () => {
-    const db = new MemoryDB("/tmp/fake-validtime-mergecandidate", 4);
+    const db = trackMemoryDb(new MemoryDB("/tmp/fake-validtime-mergecandidate", 4));
     db.init = async () => true;
     db.table = {
       async countRows() { return 1; },
@@ -527,7 +551,7 @@ describe("valid-time — index.js normalizeEntryForTable defaults + applyValidTi
   const CLOSE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
   it("normalizeEntryForTable defaults validFrom/validUntil to 0 when absent, preserves explicit values", async () => {
-    const db = new MemoryDB("/tmp/fake-validtime-normalize", 4);
+    const db = trackMemoryDb(new MemoryDB("/tmp/fake-validtime-normalize", 4));
     const withDefaults = db.normalizeEntryForTable({ id: "a", text: "t" });
     assert.equal(withDefaults.validFrom, 0);
     assert.equal(withDefaults.validUntil, 0);
@@ -1352,7 +1376,7 @@ function validTimeStoreVector(offset = 0) {
 }
 
 async function initValidTimeSchema(dbPath) {
-  const first = new MemoryDB(dbPath, VALIDTIME_STORE_VECTOR_DIM);
+  const first = trackMemoryDb(new MemoryDB(dbPath, VALIDTIME_STORE_VECTOR_DIM));
   await first.init();
   const schema = await first.table.schema();
   assert.ok(schema.fields.some((f) => f.name === "validFrom"), "schema warm-up must leave validFrom present before the real test body runs");
@@ -1361,7 +1385,7 @@ async function initValidTimeSchema(dbPath) {
 }
 
 describe("valid-time — Test 9 (§12): capture-time relative phrases stay verbatim, no false precision (real memory_store tool)", () => {
-  let basePath, workspaceDir, openclawHome, originalOpenClawHome, originalEmbed;
+  let basePath, workspaceDir, openclawHome, originalOpenClawHome, originalEmbed, originalQueryEmbed;
 
   before(() => {
     basePath = mkdtempSync(join(tmpdir(), "plur1bus-validtime-store9-"));
@@ -1371,10 +1395,13 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
     process.env.OPENCLAW_HOME = openclawHome;
     mkdirSync(join(openclawHome, ".openclaw", "memory", "_archive"), { recursive: true });
     originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+    originalQueryEmbed = LocalTransformersEmbeddingProvider.prototype.embedQuery;
   });
 
-  after(() => {
+  after(async () => {
+    await shutdownTestResources();
     LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbed;
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = originalQueryEmbed;
     rmSync(basePath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
     rmSync(openclawHome, { recursive: true, force: true });
@@ -1384,6 +1411,13 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
 
   function makeMockApi() {
     const noop = () => {};
+    const api = {
+      on(event, handler) {
+        if (event === "gateway_stop") {
+          gatewayStopHandlers.add(handler);
+        }
+      },
+    };
     return {
       pluginConfig: {
         baseDbPath: basePath,
@@ -1401,14 +1435,15 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
       resolvePath: (p) => p,
       registerCommand: noop,
       registerTool(factory) { this._toolFactory = factory; },
-      on: noop,
+      ...api,
       registerService: noop,
     };
   }
 
   it("Test 9: a memory_store call with no params.validFrom, on text using a vague relative-time phrase, stores validFrom:0 and leaves text untouched", async () => {
     const agentId = "testagent-validtime-relative";
-    await initValidTimeSchema(join(basePath, agentId));
+    const schemaDb = await initValidTimeSchema(join(basePath, agentId));
+    await shutdownMemoryDb(schemaDb);
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mockedEmbed() {
       return validTimeStoreVector(0.001);
     };
@@ -1422,18 +1457,20 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
     const result = await storeTool.execute("call-relative-9", { text, category: "fact" });
     assert.equal(result.details.action, "stored", `expected a plain store, got: ${JSON.stringify(result.details)}`);
 
-    const db = new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM);
+    const db = trackMemoryDb(new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM));
     await db.init();
     const rows = await db.table.query().toArray();
     assert.equal(rows.length, 1);
     assert.equal(rows[0].text, text, "the relative-time phrase must be preserved verbatim in the stored text");
     assert.ok(rows[0].validFrom == 0, "validFrom must remain 0 (unknown) — never guessed from 'seit letztem Monat'");
     assert.ok(rows[0].validUntil == 0, "validUntil was never supplied either, must stay 0");
+    await shutdownMemoryDb(db);
   });
 
   it("positive control: a memory_store call WITH a real params.validFrom actually persists it (proves Test 9's 0 isn't a schema-migration-default artifact)", async () => {
     const agentId = "testagent-validtime-relative-positive";
-    await initValidTimeSchema(join(basePath, agentId));
+    const schemaDb = await initValidTimeSchema(join(basePath, agentId));
+    await shutdownMemoryDb(schemaDb);
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mockedEmbed() {
       return validTimeStoreVector(0.002);
     };
@@ -1449,11 +1486,12 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
     });
     assert.equal(result.details.action, "stored");
 
-    const db = new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM);
+    const db = trackMemoryDb(new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM));
     await db.init();
     const rows = await db.table.query().toArray();
     assert.equal(rows.length, 1);
     assert.ok(rows[0].validFrom == Date.parse("2026-03-01"), `an explicit, resolvable validFrom must be persisted verbatim, got ${rows[0].validFrom}`);
+    await shutdownMemoryDb(db);
   });
 
   it("an inverted memory_store validity window degrades both bounds to unknown", async () => {
@@ -1474,12 +1512,13 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
     });
     assert.equal(result.details.action, "stored");
 
-    const db = new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM);
+    const db = trackMemoryDb(new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM));
     await db.init();
     const rows = await db.table.query().toArray();
     assert.equal(rows.length, 1);
     assert.ok(rows[0].validFrom == 0);
     assert.ok(rows[0].validUntil == 0);
+    await shutdownMemoryDb(db);
   });
 
   it("registered memory_recall without validAt returns historical rows with visible validity labels", async () => {
@@ -1487,21 +1526,21 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mockedEmbed() {
       return validTimeStoreVector(0.004);
     };
-    const db = new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM);
-    await db.store({
-      id: "88888888-8888-4888-8888-888888888888",
-      text: "Alex worked at Firma A.",
-      vector: validTimeStoreVector(0.004),
-      category: "fact",
-      createdAt: Date.now(),
-      storedBy: agentId,
-      validFrom: Date.parse("2025-01-01T00:00:00.000Z"),
-      validUntil: Date.parse("2025-06-01T00:00:00.000Z"),
-    });
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async function mockedQueryEmbed() {
+      return validTimeStoreVector(0.004);
+    };
 
     const api = makeMockApi();
     plugin.register(api);
-    const recallTool = api._toolFactory({ agentId, workspaceDir }).find((tool) => tool.name === "memory_recall");
+    const tools = api._toolFactory({ agentId, workspaceDir });
+    const storeTool = tools.find((tool) => tool.name === "memory_store");
+    await storeTool.execute("call-recall-label-seed", {
+      text: "Alex worked at Firma A.",
+      category: "fact",
+      validFrom: "2025-01-01T00:00:00.000Z",
+      validUntil: "2025-06-01T00:00:00.000Z",
+    });
+    const recallTool = tools.find((tool) => tool.name === "memory_recall");
     assert.doesNotMatch(recallTool.parameters.properties.validAt.description, /current[- ]state/i);
     const result = await recallTool.execute("call-recall-label", { query: "Where did Alex work?", limit: 5 });
     assert.match(result.content[0].text, /valid: \[2025-01-01T00:00:00\.000Z, 2025-06-01T00:00:00\.000Z\)/);
@@ -1509,7 +1548,7 @@ describe("valid-time — Test 9 (§12): capture-time relative phrases stay verba
 });
 
 describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint validity windows (real memory_store tool, §8a)", () => {
-  let basePath, workspaceDir, openclawHome, originalOpenClawHome, originalCreate, originalEmbed;
+  let basePath, workspaceDir, openclawHome, originalOpenClawHome, originalCreate, originalEmbed, originalQueryEmbed;
 
   before(() => {
     basePath = mkdtempSync(join(tmpdir(), "plur1bus-validtime-store15-"));
@@ -1520,11 +1559,14 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
     mkdirSync(join(openclawHome, ".openclaw", "memory", "_archive"), { recursive: true });
     originalCreate = OpenAI.Chat.Completions.prototype.create;
     originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+    originalQueryEmbed = LocalTransformersEmbeddingProvider.prototype.embedQuery;
   });
 
-  after(() => {
+  after(async () => {
+    await shutdownTestResources();
     OpenAI.Chat.Completions.prototype.create = originalCreate;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbed;
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = originalQueryEmbed;
     rmSync(basePath, { recursive: true, force: true });
     rmSync(workspaceDir, { recursive: true, force: true });
     rmSync(openclawHome, { recursive: true, force: true });
@@ -1534,6 +1576,13 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
 
   function makeMockApi() {
     const noop = () => {};
+    const api = {
+      on(event, handler) {
+        if (event === "gateway_stop") {
+          gatewayStopHandlers.add(handler);
+        }
+      },
+    };
     return {
       pluginConfig: {
         baseDbPath: basePath,
@@ -1552,7 +1601,7 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
       resolvePath: (p) => p,
       registerCommand: noop,
       registerTool(factory) { this._toolFactory = factory; },
-      on: noop,
+      ...api,
       registerService: noop,
     };
   }
@@ -1599,6 +1648,7 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
       validFrom: at(-60 * DAY),
       validUntil: at(-30 * DAY),
     });
+    await shutdownMemoryDb(localDb);
 
     const api = makeMockApi();
     plugin.register(api);
@@ -1623,12 +1673,13 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
     assert.ok(decision, `expected a merge_aborted trace entry, got: ${JSON.stringify(result.details.decisionTrace?.storeDecisions)}`);
     assert.equal(decision.reason, "disjoint validity windows");
 
-    const checkDb = new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM);
+    const checkDb = trackMemoryDb(new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM));
     await checkDb.init();
     const rows = await checkDb.table.query().toArray();
     assert.equal(rows.length, 2, "both the original candidate and the new fact must exist as separate rows, not merged");
     assert.ok(rows.some((r) => r.id === candidateId && r.text.includes("intern")), "the original, historically-closed row must be untouched");
     assert.ok(rows.some((r) => r.text.includes("extern") && r.id !== candidateId), "the new fact must be stored separately, not merged into the candidate");
+    await shutdownMemoryDb(checkDb);
   });
 
   it("exact text with a disjoint known window is stored as a separate historical row, not rejected as duplicate", async () => {
@@ -1649,6 +1700,7 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
       validFrom: Date.parse("2025-01-01"),
       validUntil: Date.parse("2025-06-01"),
     });
+    await shutdownMemoryDb(localDb);
 
     const api = makeMockApi();
     api.pluginConfig.merging.enabled = false;
@@ -1662,13 +1714,14 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
     });
     assert.equal(result.details.action, "stored");
 
-    const checkDb = new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM);
+    const checkDb = trackMemoryDb(new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM));
     await checkDb.init();
     const rows = await checkDb.table.query().toArray();
     assert.equal(rows.length, 2);
     assert.equal(rows.filter((row) => row.status === "active").length, 2);
     assert.ok(rows.some((row) => row.id === candidateId));
     assert.ok(rows.some((row) => row.id !== candidateId && row.validFrom == Date.parse("2025-07-01")));
+    await shutdownMemoryDb(checkDb);
   });
 
   it("exact text with an overlapping but different window remains available after the old window closes", async () => {
@@ -1676,6 +1729,9 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
     const candidateId = "77777777-7777-4777-8777-777777777778";
     const text = "Alex worked on Project Delta.";
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mockedEmbed() {
+      return validTimeStoreVector(0.31);
+    };
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async function mockedQueryEmbed() {
       return validTimeStoreVector(0.31);
     };
     const localDb = await initValidTimeSchema(join(basePath, agentId));
@@ -1689,6 +1745,7 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
       validFrom: Date.parse("2020-01-01"),
       validUntil: Date.parse("2025-01-01"),
     });
+    await shutdownMemoryDb(localDb);
 
     const api = makeMockApi();
     api.pluginConfig.merging.enabled = false;
@@ -1703,11 +1760,12 @@ describe("valid-time — Test 15 (§12): store-time LLM merge aborts on disjoint
     });
     assert.equal(result.details.action, "stored");
 
-    const checkDb = new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM);
+    const checkDb = trackMemoryDb(new MemoryDB(join(basePath, agentId), VALIDTIME_STORE_VECTOR_DIM));
     await checkDb.init();
     const rows = await checkDb.table.query().toArray();
     assert.equal(rows.filter((row) => row.status === "active").length, 2);
     assert.ok(rows.some((row) => row.id === result.details.id && row.validUntil == Date.parse("2030-01-01")));
+    await shutdownMemoryDb(checkDb);
 
     const memoryRecall = tools.find((tool) => tool.name === "memory_recall");
     const recalled = await memoryRecall.execute("call-overlap-recall", {
