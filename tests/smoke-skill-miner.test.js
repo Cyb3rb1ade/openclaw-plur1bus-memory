@@ -17,13 +17,35 @@ describe("skill-miner evidence-aggregator", () => {
     assert.ok(darkModeGroup.score >= 3, "dark mode group should have score >= 3");
   });
 
-  it("scores user_confirmation memories higher", () => {
-    const memories = [
-      { id: "a", text: "User confirmed they want weekly reports", category: "preference", origin: "user_confirmation", trustLevel: "validated", retrievalCount: 1 },
-    ];
-    const groups = aggregateEvidence(memories);
+  it("scores corroborated and trusted evidence higher", () => {
+    for (const epistemicStatus of ["corroborated", "trusted"]) {
+      const groups = aggregateEvidence([{
+        id: `memory-${epistemicStatus}`,
+        text: "User wants weekly release verification reports",
+        category: "preference",
+        origin: "dm",
+        epistemicStatus,
+        retrievalCount: 1,
+      }]);
+
+      assert.strictEqual(groups.length, 1);
+      assert.strictEqual(groups[0].score, 3, `${epistemicStatus} should receive the +2 trust bonus`);
+    }
+  });
+
+  it("does not infer a trust bonus from NEO-only fields", () => {
+    const groups = aggregateEvidence([{
+      id: "legacy-neo-shape",
+      text: "User wants weekly release verification reports",
+      category: "preference",
+      origin: "user_confirmation",
+      trustLevel: "validated",
+      epistemicStatus: "observed",
+      retrievalCount: 1,
+    }]);
+
     assert.strictEqual(groups.length, 1);
-    assert.ok(groups[0].score > 2, "validated user_confirmation should score high");
+    assert.strictEqual(groups[0].score, 1, "origin/trustLevel must not confer LanceDB trust");
   });
 });
 
