@@ -77,8 +77,8 @@ test("runs full pipeline and creates proposals", async (tmpDir) => {
       query: () => ({
         limit: () => ({
           toArray: async () => [
-            { id: "a", text: "User prefers dark mode in all applications", category: "preference", origin: "dm", retrievalCount: 1, status: "active", createdAt: Date.now() },
-            { id: "b", text: "User prefers dark theme in all applications", category: "preference", origin: "dm", retrievalCount: 2, status: "active", createdAt: Date.now() },
+            { id: "a", text: "User prefers dark mode in all applications", category: "preference", origin: "dm", epistemicStatus: "corroborated", retrievalCount: 1, status: "active", createdAt: Date.now() },
+            { id: "b", text: "User prefers dark theme in all applications", category: "preference", origin: "dm", epistemicStatus: "corroborated", retrievalCount: 2, status: "active", createdAt: Date.now() },
           ],
         }),
       }),
@@ -119,12 +119,12 @@ test("respects maxPerRun", async (tmpDir) => {
       query: () => ({
         limit: () => ({
           toArray: async () => [
-            { id: "a", text: "User confirmed prefers darkmode everywhere", category: "preference", origin: "user_confirmation", trustLevel: "validated", retrievalCount: 1, status: "active", createdAt: Date.now() },
-            { id: "b", text: "User confirmed likes lightmode everywhere", category: "preference", origin: "user_confirmation", trustLevel: "validated", retrievalCount: 1, status: "active", createdAt: Date.now() },
-            { id: "c", text: "User confirmed uses vimeditor exclusively", category: "preference", origin: "user_confirmation", trustLevel: "validated", retrievalCount: 1, status: "active", createdAt: Date.now() },
-            { id: "d", text: "User confirmed uses emacssystem exclusively", category: "preference", origin: "user_confirmation", trustLevel: "validated", retrievalCount: 1, status: "active", createdAt: Date.now() },
-            { id: "e", text: "User confirmed uses vscodesystem exclusively", category: "preference", origin: "user_confirmation", trustLevel: "validated", retrievalCount: 1, status: "active", createdAt: Date.now() },
-            { id: "f", text: "User confirmed uses neovimtool exclusively", category: "preference", origin: "user_confirmation", trustLevel: "validated", retrievalCount: 1, status: "active", createdAt: Date.now() },
+            { id: "a", text: "User confirmed prefers darkmode everywhere", category: "preference", origin: "dm", epistemicStatus: "corroborated", retrievalCount: 1, status: "active", createdAt: Date.now() },
+            { id: "b", text: "User confirmed likes lightmode everywhere", category: "preference", origin: "dm", epistemicStatus: "corroborated", retrievalCount: 1, status: "active", createdAt: Date.now() },
+            { id: "c", text: "User confirmed uses vimeditor exclusively", category: "preference", origin: "dm", epistemicStatus: "corroborated", retrievalCount: 1, status: "active", createdAt: Date.now() },
+            { id: "d", text: "User confirmed uses emacssystem exclusively", category: "preference", origin: "dm", epistemicStatus: "corroborated", retrievalCount: 1, status: "active", createdAt: Date.now() },
+            { id: "e", text: "User confirmed uses vscodesystem exclusively", category: "preference", origin: "dm", epistemicStatus: "corroborated", retrievalCount: 1, status: "active", createdAt: Date.now() },
+            { id: "f", text: "User confirmed uses neovimtool exclusively", category: "preference", origin: "dm", epistemicStatus: "corroborated", retrievalCount: 1, status: "active", createdAt: Date.now() },
           ],
         }),
       }),
