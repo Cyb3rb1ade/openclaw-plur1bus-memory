@@ -102,7 +102,7 @@ function groupContext(agentId, workspaceDir, args) {
   return ctx;
 }
 
-async function seedCriticalCard(pluginModule, baseDbPath, agentId, { id, type, text, sourceMessageRole }) {
+async function seedCriticalCard(pluginModule, baseDbPath, agentId, { id, type, text, sourceMessageRole, owner }) {
   const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
   await db.store({
     id,
@@ -110,7 +110,8 @@ async function seedCriticalCard(pluginModule, baseDbPath, agentId, { id, type, t
     vector: Array(VECTOR_DIM).fill(0.1),
     category: "fact",
     createdAt: Date.now(),
-    storedBy: agentId,
+    storedBy: owner || agentId,
+    agentId: owner || agentId,
     origin: "dm",
     trustLevel: "untrusted",
     type,
@@ -256,6 +257,38 @@ test("critical: Scope-Isolation — fremde Pending-Reviews sind nicht auflösbar
   const otherAgent = "critical-other-agent";
   const result = await findCommand(api).handler(telegramContext(otherAgent, workspaceDir, "critical accept 9a058"));
   assert.match(result.text, /finde keine ausstehende PLUR1BUS-Prüfung/);
+});
+
+test("critical: fremde Karte in derselben Agent-DB ist unsichtbar und nicht mutierbar (M1)", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  installEmbeddingStub(t);
+  const agentId = "critical-acl-agent";
+  const fremdeId = "00000000-7611-4528-992a-075f8889b0f1";
+  const pluginModule = await loadFreshPlugin();
+  // Gleiche DB, fremde Eigentümerbindung — genau der Fall, den checkAccess
+  // abdeckt und den der Kommandopfad bisher ignorierte.
+  await seedCriticalCard(pluginModule, baseDbPath, agentId, {
+    id: fremdeId, type: "zugang_passwort", text: "Fremdes Passwort.", sourceMessageRole: "user",
+    owner: "ein-anderer-agent",
+  });
+  const api = createApi(baseDbPath);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const liste = await findCommand(api).handler(telegramContext(agentId, workspaceDir, "critical"));
+  assert.doesNotMatch(liste.text, /9b0f1/, "die fremde Karte darf keine Kurzreferenz bekommen");
+  assert.doesNotMatch(liste.text, /Zugangsinformation/i, "auch der Typ ist eine Information über fremde Daten");
+
+  // Weder über die Kurzreferenz noch über die vollständige UUID mutierbar.
+  for (const ref of ["9b0f1", fremdeId]) {
+    const versuch = await findCommand(api).handler(telegramContext(agentId, workspaceDir, `critical accept ${ref}`));
+    assert.match(versuch.text, /finde keine ausstehende PLUR1BUS-Prüfung/, `accept ${ref} musste ins Leere laufen`);
+  }
+  const card = await readCard(pluginModule, baseDbPath, agentId, fremdeId);
+  assert.notEqual(card.confirmed === true || card.confirmed === 1, true, "die fremde Karte darf nicht bestätigt worden sein");
+
+  // Und edit gibt keinen Titel (= echten Inhalt) der fremden Karte aus.
+  const edit = await findCommand(api).handler(telegramContext(agentId, workspaceDir, "critical edit 9b0f1"));
+  assert.doesNotMatch(edit.text, /Fremdes Passwort/);
 });
 
 test("critical: accept/reject in Gruppen ohne Whitelist bleiben verweigert (fail-safe)", async (t) => {
