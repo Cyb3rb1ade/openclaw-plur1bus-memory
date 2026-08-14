@@ -79,6 +79,34 @@ describe("B2 findPendingCriticalReviews", () => {
     }
   });
 
+  it("filtert Karten heraus, die dem anfragenden Kontext nicht gehören (M1)", async (t) => {
+    const baseDbPath = tempBase(t);
+    const pluginModule = await loadFreshPlugin();
+    const eigeneId = uuidFor(FILLER_COUNT);
+    const fremdeId = uuidFor(FILLER_COUNT + 1);
+    await seedTable(pluginModule, baseDbPath, [
+      { id: eigeneId, text: "eigene Notiz", type: "person" },
+      // Gleiche Agent-DB, aber fremde Eigentümerbindung.
+      { id: fremdeId, text: "fremde Notiz", type: "zugang_passwort", agentId: "anderer-agent", storedBy: "anderer-agent" },
+    ]);
+
+    const adapter = createDbAdapter({ basePath: baseDbPath, logger: { info() {}, warn() {} } });
+    try {
+      // workspaceDir setzen, sonst schreibt logAclViolation sein acl-audit.jsonl
+      // ins aktuelle Verzeichnis — also ins Repo.
+      const ctx = { agentId: AGENT, workspaceDir: baseDbPath, workspaceAliases: { aliases: [] } };
+      const ids = (await adapter.findPendingCriticalReviews(AGENT, { ctx })).map((c) => c.id);
+      assert.ok(ids.includes(eigeneId), "die eigene Karte muss sichtbar bleiben");
+      assert.equal(ids.includes(fremdeId), false, "fremde Critical-Karten dürfen nicht auftauchen");
+
+      // Ohne ctx (Klassifizierer-Cron, Systemkontext) bleibt alles sichtbar.
+      const ohneCtx = (await adapter.findPendingCriticalReviews(AGENT)).map((c) => c.id);
+      assert.ok(ohneCtx.includes(fremdeId), "der Systempfad muss weiterhin alles sehen");
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
   it("übergeht bestätigte und getombsteinte Karten", async (t) => {
     const baseDbPath = tempBase(t);
     const pluginModule = await loadFreshPlugin();

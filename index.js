@@ -7231,7 +7231,11 @@ const plugin = {
 
             let pending = [];
             try {
-              pending = await memoryDbAdapter.findPendingCriticalReviews(agentId);
+              // ctx erzwingt die Per-Karten-ACL. Der Filter läuft VOR
+              // assignShortRefs, damit eine fremde Karte gar keine Kurzreferenz
+              // bekommt — Liste, accept, reject und edit sind damit gleichzeitig
+              // abgedeckt (edit gab zuvor card.title aus, also echten Inhalt).
+              pending = await memoryDbAdapter.findPendingCriticalReviews(agentId, { ctx: memoryCtx });
             } catch (err) {
               api.logger?.warn?.(`plur1bus critical[${agentId}]: findPendingCriticalReviews failed: ${err.message}`);
             }
