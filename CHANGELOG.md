@@ -55,6 +55,202 @@ general OpenClaw `latest` channel is unchanged.
   under Hermes' ownership. Jina remains an explicit, CC-BY-NC-4.0-gated option
   for new stores; it is activated only after a successful download and smoke
   check, otherwise local E5/BGE remains active.
+### Hinzugefügt
+
+- **Bi-Temporal Memory (`validFrom`/`validUntil`).** Zwei neue Spalten für
+  die REAL-WORLD-Gültigkeit eines Fakts ("Firma A war gültig von X bis Y"),
+  bewusst getrennt von System Time (`createdAt`/`updatedAt` — wann PLUR1BUS
+  eine Zeile erfasst/bearbeitet hat, nie wann der Fakt real galt) und von
+  `expiresAt` (ein hartes TTL, das eine Zeile aus dem Recall ENTFERNT —
+  `validUntil` ist das semantische Gegenteil: die Zeile bleibt vollständig
+  vorhanden und durchsuchbar, nur der Fakt gilt ab diesem Zeitpunkt nicht
+  mehr). `0` bedeutet auf beiden Seiten "keine bekannte Grenze" (dasselbe
+  Idiom wie `expiresAt`s `0` = "kein TTL"), Grenzregel links-inklusiv/
+  rechts-exklusiv (`validFrom <= validAt < validUntil`). Historische Fakten
+  werden NICHT als Versionsketten-Edit modelliert — ein neuer, unabhängiger
+  Fakt ("Firma B") ist eine eigene Zeile, der alte Fakt ("Firma A") bleibt
+  `status: "active"` mit geschlossenem `validUntil` (`applyValidTimeCloseToLanceDb`,
+  kein Versionierungs-Edit); beide koexistieren, `validAt` beim Recall
+  entscheidet, welche Zeile eine Anfrage sieht. Neu in `lib/valid-time.js`:
+  `isEntryValidAt`, `normalizeCapturedTimestamp` (nie werfend, degradiert auf
+  `0` = unbekannt), `hasDisjointValidityWindows`/`combineValidTimeForMerge`
+  (Merge-Sicherheitswächter), `buildValidTimeClosePatch` (verweigert eine
+  unbekannte oder invertierte Grenze).
+- `validAt` ist opt-in auf `memory_recall`/`memory_search` (Query-Seite),
+  Default `null` = keine zeitliche Filterung; Zeilen mit bekannten
+  `validFrom`-/`validUntil`-Grenzen bleiben dabei auswählbar und werden im
+  Recall sichtbar mit ihren Grenzen beschriftet. `buildUpdateEntry()`
+  (`lib/safe-update.js`) vererbt
+  `validFrom`/`validUntil` unbedingt und unverändert über einen
+  inhaltsändernden `safeUpdate()` — eine Umformulierung ändert nicht, wann
+  ein Fakt zu gelten begann (direktes Gegenstück zu Blocker 2 aus der
+  `epistemicStatus`-Änderung oben).
+- Die initiale und die verfeinerte ANN-Suche schieben bei explizitem `validAt`
+  das Gültigkeitsprädikat vor das harte Kandidatenlimit in LanceDB. Meldet ein
+  schreibgeschützter Legacy-Namespace spezifisch eine fehlende
+  `validFrom`-/`validUntil`-Spalte, erfolgt exakt ein Retry ohne Prädikat;
+  anschließend greift derselbe JavaScript-Lifecycle-Filter. Andere
+  Query-Fehler werden unverändert weitergegeben.
+- LanceDB-Schema-Migration um zwei weitere Spalten erweitert (`validFrom`,
+  `validUntil`), idempotent über das bestehende `addColumns`/`valueSql`-Muster.
+- `lib/jobs/memory-compaction.js`: zwei textlich kompatible, aber zeitlich
+  disjunkte Kandidaten werden nicht mehr für einen LLM-Merge vorgeschlagen,
+  sondern auf die bestehende `mark_redundant`-Aktion umgeleitet (Grund
+  `compatible_text_disjoint_validity_window`). Diese Aktion wird als Proposal
+  geloggt/persistiert und gehört nicht zum Low-Risk-Auto-Apply; disjunkte
+  historische Zeilen werden dadurch weder automatisch zusammengeführt noch
+  archiviert.
+- Recall- und Namespace-Dedup sind ebenfalls validity-aware: bekannte,
+  disjunkte Zeitfenster bleiben getrennt; Canonical-Origin-Brücken werden
+  atomar gegen alle überlappenden Gewinner geprüft, damit keine
+  überlappenden Duplikate zurückbleiben.
+- **Capture-seitige Befüllung von `validFrom`/`validUntil` ist verdrahtet.**
+  Das `memory_store`-Tool-Schema hat jetzt optionale `validFrom`/
+  `validUntil`-Parameter (die Beschreibungstexte sagen dem Modell explizit,
+  wann ein Datum gesetzt werden darf und wann nicht — vage relative Phrasen
+  wie "seit letztem Monat" bleiben unverändert im Text, ohne ein Datum zu
+  raten). Beide Live-Store-Pfade (`storeMemoryFromToolParams`, die inline
+  Kopie im `memory_store`-Tool) rufen `normalizeCapturedValidityWindow()` auf den
+  eingehenden Parametern auf, bevor der Eintrag gebaut wird, und rufen an
+  ihrer jeweiligen Store-Zeit-LLM-Merge-Stelle jetzt tatsächlich
+  `hasDisjointValidityWindows()` auf (direkt neben dem bestehenden
+  `validateMergedTextPreservesFacts`-Abbruch-Guard) — ein Merge-Kandidat mit
+  bekanntem, disjunktem Gültigkeitsfenster bricht den Merge ab und fällt auf
+  den normalen, getrennten Store zurück; ein erlaubter Merge übernimmt
+  `validFrom`/`validUntil` über `combineValidTimeForMerge()`, statt sie
+  stillschweigend zu verlieren. `findMergeCandidate`s Projektion trägt beide
+  Felder, damit der Wächter überhaupt etwas zum Vergleichen hat.
+- Dauerhafte Store-Merges schreiben zusätzlich zur Kandidaten-ID einen
+  stabilen `valid-time:<from>:<until>`-Fingerprint in das bestehende
+  `mergedFrom`-JSON-Array. Verifikation und Retry sind fail-closed bei
+  verändertem Kandidatenfenster, abweichenden Replacement-Feldern,
+  malformed/non-array JSON oder Legacy-Arrays ohne Fingerprint. Der Kandidat
+  wird nach der Replacement-Vorbereitung und unmittelbar vor dem Löschen des
+  Originals erneut autoritativ gelesen; konfliktbehaftete bzw. reparierbare
+  Forks werden nicht automatisch gelöscht.
+- **BigInt-sichere Valid-Time-Auswertung:** LanceDB liefert `int64`-Spalten
+  (also auch `validFrom`/`validUntil`) in JS als natives `BigInt` zurück;
+  `0n` muss dabei wie `0` eine unbekannte/offene Grenze bleiben. Der zentrale
+  `toFiniteMs()`-/`knownWindow()`-Pfad akzeptiert nur safe-integer Numbers
+  beziehungsweise sicher darstellbare BigInts und wird von
+  `isEntryValidAt()`, Disjointness- und Merge-Union-Logik gemeinsam genutzt;
+  Grenzen bleiben links-inklusiv und rechts-exklusiv.
+- Phase 2 ist durch Pure-, Pipeline-, Migration-, Dedup-/Compaction- und
+  Durable-Merge-Regressionen abgedeckt. Verifizierter Gesamtlauf: 3.609 Tests,
+  3.608 bestanden, 0 fehlgeschlagen, 1 übersprungen, 630 Suites.
+- **Explicit Trust State (`epistemicStatus`).** Neues, von `origin.trustLevel`
+  (WER hat etwas behauptet) und `confidence` (numerische Sicherheit) bewusst
+  getrenntes Feld: `untrusted | observed | corroborated | trusted | disputed |
+  invalidated` — eine claim-level Einschätzung, wie sehr einer Erinnerung
+  gerade vertraut werden soll. Neu in `lib/epistemic-status.js`:
+  Übergangsmatrix (Permission-Matrix nach Actor-Tier `human` /
+  `system:tombstone-cascade`, nicht State-Machine), Versionsgrenzen-Regel
+  (`disputed`/`invalidated` vererben sich unbedingt vorwärts,
+  `trusted`/`corroborated` fallen bei inhaltlicher Bearbeitung auf `observed`
+  zurück, Legacy-Zeilen ohne gespeichertes Feld bleiben ein echtes No-op —
+  nie ein implizites `untrusted`), Merge-Regel (der konservativere der beiden
+  Ausgangsstatus gewinnt, `disputed` ist sticky).
+- LanceDB-Schema-Migration um fünf Spalten erweitert
+  (`epistemicStatus`, `epistemicStatusUpdatedAt`, `epistemicStatusActor`,
+  `epistemicStatusReason`, `previousEpistemicStatus`), idempotent über das
+  bestehende `addColumns`/`valueSql`-Muster.
+- Recall-Ausschluss: `invalidated` wird an allen bekannten Lese-/Fallback-Pfaden
+  ausgeschlossen (LanceDB-Vektorsuche, `searchByTopic`, NEO-Recall,
+  REM-Dream-Kandidaten, Skill-Miner-Evidenz, Wiki-Suche, Kompaktierungs-
+  Kandidaten) — sowohl in der SQL-`WHERE`-Klausel als auch in der jeweiligen
+  JS-Fallback-Kette, wo eine existiert.
+- Weiches Recall-Scoring (`epistemicScoreBoost`) in der LanceDB- und der
+  NEO-Recall-Pipeline: legacy/fehlende Werte scoren neutral (0), nur explizit
+  gesetzte Werte wirken sich aus.
+- Prompt-Labeling: `epistemic="…"` als gerendertes Attribut in
+  `formatRelevantMemoriesContext` und `formatNeoRecallContext`.
+- Neuer Schreibpfad: `/correct trust <status> <query>` — nutzt dieselbe
+  Nonce-Bestätigung und denselben `checkAccess`/Autorisierungs-Gate wie die
+  bestehende Inhaltskorrektur; keine neue Berechtigungsstufe.
+- `applyEpistemicStatusToNeo` (`index.js`) fail-closed via `isNeoRecordAccessible()`
+  abgesichert — das NEO-Gegenstück zu `applyEpistemicStatusToLanceDb`s
+  `checkAccess()`-Gate fehlte bis zum zweiten Review-Durchlauf; die Funktion
+  ist aktuell nirgends verdrahtet, aber eine exportierte Mutations-API ohne
+  Autorisierungsprüfung wäre beim ersten Verdrahten ein stiller
+  Scope-Bypass gewesen.
+- 61 neue Tests, verteilt über `tests/epistemic-status.test.js` (57),
+  `tests/rem-dream-acl.test.js` (+2, Fallback-Pfad-Abdeckung) und
+  `tests/smoke-wiki-command.test.js` (+2, Fallback-Pfad-Abdeckung).
+  Ergänzt nach zwei unabhängigen Reviews um: Requirement 3 (Assistant-/
+  Agent-generierter Content wird nie automatisch `trusted`, über den echten
+  `applyDynamicsDefaults → normalizeEntryForTable → store`-Pfad, für alle
+  vier `MEMORY_ORIGINS`), Requirement 10 (Reindexing reaktiviert kein
+  `invalidated`-Memory, über den echten `db.search → vectorSearchActive`-Pfad),
+  die vier bislang ungetesteten Fallback-Zweige aus Auflage B
+  (`loadCandidateMemories` ohne `where()`/mit werfendem `where()`;
+  `searchByKind`/`isActiveKindRow` ohne `where()`/mit werfendem `where()`,
+  über den echten `runWikiCommand`-Pfad), und die Ablehnungsfälle für den
+  neuen `applyEpistemicStatusToNeo`-ACL-Gate.
+
+### Behoben
+
+- **`__schema__`-Bootstrap-Zeile (`index.js`, Zweig ohne vorbestehende
+  Tabelle) kannte die sieben Spalten der letzten beiden Features nicht**
+  (`epistemicStatus`, `epistemicStatusUpdatedAt`, `epistemicStatusActor`,
+  `epistemicStatusReason`, `previousEpistemicStatus`, `validFrom`,
+  `validUntil`). `MemoryDB` hat zwei sich ausschließende Init-Pfade —
+  existiert die Tabelle bereits, migriert `addColumns` fehlende Spalten
+  nach; existiert sie nicht, definiert die `__schema__`-Bootstrap-Zeile bei
+  `createTable` das Schema direkt. Die Bootstrap-Zeile wurde bei beiden
+  Features gepflegt, aber ohne die jeweils neuen Spalten — bei einer
+  fabrikneuen Agent-Datenbank fehlten sie also beim allerersten `store()`,
+  `normalizeEntryForTable` filterte sie über `schemaFieldNames` still weg
+  (Datenauswirkung gering, da die weggeworfenen Werte den Defaults
+  entsprachen, aber ein Konventionsbruch mit einem echten Fenster ohne
+  diese Spalten). Bootstrap-Zeile um alle sieben Felder ergänzt, mit
+  denselben Default-Werten und in derselben Schreibweise wie die
+  Nachbarfelder der Bootstrap-Zeile bzw. wie die `valueSql`-Defaults der
+  zugehörigen `addColumns`-Migrationen (`ensureEpistemicStatusColumns`/
+  `ensureValidTimeColumns` in `lib/db-adapter.js`; Strings `""`, Zahlen `0`).
+  Bekannte, vorbestehende Einschränkung dabei (nicht neu durch diesen Fix,
+  betrifft praktisch alle numerischen Bootstrap-Felder gleichermaßen):
+  LanceDB leitet aus dem JS-Literal `0` in der Bootstrap-Zeile `Float64` ab,
+  aus dem SQL-Literal `'0'` in `addColumns` dagegen `Int64` — eine frisch
+  erzeugte und eine migrierte Tabelle tragen für dieselben Spalten
+  dauerhaft unterschiedliche Arrow-Typen. Neuer `it()`-Block in
+  `tests/smoke-migration.test.js` belegt am frisch erzeugten
+  `createTable`-Zweig, dass ein beim allerersten `store()` übergebener
+  `epistemicStatus`-/`validFrom`-Wert jetzt tatsächlich persistiert statt
+  gefiltert zu werden.
+
+### Bekannte Lücken (bewusst offen)
+
+- `applyValidTimeCloseToLanceDb` (Schließen eines historischen
+  Gültigkeitsfensters) hat weiterhin keine Chat-Command-Oberfläche (z. B.
+  `/correct`) — der Adapter ist autorisiert, auditiert und direkt getestet,
+  aber nirgends im Chat verdrahtet.
+- `system:tombstone-cascade` (die Actor-Stufe, die eine Erinnerung nur auf
+  `invalidated` setzen darf) ist implementiert und isoliert getestet, aber
+  nirgends verdrahtet: `/forget` löscht Zeilen hart
+  (`lib/telegram-commands/memory-edit.js`s `forgetCard` →
+  `db.deleteCard`), es bleibt also keine Zeile übrig, auf der die Kaskade
+  etwas markieren könnte.
+- Der Merge-Zweig in `lib/jobs/memory-compaction.js`s `executeActions()` ist
+  mit der korrekten `epistemicStatus`-Kombinationsregel ausgestattet, aber in
+  der aktuellen Codebasis über `isLowRiskAutoApplyAction()` auf
+  `type==="delete"` beschränkt — der Merge-Zweig wird nie automatisch
+  ausgeführt (nur als Proposal persistiert), unabhängig von diesem Feature.
+- `durableMergeWriteKey` (index.js) hängt seit Phase 2 zwei zusätzliche
+  Elemente an das JSON-Array an, das zu einem SHA256 verhasht wird — auch
+  wenn beide Gültigkeitsgrenzen unbekannt (`0`) sind. Der
+  Idempotenz-Vertrag („gleicher Retry ⇒ gleicher `replacementId`") hält
+  nicht über die Versionsgrenze: Ein Merge, der VOR dem Upgrade abgestürzt
+  ist, wird beim Retry NACH dem Upgrade nicht wiedererkannt
+  (`db.getById(replacementId)` findet die alte Zeile nicht), sodass eine
+  zweite Replacement-Zeile neben der verwaisten alten entsteht. Fenster eng
+  (Absturz mitten im Merge), kein Datenverlust, kein Fehlerabbruch.
+  Das ist ein anderer Mechanismus als der bereits getestete Fall in
+  `tests/memory-store-merge-archive-first.test.js` („rejects a legacy
+  mergedFrom array that lacks the validity fingerprint"). Jener Test erzwingt die
+  Wiederauffindung der alten Zeile per Mock und belegt, dass der
+  Fail-Closed-Wächter dann korrekt greift — er belegt nicht, dass die alte
+  Zeile im Realbetrieb überhaupt gefunden wird.
+
 ## [7.2.6] — 2026-08-11
 
 Wartungs-Release. Das Deploy-Manifest deckte nur einen Bruchteil der

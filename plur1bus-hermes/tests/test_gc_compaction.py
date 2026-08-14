@@ -58,6 +58,22 @@ class GcCompactionTests(unittest.TestCase):
             )
             self.assertEqual(table.updates[0][1], {"status": "archived"})
 
+    def test_gc_collectable_scan_includes_expired_superseded_cards(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            domain = Plur1busDomain(Path(temporary), "main")
+            memory_id = "53628ada-8595-43dc-92da-216fe2c69837"
+            domain._metadata_rows = lambda: [
+                {"id": memory_id, "metadataJson": '{"expiresAt":100}'},
+            ]
+            table = _Table(
+                [{"id": memory_id, "content": "old", "status": "superseded"}]
+            )
+
+            result = domain.run_gc(table, now_ms=200)
+
+            self.assertEqual(result["count"], 1)
+            self.assertEqual(table.updates[0][1], {"status": "archived"})
+
 
 if __name__ == "__main__":
     unittest.main()

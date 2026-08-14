@@ -207,7 +207,7 @@ describe("auto-recall decision trace integration", () => {
     try { rmSync(basePath, { recursive: true, force: true }); } catch {}
   });
 
-  async function runRecallFor(agentId, prompt, traceEnabled, includeInPrompt) {
+  async function runRecallFor(agentId, prompt, traceEnabled, includeInPrompt, overrides = {}) {
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async function mockedEmbed() {
       return makeVector();
     };
@@ -216,6 +216,7 @@ describe("auto-recall decision trace integration", () => {
     };
 
     const api = makeMockApi(basePath, traceEnabled, includeInPrompt);
+    Object.assign(api.pluginConfig, overrides.pluginConfig || {});
     plugin.register(api, { importRouting: async () => routingCapability });
 
     const hook = api._hooks["before_prompt_build"];
@@ -223,7 +224,7 @@ describe("auto-recall decision trace integration", () => {
 
     return await hook(
       { prompt, messages: [{ role: "user", content: prompt }] },
-      { agentId, workspaceDir: null, sessionKey: "sess-1" }
+      { agentId, workspaceDir: overrides.workspaceDir ?? null, sessionKey: "sess-1" }
     );
   }
 
@@ -277,6 +278,102 @@ describe("auto-recall decision trace integration", () => {
       /source-stage=/,
       "memory records should not carry trace attributes when disabled"
     );
+  });
+
+  it("before_prompt_build projects known valid-time bounds from the recalled DB row", async () => {
+    const agentId = `${AGENT_PREFIX}-valid-time-label`;
+    const db = new MemoryDB(join(basePath, agentId), VECTOR_DIM);
+    await db.store({
+      id: "77777777-7777-4777-8777-777777777777",
+      text: "User worked at Firma A.",
+      vector: makeVector(),
+      category: "fact",
+      createdAt: Date.now(),
+      storedBy: agentId,
+      validFrom: Date.parse("2025-01-01T00:00:00.000Z"),
+      validUntil: Date.parse("2025-06-01T00:00:00.000Z"),
+    });
+
+    const result = await runRecallFor(agentId, "Where did the user work?", false, false);
+    assert.match(result?.prependContext || "", /valid-from="2025-01-01T00:00:00\.000Z"/);
+    assert.match(result?.prependContext || "", /valid-until="2025-06-01T00:00:00\.000Z"/);
+  });
+
+  it("before_prompt_build preserves epistemic status on primary recall projection", async () => {
+    const agentId = `${AGENT_PREFIX}-epistemic-label`;
+    const db = new MemoryDB(join(basePath, agentId), VECTOR_DIM);
+    await db.store({
+      id: "88888888-8888-4888-8888-888888888888",
+      text: "The migration date is disputed.",
+      vector: makeVector(),
+      category: "fact",
+      createdAt: Date.now(),
+      storedBy: agentId,
+      epistemicStatus: "disputed",
+    });
+
+    const result = await runRecallFor(agentId, "What is disputed about the migration?", false, false);
+    assert.match(
+      result?.prependContext || "",
+      /id="88888888-8888-4888-8888-888888888888"[^>]*epistemic="disputed"/,
+    );
+  });
+
+  it("before_prompt_build preserves known valid-time bounds on Semantic Lens projection", async () => {
+    const agentId = `${AGENT_PREFIX}-semantic-lens-valid-time`;
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-semantic-lens-valid-time-"));
+    mkdirSync(join(workspaceDir, ".plur1bus"), { recursive: true });
+    writeFileSync(join(workspaceDir, ".plur1bus", "semantic-lens-index.json"), JSON.stringify({
+      version: 1,
+      generatedAt: "2026-08-12T00:00:00.000Z",
+      memoryToCommunity: {
+        "99999999-9999-4999-8999-999999999999": "c1",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa": "c1",
+      },
+      communities: {
+        c1: {
+          id: "c1",
+          representativeMemoryIds: ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+          bridgeMemoryIds: [],
+          fadedCandidateMemoryIds: [],
+        },
+      },
+    }), "utf8");
+    const db = new MemoryDB(join(basePath, agentId), VECTOR_DIM);
+    await db.store({
+      id: "99999999-9999-4999-8999-999999999999",
+      text: "Base memory for semantic lens.",
+      vector: makeVector(),
+      category: "fact",
+      createdAt: Date.now(),
+      storedBy: agentId,
+    });
+    await db.store({
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      text: "Historical semantic lens memory.",
+      vector: makeVector().map((value) => -value),
+      category: "fact",
+      createdAt: Date.now(),
+      storedBy: agentId,
+      epistemicStatus: "trusted",
+      validFrom: Date.parse("2024-01-01T00:00:00.000Z"),
+      validUntil: Date.parse("2024-12-01T00:00:00.000Z"),
+    });
+
+    const result = await runRecallFor(agentId, "Base memory", false, false, {
+      workspaceDir,
+      pluginConfig: {
+        // Generous timeoutMs: test subject is valid-time bounds survival, not timeout mechanism (covered separately in semantic-lens-index.test.js with timeoutMs: 1). Tight budget races Promise.race under load.
+        semanticLens: { enabled: true, maxLensMemories: 1, maxCommunities: 1, timeoutMs: 30000 },
+        recall: { maxPromptMemories: 1 },
+      },
+    });
+    const context = result?.prependContext || "";
+    assert.match(context, /<memory-semantic-lens>/);
+    assert.match(context, /id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*valid-from="2024-01-01T00:00:00\.000Z"/);
+    assert.match(context, /id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*valid-until="2024-12-01T00:00:00\.000Z"/);
+    assert.match(context, /id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"[^>]*epistemic="trusted"/);
+    rmSync(workspaceDir, { recursive: true, force: true });
   });
 
   it("includeInPrompt=true renders compact decision trace block", async () => {

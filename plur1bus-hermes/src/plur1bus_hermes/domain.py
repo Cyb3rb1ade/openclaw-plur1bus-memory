@@ -545,13 +545,20 @@ class Plur1busDomain:
         return report
 
     def run_gc(self, table: Any, now_ms: int | None = None) -> dict[str, Any]:
-        """Archive explicitly expired active cards before marking them archived."""
+        """Archive expired active or superseded cards through a GC-only scan.
+
+        Recall and shared/vault paths continue using the active-only predicate;
+        this separate predicate is the Hermes equivalent of OpenClaw's
+        ``scanCollectable`` and intentionally includes superseded rows.
+        """
         now = now_ms or _now_ms()
         metadata_by_id = {
             str(row.get("id") or ""): self._metadata_json(row)
             for row in self._metadata_rows()
         }
-        rows = table.search().where("status = 'active'").limit(100000).to_list()
+        rows = table.search().where(
+            "status = 'active' OR status = 'superseded'"
+        ).limit(100000).to_list()
         archived = []
         archive_dir = self.data_dir / "archives" / self.agent_id / "gc"
         for row in rows:

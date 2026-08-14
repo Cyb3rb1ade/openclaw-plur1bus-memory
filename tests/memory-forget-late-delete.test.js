@@ -48,12 +48,12 @@ function makeMockApi(baseDbPath) {
   };
 }
 
-describe("memory_forget late delete audit continuation", () => {
+describe("memory_forget late tombstone audit continuation", () => {
   let api;
   let baseDbPath;
   let openclawHome;
   let originalOpenClawHome;
-  let originalDelete;
+  let originalTombstone;
   let originalEmbedQuery;
   let sequence = 0;
   let workspaceDirs = [];
@@ -112,7 +112,7 @@ describe("memory_forget late delete audit continuation", () => {
     originalOpenClawHome = process.env.OPENCLAW_HOME;
     openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-home-"));
     process.env.OPENCLAW_HOME = openclawHome;
-    originalDelete = MemoryDB.prototype.delete;
+    originalTombstone = MemoryDB.prototype.tombstone;
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async function mockQueryEmbedding() {
       return makeVector();
@@ -122,11 +122,11 @@ describe("memory_forget late delete audit continuation", () => {
   });
 
   afterEach(() => {
-    MemoryDB.prototype.delete = originalDelete;
+    MemoryDB.prototype.tombstone = originalTombstone;
   });
 
   after(() => {
-    MemoryDB.prototype.delete = originalDelete;
+    MemoryDB.prototype.tombstone = originalTombstone;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
     rmSync(baseDbPath, { recursive: true, force: true });
     for (const workspaceDir of workspaceDirs) {
@@ -137,113 +137,174 @@ describe("memory_forget late delete audit continuation", () => {
     else process.env.OPENCLAW_HOME = originalOpenClawHome;
   });
 
-  it("logs an ID delete exactly once when its timed-out mutation commits late", async (t) => {
+  it("logs an ID tombstone exactly once when its timed-out mutation commits late", async (t) => {
     const testCase = await createCase();
-    const deleteGate = deferred();
-    const deleteStarted = deferred();
-    let rawDelete;
+    const gate = deferred();
+    const started = deferred();
+    let rawTombstone;
 
-    MemoryDB.prototype.delete = function timedOutIdDelete(id) {
-      if (id !== testCase.memoryId) return originalDelete.call(this, id);
-      rawDelete = (async () => {
-        deleteStarted.resolve();
-        await deleteGate.promise;
-        return originalDelete.call(this, id);
+    MemoryDB.prototype.tombstone = function timedOutIdTombstone(id) {
+      if (id !== testCase.memoryId) return originalTombstone.call(this, id);
+      rawTombstone = (async () => {
+        started.resolve();
+        await gate.promise;
+        return originalTombstone.call(this, id);
       })();
-      return withTimeout(rawDelete, 20, `MemoryDB.delete:${id}`);
+      return withTimeout(rawTombstone, 20, `MemoryDB.tombstone:${id}`);
     };
     t.after(async () => {
-      deleteGate.resolve();
-      await Promise.allSettled([rawDelete].filter(Boolean));
+      gate.resolve();
+      await Promise.allSettled([rawTombstone].filter(Boolean));
     });
 
     const execution = testCase.forgetTool.execute("forget-id-late", { memoryId: testCase.memoryId });
-    await deleteStarted.promise;
+    await started.promise;
     const result = await execution;
-    assert.match(result.content[0].text, /Memory forget failed:.*timed out/i);
-    assert.ok(await readMemory(testCase.agentId, testCase.memoryId), "the prompt timeout must occur before raw delete settlement");
+    assert.match(result.content[0].text, /Memory forget failed.*timed out/i);
+    assert.equal((await readMemory(testCase.agentId, testCase.memoryId)).status, "active", "the prompt timeout must occur before raw tombstone settlement");
     assert.equal(readDestructiveOps(testCase.workspaceDir).length, 0);
 
-    deleteGate.resolve();
-    await rawDelete;
+    gate.resolve();
+    await rawTombstone;
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(await readMemory(testCase.agentId, testCase.memoryId), null);
+    assert.equal((await readMemory(testCase.agentId, testCase.memoryId)).status, "deleted");
     const logs = readDestructiveOps(testCase.workspaceDir);
-    assert.equal(logs.length, 1, "the late committed ID delete must retain exactly one audit record");
+    assert.equal(logs.length, 1, "the late committed ID tombstone must retain exactly one audit record");
     assert.equal(logs[0].source, "memory_forget");
     assert.equal(logs[0].via, "id");
     assert.equal(logs[0].memoryId, testCase.memoryId);
-    assert.match(logs[0].idempotencyKey, /^sha256:/);
+    assert.equal(logs[0].result, "committed");
+    assert.ok(logs[0].tombstoneId);
   });
 
-  it("logs a query delete exactly once when its timed-out mutation commits late", async (t) => {
+  it("logs a query tombstone exactly once when its timed-out mutation commits late", async (t) => {
     const testCase = await createCase();
-    const deleteGate = deferred();
-    const deleteStarted = deferred();
-    let rawDelete;
+    const gate = deferred();
+    const started = deferred();
+    let rawTombstone;
 
-    MemoryDB.prototype.delete = function timedOutQueryDelete(id) {
-      if (id !== testCase.memoryId) return originalDelete.call(this, id);
-      rawDelete = (async () => {
-        deleteStarted.resolve();
-        await deleteGate.promise;
-        return originalDelete.call(this, id);
+    MemoryDB.prototype.tombstone = function timedOutQueryTombstone(id) {
+      if (id !== testCase.memoryId) return originalTombstone.call(this, id);
+      rawTombstone = (async () => {
+        started.resolve();
+        await gate.promise;
+        return originalTombstone.call(this, id);
       })();
-      return withTimeout(rawDelete, 20, `MemoryDB.delete:${id}`);
+      return withTimeout(rawTombstone, 20, `MemoryDB.tombstone:${id}`);
     };
     t.after(async () => {
-      deleteGate.resolve();
-      await Promise.allSettled([rawDelete].filter(Boolean));
+      gate.resolve();
+      await Promise.allSettled([rawTombstone].filter(Boolean));
     });
 
     const query = `semantic target query ${sequence}`;
     const execution = testCase.forgetTool.execute("forget-query-late", { query });
-    await deleteStarted.promise;
+    await started.promise;
     const result = await execution;
-    assert.match(result.content[0].text, /Memory forget failed:.*timed out/i);
-    assert.ok(await readMemory(testCase.agentId, testCase.memoryId));
+    assert.match(result.content[0].text, /Memory forget failed.*timed out/i);
+    assert.equal((await readMemory(testCase.agentId, testCase.memoryId)).status, "active");
     assert.equal(readDestructiveOps(testCase.workspaceDir).length, 0);
 
-    deleteGate.resolve();
-    await rawDelete;
+    gate.resolve();
+    await rawTombstone;
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.equal(await readMemory(testCase.agentId, testCase.memoryId), null);
+    assert.equal((await readMemory(testCase.agentId, testCase.memoryId)).status, "deleted");
     const logs = readDestructiveOps(testCase.workspaceDir);
-    assert.equal(logs.length, 1, "the late committed query delete must retain exactly one audit record");
+    assert.equal(logs.length, 1, "the late committed query tombstone must retain exactly one audit record");
     assert.equal(logs[0].source, "memory_forget");
     assert.equal(logs[0].via, "query");
     assert.equal(logs[0].memoryId, testCase.memoryId);
     assert.equal(logs[0].query, query);
-    assert.match(logs[0].idempotencyKey, /^sha256:/);
+    assert.equal(logs[0].result, "committed");
+    assert.ok(logs[0].tombstoneId);
   });
 
-  it("deletes and logs a normal ID request", async () => {
+  it("tombstones and logs a normal ID request", async () => {
     const testCase = await createCase();
 
     const result = await testCase.forgetTool.execute("forget-id-normal", { memoryId: testCase.memoryId });
 
-    assert.match(result.content[0].text, /forgotten \(archived\)/i);
-    assert.equal(await readMemory(testCase.agentId, testCase.memoryId), null);
+    assert.match(result.content[0].text, /forgotten \(tombstoned\)/i);
+    assert.equal((await readMemory(testCase.agentId, testCase.memoryId)).status, "deleted");
     const logs = readDestructiveOps(testCase.workspaceDir);
     assert.equal(logs.length, 1);
     assert.equal(logs[0].via, "id");
-    assert.match(logs[0].idempotencyKey, /^sha256:/);
+    assert.equal(logs[0].result, "committed");
+    assert.ok(logs[0].tombstoneId);
   });
 
-  it("deletes and logs a normal query request", async () => {
+  it("tombstones and logs a normal query request", async () => {
     const testCase = await createCase();
     const query = `normal semantic query ${sequence}`;
 
     const result = await testCase.forgetTool.execute("forget-query-normal", { query });
 
     assert.match(result.content[0].text, /Forgotten:/);
-    assert.equal(await readMemory(testCase.agentId, testCase.memoryId), null);
+    assert.equal((await readMemory(testCase.agentId, testCase.memoryId)).status, "deleted");
     const logs = readDestructiveOps(testCase.workspaceDir);
     assert.equal(logs.length, 1);
     assert.equal(logs[0].via, "query");
     assert.equal(logs[0].query, query);
-    assert.match(logs[0].idempotencyKey, /^sha256:/);
+    assert.equal(logs[0].result, "committed");
+    assert.ok(logs[0].tombstoneId);
+  });
+
+  it("Late-Settlement mit Audit-Fehler erzeugt kein falsches Commit-Audit und wird bei Wiederholung nachgetragen", async (t) => {
+    const gate = deferred();
+    const started = deferred();
+    let rawTombstone;
+
+    const { agentId, workspaceDir, memoryId } = await createCase();
+
+    // Audit-Pfad blockieren: destructive-ops.jsonl als VERZEICHNIS anlegen.
+    const { mkdirSync, rmSync } = await import("node:fs");
+    mkdirSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true });
+
+    MemoryDB.prototype.tombstone = function timedOutIdTombstone(id) {
+      if (id !== memoryId) return originalTombstone.call(this, id);
+      rawTombstone = (async () => {
+        started.resolve();
+        await gate.promise;
+        return originalTombstone.call(this, id);
+      })();
+      return withTimeout(rawTombstone, 20, `MemoryDB.tombstone:${id}`);
+    };
+    t.after(async () => {
+      gate.resolve();
+      await Promise.allSettled([rawTombstone].filter(Boolean));
+    });
+
+    const execution = (await api._toolFactory({ agentId, workspaceDir }))
+      .find((tool) => tool.name === "memory_forget")
+      .execute("forget-id-late-audit", { memoryId });
+    await started.promise;
+    const result = await execution;
+    assert.match(result.content[0].text, /Memory forget failed.*timed out/i);
+
+    gate.resolve();
+    await rawTombstone;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Mutation ist durch, aber das Late-Settlement musste wegen Audit-Fehler
+    // abgelehnt werden: KEIN falsches Commit-Audit (Pfad ist weiterhin das
+    // blockierende Verzeichnis).
+    const auditPath = join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl");
+    if (existsSync(auditPath)) {
+      const { statSync } = await import("node:fs");
+      assert.ok(statSync(auditPath).isDirectory(), "kein falsches Commit-Audit (Pfad bleibt blockiert)");
+    }
+
+    // Pfad freigeben → Wiederholung trägt das Audit nach.
+    MemoryDB.prototype.tombstone = originalTombstone;
+    rmSync(join(workspaceDir, ".adaptive-learning", "destructive-ops.jsonl"), { recursive: true, force: true });
+    const second = await (await api._toolFactory({ agentId, workspaceDir }))
+      .find((tool) => tool.name === "memory_forget")
+      .execute("forget-id-repeat", { memoryId });
+    assert.match(second.content[0].text, /forgotten/i);
+    assert.ok(existsSync(auditPath), "Audit muss nach Wiederholung existieren");
+    const events = readFileSync(auditPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(events.some((e) => e.memoryId === memoryId && (e.result === "committed" || e.result === "already_tombstoned")));
   });
 });

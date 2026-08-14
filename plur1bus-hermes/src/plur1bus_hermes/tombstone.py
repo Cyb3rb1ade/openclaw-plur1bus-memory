@@ -10,10 +10,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
+import os
 import re
 import uuid
+from collections import OrderedDict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+
+import fcntl
 
 TOMBSTONE_SCHEMA_VERSION = 1
 
@@ -105,12 +111,39 @@ def _registry_file(base_dir: Path, agent_id: str) -> Path:
     return tombstone_registry_dir(base_dir) / f"{safe_agent_id(agent_id)}.jsonl"
 
 
+@contextmanager
+def _registry_lock(lock_path: Path):
+    """Hold the per-agent registry lock across repair and append operations."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _quarantine_file(registry_file: Path) -> Path:
+    """Return the non-JSONL quarantine path for an interrupted append."""
+    return registry_file.with_suffix(".corrupt.log")
+
+
+def _invalidate_registry_cache(registry_file: Path) -> None:
+    _registry_cache.pop(str(registry_file), None)
+
+
 def append_tombstone_to_registry(base_dir: Path, agent_id: str, tombstone: dict[str, Any]) -> Path:
     directory = tombstone_registry_dir(base_dir)
     directory.mkdir(parents=True, exist_ok=True)
     file = _registry_file(base_dir, agent_id)
-    with file.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(tombstone, ensure_ascii=True, sort_keys=True, default=str) + "\n")
+    with _registry_lock(file.with_name(file.name + ".lock")):
+        if file.exists():
+            _repair_torn_tail_locked(file, agent_id)
+        with file.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(tombstone, ensure_ascii=True, sort_keys=True, default=str) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _invalidate_registry_cache(file)
     return file
 
 
@@ -118,8 +151,13 @@ class TombstoneRegistryReadError(Exception):
     """Registry konnte nicht (sicher) gelesen werden — Capture/Restore blockieren."""
 
 
-def read_tombstones_from_registry(base_dir: Path, agent_id: str) -> list[dict[str, Any]]:
-    result = read_tombstone_registry(base_dir, agent_id)
+def read_tombstones_from_registry(
+    base_dir: Path,
+    agent_id: str,
+    *,
+    repair_torn_tail: bool = True,
+) -> list[dict[str, Any]]:
+    result = read_tombstone_registry(base_dir, agent_id, repair_torn_tail=repair_torn_tail)
     if not result["ok"]:
         raise TombstoneRegistryReadError(result["readError"])
     if result["corruptLines"] > 0:
@@ -127,35 +165,161 @@ def read_tombstones_from_registry(base_dir: Path, agent_id: str) -> list[dict[st
     return result["tombstones"]
 
 
-def read_tombstone_registry(base_dir: Path, agent_id: str) -> dict[str, Any]:
-    """Strukturiertes Lesen: unterscheidet leer/ok, Lesefehler, beschädigte Zeilen."""
+def read_tombstone_registry(
+    base_dir: Path,
+    agent_id: str,
+    *,
+    repair_torn_tail: bool = True,
+) -> dict[str, Any]:
+    """Read safely, quarantining only a genuinely incomplete final JSONL line."""
     file = _registry_file(base_dir, agent_id)
     if not file.exists():
         return {"ok": True, "tombstones": [], "corruptLines": 0, "readError": None}
     try:
-        text = file.read_text(encoding="utf-8")
+        classified = _classify_registry_cached(file, agent_id)
     except OSError as error:
         return {"ok": False, "tombstones": [], "corruptLines": 0, "readError": str(error)}
+    if classified["tornTail"] is None:
+        return _registry_result(classified)
+    if not repair_torn_tail:
+        return {
+            "ok": True,
+            "tombstones": copy.deepcopy(classified["tombstones"]),
+            "corruptLines": classified["corruptLines"] + 1,
+            "corruptDetail": {**classified["corruptDetail"], "tornTail": 1},
+            "readError": None,
+        }
+    try:
+        with _registry_lock(file.with_name(file.name + ".lock")):
+            _repair_torn_tail_locked(file, agent_id)
+        repaired = _classify_registry_cached(file, agent_id)
+    except OSError as error:
+        return {
+            "ok": False,
+            "tombstones": [],
+            "corruptLines": 0,
+            "readError": f"torn-tail repair failed: {error}",
+        }
+    if repaired["tornTail"] is not None:
+        return {
+            "ok": False,
+            "tombstones": [],
+            "corruptLines": 0,
+            "readError": "torn-tail persisted after repair",
+        }
+    return _registry_result(repaired)
+
+
+def _registry_result(classified: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "tombstones": copy.deepcopy(classified["tombstones"]),
+        "corruptLines": classified["corruptLines"],
+        "corruptDetail": dict(classified["corruptDetail"]),
+        "readError": None,
+    }
+
+
+def _classify_registry_cached(file: Path, agent_id: str) -> dict[str, Any]:
+    stat = file.stat()
+    key = str(file)
+    cached = _registry_cache.get(key)
+    if cached and cached[:3] == (stat.st_mtime_ns, stat.st_size, agent_id):
+        _registry_cache.move_to_end(key)
+        return cached[3]
+    classified = _classify_registry_text(file.read_text(encoding="utf-8"), agent_id)
+    _registry_cache[key] = (stat.st_mtime_ns, stat.st_size, agent_id, classified)
+    _registry_cache.move_to_end(key)
+    while len(_registry_cache) > _REGISTRY_CACHE_LIMIT:
+        _registry_cache.popitem(last=False)
+    return classified
+
+
+def _classify_registry_text(text: str, agent_id: str) -> dict[str, Any]:
+    """Classify valid rows, corruption, and at most one incomplete tail."""
+    ends_with_newline = text.endswith("\n")
+    lines = text.split("\n")
+    if ends_with_newline:
+        lines.pop()
     tombstones: list[dict[str, Any]] = []
     corrupt_lines = 0
-    for line in text.splitlines():
+    corrupt_detail = {"unparseable": 0, "invalid": 0}
+    torn_tail: dict[str, Any] | None = None
+    for index, line in enumerate(lines):
         if not line.strip():
             continue
+        is_last = index == len(lines) - 1
         try:
             parsed = json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as error:
+            if (
+                is_last
+                and not ends_with_newline
+                and corrupt_lines == 0
+                and _is_incomplete_json_fragment(line, error)
+            ):
+                torn_tail = {
+                    "fragment": line,
+                    "validLength": len(text.encode("utf-8")) - len(line.encode("utf-8")),
+                }
+                continue
             corrupt_lines += 1
+            corrupt_detail["unparseable"] += 1
             continue
         if is_valid_tombstone(parsed, agent_id):
             tombstones.append(parsed)
         else:
             corrupt_lines += 1
-    return {"ok": True, "tombstones": tombstones, "corruptLines": corrupt_lines, "readError": None}
+            corrupt_detail["invalid"] += 1
+    if torn_tail is not None and corrupt_lines > 0:
+        torn_tail = None
+        corrupt_lines += 1
+        corrupt_detail["unparseable"] += 1
+    return {
+        "tombstones": tombstones,
+        "corruptLines": corrupt_lines,
+        "corruptDetail": corrupt_detail,
+        "tornTail": torn_tail,
+    }
+
+
+def _is_incomplete_json_fragment(line: str, error: json.JSONDecodeError) -> bool:
+    """Recognize a truncated JSON value, not an arbitrary corrupt tail."""
+    content = line.rstrip()
+    if not content:
+        return False
+    if "Unterminated string" in error.msg:
+        return True
+    return error.pos >= len(content)
+
+
+def _repair_torn_tail_locked(file: Path, agent_id: str) -> bool:
+    """Quarantine a torn tail and truncate the registry while holding its lock."""
+    classified = _classify_registry_text(file.read_text(encoding="utf-8"), agent_id)
+    torn_tail = classified["tornTail"]
+    if torn_tail is None:
+        return False
+    quarantine = _quarantine_file(file)
+    fragment = str(torn_tail["fragment"])
+    existing = quarantine.read_text(encoding="utf-8") if quarantine.exists() else ""
+    if not existing.endswith(fragment + "\n"):
+        with quarantine.open("a", encoding="utf-8") as handle:
+            handle.write(fragment + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    with file.open("r+b") as handle:
+        handle.truncate(int(torn_tail["validLength"]))
+        handle.flush()
+        os.fsync(handle.fileno())
+    _invalidate_registry_cache(file)
+    return True
 
 
 _VALID_SCOPES = {"agent-private", "workspace", "user"}
 _VALID_STATUSES = {"attempted", "committed", "failed"}
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+_REGISTRY_CACHE_LIMIT = 50
+_registry_cache: OrderedDict[str, tuple[int, int, str, dict[str, Any]]] = OrderedDict()
 
 
 def is_valid_tombstone(parsed: Any, expected_agent_id: str | None = None) -> bool:

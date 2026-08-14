@@ -700,6 +700,18 @@ class Plur1busRuntime:
         return True
 
     def correct_async(self, memory_id: str, replacement: str, session_id: str) -> bool:
+        card_id = safe_memory_id(memory_id)
+        table, _ = self._table(create=False)
+        if table is None:
+            return False
+        rows = table.search().where(
+            f"id = '{card_id}' AND agentId = '{self.agent_id}' AND scopeKey = '{self.scope_key}'"
+        ).limit(1).to_list()
+        # Same lifecycle guard as OpenClaw correctCard(): a confirmation may
+        # outlive /forget, so never turn an already deleted row into a new
+        # active replacement.
+        if not rows or str(rows[0].get("status") or "") == "deleted":
+            return False
         if not self.forget(memory_id):
             return False
         self.remember_async(replacement, session_id, source_role="correction")

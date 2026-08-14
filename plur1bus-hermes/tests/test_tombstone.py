@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from plur1bus_hermes.legacy_assets import normalize_legacy_status
 from plur1bus_hermes.tombstone import (
@@ -13,11 +15,14 @@ from plur1bus_hermes.tombstone import (
     content_fingerprint,
     find_blocking_tombstone_for_capture,
     find_tombstone_by_fingerprint,
+    read_tombstone_registry,
     read_tombstones_from_registry,
+    tombstone_registry_dir,
     tombstone_blocks_capture,
 )
 
 UUID_A = "a4563cc9-7611-4528-992a-075f8889a018"
+UUID_B = "b4563cc9-7611-4528-992a-075f8889a019"
 
 
 class TombstoneContractTests(unittest.TestCase):
@@ -80,6 +85,153 @@ class TombstoneContractTests(unittest.TestCase):
 
     def test_fingerprint_normalizes(self) -> None:
         self.assertEqual(content_fingerprint("  Hallo   WELT "), content_fingerprint("hallo welt"))
+
+    def test_incomplete_final_json_fragment_is_quarantined_and_tolerated(self) -> None:
+        tombstone = build_tombstone(
+            card={"id": UUID_A, "content": "stable", "scope": "agent-private"},
+            agent_id="agent-a",
+        )
+        registry = tombstone_registry_dir(self.base) / "agent-a.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(
+            json.dumps({**tombstone, "status": "committed"}, sort_keys=True) + "\n{\"schemaVersion\":",
+            encoding="utf-8",
+        )
+
+        result = read_tombstone_registry(self.base, "agent-a")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["corruptLines"], 0)
+        self.assertEqual(len(result["tombstones"]), 1)
+        quarantine = registry.with_suffix(".corrupt.log")
+        self.assertTrue(quarantine.is_file())
+        self.assertEqual(registry.read_text(encoding="utf-8").count("\n"), 1)
+
+        # A second read is idempotent and does not duplicate the quarantine.
+        first_quarantine = quarantine.read_text(encoding="utf-8")
+        second = read_tombstone_registry(self.base, "agent-a")
+        self.assertEqual(second["corruptLines"], 0)
+        self.assertEqual(quarantine.read_text(encoding="utf-8"), first_quarantine)
+
+    def test_read_only_mode_reports_torn_tail_without_modifying_files(self) -> None:
+        tombstone = build_tombstone(
+            card={"id": UUID_A, "content": "survivor", "scope": "agent-private"},
+            agent_id="agent-a",
+        )
+        registry = tombstone_registry_dir(self.base) / "agent-a.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        original = (
+            json.dumps({**tombstone, "status": "committed"}, sort_keys=True)
+            + "\n{\"schemaVersion\":"
+        )
+        registry.write_text(original, encoding="utf-8")
+
+        result = read_tombstone_registry(
+            self.base,
+            "agent-a",
+            repair_torn_tail=False,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["corruptLines"], 1)
+        self.assertEqual(result["corruptDetail"]["tornTail"], 1)
+        self.assertEqual([item["memoryId"] for item in result["tombstones"]], [UUID_A])
+        self.assertEqual(registry.read_text(encoding="utf-8"), original)
+        self.assertFalse(registry.with_suffix(".corrupt.log").exists())
+
+    def test_append_repairs_torn_tail_and_preserves_survivor_and_new_tombstone(self) -> None:
+        survivor = build_tombstone(
+            card={"id": UUID_A, "content": "survivor", "scope": "agent-private"},
+            agent_id="agent-a",
+        )
+        incoming = build_tombstone(
+            card={"id": UUID_B, "content": "incoming", "scope": "agent-private"},
+            agent_id="agent-a",
+        )
+        registry = tombstone_registry_dir(self.base) / "agent-a.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        fragment = '{"schemaVersion":'
+        registry.write_text(
+            json.dumps({**survivor, "status": "committed"}, sort_keys=True)
+            + "\n"
+            + fragment,
+            encoding="utf-8",
+        )
+
+        append_tombstone_to_registry(
+            self.base,
+            "agent-a",
+            {**incoming, "status": "committed"},
+        )
+
+        rows = read_tombstones_from_registry(self.base, "agent-a")
+        self.assertEqual([row["memoryId"] for row in rows], [UUID_A, UUID_B])
+        self.assertEqual(
+            registry.with_suffix(".corrupt.log").read_text(encoding="utf-8"),
+            fragment + "\n",
+        )
+
+    def test_quarantine_write_failure_is_fail_closed_and_does_not_truncate(self) -> None:
+        tombstone = build_tombstone(
+            card={"id": UUID_A, "content": "survivor", "scope": "agent-private"},
+            agent_id="agent-a",
+        )
+        registry = tombstone_registry_dir(self.base) / "agent-a.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        original = (
+            json.dumps({**tombstone, "status": "committed"}, sort_keys=True)
+            + "\n{\"schemaVersion\":"
+        )
+        registry.write_text(original, encoding="utf-8")
+        impossible_quarantine = self.base / "missing-parent" / "agent-a.corrupt.log"
+
+        with patch(
+            "plur1bus_hermes.tombstone._quarantine_file",
+            return_value=impossible_quarantine,
+        ):
+            result = read_tombstone_registry(self.base, "agent-a")
+
+        self.assertFalse(result["ok"])
+        self.assertIn("torn-tail repair failed", str(result["readError"]))
+        self.assertEqual(registry.read_text(encoding="utf-8"), original)
+
+    def test_middle_or_terminated_corruption_remains_fail_closed(self) -> None:
+        tombstone = build_tombstone(
+            card={"id": UUID_A, "content": "stable", "scope": "agent-private"},
+            agent_id="agent-a",
+        )
+        registry = tombstone_registry_dir(self.base) / "agent-a.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        valid = json.dumps({**tombstone, "status": "committed"}, sort_keys=True)
+        registry.write_text("NOT JSON\n" + valid + "\n", encoding="utf-8")
+        result = read_tombstone_registry(self.base, "agent-a")
+        self.assertEqual(result["corruptLines"], 1)
+        with self.assertRaises(Exception):
+            read_tombstones_from_registry(self.base, "agent-a")
+        self.assertFalse(registry.with_suffix(".corrupt.log").exists())
+
+    def test_complete_semantically_invalid_tail_is_not_tolerated(self) -> None:
+        tombstone = build_tombstone(
+            card={"id": UUID_A, "content": "stable", "scope": "agent-private"},
+            agent_id="agent-a",
+        )
+        registry = tombstone_registry_dir(self.base) / "agent-a.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(
+            json.dumps({**tombstone, "status": "not-a-status"}, sort_keys=True),
+            encoding="utf-8",
+        )
+        result = read_tombstone_registry(self.base, "agent-a")
+        self.assertEqual(result["corruptLines"], 1)
+        self.assertFalse(registry.with_suffix(".corrupt.log").exists())
+
+    def test_arbitrary_malformed_tail_is_not_mistaken_for_a_torn_write(self) -> None:
+        registry = tombstone_registry_dir(self.base) / "agent-a.jsonl"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text("NOT JSON", encoding="utf-8")
+
+        result = read_tombstone_registry(self.base, "agent-a")
+        self.assertEqual(result["corruptLines"], 1)
+        self.assertFalse(registry.with_suffix(".corrupt.log").exists())
 
 
 class LegacyStatusTests(unittest.TestCase):
@@ -150,6 +302,17 @@ class TombstoneRuntimeIntegrationTests(unittest.TestCase):
         active = [r for r in rows if r.get("status") == "active"]
         self.assertEqual(len(active), 0, "identische Neuerfassung muss blockiert werden")
         self.assertEqual(len(rows), 1, "kein neuer Insert bei blockierter Neuerfassung")
+
+    def test_correct_does_not_resurrect_a_deleted_card(self) -> None:
+        content = "Die alte Fassung darf nicht wiederkehren"
+        self.runtime._remember(content, "s1", "user")
+        memory_id = self._rows()[0]["id"]
+        self.assertTrue(self.runtime.forget(memory_id))
+
+        self.assertFalse(self.runtime.correct_async(memory_id, "Eine neue Fassung", "s2"))
+        self.runtime.flush()
+        rows = self._rows()
+        self.assertEqual([row.get("status") for row in rows], ["deleted"])
 
     def test_other_agent_is_not_blocked(self) -> None:
         from plur1bus_hermes.runtime import Plur1busRuntime
