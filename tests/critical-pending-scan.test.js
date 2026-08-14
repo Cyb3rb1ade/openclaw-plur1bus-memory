@@ -92,7 +92,9 @@ describe("B2 findPendingCriticalReviews", () => {
 
     const adapter = createDbAdapter({ basePath: baseDbPath, logger: { info() {}, warn() {} } });
     try {
-      const ctx = { agentId: AGENT, workspaceAliases: { aliases: [] } };
+      // workspaceDir setzen, sonst schreibt logAclViolation sein acl-audit.jsonl
+      // ins aktuelle Verzeichnis — also ins Repo.
+      const ctx = { agentId: AGENT, workspaceDir: baseDbPath, workspaceAliases: { aliases: [] } };
       const ids = (await adapter.findPendingCriticalReviews(AGENT, { ctx })).map((c) => c.id);
       assert.ok(ids.includes(eigeneId), "die eigene Karte muss sichtbar bleiben");
       assert.equal(ids.includes(fremdeId), false, "fremde Critical-Karten dürfen nicht auftauchen");
