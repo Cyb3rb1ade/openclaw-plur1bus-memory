@@ -117,7 +117,7 @@ async function seedMemory(pluginModule, baseDbPath, agentId, overrides = {}) {
     createdAt: Date.now(),
     storedBy: agentId,
     origin: overrides.origin || "dm",
-    trustLevel: overrides.trustLevel || "untrusted",
+    epistemicStatus: overrides.epistemicStatus || "",
     type: overrides.type || "",
     status: "active",
   });
@@ -841,8 +841,8 @@ test("Skill Miner uses its feature-local native default through the command runt
   await seedMemory(pluginModule, baseDbPath, agentId, {
     id: "33333333-3333-4333-8333-333333333333",
     text: "Always verify deployment checks before publishing releases.",
-    origin: "user_confirmation",
-    trustLevel: "validated",
+    origin: "dm",
+    epistemicStatus: "trusted",
   });
   const api = createApi(baseDbPath, {
     merging: { enabled: true, model: "foreign/merging-model" },
