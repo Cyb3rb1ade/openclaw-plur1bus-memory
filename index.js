@@ -7243,8 +7243,10 @@ const plugin = {
             }
             const refMap = assignShortRefs((pending || []).map((c) => c.id));
 
-            // Listenansicht
-            if (!subKey) {
+            // Listenansicht. `list` ist in isSensitiveChatRead bereits
+            // autorisiert und muss denselben Pfad nehmen wie der leere subKey —
+            // sonst landet es im Usage-Zweig.
+            if (!subKey || subKey === "list") {
               const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
               if (!pending || pending.length === 0) {
@@ -7286,12 +7288,12 @@ const plugin = {
 
             if (subKey === "accept") {
               const result = await memoryDbAdapter.markCriticalAccepted(agentId, fullId);
-              if (!result?.ok) return { text: t("critical.failed", { lang, tone }) };
+              if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
               return { text: t("critical.accepted", { lang, tone }) };
             }
             if (subKey === "reject") {
               const result = await memoryDbAdapter.markCriticalRejected(agentId, fullId);
-              if (!result?.ok) return { text: t("critical.failed", { lang, tone }) };
+              if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
               return { text: t("critical.rejected", { lang, tone }) };
             }
             // edit → in den vorhandenen sicheren Korrekturablauf führen.
@@ -8761,7 +8763,9 @@ const plugin = {
                 // (tombstoneMemoryWithAudit trägt fehlendes Audit nach) — kein
                 // früher Return, der die Audit-Recovery umgehen würde.
                 const card = await db.getById(params.memoryId);
-                if (!card) return { content: [{ type: "text", text: `Memory ${params.memoryId} not found.` }] };
+                // Bewusst dieselbe Meldung wie bei ACL-Verweigerung unten: ein
+                // eigener "not found"-Text wäre ein Existenz-Orakel für fremde IDs.
+                if (!card) return { content: [{ type: "text", text: "No matching memory found." }] };
                 if (!cardAllowedForForget(card)) {
                   return { content: [{ type: "text", text: "No matching memory found." }] };
                 }
