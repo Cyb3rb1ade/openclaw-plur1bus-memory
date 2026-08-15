@@ -272,7 +272,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { buildRemPartition, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { buildRemPartitions, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
 import {
@@ -5879,49 +5879,57 @@ const plugin = {
                   { runtimeLlm: sessionRuntime },
                 );
                 const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
-                let remAclPartition;
-                try {
-                  remAclPartition = buildRemPartition(
-                    memoryCtx.userPrincipal
-                      ? { scope: "user", agentId: memoryCtx.agentId, workspaceIdentity: "", ownerUserId: memoryCtx.userPrincipal }
-                      : { scope: "workspace", agentId: memoryCtx.agentId, workspaceIdentity: memoryCtx.workspaceIdentity, ownerUserId: "" },
-                    memoryCtx,
-                  );
-                } catch {
+                // Ein Lauf je ACL-Partition. Vorher wurde ausschließlich `user`
+                // oder `workspace` gebaut — nie `agent-private`. Da
+                // loadCandidateMemories über `sameRemBindings` filtert und das
+                // `a.scope === b.scope` vergleicht, fiel jede agent-private
+                // Zeile heraus; live sind das 100 % der Kandidaten, weshalb der
+                // Job dauerhaft `too_few_memories, count: 0` meldete.
+                //
+                // Mehrere Läufe sind unbedenklich: buildRunKey bindet den
+                // Run-Key an die Partition, die Deduplizierung greift getrennt.
+                const remAclPartitions = buildRemPartitions(memoryCtx);
+                if (remAclPartitions.length === 0) {
                   return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "acl_partition_missing" });
                 }
-                const result = await pool.withDb(internalAgent, async (db) => {
-                  await db.init();
-                  return runRemDream({
-                    db,
-                    patternLlmCfg: commandRoute(remPatternLlmCfg, "rem-pattern-analysis"),
-                    narrativeLlmCfg: commandRoute(dreamNarrativeLlmCfg, "dream-narrative"),
-                    echoLlmCfg: commandRoute(dreamEchoLlmCfg, "dream-echo"),
-                    callLlm,
-                    neoStore: commandStore,
-                    workspaceKey: workspaceKeyFromContext(commandCtx, {
-                      defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-                      rootDir: neoRoot,
-                      runtime: api.runtime,
-                      sessionWorkspaceKeys,
-                      workspaceAliases: neoWorkspaceAliases,
-                    }),
-                    agentId: internalAgent,
-                    requestContext: memoryCtx,
-                    aclPartition: remAclPartition,
-                    logger: api.logger,
-                    maxMemories: isLocalProvider ? 1000 : 5000,
-                    topK: isLocalProvider ? 10 : 20,
-                    narrativeCfg: dreamNarrativeCfg,
-                    embeddings,
-                    workspaceDir: commandCtx?.workspaceDir || null,
-                    temperamentName: resolveTemperamentName(internalAgent),
+                const remRuns = [];
+                for (const remAclPartition of remAclPartitions) {
+                  const partitionResult = await pool.withDb(internalAgent, async (db) => {
+                    await db.init();
+                    return runRemDream({
+                      db,
+                      patternLlmCfg: commandRoute(remPatternLlmCfg, "rem-pattern-analysis"),
+                      narrativeLlmCfg: commandRoute(dreamNarrativeLlmCfg, "dream-narrative"),
+                      echoLlmCfg: commandRoute(dreamEchoLlmCfg, "dream-echo"),
+                      callLlm,
+                      neoStore: commandStore,
+                      workspaceKey: workspaceKeyFromContext(commandCtx, {
+                        defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+                        rootDir: neoRoot,
+                        runtime: api.runtime,
+                        sessionWorkspaceKeys,
+                        workspaceAliases: neoWorkspaceAliases,
+                      }),
+                      agentId: internalAgent,
+                      requestContext: memoryCtx,
+                      aclPartition: remAclPartition,
+                      logger: api.logger,
+                      maxMemories: isLocalProvider ? 1000 : 5000,
+                      topK: isLocalProvider ? 10 : 20,
+                      narrativeCfg: dreamNarrativeCfg,
+                      embeddings,
+                      workspaceDir: commandCtx?.workspaceDir || null,
+                      temperamentName: resolveTemperamentName(internalAgent),
+                    });
                   });
-                });
-                if (result.report && commandCtx.workspaceDir) {
-                  writeRemDreamToVault(result.report, result.trends, commandCtx.workspaceDir);
+                  if (partitionResult.report && commandCtx.workspaceDir) {
+                    writeRemDreamToVault(partitionResult.report, partitionResult.trends, commandCtx.workspaceDir);
+                  }
+                  api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(partitionResult.report || partitionResult)}`);
+                  remRuns.push({ scope: remAclPartition.scope, result: partitionResult });
                 }
-                api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}]: ${JSON.stringify(result.report || result)}`);
+                // Der erste Lauf mit Report gewinnt für die Antwort; sonst der erste.
+                const result = (remRuns.find((run) => run.result?.report) || remRuns[0]).result;
                 const semanticCfg = obsidianBridgeCfg?.graphLinks?.semanticDiscovery;
                 if (semanticCfg?.enabled && commandCtx.workspaceDir) {
                   const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
@@ -5936,7 +5944,11 @@ const plugin = {
                     .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
                     .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
                 }
-                return formatJsonCommandResult({ job: "rem-dream", ...(result.report || result) });
+                return formatJsonCommandResult({
+                  job: "rem-dream",
+                  partitions: remRuns.map((run) => ({ scope: run.scope, skipped: run.result?.skipped ?? false })),
+                  ...(result.report || result),
+                });
               }
               if (subKey === "skill-miner") {
                 if (!skillMinerEnabled || !skillMinerLlmCfg) {
