@@ -7,6 +7,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.3.3] — 2026-08-15
+
+### Behoben
+
+- Der Garbage Collector ist überhaupt erst auslösbar. `gc-run` stand als einziger
+  interner Job in keiner einzigen Cron-Deklaration — weder im Installer noch live —
+  und lief deshalb nie von selbst. Er ist jetzt als achter Feature-Cron aufgenommen
+  (täglich 04:45 Europe/Berlin, nach `consolidate-daily`, das seine Kandidaten erzeugt).
+  Ein Lauf genügt: `runGcJob` iteriert selbst über alle Agent-Datenbanken.
+- Die GC-Policy ist konfigurierbar. `runGcJob` liest `maxDbSizeMb`, `maxMemoryCount` und
+  `minMemoryStrength` und meldet ohne mindestens einen davon `no_policy` — das Manifest-Schema
+  kannte aber nur `enabled` und ist `additionalProperties: false`. Die Policy war damit
+  unerreichbar, der GC konnte strukturell nie etwas archivieren. Alle drei Felder sind jetzt
+  im Schema deklariert, mit Unter- bzw. Obergrenzen.
+- Der GC-Cron wird nur provisioniert, wenn `gc` ausdrücklich eingeschaltet ist — ohne Policy
+  entstünde sonst genau der Leerlauf-Job, den diese Serie beseitigt hat.
+
 ## [7.3.2] — 2026-08-15
 
 ### Behoben

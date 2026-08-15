@@ -31,6 +31,7 @@ describe("REQUIRED_FEATURE_CRONS", () => {
         "rem-dream",
         "skill-miner",
         "discover-semantic-links",
+        "gc-run",
       ],
     );
     const personaEvolve = REQUIRED_FEATURE_CRONS.find((s) => s.name.includes("persona-evolve"));
@@ -56,6 +57,37 @@ describe("REQUIRED_FEATURE_CRONS", () => {
     assert.strictEqual(classifier.schedule.kind, "every");
     assert.strictEqual(classifier.schedule.everyMs, 3 * 60 * 60 * 1000);
     assert.strictEqual(classifier.message, classifier.command);
+  });
+
+  // Der GC war als einziger interner Job nie im Plan: `gc-run` steht in der
+  // Liste gültiger Subcommands, aber keine einzige Cron-Deklaration rief ihn
+  // auf — live wie im Installer. Der Collectable-Scan lief damit nie von
+  // selbst.
+  it("declares the garbage collector, which had no scheduled trigger at all", () => {
+    const gc = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "gc-run");
+    assert.ok(gc, "gc-run spec present");
+    assert.strictEqual(gc.command, "/plur1bus internal gc-run");
+    assert.strictEqual(gc.message, gc.command);
+    assert.strictEqual(gc.needsDelivery, false, "GC reports no user-facing result");
+    assert.strictEqual(gc.schedule.kind, "cron");
+    assert.strictEqual(gc.timezone, "Europe/Berlin");
+  });
+
+  // runGcJob iteriert über listAgentIds(baseDbPath) und verarbeitet damit
+  // ohnehin JEDE Agent-Datenbank. Liefe der Job zusätzlich je Agent, würde
+  // derselbe Bestand mehrfach durchgearbeitet.
+  it("schedules the collector after the daily consolidation that creates its candidates", () => {
+    const gc = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "gc-run");
+    const consolidate = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "consolidate-daily");
+    const stunde = (expr) => Number(String(expr).split(/\s+/)[1]);
+    const minute = (expr) => Number(String(expr).split(/\s+/)[0]);
+    const nachher = stunde(gc.schedule.expr) > stunde(consolidate.schedule.expr)
+      || (stunde(gc.schedule.expr) === stunde(consolidate.schedule.expr)
+        && minute(gc.schedule.expr) > minute(consolidate.schedule.expr));
+    assert.ok(
+      nachher,
+      `GC muss nach consolidate-daily laufen — bekam GC '${gc.schedule.expr}' vs. '${consolidate.schedule.expr}'`,
+    );
   });
 });
 
@@ -205,7 +237,7 @@ describe("selectEnabledFeatureCronSpecs", () => {
     );
   });
 
-  it("selects all seven jobs only from their explicit owning gates", () => {
+  it("selects all eight jobs only from their explicit owning gates", () => {
     const selected = selectEnabledFeatureCronSpecs(sourceConfig({
       personaVoice: { enabled: true },
       afterthought: { enabled: true },
@@ -217,8 +249,24 @@ describe("selectEnabledFeatureCronSpecs", () => {
         enabled: true,
         graphLinks: { semanticDiscovery: { enabled: true } },
       },
+      gc: { enabled: true },
     }));
     assert.deepStrictEqual(selected.map((spec) => spec.feature), REQUIRED_FEATURE_CRONS.map((spec) => spec.feature));
+  });
+
+  // Ohne konfigurierte Policy meldet runGcJob nur `no_policy`. Ein Cron dafür
+  // wäre genau der Leerlauf-Job, den diese Serie überall beseitigt hat — also
+  // wird er erst provisioniert, wenn `gc` ausdrücklich eingeschaltet ist.
+  it("provisions the collector only when gc is explicitly enabled", () => {
+    assert.ok(
+      !selectEnabledFeatureCronSpecs(sourceConfig({ dailyConsolidation: { enabled: true } }))
+        .some((spec) => spec.feature === "gc-run"),
+      "ohne gc-Gate darf kein GC-Cron entstehen",
+    );
+    assert.deepStrictEqual(
+      selectEnabledFeatureCronSpecs(sourceConfig({ gc: { enabled: true } })).map((spec) => spec.feature),
+      ["gc-run"],
+    );
   });
 
   it("honors dependency gates and top-level plugin disable", () => {
