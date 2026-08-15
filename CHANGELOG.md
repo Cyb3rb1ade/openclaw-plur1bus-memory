@@ -7,6 +7,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.3.2] — 2026-08-15
+
+### Behoben
+
+- Der Klassifizierer schreibt seinen Default-Typ wieder durabel. `fakt` ist der vom
+  Prompt vorgeschriebene Rückfallwert und wird in `critical-classifier.js` ausdrücklich
+  vor der Deklassierung zu `note` geschützt — er fehlte aber im Enum von `safeType`,
+  wodurch `updateCardType` jede nicht-kritische Klassifikation mit
+  `Invalid type: "fakt"` abwies. Live gemessen auf main (15.08., erster Lauf unter
+  7.3.0): `processed: 5, classified: 0, errors: 5`, und der Cron meldete alle drei
+  Stunden Fehlschlag. Der Defekt lag seit dem 28.05.2026 schlafend, weil
+  `findRecentUnclassified` nie etwas lieferte; der Sentinel-Fix aus 7.3.0 hat ihn
+  freigelegt, nicht verursacht.
+
 ## [7.3.1] — 2026-08-15
 
 - Critical Reviews wählen `type`, `confirmed`, `age` und Pagination korrekt aus.
