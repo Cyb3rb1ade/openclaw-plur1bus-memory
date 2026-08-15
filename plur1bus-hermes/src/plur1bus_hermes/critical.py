@@ -8,6 +8,25 @@ from typing import Any
 from .critical_review import keyword_eligible
 
 
+CRITICAL_TYPES = frozenset({
+    "person",
+    "beziehung",
+    "geburtstag",
+    "geld_konto",
+    "gesundheit",
+    "zugang_passwort",
+})
+
+
+def is_confirmed(value: Any) -> bool:
+    """Return whether a card uses one of the supported confirmed values."""
+    if value is True or value == 1:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1"}
+    return False
+
+
 _CRITICAL_PATTERNS = (
     r"\b(never forget|nie vergessen|unbedingt merken)\b",
     r"\b(emergency|notfall|lebenswichtig|critical|kritisch)\b",

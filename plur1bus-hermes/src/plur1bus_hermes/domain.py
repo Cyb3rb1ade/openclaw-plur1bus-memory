@@ -21,8 +21,13 @@ from .cognition import (
     extract_open_threads,
 )
 from .code_index import query_code_index, rebuild_code_index
-from .critical import classify_critical
-from .critical_review import assign_short_refs, resolve_short_ref
+from .critical import CRITICAL_TYPES, classify_critical, is_confirmed
+from .critical_review import (
+    assign_short_refs,
+    decode_critical_cursor,
+    encode_critical_cursor,
+    resolve_short_ref,
+)
 from .dreaming import build_rem_dream
 from .obsidian_maintenance import generate_obsidian_control_room
 from .mood import MoodEngine
@@ -1046,17 +1051,183 @@ class Plur1busDomain:
             database.create_table("metadata", data=all_rows, mode="overwrite")
         return {"changed": changed}
 
-    def critical_items(self, status: str | None = "pending_review") -> list[dict[str, Any]]:
-        """Return the latest append-only critical review state per memory."""
+    def _memory_rows(self) -> list[dict[str, Any]]:
+        """Read authoritative memory cards without creating a namespace."""
+        try:
+            import lancedb
+            database = lancedb.connect(str(self.data_dir / "lancedb" / self.agent_id))
+            if "memories" not in database.table_names():
+                return []
+            return [dict(row) for row in database.open_table("memories").to_arrow().to_pylist()]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _critical_timestamp(value: Any) -> int | None:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return int(parsed.timestamp() * 1000)
+
+    @staticmethod
+    def _critical_acl_matches(card: Mapping[str, Any], selector: _ScopeSelector) -> bool:
+        """Require the card's explicit binding to agree with the request owner."""
+        if str(card.get("agentId") or "").strip() != selector.agent_id:
+            return False
+        if _row_scope_key(card) != selector.scope_key:
+            return False
+        acl = card.get("aclBindings")
+        if not isinstance(acl, Mapping):
+            # A scope key without its binding is not enough for a review action.
+            return False
+        expected = selector.acl_bindings
+        aliases = {
+            "workspace": "workspaceIdentity",
+            "user": "userId",
+            "chat": "chatId",
+            "key": "scopeKey",
+        }
+        for raw_key, expected_value in expected.items():
+            key = aliases.get(raw_key, raw_key)
+            actual = acl.get(raw_key, acl.get(key))
+            if str(actual or "") != str(expected_value or ""):
+                return False
+        return True
+
+    def _critical_cards(self, selector: _ScopeSelector) -> list[dict[str, Any]]:
+        """Join cards with their transactionally bound metadata projection."""
+        metadata_by_id: dict[str, dict[str, Any]] = {}
+        for row in self._metadata_rows():
+            card_id = str(row.get("id") or "")
+            metadata = self._metadata_json(row)
+            if card_id:
+                metadata_by_id[card_id] = {**metadata, **row}
+        cards: dict[str, dict[str, Any]] = {}
+        for row in self._memory_rows():
+            card_id = str(row.get("id") or "")
+            if not card_id:
+                continue
+            cards[card_id] = {**metadata_by_id.get(card_id, {}), **row}
+            if not isinstance(cards[card_id].get("aclBindings"), Mapping):
+                projected = metadata_by_id.get(card_id, {}).get("aclBindings")
+                if isinstance(projected, Mapping):
+                    cards[card_id]["aclBindings"] = projected
+        for card_id, row in metadata_by_id.items():
+            cards.setdefault(card_id, row)
+        return [
+            card for card in cards.values()
+            if self._critical_acl_matches(card, selector)
+        ]
+
+    def _critical_candidates(
+        self,
+        selector: _ScopeSelector,
+        *,
+        older_than_ms: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Filter cards before applying any output/page limit."""
+        candidates = []
+        for card in self._critical_cards(selector):
+            if str(card.get("type") or "") not in CRITICAL_TYPES:
+                continue
+            if str(card.get("status") or "") != "active":
+                continue
+            if is_confirmed(card.get("confirmed")):
+                continue
+            created_at = self._critical_timestamp(card.get("createdAt"))
+            if older_than_ms is not None and (created_at is None or created_at > older_than_ms):
+                continue
+            card["_criticalSortKey"] = (created_at or 0, str(card.get("id") or ""))
+            candidates.append(card)
+        return sorted(candidates, key=lambda card: card["_criticalSortKey"])
+
+    def critical_review_page(
+        self,
+        *,
+        limit: int = 500,
+        cursor: str | None = None,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+        older_than_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Return a bounded, deterministic page of scope-valid critical cards."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        owner = {
+            "agentId": selector.agent_id,
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
+        }
+        candidates = self._critical_candidates(selector, older_than_ms=older_than_ms)
+        if cursor:
+            after = decode_critical_cursor(cursor, owner)
+            candidates = [item for item in candidates if item["_criticalSortKey"] > after]
+        page_limit = max(1, min(int(limit), 500))
+        page = candidates[:page_limit]
+        refs = assign_short_refs([str(item["id"]) for item in candidates])
+        for item in page:
+            item["shortRef"] = refs[str(item["id"])]
+            item.pop("_criticalSortKey", None)
+        next_cursor = None
+        if len(candidates) > page_limit:
+            last = page[-1]
+            next_cursor = encode_critical_cursor(owner, (self._critical_timestamp(last.get("createdAt")) or 0, str(last["id"])))
+        return {"items": page, "nextCursor": next_cursor, "hasMore": next_cursor is not None}
+
+    def critical_items(
+        self,
+        status: str | None = "pending_review",
+        *,
+        limit: int = 500,
+        cursor: str | None = None,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return pending reviews from cards; other statuses remain audit-only."""
         latest: dict[str, dict[str, Any]] = {}
         for item in self._read_jsonl(self.state_dir / "critical-push.jsonl"):
             memory_id = str(item.get("id") or "")
             if memory_id:
                 latest[memory_id] = item
+        if status == "pending_review":
+            page = self.critical_review_page(
+                limit=limit,
+                cursor=cursor,
+                acl_bindings=aclBindings if aclBindings is not None else acl_bindings,
+                scope_key=scopeKey if scopeKey is not None else scope_key,
+            )
+            ledger = latest
+            return [
+                {
+                    **item,
+                    **({key: ledger[str(item["id"])][key] for key in ("reason", "sourceRole", "contentSuppressed") if key in ledger[str(item["id"])]}),
+                    "status": "pending_review",
+                }
+                for item in page["items"]
+                if not ledger
+                or str(item["id"]) not in ledger
+                or ledger[str(item["id"])].get("status") == "pending_review"
+            ]
         values = list(latest.values())
         if status is not None:
             values = [item for item in values if item.get("status") == status]
-        return values
+        return values[: max(1, min(int(limit), 500))]
 
     def critical_reference_map(self) -> dict[str, str]:
         """Kürzeste eindeutige Kurzreferenz je ausstehender Critical-Review."""
@@ -1208,19 +1379,13 @@ class Plur1busDomain:
 
     def auto_accept_stale_criticals(self, max_age_ms: int = 604_800_000) -> dict[str, Any]:
         """Accept critical proposals left pending beyond the configured age."""
-        now = datetime.now(timezone.utc)
+        cutoff = _now_ms() - max(0, int(max_age_ms))
         accepted = []
-        for item in self.critical_items("pending_review"):
-            try:
-                created = datetime.fromisoformat(str(item.get("createdAt") or ""))
-            except ValueError:
-                continue
-            if created.tzinfo is None:
-                created = created.replace(tzinfo=timezone.utc)
-            if (now - created).total_seconds() * 1000 >= max_age_ms:
-                result = self.review_critical(str(item["id"]), "accept")
-                if result["updated"]:
-                    accepted.append(str(item["id"]))
+        stale = self.critical_review_page(older_than_ms=cutoff)["items"]
+        for item in stale:
+            result = self.review_critical(str(item["id"]), "accept")
+            if result["updated"]:
+                accepted.append(str(item["id"]))
         return {"accepted": accepted, "count": len(accepted)}
 
     def update_reminder(self, memory_id: str, action: str) -> dict[str, Any]:

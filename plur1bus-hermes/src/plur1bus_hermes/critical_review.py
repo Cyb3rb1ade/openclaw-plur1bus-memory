@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import re
 import uuid
+import base64
+import json
 from typing import Any
 
 SHORT_REF_MIN_LEN = 5
+CRITICAL_CURSOR_VERSION = "critical-v1"
 
 # ─── Verständliche Bezeichnungen ────────────────────────────────────────────
 
@@ -278,3 +281,37 @@ def resolve_short_ref(
         for m in matches
     ]
     return {"ok": False, "error": "ambiguous", "suggestions": suggestions}
+
+
+def encode_critical_cursor(owner: dict[str, Any], sort_key: tuple[int, str]) -> str:
+    """Encode a deterministic, owner-bound critical-review cursor."""
+    payload = {
+        "version": CRITICAL_CURSOR_VERSION,
+        "owner": owner,
+        "createdAt": int(sort_key[0]),
+        "id": str(sort_key[1]),
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+    return f"{CRITICAL_CURSOR_VERSION}.{encoded}"
+
+
+def decode_critical_cursor(cursor: str, owner: dict[str, Any]) -> tuple[int, str]:
+    """Decode a cursor and fail closed when it belongs to another owner."""
+    value = str(cursor or "")
+    prefix = f"{CRITICAL_CURSOR_VERSION}."
+    if not value.startswith(prefix):
+        raise ValueError("invalid critical cursor")
+    try:
+        encoded = value[len(prefix):]
+        encoded += "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(encoded.encode()).decode())
+    except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid critical cursor") from error
+    if payload.get("version") != CRITICAL_CURSOR_VERSION or payload.get("owner") != owner:
+        raise ValueError("critical cursor owner mismatch")
+    try:
+        return int(payload["createdAt"]), str(payload["id"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("invalid critical cursor") from error
