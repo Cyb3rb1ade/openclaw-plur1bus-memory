@@ -24,7 +24,6 @@ import {
   contentFingerprint,
   findTombstoneByOriginId,
   appendTombstoneToRegistry,
-  readTombstonesFromRegistry,
   tombstoneRegistryDir,
 } from "../lib/tombstone.js";
 import { safeAgentId, safeUuid } from "../lib/sql-safety.js";
@@ -244,6 +243,11 @@ function main() {
     missingContentDetails: missingContent,
   };
   process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+
+  // Fail-closed wie reapply-tombstones.mjs: beschädigte Quellzeilen oder
+  // Konflikte könnten einen rekonstruierbaren Tombstone verbergen. Ohne
+  // Exit-Code meldete das Skript in einem Gate still Erfolg.
+  return (corruptLines > 0 || conflicted.length > 0) ? 1 : 0;
 }
 
-main();
+process.exitCode = main();
