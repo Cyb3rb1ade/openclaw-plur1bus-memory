@@ -47,8 +47,17 @@ def run_jobs(
     mode: str,
     *,
     runtime_factory: Callable[..., Any] = Plur1busRuntime,
+    acl_bindings: Any = None,
+    scope_key: str | None = None,
+    scope: Any = None,
+    aclBindings: Any = None,
+    scopeKey: str | None = None,
 ) -> dict[str, Any]:
     """Run one agent's maintenance jobs under a non-overlapping file lock."""
+    acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+    scope_key = scopeKey if scopeKey is not None else scope_key
+    if acl_bindings is None and scope is not None:
+        acl_bindings = scope
     agent_id = safe_agent_id(agent_id)
     if mode not in {"hourly", "daily", "all"}:
         raise ValueError("mode must be hourly, daily, or all")
@@ -67,7 +76,13 @@ def run_jobs(
     os.close(lock_fd)
     runtime = None
     try:
-        runtime = runtime_factory(Path(data_dir), config, agent_id, {"agent_id": agent_id})
+        runtime_scope = acl_bindings if acl_bindings is not None else scope
+        runtime = runtime_factory(
+            Path(data_dir),
+            config,
+            agent_id,
+            runtime_scope if runtime_scope is not None else {"agent_id": agent_id},
+        )
         table, _ = runtime._table(create=False)
         if table is None:
             report = {
@@ -81,9 +96,19 @@ def run_jobs(
             domain = runtime._domain
             gate = JobRateGate(state_dir / "job-rate-limits.json")
             results: dict[str, Any] = {}
+
+            scope_kwargs = {}
+            if acl_bindings is not None:
+                scope_kwargs["acl_bindings"] = acl_bindings
+            if scope_key is not None:
+                scope_kwargs["scope_key"] = scope_key
+
+            def scoped_call(method: Callable[..., Any], *args: Any) -> Any:
+                return method(*args, **scope_kwargs) if scope_kwargs else method(*args)
+
             if mode in {"hourly", "all"}:
                 results["dynamics"] = gate.run(
-                    "dynamics", 3_600, domain.run_dynamics
+                    "dynamics", 3_600, lambda: scoped_call(domain.run_dynamics)
                 )
                 results["proactiveCheck"] = gate.run(
                     "proactive-check", 1_800, domain.proactive_check
@@ -97,7 +122,7 @@ def run_jobs(
                 results["afterthought"] = gate.run(
                     "afterthought", 1_800, domain.run_afterthought
                 )
-                reminders = domain.due_reminders()
+                reminders = scoped_call(domain.due_reminders)
                 results["reminders"] = {"due": len(reminders)}
                 _atomic_json(state_dir / "pending-reminders.json", {
                     "generatedAt": _utcnow(),
@@ -114,20 +139,20 @@ def run_jobs(
                     domain.auto_accept_stale_criticals,
                 )
                 results["consolidation"] = gate.run(
-                    "consolidation", 86_400, lambda: domain.run_consolidation(table)
+                    "consolidation", 86_400, lambda: scoped_call(domain.run_consolidation, table)
                 )
                 if (config.get("gc") or {}).get("enabled") is True:
                     results["gc"] = gate.run(
-                        "gc", 86_400, lambda: domain.run_gc(table)
+                        "gc", 86_400, lambda: scoped_call(domain.run_gc, table)
                     )
                 results["dreaming"] = gate.run(
-                    "rem-dream", 604_800, lambda: domain.run_dreaming(table)
+                    "rem-dream", 604_800, lambda: scoped_call(domain.run_dreaming, table)
                 )
                 results["indexes"] = gate.run(
-                    "indexes", 86_400, lambda: domain.rebuild_indexes(table)
+                    "indexes", 86_400, lambda: scoped_call(domain.rebuild_indexes, table)
                 )
                 results["obsidian"] = gate.run(
-                    "obsidian", 86_400, domain.maintain_obsidian
+                    "obsidian", 86_400, lambda: scoped_call(domain.maintain_obsidian)
                 )
                 results["codeIndex"] = gate.run(
                     "code-index", 86_400, domain.rebuild_code_index

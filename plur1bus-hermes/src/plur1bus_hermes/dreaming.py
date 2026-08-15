@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
 from .cognition import contradiction_score
+from .namespaces import (
+    ScopeBinding,
+    binding_from_scope,
+    canonical_scope_binding,
+    legacy_agent_private_scope_key,
+)
 
 
 def _utcnow() -> str:
@@ -22,19 +29,113 @@ def _tokens(text: str) -> set[str]:
     }
 
 
+def _selector(
+    agent_id: str,
+    *,
+    acl_bindings: Any = None,
+    scope_key: str | None = None,
+) -> tuple[str, str, dict[str, str]]:
+    """Resolve the exact REM input binding, retaining the private legacy path."""
+    binding: ScopeBinding | None = None
+    if acl_bindings is not None:
+        if isinstance(acl_bindings, ScopeBinding):
+            binding = acl_bindings
+        elif isinstance(acl_bindings, Mapping):
+            provided_agent = str(acl_bindings.get("agentId") or agent_id).strip()
+            if provided_agent != agent_id:
+                raise ValueError("ACL binding agent does not match dream agent")
+            direct_key = str(acl_bindings.get("scopeKey") or "").strip()
+            scope_type = str(
+                acl_bindings.get("scopeType")
+                or acl_bindings.get("scope_type")
+                or acl_bindings.get("scope")
+                or ""
+            ).strip()
+            if direct_key and scope_type not in {"agent-private", "workspace", "user", "chat"}:
+                binding = None
+                resolved_key = direct_key
+                resolved_type = "opaque"
+            else:
+                binding = canonical_scope_binding(
+                    agent_id,
+                    scopeType=scope_type or None,
+                    workspaceIdentity=acl_bindings.get("workspaceIdentity")
+                    or acl_bindings.get("workspace"),
+                    platform=acl_bindings.get("platform"),
+                    userId=acl_bindings.get("userId")
+                    or acl_bindings.get("user")
+                    or acl_bindings.get("ownerUserId"),
+                    chatId=acl_bindings.get("chatId")
+                    or acl_bindings.get("chat")
+                    or acl_bindings.get("chatScope"),
+                    account=acl_bindings.get("account")
+                    or acl_bindings.get("accountId"),
+                )
+                resolved_key = binding.scope_key
+                resolved_type = binding.scope_type
+        else:
+            binding = binding_from_scope(agent_id, acl_bindings)
+            resolved_key = binding.scope_key
+            resolved_type = binding.scope_type
+        if binding is not None:
+            resolved_key = binding.scope_key
+            resolved_type = binding.scope_type
+            normalized = binding.as_dict()
+        else:
+            normalized = {
+                "agentId": agent_id,
+                "scopeKey": resolved_key,
+                "scopeType": resolved_type,
+            }
+        if scope_key is not None and str(scope_key).strip() != resolved_key:
+            raise ValueError("scopeKey does not match ACL binding")
+        return resolved_key, resolved_type, normalized
+    if scope_key is not None:
+        resolved_key = str(scope_key).strip()
+        if not resolved_key:
+            raise ValueError("scopeKey is required")
+        return resolved_key, "opaque", {"agentId": agent_id, "scopeKey": resolved_key, "scopeType": "opaque"}
+    binding = binding_from_scope(agent_id)
+    return binding.scope_key, binding.scope_type, binding.as_dict()
+
+
+def _row_matches(row: Mapping[str, Any], agent_id: str, scope_key: str, scope_type: str) -> bool:
+    row_agent = str(row.get("agentId") or "").strip()
+    if row_agent and row_agent != agent_id:
+        return False
+    row_key = str(row.get("scopeKey") or "").strip()
+    if not row_key and isinstance(row.get("aclBindings"), Mapping):
+        row_key = str(row["aclBindings"].get("scopeKey") or "").strip()
+    if not row_key:
+        return scope_type == "agent-private"
+    return row_key == scope_key or (
+        scope_type == "agent-private" and row_key == legacy_agent_private_scope_key()
+    )
+
+
 def build_rem_dream(
     rows: list[dict[str, Any]],
     agent_id: str,
     *,
     max_associations: int = 8,
+    acl_bindings: Any = None,
+    scope_key: str | None = None,
+    aclBindings: Any = None,
+    scopeKey: str | None = None,
 ) -> dict[str, Any]:
     """Build a transparent REM dream from bounded active-memory associations."""
+    acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+    scope_key = scopeKey if scopeKey is not None else scope_key
+    resolved_key, scope_type, normalized_acl = _selector(
+        agent_id, acl_bindings=acl_bindings, scope_key=scope_key
+    )
     memories = [
         {
             "id": str(row.get("id") or ""),
             "text": str(row.get("content") or "").strip(),
         }
         for row in rows
+        if _row_matches(row, agent_id, resolved_key, scope_type)
         if str(row.get("content") or "").strip()
     ]
     associations = []
@@ -77,6 +178,8 @@ def build_rem_dream(
         "id": str(uuid.uuid4()),
         "type": "rem_dream",
         "agentId": agent_id,
+        "scopeKey": resolved_key,
+        "aclBindings": normalized_acl,
         "createdAt": _utcnow(),
         "phases": ["activation", "association", "synthesis", "integration"],
         "insights": insights,

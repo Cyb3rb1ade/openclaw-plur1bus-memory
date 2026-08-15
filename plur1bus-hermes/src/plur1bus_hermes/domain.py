@@ -8,6 +8,8 @@ import math
 import re
 import threading
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,13 @@ from .critical_review import assign_short_refs, resolve_short_ref
 from .dreaming import build_rem_dream
 from .obsidian_maintenance import generate_obsidian_control_room
 from .mood import MoodEngine
+from .namespaces import (
+    ScopeBinding,
+    binding_from_scope,
+    canonical_scope_binding,
+    legacy_agent_private_scope_key,
+    scope_where_clause,
+)
 from .proactive import ProactiveEngine
 from .speakers import SpeakerMappingStore
 from .shared_pools import SharedPoolStore, SharedPrincipal
@@ -42,6 +51,62 @@ def _now_ms() -> int:
 
 def _normalized_text(value: str) -> str:
     return " ".join(str(value).lower().split())
+
+
+@dataclass(frozen=True)
+class _ScopeSelector:
+    """One exact consumer scope, including the legacy private read path."""
+
+    agent_id: str
+    scope_key: str
+    scope_type: str
+    binding: ScopeBinding | None = None
+
+    @property
+    def acl_bindings(self) -> dict[str, str]:
+        if self.binding is not None:
+            return self.binding.as_dict()
+        return {
+            "agentId": self.agent_id,
+            "scopeKey": self.scope_key,
+            "scopeType": self.scope_type,
+        }
+
+    @property
+    def include_legacy_private(self) -> bool:
+        return self.scope_type == "agent-private"
+
+    def where(self, suffix: str = "") -> str:
+        if self.binding is not None:
+            clause = scope_where_clause(self.binding)
+        else:
+            clause = (
+                f"agentId = '{self.agent_id}' AND "
+                f"scopeKey = '{self.scope_key.replace(chr(39), chr(39) * 2)}'"
+            )
+        return clause + suffix
+
+
+def _row_scope_key(row: Mapping[str, Any]) -> str:
+    direct = str(row.get("scopeKey") or "").strip()
+    if direct:
+        return direct
+    acl = row.get("aclBindings")
+    if isinstance(acl, Mapping):
+        return str(acl.get("scopeKey") or acl.get("key") or "").strip()
+    return ""
+
+
+def _row_matches_scope(row: Mapping[str, Any], selector: _ScopeSelector) -> bool:
+    row_agent = str(row.get("agentId") or "").strip()
+    if row_agent and row_agent != selector.agent_id:
+        return False
+    row_scope_key = _row_scope_key(row)
+    if not row_scope_key:
+        return selector.include_legacy_private
+    if row_scope_key == selector.scope_key:
+        return True
+    return selector.include_legacy_private and row_scope_key == legacy_agent_private_scope_key()
 
 
 class Plur1busDomain:
@@ -68,8 +133,147 @@ class Plur1busDomain:
         self._lock = threading.RLock()
         self._last_recall_ms = 0
 
-    def on_turn(self, user: str, assistant: str, session_id: str) -> None:
+    def _scope_selector(
+        self,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        record: Mapping[str, Any] | None = None,
+    ) -> _ScopeSelector:
+        """Resolve one explicit canonical consumer scope without defaults."""
+        if record is not None and acl_bindings is None and scope_key is None:
+            record_scope_key = _row_scope_key(record)
+            if record_scope_key:
+                record_scope_type = str(
+                    record.get("scopeType")
+                    or record.get("scope_type")
+                    or record.get("scope")
+                    or "agent-private"
+                ).strip()
+                if record_scope_type != "agent-private":
+                    return self._scope_selector(
+                        acl_bindings={
+                            "agentId": record.get("agentId") or self.agent_id,
+                            "scopeType": record_scope_type,
+                            "workspaceIdentity": record.get("workspaceIdentity")
+                            or record.get("workspace"),
+                            "platform": record.get("ownerPlatform")
+                            or record.get("platform"),
+                            "userId": record.get("ownerUser")
+                            or record.get("userId"),
+                            "chatId": record.get("chatScope")
+                            or record.get("chatId"),
+                            "account": record.get("account"),
+                        },
+                        scope_key=record_scope_key,
+                    )
+                return _ScopeSelector(
+                    self.agent_id,
+                    record_scope_key,
+                    str(record.get("scopeType") or "agent-private"),
+                )
+            acl_bindings = record.get("aclBindings")
+
+        binding: ScopeBinding | None = None
+        if acl_bindings is not None:
+            if isinstance(acl_bindings, ScopeBinding):
+                binding = acl_bindings
+            elif isinstance(acl_bindings, Mapping):
+                provided_agent = str(acl_bindings.get("agentId") or self.agent_id).strip()
+                if provided_agent != self.agent_id:
+                    raise ValueError("ACL binding agent does not match domain agent")
+                direct_key = str(
+                    acl_bindings.get("scopeKey") or acl_bindings.get("key") or ""
+                ).strip()
+                scope_type = str(
+                    acl_bindings.get("scopeType")
+                    or acl_bindings.get("scope_type")
+                    or acl_bindings.get("scope")
+                    or ""
+                ).strip()
+                if direct_key and scope_type not in {"agent-private", "workspace", "user", "chat"}:
+                    if scope_key and scope_key != direct_key:
+                        raise ValueError("scopeKey does not match ACL binding")
+                    return _ScopeSelector(self.agent_id, direct_key, "opaque")
+                binding = canonical_scope_binding(
+                    self.agent_id,
+                    scopeType=scope_type or None,
+                    workspaceIdentity=acl_bindings.get("workspaceIdentity")
+                    or acl_bindings.get("workspace")
+                    or acl_bindings.get("workspaceId"),
+                    platform=acl_bindings.get("platform"),
+                    userId=acl_bindings.get("userId")
+                    or acl_bindings.get("user")
+                    or acl_bindings.get("ownerUserId"),
+                    chatId=acl_bindings.get("chatId")
+                    or acl_bindings.get("chat")
+                    or acl_bindings.get("chatScope"),
+                    account=acl_bindings.get("account")
+                    or acl_bindings.get("accountId"),
+                )
+            else:
+                binding = binding_from_scope(self.agent_id, acl_bindings)
+            if binding.agent_id != self.agent_id:
+                raise ValueError("ACL binding agent does not match domain agent")
+            if direct_key and direct_key != binding.scope_key:
+                raise ValueError("ACL binding scopeKey is not canonical")
+            if scope_key and scope_key != binding.scope_key:
+                raise ValueError("scopeKey does not match ACL binding")
+            return _ScopeSelector(self.agent_id, binding.scope_key, binding.scope_type, binding)
+
+        if scope_key is not None:
+            normalized_key = str(scope_key).strip()
+            if not normalized_key:
+                raise ValueError("scopeKey is required")
+            return _ScopeSelector(self.agent_id, normalized_key, "opaque")
+
+        binding = binding_from_scope(self.agent_id)
+        return _ScopeSelector(self.agent_id, binding.scope_key, binding.scope_type, binding)
+
+    def _scope_for_rows(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+    ) -> _ScopeSelector | None:
+        """Infer a single row scope only when every candidate agrees."""
+        if acl_bindings is not None or scope_key is not None:
+            return self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        keys = {_row_scope_key(row) for row in rows if _row_scope_key(row)}
+        if len(keys) > 1:
+            return None
+        return self._scope_selector(scope_key=next(iter(keys))) if keys else self._scope_selector()
+
+    @staticmethod
+    def _filter_rows(rows: list[dict[str, Any]], selector: _ScopeSelector) -> list[dict[str, Any]]:
+        return [row for row in rows if _row_matches_scope(row, selector)]
+
+    def _metadata_rows_for_scope(self, selector: _ScopeSelector) -> list[dict[str, Any]]:
+        """Filter metadata by its embedded binding before any consumer limit."""
+        selected = []
+        for row in self._metadata_rows():
+            metadata = self._metadata_json(row)
+            candidate = metadata if _row_scope_key(metadata) else row
+            if _row_matches_scope(candidate, selector):
+                selected.append(row)
+        return selected
+
+    def on_turn(
+        self,
+        user: str,
+        assistant: str,
+        session_id: str,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> None:
         """Persist a turn journal entry and a compact episodic record."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         now = _utcnow()
         turn_ids = []
         for index, (role, content) in enumerate((("user", user), ("assistant", assistant))):
@@ -83,6 +287,8 @@ class Plur1busDomain:
                 "id": turn_id,
                 "workspaceKey": self.agent_id,
                 "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
                 "sessionId": session_id,
                 "turnIndex": index,
                 "role": role,
@@ -106,6 +312,8 @@ class Plur1busDomain:
                 "id": str(uuid.uuid4()),
                 "workspaceKey": self.agent_id,
                 "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
                 "title": f"Conversation {now[:10]}",
                 "summary": combined[:1000],
                 "startTime": now,
@@ -124,6 +332,8 @@ class Plur1busDomain:
             })
             self._append_jsonl(self.neo_dir / "emotional-state.jsonl", {
                 "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
                 "sessionId": session_id,
                 "createdAt": now,
                 **analysis["emotion"],
@@ -132,18 +342,44 @@ class Plur1busDomain:
                 self._append_jsonl(self.neo_dir / "open-threads.jsonl", {
                     "id": str(uuid.uuid4()),
                     "agentId": self.agent_id,
+                    "scopeKey": selector.scope_key,
+                    "aclBindings": selector.acl_bindings,
                     "sessionId": session_id,
                     "text": thread,
                     "status": "open",
                     "createdAt": now,
                 })
 
-    def on_memory(self, record: dict[str, Any], table: Any) -> None:
+    def on_memory(
+        self,
+        record: dict[str, Any],
+        table: Any,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> None:
         """Materialize metadata, graph edges, critical state, and an Obsidian note."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(
+            acl_bindings=acl_bindings,
+            scope_key=scope_key,
+            record=record,
+        )
+        record = {
+            **record,
+            "scopeKey": selector.scope_key,
+            "scopeType": selector.scope_type,
+            "aclBindings": selector.acl_bindings,
+        }
         analysis = self._analyze_text(str(record.get("content") or ""))
         self._append_jsonl(self.neo_dir / "memory-cognition.jsonl", {
             "id": record["id"],
             "agentId": self.agent_id,
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
             "createdAt": _utcnow(),
             **analysis,
         })
@@ -204,8 +440,23 @@ class Plur1busDomain:
                 "createdAt": _utcnow(),
             })
 
-    def recall_overlay(self, query: str, rows: list[dict[str, Any]]) -> str:
+    def recall_overlay(
+        self,
+        query: str,
+        rows: list[dict[str, Any]],
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> str:
         """Build an additive explainability and continuity block after normal recall."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_for_rows(
+            rows, acl_bindings=acl_bindings, scope_key=scope_key
+        )
+        rows = self._filter_rows(rows, selector) if selector is not None else []
         if not rows:
             return ""
         analysis = analyze_text(query)
@@ -225,15 +476,17 @@ class Plur1busDomain:
             for item in self._read_jsonl(
                 self.neo_dir / "contradiction-disclosure.jsonl"
             )
-            if str(item.get("newMemoryId") or "") in recalled_ids
+            if _row_matches_scope(item, selector)
+            and (str(item.get("newMemoryId") or "") in recalled_ids
             or str(item.get("existingMemoryId") or "") in recalled_ids
+            )
         ][-3:]
         open_threads = []
         if analysis["continuationSignal"] or analysis["question"]:
             latest: dict[str, dict[str, Any]] = {}
             for item in self._read_jsonl(self.neo_dir / "open-threads.jsonl"):
                 thread_id = str(item.get("id") or "")
-                if thread_id:
+                if thread_id and _row_matches_scope(item, selector):
                     latest[thread_id] = item
             open_threads = [
                 str(item.get("text") or "")
@@ -262,8 +515,22 @@ class Plur1busDomain:
             + "\n</memory-meta-cognition>"
         )
 
-    def explain_recall(self, rows: list[dict[str, Any]]) -> str:
+    def explain_recall(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> str:
         """Render a bounded per-result score and provenance explanation."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_for_rows(
+            rows, acl_bindings=acl_bindings, scope_key=scope_key
+        )
+        rows = self._filter_rows(rows, selector) if selector is not None else []
         explanations = []
         for rank, row in enumerate(rows, start=1):
             distance = row.get("_distance")
@@ -304,22 +571,58 @@ class Plur1busDomain:
             + "\n</memory-recall-explain>"
         )
 
-    def boost_recall(self, rows: list[dict[str, Any]], table: Any, limit: int) -> list[dict[str, Any]]:
+    def boost_recall(
+        self,
+        rows: list[dict[str, Any]],
+        table: Any,
+        limit: int,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Append graph, semantic-lens, and reactivation candidates after base recall."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_for_rows(
+            rows, acl_bindings=acl_bindings, scope_key=scope_key
+        )
+        if selector is None:
+            return []
+        rows = self._filter_rows(rows, selector)
         if not rows:
             return rows
         seen = {str(row.get("id") or "") for row in rows}
-        candidate_ids = self._graph_neighbor_ids(seen)
-        candidate_ids.update(self._semantic_lens_ids(seen))
+        candidate_ids = self._graph_neighbor_ids(seen, scope_key=selector.scope_key)
+        candidate_ids.update(self._semantic_lens_ids(seen, scope_key=selector.scope_key))
         now = _now_ms()
         if self._last_recall_ms and now - self._last_recall_ms >= 45 * 60 * 1000:
-            candidate_ids.update(self._reactivation_ids(seen))
+            candidate_ids.update(self._reactivation_ids(seen, scope_key=selector.scope_key))
         self._last_recall_ms = now
-        hydrated = self._hydrate_ids(table, candidate_ids - seen, max(0, limit - len(rows)))
+        hydrated = self._hydrate_ids(
+            table,
+            candidate_ids - seen,
+            max(0, limit - len(rows)),
+            scope_key=selector.scope_key,
+        )
         return rows + hydrated
 
-    def record_feedback(self, memory_id: str, feedback: str, query: str = "") -> dict[str, Any]:
+    def record_feedback(
+        self,
+        memory_id: str,
+        feedback: str,
+        query: str = "",
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Record useful, irrelevant, or incorrect feedback for later dynamics jobs."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         card_id = safe_memory_id(memory_id)
         normalized = str(feedback).strip().lower()
         if normalized not in {"useful", "irrelevant", "incorrect"}:
@@ -328,6 +631,8 @@ class Plur1busDomain:
             "id": str(uuid.uuid4()),
             "agentId": self.agent_id,
             "memoryId": card_id,
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
             "feedback": normalized,
             "queryHash": hashlib.sha256(query.encode("utf-8")).hexdigest() if query else "",
             "createdAt": _utcnow(),
@@ -342,10 +647,20 @@ class Plur1busDomain:
         *,
         principal: SharedPrincipal | None = None,
         user_scope: bool = False,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
     ) -> dict[str, Any]:
         """Publish an explicit card copy to the local shared-memory pool."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         card_id = safe_memory_id(memory_id)
-        rows = table.search().where(f"id = '{card_id}' AND status = 'active'").limit(1).to_list()
+        rows = table.search().where(
+            f"id = '{card_id}' AND {selector.where()} AND status = 'active'"
+        ).limit(1).to_list()
+        rows = self._filter_rows(rows, selector)
         if not rows:
             raise ValueError("memory not found or inactive")
         card = rows[0]
@@ -359,11 +674,22 @@ class Plur1busDomain:
             user_scope=user_scope,
         )
 
-    def due_reminders(self, now_ms: int | None = None) -> list[dict[str, Any]]:
+    def due_reminders(
+        self,
+        now_ms: int | None = None,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Return active reminder cards whose due timestamp has passed."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         now = now_ms or _now_ms()
         due = []
-        for row in self._metadata_rows():
+        for row in self._metadata_rows_for_scope(selector):
             metadata = self._metadata_json(row)
             remind_at = int(metadata.get("remindAt") or 0)
             status = str(metadata.get("reminderStatus") or "")
@@ -406,9 +732,24 @@ class Plur1busDomain:
             hashes[candidate["path"]] = candidate["sha256"]
         self._write_json(state_path, {"updatedAt": _utcnow(), "hashes": hashes})
 
-    def rebuild_indexes(self, table: Any) -> dict[str, Any]:
+    def rebuild_indexes(
+        self,
+        table: Any,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Rebuild model-independent graph link and semantic-lens indexes."""
-        edges = self._read_jsonl(self.neo_dir / "memory-graph.jsonl")
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        edges = [
+            edge
+            for edge in self._read_jsonl(self.neo_dir / "memory-graph.jsonl")
+            if _row_matches_scope(edge, selector)
+        ]
         adjacency: dict[str, set[str]] = {}
         for edge in edges:
             source = str(edge.get("source") or "")
@@ -442,12 +783,16 @@ class Plur1busDomain:
             "version": 1,
             "generatedAt": _utcnow(),
             "workspaceId": self.agent_id,
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
             "memoryToCommunity": memory_to_community,
             "communities": communities,
         })
         self._write_json(index_dir / "link-index.json", {
             "version": "1",
             "generatedAt": _utcnow(),
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
             "entries": {
                 memory_id: {"links": sorted(neighbors)}
                 for memory_id, neighbors in adjacency.items()
@@ -469,10 +814,30 @@ class Plur1busDomain:
         self._write_json(self.state_dir / "index-rebuild.json", result)
         return result
 
-    def run_dreaming(self, table: Any, max_memories: int = 12) -> dict[str, Any]:
+    def run_dreaming(
+        self,
+        table: Any,
+        max_memories: int = 12,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Create a bounded, non-destructive REM dream from active memories."""
-        rows = table.search().where("status = 'active'").limit(max_memories).to_list()
-        dream = build_rem_dream(rows, self.agent_id)
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        rows = table.search().where(
+            selector.where(" AND status = 'active'")
+        ).limit(max_memories).to_list()
+        rows = self._filter_rows(rows, selector)[:max_memories]
+        dream = build_rem_dream(
+            rows,
+            self.agent_id,
+            acl_bindings=selector.acl_bindings,
+            scope_key=selector.scope_key,
+        )
         self._append_jsonl(self.neo_dir / "dream-diary.jsonl", dream)
         dreams_path = self.workspace_dir / "DREAMS.md"
         dreams_path.parent.mkdir(parents=True, exist_ok=True)
@@ -483,9 +848,21 @@ class Plur1busDomain:
                 handle.write(f"- {insight}\n")
         return dream
 
-    def run_consolidation(self, table: Any) -> dict[str, Any]:
+    def run_consolidation(
+        self,
+        table: Any,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Generate a non-destructive duplicate and dynamics maintenance report."""
-        rows = table.search().limit(100000).to_list()
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        rows = table.search().where(selector.where()).limit(100000).to_list()
+        rows = self._filter_rows(rows, selector)
         groups: dict[str, list[str]] = {}
         for row in rows:
             digest = hashlib.sha256(_normalized_text(str(row.get("content") or "")).encode("utf-8")).hexdigest()
@@ -512,6 +889,8 @@ class Plur1busDomain:
         for conflict in self._read_jsonl(
             self.neo_dir / "contradiction-disclosure.jsonl"
         ):
+            if not _row_matches_scope(conflict, selector):
+                continue
             conflict_recommendations.append({
                 "newMemoryId": conflict.get("newMemoryId"),
                 "existingMemoryId": conflict.get("existingMemoryId"),
@@ -530,7 +909,7 @@ class Plur1busDomain:
                 "recommendations": conflict_recommendations,
             },
         )
-        dynamics = self.run_dynamics()
+        dynamics = self.run_dynamics(scope_key=selector.scope_key)
         report = {
             "agentId": self.agent_id,
             "generatedAt": _utcnow(),
@@ -544,21 +923,34 @@ class Plur1busDomain:
         self._write_json(self.state_dir / "consolidation-report.json", report)
         return report
 
-    def run_gc(self, table: Any, now_ms: int | None = None) -> dict[str, Any]:
+    def run_gc(
+        self,
+        table: Any,
+        now_ms: int | None = None,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Archive expired active or superseded cards through a GC-only scan.
 
         Recall and shared/vault paths continue using the active-only predicate;
         this separate predicate is the Hermes equivalent of OpenClaw's
         ``scanCollectable`` and intentionally includes superseded rows.
         """
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         now = now_ms or _now_ms()
         metadata_by_id = {
             str(row.get("id") or ""): self._metadata_json(row)
-            for row in self._metadata_rows()
+            for row in self._metadata_rows_for_scope(selector)
         }
         rows = table.search().where(
-            "status = 'active' OR status = 'superseded'"
+            selector.where(" AND (status = 'active' OR status = 'superseded')")
         ).limit(100000).to_list()
+        rows = self._filter_rows(rows, selector)
         archived = []
         archive_dir = self.data_dir / "archives" / self.agent_id / "gc"
         for row in rows:
@@ -576,7 +968,7 @@ class Plur1busDomain:
                     encoding="utf-8",
                 )
             table.update(
-                where=f"id = '{memory_id}'",
+                where=f"id = '{memory_id}' AND {selector.where()}",
                 values={"status": "archived"},
             )
             self._append_jsonl(
@@ -596,11 +988,23 @@ class Plur1busDomain:
             "hardDeleted": 0,
         }
 
-    def run_dynamics(self) -> dict[str, Any]:
+    def run_dynamics(
+        self,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Decay strength by half-life while applying explicit feedback signals."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         feedback = self._read_jsonl(self.workspace_dir / ".adaptive-learning" / "feedback-log.jsonl")
         adjustments: dict[str, float] = {}
         for item in feedback:
+            if not _row_matches_scope(item, selector):
+                continue
             value = {"useful": 0.1, "irrelevant": -0.1, "incorrect": -0.25}.get(str(item.get("feedback")), 0)
             adjustments[str(item.get("memoryId") or "")] = adjustments.get(str(item.get("memoryId") or ""), 0) + value
         changed = 0
@@ -608,7 +1012,17 @@ class Plur1busDomain:
         table = self._metadata_table()
         if table is None:
             return {"changed": 0}
-        rows = [dict(row) for row in table.to_arrow().to_pylist()]
+        all_rows = [dict(row) for row in table.to_arrow().to_pylist()]
+        rows = [
+            row
+            for row in all_rows
+            if _row_matches_scope(
+                self._metadata_json(row)
+                if _row_scope_key(self._metadata_json(row))
+                else row,
+                selector,
+            )
+        ]
         for row in rows:
             metadata = self._metadata_json(row)
             half_life = max(1, int(metadata.get("halfLifeDays") or 30))
@@ -629,7 +1043,7 @@ class Plur1busDomain:
             import lancedb
 
             database = lancedb.connect(str(self.data_dir / "lancedb" / self.agent_id))
-            database.create_table("metadata", data=rows, mode="overwrite")
+            database.create_table("metadata", data=all_rows, mode="overwrite")
         return {"changed": changed}
 
     def critical_items(self, status: str | None = "pending_review") -> list[dict[str, Any]]:
@@ -721,18 +1135,38 @@ class Plur1busDomain:
         """Persist one agent-local speaker alias mapping."""
         return self._speakers.set_mapping(alias, person)
 
-    def maintain_obsidian(self) -> dict[str, Any]:
+    def maintain_obsidian(
+        self,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Regenerate managed Obsidian dashboards and review views."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         return generate_obsidian_control_room(
             self.workspace_dir,
             self.agent_id,
-            metadata_rows=self._metadata_rows(),
-            episodes=self._read_jsonl(self.neo_dir / "episodes.jsonl"),
-            dreams=self._read_jsonl(self.neo_dir / "dream-diary.jsonl"),
-            contradictions=self._read_jsonl(
-                self.neo_dir / "contradiction-disclosure.jsonl"
-            ),
-            open_threads=self._read_jsonl(self.neo_dir / "open-threads.jsonl"),
+            metadata_rows=self._metadata_rows_for_scope(selector),
+            episodes=[
+                row for row in self._read_jsonl(self.neo_dir / "episodes.jsonl")
+                if _row_matches_scope(row, selector)
+            ],
+            dreams=[
+                row for row in self._read_jsonl(self.neo_dir / "dream-diary.jsonl")
+                if _row_matches_scope(row, selector)
+            ],
+            contradictions=[
+                row for row in self._read_jsonl(self.neo_dir / "contradiction-disclosure.jsonl")
+                if _row_matches_scope(row, selector)
+            ],
+            open_threads=[
+                row for row in self._read_jsonl(self.neo_dir / "open-threads.jsonl")
+                if _row_matches_scope(row, selector)
+            ],
         )
 
     def review_critical(self, memory_id: str, decision: str) -> dict[str, Any]:
@@ -855,7 +1289,9 @@ class Plur1busDomain:
             "summary": content[:500],
             "importance": self._importance(content, str(record.get("sourceRole") or "")),
             "category": "conversation",
-            "scope": "agent-private",
+            "scope": str(record.get("scopeType") or "agent-private"),
+            "scopeKey": str(record.get("scopeKey") or ""),
+            "aclBindings": record.get("aclBindings") or {},
             "type": str(record.get("type") or "observation"),
             "confirmed": str(record.get("sourceRole")) == "user",
             "emotionalDominant": emotion,
@@ -896,8 +1332,12 @@ class Plur1busDomain:
             database.create_table("metadata", data=[row])
 
     def _build_graph_edges(self, record: dict[str, Any], table: Any) -> None:
+        selector = self._scope_selector(record=record)
         try:
-            neighbors = table.search(record["vector"]).where("status = 'active'").limit(4).to_list()
+            neighbors = table.search(record["vector"]).where(
+                selector.where(" AND status = 'active'")
+            ).limit(4).to_list()
+            neighbors = self._filter_rows(neighbors, selector)
         except Exception as error:
             self._append_jsonl(self.state_dir / "domain-errors.jsonl", {
                 "operation": "graph-neighbor-search",
@@ -918,6 +1358,9 @@ class Plur1busDomain:
                 self._append_jsonl(self.neo_dir / "memory-graph.jsonl", {
                     "source": record["id"],
                     "target": target,
+                    "agentId": self.agent_id,
+                    "scopeKey": selector.scope_key,
+                    "aclBindings": selector.acl_bindings,
                     "type": "contradiction",
                     "strength": contradiction,
                     "directed": False,
@@ -930,6 +1373,8 @@ class Plur1busDomain:
                 self._append_jsonl(self.neo_dir / "contradiction-disclosure.jsonl", {
                     "id": str(uuid.uuid4()),
                     "agentId": self.agent_id,
+                    "scopeKey": selector.scope_key,
+                    "aclBindings": selector.acl_bindings,
                     "newMemoryId": record["id"],
                     "existingMemoryId": target,
                     "score": contradiction,
@@ -943,6 +1388,9 @@ class Plur1busDomain:
             self._append_jsonl(self.neo_dir / "memory-graph.jsonl", {
                 "source": record["id"],
                 "target": target,
+                "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
                 "type": "semantic",
                 "strength": strength,
                 "directed": False,
@@ -992,9 +1440,18 @@ class Plur1busDomain:
                 text += "\n" + block + "\n"
             note.write_text(text, encoding="utf-8")
 
-    def _graph_neighbor_ids(self, seeds: set[str]) -> set[str]:
+    def _graph_neighbor_ids(
+        self,
+        seeds: set[str],
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+    ) -> set[str]:
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         neighbors = set()
         for edge in self._read_jsonl(self.neo_dir / "memory-graph.jsonl"):
+            if not _row_matches_scope(edge, selector):
+                continue
             if float(edge.get("strength") or 0) < 0.5:
                 continue
             source, target = str(edge.get("source") or ""), str(edge.get("target") or "")
@@ -1004,8 +1461,21 @@ class Plur1busDomain:
                 neighbors.add(source)
         return neighbors
 
-    def _semantic_lens_ids(self, seeds: set[str]) -> set[str]:
+    def _semantic_lens_ids(
+        self,
+        seeds: set[str],
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+    ) -> set[str]:
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         index = self._read_json(self.workspace_dir / ".plur1bus" / "semantic-lens-index.json")
+        index_scope = str(index.get("scopeKey") or "")
+        if (
+            index_scope not in {selector.scope_key, legacy_agent_private_scope_key()}
+            and not (selector.scope_type == "agent-private" and not index_scope)
+        ):
+            return set()
         memory_to_community = index.get("memoryToCommunity", {})
         communities = index.get("communities", {})
         community_ids = {memory_to_community.get(seed) for seed in seeds if memory_to_community.get(seed)}
@@ -1018,23 +1488,51 @@ class Plur1busDomain:
                     candidates.update(str(value) for value in values)
         return candidates
 
-    def _reactivation_ids(self, seeds: set[str]) -> set[str]:
+    def _reactivation_ids(
+        self,
+        seeds: set[str],
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+    ) -> set[str]:
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         index = self._read_json(self.workspace_dir / ".plur1bus" / "link-index.json")
+        index_scope = str(index.get("scopeKey") or "")
+        if (
+            index_scope not in {selector.scope_key, legacy_agent_private_scope_key()}
+            and not (selector.scope_type == "agent-private" and not index_scope)
+        ):
+            return set()
         entries = index.get("entries", {})
         candidates = set()
         for seed in seeds:
             entry = entries.get(seed, {}) if isinstance(entries, dict) else {}
-            if isinstance(entry, dict):
+            if isinstance(entry, dict) and str(entry.get("scopeKey") or "") in {"", selector.scope_key, legacy_agent_private_scope_key()}:
                 for key in ("links", "targets", "memoryIds"):
                     values = entry.get(key, [])
                     if isinstance(values, list):
-                        candidates.update(str(value) for value in values[:3])
+                        for value in values[:3]:
+                            if isinstance(value, Mapping):
+                                if _row_matches_scope(value, selector):
+                                    candidate = str(value.get("id") or value.get("memoryId") or "")
+                                    if candidate:
+                                        candidates.add(candidate)
+                            else:
+                                candidates.add(str(value))
         return candidates
 
-    @staticmethod
-    def _hydrate_ids(table: Any, ids: set[str], limit: int) -> list[dict[str, Any]]:
+    def _hydrate_ids(
+        self,
+        table: Any,
+        ids: set[str],
+        limit: int,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not ids or limit <= 0:
             return []
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         valid = []
         for value in ids:
             try:
@@ -1045,7 +1543,10 @@ class Plur1busDomain:
             return []
         where = " OR ".join(f"id = '{value}'" for value in valid[:50])
         try:
-            return table.search().where(f"({where}) AND status = 'active'").limit(limit).to_list()
+            rows = table.search().where(
+                f"({where}) AND {selector.where()} AND status = 'active'"
+            ).limit(limit).to_list()
+            return self._filter_rows(rows, selector)[:limit]
         except Exception:
             return []
 
