@@ -8,6 +8,7 @@ Klartext, und blockiert eine gleichlautende Neuerfassung im selben Scope.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import copy
@@ -133,16 +134,49 @@ def build_tombstone(
     deleted_at = deleted_at or _utcnow()
     resolved_scope_key = str(scope_key or card.get("scopeKey") or "")
     resolved_acl = dict(acl_bindings or card.get("aclBindings") or {})
+    scope = str(card.get("scope") or card.get("scopeType") or "agent-private")
     return {
         "schemaVersion": TOMBSTONE_SCHEMA_VERSION,
         "tombstoneId": str(tombstone_id or uuid.uuid4()),
         "memoryId": memory_id,
         "canonicalOriginId": str(card.get("canonicalOriginId") or card.get("id") or memory_id),
         "agentId": agent_id,
-        "scope": str(card.get("scope") or card.get("scopeType") or "agent-private"),
-        "workspaceId": str(card.get("workspaceId") or card.get("workspaceKey") or card.get("workspaceIdentity") or ""),
-        "workspaceKey": str(card.get("workspaceKey") or card.get("workspaceIdentity") or ""),
-        "ownerUserId": str(card.get("ownerUserId") or card.get("ownerUser") or ""),
+        "scope": scope,
+        "workspaceId": str(
+            card.get("workspaceId")
+            or card.get("workspaceKey")
+            or card.get("workspaceIdentity")
+            or resolved_acl.get("workspaceIdentity")
+            or resolved_acl.get("workspace")
+            or ""
+        ),
+        "workspaceKey": str(
+            card.get("workspaceKey")
+            or card.get("workspaceIdentity")
+            or resolved_acl.get("workspaceIdentity")
+            or resolved_acl.get("workspace")
+            or ""
+        ),
+        "ownerPlatform": str(
+            card.get("ownerPlatform")
+            or card.get("platform")
+            or resolved_acl.get("platform")
+            or ""
+        ),
+        "ownerUserId": str(
+            card.get("ownerUserId")
+            or card.get("ownerUser")
+            or resolved_acl.get("userId")
+            or resolved_acl.get("user")
+            or ""
+        ),
+        "chatId": str(
+            card.get("chatId")
+            or card.get("chatScope")
+            or resolved_acl.get("chatId")
+            or resolved_acl.get("chat")
+            or ""
+        ),
         "storedBy": str(card.get("storedBy") or ""),
         "deletedAt": deleted_at,
         "actor": str(actor or ""),
@@ -182,8 +216,43 @@ def tombstone_blocks_capture(tombstone: dict[str, Any], ctx: dict[str, Any]) -> 
             return False
         tomb_user = tombstone.get("ownerUserId") or ""
         ctx_user = ctx.get("ownerUserId") or ctx.get("userPrincipal") or ""
-        return bool(tomb_user) and tomb_user == ctx_user
-    return True
+        tomb_platform = tombstone.get("ownerPlatform") or _acl_value(
+            tombstone, "platform"
+        )
+        ctx_platform = ctx.get("platform") or ""
+        return (
+            bool(tomb_user)
+            and tomb_user == ctx_user
+            and bool(tomb_platform)
+            and tomb_platform == ctx_platform
+        )
+    if scope == "chat":
+        if ctx_scope != "chat":
+            return False
+        tomb_platform = tombstone.get("ownerPlatform") or _acl_value(
+            tombstone, "platform"
+        )
+        tomb_chat = tombstone.get("chatId") or _acl_value(
+            tombstone, "chatId", "chat"
+        )
+        return (
+            bool(tomb_platform)
+            and tomb_platform == str(ctx.get("platform") or "")
+            and bool(tomb_chat)
+            and tomb_chat == str(ctx.get("chatId") or ctx.get("chat") or "")
+        )
+    return False
+
+
+def _acl_value(tombstone: dict[str, Any], *names: str) -> str:
+    acl = tombstone.get("aclBindings")
+    if not isinstance(acl, dict):
+        return ""
+    for name in names:
+        value = acl.get(name)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def tombstone_registry_dir(base_dir: Path) -> Path:
@@ -218,6 +287,8 @@ def _invalidate_registry_cache(registry_file: Path) -> None:
 
 
 def append_tombstone_to_registry(base_dir: Path, agent_id: str, tombstone: dict[str, Any]) -> Path:
+    if not is_valid_tombstone(tombstone, agent_id):
+        raise ValueError("refusing to append an invalid or foreign tombstone")
     directory = tombstone_registry_dir(base_dir)
     directory.mkdir(parents=True, exist_ok=True)
     file = _registry_file(base_dir, agent_id)
@@ -400,7 +471,7 @@ def _repair_torn_tail_locked(file: Path, agent_id: str) -> bool:
     return True
 
 
-_VALID_SCOPES = {"agent-private", "workspace", "user"}
+_VALID_SCOPES = {"agent-private", "workspace", "user", "chat"}
 _VALID_STATUSES = {"attempted", "committed", "failed"}
 _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 _REGISTRY_CACHE_LIMIT = 50
@@ -441,8 +512,25 @@ def is_valid_tombstone(parsed: Any, expected_agent_id: str | None = None) -> boo
         or _non_empty_string(parsed.get("workspaceKey"))
     ):
         return False
-    if scope == "user" and not _non_empty_string(parsed.get("ownerUserId")):
-        return False
+    if scope == "user":
+        if not _non_empty_string(parsed.get("ownerUserId")):
+            return False
+        if not (
+            _non_empty_string(parsed.get("ownerPlatform"))
+            or _non_empty_string(_acl_value(parsed, "platform"))
+        ):
+            return False
+    if scope == "chat":
+        if not (
+            _non_empty_string(parsed.get("ownerPlatform"))
+            or _non_empty_string(_acl_value(parsed, "platform"))
+        ):
+            return False
+        if not (
+            _non_empty_string(parsed.get("chatId"))
+            or _non_empty_string(_acl_value(parsed, "chatId", "chat"))
+        ):
+            return False
     if parsed.get("status") not in _VALID_STATUSES:
         return False
     fingerprint = parsed.get("contentFingerprint")
@@ -545,7 +633,245 @@ def backfill_committed_tombstone(
     return {"alreadyCommitted": False, "tombstone": tombstone}
 
 
+def _archive_card_for_repair(
+    base_dir: Path,
+    agent_id: str,
+    tombstone: dict[str, Any],
+) -> dict[str, Any]:
+    """Load and fully bind one repair archive to its attempted tombstone."""
+    scope_key = str(tombstone.get("scopeKey") or "")
+    memory_id = str(tombstone.get("memoryId") or "")
+    expected = archive_path_for(base_dir, agent_id, scope_key, memory_id)
+    recorded = Path(str(tombstone.get("archivePath") or tombstone.get("archiveRef") or ""))
+    if not recorded.is_absolute() or recorded.resolve(strict=False) != expected.resolve(strict=False):
+        raise ValueError("archive path does not match the canonical agent/scope target")
+    _assert_no_symlink(expected, Path(base_dir).expanduser().resolve())
+    if not expected.is_file():
+        raise ValueError("archive is missing")
+    try:
+        card = json.loads(expected.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"archive is unreadable: {error}") from error
+    if not isinstance(card, dict):
+        raise ValueError("archive payload is not an object")
+    if str(card.get("id") or "") != memory_id:
+        raise ValueError("archive memory id mismatch")
+    if str(card.get("agentId") or "") != agent_id:
+        raise ValueError("archive agent mismatch")
+    if str(card.get("scopeKey") or "") != scope_key:
+        raise ValueError("archive scope mismatch")
+    if content_fingerprint(card.get("content") or card.get("text") or "") != str(
+        tombstone.get("contentFingerprint") or ""
+    ):
+        raise ValueError("archive content fingerprint mismatch")
+    scope = str(tombstone.get("scope") or "")
+    if str(card.get("scopeType") or card.get("scope") or "agent-private") != scope:
+        raise ValueError("archive scope type mismatch")
+    direct_checks = {
+        "workspace": ("workspaceIdentity", tombstone.get("workspaceId") or tombstone.get("workspaceKey")),
+        "user": ("ownerUser", tombstone.get("ownerUserId")),
+        "chat": ("chatScope", tombstone.get("chatId") or _acl_value(tombstone, "chatId", "chat")),
+    }
+    if scope in direct_checks:
+        field, expected_principal = direct_checks[scope]
+        if not expected_principal or str(card.get(field) or "") != str(expected_principal):
+            raise ValueError("archive principal mismatch")
+    if scope in {"user", "chat"}:
+        expected_platform = tombstone.get("ownerPlatform") or _acl_value(
+            tombstone, "platform"
+        )
+        if not expected_platform or str(card.get("ownerPlatform") or "") != str(expected_platform):
+            raise ValueError("archive platform mismatch")
+    return card
+
+
+def _memory_store_paths(base_dir: Path, agent_id: str) -> list[Path]:
+    """Return bounded candidate Hermes memory stores without following symlinks."""
+    from .validation import resolve_inside, safe_agent_id
+
+    root = Path(base_dir).expanduser().resolve()
+    safe_agent = safe_agent_id(agent_id)
+    candidates = [resolve_inside(str(root), "lancedb", safe_agent)]
+    namespaces = root / "lancedb-namespaces"
+    if namespaces.is_dir() and not namespaces.is_symlink():
+        for child in sorted(namespaces.iterdir())[:64]:
+            if not child.is_dir() or child.is_symlink():
+                continue
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", child.name):
+                continue
+            candidates.append(resolve_inside(str(root), "lancedb-namespaces", child.name, safe_agent))
+    return candidates
+
+
+def _lookup_deleted_card(base_dir: Path, agent_id: str, tombstone: dict[str, Any]) -> dict[str, Any] | None:
+    """Find exactly one deleted card matching the attempted tombstone."""
+    try:
+        import lancedb
+    except ImportError as error:  # pragma: no cover - package dependency
+        raise RuntimeError("PLUR1BUS requires lancedb for tombstone repair") from error
+    memory_id = str(tombstone["memoryId"])
+    scope_key = str(tombstone.get("scopeKey") or "")
+    matches: list[dict[str, Any]] = []
+    for store_path in _memory_store_paths(base_dir, agent_id):
+        if not store_path.is_dir():
+            continue
+        database = lancedb.connect(str(store_path))
+        if "memories" not in database.table_names():
+            continue
+        rows = database.open_table("memories").search().where(
+            f"id = '{memory_id}' AND agentId = '{agent_id}' AND scopeKey = '{scope_key}'"
+        ).limit(2).to_list()
+        matches.extend(dict(row) for row in rows)
+    if not matches:
+        return None
+    deleted = [row for row in matches if str(row.get("status") or "") == "deleted"]
+    if len(deleted) != len(matches):
+        raise ValueError("a matching card is still recallable or has changed lifecycle")
+    fingerprints = {
+        content_fingerprint(row.get("content") or row.get("text") or "") for row in deleted
+    }
+    if fingerprints != {str(tombstone.get("contentFingerprint") or "")}:
+        raise ValueError("deleted card fingerprint mismatch")
+    return deleted[0]
+
+
+def repair_tombstones(
+    base_dir: Path,
+    agent_id: str,
+    *,
+    apply: bool = False,
+    card_lookup: Any = None,
+) -> dict[str, Any]:
+    """Plan or apply fail-closed repair of interrupted Hermes deletions."""
+    from .validation import safe_agent_id
+
+    safe_agent = safe_agent_id(agent_id)
+    registry = read_tombstone_registry(base_dir, safe_agent, repair_torn_tail=False)
+    report: dict[str, Any] = {
+        "agentId": safe_agent,
+        "apply": bool(apply),
+        "planned": [],
+        "reconstructed": [],
+        "alreadyCommitted": [],
+        "conflicts": [],
+        "errors": [],
+    }
+    if not registry["ok"] or registry["corruptLines"]:
+        report["errors"].append(
+            registry.get("readError")
+            or f"registry contains {registry['corruptLines']} corrupt line(s)"
+        )
+        report["complete"] = False
+        report["ok"] = False
+        return report
+    by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in registry["tombstones"]:
+        by_id.setdefault(str(row.get("tombstoneId") or ""), []).append(row)
+    lookup = card_lookup or (
+        lambda attempted: _lookup_deleted_card(Path(base_dir), safe_agent, attempted)
+    )
+    for tombstone_id, events in by_id.items():
+        identity_fields = (
+            "memoryId",
+            "agentId",
+            "scope",
+            "scopeKey",
+            "workspaceId",
+            "workspaceKey",
+            "ownerPlatform",
+            "ownerUserId",
+            "chatId",
+            "archivePath",
+            "contentFingerprint",
+        )
+        identities = {
+            tuple(str(event.get(field) or "") for field in identity_fields)
+            for event in events
+        }
+        if len(identities) != 1:
+            report["conflicts"].append({
+                "tombstoneId": tombstone_id,
+                "memoryId": str(events[-1].get("memoryId") or ""),
+                "reason": "events with the same tombstone id disagree on identity",
+            })
+            continue
+        statuses = {str(event.get("status") or "") for event in events}
+        attempted = next(
+            (event for event in reversed(events) if event.get("status") == "attempted"),
+            None,
+        )
+        if "committed" in statuses:
+            report["alreadyCommitted"].append(tombstone_id)
+            continue
+        if "failed" in statuses or attempted is None:
+            continue
+        try:
+            archive = _archive_card_for_repair(Path(base_dir), safe_agent, attempted)
+            current = lookup(attempted)
+            if not isinstance(current, dict):
+                raise ValueError("no matching deleted card found")
+            for field in ("id", "agentId", "scopeKey"):
+                if str(current.get(field) or "") != str(archive.get(field) or ""):
+                    raise ValueError(f"deleted card {field} mismatch")
+            if str(current.get("status") or "") != "deleted":
+                raise ValueError("matching card is not deleted")
+            if content_fingerprint(current.get("content") or current.get("text") or "") != str(
+                attempted.get("contentFingerprint") or ""
+            ):
+                raise ValueError("deleted card fingerprint mismatch")
+        except Exception as error:
+            report["conflicts"].append({
+                "tombstoneId": tombstone_id,
+                "memoryId": str(attempted.get("memoryId") or ""),
+                "reason": str(error),
+            })
+            continue
+        report["planned"].append(tombstone_id)
+        if apply:
+            try:
+                append_tombstone_to_registry(
+                    Path(base_dir),
+                    safe_agent,
+                    {
+                        **attempted,
+                        "status": "committed",
+                        "repairedAt": _utcnow(),
+                        "repairSource": "plur1bus-hermes-repair-tombstones",
+                    },
+                )
+            except Exception as error:
+                report["errors"].append({
+                    "tombstoneId": tombstone_id,
+                    "reason": str(error),
+                })
+            else:
+                report["reconstructed"].append(tombstone_id)
+    report["complete"] = not report["conflicts"] and not report["errors"]
+    report["ok"] = report["complete"]
+    return report
+
+
+def repair_cli_main(argv: list[str] | None = None) -> int:
+    """CLI entrypoint for native Hermes tombstone repair."""
+    parser = argparse.ArgumentParser(description="Repair interrupted Hermes tombstones")
+    parser.add_argument("--data-dir", type=Path, required=True)
+    parser.add_argument("--agent", required=True)
+    parser.add_argument("--apply", action="store_true")
+    arguments = parser.parse_args(argv)
+    report = repair_tombstones(
+        arguments.data_dir,
+        arguments.agent,
+        apply=arguments.apply,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if report["ok"] else 1
+
+
 def _utcnow() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+if __name__ == "__main__":
+    raise SystemExit(repair_cli_main())

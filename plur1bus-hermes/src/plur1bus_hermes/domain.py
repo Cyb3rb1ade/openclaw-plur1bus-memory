@@ -36,13 +36,12 @@ from .namespaces import (
     binding_from_scope,
     canonical_scope_binding,
     legacy_agent_private_scope_key,
+    resolve_namespace_routes,
     scope_where_clause,
 )
 from .proactive import ProactiveEngine
 from .speakers import SpeakerMappingStore
 from .shared_pools import SharedPoolStore, SharedPrincipal
-from .validation import safe_memory_id
-
 from .validation import safe_agent_id, safe_memory_id
 
 
@@ -254,6 +253,117 @@ class Plur1busDomain:
     def _filter_rows(rows: list[dict[str, Any]], selector: _ScopeSelector) -> list[dict[str, Any]]:
         return [row for row in rows if _row_matches_scope(row, selector)]
 
+    @staticmethod
+    def _scope_storage_key(selector: _ScopeSelector) -> str:
+        """Return a filesystem-safe owner key, including for opaque test/legacy scopes."""
+        if re.fullmatch(r"[0-9a-f]{64}", selector.scope_key):
+            return selector.scope_key
+        return hashlib.sha256(
+            f"{selector.scope_type}:{selector.scope_key}".encode("utf-8")
+        ).hexdigest()
+
+    def _scope_state_dir(self, selector: _ScopeSelector) -> Path:
+        if selector.scope_type == "agent-private":
+            return self.state_dir
+        return self.state_dir / "scopes" / self._scope_storage_key(selector)
+
+    def _scope_neo_dir(self, selector: _ScopeSelector) -> Path:
+        if selector.scope_type == "agent-private":
+            return self.neo_dir
+        return self.neo_dir / "scopes" / self._scope_storage_key(selector)
+
+    def _scope_workspace_dir(self, selector: _ScopeSelector) -> Path:
+        if selector.scope_type == "agent-private":
+            return self.workspace_dir
+        return self.workspace_dir / ".plur1bus-scopes" / self._scope_storage_key(selector)
+
+    def _scoped_jsonl(
+        self,
+        root: Path,
+        scoped_root: Path,
+        name: str,
+        selector: _ScopeSelector,
+    ) -> list[dict[str, Any]]:
+        """Read the owner partition plus filtered legacy rows for compatibility."""
+        rows = self._read_jsonl(scoped_root / name)
+        if scoped_root != root:
+            rows.extend(
+                row
+                for row in self._read_jsonl(root / name)
+                if _row_matches_scope(row, selector)
+            )
+        return rows
+
+    def _job_page(
+        self,
+        table: Any,
+        selector: _ScopeSelector,
+        *,
+        job: str,
+        where_suffix: str,
+        page_size: int,
+        mutates_predicate: bool = False,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Read one durable owner-bound page and advance only after a clean query."""
+        bounded_size = max(1, min(int(page_size), 100_000))
+        cursor_path = self._scope_state_dir(selector) / "job-cursors" / f"{job}.json"
+        state: dict[str, Any] = {}
+        if cursor_path.is_file():
+            try:
+                loaded = json.loads(cursor_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise RuntimeError(f"{job} cursor is unreadable: {error}") from error
+            if not isinstance(loaded, dict):
+                raise RuntimeError(f"{job} cursor is not an object")
+            state = loaded
+        try:
+            offset = 0 if mutates_predicate else int(state.get("nextOffset") or 0)
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"{job} cursor offset is invalid") from error
+        if offset < 0:
+            raise RuntimeError(f"{job} cursor offset is invalid")
+        query = table.search().where(selector.where(where_suffix))
+        if offset:
+            offset_method = getattr(query, "offset", None)
+            if not callable(offset_method):
+                raise RuntimeError(f"{job} query does not support durable pagination")
+            query = offset_method(offset)
+        raw = [dict(row) for row in query.limit(bounded_size + 1).to_list()]
+        has_more = len(raw) > bounded_size
+        selected_raw = raw[:bounded_size]
+        rows = self._filter_rows(selected_raw, selector)
+        if mutates_predicate or not has_more:
+            next_offset = 0
+        else:
+            next_offset = offset + len(selected_raw)
+        return rows, {
+            "selected": len(rows),
+            "complete": not has_more,
+            "truncated": has_more,
+            "nextCursor": (
+                "continue" if mutates_predicate and has_more else next_offset or None
+            ),
+            "offset": offset,
+            "cursorPath": cursor_path,
+            "cursorState": {
+                "schemaVersion": 1,
+                "agentId": selector.agent_id,
+                "scopeKey": selector.scope_key,
+                "job": job,
+                "nextOffset": next_offset,
+                "complete": not has_more,
+                "updatedAt": _utcnow(),
+            },
+        }
+
+    def _commit_job_page(self, page: Mapping[str, Any]) -> None:
+        """Advance a durable cursor only after the page side effects succeeded."""
+        path = page.get("cursorPath")
+        state = page.get("cursorState")
+        if not isinstance(path, Path) or not isinstance(state, Mapping):
+            raise RuntimeError("job page is missing its durable cursor state")
+        self._write_json(path, dict(state))
+
     def _metadata_rows_for_scope(self, selector: _ScopeSelector) -> list[dict[str, Any]]:
         """Filter metadata by its embedded binding before any consumer limit."""
         selected = []
@@ -279,6 +389,7 @@ class Plur1busDomain:
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        neo_dir = self._scope_neo_dir(selector)
         now = _utcnow()
         turn_ids = []
         for index, (role, content) in enumerate((("user", user), ("assistant", assistant))):
@@ -288,7 +399,7 @@ class Plur1busDomain:
             analysis = analyze_text(text)
             turn_id = str(uuid.uuid4())
             turn_ids.append(turn_id)
-            self._append_jsonl(self.neo_dir / "turn-journal.jsonl", {
+            self._append_jsonl(neo_dir / "turn-journal.jsonl", {
                 "id": turn_id,
                 "workspaceKey": self.agent_id,
                 "agentId": self.agent_id,
@@ -302,7 +413,7 @@ class Plur1busDomain:
                 "cognition": analysis,
                 "speakerSegments": self._speakers.segment(text),
                 "visibility": {
-                    "scope": "agent_private",
+                    "scope": selector.scope_type,
                     "recallable": True,
                     "promptInjectable": False,
                     "dreamEligible": role == "user",
@@ -313,7 +424,7 @@ class Plur1busDomain:
             combined = "\n".join(text for text in (user.strip(), assistant.strip()) if text)
             analysis = self._analyze_text(combined)
             mood = self._mood.update(analysis["emotion"])
-            self._append_jsonl(self.neo_dir / "episodes.jsonl", {
+            self._append_jsonl(neo_dir / "episodes.jsonl", {
                 "id": str(uuid.uuid4()),
                 "workspaceKey": self.agent_id,
                 "agentId": self.agent_id,
@@ -335,7 +446,7 @@ class Plur1busDomain:
                 "turnCount": len(turn_ids),
                 "createdAt": now,
             })
-            self._append_jsonl(self.neo_dir / "emotional-state.jsonl", {
+            self._append_jsonl(neo_dir / "emotional-state.jsonl", {
                 "agentId": self.agent_id,
                 "scopeKey": selector.scope_key,
                 "aclBindings": selector.acl_bindings,
@@ -344,7 +455,7 @@ class Plur1busDomain:
                 **analysis["emotion"],
             })
             for thread in extract_open_threads(user):
-                self._append_jsonl(self.neo_dir / "open-threads.jsonl", {
+                self._append_jsonl(neo_dir / "open-threads.jsonl", {
                     "id": str(uuid.uuid4()),
                     "agentId": self.agent_id,
                     "scopeKey": selector.scope_key,
@@ -379,8 +490,10 @@ class Plur1busDomain:
             "scopeType": selector.scope_type,
             "aclBindings": selector.acl_bindings,
         }
+        neo_dir = self._scope_neo_dir(selector)
+        state_dir = self._scope_state_dir(selector)
         analysis = self._analyze_text(str(record.get("content") or ""))
-        self._append_jsonl(self.neo_dir / "memory-cognition.jsonl", {
+        self._append_jsonl(neo_dir / "memory-cognition.jsonl", {
             "id": record["id"],
             "agentId": self.agent_id,
             "scopeKey": selector.scope_key,
@@ -399,7 +512,7 @@ class Plur1busDomain:
             source_role=source_role,
         )
         classifications = self._read_jsonl(
-            self.state_dir / "critical-classification.jsonl"
+            state_dir / "critical-classification.jsonl"
         )
         if any(str(item.get("id") or "") == str(record["id"]) for item in classifications):
             return
@@ -411,22 +524,26 @@ class Plur1busDomain:
         pushed_today = sum(
             str(item.get("createdAt") or "").startswith(today)
             and item.get("status") == "pending_review"
-            for item in self._read_jsonl(self.state_dir / "critical-push.jsonl")
+            for item in self._read_jsonl(state_dir / "critical-push.jsonl")
         )
         classification = {
             "id": record["id"],
             "agentId": self.agent_id,
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
             **critical,
             "classifiedAt": _utcnow(),
         }
         self._append_jsonl(
-            self.state_dir / "critical-classification.jsonl",
+            state_dir / "critical-classification.jsonl",
             classification,
         )
         if critical["eligible"] and pushed_today < max_per_day:
-            self._append_jsonl(self.state_dir / "critical-push.jsonl", {
+            self._append_jsonl(state_dir / "critical-push.jsonl", {
                 "id": record["id"],
                 "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
                 "importance": critical["importance"],
                 "reason": critical["reason"],
                 "sourceRole": source_role,
@@ -435,9 +552,11 @@ class Plur1busDomain:
                 "createdAt": _utcnow(),
             })
         elif critical["eligible"]:
-            self._append_jsonl(self.state_dir / "critical-push.jsonl", {
+            self._append_jsonl(state_dir / "critical-push.jsonl", {
                 "id": record["id"],
                 "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
                 "importance": critical["importance"],
                 "reason": critical["reason"],
                 "sourceRole": source_role,
@@ -476,10 +595,14 @@ class Plur1busDomain:
             else 0.5
         )
         recalled_ids = {str(row.get("id") or "") for row in rows}
+        neo_dir = self._scope_neo_dir(selector)
         contradictions = [
             item
-            for item in self._read_jsonl(
-                self.neo_dir / "contradiction-disclosure.jsonl"
+            for item in self._scoped_jsonl(
+                self.neo_dir,
+                neo_dir,
+                "contradiction-disclosure.jsonl",
+                selector,
             )
             if _row_matches_scope(item, selector)
             and (str(item.get("newMemoryId") or "") in recalled_ids
@@ -489,7 +612,12 @@ class Plur1busDomain:
         open_threads = []
         if analysis["continuationSignal"] or analysis["question"]:
             latest: dict[str, dict[str, Any]] = {}
-            for item in self._read_jsonl(self.neo_dir / "open-threads.jsonl"):
+            for item in self._scoped_jsonl(
+                self.neo_dir,
+                neo_dir,
+                "open-threads.jsonl",
+                selector,
+            ):
                 thread_id = str(item.get("id") or "")
                 if thread_id and _row_matches_scope(item, selector):
                     latest[thread_id] = item
@@ -599,17 +727,23 @@ class Plur1busDomain:
         if not rows:
             return rows
         seen = {str(row.get("id") or "") for row in rows}
-        candidate_ids = self._graph_neighbor_ids(seen, scope_key=selector.scope_key)
-        candidate_ids.update(self._semantic_lens_ids(seen, scope_key=selector.scope_key))
+        candidate_ids = self._graph_neighbor_ids(
+            seen, acl_bindings=selector.acl_bindings
+        )
+        candidate_ids.update(
+            self._semantic_lens_ids(seen, acl_bindings=selector.acl_bindings)
+        )
         now = _now_ms()
         if self._last_recall_ms and now - self._last_recall_ms >= 45 * 60 * 1000:
-            candidate_ids.update(self._reactivation_ids(seen, scope_key=selector.scope_key))
+            candidate_ids.update(
+                self._reactivation_ids(seen, acl_bindings=selector.acl_bindings)
+            )
         self._last_recall_ms = now
         hydrated = self._hydrate_ids(
             table,
             candidate_ids - seen,
             max(0, limit - len(rows)),
-            scope_key=selector.scope_key,
+            acl_bindings=selector.acl_bindings,
         )
         return rows + hydrated
 
@@ -642,7 +776,11 @@ class Plur1busDomain:
             "queryHash": hashlib.sha256(query.encode("utf-8")).hexdigest() if query else "",
             "createdAt": _utcnow(),
         }
-        self._append_jsonl(self.workspace_dir / ".adaptive-learning" / "feedback-log.jsonl", entry)
+        workspace_dir = self._scope_workspace_dir(selector)
+        self._append_jsonl(
+            workspace_dir / ".adaptive-learning" / "feedback-log.jsonl",
+            entry,
+        )
         return entry
 
     def share_memory(
@@ -707,16 +845,28 @@ class Plur1busDomain:
                 })
         return due
 
-    def obsidian_candidates(self, limit: int = 100) -> list[dict[str, str]]:
+    def obsidian_candidates(
+        self,
+        limit: int = 100,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> list[dict[str, str]]:
         """Return changed Markdown notes for an explicit bidirectional sync."""
-        state_path = self.state_dir / "obsidian-sync.json"
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        state_path = self._scope_state_dir(selector) / "obsidian-sync.json"
+        workspace_dir = self._scope_workspace_dir(selector)
         state = self._read_json(state_path)
         previous = state.get("hashes", {}) if isinstance(state.get("hashes"), dict) else {}
         candidates = []
-        if not self.workspace_dir.is_dir():
+        if not workspace_dir.is_dir():
             return candidates
-        for path in sorted(self.workspace_dir.rglob("*.md")):
-            relative = path.relative_to(self.workspace_dir)
+        for path in sorted(workspace_dir.rglob("*.md")):
+            relative = path.relative_to(workspace_dir)
             if relative.parts[:2] == ("plur1bus", "memories") or ".stversions" in relative.parts:
                 continue
             content = path.read_text(encoding="utf-8", errors="replace")
@@ -728,9 +878,20 @@ class Plur1busDomain:
                 break
         return candidates
 
-    def mark_obsidian_synced(self, candidates: list[dict[str, str]]) -> None:
+    def mark_obsidian_synced(
+        self,
+        candidates: list[dict[str, str]],
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> None:
         """Commit successful Markdown import hashes atomically."""
-        state_path = self.state_dir / "obsidian-sync.json"
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        state_path = self._scope_state_dir(selector) / "obsidian-sync.json"
         state = self._read_json(state_path)
         hashes = dict(state.get("hashes", {})) if isinstance(state.get("hashes"), dict) else {}
         for candidate in candidates:
@@ -750,9 +911,17 @@ class Plur1busDomain:
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        neo_dir = self._scope_neo_dir(selector)
+        workspace_dir = self._scope_workspace_dir(selector)
+        state_dir = self._scope_state_dir(selector)
         edges = [
             edge
-            for edge in self._read_jsonl(self.neo_dir / "memory-graph.jsonl")
+            for edge in self._scoped_jsonl(
+                self.neo_dir,
+                neo_dir,
+                "memory-graph.jsonl",
+                selector,
+            )
             if _row_matches_scope(edge, selector)
         ]
         adjacency: dict[str, set[str]] = {}
@@ -783,7 +952,7 @@ class Plur1busDomain:
             communities[community_id] = {"memoryIds": members, "size": len(members)}
             for memory_id in members:
                 memory_to_community[memory_id] = community_id
-        index_dir = self.workspace_dir / ".plur1bus"
+        index_dir = workspace_dir / ".plur1bus"
         self._write_json(index_dir / "semantic-lens-index.json", {
             "version": 1,
             "generatedAt": _utcnow(),
@@ -816,7 +985,7 @@ class Plur1busDomain:
             "annIndex": ann_status,
             "generatedAt": _utcnow(),
         }
-        self._write_json(self.state_dir / "index-rebuild.json", result)
+        self._write_json(state_dir / "index-rebuild.json", result)
         return result
 
     def run_dreaming(
@@ -833,24 +1002,44 @@ class Plur1busDomain:
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
-        rows = table.search().where(
-            selector.where(" AND status = 'active'")
-        ).limit(max_memories).to_list()
-        rows = self._filter_rows(rows, selector)[:max_memories]
+        rows, page = self._job_page(
+            table,
+            selector,
+            job="rem-dream",
+            where_suffix=" AND status = 'active'",
+            page_size=max_memories,
+        )
         dream = build_rem_dream(
             rows,
             self.agent_id,
             acl_bindings=selector.acl_bindings,
             scope_key=selector.scope_key,
         )
-        self._append_jsonl(self.neo_dir / "dream-diary.jsonl", dream)
-        dreams_path = self.workspace_dir / "DREAMS.md"
+        dream.update({
+            "selected": page["selected"],
+            "planned": 1 if rows else 0,
+            "persisted": 0,
+            "executed": 0,
+            "complete": page["complete"],
+            "truncated": page["truncated"],
+            "nextCursor": page["nextCursor"],
+        })
+        neo_dir = self._scope_neo_dir(selector)
+        workspace_dir = self._scope_workspace_dir(selector)
+        if not rows:
+            self._commit_job_page(page)
+            return dream
+        self._append_jsonl(neo_dir / "dream-diary.jsonl", dream)
+        dreams_path = workspace_dir / "DREAMS.md"
         dreams_path.parent.mkdir(parents=True, exist_ok=True)
         with dreams_path.open("a", encoding="utf-8") as handle:
             handle.write(f"\n## Dream {_utcnow()}\n\n")
             handle.write(f"{dream['narrative']}\n\n")
             for insight in dream["insights"]:
                 handle.write(f"- {insight}\n")
+        dream["persisted"] = 1
+        dream["executed"] = 1
+        self._commit_job_page(page)
         return dream
 
     def run_consolidation(
@@ -866,12 +1055,64 @@ class Plur1busDomain:
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
-        rows = table.search().where(selector.where()).limit(100000).to_list()
-        rows = self._filter_rows(rows, selector)
+        page_size = int(
+            (self.config.get("maintenance") or {}).get(
+                "consolidationPageSize", 10_000
+            )
+        )
+        rows, page = self._job_page(
+            table,
+            selector,
+            job="consolidation",
+            where_suffix="",
+            page_size=page_size,
+        )
+        state_dir = self._scope_state_dir(selector)
+        neo_dir = self._scope_neo_dir(selector)
+        accumulator_path = state_dir / "job-cursors" / "consolidation-accumulator.json"
         groups: dict[str, list[str]] = {}
+        scanned_before = 0
+        if page["offset"]:
+            accumulator = self._read_json(accumulator_path)
+            if not accumulator or not isinstance(accumulator.get("groups"), dict):
+                raise RuntimeError("consolidation accumulator is missing or invalid")
+            groups = {
+                str(digest): [str(value) for value in values]
+                for digest, values in accumulator["groups"].items()
+                if isinstance(values, list)
+            }
+            scanned_before = int(accumulator.get("cardsScanned") or 0)
         for row in rows:
             digest = hashlib.sha256(_normalized_text(str(row.get("content") or "")).encode("utf-8")).hexdigest()
             groups.setdefault(digest, []).append(str(row.get("id") or ""))
+        cards_scanned = scanned_before + len(rows)
+        if not page["complete"]:
+            self._write_json(
+                accumulator_path,
+                {
+                    "agentId": self.agent_id,
+                    "scopeKey": selector.scope_key,
+                    "cardsScanned": cards_scanned,
+                    "groups": groups,
+                    "updatedAt": _utcnow(),
+                },
+            )
+            report = {
+                "agentId": self.agent_id,
+                "generatedAt": _utcnow(),
+                "cardsScanned": cards_scanned,
+                "selected": len(rows),
+                "planned": 0,
+                "persisted": 1,
+                "executed": 0,
+                "complete": False,
+                "truncated": True,
+                "nextCursor": page["nextCursor"],
+                "destructiveChanges": False,
+            }
+            self._write_json(state_dir / "consolidation-report.json", report)
+            self._commit_job_page(page)
+            return report
         duplicates = [ids for ids in groups.values() if len(ids) > 1]
         proposals = []
         for memory_ids in duplicates:
@@ -880,6 +1121,8 @@ class Plur1busDomain:
                     "|".join(sorted(memory_ids)).encode("utf-8")
                 ).hexdigest()[:16],
                 "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
                 "memoryIds": memory_ids,
                 "status": "pending_review",
                 "autoApply": False,
@@ -887,12 +1130,15 @@ class Plur1busDomain:
             }
             proposals.append(proposal)
         self._write_json(
-            self.state_dir / "merge-proposals.json",
+            state_dir / "merge-proposals.json",
             {"generatedAt": _utcnow(), "proposals": proposals},
         )
         conflict_recommendations = []
-        for conflict in self._read_jsonl(
-            self.neo_dir / "contradiction-disclosure.jsonl"
+        for conflict in self._scoped_jsonl(
+            self.neo_dir,
+            neo_dir,
+            "contradiction-disclosure.jsonl",
+            selector,
         ):
             if not _row_matches_scope(conflict, selector):
                 continue
@@ -908,24 +1154,33 @@ class Plur1busDomain:
                 "autoApply": False,
             })
         self._write_json(
-            self.state_dir / "conflict-recommendations.json",
+            state_dir / "conflict-recommendations.json",
             {
                 "generatedAt": _utcnow(),
                 "recommendations": conflict_recommendations,
             },
         )
-        dynamics = self.run_dynamics(scope_key=selector.scope_key)
+        dynamics = self.run_dynamics(acl_bindings=selector.acl_bindings)
         report = {
             "agentId": self.agent_id,
             "generatedAt": _utcnow(),
-            "cardsScanned": len(rows),
+            "cardsScanned": cards_scanned,
             "duplicateGroups": duplicates,
             "mergeProposals": len(proposals),
             "conflictRecommendations": len(conflict_recommendations),
             "dynamics": dynamics,
+            "selected": len(rows),
+            "planned": len(proposals) + len(conflict_recommendations),
+            "persisted": 3,
+            "executed": 0,
+            "complete": True,
+            "truncated": False,
+            "nextCursor": None,
             "destructiveChanges": False,
         }
-        self._write_json(self.state_dir / "consolidation-report.json", report)
+        self._write_json(state_dir / "consolidation-report.json", report)
+        self._commit_job_page(page)
+        self._write_json(accumulator_path, {})
         return report
 
     def run_gc(
@@ -952,12 +1207,21 @@ class Plur1busDomain:
             str(row.get("id") or ""): self._metadata_json(row)
             for row in self._metadata_rows_for_scope(selector)
         }
-        rows = table.search().where(
-            selector.where(" AND (status = 'active' OR status = 'superseded')")
-        ).limit(100000).to_list()
-        rows = self._filter_rows(rows, selector)
+        page_size = int(
+            (self.config.get("maintenance") or {}).get("gcPageSize", 10_000)
+        )
+        rows, page = self._job_page(
+            table,
+            selector,
+            job="gc",
+            where_suffix=" AND (status = 'active' OR status = 'superseded')",
+            page_size=page_size,
+            mutates_predicate=True,
+        )
         archived = []
-        archive_dir = self.data_dir / "archives" / self.agent_id / "gc"
+        planned = 0
+        from .tombstone import archive_card_atomically, archive_path_for
+
         for row in rows:
             memory_id = safe_memory_id(str(row.get("id") or ""))
             expires_at = int(
@@ -965,33 +1229,63 @@ class Plur1busDomain:
             )
             if not expires_at or expires_at > now:
                 continue
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            archive_path = archive_dir / f"{memory_id}.json"
-            if not archive_path.exists():
-                archive_path.write_text(
-                    json.dumps(row, ensure_ascii=False, indent=2) + "\n",
-                    encoding="utf-8",
-                )
-            table.update(
-                where=f"id = '{memory_id}' AND {selector.where()}",
+            planned += 1
+            archive_path = archive_path_for(
+                self.data_dir,
+                self.agent_id,
+                selector.scope_key,
+                memory_id,
+            )
+            archive_card_atomically(archive_path, row)
+            audit_base = {
+                "operation": "gc-archive-expired",
+                "id": memory_id,
+                "agentId": self.agent_id,
+                "scopeKey": selector.scope_key,
+                "aclBindings": selector.acl_bindings,
+                "archivePath": str(archive_path),
+                "previousStatus": str(row.get("status") or ""),
+                "newStatus": "archived",
+                "contentFingerprint": hashlib.sha256(
+                    _normalized_text(str(row.get("content") or "")).encode("utf-8")
+                ).hexdigest(),
+            }
+            self.audit_mutation({**audit_base, "result": "attempted"})
+            update_result = table.update(
+                where=(
+                    f"id = '{memory_id}' AND {selector.where()} "
+                    "AND (status = 'active' OR status = 'superseded')"
+                ),
                 values={"status": "archived"},
             )
-            self._append_jsonl(
-                self.state_dir / "destructive-operations.jsonl",
-                {
-                    "operation": "gc-archive-expired",
-                    "id": memory_id,
-                    "archive": str(archive_path),
-                    "createdAt": _utcnow(),
-                },
+            rows_updated = getattr(update_result, "rows_updated", None)
+            if rows_updated is not None and int(rows_updated) != 1:
+                raise RuntimeError("GC lifecycle mutation did not update exactly one card")
+            verified = self._filter_rows(
+                table.search().where(
+                    f"id = '{memory_id}' AND {selector.where()}"
+                ).limit(2).to_list(),
+                selector,
             )
+            if len(verified) != 1 or str(verified[0].get("status") or "") != "archived":
+                raise RuntimeError("GC lifecycle mutation could not be verified")
+            self.audit_mutation({**audit_base, "result": "committed"})
             archived.append(memory_id)
-        return {
+        result = {
             "scanned": len(rows),
             "archived": archived,
             "count": len(archived),
             "hardDeleted": 0,
+            "selected": page["selected"],
+            "planned": planned,
+            "persisted": len(archived) * 2,
+            "executed": len(archived),
+            "complete": page["complete"],
+            "truncated": page["truncated"],
+            "nextCursor": page["nextCursor"],
         }
+        self._commit_job_page(page)
+        return result
 
     def run_dynamics(
         self,
@@ -1005,7 +1299,13 @@ class Plur1busDomain:
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
-        feedback = self._read_jsonl(self.workspace_dir / ".adaptive-learning" / "feedback-log.jsonl")
+        workspace_dir = self._scope_workspace_dir(selector)
+        feedback = self._scoped_jsonl(
+            self.workspace_dir,
+            workspace_dir,
+            ".adaptive-learning/feedback-log.jsonl",
+            selector,
+        )
         adjustments: dict[str, float] = {}
         for item in feedback:
             if not _row_matches_scope(item, selector):
@@ -1065,7 +1365,10 @@ class Plur1busDomain:
         """Open the authoritative memory-card table without creating it."""
         try:
             import lancedb
-            database = lancedb.connect(str(self.data_dir / "lancedb" / self.agent_id))
+            writer, _ = resolve_namespace_routes(
+                self.data_dir, self.agent_id, self.config
+            )
+            database = lancedb.connect(str(writer.path))
             return database.open_table("memories") if "memories" in database.table_names() else None
         except Exception:
             return None
@@ -1128,24 +1431,26 @@ class Plur1busDomain:
 
     def _critical_cards(self, selector: _ScopeSelector) -> list[dict[str, Any]]:
         """Join cards with their transactionally bound metadata projection."""
-        metadata_by_id: dict[str, dict[str, Any]] = {}
+        metadata_by_id: dict[tuple[str, str], dict[str, Any]] = {}
         for row in self._metadata_rows():
             card_id = str(row.get("id") or "")
             metadata = self._metadata_json(row)
             if card_id:
-                metadata_by_id[card_id] = {**metadata, **row}
-        cards: dict[str, dict[str, Any]] = {}
+                key = (card_id, _row_scope_key(metadata) or _row_scope_key(row))
+                metadata_by_id[key] = {**metadata, **row}
+        cards: dict[tuple[str, str], dict[str, Any]] = {}
         for row in self._memory_rows():
             card_id = str(row.get("id") or "")
             if not card_id:
                 continue
-            cards[card_id] = {**metadata_by_id.get(card_id, {}), **row}
-            if not isinstance(cards[card_id].get("aclBindings"), Mapping):
-                projected = metadata_by_id.get(card_id, {}).get("aclBindings")
+            key = (card_id, _row_scope_key(row))
+            cards[key] = {**metadata_by_id.get(key, {}), **row}
+            if not isinstance(cards[key].get("aclBindings"), Mapping):
+                projected = metadata_by_id.get(key, {}).get("aclBindings")
                 if isinstance(projected, Mapping):
-                    cards[card_id]["aclBindings"] = projected
-        for card_id, row in metadata_by_id.items():
-            cards.setdefault(card_id, row)
+                    cards[key]["aclBindings"] = projected
+        for key, row in metadata_by_id.items():
+            cards.setdefault(key, row)
         return [
             card for card in cards.values()
             if self._critical_acl_matches(card, selector)
@@ -1221,8 +1526,18 @@ class Plur1busDomain:
         scopeKey: str | None = None,
     ) -> list[dict[str, Any]]:
         """Return pending reviews from cards; other statuses remain audit-only."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(
+            acl_bindings=acl_bindings, scope_key=scope_key
+        )
+        state_dir = self._scope_state_dir(selector)
         latest: dict[str, dict[str, Any]] = {}
-        for item in self._read_jsonl(self.state_dir / "critical-push.jsonl"):
+        for item in self._scoped_jsonl(
+            self.state_dir, state_dir, "critical-push.jsonl", selector
+        ):
+            if not _row_matches_scope(item, selector):
+                continue
             memory_id = str(item.get("id") or "")
             if memory_id:
                 latest[memory_id] = item
@@ -1230,8 +1545,8 @@ class Plur1busDomain:
             page = self.critical_review_page(
                 limit=limit,
                 cursor=cursor,
-                acl_bindings=aclBindings if aclBindings is not None else acl_bindings,
-                scope_key=scopeKey if scopeKey is not None else scope_key,
+                acl_bindings=acl_bindings,
+                scope_key=scope_key,
             )
             ledger = latest
             return [
@@ -1377,24 +1692,26 @@ class Plur1busDomain:
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
+        workspace_dir = self._scope_workspace_dir(selector)
+        neo_dir = self._scope_neo_dir(selector)
         return generate_obsidian_control_room(
-            self.workspace_dir,
+            workspace_dir,
             self.agent_id,
             metadata_rows=self._metadata_rows_for_scope(selector),
             episodes=[
-                row for row in self._read_jsonl(self.neo_dir / "episodes.jsonl")
+                row for row in self._scoped_jsonl(self.neo_dir, neo_dir, "episodes.jsonl", selector)
                 if _row_matches_scope(row, selector)
             ],
             dreams=[
-                row for row in self._read_jsonl(self.neo_dir / "dream-diary.jsonl")
+                row for row in self._scoped_jsonl(self.neo_dir, neo_dir, "dream-diary.jsonl", selector)
                 if _row_matches_scope(row, selector)
             ],
             contradictions=[
-                row for row in self._read_jsonl(self.neo_dir / "contradiction-disclosure.jsonl")
+                row for row in self._scoped_jsonl(self.neo_dir, neo_dir, "contradiction-disclosure.jsonl", selector)
                 if _row_matches_scope(row, selector)
             ],
             open_threads=[
-                row for row in self._read_jsonl(self.neo_dir / "open-threads.jsonl")
+                row for row in self._scoped_jsonl(self.neo_dir, neo_dir, "open-threads.jsonl", selector)
                 if _row_matches_scope(row, selector)
             ],
         )
@@ -1441,7 +1758,12 @@ class Plur1busDomain:
             None,
         )
         actual = next(
-            (row for row in self._memory_rows() if str(row.get("id") or "") == memory_id),
+            (
+                row
+                for row in self._memory_rows()
+                if str(row.get("id") or "") == memory_id
+                and _row_matches_scope(row, selector)
+            ),
             None,
         )
         if current is None or actual is None:
@@ -1481,6 +1803,23 @@ class Plur1busDomain:
                 return {"updated": False, "reason": "card-changed", "id": memory_id}
         except Exception:
             return {"updated": False, "reason": "card-update-failed", "id": memory_id}
+        verified = next(
+            (
+                row
+                for row in self._memory_rows()
+                if str(row.get("id") or "") == memory_id
+                and _row_matches_scope(row, selector)
+            ),
+            None,
+        )
+        expected_type = NON_CRITICAL_TYPE if decision == "reject" else str(current["type"])
+        if (
+            verified is None
+            or str(verified.get("status") or "") != "active"
+            or not is_confirmed(verified.get("confirmed"))
+            or str(verified.get("type") or "") != expected_type
+        ):
+            return {"updated": False, "reason": "card-update-unverified", "id": memory_id}
         transition = {
             "id": memory_id,
             "agentId": self.agent_id,
@@ -1498,7 +1837,9 @@ class Plur1busDomain:
             "previousType": str(current.get("type") or ""),
             "newType": str(values.get("type") or current.get("type") or ""),
         })
-        self._append_jsonl(self.state_dir / "critical-push.jsonl", transition)
+        self._append_jsonl(
+            self._scope_state_dir(selector) / "critical-push.jsonl", transition
+        )
         return {"updated": True, **transition}
 
     def mark_criticals_notified(
@@ -1513,6 +1854,9 @@ class Plur1busDomain:
         """Record successful delivery while keeping proposals pending for review."""
         acl_bindings = aclBindings if aclBindings is not None else acl_bindings
         scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(
+            acl_bindings=acl_bindings, scope_key=scope_key
+        )
         pending = {
             item["id"]: item
             for item in self.critical_items(
@@ -1529,34 +1873,74 @@ class Plur1busDomain:
                 "status": "pending_review",
                 "notifiedAt": _utcnow(),
             }
-            self._append_jsonl(self.state_dir / "critical-push.jsonl", transition)
+            self._append_jsonl(
+                self._scope_state_dir(selector) / "critical-push.jsonl", transition
+            )
             notified.append(memory_id)
         return {"notified": notified, "count": len(notified)}
 
-    def auto_accept_stale_criticals(self, max_age_ms: int = 604_800_000) -> dict[str, Any]:
+    def auto_accept_stale_criticals(
+        self,
+        max_age_ms: int = 604_800_000,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Accept critical proposals left pending beyond the configured age."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
         cutoff = _now_ms() - max(0, int(max_age_ms))
         accepted = []
-        stale = self.critical_review_page(older_than_ms=cutoff)["items"]
+        stale = self.critical_review_page(
+            older_than_ms=cutoff,
+            acl_bindings=acl_bindings,
+            scope_key=scope_key,
+        )["items"]
         for item in stale:
-            result = self.review_critical(str(item["id"]), "accept")
+            result = self.review_critical(
+                str(item["id"]),
+                "accept",
+                acl_bindings=acl_bindings,
+                scope_key=scope_key,
+            )
             if result["updated"]:
                 accepted.append(str(item["id"]))
         return {"accepted": accepted, "count": len(accepted)}
 
-    def update_reminder(self, memory_id: str, action: str) -> dict[str, Any]:
+    def update_reminder(
+        self,
+        memory_id: str,
+        action: str,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Acknowledge or cancel a reminder while preserving all card metadata."""
         memory_id = safe_memory_id(memory_id)
         if action not in {"acknowledge", "cancel", "present"}:
             raise ValueError("action must be acknowledge, cancel, or present")
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(
+            acl_bindings=acl_bindings, scope_key=scope_key
+        )
         table = self._metadata_table()
         if table is None:
             return {"updated": False, "reason": "metadata-table-unavailable"}
-        matches = [
-            dict(row)
-            for row in self._metadata_rows()
-            if str(row.get("id") or "") == memory_id
-        ]
+        all_rows = [dict(row) for row in self._metadata_rows()]
+        matches = []
+        for row in all_rows:
+            metadata = self._metadata_json(row)
+            candidate = metadata if _row_scope_key(metadata) else row
+            if (
+                str(row.get("id") or "") == memory_id
+                and _row_matches_scope(candidate, selector)
+            ):
+                matches.append(row)
         if not matches:
             return {"updated": False, "reason": "not-found", "id": memory_id}
         timestamp = _now_ms()
@@ -1577,28 +1961,52 @@ class Plur1busDomain:
             row["metadataJson"] = json.dumps(
                 metadata, ensure_ascii=False, sort_keys=True
             )
-        table.delete(f"id = '{memory_id}'")
-        table.add(matches)
+        import lancedb
+
+        database = lancedb.connect(str(self.data_dir / "lancedb" / self.agent_id))
+        database.create_table("metadata", data=all_rows, mode="overwrite")
         event = {
             "id": memory_id,
             "agentId": self.agent_id,
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
             "action": action,
             "createdAt": _utcnow(),
         }
-        self._append_jsonl(self.neo_dir / "reminder-dispatch-ledger.jsonl", event)
+        self._append_jsonl(
+            self._scope_neo_dir(selector) / "reminder-dispatch-ledger.jsonl", event
+        )
         return {"updated": True, **event}
 
-    def status(self) -> dict[str, Any]:
+    def status(
+        self,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Return feature-store health and imported artifact counts."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(
+            acl_bindings=acl_bindings, scope_key=scope_key
+        )
+        neo_dir = self._scope_neo_dir(selector)
+        workspace_dir = self._scope_workspace_dir(selector)
         return {
             "agentId": self.agent_id,
-            "graphEdges": len(self._read_jsonl(self.neo_dir / "memory-graph.jsonl")),
-            "dreams": len(self._read_jsonl(self.neo_dir / "dream-diary.jsonl")),
-            "episodes": len(self._read_jsonl(self.neo_dir / "episodes.jsonl")),
-            "feedback": len(self._read_jsonl(self.workspace_dir / ".adaptive-learning" / "feedback-log.jsonl")),
-            "dueReminders": len(self.due_reminders()),
-            "pendingCriticals": len(self.critical_items()),
-            "obsidianMirror": str(self.workspace_dir / "plur1bus" / "memories"),
+            "scopeKey": selector.scope_key,
+            "graphEdges": len(self._scoped_jsonl(self.neo_dir, neo_dir, "memory-graph.jsonl", selector)),
+            "dreams": len(self._scoped_jsonl(self.neo_dir, neo_dir, "dream-diary.jsonl", selector)),
+            "episodes": len(self._scoped_jsonl(self.neo_dir, neo_dir, "episodes.jsonl", selector)),
+            "feedback": len(self._scoped_jsonl(self.workspace_dir, workspace_dir, ".adaptive-learning/feedback-log.jsonl", selector)),
+            "dueReminders": len(self.due_reminders(acl_bindings=selector.acl_bindings)),
+            "pendingCriticals": len(self.critical_items(acl_bindings=selector.acl_bindings)),
+            "obsidianMirror": str(workspace_dir / "plur1bus" / "memories"),
+            "workspace": str(workspace_dir),
+            "graphPath": str(neo_dir / "memory-graph.jsonl"),
+            "dreamPath": str(neo_dir / "dream-diary.jsonl"),
         }
 
     def _metadata_for(self, record: dict[str, Any]) -> dict[str, Any]:
@@ -1642,6 +2050,7 @@ class Plur1busDomain:
         row = {
             "id": record["id"],
             "agentId": self.agent_id,
+            "scopeKey": str(record.get("scopeKey") or ""),
             "sourceAgent": self.agent_id,
             "originalId": record["id"],
             "legacyStatus": "",
@@ -1654,13 +2063,15 @@ class Plur1busDomain:
 
     def _build_graph_edges(self, record: dict[str, Any], table: Any) -> None:
         selector = self._scope_selector(record=record)
+        neo_dir = self._scope_neo_dir(selector)
+        state_dir = self._scope_state_dir(selector)
         try:
             neighbors = table.search(record["vector"]).where(
                 selector.where(" AND status = 'active'")
             ).limit(4).to_list()
             neighbors = self._filter_rows(neighbors, selector)
         except Exception as error:
-            self._append_jsonl(self.state_dir / "domain-errors.jsonl", {
+            self._append_jsonl(state_dir / "domain-errors.jsonl", {
                 "operation": "graph-neighbor-search",
                 "errorType": type(error).__name__,
                 "error": str(error),
@@ -1676,7 +2087,7 @@ class Plur1busDomain:
                 str(neighbor.get("content") or ""),
             )
             if contradiction:
-                self._append_jsonl(self.neo_dir / "memory-graph.jsonl", {
+                self._append_jsonl(neo_dir / "memory-graph.jsonl", {
                     "source": record["id"],
                     "target": target,
                     "agentId": self.agent_id,
@@ -1691,7 +2102,7 @@ class Plur1busDomain:
                     "observations": 1,
                     "algorithmVersion": "hermes-1.0",
                 })
-                self._append_jsonl(self.neo_dir / "contradiction-disclosure.jsonl", {
+                self._append_jsonl(neo_dir / "contradiction-disclosure.jsonl", {
                     "id": str(uuid.uuid4()),
                     "agentId": self.agent_id,
                     "scopeKey": selector.scope_key,
@@ -1706,7 +2117,7 @@ class Plur1busDomain:
             strength = max(0.0, min(1.0, 1.0 - distance))
             if strength < 0.5:
                 continue
-            self._append_jsonl(self.neo_dir / "memory-graph.jsonl", {
+            self._append_jsonl(neo_dir / "memory-graph.jsonl", {
                 "source": record["id"],
                 "target": target,
                 "agentId": self.agent_id,
@@ -1721,10 +2132,11 @@ class Plur1busDomain:
                 "observations": 1,
                 "algorithmVersion": "hermes-1.0",
             })
-            self._update_graph_links(str(record["id"]), target)
+            self._update_graph_links(str(record["id"]), target, selector=selector)
 
     def _write_obsidian_note(self, record: dict[str, Any]) -> None:
-        note = self.workspace_dir / "plur1bus" / "memories" / f"{record['id']}.md"
+        selector = self._scope_selector(record=record)
+        note = self._scope_workspace_dir(selector) / "plur1bus" / "memories" / f"{record['id']}.md"
         note.parent.mkdir(parents=True, exist_ok=True)
         content = str(record.get("content") or "")
         text = (
@@ -1743,9 +2155,12 @@ class Plur1busDomain:
         )
         note.write_text(text, encoding="utf-8")
 
-    def _update_graph_links(self, source: str, target: str) -> None:
+    def _update_graph_links(
+        self, source: str, target: str, *, selector: _ScopeSelector
+    ) -> None:
+        workspace_dir = self._scope_workspace_dir(selector)
         for memory_id, linked_id in ((source, target), (target, source)):
-            note = self.workspace_dir / "plur1bus" / "memories" / f"{memory_id}.md"
+            note = workspace_dir / "plur1bus" / "memories" / f"{memory_id}.md"
             if not note.is_file():
                 continue
             text = note.read_text(encoding="utf-8", errors="replace")
@@ -1770,7 +2185,12 @@ class Plur1busDomain:
     ) -> set[str]:
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         neighbors = set()
-        for edge in self._read_jsonl(self.neo_dir / "memory-graph.jsonl"):
+        for edge in self._scoped_jsonl(
+            self.neo_dir,
+            self._scope_neo_dir(selector),
+            "memory-graph.jsonl",
+            selector,
+        ):
             if not _row_matches_scope(edge, selector):
                 continue
             if float(edge.get("strength") or 0) < 0.5:
@@ -1790,7 +2210,16 @@ class Plur1busDomain:
         scope_key: str | None = None,
     ) -> set[str]:
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
-        index = self._read_json(self.workspace_dir / ".plur1bus" / "semantic-lens-index.json")
+        scoped_path = (
+            self._scope_workspace_dir(selector)
+            / ".plur1bus"
+            / "semantic-lens-index.json"
+        )
+        index = self._read_json(scoped_path)
+        if not index and scoped_path != self.workspace_dir / ".plur1bus" / "semantic-lens-index.json":
+            index = self._read_json(
+                self.workspace_dir / ".plur1bus" / "semantic-lens-index.json"
+            )
         index_scope = str(index.get("scopeKey") or "")
         if (
             index_scope not in {selector.scope_key, legacy_agent_private_scope_key()}
@@ -1817,7 +2246,14 @@ class Plur1busDomain:
         scope_key: str | None = None,
     ) -> set[str]:
         selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
-        index = self._read_json(self.workspace_dir / ".plur1bus" / "link-index.json")
+        scoped_path = (
+            self._scope_workspace_dir(selector) / ".plur1bus" / "link-index.json"
+        )
+        index = self._read_json(scoped_path)
+        if not index and scoped_path != self.workspace_dir / ".plur1bus" / "link-index.json":
+            index = self._read_json(
+                self.workspace_dir / ".plur1bus" / "link-index.json"
+            )
         index_scope = str(index.get("scopeKey") or "")
         if (
             index_scope not in {selector.scope_key, legacy_agent_private_scope_key()}
@@ -1921,8 +2357,12 @@ class Plur1busDomain:
 
     def audit_mutation(self, entry: dict[str, Any]) -> None:
         """Append-only Mutations-Audit (destructive-operations.jsonl)."""
+        selector = self._scope_selector(
+            acl_bindings=entry.get("aclBindings"),
+            scope_key=str(entry.get("scopeKey") or "") or None,
+        )
         self._append_jsonl(
-            self.state_dir / "destructive-operations.jsonl",
+            self._scope_state_dir(selector) / "destructive-operations.jsonl",
             {**entry, "timestamp": _utcnow()},
         )
 

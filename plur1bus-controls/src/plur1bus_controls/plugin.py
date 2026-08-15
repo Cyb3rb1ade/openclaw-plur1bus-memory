@@ -186,13 +186,18 @@ class Plur1busControlsPlugin:
             return
         domain = runtime._domain
         scope_kwargs = self._scope_kwargs(runtime)
-        reminders = domain.due_reminders()
+        reminders = domain.due_reminders(**scope_kwargs)
         criticals = [
             item
             for item in domain.critical_items("pending_review", **scope_kwargs)
             if not item.get("notifiedAt")
         ]
-        proactive = domain.proactive_messages()
+        binding = getattr(runtime, "scope_binding", None)
+        proactive = (
+            domain.proactive_messages()
+            if getattr(binding, "scope_type", "agent-private") == "agent-private"
+            else []
+        )
         if not reminders and not criticals and not proactive:
             return
         ref_map = domain.critical_reference_map(**scope_kwargs)
@@ -219,7 +224,9 @@ class Plur1busControlsPlugin:
             metadata=metadata or None,
         )
         for reminder in reminders:
-            domain.update_reminder(str(reminder["id"]), "present")
+            domain.update_reminder(
+                str(reminder["id"]), "present", **scope_kwargs
+            )
         domain.mark_criticals_notified(
             [str(item["id"]) for item in criticals], **scope_kwargs
         )
@@ -253,6 +260,7 @@ class Plur1busControlsPlugin:
             )
             domain = runtime._domain
             table, _ = runtime._table(create=False)
+            scope_kwargs = self._scope_kwargs(runtime)
             controls_config = runtime.config.get("controls") or {}
             mutating_command = command in {
                 "forget", "correct", "feedback", "share", "enable", "disable"
@@ -354,7 +362,7 @@ class Plur1busControlsPlugin:
                 return json.dumps({
                     "status": "ready",
                     "provider": Plur1busMemoryProvider(runtime.config).name,
-                    "features": domain.status(),
+                    "features": domain.status(**scope_kwargs),
                 }, ensure_ascii=False, indent=2)
             if command == "memory":
                 if not arguments:
@@ -389,7 +397,12 @@ class Plur1busControlsPlugin:
             if command == "feedback":
                 if len(arguments) < 2:
                     return "Usage: /plur1bus feedback [--agent ID] MEMORY_ID useful|irrelevant|incorrect"
-                return json.dumps(domain.record_feedback(arguments[0], arguments[1]), ensure_ascii=False)
+                return json.dumps(
+                    domain.record_feedback(
+                        arguments[0], arguments[1], **scope_kwargs
+                    ),
+                    ensure_ascii=False,
+                )
             if command == "share":
                 if table is None:
                     return json.dumps({"shared": False, "error": "memory table unavailable"})
@@ -421,10 +434,12 @@ class Plur1busControlsPlugin:
                         memory_id,
                         principal=principal,
                         user_scope=user_scope,
+                        **scope_kwargs,
                     ),
                 )
             if command == "graph":
-                return json.dumps({"graphEdges": domain.status()["graphEdges"], "path": str(domain.neo_dir / "memory-graph.jsonl")}, indent=2)
+                feature_status = domain.status(**scope_kwargs)
+                return json.dumps({"graphEdges": feature_status["graphEdges"], "path": feature_status["graphPath"]}, indent=2)
             if command == "code":
                 if not arguments:
                     return "Usage: /plur1bus code [--agent ID] rebuild|QUERY"
@@ -441,7 +456,6 @@ class Plur1busControlsPlugin:
                 )
             if command == "critical":
                 if not arguments:
-                    scope_kwargs = self._scope_kwargs(runtime)
                     pending = domain.critical_items(**scope_kwargs)
                     ref_map = domain.critical_reference_map(**scope_kwargs)
                     items = [
@@ -456,7 +470,6 @@ class Plur1busControlsPlugin:
                     return "Usage: /plur1bus critical [--agent ID] accept|reject|edit REFERENZ"
                 decision = arguments[0]
                 reference = arguments[1]
-                scope_kwargs = self._scope_kwargs(runtime)
                 if decision == "edit":
                     resolved = domain.resolve_critical_reference(reference, **scope_kwargs)
                     if not resolved["ok"]:
@@ -509,19 +522,22 @@ class Plur1busControlsPlugin:
             if command == "dreams":
                 if table is None:
                     return json.dumps({"error": "memory table unavailable"})
-                result = domain.run_dreaming(table) if arguments and arguments[0] == "run" else {
-                    "dreams": domain.status()["dreams"],
-                    "path": str(domain.neo_dir / "dream-diary.jsonl"),
+                feature_status = domain.status(**scope_kwargs)
+                result = domain.run_dreaming(table, **scope_kwargs) if arguments and arguments[0] == "run" else {
+                    "dreams": feature_status["dreams"],
+                    "path": feature_status["dreamPath"],
                 }
                 return json.dumps(result, ensure_ascii=False, indent=2)
             if command == "obsidian":
+                feature_status = domain.status(**scope_kwargs)
+                scoped_workspace = Path(feature_status["workspace"])
                 result = {
-                    "workspace": str(domain.workspace_dir),
-                    "memoryMirror": domain.status()["obsidianMirror"],
-                    "exists": domain.workspace_dir.is_dir(),
+                    "workspace": str(scoped_workspace),
+                    "memoryMirror": feature_status["obsidianMirror"],
+                    "exists": scoped_workspace.is_dir(),
                 }
                 if arguments and arguments[0] == "sync":
-                    candidates = domain.obsidian_candidates()
+                    candidates = domain.obsidian_candidates(**scope_kwargs)
                     for candidate in candidates:
                         runtime.remember_async(
                             f"Obsidian note {candidate['path']}:\n{candidate['content']}",
@@ -529,29 +545,31 @@ class Plur1busControlsPlugin:
                             source_role="obsidian",
                         )
                     runtime.flush(timeout_seconds=60)
-                    domain.mark_obsidian_synced(candidates)
+                    domain.mark_obsidian_synced(candidates, **scope_kwargs)
                     result["imported"] = len(candidates)
                 if arguments and arguments[0] == "maintain":
-                    result["maintenance"] = domain.maintain_obsidian()
+                    result["maintenance"] = domain.maintain_obsidian(**scope_kwargs)
                 return json.dumps(result, indent=2)
             if command == "reminders":
                 if arguments:
                     if len(arguments) != 2 or arguments[0] not in {"acknowledge", "cancel"}:
                         return "Usage: /plur1bus reminders [--agent ID] acknowledge|cancel MEMORY_ID"
                     return json.dumps(
-                        domain.update_reminder(arguments[1], arguments[0]),
+                        domain.update_reminder(
+                            arguments[1], arguments[0], **scope_kwargs
+                        ),
                         ensure_ascii=False,
                         indent=2,
                     )
-                return json.dumps({"due": domain.due_reminders()}, ensure_ascii=False, indent=2)
+                return json.dumps({"due": domain.due_reminders(**scope_kwargs)}, ensure_ascii=False, indent=2)
             if command == "jobs":
                 if table is None:
                     return json.dumps({"error": "memory table unavailable"})
                 if arguments and arguments[0] == "run":
                     return json.dumps({
-                        "consolidation": domain.run_consolidation(table),
-                        "dreaming": domain.run_dreaming(table),
-                        "indexes": domain.rebuild_indexes(table),
+                        "consolidation": domain.run_consolidation(table, **scope_kwargs),
+                        "dreaming": domain.run_dreaming(table, **scope_kwargs),
+                        "indexes": domain.rebuild_indexes(table, **scope_kwargs),
                     }, ensure_ascii=False, indent=2)
                 return "Usage: /plur1bus jobs [--agent ID] run"
             if command == "doctor":
@@ -626,7 +644,9 @@ class Plur1busControlsPlugin:
             "agentId": runtime.agent_id,
             "dataDir": str(runtime.data_dir),
             "memoryRows": table.count_rows() if table is not None else 0,
-            "features": domain.status(),
+            "features": domain.status(
+                **Plur1busControlsPlugin._scope_kwargs(runtime)
+            ),
             "embeddingProvider": runtime.config.get("embedding", {}).get("provider"),
             "rerankerProvider": runtime.config.get("reranker", {}).get("provider"),
         }

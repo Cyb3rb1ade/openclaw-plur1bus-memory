@@ -740,6 +740,30 @@ class Plur1busRuntime:
         except Exception:
             append_tombstone_to_registry(self.data_dir, self.agent_id, {**tombstone, "status": "failed"})
             raise
+        settled_rows = table.search().where(
+            f"id = '{card_id}' AND {mutation_scope}"
+        ).limit(2).to_list()
+        if (
+            len(settled_rows) != 1
+            or not self._card_matches_scope(settled_rows[0])
+            or str(settled_rows[0].get("status") or "") != "deleted"
+        ):
+            append_tombstone_to_registry(
+                self.data_dir,
+                self.agent_id,
+                {**tombstone, "status": "failed"},
+            )
+            return False
+        append_tombstone_to_registry(
+            self.data_dir,
+            self.agent_id,
+            {
+                **tombstone,
+                "status": "attempted",
+                "deleteSettledAt": _utcnow(),
+                "settlement": "soft_deleted",
+            },
+        )
         append_tombstone_to_registry(self.data_dir, self.agent_id, {**tombstone, "status": "committed"})
         self._domain.audit_mutation({
             "event": "memory.deleted",
@@ -839,7 +863,12 @@ class Plur1busRuntime:
         wait(futures, timeout=timeout_seconds)
 
     def _capture_turn(self, user: str, assistant: str, session_id: str) -> None:
-        self._domain.on_turn(user, assistant, session_id)
+        self._domain.on_turn(
+            user,
+            assistant,
+            session_id,
+            acl_bindings=self.scope_binding.as_dict(),
+        )
         self._remember(user, session_id, "user")
         self._remember(assistant, session_id, "assistant")
 
@@ -877,6 +906,7 @@ class Plur1busRuntime:
             "ownerPlatform": self.scope_binding.platform,
             "ownerUser": self.scope_binding.user,
             "chatScope": self.scope_binding.chat,
+            "aclBindings": self.scope_binding.as_dict(),
             "sessionId": session_id,
             "content": content,
             "status": "active",

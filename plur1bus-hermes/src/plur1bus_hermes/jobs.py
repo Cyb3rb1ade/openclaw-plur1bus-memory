@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .runtime import Plur1busRuntime
+from .namespaces import binding_from_scope
 from .validation import safe_agent_id
 from .rate_gate import JobRateGate
 
@@ -40,6 +42,40 @@ def _lock_pid_is_alive(lock_path: Path) -> bool:
         return False
 
 
+def _owner_state_dir(
+    data_dir: Path,
+    agent_id: str,
+    acl_bindings: Any,
+    scope_key: str | None,
+) -> tuple[Path, str, str]:
+    """Resolve an owner-bound job state directory without path-using raw input."""
+    if acl_bindings is None and scope_key is None:
+        binding = binding_from_scope(agent_id)
+        return Path(data_dir) / "state" / agent_id, binding.scope_key, binding.scope_type
+    if acl_bindings is not None:
+        binding = binding_from_scope(agent_id, acl_bindings)
+        if scope_key is not None and str(scope_key) != binding.scope_key:
+            raise ValueError("scopeKey does not match ACL binding")
+        resolved_key = binding.scope_key
+        scope_type = binding.scope_type
+    else:
+        resolved_key = str(scope_key or "").strip()
+        if not resolved_key:
+            raise ValueError("scopeKey is required")
+        scope_type = "opaque"
+    storage_key = (
+        resolved_key
+        if len(resolved_key) == 64
+        and all(character in "0123456789abcdef" for character in resolved_key)
+        else hashlib.sha256(f"{scope_type}:{resolved_key}".encode("utf-8")).hexdigest()
+    )
+    return (
+        Path(data_dir) / "state" / agent_id / "scopes" / storage_key,
+        resolved_key,
+        scope_type,
+    )
+
+
 def run_jobs(
     data_dir: Path,
     config: dict[str, Any],
@@ -58,10 +94,22 @@ def run_jobs(
     scope_key = scopeKey if scopeKey is not None else scope_key
     if acl_bindings is None and scope is not None:
         acl_bindings = scope
+    if acl_bindings is None and config.get("scopeType"):
+        acl_bindings = {
+            "scopeType": config.get("scopeType"),
+            "workspaceIdentity": config.get("workspaceId")
+            or config.get("workspaceIdentity"),
+            "platform": config.get("platform"),
+            "userId": config.get("userId") or config.get("ownerUserId"),
+            "chatId": config.get("chatId"),
+            "account": config.get("account"),
+        }
     agent_id = safe_agent_id(agent_id)
     if mode not in {"hourly", "daily", "all"}:
         raise ValueError("mode must be hourly, daily, or all")
-    state_dir = Path(data_dir) / "state" / agent_id
+    state_dir, resolved_scope_key, scope_type = _owner_state_dir(
+        Path(data_dir), agent_id, acl_bindings, scope_key
+    )
     state_dir.mkdir(parents=True, exist_ok=True)
     lock_path = state_dir / "maintenance.lock"
     try:
@@ -81,7 +129,7 @@ def run_jobs(
             Path(data_dir),
             config,
             agent_id,
-            runtime_scope if runtime_scope is not None else {"agent_id": agent_id},
+            runtime_scope,
         )
         table, _ = runtime._table(create=False)
         if table is None:
@@ -102,6 +150,8 @@ def run_jobs(
                 scope_kwargs["acl_bindings"] = acl_bindings
             if scope_key is not None:
                 scope_kwargs["scope_key"] = scope_key
+            elif acl_bindings is not None:
+                scope_kwargs["scope_key"] = resolved_scope_key
 
             def scoped_call(method: Callable[..., Any], *args: Any) -> Any:
                 return method(*args, **scope_kwargs) if scope_kwargs else method(*args)
@@ -110,8 +160,10 @@ def run_jobs(
                 results["dynamics"] = gate.run(
                     "dynamics", 3_600, lambda: scoped_call(domain.run_dynamics)
                 )
-                results["proactiveCheck"] = gate.run(
-                    "proactive-check", 1_800, domain.proactive_check
+                results["proactiveCheck"] = (
+                    gate.run("proactive-check", 1_800, domain.proactive_check)
+                    if scope_type == "agent-private"
+                    else {"skipped": True, "reason": "agent-private-only"}
                 )
                 # Deliberate divergence from upstream 7.1.9 (a130015): upstream
                 # raised this cadence to 3 h to save model-carrier tokens. The
@@ -119,24 +171,29 @@ def run_jobs(
                 # (proactive.py), so the token rationale does not apply, and the
                 # hourly launchd cadence lands inside the 30-120 min proactive
                 # window far better than a 3 h spacing.
-                results["afterthought"] = gate.run(
-                    "afterthought", 1_800, domain.run_afterthought
+                results["afterthought"] = (
+                    gate.run("afterthought", 1_800, domain.run_afterthought)
+                    if scope_type == "agent-private"
+                    else {"skipped": True, "reason": "agent-private-only"}
                 )
                 reminders = scoped_call(domain.due_reminders)
                 results["reminders"] = {"due": len(reminders)}
                 _atomic_json(state_dir / "pending-reminders.json", {
                     "generatedAt": _utcnow(),
                     "agentId": agent_id,
+                    "scopeKey": resolved_scope_key,
                     "reminders": reminders,
                 })
             if mode in {"daily", "all"}:
-                results["metaReflection"] = gate.run(
-                    "meta-reflection", 604_800, domain.run_meta_reflection
+                results["metaReflection"] = (
+                    gate.run("meta-reflection", 604_800, domain.run_meta_reflection)
+                    if scope_type == "agent-private"
+                    else {"skipped": True, "reason": "agent-private-only"}
                 )
                 results["criticalAutoAccept"] = gate.run(
                     "critical-auto-accept",
                     86_400,
-                    domain.auto_accept_stale_criticals,
+                    lambda: scoped_call(domain.auto_accept_stale_criticals),
                 )
                 results["consolidation"] = gate.run(
                     "consolidation", 86_400, lambda: scoped_call(domain.run_consolidation, table)
@@ -154,12 +211,19 @@ def run_jobs(
                 results["obsidian"] = gate.run(
                     "obsidian", 86_400, lambda: scoped_call(domain.maintain_obsidian)
                 )
-                results["codeIndex"] = gate.run(
-                    "code-index", 86_400, domain.rebuild_code_index
+                results["codeIndex"] = (
+                    gate.run("code-index", 86_400, domain.rebuild_code_index)
+                    if scope_type == "agent-private"
+                    else {"skipped": True, "reason": "agent-private-only"}
                 )
+            incomplete = any(
+                isinstance(result, dict) and result.get("complete") is False
+                for result in results.values()
+            )
             report = {
-                "status": "completed",
+                "status": "partial" if incomplete else "completed",
                 "agentId": agent_id,
+                "scopeKey": resolved_scope_key,
                 "mode": mode,
                 "completedAt": _utcnow(),
                 "results": results,

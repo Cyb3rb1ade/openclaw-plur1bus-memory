@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -20,12 +21,17 @@ class JobRateGate:
             return {}
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, TypeError, ValueError):
-            return {}
-        return {
-            str(key): float(timestamp)
-            for key, timestamp in dict(value).items()
-        }
+            if not isinstance(value, dict):
+                raise ValueError("rate-gate state must be a JSON object")
+            state = {}
+            for key, timestamp in value.items():
+                parsed = float(timestamp)
+                if not math.isfinite(parsed) or parsed < 0:
+                    raise ValueError("rate-gate timestamps must be finite and non-negative")
+                state[str(key)] = parsed
+            return state
+        except (OSError, TypeError, ValueError) as error:
+            raise RuntimeError(f"rate-gate state is unreadable: {error}") from error
 
     def run(
         self,
@@ -45,6 +51,8 @@ class JobRateGate:
                 "nextEligibleAt": last + interval_seconds,
             }
         result = operation()
+        if isinstance(result, dict) and result.get("complete") is False:
+            return result
         state[name] = current
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
