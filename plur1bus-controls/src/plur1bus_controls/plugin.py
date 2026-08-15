@@ -22,7 +22,7 @@ from plur1bus_hermes.critical_review import (
 from .commands import CANONICAL_SUBCOMMANDS, build_command_table
 from .hooks import HookCollector
 from .service import PLUR1BUS_CONTROLS_CONTAINER
-from .request_context import current_identity, is_mutation_authorized
+from .request_context import RequestIdentity, current_identity, is_mutation_authorized
 from .command_parse import parse_correction
 from .confirmations import ConfirmationStore
 
@@ -77,7 +77,11 @@ class Plur1busControlsPlugin:
             return
         agent = identity.profile or self.config.get("defaultAgentId") or "default"
         try:
-            runtime = self._runtime(agent)
+            runtime = (
+                self._runtime(agent, identity)
+                if identity is not None
+                else self._runtime(agent)
+            )
         except Exception as error:
             PLUR1BUS_CONTROLS_CONTAINER.put(
                 "last_delivery_error", f"{type(error).__name__}: {error}"
@@ -210,7 +214,12 @@ class Plur1busControlsPlugin:
             return "PLUR1BUS commands: " + ", ".join(CANONICAL_SUBCOMMANDS)
         try:
             agent, arguments = self._agent_and_arguments(tokens[1:])
-            runtime = self._runtime(agent)
+            identity = current_identity()
+            runtime = (
+                self._runtime(agent, identity)
+                if identity is not None
+                else self._runtime(agent)
+            )
             domain = runtime._domain
             table, _ = runtime._table(create=False)
             controls_config = runtime.config.get("controls") or {}
@@ -247,7 +256,6 @@ class Plur1busControlsPlugin:
                 "enable",
                 "disable",
             }
-            identity = current_identity()
             if (
                 mutating_command
                 and command in confirmation_commands
@@ -358,10 +366,21 @@ class Plur1busControlsPlugin:
                 identity = current_identity()
                 user_scope = "--user" in arguments
                 ids = [argument for argument in arguments if argument != "--user"]
+                if user_scope and (
+                    identity is None or not identity.platform or not identity.user_id
+                ):
+                    return json.dumps({
+                        "shared": False,
+                        "error": "user sharing requires platform and user identity",
+                    }, ensure_ascii=False)
                 principal = SharedPrincipal(
-                    workspace=str(runtime.config.get("workspaceId") or agent),
+                    workspace=str(
+                        (identity.workspace_id if identity else "")
+                        or runtime.config.get("workspaceId")
+                        or agent
+                    ),
                     platform=identity.platform if identity else "",
-                    account="",
+                    account=identity.account if identity else "",
                     user=identity.user_id if identity else "",
                 )
                 return self._require_id(
@@ -526,7 +545,7 @@ class Plur1busControlsPlugin:
         PLUR1BUS_CONTROLS_CONTAINER.put("last_bootstrap_at", _utcnow())
         PLUR1BUS_CONTROLS_CONTAINER.put("commands", self.commands)
 
-    def _runtime(self, agent: str) -> Plur1busRuntime:
+    def _runtime(self, agent: str, identity: RequestIdentity | None = None) -> Plur1busRuntime:
         hermes_home = Path(str(self.config.get("hermesHome") or Path.home() / ".hermes")).expanduser()
         config_path = self._config_path()
         try:
@@ -536,7 +555,10 @@ class Plur1busControlsPlugin:
         data_dir = Path(str(provider_config.get("dataDir") or "plur1bus")).expanduser()
         if not data_dir.is_absolute():
             data_dir = hermes_home / data_dir
-        return Plur1busRuntime(data_dir, provider_config, agent)
+        scope = identity.as_scope() if identity is not None else {}
+        if not scope and provider_config.get("scopeType"):
+            scope = {"scopeType": provider_config["scopeType"]}
+        return Plur1busRuntime(data_dir, provider_config, agent, scope)
 
     def _config_path(self) -> Path:
         """Return the one authoritative provider config path."""

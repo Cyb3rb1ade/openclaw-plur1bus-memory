@@ -42,6 +42,32 @@ class SharedPoolTests(unittest.TestCase):
                 {"workspace-shared", "user-shared"},
             )
 
+    def test_user_pool_filters_foreign_rows_before_the_hard_limit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            owner = SharedPoolStore(
+                root,
+                SharedPrincipal(workspace="ws", platform="telegram", user="owner"),
+            )
+            other = SharedPoolStore(
+                root,
+                SharedPrincipal(workspace="ws", platform="signal", user="other"),
+            )
+            owner.copy(
+                {"id": "53628ada-8595-43dc-92da-216fe2c69836", "status": "active", "content": "owner", "vector": [1.0, 0.0]},
+                source_agent="main",
+                user_scope=True,
+            )
+            other.copy(
+                {"id": "53628ada-8595-43dc-92da-216fe2c69837", "status": "active", "content": "other", "vector": [1.0, 0.0]},
+                source_agent="main",
+                user_scope=True,
+            )
+
+            recalled = owner.recall_rows([1.0, 0.0], 1)
+
+            self.assertEqual([row["content"] for row in recalled], ["owner"])
+
 
 if __name__ == "__main__":
     unittest.main()

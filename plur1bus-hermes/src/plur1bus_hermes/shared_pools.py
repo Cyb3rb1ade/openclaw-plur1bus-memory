@@ -120,7 +120,15 @@ class SharedPoolStore:
                 table = database.open_table("memories")
             except Exception:
                 continue
-            found = table.search(vector).limit(limit).to_list()
+            principal_hash = (
+                self.principal.user_key
+                if name == "user-shared"
+                else self.principal.workspace_key
+            )
+            found = table.search(vector).where(
+                f"sharedScope = '{'user' if name == 'user-shared' else 'workspace'}' "
+                f"AND principalHash = '{principal_hash}' AND status = 'active'"
+            ).limit(limit).to_list()
             for row in found:
                 row["_namespace"] = name
             rows.extend(found)
