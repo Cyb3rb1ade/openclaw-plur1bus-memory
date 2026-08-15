@@ -16,6 +16,12 @@ import {
   loadFeatureCronConfig,
   runSetupFeatureCrons,
 } from "../scripts/setup-feature-crons.mjs";
+import { REQUIRED_FEATURE_CRONS } from "../lib/setup/feature-cron-plan.js";
+
+// Auf den fail-closed-Pfaden meldet das Skript `pendingByDefault`, also die
+// Zahl der ausgelieferten Feature-Crons. Gegen die Konstante prüfen statt gegen
+// eine feste Zahl — sonst bricht jeder neu aufgenommene Job diese Tests.
+const AUSGELIEFERTE_JOBS = REQUIRED_FEATURE_CRONS.length;
 
 const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
@@ -175,6 +181,7 @@ describe("featureCronSetup manifest documentation", () => {
       "rem-dream: merging.enabled",
       "skillMiner.enabled",
       "obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled",
+      "gc-run: gc.enabled",
       "peer.id/defaultTo",
       "never allowFrom",
     ]) {
@@ -507,7 +514,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
 
     assert.equal(result.exitCode, 0);
     assert.equal(result.parsed.reason, "host-direct-dispatch-unavailable");
-    assert.equal(result.parsed.lastPlanCreateCount, 7);
+    assert.equal(result.parsed.lastPlanCreateCount, AUSGELIEFERTE_JOBS);
     assert.deepStrictEqual(
       calls.map((args) => args.join(" ")),
       [
@@ -917,7 +924,7 @@ describe("runSetupFeatureCrons --json", () => {
   it("prints one JSON object and exit 0 when the CLI is unavailable", async () => {
     const result = await runJsonSetupWith(() => ({ ok: false, stdout: "", stderr: "missing", status: 1 }));
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(result.parsed.lastPlanCreateCount, 7);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, AUSGELIEFERTE_JOBS);
     assert.strictEqual(result.parsed.reason, "cli-unavailable");
   });
 
@@ -956,7 +963,7 @@ describe("runSetupFeatureCrons --json", () => {
       throw new Error(secret);
     });
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(result.parsed.lastPlanCreateCount, 7);
+    assert.strictEqual(result.parsed.lastPlanCreateCount, AUSGELIEFERTE_JOBS);
     assert.strictEqual(result.parsed.reason, "unexpected-error");
     assert.strictEqual(result.parsed.message, "unexpected setup failure");
     assert.ok(!result.stdout.includes(secret));

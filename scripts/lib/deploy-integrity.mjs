@@ -264,6 +264,7 @@ export const DEPLOY_FILES = [
   "scripts/reindex-provider.mjs",
   "scripts/repair-dreaming-cron.mjs",
   "scripts/repair-installed-plugin.mjs",
+  "scripts/backfill-manual-core-markers.mjs",
   "scripts/repair-tombstones.mjs",
   "scripts/reapply-tombstones.mjs",
   "scripts/run-graph-links-once.mjs",

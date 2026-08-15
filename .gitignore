@@ -39,6 +39,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/repair-dreaming-cron.mjs
 !scripts/repair-tombstones.mjs
 !scripts/reapply-tombstones.mjs
+!scripts/backfill-manual-core-markers.mjs
 !scripts/verify-workspace-writer.mjs
 !scripts/auto-capture-lancedb.mjs
 !scripts/build-code-index.mjs

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import threading
@@ -230,13 +231,19 @@ class Plur1busMemoryProvider(MemoryProvider):
             "user": str(user or ""),
             "assistant": str(assistant or ""),
             "capturedAt": _utcnow_iso(),
+            "importance": kwargs.get("importance"),
         })
         try:
             payload["agentId"] = safe_agent_id(payload["agentId"])
         except ValidationError:
             return
         if self._runtime:
-            self._runtime.capture_async(payload["user"], payload["assistant"], payload["sessionId"])
+            self._runtime.capture_async(
+                payload["user"],
+                payload["assistant"],
+                payload["sessionId"],
+                importance=payload.get("importance"),
+            )
             return
         try:
             self._capture_queue.put_nowait(payload)
@@ -362,7 +369,15 @@ class Plur1busMemoryProvider(MemoryProvider):
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         return [
-            self._tool_schema("memory_store", "Store a durable PLUR1BUS memory.", {"text": {"type": "string", "maxLength": 20000}}, ["text"]),
+            self._tool_schema(
+                "memory_store",
+                "Store a durable PLUR1BUS memory. Reserve exactly 1.0 importance for a memory you decide must never be forgotten.",
+                {
+                    "text": {"type": "string", "maxLength": 20000},
+                    "importance": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                ["text"],
+            ),
             self._tool_schema("memory_recall", "Recall PLUR1BUS memories.", {"query": {"type": "string", "maxLength": 5000}}, ["query"]),
         ]
 
@@ -373,7 +388,15 @@ class Plur1busMemoryProvider(MemoryProvider):
         if tool_name == "memory_store":
             text = str(arguments.get("text", "")).strip()
             if text:
-                self.sync_turn(text, "", session_id=self._session_id)
+                importance = arguments.get("importance")
+                if importance is not None:
+                    try:
+                        importance = float(importance)
+                    except (TypeError, ValueError):
+                        return json.dumps({"ok": False, "error": "importance must be a number between 0 and 1"})
+                    if not math.isfinite(importance) or not 0 <= importance <= 1:
+                        return json.dumps({"ok": False, "error": "importance must be a number between 0 and 1"})
+                self.sync_turn(text, "", session_id=self._session_id, importance=importance)
                 return json.dumps({"ok": True, "stored": True, "textHash": _fingerprint(text)})
             return json.dumps({"ok": False, "error": "text is required"})
         if tool_name == "memory_recall":

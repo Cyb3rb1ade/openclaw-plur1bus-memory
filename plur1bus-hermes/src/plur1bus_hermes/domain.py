@@ -471,6 +471,7 @@ class Plur1busDomain:
         record: dict[str, Any],
         table: Any,
         *,
+        importance: float | None = None,
         acl_bindings: Any = None,
         scope_key: str | None = None,
         aclBindings: Any = None,
@@ -501,10 +502,10 @@ class Plur1busDomain:
             "createdAt": _utcnow(),
             **analysis,
         })
-        self._store_metadata(record)
+        self._store_metadata(record, importance=importance)
         self._write_obsidian_note(record)
         self._build_graph_edges(record, table)
-        metadata = self._metadata_for(record)
+        metadata = self._metadata_for(record, importance=importance)
         source_role = str(record.get("sourceRole") or "")
         critical = classify_critical(
             str(record.get("content") or ""),
@@ -1330,6 +1331,8 @@ class Plur1busDomain:
         ]
         for row in rows:
             metadata = self._metadata_json(row)
+            if metadata.get("neverForget") or str(metadata.get("memoryClass") or "") == "core":
+                continue
             half_life = max(1, int(metadata.get("halfLifeDays") or 30))
             last = int(metadata.get("lastDynamicsAt") or metadata.get("updatedAt") or metadata.get("sourceTimestamp") or now)
             elapsed_days = max(0.0, (now - last) / 86_400_000)
@@ -2009,14 +2012,16 @@ class Plur1busDomain:
             "dreamPath": str(neo_dir / "dream-diary.jsonl"),
         }
 
-    def _metadata_for(self, record: dict[str, Any]) -> dict[str, Any]:
+    def _metadata_for(self, record: dict[str, Any], *, importance: float | None = None) -> dict[str, Any]:
         content = str(record.get("content") or "")
         is_correction = str(record.get("sourceRole") or "") == "correction"
         emotion, intensity = self._emotion(content)
+        importance_value = self._importance(content, str(record.get("sourceRole") or "")) if importance is None else max(0.0, min(1.0, float(importance)))
+        manual_core = importance is not None and importance_value >= 1.0
         return {
             "text": content,
             "summary": content[:500],
-            "importance": self._importance(content, str(record.get("sourceRole") or "")),
+            "importance": importance_value,
             "category": "conversation",
             "scope": str(record.get("scopeType") or "agent-private"),
             "scopeKey": str(record.get("scopeKey") or ""),
@@ -2029,24 +2034,26 @@ class Plur1busDomain:
             "retrievalCount": 1 if is_correction else 0,
             "lastRetrievedAt": _now_ms() if is_correction else 0,
             "memoryStrength": 1.15 if is_correction else 1.0,
-            "halfLifeDays": 180 if str(record.get("sourceRole")) == "user" else 30,
+            "halfLifeDays": 36500 if manual_core else (180 if str(record.get("sourceRole")) == "user" else 30),
             "lastDynamicsAt": _now_ms(),
-            "neverForget": False,
-            "coreMemoryScore": 0.0,
+            "neverForget": manual_core,
+            "coreMemoryScore": 1.0 if manual_core else 0.0,
+            "memoryClass": "core" if manual_core else "standard",
+            "coreMemoryReason": "manual_importance_marker" if manual_core else "",
             "status": str(record.get("status") or "active"),
             "memoryKind": "memory",
             "reminderStatus": "",
             "remindAt": 0,
         }
 
-    def _store_metadata(self, record: dict[str, Any]) -> None:
+    def _store_metadata(self, record: dict[str, Any], *, importance: float | None = None) -> None:
         agent_dir = self.data_dir / "lancedb" / self.agent_id
         try:
             import lancedb
         except ImportError:
             return
         database = lancedb.connect(str(agent_dir))
-        metadata = self._metadata_for(record)
+        metadata = self._metadata_for(record, importance=importance)
         row = {
             "id": record["id"],
             "agentId": self.agent_id,

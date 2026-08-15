@@ -406,10 +406,10 @@ class Plur1busRuntime:
         self._futures: set[Future[None]] = set()
         self._lock = threading.RLock()
 
-    def capture_async(self, user: str, assistant: str, session_id: str) -> None:
+    def capture_async(self, user: str, assistant: str, session_id: str, *, importance: float | None = None) -> None:
         self._resubmit_capture_retries()
         self._submit_capture(
-            {"user": user, "assistant": assistant, "sessionId": session_id},
+            {"user": user, "assistant": assistant, "sessionId": session_id, "importance": importance},
             attempts=0,
         )
 
@@ -419,6 +419,7 @@ class Plur1busRuntime:
             str(payload.get("user") or ""),
             str(payload.get("assistant") or ""),
             str(payload.get("sessionId") or ""),
+            payload.get("importance"),
         )
         with self._lock:
             self._futures.add(future)
@@ -439,11 +440,12 @@ class Plur1busRuntime:
         return self.data_dir / "state" / "capture-retry.jsonl"
 
     @staticmethod
-    def _retry_key(entry: dict[str, Any]) -> tuple[str, str, str]:
+    def _retry_key(entry: dict[str, Any]) -> tuple[str, str, str, str]:
         return (
             str(entry.get("user") or ""),
             str(entry.get("assistant") or ""),
             str(entry.get("sessionId") or ""),
+            str(entry.get("importance") if entry.get("importance") is not None else ""),
         )
 
     def _read_capture_retries(self) -> list[dict[str, Any]]:
@@ -525,6 +527,7 @@ class Plur1busRuntime:
                     "user": key[0],
                     "assistant": key[1],
                     "sessionId": key[2],
+                    "importance": payload.get("importance"),
                     "attempts": attempts,
                     "lastErrorAt": _utcnow(),
                 })
@@ -862,17 +865,20 @@ class Plur1busRuntime:
             futures = list(self._futures)
         wait(futures, timeout=timeout_seconds)
 
-    def _capture_turn(self, user: str, assistant: str, session_id: str) -> None:
+    def _capture_turn(self, user: str, assistant: str, session_id: str, importance: float | None = None) -> None:
         self._domain.on_turn(
             user,
             assistant,
             session_id,
             acl_bindings=self.scope_binding.as_dict(),
         )
-        self._remember(user, session_id, "user")
+        if importance is None:
+            self._remember(user, session_id, "user")
+        else:
+            self._remember(user, session_id, "user", importance=importance)
         self._remember(assistant, session_id, "assistant")
 
-    def _remember(self, content: str, session_id: str, source_role: str) -> None:
+    def _remember(self, content: str, session_id: str, source_role: str, *, importance: float | None = None) -> None:
         content = content.strip()
         if not content:
             return
@@ -919,7 +925,10 @@ class Plur1busRuntime:
         if table is not None and not inserted:
             table.add([record])
         if table is not None:
-            self._domain.on_memory(record, table)
+            if importance is None:
+                self._domain.on_memory(record, table)
+            else:
+                self._domain.on_memory(record, table, importance=importance)
 
     def _table(self, create: bool, first_record: dict[str, Any] | None = None):
         try:

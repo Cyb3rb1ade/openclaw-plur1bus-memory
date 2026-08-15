@@ -8812,7 +8812,7 @@ const plugin = {
             properties: {
               text: { type: "string", description: "Information to remember" },
               category: { type: "string", enum: MEMORY_CATEGORIES, description: "Memory category" },
-              importance: { type: "number", description: "Importance 0-1 (default 0.5)" },
+              importance: { type: "number", description: "Importance 0-1 (default 0.5). Reserve exactly 1.0 for something you decide you must never forget — it marks the memory as permanent and exempt from garbage collection, compaction and merging. Use it sparingly and only on your own judgement; anything merely very important belongs at 0.85-0.95." },
               origin: { type: "string", enum: MEMORY_ORIGINS, description: "Origin context: 'dm' = direct message (default), 'group' = Telegram group chat, 'cron' = background job, 'internal' = agent-generated. ALWAYS set 'group' when storing from a group chat!" },
               ttl: { type: "string", enum: ["session", "short"], description: "Memory lifetime: 'session' = until tomorrow, 'short' = 14 days. Omit for permanent storage." },
               sourceUrl: { type: "string", description: "Optional URL this memory is derived from (provenance)" },

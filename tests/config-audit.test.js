@@ -543,4 +543,19 @@ describe("Schema-Default-Typen (Humanization strict schema coverage)", () => {
     assertStrictObjectNode("contradictionDisclosure");
     assertBooleanDefault("contradictionDisclosure.enabled", true);
   });
+
+  // runGcJob liest maxDbSizeMb / maxMemoryCount / minMemoryStrength und meldet
+  // ohne mindestens einen davon `no_policy`. Das Schema kannte aber nur
+  // `enabled` und ist `additionalProperties: false` — die Policy war damit
+  // unerreichbar, der GC konnte strukturell nie etwas archivieren.
+  it("gc erlaubt die Policy-Felder, die runGcJob tatsächlich liest", () => {
+    assertStrictObjectNode("gc");
+    assertBooleanDefault("gc.enabled", true);
+    for (const feld of ["maxDbSizeMb", "maxMemoryCount", "minMemoryStrength"]) {
+      const node = getSchemaNode(`gc.${feld}`);
+      assert.ok(node, `gc.${feld} fehlt im Schema — runGcJob liest es, die Config kann es nicht setzen`);
+      assert.strictEqual(node.type, "number", `gc.${feld} muss eine Zahl sein`);
+      assert.strictEqual(typeof node.minimum, "number", `gc.${feld} braucht eine Untergrenze`);
+    }
+  });
 });

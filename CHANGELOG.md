@@ -7,6 +7,16 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [Hermes 7.3.4 / 7.3.4-hermes] — 2026-08-15
+
+### Changed
+
+- Ported the shared 7.3.2–7.3.4 runtime contracts: classifier type `fakt`, the
+  policy-gated garbage-collection cron/schema, and the manual `importance = 1.0`
+  core-memory marker with normalized scores.
+- Added the manual-core backfill command and release tests while retaining the
+  Hermes provider, controls, installer, Jina, and model-provider distribution.
+
 ### Added
 
 - **`mtplx` Hermes model provider.** MTPLX's own `mtplx start hermes` configures a profile-scoped `HERMES_HOME` under `~/.hermes/profiles/mtplx` — a sandbox without the PLUR1BUS memory plugin, the gateway, or the messaging platforms. The new provider plugin (`hermes-model-providers/mtplx/`) registers MTPLX in the *root* Hermes instead, so the local MTP-accelerated model can serve chat while memory, gateway, and platforms stay intact. `scripts/mtplx-hermes-up` starts the daemon, waits for `/v1/models` to answer, and only then rewrites `model.provider`/`model.base_url`/`model.default` — a failed start never leaves the live gateway pointing at a dead endpoint. `--down` restores the saved configuration.

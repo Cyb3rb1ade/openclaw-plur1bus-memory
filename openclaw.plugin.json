@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.3.1-hermes",
+  "version": "7.3.4-hermes",
   "contracts": {
     "memoryEmbeddingProviders": [
       "plur1bus-openai",
@@ -731,6 +731,22 @@
           "enabled": {
             "type": "boolean",
             "default": true
+          },
+          "maxDbSizeMb": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Archive the weakest memories once an agent database exceeds this size. Unset means no size-driven collection."
+          },
+          "maxMemoryCount": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Archive the weakest memories once an agent holds more than this many active rows. Unset means no count-driven collection."
+          },
+          "minMemoryStrength": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Archive every active memory whose memoryStrength falls below this value. Applied independently of the size and count caps."
           }
         }
       },
@@ -1876,7 +1892,7 @@
       "featureCronSetup": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Controls gateway_start provisioning for exactly seven owner-gated jobs: persona-evolve: personaVoice.enabled && skillMiner.enabled; afterthought: afterthought.enabled && (skillMiner.enabled || merging.enabled); consolidate-daily: dailyConsolidation.enabled; classify-recent: criticalPush.enabled; rem-dream: merging.enabled; skill-miner: skillMiner.enabled; discover-semantic-links: obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled. Raw sourceConfig owns gates/schedules; effective runtimeConfig owns bindings/accounts/delivery. Outbound delivery uses concrete peer.id/defaultTo, never allowFrom, and fails closed without model or credential overrides.",
+        "description": "Controls gateway_start provisioning for exactly eight owner-gated jobs: persona-evolve: personaVoice.enabled && skillMiner.enabled; afterthought: afterthought.enabled && (skillMiner.enabled || merging.enabled); consolidate-daily: dailyConsolidation.enabled; classify-recent: criticalPush.enabled; rem-dream: merging.enabled; skill-miner: skillMiner.enabled; discover-semantic-links: obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled; gc-run: gc.enabled. Raw sourceConfig owns gates/schedules; effective runtimeConfig owns bindings/accounts/delivery. Outbound delivery uses concrete peer.id/defaultTo, never allowFrom, and fails closed without model or credential overrides.",
         "properties": {
           "auto": {
             "type": "boolean",
