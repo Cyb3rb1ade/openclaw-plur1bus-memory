@@ -261,7 +261,8 @@ describe("release 7.3.1 skill-miner and compaction security", () => {
       },
     );
 
-    assert.equal(result.deleted, 1, "the candidate action may be generated but must not report a successful archive");
+    assert.equal(result.deleted, 0, "a failed revalidation must not report a successful archive");
+    assert.equal(result.plannedDeleted, 1, "the planned action remains observable separately");
     assert.equal(result.executed, 0);
     assert.deepEqual([...table._archived], []);
     assert.equal(table._rows.find((row) => row.id === userA2).ownerUserId, USER_B);
