@@ -5920,6 +5920,40 @@ const plugin = {
                 }
                 const remRuns = [];
                 for (const remAclPartition of remAclPartitions) {
+                  // The command store and workspace directory are safe only for
+                  // the exact workspace partition represented by memoryCtx. No
+                  // physically owner-bound pattern/output store exists here for
+                  // agent-private or user partitions, so those runs fail closed.
+                  const commandWorkspaceKey = workspaceKeyFromContext(commandCtx, {
+                    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
+                    rootDir: neoRoot,
+                    runtime: api.runtime,
+                    sessionWorkspaceKeys,
+                    workspaceAliases: neoWorkspaceAliases,
+                  });
+                  const workspaceSinkAllowed = remAclPartition.scope === "workspace"
+                    && memoryCtx?.workspaceDir
+                    && remAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity
+                    && commandWorkspaceKey === remAclPartition.workspaceIdentity;
+                  const remSink = workspaceSinkAllowed
+                    ? (() => {
+                        const boundNeoStore = Object.freeze({
+                          ...commandStore,
+                          aclBindings: remAclPartition,
+                        });
+                        const boundWorkspaceTarget = Object.freeze({
+                          aclBindings: remAclPartition,
+                          kind: "workspace",
+                          workspaceDir: memoryCtx.workspaceDir,
+                        });
+                        return Object.freeze({
+                          aclBindings: remAclPartition,
+                          neoStore: boundNeoStore,
+                          inputTarget: boundWorkspaceTarget,
+                          outputTarget: boundWorkspaceTarget,
+                        });
+                      })()
+                    : null;
                   const partitionResult = await pool.withDb(internalAgent, async (db) => {
                     await db.init();
                     return runRemDream({
@@ -5928,28 +5962,23 @@ const plugin = {
                       narrativeLlmCfg: commandRoute(dreamNarrativeLlmCfg, "dream-narrative"),
                       echoLlmCfg: commandRoute(dreamEchoLlmCfg, "dream-echo"),
                       callLlm,
-                      neoStore: commandStore,
-                      workspaceKey: workspaceKeyFromContext(commandCtx, {
-                        defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-                        rootDir: neoRoot,
-                        runtime: api.runtime,
-                        sessionWorkspaceKeys,
-                        workspaceAliases: neoWorkspaceAliases,
-                      }),
+                      neoStore: remSink?.neoStore || null,
+                      workspaceKey: remAclPartition.workspaceIdentity || remAclPartition.ownerUserId || remAclPartition.agentId,
                       agentId: internalAgent,
                       requestContext: memoryCtx,
                       aclPartition: remAclPartition,
+                      partitionSink: remSink,
                       logger: api.logger,
                       maxMemories: isLocalProvider ? 1000 : 5000,
                       topK: isLocalProvider ? 10 : 20,
                       narrativeCfg: dreamNarrativeCfg,
                       embeddings,
-                      workspaceDir: commandCtx?.workspaceDir || null,
+                      workspaceDir: remSink?.inputTarget?.workspaceDir || null,
                       temperamentName: resolveTemperamentName(internalAgent),
                     });
                   });
-                  if (partitionResult.report && commandCtx.workspaceDir) {
-                    writeRemDreamToVault(partitionResult.report, partitionResult.trends, commandCtx.workspaceDir);
+                  if (partitionResult.report && remSink?.outputTarget) {
+                    writeRemDreamToVault(partitionResult.report, partitionResult.trends, remSink.outputTarget);
                   }
                   api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(partitionResult.report || partitionResult)}`);
                   remRuns.push({ scope: remAclPartition.scope, result: partitionResult });
@@ -5990,27 +6019,55 @@ const plugin = {
                       agentId: internalAgent,
                       purpose: LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
                     };
-                const result = await pool.withDb(internalAgent, async (rawDb) => {
-                  await rawDb.init();
-                  return runSkillMiner(rawDb, internalAgent, {
-                    logger: api.logger,
-                    neoStore: commandStore,
-                    workspaceDir: commandCtx.workspaceDir,
-                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                    llmCfg: withLlmCallContext(
-                      skillMinerLlmCfg,
-                      skillMinerCallContext.agentId,
-                      LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
-                      { runtimeLlm: skillMinerCallContext.runtimeLlm },
-                    ),
-                    callLlm,
-                    maxPerRun: skillMinerCfg.maxPerRun ?? 5,
-                    minConfidence: skillMinerCfg.minConfidence ?? 0.6,
-                    minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                const skillRuns = [];
+                for (const skillAclPartition of buildRemPartitions(memoryCtx)) {
+                  // Proposals are currently written to a workspace directory.
+                  // That is a protected sink only for the exact workspace
+                  // partition; never scan private/user rows into that file.
+                  const protectedWorkspaceOutput = skillAclPartition.scope === "workspace"
+                    && memoryCtx?.workspaceDir
+                    && skillAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity;
+                  if (!protectedWorkspaceOutput) {
+                    skillRuns.push({
+                      scope: skillAclPartition.scope,
+                      skipped: true,
+                      reason: "acl_sink_missing",
+                    });
+                    continue;
+                  }
+                  const result = await pool.withDb(internalAgent, async (rawDb) => {
+                    await rawDb.init();
+                    return runSkillMiner(rawDb, internalAgent, {
+                      logger: api.logger,
+                      neoStore: commandStore,
+                      requestContext: memoryCtx,
+                      aclPartition: skillAclPartition,
+                      workspaceDir: memoryCtx.workspaceDir,
+                      workspaceKey: skillAclPartition.workspaceIdentity,
+                      llmCfg: withLlmCallContext(
+                        skillMinerLlmCfg,
+                        skillMinerCallContext.agentId,
+                        LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                        { runtimeLlm: skillMinerCallContext.runtimeLlm },
+                      ),
+                      callLlm,
+                      maxPerRun: skillMinerCfg.maxPerRun ?? 5,
+                      minConfidence: skillMinerCfg.minConfidence ?? 0.6,
+                      minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                    });
                   });
+                  skillRuns.push({ scope: skillAclPartition.scope, result });
+                }
+                api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(skillRuns)}`);
+                const result = skillRuns.find((run) => run.result)?.result || skillRuns[0] || {
+                  skipped: true,
+                  reason: "acl_sink_missing",
+                };
+                return formatJsonCommandResult({
+                  job: "skill-miner",
+                  partitions: skillRuns.map((run) => ({ scope: run.scope, skipped: run.skipped ?? run.result?.skipped ?? false, reason: run.reason || run.result?.reason })),
+                  ...(result.result || result),
                 });
-                api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(result)}`);
-                return formatJsonCommandResult({ job: "skill-miner", ...result });
               }
               if (subKey === "afterthought") {
                 if ((cfg.afterthought?.enabled ?? true) === false
@@ -7580,6 +7637,23 @@ const plugin = {
 
         const agentId = ctx?.agentId || "default";
         const background = isBackgroundTurn(event, ctx);
+        let memoryCtx = null;
+        try {
+          memoryCtx = resolveMemoryRequestContext({
+            agentId,
+            workspaceDir: ctx?.workspaceDir,
+            workspaceKey: ctx?.workspaceKey,
+            workspaceId: ctx?.workspaceId,
+            userId: ctx?.userId ?? ctx?.senderId,
+            channel: ctx?.channel ?? ctx?.messageProvider,
+            accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
+            chatId: ctx?.chatId,
+            sessionKey: ctx?.sessionKey ?? event?.sessionKey,
+            sessionId: ctx?.sessionId ?? event?.sessionId,
+          }, { workspaceAliases: memoryWorkspaceAliases });
+        } catch (err) {
+          api.logger?.debug?.(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
+        }
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
@@ -8239,6 +8313,15 @@ const plugin = {
                   entities: row.entities || [],
                   emotionalDominant: row.emotionalDominant,
                   emotionalIntensity: row.emotionalIntensity,
+                  status: row.status || "active",
+                  epistemicStatus: row.epistemicStatus || "",
+                  expiresAt: row.expiresAt ?? 0,
+                  scope: row.scope,
+                  agentId: row.agentId,
+                  storedBy: row.storedBy,
+                  workspaceId: row.workspaceId || "",
+                  workspaceKey: row.workspaceKey || "",
+                  ownerUserId: row.ownerUserId || "",
                 }));
 
                 // Lade existierende Edges für Deduplizierung
@@ -8252,17 +8335,23 @@ const plugin = {
                     limit: 100,
                     sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
                     includeGlobalRecent: true,
-                    fields: ["id", "createdAt", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity"],
+                    fields: [
+                      "id", "createdAt", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity",
+                      "status", "epistemicStatus", "expiresAt", "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId",
+                    ],
                   });
-                } catch (_) { /* ignore */ }
+                } catch (err) {
+                  api.logger?.debug?.(`memory-graph: recent ownership projection failed: ${String(err)}`);
+                }
 
                 // Baue neue Edges
-                const allEdges = await buildEdgesForSession(
+                const allEdges = memoryCtx ? await buildEdgesForSession(
                   newMemories.filter(m => m.vector),
                   [...recentExisting, ...newMemories],
                   db.table,
-                  api.logger
-                );
+                  api.logger,
+                  { requestContext: memoryCtx },
+                ) : [];
 
                 // Episode-Anchor-Edges — nur für Episoden im aktuellen Zeitfenster
                 const allEpisodes = neoStore.readEpisodes(100);
@@ -9831,7 +9920,12 @@ const plugin = {
                   now: Date.now(),
                   logger: api.logger,
                   compactedAt: event?.compactedAt || ctx?.compactedAt || null,
-                  getMemoryById: async (memoryId) => db.getById(memoryId),
+                  requestContext: memoryCtx,
+                  getMemoryById: async (memoryId) => {
+                    const memory = await db.getById(memoryId);
+                    if (!memory || !checkAccess(memoryCtx, memory).allowed) return null;
+                    return memory;
+                  },
                   decisionTrace: traceEnabled ? trace : null,
                 }),
                 new Promise((_, reject) =>
