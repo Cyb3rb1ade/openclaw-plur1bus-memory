@@ -7,6 +7,33 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.3.4] — 2026-08-15
+
+### Behoben
+
+- **`importance = 1.0` wirkt wieder.** Der Wert ist dem Agenten vorbehalten: er markiert
+  damit im Gespräch eine Erinnerung, die er subjektiv nicht vergessen will. Die Geste kam
+  bis hierher in der Datenbank an und wurde ignoriert — `computeCoreMemoryScore` verlangte
+  zusätzlich `emotionalIntensity >= 0.95`, und diesen Wert kann der Agent gar nicht setzen;
+  er stammt aus der automatischen Tonanalyse des Textes. Eine ruhig formulierte
+  Sicherheitsnotiz, genau der gemeinte Fall, hat emotionale Intensität 0. Live betroffen:
+  zwei medizinische Sicherheitsnotizen, beide ungeschützt.
+- **Core-Memory war rechnerisch unerreichbar.** `novelty` und `userCorrection` wurden in
+  beide Scores eingerechnet, existieren aber als Spalten nicht und wurden über die gesamte
+  Historie nie geschrieben. Sie trugen 10 % des Core- und 30 % des Flashbulb-Scores: Core
+  lag damit bei maximal 0,90 gegen Schwelle 0,95, Flashbulb feuerte nur im singulären Punkt
+  `1.0/1.0`. Die Gewichte sind auf die tatsächlich vorhandenen Merkmale normiert. Dieser
+  Befund war als M1-03 seit dem 16.06.2026 dokumentiert und nie umgesetzt.
+- Die Beschreibung des `importance`-Parameters nennt den Vertrag jetzt ausdrücklich. Vorher
+  stand dort nur „Importance 0-1 (default 0.5)" — der Agent konnte von der Reservierung
+  nichts wissen.
+
+### Hinzugefügt
+
+- `scripts/backfill-manual-core-markers.mjs` rüstet den Schutz für bereits gespeicherte
+  `importance = 1.0`-Erinnerungen nach. `applyDynamicsDefaults` kodiert nur bei neuen
+  Einträgen, ältere Markierungen blieben deshalb wirkungslos. Dry-Run als Standard.
+
 ## [7.3.3] — 2026-08-15
 
 ### Behoben
