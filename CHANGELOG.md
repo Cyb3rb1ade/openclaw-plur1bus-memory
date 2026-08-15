@@ -7,6 +7,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.3.0] — 2026-08-15
+
 ### Hinzugefügt
 
 - **Bi-Temporal Memory (`validFrom`/`validUntil`).** Zwei neue Spalten für
@@ -141,6 +143,133 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Vier Abfragen ließen einen Deckel entscheiden, was sie überhaupt zu sehen
+  bekommen.** Jeweils ein `limit(N)` ohne `where`-Pushdown, hinter dem in
+  JavaScript weitergefiltert wurde. LanceDB liefert in Einfügereihenfolge, der
+  Präfix sind also die ältesten Zeilen; auf einer Tabelle über dem Deckel lagen
+  die gesuchten Zeilen sämtlich außerhalb. Der Deckel entschied damit nicht, wie
+  viele Zeilen zurückkommen, sondern *welche überhaupt betrachtet werden*.
+  Read-only an den Live-Daten gemessen (14./15.08.2026, bernhardine 13.700
+  Zeilen / main 9.375): `loadCompactionCandidates` sah 0 statt 1.965 bzw. 1.071
+  Kandidaten, `skill-miner`s `loadMemories` 0 statt 589 bzw. 323. Betroffen
+  waren außerdem `findPendingCriticalReviews` (Pending-Review-Ledger und
+  Kurzreferenz-Auflösung von `/plur1bus critical`) und `findUnconfirmedCritical`
+  (bislang maskiert, weil noch keine Critical-Typen existierten). Alle vier
+  filtern jetzt in der `where`-Klausel; der Deckel greift danach und ist
+  parametrisierbar. Das JS-Prädikat bleibt überall als konvergierendes
+  Sicherheitsnetz stehen, inklusive Fallback für Query-Builder ohne `where()`.
+- **Der Critical-Klassifizierer lief seit `2291f95` (28.05.2026) ins Nichts.**
+  `MemoryDB.normalizeEntryForTable` setzt bei jedem Insert `type = "memory"` —
+  ein Schema-Zwang, LanceDB verlangt jedes Feld. `findRecentUnclassified` suchte
+  aber `type IS NULL OR type = ''`. Die Schnittmenge war für jede je
+  gespeicherte Karte leer; jeder Cron-Lauf loggte
+  `{"processed":0,"note":"no recent unclassified cards"}`. `"memory"` ist ein
+  Speicher-Sentinel und kein Klassifikationsergebnis (das Vokabular ist
+  `person`/`beziehung`/`geburtstag`/`geld_konto`/`gesundheit`/`zugang_passwort`
+  plus `fakt`/`info`/`note`) und gehört deshalb in `UNCLASSIFIED_TYPES`. Zwei
+  weitere Defekte derselben Klasse mitbehoben: die Rückschau war fest auf 30
+  Minuten verdrahtet, während der Cron alle 3 Stunden läuft (150 von 180 Minuten
+  wurden nie angesehen — das Fenster wandert nur nach vorn, was einmal
+  herausfällt, bleibt für immer unklassifiziert; Default jetzt 24 h und über
+  `criticalPush.sinceMinutes` überschreibbar), und der Zeilendeckel von 50 pro
+  Lauf ließ Karten stranden (live gemessen bis zu 90 neue Karten je
+  200-Minuten-Fenster; jetzt 500).
+- **rem-dream: die ACL-Partition deckte den Scope der Daten nie ab.** Der
+  Aufrufer baute sie ausschließlich als `user` oder `workspace`, nie
+  `agent-private`. `loadCandidateMemories` filtert über `sameRemBindings`, und
+  das vergleicht `a.scope === b.scope`; live sind 70 von 70 (bernhardine) bzw.
+  49 von 49 (main) Kandidaten `agent-private`, also fiel jede Zeile heraus und
+  der Job meldete dauerhaft `too_few_memories, count: 0`. `buildRemPartitions()`
+  liefert jetzt alle sinnvollen Partitionen in Laufreihenfolge, `agent-private`
+  zuerst, und der Aufrufer läuft je Partition. Mehrere Läufe waren
+  architektonisch vorgesehen und wurden nur nie genutzt: `buildRunKey` bindet
+  den Run-Key an die Partition, `writeRemDreamToVault` schreibt nach
+  `${weekOf}-${partition.key}-rem-dream.md` — getrennte Deduplizierung,
+  getrennte Dateien.
+- **Ein abgebrochener Append legte die gesamte Erfassung eines Agenten stumm
+  still.** `findBlockingTombstoneForCapture` lieferte bei `corruptLines > 0`
+  einen synthetischen Blocker für *jeden* `memory_store`, und
+  `readTombstonesFromRegistry` warf parallel bei jedem Forget-Retry. Auslöser
+  war eine einzige abgeschnittene `appendFileSync`-Zeile (Absturz, ENOSPC);
+  einziges Signal war eine `warn`-Zeile, einen Reparaturweg gab es nicht.
+  Toleriert wird jetzt ausschließlich ein echter torn write — letzte physische
+  Zeile, ohne abschließendes `\n`, syntaktisch unvollständiges JSON, Rest
+  vollständig gültig. Das Fragment wandert unter Lock beweissicher nach
+  `<agent>.corrupt.log` (bewusst nicht `.jsonl`: `reapply-tombstones.mjs` leitet
+  seine Agent-Liste aus den Dateinamen ab und hätte sonst einen Phantom-Agenten
+  erfunden und jedes Snapshot-Restore fail-closed abgebrochen), die Registry
+  wird per `truncate` gekürzt — nicht per `rename`, damit ein paralleler
+  `O_APPEND`-Deskriptor nicht ins Leere schreibt — und anschließend vollständig
+  neu validiert. Jeder Fehlschlag bleibt fail-closed. Vollständiges JSON, das
+  die Validierung nicht besteht, und ein beschädigter Tail *mit* Newline gelten
+  weiterhin als Korruption.
+- **`/plur1bus critical` mutierte ohne Per-Karten-ACL.** Gegated war nur über
+  `checkAuth(destructive)`, ein Chat-/Kanal-Gate, während
+  `findPendingCriticalReviews` jede Critical-Karte des Agenten lieferte —
+  unabhängig von `scope`/`ownerUserId`/`agentId`. In einer geteilten Agent-DB
+  konnte ein anderer autorisierter Sprecher fremde Karten listen (Typ und
+  Existenz, etwa `zugang_passwort`) und per `accept`/`reject` mutieren; `edit`
+  gab zusätzlich `card.title` aus, also die ersten 80 Zeichen des Inhalts. Der
+  ACL-Filter läuft jetzt **vor** `assignShortRefs`, dadurch bekommt eine fremde
+  Karte gar keine Kurzreferenz und Liste, `accept`, `reject` und `edit` sind mit
+  einer Änderung abgedeckt. Ohne Kontext bleibt die Liste vollständig — der
+  Klassifizierer-Cron läuft im Systemkontext.
+- **`correctCard` konnte eine getombsteinte Erinnerung wiederbeleben.** Gelesen
+  wird über `db.getCard()`, das keinen Status-Filter hat; `card.status` wurde
+  nicht geprüft. `updateCard` hätte eine neue aktive Zeile mit dem korrigierten
+  Text und neuer ID angelegt und den Tombstone der alten mit `superseded`
+  überschrieben — eine Resurrection, die `reapply-tombstones.mjs` nicht
+  einfängt, weil die Registry nur die alte ID kennt. Erreichbar war das über das
+  Fenster suchen → Bestätigung anfordern → vergessen → Bestätigung einlösen.
+  Abgelehnt wird jetzt mit derselben Meldung wie „nicht gefunden"; ein eigener
+  Text wäre ein Existenz-Orakel. Aus demselben Grund vereinheitlicht:
+  `memory_forget` unterschied im ID-Pfad zwischen `Memory <id> not found.` und
+  `No matching memory found.`
+- **`getRecentForGraph` und `rem-dream` bauen ihre `where`-Klausel jetzt aus dem
+  Live-Schema.** Eine feste Klausel bricht, sobald eine referenzierte Spalte
+  fehlt, und der `catch` verwandelt den Fehler still in einen ungefilterten
+  Präfix-Scan beziehungsweise in ein leeres Ergebnis ohne Logzeile — bei
+  `getRecentForGraph` bedeutet das, dass `buildEdgesForSession` keine
+  Bestandserinnerungen sieht und nur noch Kanten innerhalb einer Sitzung
+  entstehen. Zusätzlich NULL-sicher formuliert:
+  `(epistemicStatus IS NULL OR epistemicStatus != 'invalidated')` statt der
+  dreiwertigen Kurzform, die Zeilen ohne gesetzten Wert still verworfen hätte.
+- **`superseded` fiel aus dem Active-Scan und damit aus der Garbage
+  Collection.** Die Umstellung auf eine Positiv-Whitelist war für Recall, Shared
+  Search und die Vault-Notizen richtig, schloss aber auch überholte Fassungen
+  aus, die die alte Negativliste eingeschlossen hatte. `garbage-collector.js`
+  zählt alles außer `archived`/`deleted` als sammelbar, bezieht seine Eingabe
+  aber ausschließlich aus dem Active-Scan — zusammen mit dem entfallenen
+  Hard-Delete wuchs die Tabelle nur noch. Die gemeinsame Whitelist bleibt
+  unangetastet; der GC bekommt mit `scanCollectable*` einen eigenen,
+  ausdrücklich benannten Pfad.
+- **skill-miner prüfte Felder, die es auf `memories`-Zeilen nicht gibt.**
+  `isTrustedSkillEvidence` verlangte `origin === "user_confirmation"` oder
+  `trustLevel ∈ {validated, curated}`. `trustLevel` gehört zu NEO
+  (`lib/neo-arch.js`), nicht zur `memories`-Tabelle, und `origin` nimmt real nur
+  `dm`/`group`/`cron`/`internal`/`dreaming-promotion`/`memory-md-migration`/
+  `dream` an — beide Zweige waren unerfüllbar. Das Gate nutzt jetzt den
+  Trust-Zustand, den LanceDB tatsächlich führt (`epistemicStatus`, zugelassen
+  sind `corroborated` und `trusted`), und dieselbe Funktion trägt Aufnahme *und*
+  Bewertung, die vorher getrennte Definitionen hatten.
+- **`findBlockingTombstoneForCapture` las bei jeder Erfassung die vollständige
+  Registry synchron ein** und parste sie zeilenweise — blockierend im
+  Event-Loop, ohne Cache und ohne Size-Cap, bei einer Datei, die um zwei Zeilen
+  pro Forget wächst und nie kompaktiert wird. Die geparste Registry wird jetzt
+  je Datei gecacht und über `mtimeMs` und Größe validiert; beide Schreibpfade
+  ändern beides, eine zusätzliche Invalidierung ist deshalb nicht nötig. Nicht
+  kompaktiert wird weiterhin nichts — die Registry ist der Audit-Trail, gekürzt
+  werden nur die Parse-Kosten.
+- **Kleinkram.** `/plur1bus critical list` war in `isSensitiveChatRead` bereits
+  autorisiert, landete im Handler aber im Usage-Zweig. `repair-tombstones.mjs`
+  setzte nie einen Exit-Code, auch nicht bei beschädigten Quellzeilen — die
+  Umkehrung des fail-closed-Vertrags von `reapply-tombstones.mjs`; dazu ein
+  ungenutzter Import entfernt (`npm run lint` ist nur `node --check` und fängt
+  so etwas nicht). `critical.failed` wurde ohne `{{error}}`-Var gerendert, der
+  Nutzer sah einen hängenden Doppelpunkt. Beide Tombstone-Skripte sind ohne
+  `--apply` wieder strikt read-only: die Torn-Tail-Reparatur ist ein
+  Schreibvorgang und hätte deren Dry-Run-Zusage gebrochen.
+
 - **`__schema__`-Bootstrap-Zeile (`index.js`, Zweig ohne vorbestehende
   Tabelle) kannte die sieben Spalten der letzten beiden Features nicht**
   (`epistemicStatus`, `epistemicStatusUpdatedAt`, `epistemicStatusActor`,
@@ -178,10 +307,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   aber nirgends im Chat verdrahtet.
 - `system:tombstone-cascade` (die Actor-Stufe, die eine Erinnerung nur auf
   `invalidated` setzen darf) ist implementiert und isoliert getestet, aber
-  nirgends verdrahtet: `/forget` löscht Zeilen hart
-  (`lib/telegram-commands/memory-edit.js`s `forgetCard` →
-  `db.deleteCard`), es bleibt also keine Zeile übrig, auf der die Kaskade
-  etwas markieren könnte.
+  weiterhin nirgends verdrahtet. Die frühere Begründung („`/forget` löscht
+  Zeilen hart") gilt seit dem kanonischen Tombstone-Vertrag nicht mehr —
+  `forgetCard` tombstoniert Archive-First, die Zeile bleibt also erhalten. Die
+  Kaskade hätte jetzt etwas zu markieren, ruft sie aber niemand auf.
+- skill-miner fördert bis auf Weiteres nichts. Das Gate lässt nur
+  `corroborated`/`trusted` zu, und diese Werte setzt ausschließlich
+  `/plur1bus correct trust` von Hand; `combineEpistemicStatusForMerge` nimmt das
+  Minimum der Leiter und kann nur herabstufen. Bestandszeilen normalisieren nach
+  der Migration auf `untrusted`. Das ist die bewusste fail-closed-Entscheidung,
+  keine Regression — nur sollte niemand erwarten, dass der Job nach dem Upgrade
+  Vorschläge produziert.
 - Der Merge-Zweig in `lib/jobs/memory-compaction.js`s `executeActions()` ist
   mit der korrekten `epistemicStatus`-Kombinationsregel ausgestattet, aber in
   der aktuellen Codebasis über `isLowRiskAutoApplyAction()` auf
