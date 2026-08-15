@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from plur1bus_hermes.domain import Plur1busDomain
+from plur1bus_hermes.namespaces import binding_from_scope
 
 
 class _Search:
@@ -29,6 +30,8 @@ class _Table:
 
     def update(self, where, values):
         self.updates.append((where, values))
+        for row in self.rows:
+            row.update(values)
 
 
 class GcCompactionTests(unittest.TestCase):
@@ -53,7 +56,10 @@ class GcCompactionTests(unittest.TestCase):
             self.assertTrue(
                 (
                     Path(temporary)
-                    / f"archives/main/gc/{memory_id}.json"
+                    / "archives"
+                    / "main"
+                    / binding_from_scope("main").scope_key
+                    / f"{memory_id}.json"
                 ).is_file()
             )
             self.assertEqual(table.updates[0][1], {"status": "archived"})

@@ -432,15 +432,17 @@ class AgentBindingAndPrincipalValidationTests(unittest.TestCase):
         }
 
     def test_tombstone_with_foreign_agent_in_registry_file_is_corrupt(self) -> None:
-        from plur1bus_hermes.tombstone import (
-            append_tombstone_to_registry,
-            find_blocking_tombstone_for_capture,
-        )
+        from plur1bus_hermes.tombstone import find_blocking_tombstone_for_capture
         from plur1bus_hermes.tombstone import build_tombstone
         tombstone = build_tombstone(
             card={"id": UUID_A, "content": "Fakt", "scope": "agent-private"}, agent_id="agent-b"
         )
-        append_tombstone_to_registry(self.base, "agent-a", {**tombstone, "status": "committed"})
+        registry = self.base / "_tombstones" / "agent-a.jsonl"
+        registry.parent.mkdir(parents=True)
+        registry.write_text(
+            json.dumps({**tombstone, "status": "committed"}) + "\n",
+            encoding="utf-8",
+        )
 
         blocking = find_blocking_tombstone_for_capture(self.base, {"agentId": "agent-a", "text": "Fakt", "scope": "agent-private"})
         self.assertIsNotNone(blocking, "Agent-Mismatch muss fail-closed blockieren")
@@ -457,7 +459,7 @@ class AgentBindingAndPrincipalValidationTests(unittest.TestCase):
         self.assertFalse(is_valid_tombstone({**base, "contentFingerprint": "abc"}, "agent-a"))
         self.assertFalse(is_valid_tombstone(base, "agent-b"), "Agent-Bindung")
         self.assertTrue(is_valid_tombstone({**base, "scope": "workspace", "workspaceId": "ws-1"}, "agent-a"))
-        self.assertTrue(is_valid_tombstone({**base, "scope": "user", "ownerUserId": "user:v1:aaa"}, "agent-a"))
+        self.assertTrue(is_valid_tombstone({**base, "scope": "user", "ownerUserId": "user:v1:aaa", "ownerPlatform": "telegram"}, "agent-a"))
 
     def test_unsafe_agent_id_is_rejected(self) -> None:
         from plur1bus_hermes.tombstone import is_valid_tombstone

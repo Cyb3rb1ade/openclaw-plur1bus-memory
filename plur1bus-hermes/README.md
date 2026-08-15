@@ -94,5 +94,23 @@ and PLUR1BUS dependencies are installed into the same environment.
 
 - `plur1bus-hermes` – lightweight CLI wrapper for status/help.
 - `plur1bus-hermes-migrate` – migration command scaffold.
+- `plur1bus-hermes-jobs` – scope-bound scheduled maintenance runner.
+- `plur1bus-hermes-repair-tombstones` – fail-closed recovery for a process
+  interruption between soft-delete and the committed tombstone append. It is a
+  read-only dry run by default; pass `--apply` only after reviewing the report:
+
+  ```bash
+  plur1bus-hermes-repair-tombstones \
+    --data-dir /path/to/hermes/plur1bus-data \
+    --agent AGENT_ID
+  plur1bus-hermes-repair-tombstones \
+    --data-dir /path/to/hermes/plur1bus-data \
+    --agent AGENT_ID \
+    --apply
+  ```
+
+  Corrupt registries, mismatched archives, active cards, foreign agents/scopes,
+  and fingerprint mismatches stop repair with a non-zero exit status. Repeated
+  successful application is idempotent.
 
 For full parity features, refer to `docs/superpowers/plans/2026-07-25-plur1bus-hermes-migration.md`.

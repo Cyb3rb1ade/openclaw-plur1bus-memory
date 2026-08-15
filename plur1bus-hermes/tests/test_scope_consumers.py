@@ -258,6 +258,7 @@ class ScopeConsumerTests(unittest.TestCase):
             scoped = {
                 "run_dynamics",
                 "due_reminders",
+                "auto_accept_stale_criticals",
                 "run_consolidation",
                 "run_gc",
                 "run_dreaming",

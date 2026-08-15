@@ -9,6 +9,7 @@ from pathlib import Path
 import lancedb
 
 from plur1bus_hermes.domain import Plur1busDomain
+from plur1bus_hermes.namespaces import binding_from_scope
 
 
 class DomainTests(unittest.TestCase):
@@ -17,10 +18,13 @@ class DomainTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.agent_dir = self.root / "lancedb" / "main"
         self.agent_dir.mkdir(parents=True)
+        binding = binding_from_scope("main")
         self.record = {
             "id": "619c3d51-1d9d-4736-8bf9-91b38aff8246",
             "agentId": "main",
-            "scopeKey": "scope",
+            "scopeKey": binding.scope_key,
+            "scopeType": binding.scope_type,
+            "aclBindings": binding.as_dict(),
             "sessionId": "session",
             "content": "Bitte merke diese wichtige Information.",
             "status": "active",
