@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -51,7 +51,6 @@ const DEFAULT_BASE_DB = join(openclawHome(), "memory", "lancedb-namespaced");
 const DEFAULT_ARCHIVE = join(openclawHome(), "memory", "_archive");
 
 function readJsonl(path) {
-  if (!existsSync(path)) return { records: [], corruptLines: 0 };
   const records = [];
   let corruptLines = 0;
   let text;
@@ -67,36 +66,52 @@ function readJsonl(path) {
   return { records, corruptLines };
 }
 
-function findDestructiveOpsFiles(root) {
+function findDestructiveOpsFiles(root, { required = false } = {}) {
   const results = [];
+  const errors = [];
   const stack = [root];
   while (stack.length) {
     const dir = stack.pop();
     let entries;
-    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      if (!(dir === root && !required && err?.code === "ENOENT")) {
+        errors.push({ root: dir, error: err?.message || String(err) });
+      }
+      continue;
+    }
     for (const entry of entries) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) stack.push(full);
       else if (entry.name === "destructive-ops.jsonl") results.push(full);
     }
   }
-  return results;
+  return { files: results, errors };
 }
 
-function findArchiveJsonFiles(archiveDir) {
+function findArchiveJsonFiles(archiveDir, { required = false } = {}) {
   const results = [];
+  const errors = [];
   const stack = [archiveDir];
   while (stack.length) {
     const dir = stack.pop();
     let entries;
-    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      if (!(dir === archiveDir && !required && err?.code === "ENOENT")) {
+        errors.push({ root: dir, error: err?.message || String(err) });
+      }
+      continue;
+    }
     for (const entry of entries) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) stack.push(full);
       else if (entry.name.endsWith(".json")) results.push(full);
     }
   }
-  return results;
+  return { files: results, errors };
 }
 
 // Kollisionsbewusste Namenszuordnung: ein Basename darf nur dann verwendet
@@ -181,11 +196,20 @@ function main() {
   const baseDbPath = args.baseDbPath || DEFAULT_BASE_DB;
   const archiveDir = args.archiveDir || DEFAULT_ARCHIVE;
 
-  const destructiveOpsFiles = args.workspaces.length
-    ? args.workspaces.flatMap((w) => findDestructiveOpsFiles(w))
-    : findDestructiveOpsFiles(process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"));
+  const sourceErrors = [];
+  const workspaceRoots = args.workspaces.length
+    ? args.workspaces.map((root) => ({ root, required: true }))
+    : [{ root: process.env.OPENCLAW_HOME || join(homedir(), ".openclaw"), required: false }];
+  const destructiveOpsFiles = [];
+  for (const { root, required } of workspaceRoots) {
+    const discovery = findDestructiveOpsFiles(root, { required });
+    destructiveOpsFiles.push(...discovery.files);
+    sourceErrors.push(...discovery.errors);
+  }
 
-  const archiveFiles = findArchiveJsonFiles(archiveDir);
+  const archiveDiscovery = findArchiveJsonFiles(archiveDir, { required: args.archiveDir !== null });
+  const archiveFiles = archiveDiscovery.files;
+  sourceErrors.push(...archiveDiscovery.errors);
   const { map: archiveByName, collisions: archiveNameCollisions } = archiveByFilenameMap(archiveFiles);
   const { byAgent: existingRegistries, errors: registryErrors } = readRegistriesForPlan(baseDbPath);
 
@@ -193,7 +217,6 @@ function main() {
   const skipped = [];
   const conflicted = [];
   const missingContent = [];
-  const sourceErrors = [];
   const unacceptableEvents = [];
   const applyErrors = [];
   let corruptLines = 0;
