@@ -259,6 +259,25 @@ test("critical: Scope-Isolation — fremde Pending-Reviews sind nicht auflösbar
   assert.match(result.text, /finde keine ausstehende PLUR1BUS-Prüfung/);
 });
 
+test("critical list zeigt dieselbe Liste wie der leere subKey (K3)", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  installEmbeddingStub(t);
+  const agentId = "critical-list-agent";
+  const id = "34567890-7611-4528-992a-075f8889a088";
+  const pluginModule = await loadFreshPlugin();
+  await seedCriticalCard(pluginModule, baseDbPath, agentId, {
+    id, type: "person", text: "Listentest.", sourceMessageRole: "user",
+  });
+  const api = createApi(baseDbPath);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const leer = await findCommand(api).handler(telegramContext(agentId, workspaceDir, "critical"));
+  const mitList = await findCommand(api).handler(telegramContext(agentId, workspaceDir, "critical list"));
+
+  assert.match(leer.text, /Ausstehende PLUR1BUS-Prüfungen/);
+  assert.equal(mitList.text, leer.text, "`list` ist autorisiert und muss dieselbe Ansicht liefern");
+});
+
 test("critical: fremde Karte in derselben Agent-DB ist unsichtbar und nicht mutierbar (M1)", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   installEmbeddingStub(t);
