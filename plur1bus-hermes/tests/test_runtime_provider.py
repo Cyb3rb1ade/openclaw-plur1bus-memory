@@ -9,11 +9,13 @@ import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from plur1bus_hermes.provider import Plur1busMemoryProvider
 from plur1bus_hermes.runtime import Plur1busRuntime
 from plur1bus_hermes.service import PLUR1BUS_SERVICE
 from plur1bus_hermes.validation import ValidationError
+from plur1bus_hermes.namespaces import canonical_scope_key
 
 
 class RuntimeProviderTests(unittest.TestCase):
@@ -35,6 +37,67 @@ class RuntimeProviderTests(unittest.TestCase):
         first = Plur1busRuntime._scope_key({"workspace": "one", "chat": "a"})
         second = Plur1busRuntime._scope_key({"workspace": "two", "chat": "b"})
         self.assertEqual(first, second)
+
+    def test_runtime_accepts_context_object_without_losing_scope_identity(self) -> None:
+        context = SimpleNamespace(
+            scopeType="chat",
+            workspaceIdentity="workspace-a",
+            platform="telegram",
+            chatId="chat-a",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Plur1busRuntime(
+                Path(directory),
+                {
+                    "embedding": {"provider": "omlx", "model": "embed", "dimensions": 4},
+                    "reranker": {"provider": "disabled"},
+                },
+                "agent-a",
+                context,
+            )
+            try:
+                self.assertEqual(runtime.scope_binding.scope_type, "chat")
+                self.assertEqual(runtime.scope_binding.workspace_identity, "workspace-a")
+                self.assertEqual(runtime.scope_binding.platform, "telegram")
+                self.assertEqual(runtime.scope_binding.chat_id, "chat-a")
+                self.assertEqual(
+                    runtime.scope_key,
+                    canonical_scope_key(
+                        "agent-a", scopeType="chat", platform="telegram", chatId="chat-a"
+                    ),
+                )
+            finally:
+                runtime.shutdown()
+
+    def test_provider_transports_canonical_request_context_to_runtime(self) -> None:
+        provider = Plur1busMemoryProvider({
+            "dataDir": "plur1bus",
+            "embedding": {"provider": "omlx", "model": "embed", "dimensions": 4},
+            "reranker": {"provider": "disabled"},
+        })
+        context = SimpleNamespace(
+            scopeType="user",
+            workspaceIdentity="workspace-a",
+            platform="signal",
+            userId="user-a",
+            chatId="chat-a",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("plur1bus_hermes.provider.Plur1busRuntime") as runtime_cls:
+                runtime_cls.return_value.scope_key = "scope-key"
+                provider.initialize(
+                    "session",
+                    hermes_home=directory,
+                    agent_identity="agent-a",
+                    request_context=context,
+                )
+                request_scope = runtime_cls.call_args.args[3]
+                self.assertEqual(request_scope["scopeType"], "user")
+                self.assertEqual(request_scope["workspace"], "workspace-a")
+                self.assertEqual(request_scope["platform"], "signal")
+                self.assertEqual(request_scope["user"], "user-a")
+                self.assertEqual(request_scope["chat"], "chat-a")
+        provider.shutdown()
 
     def test_profile_identity_overrides_default_config_and_backups_include_lancedb(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

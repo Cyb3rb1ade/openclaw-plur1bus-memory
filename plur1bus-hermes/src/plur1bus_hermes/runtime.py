@@ -18,8 +18,16 @@ from .cache import EmbeddingCache
 from .domain import Plur1busDomain
 from .llm_cache import LlmResultCache
 from .semantic_input import prepare_semantic_input
-from .namespaces import resolve_namespace_routes
-from .shared_pools import SharedPoolStore, SharedPrincipal
+from .namespaces import (
+    binding_from_scope,
+    normalize_scope_context,
+    resolve_namespace_routes,
+    scope_where_clause,
+)
+from .shared_pools import (
+    SharedPoolStore,
+    SharedPrincipal,
+)
 from .cognition import parse_temporal_range
 from .query_refinement import refine_query
 from .llm_backend import InternalLlmBackend
@@ -347,12 +355,21 @@ class RerankerBackend:
 class Plur1busRuntime:
     """Agent-isolated LanceDB storage with asynchronous capture and recall."""
 
-    def __init__(self, data_dir: Path, config: dict[str, Any], agent_id: str, scope: dict[str, Any] | None = None) -> None:
+    def __init__(self, data_dir: Path, config: dict[str, Any], agent_id: str, scope: Any = None) -> None:
         self.data_dir = data_dir
         self.config = config
         self.agent_id = safe_agent_id(agent_id)
-        self.request_scope = dict(scope or {})
-        self.scope_key = self._scope_key(self.request_scope)
+        self.request_scope = normalize_scope_context(scope)
+        if scope is None and config.get("scopeType"):
+            self.request_scope["scopeType"] = config["scopeType"]
+        if (
+            str(self.request_scope.get("scopeType") or "agent-private") != "agent-private"
+            and not self.request_scope.get("workspace")
+            and config.get("workspaceId")
+        ):
+            self.request_scope["workspace"] = config["workspaceId"]
+        self.scope_binding = binding_from_scope(self.agent_id, self.request_scope)
+        self.scope_key = self.scope_binding.key
         self._writer_route, self._recall_routes = resolve_namespace_routes(
             data_dir, self.agent_id, config
         )
@@ -361,7 +378,6 @@ class Plur1busRuntime:
             SharedPrincipal(
                 workspace=str(
                     self.request_scope.get("workspace")
-                    or config.get("workspaceId")
                     or self.agent_id
                 ),
                 platform=str(self.request_scope.get("platform") or ""),
@@ -526,10 +542,7 @@ class Plur1busRuntime:
             return ""
         rows = []
         temporal_range = parse_temporal_range(semantic_query)
-        where_clause = (
-            f"agentId = '{self.agent_id}' AND "
-            f"scopeKey = '{self.scope_key}' AND status = 'active'"
-        )
+        where_clause = f"{scope_where_clause(self.scope_binding)} AND status = 'active'"
         if temporal_range:
             where_clause += (
                 f" AND createdAt >= '{temporal_range['start']}'"
@@ -632,7 +645,9 @@ class Plur1busRuntime:
         table, _ = self._table(create=False)
         if table is None:
             return False
-        rows = table.search().where(f"id = '{card_id}' AND agentId = '{self.agent_id}' AND scopeKey = '{self.scope_key}'").limit(1).to_list()
+        rows = table.search().where(
+            f"id = '{card_id}' AND {scope_where_clause(self.scope_binding)}"
+        ).limit(1).to_list()
         if not rows:
             return False
         card = rows[0]
@@ -705,7 +720,7 @@ class Plur1busRuntime:
         if table is None:
             return False
         rows = table.search().where(
-            f"id = '{card_id}' AND agentId = '{self.agent_id}' AND scopeKey = '{self.scope_key}'"
+            f"id = '{card_id}' AND {scope_where_clause(self.scope_binding)}"
         ).limit(1).to_list()
         # Same lifecycle guard as OpenClaw correctCard(): a confirmation may
         # outlive /forget, so never turn an already deleted row into a new
@@ -731,8 +746,7 @@ class Plur1busRuntime:
         if table is None:
             return None
         rows = table.search(vector).where(
-            f"agentId = '{self.agent_id}' AND "
-            f"scopeKey = '{self.scope_key}' AND status = 'active'"
+            f"{scope_where_clause(self.scope_binding)} AND status = 'active'"
         ).limit(5).to_list()
         if not rows:
             return None
@@ -772,9 +786,12 @@ class Plur1busRuntime:
         blocking = find_blocking_tombstone_for_capture(self.data_dir, {
             "agentId": self.agent_id,
             "text": content,
-            "scope": "agent-private",
+            "scope": self.scope_binding.scope_type,
+            "scopeKey": self.scope_key,
             "workspaceIdentity": str(self.request_scope.get("workspace") or ""),
             "userPrincipal": str(self.request_scope.get("user") or ""),
+            "platform": str(self.request_scope.get("platform") or ""),
+            "chat": str(self.request_scope.get("chat") or ""),
         })
         if blocking is not None:
             reason = blocking.get("_blockReason") or "fingerprint match"
@@ -785,6 +802,12 @@ class Plur1busRuntime:
             "id": str(uuid.uuid4()),
             "agentId": self.agent_id,
             "scopeKey": self.scope_key,
+            "scopeType": self.scope_binding.scope_type,
+            "ownerKey": self.scope_binding.owner_key,
+            "workspaceIdentity": self.scope_binding.workspace,
+            "ownerPlatform": self.scope_binding.platform,
+            "ownerUser": self.scope_binding.user,
+            "chatScope": self.scope_binding.chat,
             "sessionId": session_id,
             "content": content,
             "status": "active",
@@ -844,7 +867,10 @@ class Plur1busRuntime:
         return tables
 
     @staticmethod
-    def _scope_key(scope: dict[str, Any]) -> str:
-        del scope
-        normalized = {"workspace": "default", "user": "", "chat": ""}
-        return uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(normalized, sort_keys=True)).hex
+    def _scope_key(scope: Any) -> str:
+        """Return the canonical key for a request scope (legacy API helper)."""
+        return binding_from_scope("agent", scope).key
+
+    def _scope_where(self, suffix: str = "") -> str:
+        """Return this runtime's exact pre-limit LanceDB ACL predicate."""
+        return scope_where_clause(self.scope_binding) + suffix

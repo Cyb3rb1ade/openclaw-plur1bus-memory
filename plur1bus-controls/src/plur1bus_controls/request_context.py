@@ -15,6 +15,21 @@ class RequestIdentity:
     chat_type: str
     profile: str
     role_authorized: bool
+    workspace_id: str = ""
+    scope_type: str = ""
+    account: str = ""
+    thread_id: str = ""
+
+    def as_scope(self, scope_type: str | None = None) -> dict[str, str]:
+        """Return the normalized fields consumed by the Hermes scope binder."""
+        return {
+            "scopeType": scope_type or self.scope_type or "agent-private",
+            "workspace": self.workspace_id,
+            "platform": self.platform,
+            "user": self.user_id,
+            "chat": self.chat_id,
+            "account": self.account,
+        }
 
 
 _CURRENT_IDENTITY: ContextVar[RequestIdentity | None] = ContextVar(
@@ -30,13 +45,26 @@ def capture_gateway_identity(event: Any) -> RequestIdentity | None:
         _CURRENT_IDENTITY.set(None)
         return None
     platform = getattr(getattr(source, "platform", None), "value", None)
+    def source_value(*names: str) -> str:
+        for name in names:
+            value = getattr(source, name, None)
+            if value not in (None, ""):
+                return str(value)
+        return ""
+
     identity = RequestIdentity(
-        platform=str(platform or getattr(source, "platform", "") or ""),
-        user_id=str(getattr(source, "user_id", None) or ""),
-        chat_id=str(getattr(source, "chat_id", None) or ""),
-        chat_type=str(getattr(source, "chat_type", None) or ""),
-        profile=str(getattr(source, "profile", None) or ""),
+        platform=str(platform or source_value("platform")),
+        user_id=source_value("user_id", "userId"),
+        chat_id=source_value("chat_id", "chatId"),
+        chat_type=source_value("chat_type", "chatType"),
+        profile=source_value("profile", "agent_id", "agentId"),
         role_authorized=bool(getattr(source, "role_authorized", False)),
+        workspace_id=source_value(
+            "workspace_id", "workspaceId", "workspaceIdentity", "workspace", "workspace_identity"
+        ),
+        scope_type=source_value("scope_type", "scopeType", "scope"),
+        account=source_value("account", "account_id", "accountId"),
+        thread_id=source_value("thread_id", "threadId"),
     )
     _CURRENT_IDENTITY.set(identity)
     return identity

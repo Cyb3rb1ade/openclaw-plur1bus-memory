@@ -2,12 +2,55 @@ import unittest
 from types import SimpleNamespace
 
 from plur1bus_controls.request_context import (
+    RequestIdentity,
     capture_gateway_identity,
     is_mutation_authorized,
 )
 
 
 class RequestContextTests(unittest.TestCase):
+    def test_gateway_context_preserves_canonical_workspace_user_and_chat_fields(self):
+        identity = capture_gateway_identity(SimpleNamespace(
+            source=SimpleNamespace(
+                platform=SimpleNamespace(value="signal"),
+                userId="user-7",
+                chatId="chat-9",
+                workspaceIdentity="workspace-3",
+                scopeType="chat",
+                profile="agent",
+            )
+        ))
+
+        self.assertEqual(identity.as_scope(), {
+            "scopeType": "chat",
+            "workspace": "workspace-3",
+            "platform": "signal",
+            "user": "user-7",
+            "chat": "chat-9",
+            "account": "",
+        })
+
+    def test_identity_can_be_passed_as_canonical_scope_context(self):
+        identity = RequestIdentity(
+            platform="telegram",
+            user_id="owner",
+            chat_id="chat",
+            chat_type="group",
+            profile="bernd",
+            role_authorized=True,
+            workspace_id="workspace",
+            scope_type="chat",
+        )
+
+        self.assertEqual(identity.as_scope(), {
+            "scopeType": "chat",
+            "workspace": "workspace",
+            "platform": "telegram",
+            "user": "owner",
+            "chat": "chat",
+            "account": "",
+        })
+
     def test_private_chat_owner_is_allowed_without_whitelist(self):
         event = SimpleNamespace(
             source=SimpleNamespace(

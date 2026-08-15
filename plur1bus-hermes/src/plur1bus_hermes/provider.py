@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - exercised only before Hermes installs 
 
 from .service import PLUR1BUS_SERVICE
 from .runtime import Plur1busRuntime
+from .namespaces import binding_from_scope, normalize_scope_context
 from .validation import ValidationError, normalize_text_payload, resolve_inside, safe_agent_id, safe_memory_id
 
 
@@ -126,19 +127,46 @@ class Plur1busMemoryProvider(MemoryProvider):
         aliases = self.config.get("agentAliases", {})
         if isinstance(aliases, Mapping):
             runtime_agent = str(aliases.get(runtime_agent, runtime_agent))
+        request_context = (
+            kwargs.get("request_context")
+            or kwargs.get("request_identity")
+            or kwargs.get("identity")
+            or kwargs.get("context")
+        )
+        request_scope = normalize_scope_context(request_context)
+        direct_scope = normalize_scope_context({
+            "scopeType": kwargs.get("scope_type") or kwargs.get("scopeType"),
+            "workspace": kwargs.get("agent_workspace"),
+            "platform": kwargs.get("platform"),
+            "user": kwargs.get("user_id") or kwargs.get("userId"),
+            "chat": kwargs.get("chat_id") or kwargs.get("chatId"),
+            "account": kwargs.get("account") or kwargs.get("account_id"),
+        })
+        for field in ("workspace", "platform", "user", "chat", "account"):
+            if not request_scope[field]:
+                request_scope[field] = direct_scope[field]
+        explicit_scope_type = kwargs.get("scope_type") or kwargs.get("scopeType")
+        if request_context is None and explicit_scope_type:
+            request_scope["scopeType"] = str(explicit_scope_type)
+        elif request_context is None and self.config.get("scopeType"):
+            request_scope["scopeType"] = str(self.config["scopeType"])
+        if (
+            request_scope["scopeType"] != "agent-private"
+            and not request_scope["workspace"]
+            and self.config.get("workspaceId")
+        ):
+            request_scope["workspace"] = str(self.config["workspaceId"])
+        request_scope = binding_from_scope(runtime_agent, request_scope).as_dict()
         self._runtime = Plur1busRuntime(
             self._base_path(),
             self.config,
             runtime_agent,
-            {
-                "workspace": kwargs.get("agent_workspace"),
-                "user": kwargs.get("user_id"),
-                "chat": kwargs.get("chat_id") or kwargs.get("session_id"),
-            },
+            request_scope,
         )
         PLUR1BUS_SERVICE.state().active_profiles[runtime_agent] = {
             "sessionId": self._session_id,
-            "workspace": str(kwargs.get("agent_workspace") or ""),
+            "workspace": request_scope["workspace"],
+            "scopeKey": self._runtime.scope_key,
         }
 
     def system_prompt_block(self) -> str:
