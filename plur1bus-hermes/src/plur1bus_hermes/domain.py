@@ -21,7 +21,7 @@ from .cognition import (
     extract_open_threads,
 )
 from .code_index import query_code_index, rebuild_code_index
-from .critical import CRITICAL_TYPES, classify_critical, is_confirmed
+from .critical import CRITICAL_TYPES, NON_CRITICAL_TYPE, classify_critical, is_confirmed
 from .critical_review import (
     assign_short_refs,
     decode_critical_cursor,
@@ -1053,14 +1053,22 @@ class Plur1busDomain:
 
     def _memory_rows(self) -> list[dict[str, Any]]:
         """Read authoritative memory cards without creating a namespace."""
+        table = self._memory_table()
+        if table is None:
+            return []
+        try:
+            return [dict(row) for row in table.to_arrow().to_pylist()]
+        except Exception:
+            return []
+
+    def _memory_table(self) -> Any | None:
+        """Open the authoritative memory-card table without creating it."""
         try:
             import lancedb
             database = lancedb.connect(str(self.data_dir / "lancedb" / self.agent_id))
-            if "memories" not in database.table_names():
-                return []
-            return [dict(row) for row in database.open_table("memories").to_arrow().to_pylist()]
+            return database.open_table("memories") if "memories" in database.table_names() else None
         except Exception:
-            return []
+            return None
 
     @staticmethod
     def _critical_timestamp(value: Any) -> int | None:
@@ -1092,6 +1100,19 @@ class Plur1busDomain:
             # A scope key without its binding is not enough for a review action.
             return False
         expected = selector.acl_bindings
+        direct_aliases = {
+            "agentId": "agentId",
+            "scopeKey": "scopeKey",
+            "scopeType": "scopeType",
+            "workspaceIdentity": "workspaceIdentity",
+            "platform": "ownerPlatform",
+            "userId": "ownerUser",
+            "chatId": "chatScope",
+            "account": "account",
+        }
+        for expected_key, card_key in direct_aliases.items():
+            if card_key in card and str(card.get(card_key) or "") != str(expected.get(expected_key) or ""):
+                return False
         aliases = {
             "workspace": "workspaceIdentity",
             "user": "userId",
@@ -1216,7 +1237,7 @@ class Plur1busDomain:
             return [
                 {
                     **item,
-                    **({key: ledger[str(item["id"])][key] for key in ("reason", "sourceRole", "contentSuppressed") if key in ledger[str(item["id"])]}),
+                    **({"reason": ledger[str(item["id"])]["reason"]} if "reason" in ledger.get(str(item["id"]), {}) else {}),
                     "status": "pending_review",
                 }
                 for item in page["items"]
@@ -1229,24 +1250,62 @@ class Plur1busDomain:
             values = [item for item in values if item.get("status") == status]
         return values[: max(1, min(int(limit), 500))]
 
-    def critical_reference_map(self) -> dict[str, str]:
+    def critical_reference_map(
+        self,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, str]:
         """Kürzeste eindeutige Kurzreferenz je ausstehender Critical-Review."""
-        pending = self.critical_items("pending_review")
+        pending = self.critical_items(
+            "pending_review",
+            acl_bindings=aclBindings if aclBindings is not None else acl_bindings,
+            scope_key=scopeKey if scopeKey is not None else scope_key,
+        )
         return assign_short_refs([str(item["id"]) for item in pending])
 
-    def resolve_critical_reference(self, reference: str) -> dict[str, Any]:
+    def resolve_critical_reference(
+        self,
+        reference: str,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Löst eine Kurzreferenz (oder vollständige UUID) gegen ausstehende
         Reviews auf. Liefert ``{"ok": True, "id": ...}`` oder ein Fehlerobjekt.
         """
-        pending = self.critical_items("pending_review")
+        pending = self.critical_items(
+            "pending_review",
+            acl_bindings=aclBindings if aclBindings is not None else acl_bindings,
+            scope_key=scopeKey if scopeKey is not None else scope_key,
+        )
         return resolve_short_ref(reference, pending)
 
-    def review_critical_by_reference(self, reference: str, decision: str) -> dict[str, Any]:
+    def review_critical_by_reference(
+        self,
+        reference: str,
+        decision: str,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Accept/Reject über Kurzreferenz oder vollständige UUID."""
-        resolved = self.resolve_critical_reference(reference)
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        resolved = self.resolve_critical_reference(
+            reference, acl_bindings=acl_bindings, scope_key=scope_key
+        )
         if not resolved["ok"]:
             return {"updated": False, "reason": resolved["error"], "reference": reference}
-        return self.review_critical(resolved["id"], decision)
+        return self.review_critical(
+            resolved["id"], decision, acl_bindings=acl_bindings, scope_key=scope_key
+        )
 
     def speaker_mappings(self) -> dict[str, str]:
         """Return the current agent-local speaker alias mappings."""
@@ -1340,28 +1399,125 @@ class Plur1busDomain:
             ],
         )
 
-    def review_critical(self, memory_id: str, decision: str) -> dict[str, Any]:
-        """Accept or reject a pending critical-memory proposal."""
+    @staticmethod
+    def _ensure_confirmed_column(table: Any) -> None:
+        """Ensure old memory tables can persist the review confirmation bit."""
+        schema = table.schema() if callable(getattr(table, "schema", None)) else None
+        fields = getattr(schema, "fields", ()) if schema is not None else ()
+        names = {str(getattr(field, "name", "")) for field in fields}
+        if "confirmed" not in names:
+            add_columns = getattr(table, "add_columns", None)
+            if not callable(add_columns):
+                raise RuntimeError("critical card confirmation column unavailable")
+            add_columns({"confirmed": "0"})
+
+    def review_critical(
+        self,
+        memory_id: str,
+        decision: str,
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
+        """Revalidate and mutate the current card before appending ledger state."""
         memory_id = safe_memory_id(memory_id)
         if decision not in {"accept", "reject"}:
             raise ValueError("decision must be accept or reject")
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
+        selector = self._scope_selector(acl_bindings=acl_bindings, scope_key=scope_key)
         pending = {
-            item["id"]: item for item in self.critical_items("pending_review")
+            item["id"]: item
+            for item in self.critical_items(
+                "pending_review", acl_bindings=acl_bindings, scope_key=scope_key
+            )
         }
         if memory_id not in pending:
             return {"updated": False, "reason": "not-pending", "id": memory_id}
+        current = next(
+            (card for card in self._critical_candidates(selector) if str(card.get("id")) == memory_id),
+            None,
+        )
+        actual = next(
+            (row for row in self._memory_rows() if str(row.get("id") or "") == memory_id),
+            None,
+        )
+        if current is None or actual is None:
+            return {"updated": False, "reason": "card-changed", "id": memory_id}
+        table = self._memory_table()
+        if table is None:
+            return {"updated": False, "reason": "card-unavailable", "id": memory_id}
+        try:
+            self._ensure_confirmed_column(table)
+            safe_agent = self.agent_id.replace("'", "''")
+            safe_scope = selector.scope_key.replace("'", "''")
+            safe_type = str(current["type"]).replace("'", "''")
+            clauses = [
+                f"id = '{memory_id}' AND agentId = '{safe_agent}' "
+                f"AND scopeKey = '{safe_scope}' AND status = 'active' "
+                f"AND type = '{safe_type}' "
+                "AND (confirmed IS NULL OR confirmed = false OR confirmed = 0)"
+            ]
+            direct_fields = {
+                "scopeType": current.get("scopeType"),
+                "workspaceIdentity": current.get("workspaceIdentity"),
+                "ownerPlatform": current.get("ownerPlatform"),
+                "ownerUser": current.get("ownerUser"),
+                "chatScope": current.get("chatScope"),
+                "account": current.get("account"),
+            }
+            for field, value in direct_fields.items():
+                if field in actual:
+                    clauses.append(f"{field} = '{str(value or '').replace(chr(39), chr(39) * 2)}'")
+            where = " AND ".join(clauses)
+            values = {"confirmed": 1}
+            if decision == "reject":
+                values["type"] = NON_CRITICAL_TYPE
+            update_result = table.update(where=where, values=values)
+            rows_updated = getattr(update_result, "rows_updated", None)
+            if rows_updated is not None and int(rows_updated) != 1:
+                return {"updated": False, "reason": "card-changed", "id": memory_id}
+        except Exception:
+            return {"updated": False, "reason": "card-update-failed", "id": memory_id}
         transition = {
-            **pending[memory_id],
+            "id": memory_id,
+            "agentId": self.agent_id,
+            "scopeKey": selector.scope_key,
             "status": "accepted" if decision == "accept" else "rejected",
             "reviewedAt": _utcnow(),
         }
+        self.audit_mutation({
+            "operation": "critical-review",
+            "action": decision,
+            "id": memory_id,
+            "agentId": self.agent_id,
+            "scopeKey": selector.scope_key,
+            "aclBindings": selector.acl_bindings,
+            "previousType": str(current.get("type") or ""),
+            "newType": str(values.get("type") or current.get("type") or ""),
+        })
         self._append_jsonl(self.state_dir / "critical-push.jsonl", transition)
         return {"updated": True, **transition}
 
-    def mark_criticals_notified(self, memory_ids: list[str]) -> dict[str, Any]:
+    def mark_criticals_notified(
+        self,
+        memory_ids: list[str],
+        *,
+        acl_bindings: Any = None,
+        scope_key: str | None = None,
+        aclBindings: Any = None,
+        scopeKey: str | None = None,
+    ) -> dict[str, Any]:
         """Record successful delivery while keeping proposals pending for review."""
+        acl_bindings = aclBindings if aclBindings is not None else acl_bindings
+        scope_key = scopeKey if scopeKey is not None else scope_key
         pending = {
-            item["id"]: item for item in self.critical_items("pending_review")
+            item["id"]: item
+            for item in self.critical_items(
+                "pending_review", acl_bindings=acl_bindings, scope_key=scope_key
+            )
         }
         notified = []
         for raw_id in memory_ids:
@@ -1458,7 +1614,7 @@ class Plur1busDomain:
             "scopeKey": str(record.get("scopeKey") or ""),
             "aclBindings": record.get("aclBindings") or {},
             "type": str(record.get("type") or "observation"),
-            "confirmed": str(record.get("sourceRole")) == "user",
+            "confirmed": bool(record.get("confirmed", False)),
             "emotionalDominant": emotion,
             "emotionalIntensity": intensity,
             "moodContextAtCapture": self._mood.state(),

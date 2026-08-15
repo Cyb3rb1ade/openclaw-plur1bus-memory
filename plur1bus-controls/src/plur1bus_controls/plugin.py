@@ -124,6 +124,7 @@ class Plur1busControlsPlugin:
         )
         source = translate_source_role(str(item.get("sourceRole") or ""), "de")
         preview = build_preview(item, lang="de")
+        timestamp = str(item.get("sourceTimestamp") or item.get("createdAt") or "").strip()[:64]
         lines = [
             "🧠 PLUR1BUS hat eine Erinnerung als möglicherweise besonders wichtig erkannt.",
             "",
@@ -135,6 +136,7 @@ class Plur1busControlsPlugin:
         lines.extend([
             f"Grund: {reason}",
             f"Quelle: {source}",
+            f"Zeitpunkt: {timestamp or 'unbekannt'}",
             f"Referenz: {ref}",
             "",
             "Soll diese Erinnerung besonders hervorgehoben werden?",
@@ -147,6 +149,34 @@ class Plur1busControlsPlugin:
         ])
         return "\n".join(lines)
 
+    @staticmethod
+    def _scope_kwargs(runtime: Any) -> dict[str, Any]:
+        binding = getattr(runtime, "scope_binding", None)
+        as_dict = getattr(binding, "as_dict", None)
+        return {"acl_bindings": as_dict()} if callable(as_dict) else {}
+
+    @staticmethod
+    def _public_critical_item(item: dict[str, Any], ref: str) -> dict[str, Any]:
+        """Render only scope-valid, safe card fields for the list command."""
+        preview = build_preview(item, lang="de")
+        return {
+            "ref": ref,
+            "type": translate_type(str(item.get("type") or ""), "de"),
+            "reason": translate_reason(
+                str(item.get("reason") or ""), str(item.get("type") or ""), "de"
+            ),
+            "source": translate_source_role(str(item.get("sourceRole") or ""), "de"),
+            "time": str(item.get("sourceTimestamp") or item.get("createdAt") or "").strip()[:64] or "unbekannt",
+            "preview": preview["text"] if not preview["suppressed"] else "",
+            "previewSuppressed": bool(preview["suppressed"]),
+            "previewNote": preview["reason"] if preview["suppressed"] else "",
+            "actions": {
+                "accept": f"/plur1bus critical accept {ref}",
+                "reject": f"/plur1bus critical reject {ref}",
+                "edit": f"/plur1bus critical edit {ref}",
+            },
+        }
+
     async def _deliver_proactive(self, event: Any, gateway: Any, runtime: Any) -> None:
         """Deliver due reminders and pending critical reviews through the live adapter."""
         source = getattr(event, "source", None)
@@ -155,16 +185,17 @@ class Plur1busControlsPlugin:
         if adapter is None or source is None:
             return
         domain = runtime._domain
+        scope_kwargs = self._scope_kwargs(runtime)
         reminders = domain.due_reminders()
         criticals = [
             item
-            for item in domain.critical_items("pending_review")
+            for item in domain.critical_items("pending_review", **scope_kwargs)
             if not item.get("notifiedAt")
         ]
         proactive = domain.proactive_messages()
         if not reminders and not criticals and not proactive:
             return
-        ref_map = domain.critical_reference_map()
+        ref_map = domain.critical_reference_map(**scope_kwargs)
         lines = []
         if reminders:
             lines.append("PLUR1BUS reminders:")
@@ -174,7 +205,7 @@ class Plur1busControlsPlugin:
             )
         if criticals:
             for item in criticals:
-                ref = ref_map.get(str(item["id"]), "")
+                ref = str(item.get("shortRef") or ref_map.get(str(item["id"]), ""))
                 lines.append(self._render_critical_message(item, ref))
         if proactive:
             lines.extend(str(item.get("text") or "") for item in proactive)
@@ -190,7 +221,7 @@ class Plur1busControlsPlugin:
         for reminder in reminders:
             domain.update_reminder(str(reminder["id"]), "present")
         domain.mark_criticals_notified(
-            [str(item["id"]) for item in criticals]
+            [str(item["id"]) for item in criticals], **scope_kwargs
         )
         domain.mark_proactive_sent(
             [str(item["id"]) for item in proactive]
@@ -410,18 +441,14 @@ class Plur1busControlsPlugin:
                 )
             if command == "critical":
                 if not arguments:
-                    pending = domain.critical_items()
-                    ref_map = domain.critical_reference_map()
+                    scope_kwargs = self._scope_kwargs(runtime)
+                    pending = domain.critical_items(**scope_kwargs)
+                    ref_map = domain.critical_reference_map(**scope_kwargs)
                     items = [
-                        {
-                            "ref": ref_map.get(str(item["id"]), ""),
-                            "id": str(item["id"]),
-                            "type": translate_type(str(item.get("type") or ""), "de"),
-                            "reason": translate_reason(str(item.get("reason") or ""), str(item.get("type") or ""), "de"),
-                            "source": translate_source_role(str(item.get("sourceRole") or ""), "de"),
-                            "contentSuppressed": bool(item.get("contentSuppressed")),
-                            "status": item.get("status"),
-                        }
+                        self._public_critical_item(
+                            item,
+                            str(item.get("shortRef") or ref_map.get(str(item["id"]), "")),
+                        )
                         for item in pending
                     ]
                     return json.dumps({"pending": items}, ensure_ascii=False, indent=2)
@@ -429,8 +456,9 @@ class Plur1busControlsPlugin:
                     return "Usage: /plur1bus critical [--agent ID] accept|reject|edit REFERENZ"
                 decision = arguments[0]
                 reference = arguments[1]
+                scope_kwargs = self._scope_kwargs(runtime)
                 if decision == "edit":
-                    resolved = domain.resolve_critical_reference(reference)
+                    resolved = domain.resolve_critical_reference(reference, **scope_kwargs)
                     if not resolved["ok"]:
                         return json.dumps(
                             {"updated": False, "reason": resolved["error"], "reference": reference},
@@ -444,7 +472,7 @@ class Plur1busControlsPlugin:
                         ),
                     }, ensure_ascii=False, indent=2)
                 return json.dumps(
-                    domain.review_critical_by_reference(reference, decision),
+                    domain.review_critical_by_reference(reference, decision, **scope_kwargs),
                     ensure_ascii=False,
                     indent=2,
                 )

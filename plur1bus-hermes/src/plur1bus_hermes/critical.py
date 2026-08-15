@@ -16,6 +16,7 @@ CRITICAL_TYPES = frozenset({
     "gesundheit",
     "zugang_passwort",
 })
+NON_CRITICAL_TYPE = "note"
 
 
 def is_confirmed(value: Any) -> bool:

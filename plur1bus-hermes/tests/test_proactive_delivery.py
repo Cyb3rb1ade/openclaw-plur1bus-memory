@@ -24,6 +24,9 @@ class _Domain:
     def critical_items(self, _status):
         return [{
             "id": "a4563cc9-7611-4528-992a-075f8889a018",
+            "type": "person",
+            "text": "Bernds bevorzugte Sprache ist Deutsch.",
+            "createdAt": "2026-08-15T10:20:00+00:00",
             "reason": "high_importance",
             "sourceRole": "user",
             "contentSuppressed": False,
@@ -80,6 +83,9 @@ class ProactiveDeliveryTests(unittest.TestCase):
             text = adapter.sent[0][1]
             self.assertNotIn("reason=", text)
             self.assertIn("möglicherweise besonders wichtig eingestuft", text)
+            self.assertIn("Quelle: Benutzer", text)
+            self.assertIn("Zeitpunkt: 2026-08-15T10:20:00+00:00", text)
+            self.assertIn("Bernds bevorzugte Sprache", text)
             self.assertIn("9a018", text)
             self.assertIn("/plur1bus critical accept 9a018", text)
             self.assertIn("/plur1bus critical reject 9a018", text)
@@ -87,6 +93,44 @@ class ProactiveDeliveryTests(unittest.TestCase):
             self.assertNotIn("a4563cc9-7611-4528-992a-075f8889a018", text)
 
         asyncio.run(scenario())
+
+    def test_sensitive_critical_preview_is_suppressed(self):
+        async def scenario():
+            plugin = Plur1busControlsPlugin()
+            item = {
+                "id": "a4563cc9-7611-4528-992a-075f8889a018",
+                "type": "gesundheit",
+                "text": "Diagnose: streng vertrauliches-geheimnis",
+                "createdAt": "2026-08-15T10:20:00+00:00",
+                "reason": "high_importance",
+                "sourceRole": "user",
+            }
+            text = plugin._render_critical_message(item, "9a018")
+            self.assertNotIn("streng vertrauliches-geheimnis", text)
+            self.assertNotIn("high_importance", text)
+            self.assertIn("Datenschutz", text)
+
+        asyncio.run(scenario())
+
+    def test_list_projection_is_safe_and_contains_provenance(self):
+        plugin = Plur1busControlsPlugin()
+        item = {
+            "id": "a4563cc9-7611-4528-992a-075f8889a018",
+            "type": "gesundheit",
+            "text": "Diagnose: geheim",
+            "createdAt": "2026-08-15T10:20:00+00:00",
+            "reason": "high_importance",
+            "sourceRole": "user",
+        }
+        result = plugin._public_critical_item(item, "9a018")
+        self.assertEqual(result["ref"], "9a018")
+        self.assertEqual(result["source"], "Benutzer")
+        self.assertEqual(result["time"], "2026-08-15T10:20:00+00:00")
+        self.assertTrue(result["previewSuppressed"])
+        self.assertNotIn("geheim", result["preview"])
+        self.assertNotIn("high_importance", str(result))
+        self.assertNotIn(item["id"], str(result))
+        self.assertEqual(result["actions"]["edit"], "/plur1bus critical edit 9a018")
 
 
 if __name__ == "__main__":
