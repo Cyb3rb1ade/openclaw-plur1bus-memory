@@ -63,15 +63,25 @@ describe("applyDynamicsDefaults mit Intensitäts-Modulation", () => {
   });
 
   it("respektiert explizit gesetzte halfLifeDays", () => {
-    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.5, halfLifeDays: 42 };
+    // Bewusst unterhalb der Flashbulb-Schwelle: Flashbulb hebt die
+    // Halbwertszeit vertraglich auf mindestens 90 an (nur verlängern, nie
+    // verkürzen) und würde eine explizite 42 damit legitim überschreiben.
+    const entry = { id: "x", category: "project", emotionalIntensity: 0.3, importance: 0.5, halfLifeDays: 42 };
     const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
     assert.strictEqual(out.halfLifeDays, 42);
   });
 
+  it("eine Flashbulb-Erinnerung hebt eine kürzere explizite Halbwertszeit an", () => {
+    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.5, halfLifeDays: 42 };
+    const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
+    assert.strictEqual(out.memoryClass, "flashbulb");
+    assert.strictEqual(out.halfLifeDays, 90);
+  });
+
   it("Flashbulb-Memories erben die modulierte Basis statt fixer 90 Tage", () => {
-    // Score: 0.9*0.35 + 0.9*0.35 = 0.63 + novelty 0.5*0.15 = 0.705 >= 0.70 → Flashbulb.
+    // Score: 0.9*0.5 + 0.9*0.5 = 0.90 >= 0.70 → Flashbulb.
     // Kein Core (emotionalIntensity 0.9 < 0.95). Basis: 600 × (1 + 0.9) = 1140.
-    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.9, novelty: 0.5 };
+    const entry = { id: "x", category: "project", emotionalIntensity: 0.9, importance: 0.9 };
     const out = applyDynamicsDefaults(entry, Date.now(), {}, { intensityHalfLifeFactor: 1.0 });
     assert.strictEqual(out.memoryClass, "flashbulb");
     assert.strictEqual(out.halfLifeDays, 1140);
