@@ -291,6 +291,11 @@ test("registered internal skill-miner processes every allowed partition without 
   );
   const parsed = responseJson(result);
   assert.deepEqual(parsed.partitions.map((entry) => entry.scope).sort(), ["agent-private", "user", "workspace"]);
+  assert.equal(parsed.partialFailure, false);
+  assert.equal(parsed.scanned, 9);
+  assert.equal(parsed.proposalsCreated, 3);
+  assert.equal(parsed.pushMessages.length, 3);
+  assert.equal(parsed.aclBindings, null);
   assert.equal(prompts.length, 3);
   for (const prompt of prompts) {
     const scopes = ["AGENT-PRIVATE", "USER", "WORKSPACE"].filter((scope) => prompt.includes(`${scope} LOCAL`));

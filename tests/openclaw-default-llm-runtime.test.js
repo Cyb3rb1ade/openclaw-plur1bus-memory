@@ -898,6 +898,10 @@ test("Skill Miner uses its feature-local native default through the command runt
   });
 
   assert.match(result.text, /"proposalsCreated": 1/);
+  assert.match(result.text, /"scanned": 1/);
+  assert.match(result.text, /"pushMessages": \[/);
+  assert.match(result.text, /"aclBindings": null/);
+  assert.doesNotMatch(result.text, /"aclBindings": \{[\s\S]*"scope": "agent-private"/);
   assert.equal(globalCalls.length, 0);
   assert.equal(sessionCalls.length, 1);
   assert.equal(Object.hasOwn(sessionCalls[0], "agentId"), false);

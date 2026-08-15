@@ -3032,6 +3032,40 @@ function formatJsonCommandResult(value) {
   return { text: JSON.stringify(value, null, 2) };
 }
 
+function finiteSkillMetric(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
+}
+
+function aggregateSkillMinerRuns(skillRuns, agent) {
+  const successfulRuns = skillRuns.filter((run) => run.result && !run.failed);
+  const failedRuns = skillRuns.filter((run) => run.failed === true);
+  const reports = successfulRuns.map((run) => run.result);
+  const aclBindings = skillRuns.length === 1 && successfulRuns.length === 1
+    ? reports[0].aclBindings || null
+    : null;
+  const allSkipped = reports.length > 0 && reports.every((report) => report.skipped === true);
+  const allFailed = reports.length === 0 && failedRuns.length > 0;
+
+  return {
+    timestamp: new Date().toISOString(),
+    agent,
+    ...((allSkipped || allFailed)
+      ? { skipped: true, reason: allFailed ? "all_partitions_failed" : "all_partitions_skipped" }
+      : {}),
+    partialFailure: failedRuns.length > 0,
+    failedPartitions: failedRuns.map((run) => run.scope),
+    scanned: reports.reduce((total, report) => total + finiteSkillMetric(report.scanned), 0),
+    proposalsCreated: reports.reduce((total, report) => total + finiteSkillMetric(report.proposalsCreated), 0),
+    skippedLowEvidence: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedLowEvidence), 0),
+    skippedLowConfidence: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedLowConfidence), 0),
+    skippedDuplicate: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedDuplicate), 0),
+    pushMessages: reports.flatMap((report) => Array.isArray(report.pushMessages) ? report.pushMessages : []),
+    dryRun: reports.length > 0 && reports.every((report) => report.dryRun === true),
+    aclBindings,
+  };
+}
+
 function formatKnownValidityLabel(entry) {
   const validFrom = Number(entry?.validFrom ?? 0);
   const validUntil = Number(entry?.validUntil ?? 0);
@@ -6174,47 +6208,60 @@ const plugin = {
                   : {
                       agentId: internalAgent,
                       purpose: LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
-                    };
+                };
                 const skillRuns = [];
-                for (const skillAclPartition of buildRemPartitions(memoryCtx)) {
+                const skillAclPartitions = buildRemPartitions(memoryCtx);
+                if (skillAclPartitions.length === 0) {
+                  return formatJsonCommandResult({ job: "skill-miner", skipped: true, reason: "acl_partition_missing", partitions: [] });
+                }
+                for (const skillAclPartition of skillAclPartitions) {
                   const skillStore = createOwnerBoundNeoStore(skillAclPartition);
                   const skillWorkspaceDir = skillAclPartition.scope === "workspace"
                     && memoryCtx?.workspaceDir
                     && skillAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity
                     ? memoryCtx.workspaceDir
                     : skillStore.paths.workspaceDir;
-                  const result = await pool.withDb(internalAgent, async (rawDb) => {
-                    await rawDb.init();
-                    return runSkillMiner(rawDb, internalAgent, {
-                      logger: api.logger,
-                      neoStore: skillStore,
-                      requestContext: memoryCtx,
-                      aclPartition: skillAclPartition,
-                      workspaceDir: skillWorkspaceDir,
-                      workspaceKey: skillAclPartition.workspaceIdentity,
-                      llmCfg: withLlmCallContext(
-                        skillMinerLlmCfg,
-                        skillMinerCallContext.agentId,
-                        LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
-                        { runtimeLlm: skillMinerCallContext.runtimeLlm },
-                      ),
-                      callLlm,
-                      maxPerRun: skillMinerCfg.maxPerRun ?? 5,
-                      minConfidence: skillMinerCfg.minConfidence ?? 0.6,
-                      minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                  try {
+                    const result = await pool.withDb(internalAgent, async (rawDb) => {
+                      await rawDb.init();
+                      return runSkillMiner(rawDb, internalAgent, {
+                        logger: api.logger,
+                        neoStore: skillStore,
+                        requestContext: memoryCtx,
+                        aclPartition: skillAclPartition,
+                        workspaceDir: skillWorkspaceDir,
+                        workspaceKey: skillAclPartition.workspaceIdentity,
+                        llmCfg: withLlmCallContext(
+                          skillMinerLlmCfg,
+                          skillMinerCallContext.agentId,
+                          LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                          { runtimeLlm: skillMinerCallContext.runtimeLlm },
+                        ),
+                        callLlm,
+                        maxPerRun: skillMinerCfg.maxPerRun ?? 5,
+                        minConfidence: skillMinerCfg.minConfidence ?? 0.6,
+                        minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                      });
                     });
-                  });
-                  skillRuns.push({ scope: skillAclPartition.scope, result });
+                    skillRuns.push({ scope: skillAclPartition.scope, result });
+                  } catch {
+                    api.logger?.warn?.(`plur1bus internal skill-miner[${internalAgent}/${skillAclPartition.scope}] partition failed`);
+                    skillRuns.push({ scope: skillAclPartition.scope, failed: true });
+                  }
                 }
                 api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(skillRuns)}`);
-                const result = skillRuns.find((run) => run.result)?.result || skillRuns[0] || {
-                  skipped: true,
-                  reason: "acl_sink_missing",
-                };
+                const result = aggregateSkillMinerRuns(skillRuns, internalAgent);
                 return formatJsonCommandResult({
                   job: "skill-miner",
-                  partitions: skillRuns.map((run) => ({ scope: run.scope, skipped: run.skipped ?? run.result?.skipped ?? false, reason: run.reason || run.result?.reason })),
-                  ...(result.result || result),
+                  partitions: skillRuns.map((run) => ({
+                    scope: run.scope,
+                    failed: run.failed === true,
+                    skipped: run.failed === true ? false : run.result?.skipped ?? false,
+                    ...(run.failed === true
+                      ? { reason: "partition_failed" }
+                      : (run.result?.reason ? { reason: run.result.reason } : {})),
+                  })),
+                  ...result,
                 });
               }
               if (subKey === "afterthought") {
