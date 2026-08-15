@@ -278,7 +278,7 @@ import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } 
 import {
   buildEdgesForSession,
   buildEpisodeAnchorEdges,
-  readGraph,
+  readBoundGraph,
   createGraphMetrics,
   writeGraphConstellationReport,
   extractGraphSignals,
@@ -4495,6 +4495,156 @@ const plugin = {
       emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
       return createNeoStore(neoRoot, workspaceKey);
     };
+    const sameOwnerPartition = (left, right) => Boolean(left && right
+      && left.scope === right.scope
+      && left.agentId === right.agentId
+      && left.workspaceIdentity === right.workspaceIdentity
+      && left.ownerUserId === right.ownerUserId);
+    const ownerStorageKey = (partition) => partition.scope === "workspace"
+      ? partition.workspaceIdentity
+      : `acl-owner-v1:${partition.scope}:${partition.agentId}:${partition.key}`;
+    const createOwnerBoundNeoStore = (partition) => Object.freeze({
+      ...createNeoStore(neoRoot, ownerStorageKey(partition)),
+      aclBindings: partition,
+    });
+    const createOwnerBoundTarget = (partition, store, kind, outputRoot) => Object.freeze({
+      aclBindings: partition,
+      kind,
+      workspaceDir: outputRoot,
+      writeFile: ({ path, content }) => {
+        const targetPath = resolveInside(outputRoot, path);
+        mkdirSync(dirname(targetPath), { recursive: true });
+        writeFileSync(targetPath, content, "utf8");
+        return { written: true, path: targetPath };
+      },
+    });
+    const createOwnerBoundMemoryStore = (db, partition, requestContext) => {
+      const assertRecord = (record, operation) => {
+        if (!record || !checkAccess(requestContext, record).allowed) {
+          throw new Error(`ACL denied for ${operation}`);
+        }
+        const candidate = {
+          ...record,
+          scope: record.scope || "agent-private",
+          agentId: record.agentId || record.storedBy || partition.agentId,
+          storedBy: record.storedBy || record.agentId || partition.agentId,
+          workspaceId: record.workspaceId || record.workspaceKey || partition.workspaceIdentity,
+          workspaceKey: record.workspaceKey || record.workspaceId || partition.workspaceIdentity,
+          ownerUserId: record.ownerUserId || partition.ownerUserId,
+        };
+        if (!sameOwnerPartition({
+          scope: candidate.scope,
+          agentId: candidate.agentId,
+          workspaceIdentity: candidate.workspaceId || candidate.workspaceKey || "",
+          ownerUserId: candidate.ownerUserId || "",
+        }, partition)) {
+          throw new Error(`ACL partition mismatch for ${operation}`);
+        }
+        return record;
+      };
+      const withOwnershipDefaults = (entry) => ({
+        ...entry,
+        scope: partition.scope,
+        agentId: partition.agentId,
+        storedBy: entry?.storedBy || partition.agentId,
+        workspaceId: partition.workspaceIdentity,
+        workspaceKey: partition.workspaceIdentity,
+        ownerUserId: partition.ownerUserId,
+      });
+      return Object.freeze({
+        aclBindings: partition,
+        async getById(id) {
+          const record = await db.getById(id);
+          return record ? assertRecord(record, "getById") : null;
+        },
+        async store(entry) {
+          const bound = withOwnershipDefaults(entry);
+          assertRecord(bound, "store");
+          return db.store(bound);
+        },
+        async update(id, patch) {
+          const record = await db.getById(id);
+          assertRecord(record, "update");
+          return db.update(id, patch);
+        },
+        async delete(id) {
+          const record = await db.getById(id);
+          assertRecord(record, "delete");
+          return db.delete(id);
+        },
+        async tombstone(id, values) {
+          const record = await db.getById(id);
+          assertRecord(record, "tombstone");
+          return db.tombstone(id, values);
+        },
+      });
+    };
+    const createPartitionScopedDb = (db, partition, requestContext) => {
+      const memoryStore = createOwnerBoundMemoryStore(db, partition, requestContext);
+      const assertRows = (rows, operation) => {
+        for (const row of rows || []) {
+          if (!checkAccess(requestContext, row).allowed) throw new Error(`ACL denied for ${operation}`);
+          const workspaceIdentity = row.workspaceId || row.workspaceKey || "";
+          if (!sameOwnerPartition({
+            scope: row.scope || "agent-private",
+            agentId: row.agentId || row.storedBy || "",
+            workspaceIdentity,
+            ownerUserId: row.ownerUserId || "",
+          }, partition)) throw new Error(`ACL partition mismatch for ${operation}`);
+        }
+      };
+      const guardedBuilder = (builder) => new Proxy(builder, {
+        get(target, property) {
+          if (property === "toArray") {
+            return async (...args) => {
+              const rows = await target.toArray(...args);
+              assertRows(rows, "query");
+              return rows;
+            };
+          }
+          const value = target[property];
+          if (typeof value !== "function") return value;
+          return (...args) => {
+            const next = value.apply(target, args);
+            return next && typeof next === "object" && typeof next.toArray === "function"
+              ? guardedBuilder(next)
+              : next;
+          };
+        },
+      });
+      const rawTable = db.table;
+      const table = rawTable ? {
+        schema: (...args) => rawTable.schema(...args),
+        query: (...args) => guardedBuilder(rawTable.query(...args)),
+        vectorSearch: (...args) => guardedBuilder(rawTable.vectorSearch(...args)),
+        async add(entries) {
+          assertRows(entries, "add");
+          return rawTable.add(entries);
+        },
+        async update(options) {
+          const rows = await rawTable.query().where(options.where).toArray();
+          assertRows(rows, "update");
+          return rawTable.update(options);
+        },
+        async delete(where) {
+          const rows = await rawTable.query().where(where).toArray();
+          assertRows(rows, "delete");
+          return rawTable.delete(where);
+        },
+      } : null;
+      return {
+        ...db,
+        table,
+        async getById(id) { return memoryStore.getById(id); },
+        async store(entry) { return memoryStore.store(entry); },
+        async update(id, patch) { return memoryStore.update(id, patch); },
+        async delete(id) { return memoryStore.delete(id); },
+        async tombstone(id, values) { return memoryStore.tombstone(id, values); },
+        // Expiry is a global destructive operation on MemoryDB; the partition
+        // compaction API owns scoped mutations, so never expose the raw purge.
+        async purgeExpired() { return 0; },
+      };
+    };
     const neoRequester = (ctx = {}, event = {}) => ({
       requesterAgentId: [ctx?.agentId, event?.agentId].find(value => typeof value === "string" && value.trim()) || "",
       // ACL binding may not inherit routing defaults; an omitted trusted binding fails closed.
@@ -5810,29 +5960,51 @@ const plugin = {
                   return formatJsonCommandResult({ job: "consolidate-daily", skipped: true, reason: "dailyConsolidation_disabled" });
                 }
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
-                const result = await pool.withDb(internalAgent, async (rawDb) => {
-                  await rawDb.init();
-                  return runDailyConsolidation(rawDb, internalAgent, {
-                    logger: api.logger,
-                    neoStore: commandStore,
-                    workspaceDir: commandCtx.workspaceDir,
-                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                    compactionLlmCfg: mergingEnabled ? withLlmCallContext(
-                      memoryCompactionLlmCfg,
-                      typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
-                      "memory-compaction",
-                      { runtimeLlm: sessionRuntime },
-                    ) : null,
-                    conflictLlmCfg: mergingEnabled ? withLlmCallContext(
-                      conflictResolutionLlmCfg,
-                      typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
-                      "conflict-resolution",
-                      { runtimeLlm: sessionRuntime },
-                    ) : null,
-                    callLlm,
-                    embeddings,
+                const dailyRuns = [];
+                for (const dailyPartition of buildRemPartitions(memoryCtx)) {
+                  const dailyStore = createOwnerBoundNeoStore(dailyPartition);
+                  const dailyWorkspaceDir = dailyPartition.scope === "workspace"
+                    && memoryCtx?.workspaceDir
+                    && dailyPartition.workspaceIdentity === memoryCtx.workspaceIdentity
+                    ? memoryCtx.workspaceDir
+                    : dailyStore.paths.workspaceDir;
+                  const partitionResult = await pool.withDb(internalAgent, async (rawDb) => {
+                    await rawDb.init();
+                    return runDailyConsolidation(
+                      createPartitionScopedDb(rawDb, dailyPartition, memoryCtx),
+                      internalAgent,
+                      {
+                        logger: api.logger,
+                        neoStore: dailyStore,
+                        requestContext: memoryCtx,
+                        aclPartition: dailyPartition,
+                        workspaceDir: dailyWorkspaceDir,
+                        workspaceKey: dailyPartition.workspaceIdentity || dailyPartition.ownerUserId || dailyPartition.agentId,
+                        compactionLlmCfg: mergingEnabled ? withLlmCallContext(
+                          memoryCompactionLlmCfg,
+                          typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                          "memory-compaction",
+                          { runtimeLlm: sessionRuntime },
+                        ) : null,
+                        conflictLlmCfg: mergingEnabled ? withLlmCallContext(
+                          conflictResolutionLlmCfg,
+                          typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                          "conflict-resolution",
+                          { runtimeLlm: sessionRuntime },
+                        ) : null,
+                        callLlm,
+                        embeddings,
+                      },
+                    );
                   });
-                });
+                  dailyRuns.push({ scope: dailyPartition.scope, result: partitionResult });
+                }
+                const result = {
+                  partitionResults: dailyRuns,
+                  compacted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.compacted || 0), 0),
+                  deleted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.deleted || 0), 0),
+                  merged: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.merged || 0), 0),
+                };
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
               }
@@ -5920,40 +6092,18 @@ const plugin = {
                 }
                 const remRuns = [];
                 for (const remAclPartition of remAclPartitions) {
-                  // The command store and workspace directory are safe only for
-                  // the exact workspace partition represented by memoryCtx. No
-                  // physically owner-bound pattern/output store exists here for
-                  // agent-private or user partitions, so those runs fail closed.
-                  const commandWorkspaceKey = workspaceKeyFromContext(commandCtx, {
-                    defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-                    rootDir: neoRoot,
-                    runtime: api.runtime,
-                    sessionWorkspaceKeys,
-                    workspaceAliases: neoWorkspaceAliases,
-                  });
-                  const workspaceSinkAllowed = remAclPartition.scope === "workspace"
+                  const remStore = createOwnerBoundNeoStore(remAclPartition);
+                  const remOutputRoot = remAclPartition.scope === "workspace"
                     && memoryCtx?.workspaceDir
                     && remAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity
-                    && commandWorkspaceKey === remAclPartition.workspaceIdentity;
-                  const remSink = workspaceSinkAllowed
-                    ? (() => {
-                        const boundNeoStore = Object.freeze({
-                          ...commandStore,
-                          aclBindings: remAclPartition,
-                        });
-                        const boundWorkspaceTarget = Object.freeze({
-                          aclBindings: remAclPartition,
-                          kind: "workspace",
-                          workspaceDir: memoryCtx.workspaceDir,
-                        });
-                        return Object.freeze({
-                          aclBindings: remAclPartition,
-                          neoStore: boundNeoStore,
-                          inputTarget: boundWorkspaceTarget,
-                          outputTarget: boundWorkspaceTarget,
-                        });
-                      })()
-                    : null;
+                    ? memoryCtx.workspaceDir
+                    : remStore.paths.workspaceDir;
+                  const remTarget = createOwnerBoundTarget(
+                    remAclPartition,
+                    remStore,
+                    remAclPartition.scope,
+                    remOutputRoot,
+                  );
                   const partitionResult = await pool.withDb(internalAgent, async (db) => {
                     await db.init();
                     return runRemDream({
@@ -5962,23 +6112,29 @@ const plugin = {
                       narrativeLlmCfg: commandRoute(dreamNarrativeLlmCfg, "dream-narrative"),
                       echoLlmCfg: commandRoute(dreamEchoLlmCfg, "dream-echo"),
                       callLlm,
-                      neoStore: remSink?.neoStore || null,
+                      neoStore: remStore,
                       workspaceKey: remAclPartition.workspaceIdentity || remAclPartition.ownerUserId || remAclPartition.agentId,
                       agentId: internalAgent,
                       requestContext: memoryCtx,
                       aclPartition: remAclPartition,
-                      partitionSink: remSink,
+                      partitionSink: {
+                        aclBindings: remAclPartition,
+                        neoStore: remStore,
+                        memoryStore: createOwnerBoundMemoryStore(db, remAclPartition, memoryCtx),
+                        inputTarget: remTarget,
+                        outputTarget: remTarget,
+                      },
                       logger: api.logger,
                       maxMemories: isLocalProvider ? 1000 : 5000,
                       topK: isLocalProvider ? 10 : 20,
                       narrativeCfg: dreamNarrativeCfg,
                       embeddings,
-                      workspaceDir: remSink?.inputTarget?.workspaceDir || null,
+                      workspaceDir: remTarget.workspaceDir,
                       temperamentName: resolveTemperamentName(internalAgent),
                     });
                   });
-                  if (partitionResult.report && remSink?.outputTarget) {
-                    writeRemDreamToVault(partitionResult.report, partitionResult.trends, remSink.outputTarget);
+                  if (partitionResult.report) {
+                    writeRemDreamToVault(partitionResult.report, partitionResult.trends, remTarget);
                   }
                   api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(partitionResult.report || partitionResult)}`);
                   remRuns.push({ scope: remAclPartition.scope, result: partitionResult });
@@ -6021,28 +6177,20 @@ const plugin = {
                     };
                 const skillRuns = [];
                 for (const skillAclPartition of buildRemPartitions(memoryCtx)) {
-                  // Proposals are currently written to a workspace directory.
-                  // That is a protected sink only for the exact workspace
-                  // partition; never scan private/user rows into that file.
-                  const protectedWorkspaceOutput = skillAclPartition.scope === "workspace"
+                  const skillStore = createOwnerBoundNeoStore(skillAclPartition);
+                  const skillWorkspaceDir = skillAclPartition.scope === "workspace"
                     && memoryCtx?.workspaceDir
-                    && skillAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity;
-                  if (!protectedWorkspaceOutput) {
-                    skillRuns.push({
-                      scope: skillAclPartition.scope,
-                      skipped: true,
-                      reason: "acl_sink_missing",
-                    });
-                    continue;
-                  }
+                    && skillAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity
+                    ? memoryCtx.workspaceDir
+                    : skillStore.paths.workspaceDir;
                   const result = await pool.withDb(internalAgent, async (rawDb) => {
                     await rawDb.init();
                     return runSkillMiner(rawDb, internalAgent, {
                       logger: api.logger,
-                      neoStore: commandStore,
+                      neoStore: skillStore,
                       requestContext: memoryCtx,
                       aclPartition: skillAclPartition,
-                      workspaceDir: memoryCtx.workspaceDir,
+                      workspaceDir: skillWorkspaceDir,
                       workspaceKey: skillAclPartition.workspaceIdentity,
                       llmCfg: withLlmCallContext(
                         skillMinerLlmCfg,
@@ -8326,7 +8474,7 @@ const plugin = {
 
                 // Lade existierende Edges für Deduplizierung
                 const existingEdges = neoStore.readGraphEdges(10_000);
-                const { adjacency: existingAdj } = readGraph(existingEdges);
+                const { adjacency: existingAdj } = readBoundGraph(existingEdges);
 
                 // Lade recent existing memories für vollständigen Edge-Aufbau
                 let recentExisting = [];
@@ -8362,7 +8510,8 @@ const plugin = {
                 });
                 const episodeEdges = buildEpisodeAnchorEdges(
                   recentEpisodes,
-                  storedMemoryRows.map(r => r.id)
+                  newMemories,
+                  { requestContext: memoryCtx },
                 );
 
                 const combinedEdges = [...allEdges, ...episodeEdges];
