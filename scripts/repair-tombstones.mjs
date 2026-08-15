@@ -16,7 +16,7 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
 import {
@@ -27,7 +27,7 @@ import {
   readTombstoneRegistry,
   tombstoneRegistryDir,
 } from "../lib/tombstone.js";
-import { safeAgentId, safeUuid } from "../lib/sql-safety.js";
+import { resolveInside, safeAgentId, safeUuid } from "../lib/sql-safety.js";
 
 function parseArgs(argv) {
   const args = { apply: false, baseDbPath: null, archiveDir: null, workspaces: [] };
@@ -129,6 +129,80 @@ function archiveByFilenameMap(files) {
     }
   }
   return { map, collisions };
+}
+
+const OWNERSHIP_FIELDS = Object.freeze([
+  "scope",
+  "workspaceId",
+  "workspaceKey",
+  "ownerUserId",
+]);
+
+function hasOwnField(value, field) {
+  return Object.prototype.hasOwnProperty.call(value, field)
+    && value[field] !== undefined
+    && value[field] !== null;
+}
+
+function normalizedOwnershipField(value, field) {
+  if (field === "scope") return String(value?.scope || "agent-private");
+  return String(value?.[field] || "");
+}
+
+/**
+ * Verify that archive evidence belongs to the delete event and its registry
+ * target. Missing legacy bindings are tolerated only when no contradiction is
+ * present; supplied bindings must match exactly.
+ *
+ * @param {{event: object, card: object, memoryId: string, agentId: string}} args
+ * @returns {string|null} Conflict reason, or null for compatible evidence.
+ */
+function archiveBindingConflict({ event, card, memoryId, agentId }) {
+  if (String(card.id || "") !== memoryId) return "archive_memory_id_mismatch";
+
+  const cardCanonicalOriginId = String(card.canonicalOriginId || card.id || "");
+  if (!cardCanonicalOriginId) return "archive_canonical_origin_missing";
+  if (event.canonicalOriginId !== undefined
+    && event.canonicalOriginId !== null
+    && String(event.canonicalOriginId || "") !== cardCanonicalOriginId) {
+    return "archive_canonical_origin_mismatch";
+  }
+  // An event without its historical origin binding may only use a card whose
+  // origin is unambiguous from the event's memory id.
+  if ((!event.canonicalOriginId || String(event.canonicalOriginId) === "")
+    && cardCanonicalOriginId !== memoryId) {
+    return "archive_canonical_origin_unconfirmed";
+  }
+
+  const cardAgentId = String(card.agentId || "");
+  if (cardAgentId && cardAgentId !== agentId) return "archive_agent_mismatch";
+  const cardStoredBy = String(card.storedBy || "");
+  if (cardStoredBy && cardStoredBy !== agentId) return "archive_stored_by_mismatch";
+
+  if (hasOwnField(event, "storedBy")) {
+    const eventStoredBy = String(event.storedBy || "");
+    if (!eventStoredBy || eventStoredBy !== agentId || cardStoredBy !== eventStoredBy) {
+      return "archive_stored_by_mismatch";
+    }
+  }
+
+  const hasOwnershipTarget = OWNERSHIP_FIELDS.some((field) => hasOwnField(event, field));
+  if (hasOwnershipTarget) {
+    for (const field of OWNERSHIP_FIELDS) {
+      if (normalizedOwnershipField(event, field) !== normalizedOwnershipField(card, field)) {
+        return `archive_${field}_mismatch`;
+      }
+    }
+  }
+  return null;
+}
+
+function resolveArchiveCandidate(archiveDir, candidate) {
+  try {
+    return resolveInside(archiveDir, candidate);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -293,8 +367,10 @@ function main() {
         continue;
       }
 
-      // Karteninhalt aus dem Archiv laden (für Fingerprint/Scope). Nur den
-      // expliziten archivePath verwenden; Basename-Fallback nur bei Eindeutigkeit.
+      // Karteninhalt aus dem Archiv laden (für Fingerprint/Scope). Der
+      // explizite archivePath wird kanonisch innerhalb des Archivroots
+      // aufgeloest; das blockiert auch Symlink-Escapes. Basename-Fallback nur
+      // bei Eindeutigkeit und ebenfalls nur nach derselben Pruefung.
       let archiveFile = null;
       if (archivePath !== undefined && archivePath !== null && typeof archivePath !== "string") {
         const detail = { memoryId, agentId, reason: "invalid archive path" };
@@ -302,17 +378,41 @@ function main() {
         unacceptableEvents.push(detail);
         continue;
       }
-      if (archivePath && existsSync(archivePath)) {
-        archiveFile = archivePath;
-      } else if (archivePath) {
-        const name = basename(archivePath);
-        if (archiveNameCollisions.has(name)) {
-          const detail = { memoryId, agentId, reason: "archive_filename_collision" };
+      if (archivePath) {
+        archiveFile = resolveArchiveCandidate(archiveDir, archivePath);
+        if (!archiveFile) {
+          const detail = {
+            memoryId,
+            agentId,
+            archivePath,
+            reason: "archive path outside archive dir",
+          };
           conflicted.push(detail);
           unacceptableEvents.push(detail);
           continue;
         }
-        archiveFile = archiveByName.get(name) || null;
+        if (!existsSync(archiveFile)) {
+          const name = basename(archiveFile);
+          if (archiveNameCollisions.has(name)) {
+            const detail = { memoryId, agentId, reason: "archive_filename_collision" };
+            conflicted.push(detail);
+            unacceptableEvents.push(detail);
+            continue;
+          }
+          const fallback = archiveByName.get(name) || null;
+          archiveFile = fallback ? resolveArchiveCandidate(archiveDir, fallback) : null;
+          if (fallback && !archiveFile) {
+            const detail = {
+              memoryId,
+              agentId,
+              archivePath,
+              reason: "archive path outside archive dir",
+            };
+            conflicted.push(detail);
+            unacceptableEvents.push(detail);
+            continue;
+          }
+        }
       }
       let card = null;
       if (archiveFile && existsSync(archiveFile)) {
@@ -321,6 +421,14 @@ function main() {
       if (!card || typeof card.text !== "string" || !card.text) {
         const detail = { memoryId, agentId, reason: "archive content unavailable" };
         missingContent.push(detail);
+        unacceptableEvents.push(detail);
+        continue;
+      }
+
+      const bindingConflict = archiveBindingConflict({ event, card, memoryId, agentId });
+      if (bindingConflict) {
+        const detail = { memoryId, agentId, archivePath: archiveFile, reason: bindingConflict };
+        conflicted.push(detail);
         unacceptableEvents.push(detail);
         continue;
       }
