@@ -260,6 +260,7 @@ describe("release 7.3.1 compaction follow-up", () => {
     const rows = dailyRows(Date.now());
     const table = makeTable(rows);
     const workspaceDir = tempDir(t, "release-731-daily-tuples-");
+    const ownerStateRoot = tempDir(t, "release-731-daily-owner-state-");
     const result = await runConsolidation({
       async init() {},
       table,
@@ -269,6 +270,7 @@ describe("release 7.3.1 compaction follow-up", () => {
     }, AGENT, {
       workspaceDir,
       workspaceKey: WORKSPACE,
+      neoStore: createNeoStore(ownerStateRoot, WORKSPACE),
       requestContext: WORKSPACE_CONTEXT,
       compaction: {
         similarityThreshold: 0.99,

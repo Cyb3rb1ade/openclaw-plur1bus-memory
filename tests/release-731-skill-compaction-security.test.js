@@ -6,7 +6,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -217,12 +217,11 @@ describe("release 7.3.1 skill-miner and compaction security", () => {
     assert.equal(table._rows.find((row) => row.id === userB).status, "active");
     assert.equal(table._rows.find((row) => row.id === workspace).status, "active");
 
-    const aliases = readFileSync(join(workspaceDir, ".adaptive-learning", "memory-aliases.jsonl"), "utf8")
-      .trim().split("\n").map((line) => JSON.parse(line));
-    assert.equal(aliases.length, 1);
-    assert.deepEqual(aliases[0].aclBindings, USER_A_PARTITION);
-    assert.equal(aliases[0].oldId, userA2);
-    assert.equal(aliases[0].canonicalId, userA1);
+    assert.equal(
+      existsSync(join(workspaceDir, ".adaptive-learning", "memory-aliases.jsonl")),
+      false,
+      "user-private compaction must not write an alias file into the workspace",
+    );
   });
 
   it("fails closed when ownership changes between proposal generation and auto-archive", async (t) => {
