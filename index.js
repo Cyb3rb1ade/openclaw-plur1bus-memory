@@ -272,13 +272,13 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { buildRemPartition, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { buildRemPartitions, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
 import {
   buildEdgesForSession,
   buildEpisodeAnchorEdges,
-  readGraph,
+  readBoundGraph,
   createGraphMetrics,
   writeGraphConstellationReport,
   extractGraphSignals,
@@ -1701,13 +1701,36 @@ class MemoryDB {
    * @param {boolean} [opts.includeGlobalRecent] — auch session-übergreifende laden
    * @param {string[]} [opts.fields] — Felder, die benötigt werden
    */
+  /**
+   * where-Klausel für den Graph-Scan, gebaut aus dem LIVE-Schema.
+   *
+   * Eine feste Klausel bricht, sobald eine referenzierte Spalte fehlt, und der
+   * `catch` unten liefert dann stilles `[]` — `recentExisting` bliebe leer und
+   * buildEdgesForSession verbände neue Erinnerungen nur untereinander, nie mit
+   * dem Bestand. `epistemicStatus` fehlt auf allen produktiven Tabellen, bis das
+   * Release die Spalte migriert; im readOnly-Modus wird die Migration ohnehin
+   * übersprungen (siehe init).
+   *
+   * `epistemicStatus` zusätzlich NULL-sicher: `!= 'invalidated'` allein ist in
+   * SQL dreiwertig und verwürfe Zeilen ohne gesetzten Wert.
+   */
+  _buildRecentGraphWhere() {
+    const felder = this.schemaFieldNames;
+    const hat = (name) => !felder || felder.size === 0 || felder.has(name);
+    const teile = [];
+    if (hat("memoryKind")) teile.push("(memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = '')");
+    if (hat("status")) teile.push("(status IS NULL OR status = 'active' OR status = '')");
+    if (hat("epistemicStatus")) teile.push("(epistemicStatus IS NULL OR epistemicStatus != 'invalidated')");
+    return teile.length > 0 ? teile.join(" AND ") : "true";
+  }
+
   async getRecentForGraph({ limit = 100, sessionId = "", includeGlobalRecent = true, fields = null } = {}) {
     await this.init();
     if (!this.table) return [];
     try {
       let rows = await this._read(
         this.table.query()
-          .where("(memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = '') AND (status IS NULL OR status = 'active' OR status = '') AND epistemicStatus != 'invalidated'")
+          .where(this._buildRecentGraphWhere())
           .limit(limit * 2)
           .toArray(),
         "MemoryDB.getRecentForGraph",
@@ -1739,6 +1762,9 @@ class MemoryDB {
       }
       return rows;
     } catch (e) {
+      // Nicht stumm: ein leeres Ergebnis hier bedeutet, dass der Graph-Aufbau
+      // keine Bestandserinnerungen sieht — das darf nicht unbemerkt bleiben.
+      this.logger?.warn?.(`memory-lancedb-namespaced: getRecentForGraph failed for ${this.dbPath}: ${String(e?.message || e)}`);
       return [];
     }
   }
@@ -3004,6 +3030,40 @@ function resolveNeoHooksConfig(api, commandConfig) {
 
 function formatJsonCommandResult(value) {
   return { text: JSON.stringify(value, null, 2) };
+}
+
+function finiteSkillMetric(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : 0;
+}
+
+function aggregateSkillMinerRuns(skillRuns, agent) {
+  const successfulRuns = skillRuns.filter((run) => run.result && !run.failed);
+  const failedRuns = skillRuns.filter((run) => run.failed === true);
+  const reports = successfulRuns.map((run) => run.result);
+  const aclBindings = skillRuns.length === 1 && successfulRuns.length === 1
+    ? reports[0].aclBindings || null
+    : null;
+  const allSkipped = reports.length > 0 && reports.every((report) => report.skipped === true);
+  const allFailed = reports.length === 0 && failedRuns.length > 0;
+
+  return {
+    timestamp: new Date().toISOString(),
+    agent,
+    ...((allSkipped || allFailed)
+      ? { skipped: true, reason: allFailed ? "all_partitions_failed" : "all_partitions_skipped" }
+      : {}),
+    partialFailure: failedRuns.length > 0,
+    failedPartitions: failedRuns.map((run) => run.scope),
+    scanned: reports.reduce((total, report) => total + finiteSkillMetric(report.scanned), 0),
+    proposalsCreated: reports.reduce((total, report) => total + finiteSkillMetric(report.proposalsCreated), 0),
+    skippedLowEvidence: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedLowEvidence), 0),
+    skippedLowConfidence: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedLowConfidence), 0),
+    skippedDuplicate: reports.reduce((total, report) => total + finiteSkillMetric(report.skippedDuplicate), 0),
+    pushMessages: reports.flatMap((report) => Array.isArray(report.pushMessages) ? report.pushMessages : []),
+    dryRun: reports.length > 0 && reports.every((report) => report.dryRun === true),
+    aclBindings,
+  };
 }
 
 function formatKnownValidityLabel(entry) {
@@ -4469,6 +4529,156 @@ const plugin = {
       emitCommandRuntimeHook("onNeoStore", { purpose, workspaceKey });
       return createNeoStore(neoRoot, workspaceKey);
     };
+    const sameOwnerPartition = (left, right) => Boolean(left && right
+      && left.scope === right.scope
+      && left.agentId === right.agentId
+      && left.workspaceIdentity === right.workspaceIdentity
+      && left.ownerUserId === right.ownerUserId);
+    const ownerStorageKey = (partition) => partition.scope === "workspace"
+      ? partition.workspaceIdentity
+      : `acl-owner-v1:${partition.scope}:${partition.agentId}:${partition.key}`;
+    const createOwnerBoundNeoStore = (partition) => Object.freeze({
+      ...createNeoStore(neoRoot, ownerStorageKey(partition)),
+      aclBindings: partition,
+    });
+    const createOwnerBoundTarget = (partition, store, kind, outputRoot) => Object.freeze({
+      aclBindings: partition,
+      kind,
+      workspaceDir: outputRoot,
+      writeFile: ({ path, content }) => {
+        const targetPath = resolveInside(outputRoot, path);
+        mkdirSync(dirname(targetPath), { recursive: true });
+        writeFileSync(targetPath, content, "utf8");
+        return { written: true, path: targetPath };
+      },
+    });
+    const createOwnerBoundMemoryStore = (db, partition, requestContext) => {
+      const assertRecord = (record, operation) => {
+        if (!record || !checkAccess(requestContext, record).allowed) {
+          throw new Error(`ACL denied for ${operation}`);
+        }
+        const candidate = {
+          ...record,
+          scope: record.scope || "agent-private",
+          agentId: record.agentId || record.storedBy || partition.agentId,
+          storedBy: record.storedBy || record.agentId || partition.agentId,
+          workspaceId: record.workspaceId || record.workspaceKey || partition.workspaceIdentity,
+          workspaceKey: record.workspaceKey || record.workspaceId || partition.workspaceIdentity,
+          ownerUserId: record.ownerUserId || partition.ownerUserId,
+        };
+        if (!sameOwnerPartition({
+          scope: candidate.scope,
+          agentId: candidate.agentId,
+          workspaceIdentity: candidate.workspaceId || candidate.workspaceKey || "",
+          ownerUserId: candidate.ownerUserId || "",
+        }, partition)) {
+          throw new Error(`ACL partition mismatch for ${operation}`);
+        }
+        return record;
+      };
+      const withOwnershipDefaults = (entry) => ({
+        ...entry,
+        scope: partition.scope,
+        agentId: partition.agentId,
+        storedBy: entry?.storedBy || partition.agentId,
+        workspaceId: partition.workspaceIdentity,
+        workspaceKey: partition.workspaceIdentity,
+        ownerUserId: partition.ownerUserId,
+      });
+      return Object.freeze({
+        aclBindings: partition,
+        async getById(id) {
+          const record = await db.getById(id);
+          return record ? assertRecord(record, "getById") : null;
+        },
+        async store(entry) {
+          const bound = withOwnershipDefaults(entry);
+          assertRecord(bound, "store");
+          return db.store(bound);
+        },
+        async update(id, patch) {
+          const record = await db.getById(id);
+          assertRecord(record, "update");
+          return db.update(id, patch);
+        },
+        async delete(id) {
+          const record = await db.getById(id);
+          assertRecord(record, "delete");
+          return db.delete(id);
+        },
+        async tombstone(id, values) {
+          const record = await db.getById(id);
+          assertRecord(record, "tombstone");
+          return db.tombstone(id, values);
+        },
+      });
+    };
+    const createPartitionScopedDb = (db, partition, requestContext) => {
+      const memoryStore = createOwnerBoundMemoryStore(db, partition, requestContext);
+      const assertRows = (rows, operation) => {
+        for (const row of rows || []) {
+          if (!checkAccess(requestContext, row).allowed) throw new Error(`ACL denied for ${operation}`);
+          const workspaceIdentity = row.workspaceId || row.workspaceKey || "";
+          if (!sameOwnerPartition({
+            scope: row.scope || "agent-private",
+            agentId: row.agentId || row.storedBy || "",
+            workspaceIdentity,
+            ownerUserId: row.ownerUserId || "",
+          }, partition)) throw new Error(`ACL partition mismatch for ${operation}`);
+        }
+      };
+      const guardedBuilder = (builder) => new Proxy(builder, {
+        get(target, property) {
+          if (property === "toArray") {
+            return async (...args) => {
+              const rows = await target.toArray(...args);
+              assertRows(rows, "query");
+              return rows;
+            };
+          }
+          const value = target[property];
+          if (typeof value !== "function") return value;
+          return (...args) => {
+            const next = value.apply(target, args);
+            return next && typeof next === "object" && typeof next.toArray === "function"
+              ? guardedBuilder(next)
+              : next;
+          };
+        },
+      });
+      const rawTable = db.table;
+      const table = rawTable ? {
+        schema: (...args) => rawTable.schema(...args),
+        query: (...args) => guardedBuilder(rawTable.query(...args)),
+        vectorSearch: (...args) => guardedBuilder(rawTable.vectorSearch(...args)),
+        async add(entries) {
+          assertRows(entries, "add");
+          return rawTable.add(entries);
+        },
+        async update(options) {
+          const rows = await rawTable.query().where(options.where).toArray();
+          assertRows(rows, "update");
+          return rawTable.update(options);
+        },
+        async delete(where) {
+          const rows = await rawTable.query().where(where).toArray();
+          assertRows(rows, "delete");
+          return rawTable.delete(where);
+        },
+      } : null;
+      return {
+        ...db,
+        table,
+        async getById(id) { return memoryStore.getById(id); },
+        async store(entry) { return memoryStore.store(entry); },
+        async update(id, patch) { return memoryStore.update(id, patch); },
+        async delete(id) { return memoryStore.delete(id); },
+        async tombstone(id, values) { return memoryStore.tombstone(id, values); },
+        // Expiry is a global destructive operation on MemoryDB; the partition
+        // compaction API owns scoped mutations, so never expose the raw purge.
+        async purgeExpired() { return 0; },
+      };
+    };
     const neoRequester = (ctx = {}, event = {}) => ({
       requesterAgentId: [ctx?.agentId, event?.agentId].find(value => typeof value === "string" && value.trim()) || "",
       // ACL binding may not inherit routing defaults; an omitted trusted binding fails closed.
@@ -5784,29 +5994,51 @@ const plugin = {
                   return formatJsonCommandResult({ job: "consolidate-daily", skipped: true, reason: "dailyConsolidation_disabled" });
                 }
                 const sessionRuntime = commandCtx?.runtimeContext?.llm;
-                const result = await pool.withDb(internalAgent, async (rawDb) => {
-                  await rawDb.init();
-                  return runDailyConsolidation(rawDb, internalAgent, {
-                    logger: api.logger,
-                    neoStore: commandStore,
-                    workspaceDir: commandCtx.workspaceDir,
-                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                    compactionLlmCfg: mergingEnabled ? withLlmCallContext(
-                      memoryCompactionLlmCfg,
-                      typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
-                      "memory-compaction",
-                      { runtimeLlm: sessionRuntime },
-                    ) : null,
-                    conflictLlmCfg: mergingEnabled ? withLlmCallContext(
-                      conflictResolutionLlmCfg,
-                      typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
-                      "conflict-resolution",
-                      { runtimeLlm: sessionRuntime },
-                    ) : null,
-                    callLlm,
-                    embeddings,
+                const dailyRuns = [];
+                for (const dailyPartition of buildRemPartitions(memoryCtx)) {
+                  const dailyStore = createOwnerBoundNeoStore(dailyPartition);
+                  const dailyWorkspaceDir = dailyPartition.scope === "workspace"
+                    && memoryCtx?.workspaceDir
+                    && dailyPartition.workspaceIdentity === memoryCtx.workspaceIdentity
+                    ? memoryCtx.workspaceDir
+                    : dailyStore.paths.workspaceDir;
+                  const partitionResult = await pool.withDb(internalAgent, async (rawDb) => {
+                    await rawDb.init();
+                    return runDailyConsolidation(
+                      createPartitionScopedDb(rawDb, dailyPartition, memoryCtx),
+                      internalAgent,
+                      {
+                        logger: api.logger,
+                        neoStore: dailyStore,
+                        requestContext: memoryCtx,
+                        aclPartition: dailyPartition,
+                        workspaceDir: dailyWorkspaceDir,
+                        workspaceKey: dailyPartition.workspaceIdentity || dailyPartition.ownerUserId || dailyPartition.agentId,
+                        compactionLlmCfg: mergingEnabled ? withLlmCallContext(
+                          memoryCompactionLlmCfg,
+                          typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                          "memory-compaction",
+                          { runtimeLlm: sessionRuntime },
+                        ) : null,
+                        conflictLlmCfg: mergingEnabled ? withLlmCallContext(
+                          conflictResolutionLlmCfg,
+                          typeof sessionRuntime?.complete === "function" ? undefined : internalAgent,
+                          "conflict-resolution",
+                          { runtimeLlm: sessionRuntime },
+                        ) : null,
+                        callLlm,
+                        embeddings,
+                      },
+                    );
                   });
-                });
+                  dailyRuns.push({ scope: dailyPartition.scope, result: partitionResult });
+                }
+                const result = {
+                  partitionResults: dailyRuns,
+                  compacted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.compacted || 0), 0),
+                  deleted: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.deleted || 0), 0),
+                  merged: dailyRuns.reduce((total, run) => total + Number(run.result?.compaction?.merged || 0), 0),
+                };
                 api.logger?.info?.(`plur1bus internal consolidate-daily[${internalAgent}]: ${JSON.stringify(result)}`);
                 return formatJsonCommandResult({ job: "consolidate-daily", ...result });
               }
@@ -5879,49 +6111,70 @@ const plugin = {
                   { runtimeLlm: sessionRuntime },
                 );
                 const isLocalProvider = normalizedEmbeddingCfg.provider === "local-transformers";
-                let remAclPartition;
-                try {
-                  remAclPartition = buildRemPartition(
-                    memoryCtx.userPrincipal
-                      ? { scope: "user", agentId: memoryCtx.agentId, workspaceIdentity: "", ownerUserId: memoryCtx.userPrincipal }
-                      : { scope: "workspace", agentId: memoryCtx.agentId, workspaceIdentity: memoryCtx.workspaceIdentity, ownerUserId: "" },
-                    memoryCtx,
-                  );
-                } catch {
+                // Ein Lauf je ACL-Partition. Vorher wurde ausschließlich `user`
+                // oder `workspace` gebaut — nie `agent-private`. Da
+                // loadCandidateMemories über `sameRemBindings` filtert und das
+                // `a.scope === b.scope` vergleicht, fiel jede agent-private
+                // Zeile heraus; live sind das 100 % der Kandidaten, weshalb der
+                // Job dauerhaft `too_few_memories, count: 0` meldete.
+                //
+                // Mehrere Läufe sind unbedenklich: buildRunKey bindet den
+                // Run-Key an die Partition, die Deduplizierung greift getrennt.
+                const remAclPartitions = buildRemPartitions(memoryCtx);
+                if (remAclPartitions.length === 0) {
                   return formatJsonCommandResult({ job: "rem-dream", skipped: true, reason: "acl_partition_missing" });
                 }
-                const result = await pool.withDb(internalAgent, async (db) => {
-                  await db.init();
-                  return runRemDream({
-                    db,
-                    patternLlmCfg: commandRoute(remPatternLlmCfg, "rem-pattern-analysis"),
-                    narrativeLlmCfg: commandRoute(dreamNarrativeLlmCfg, "dream-narrative"),
-                    echoLlmCfg: commandRoute(dreamEchoLlmCfg, "dream-echo"),
-                    callLlm,
-                    neoStore: commandStore,
-                    workspaceKey: workspaceKeyFromContext(commandCtx, {
-                      defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
-                      rootDir: neoRoot,
-                      runtime: api.runtime,
-                      sessionWorkspaceKeys,
-                      workspaceAliases: neoWorkspaceAliases,
-                    }),
-                    agentId: internalAgent,
-                    requestContext: memoryCtx,
-                    aclPartition: remAclPartition,
-                    logger: api.logger,
-                    maxMemories: isLocalProvider ? 1000 : 5000,
-                    topK: isLocalProvider ? 10 : 20,
-                    narrativeCfg: dreamNarrativeCfg,
-                    embeddings,
-                    workspaceDir: commandCtx?.workspaceDir || null,
-                    temperamentName: resolveTemperamentName(internalAgent),
+                const remRuns = [];
+                for (const remAclPartition of remAclPartitions) {
+                  const remStore = createOwnerBoundNeoStore(remAclPartition);
+                  const remOutputRoot = remAclPartition.scope === "workspace"
+                    && memoryCtx?.workspaceDir
+                    && remAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity
+                    ? memoryCtx.workspaceDir
+                    : remStore.paths.workspaceDir;
+                  const remTarget = createOwnerBoundTarget(
+                    remAclPartition,
+                    remStore,
+                    remAclPartition.scope,
+                    remOutputRoot,
+                  );
+                  const partitionResult = await pool.withDb(internalAgent, async (db) => {
+                    await db.init();
+                    return runRemDream({
+                      db,
+                      patternLlmCfg: commandRoute(remPatternLlmCfg, "rem-pattern-analysis"),
+                      narrativeLlmCfg: commandRoute(dreamNarrativeLlmCfg, "dream-narrative"),
+                      echoLlmCfg: commandRoute(dreamEchoLlmCfg, "dream-echo"),
+                      callLlm,
+                      neoStore: remStore,
+                      workspaceKey: remAclPartition.workspaceIdentity || remAclPartition.ownerUserId || remAclPartition.agentId,
+                      agentId: internalAgent,
+                      requestContext: memoryCtx,
+                      aclPartition: remAclPartition,
+                      partitionSink: {
+                        aclBindings: remAclPartition,
+                        neoStore: remStore,
+                        memoryStore: createOwnerBoundMemoryStore(db, remAclPartition, memoryCtx),
+                        inputTarget: remTarget,
+                        outputTarget: remTarget,
+                      },
+                      logger: api.logger,
+                      maxMemories: isLocalProvider ? 1000 : 5000,
+                      topK: isLocalProvider ? 10 : 20,
+                      narrativeCfg: dreamNarrativeCfg,
+                      embeddings,
+                      workspaceDir: remTarget.workspaceDir,
+                      temperamentName: resolveTemperamentName(internalAgent),
+                    });
                   });
-                });
-                if (result.report && commandCtx.workspaceDir) {
-                  writeRemDreamToVault(result.report, result.trends, commandCtx.workspaceDir);
+                  if (partitionResult.report) {
+                    writeRemDreamToVault(partitionResult.report, partitionResult.trends, remTarget);
+                  }
+                  api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}/${remAclPartition.scope}]: ${JSON.stringify(partitionResult.report || partitionResult)}`);
+                  remRuns.push({ scope: remAclPartition.scope, result: partitionResult });
                 }
-                api.logger?.info?.(`plur1bus internal rem-dream[${internalAgent}]: ${JSON.stringify(result.report || result)}`);
+                // Der erste Lauf mit Report gewinnt für die Antwort; sonst der erste.
+                const result = (remRuns.find((run) => run.result?.report) || remRuns[0]).result;
                 const semanticCfg = obsidianBridgeCfg?.graphLinks?.semanticDiscovery;
                 if (semanticCfg?.enabled && commandCtx.workspaceDir) {
                   const semVaultCfg = { ...obsidianBridgeCfg, vaultPath: commandCtx.workspaceDir };
@@ -5936,7 +6189,11 @@ const plugin = {
                     .then((r) => api.logger?.info?.(`plur1bus-semantic: processed=${r.processed} unchanged=${r.unchanged} errors=${r.errors}${r.blocked ? ` blocked=${r.reason || true}` : ""}${r.batchAborted ? " (aborted-429)" : ""}`))
                     .catch((err) => api.logger?.warn?.(`plur1bus-semantic: discovery failed: ${String(err)}`));
                 }
-                return formatJsonCommandResult({ job: "rem-dream", ...(result.report || result) });
+                return formatJsonCommandResult({
+                  job: "rem-dream",
+                  partitions: remRuns.map((run) => ({ scope: run.scope, skipped: run.result?.skipped ?? false })),
+                  ...(result.report || result),
+                });
               }
               if (subKey === "skill-miner") {
                 if (!skillMinerEnabled || !skillMinerLlmCfg) {
@@ -5951,28 +6208,61 @@ const plugin = {
                   : {
                       agentId: internalAgent,
                       purpose: LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
-                    };
-                const result = await pool.withDb(internalAgent, async (rawDb) => {
-                  await rawDb.init();
-                  return runSkillMiner(rawDb, internalAgent, {
-                    logger: api.logger,
-                    neoStore: commandStore,
-                    workspaceDir: commandCtx.workspaceDir,
-                    workspaceKey: commandCtx?.workspaceKey || commandCtx?.workspaceDir || null,
-                    llmCfg: withLlmCallContext(
-                      skillMinerLlmCfg,
-                      skillMinerCallContext.agentId,
-                      LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
-                      { runtimeLlm: skillMinerCallContext.runtimeLlm },
-                    ),
-                    callLlm,
-                    maxPerRun: skillMinerCfg.maxPerRun ?? 5,
-                    minConfidence: skillMinerCfg.minConfidence ?? 0.6,
-                    minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
-                  });
+                };
+                const skillRuns = [];
+                const skillAclPartitions = buildRemPartitions(memoryCtx);
+                if (skillAclPartitions.length === 0) {
+                  return formatJsonCommandResult({ job: "skill-miner", skipped: true, reason: "acl_partition_missing", partitions: [] });
+                }
+                for (const skillAclPartition of skillAclPartitions) {
+                  const skillStore = createOwnerBoundNeoStore(skillAclPartition);
+                  const skillWorkspaceDir = skillAclPartition.scope === "workspace"
+                    && memoryCtx?.workspaceDir
+                    && skillAclPartition.workspaceIdentity === memoryCtx.workspaceIdentity
+                    ? memoryCtx.workspaceDir
+                    : skillStore.paths.workspaceDir;
+                  try {
+                    const result = await pool.withDb(internalAgent, async (rawDb) => {
+                      await rawDb.init();
+                      return runSkillMiner(rawDb, internalAgent, {
+                        logger: api.logger,
+                        neoStore: skillStore,
+                        requestContext: memoryCtx,
+                        aclPartition: skillAclPartition,
+                        workspaceDir: skillWorkspaceDir,
+                        workspaceKey: skillAclPartition.workspaceIdentity,
+                        llmCfg: withLlmCallContext(
+                          skillMinerLlmCfg,
+                          skillMinerCallContext.agentId,
+                          LLM_RESULT_CACHE_PURPOSES.SKILL_EXTRACTION,
+                          { runtimeLlm: skillMinerCallContext.runtimeLlm },
+                        ),
+                        callLlm,
+                        maxPerRun: skillMinerCfg.maxPerRun ?? 5,
+                        minConfidence: skillMinerCfg.minConfidence ?? 0.6,
+                        minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
+                      });
+                    });
+                    skillRuns.push({ scope: skillAclPartition.scope, result });
+                  } catch {
+                    api.logger?.warn?.(`plur1bus internal skill-miner[${internalAgent}/${skillAclPartition.scope}] partition failed`);
+                    skillRuns.push({ scope: skillAclPartition.scope, failed: true });
+                  }
+                }
+                api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(skillRuns)}`);
+                const result = aggregateSkillMinerRuns(skillRuns, internalAgent);
+                return formatJsonCommandResult({
+                  job: "skill-miner",
+                  partitions: skillRuns.map((run) => ({
+                    scope: run.scope,
+                    failed: run.failed === true,
+                    skipped: run.failed === true ? false : run.result?.skipped ?? false,
+                    ...(run.failed === true
+                      ? { reason: "partition_failed" }
+                      : (run.result?.reason ? { reason: run.result.reason } : {})),
+                  })),
+                  ...result,
                 });
-                api.logger?.info?.(`plur1bus internal skill-miner[${internalAgent}]: ${JSON.stringify(result)}`);
-                return formatJsonCommandResult({ job: "skill-miner", ...result });
               }
               if (subKey === "afterthought") {
                 if ((cfg.afterthought?.enabled ?? true) === false
@@ -7243,8 +7533,10 @@ const plugin = {
             }
             const refMap = assignShortRefs((pending || []).map((c) => c.id));
 
-            // Listenansicht
-            if (!subKey) {
+            // Listenansicht. `list` ist in isSensitiveChatRead bereits
+            // autorisiert und muss denselben Pfad nehmen wie der leere subKey —
+            // sonst landet es im Usage-Zweig.
+            if (!subKey || subKey === "list") {
               const denied = await checkAuth(memoryCtx, { chatKind: memoryCtx.chatKind }, commandCtx);
               if (denied) return denied;
               if (!pending || pending.length === 0) {
@@ -7286,12 +7578,12 @@ const plugin = {
 
             if (subKey === "accept") {
               const result = await memoryDbAdapter.markCriticalAccepted(agentId, fullId);
-              if (!result?.ok) return { text: t("critical.failed", { lang, tone }) };
+              if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
               return { text: t("critical.accepted", { lang, tone }) };
             }
             if (subKey === "reject") {
               const result = await memoryDbAdapter.markCriticalRejected(agentId, fullId);
-              if (!result?.ok) return { text: t("critical.failed", { lang, tone }) };
+              if (!result?.ok) return { text: t("critical.failed", { lang, tone, vars: { error: result?.error || "unknown" } }) };
               return { text: t("critical.rejected", { lang, tone }) };
             }
             // edit → in den vorhandenen sicheren Korrekturablauf führen.
@@ -7540,6 +7832,23 @@ const plugin = {
 
         const agentId = ctx?.agentId || "default";
         const background = isBackgroundTurn(event, ctx);
+        let memoryCtx = null;
+        try {
+          memoryCtx = resolveMemoryRequestContext({
+            agentId,
+            workspaceDir: ctx?.workspaceDir,
+            workspaceKey: ctx?.workspaceKey,
+            workspaceId: ctx?.workspaceId,
+            userId: ctx?.userId ?? ctx?.senderId,
+            channel: ctx?.channel ?? ctx?.messageProvider,
+            accountId: ctx?.accountId ?? ctx?.channelContext?.accountId,
+            chatId: ctx?.chatId,
+            sessionKey: ctx?.sessionKey ?? event?.sessionKey,
+            sessionId: ctx?.sessionId ?? event?.sessionId,
+          }, { workspaceAliases: memoryWorkspaceAliases });
+        } catch (err) {
+          api.logger?.debug?.(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
+        }
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
@@ -8199,11 +8508,20 @@ const plugin = {
                   entities: row.entities || [],
                   emotionalDominant: row.emotionalDominant,
                   emotionalIntensity: row.emotionalIntensity,
+                  status: row.status || "active",
+                  epistemicStatus: row.epistemicStatus || "",
+                  expiresAt: row.expiresAt ?? 0,
+                  scope: row.scope,
+                  agentId: row.agentId,
+                  storedBy: row.storedBy,
+                  workspaceId: row.workspaceId || "",
+                  workspaceKey: row.workspaceKey || "",
+                  ownerUserId: row.ownerUserId || "",
                 }));
 
                 // Lade existierende Edges für Deduplizierung
                 const existingEdges = neoStore.readGraphEdges(10_000);
-                const { adjacency: existingAdj } = readGraph(existingEdges);
+                const { adjacency: existingAdj } = readBoundGraph(existingEdges);
 
                 // Lade recent existing memories für vollständigen Edge-Aufbau
                 let recentExisting = [];
@@ -8212,17 +8530,23 @@ const plugin = {
                     limit: 100,
                     sessionId: event?.sessionId || event?.sessionKey || event?.runId || "",
                     includeGlobalRecent: true,
-                    fields: ["id", "createdAt", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity"],
+                    fields: [
+                      "id", "createdAt", "sessionId", "topics", "entities", "emotionalDominant", "emotionalIntensity",
+                      "status", "epistemicStatus", "expiresAt", "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId",
+                    ],
                   });
-                } catch (_) { /* ignore */ }
+                } catch (err) {
+                  api.logger?.debug?.(`memory-graph: recent ownership projection failed: ${String(err)}`);
+                }
 
                 // Baue neue Edges
-                const allEdges = await buildEdgesForSession(
+                const allEdges = memoryCtx ? await buildEdgesForSession(
                   newMemories.filter(m => m.vector),
                   [...recentExisting, ...newMemories],
                   db.table,
-                  api.logger
-                );
+                  api.logger,
+                  { requestContext: memoryCtx },
+                ) : [];
 
                 // Episode-Anchor-Edges — nur für Episoden im aktuellen Zeitfenster
                 const allEpisodes = neoStore.readEpisodes(100);
@@ -8233,7 +8557,8 @@ const plugin = {
                 });
                 const episodeEdges = buildEpisodeAnchorEdges(
                   recentEpisodes,
-                  storedMemoryRows.map(r => r.id)
+                  newMemories,
+                  { requestContext: memoryCtx },
                 );
 
                 const combinedEdges = [...allEdges, ...episodeEdges];
@@ -8761,7 +9086,9 @@ const plugin = {
                 // (tombstoneMemoryWithAudit trägt fehlendes Audit nach) — kein
                 // früher Return, der die Audit-Recovery umgehen würde.
                 const card = await db.getById(params.memoryId);
-                if (!card) return { content: [{ type: "text", text: `Memory ${params.memoryId} not found.` }] };
+                // Bewusst dieselbe Meldung wie bei ACL-Verweigerung unten: ein
+                // eigener "not found"-Text wäre ein Existenz-Orakel für fremde IDs.
+                if (!card) return { content: [{ type: "text", text: "No matching memory found." }] };
                 if (!cardAllowedForForget(card)) {
                   return { content: [{ type: "text", text: "No matching memory found." }] };
                 }
@@ -9789,7 +10116,12 @@ const plugin = {
                   now: Date.now(),
                   logger: api.logger,
                   compactedAt: event?.compactedAt || ctx?.compactedAt || null,
-                  getMemoryById: async (memoryId) => db.getById(memoryId),
+                  requestContext: memoryCtx,
+                  getMemoryById: async (memoryId) => {
+                    const memory = await db.getById(memoryId);
+                    if (!memory || !checkAccess(memoryCtx, memory).allowed) return null;
+                    return memory;
+                  },
                   decisionTrace: traceEnabled ? trace : null,
                 }),
                 new Promise((_, reject) =>

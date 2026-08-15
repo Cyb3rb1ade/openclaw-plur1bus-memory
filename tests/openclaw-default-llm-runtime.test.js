@@ -117,9 +117,12 @@ async function seedMemory(pluginModule, baseDbPath, agentId, overrides = {}) {
     createdAt: Date.now(),
     storedBy: agentId,
     origin: overrides.origin || "dm",
-    trustLevel: overrides.trustLevel || "untrusted",
+    epistemicStatus: overrides.epistemicStatus || "",
     type: overrides.type || "",
     status: "active",
+    ...(overrides.scope ? { scope: overrides.scope } : {}),
+    ...(overrides.workspaceId ? { workspaceId: overrides.workspaceId } : {}),
+    ...(overrides.workspaceKey ? { workspaceKey: overrides.workspaceKey } : {}),
   });
   if (overrides.unclassified === true) {
     await db.table.update({ where: `id = "${id}"`, values: { type: "" } });
@@ -835,14 +838,23 @@ test("Schicht 1.5 sanitizes provider failures in responses and logs", async (t) 
 test("Skill Miner uses its feature-local native default through the command runtime", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   const agentId = "skill-session-agent";
+  const workspaceContext = resolveMemoryRequestContext({
+    agentId,
+    workspaceDir: baseDbPath,
+    channel: "cron",
+    accountId: "cron",
+  });
   const globalCalls = [];
   const sessionCalls = [];
   const pluginModule = await loadFreshPlugin();
   await seedMemory(pluginModule, baseDbPath, agentId, {
     id: "33333333-3333-4333-8333-333333333333",
     text: "Always verify deployment checks before publishing releases.",
-    origin: "user_confirmation",
-    trustLevel: "validated",
+    origin: "dm",
+    epistemicStatus: "trusted",
+    scope: "workspace",
+    workspaceId: workspaceContext.workspaceIdentity,
+    workspaceKey: workspaceContext.workspaceIdentity,
   });
   const api = createApi(baseDbPath, {
     merging: { enabled: true, model: "foreign/merging-model" },
@@ -886,6 +898,10 @@ test("Skill Miner uses its feature-local native default through the command runt
   });
 
   assert.match(result.text, /"proposalsCreated": 1/);
+  assert.match(result.text, /"scanned": 1/);
+  assert.match(result.text, /"pushMessages": \[/);
+  assert.match(result.text, /"aclBindings": null/);
+  assert.doesNotMatch(result.text, /"aclBindings": \{[\s\S]*"scope": "agent-private"/);
   assert.equal(globalCalls.length, 0);
   assert.equal(sessionCalls.length, 1);
   assert.equal(Object.hasOwn(sessionCalls[0], "agentId"), false);
