@@ -193,6 +193,24 @@ async function seedRuntimeMemories(pluginModule, baseDbPath, workspaceDir) {
       });
     }
   }
+  rows.push({
+    id: uuidFor(200),
+    text: "WORKSPACE FOREIGN SECRET release procedure",
+    summary: "WORKSPACE FOREIGN SECRET release procedure",
+    vector: makeVector(),
+    createdAt,
+    sourceTimestamp: createdAt,
+    status: "active",
+    epistemicStatus: "trusted",
+    category: "workspace_rule",
+    origin: "dm",
+    scope: "workspace",
+    agentId,
+    storedBy: agentId,
+    workspaceId: "workspace-dir:v1:foreign-workspace",
+    workspaceKey: "workspace-dir:v1:foreign-workspace",
+    ownerUserId: "",
+  });
   try {
     for (const row of rows) await db.store(row);
   } finally {
@@ -328,6 +346,12 @@ test("registered internal daily compaction invokes the partition-aware API per a
   );
   const parsed = responseJson(result);
   assert.deepEqual(parsed.partitionResults.map((entry) => entry.scope).sort(), ["agent-private", "user", "workspace"]);
+  assert.equal(parsed.partitionResults.length, 3);
+  for (const partitionRun of parsed.partitionResults) {
+    assert.equal(partitionRun.result.compaction.partitionResults.length, 1);
+    assert.equal(partitionRun.result.compaction.partitionResults[0].aclPartition.scope, partitionRun.scope);
+    assert.equal(partitionRun.result.compaction.partitionResults[0].aclPartition.agentId, "agent-a");
+  }
 });
 
 test("REM provider callback receives only the exact workspace partition", async () => {
