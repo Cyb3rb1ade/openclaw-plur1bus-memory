@@ -1701,13 +1701,36 @@ class MemoryDB {
    * @param {boolean} [opts.includeGlobalRecent] — auch session-übergreifende laden
    * @param {string[]} [opts.fields] — Felder, die benötigt werden
    */
+  /**
+   * where-Klausel für den Graph-Scan, gebaut aus dem LIVE-Schema.
+   *
+   * Eine feste Klausel bricht, sobald eine referenzierte Spalte fehlt, und der
+   * `catch` unten liefert dann stilles `[]` — `recentExisting` bliebe leer und
+   * buildEdgesForSession verbände neue Erinnerungen nur untereinander, nie mit
+   * dem Bestand. `epistemicStatus` fehlt auf allen produktiven Tabellen, bis das
+   * Release die Spalte migriert; im readOnly-Modus wird die Migration ohnehin
+   * übersprungen (siehe init).
+   *
+   * `epistemicStatus` zusätzlich NULL-sicher: `!= 'invalidated'` allein ist in
+   * SQL dreiwertig und verwürfe Zeilen ohne gesetzten Wert.
+   */
+  _buildRecentGraphWhere() {
+    const felder = this.schemaFieldNames;
+    const hat = (name) => !felder || felder.size === 0 || felder.has(name);
+    const teile = [];
+    if (hat("memoryKind")) teile.push("(memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = '')");
+    if (hat("status")) teile.push("(status IS NULL OR status = 'active' OR status = '')");
+    if (hat("epistemicStatus")) teile.push("(epistemicStatus IS NULL OR epistemicStatus != 'invalidated')");
+    return teile.length > 0 ? teile.join(" AND ") : "true";
+  }
+
   async getRecentForGraph({ limit = 100, sessionId = "", includeGlobalRecent = true, fields = null } = {}) {
     await this.init();
     if (!this.table) return [];
     try {
       let rows = await this._read(
         this.table.query()
-          .where("(memoryKind = 'memory' OR memoryKind IS NULL OR memoryKind = '') AND (status IS NULL OR status = 'active' OR status = '') AND epistemicStatus != 'invalidated'")
+          .where(this._buildRecentGraphWhere())
           .limit(limit * 2)
           .toArray(),
         "MemoryDB.getRecentForGraph",
@@ -1739,6 +1762,9 @@ class MemoryDB {
       }
       return rows;
     } catch (e) {
+      // Nicht stumm: ein leeres Ergebnis hier bedeutet, dass der Graph-Aufbau
+      // keine Bestandserinnerungen sieht — das darf nicht unbemerkt bleiben.
+      this.logger?.warn?.(`memory-lancedb-namespaced: getRecentForGraph failed for ${this.dbPath}: ${String(e?.message || e)}`);
       return [];
     }
   }
