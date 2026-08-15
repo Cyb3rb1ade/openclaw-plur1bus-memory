@@ -120,6 +120,9 @@ async function seedMemory(pluginModule, baseDbPath, agentId, overrides = {}) {
     epistemicStatus: overrides.epistemicStatus || "",
     type: overrides.type || "",
     status: "active",
+    ...(overrides.scope ? { scope: overrides.scope } : {}),
+    ...(overrides.workspaceId ? { workspaceId: overrides.workspaceId } : {}),
+    ...(overrides.workspaceKey ? { workspaceKey: overrides.workspaceKey } : {}),
   });
   if (overrides.unclassified === true) {
     await db.table.update({ where: `id = "${id}"`, values: { type: "" } });
@@ -835,6 +838,12 @@ test("Schicht 1.5 sanitizes provider failures in responses and logs", async (t) 
 test("Skill Miner uses its feature-local native default through the command runtime", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   const agentId = "skill-session-agent";
+  const workspaceContext = resolveMemoryRequestContext({
+    agentId,
+    workspaceDir: baseDbPath,
+    channel: "cron",
+    accountId: "cron",
+  });
   const globalCalls = [];
   const sessionCalls = [];
   const pluginModule = await loadFreshPlugin();
@@ -843,6 +852,9 @@ test("Skill Miner uses its feature-local native default through the command runt
     text: "Always verify deployment checks before publishing releases.",
     origin: "dm",
     epistemicStatus: "trusted",
+    scope: "workspace",
+    workspaceId: workspaceContext.workspaceIdentity,
+    workspaceKey: workspaceContext.workspaceIdentity,
   });
   const api = createApi(baseDbPath, {
     merging: { enabled: true, model: "foreign/merging-model" },

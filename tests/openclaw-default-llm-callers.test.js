@@ -7,7 +7,7 @@ import test from "node:test";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { lightDream } from "../lib/dreaming/light-dream.js";
-import { runRemDream } from "../lib/dreaming/rem-dream.js";
+import { buildRemPartition, runRemDream } from "../lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns } from "../lib/episodes.js";
 import { resolveMemoryRequestContext, userPoolKey, workspacePoolKey } from "../lib/memory-request-context.js";
 import { storeSharedMemory } from "../lib/shared-memory.js";
@@ -395,10 +395,40 @@ test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors
   };
   const owner = (feature) => ({ feature, callContext: { agentId: "rem-agent", purpose: feature } });
   const table = {
-    query() { return { where() { return { limit() { return { async toArray() { return rows; } }; } }; } }; },
+    schema: async () => ({ fields: [
+      { name: "id" }, { name: "text" }, { name: "scope" }, { name: "workspaceKey" },
+      { name: "agentId" }, { name: "createdAt" }, { name: "sourceTimestamp" },
+      { name: "status" }, { name: "memoryClass" },
+    ] }),
+    query() {
+      let offset = 0;
+      let limit = rows.length;
+      const builder = {
+        where() { return builder; },
+        offset(value) { offset = value; return builder; },
+        limit(value) { limit = value; return builder; },
+        async toArray() { return rows.slice(offset, offset + limit); },
+      };
+      return builder;
+    },
     vectorSearch() { return { limit() { return { async toArray() { return rows.map((row) => ({ ...row, _distance: 0 })); } }; } }; },
   };
 
+  const remPartition = buildRemPartition({
+    scope: "workspace",
+    agentId: "rem-agent",
+    workspaceIdentity: "workspace:v1:rem-workspace",
+    ownerUserId: "",
+  }, {
+    agentId: "rem-agent",
+    workspaceIdentity: "workspace:v1:rem-workspace",
+    workspaceAliases: { paths: [], aliases: [] },
+  });
+  const boundWorkspaceTarget = {
+    aclBindings: remPartition,
+    kind: "workspace",
+    workspaceDir,
+  };
   await runRemDream({
     db: { table },
     patternLlmCfg: owner("rem-pattern-analysis"),
@@ -410,6 +440,20 @@ test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors
       readPatterns() { return []; },
       appendPatterns() {},
       markRunCompleted() {},
+      aclBindings: remPartition,
+    },
+    partitionSink: {
+      aclBindings: remPartition,
+      neoStore: {
+        hasCompletedRun() { return false; },
+        readPatterns() { return []; },
+        appendPatterns() {},
+        markRunCompleted() {},
+        aclBindings: remPartition,
+      },
+      memoryStore: { aclBindings: remPartition, store() {} },
+      inputTarget: boundWorkspaceTarget,
+      outputTarget: boundWorkspaceTarget,
     },
     workspaceKey: "rem-workspace",
     agentId: "rem-agent",
@@ -418,9 +462,7 @@ test("REM dreaming fans out to distinct pattern, narrative, and echo descriptors
       workspaceIdentity: "workspace:v1:rem-workspace",
       workspaceAliases: { paths: [], aliases: [] },
     },
-    aclPartition: {
-      scope: "workspace", agentId: "rem-agent", workspaceIdentity: "workspace:v1:rem-workspace", ownerUserId: "",
-    },
+    aclPartition: remPartition,
     force: true,
     narrativeCfg: { enabled: true, storeAsMemory: false },
     workspaceDir,

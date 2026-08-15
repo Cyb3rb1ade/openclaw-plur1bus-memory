@@ -348,6 +348,14 @@ function evalWhere(row, expr) {
   // `spalte = 'wert'`, inklusive leerem String
   m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([^']*)'$/);
   if (m) return String(row[m[1]] ?? '') === m[2];
+  // Boolean-/Integer-Literale wie die gepushte confirmed-Klausel
+  m = e.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(true|false|[0-9]+)$/i);
+  if (m) {
+    const value = m[2].toLowerCase();
+    if (value === 'true') return row[m[1]] === true || row[m[1]] === 1 || row[m[1]] === 'true' || row[m[1]] === '1';
+    if (value === 'false') return row[m[1]] === false || row[m[1]] === 0 || row[m[1]] === 'false' || row[m[1]] === '0';
+    return Number(row[m[1]]) === Number(value);
+  }
   return false;
 }
 
