@@ -7,6 +7,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.3.1] — 2026-08-15
+
+- Critical Reviews wählen `type`, `confirmed`, `age` und Pagination korrekt aus.
+- REM, Skill Miner, Daily Compaction, Graph und CRR laufen scope- und owner-isoliert.
+- Tombstone-Reparaturen sind fail-closed und an Archiv und Event gebunden.
+- Persistente Scan-Cursor sind owner-gebunden; fixed-prefix starvation ist beseitigt.
+- Compaction behandelt Duplikate über Validitätsfenster hinweg, schließt bei Query-Fehlern fail-closed, nutzt dauerhafte private/user Proposal-Sinks und weist planned/persisted/executed Counts ehrlich aus.
+- Ein echter registrierter Runtime-Negativtest und ein unabhängiger Sol-Reaudit decken die Sicherheitsgrenzen ab.
+
 ## [7.3.0] — 2026-08-15
 
 ### Hinzugefügt
