@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import { buildEdgesForSession, createEdge } from "../lib/memory-graph.js";
 import { runConversationReactivationRecall } from "../lib/conversation-reactivation-recall.js";
 import { buildRemPartition, runRemDream } from "../lib/dreaming/rem-dream.js";
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
+import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
 
 const EMPTY_ALIASES = Object.freeze({ paths: Object.freeze([]), aliases: Object.freeze([]) });
 const USER_A = "user:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -75,19 +76,253 @@ function makeTable(rows) {
   };
 }
 
-test("release call sites thread the canonical context and never use an unbound output path", () => {
-  const source = readFileSync(new URL("../index.js", import.meta.url), "utf8");
-  assert.match(source, /partitionSink: remSink/);
-  assert.match(source, /writeRemDreamToVault\(partitionResult\.report, partitionResult\.trends, remSink\.outputTarget\)/);
-  assert.doesNotMatch(source, /writeRemDreamToVault\(partitionResult\.report, partitionResult\.trends, commandCtx\.workspaceDir\)/);
-  assert.match(source, /for \(const skillAclPartition of buildRemPartitions\(memoryCtx\)\)/);
-  assert.match(source, /requestContext: memoryCtx,\n\s+aclPartition: skillAclPartition/);
-  assert.match(source, /\{ requestContext: memoryCtx \}/);
-  assert.match(source, /requestContext: memoryCtx,\n\s+getMemoryById: async/);
-  assert.match(source, /const memory = await db\.getById\(memoryId\);\n\s+if \(!memory \|\| !checkAccess\(memoryCtx, memory\)\.allowed\) return null;/);
-  for (const field of ["scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId"]) {
-    assert.match(source, new RegExp(`\\"${field}\\"`), `graph projection must include ${field}`);
+const VECTOR_DIM = 384;
+
+const routingCapability = Object.freeze({
+  parseAgentSessionKey(value) {
+    const match = /^agent:([^:]+):(.+)$/.exec(value);
+    return match ? { agentId: match[1], rest: match[2] } : null;
+  },
+  parseThreadSessionSuffix(value) {
+    return { baseSessionKey: value, threadId: "" };
+  },
+  normalizeOptionalAccountId(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  normalizeMessageChannel(value) {
+    return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+});
+
+function makeVector() {
+  return Array(VECTOR_DIM).fill(0.1);
+}
+
+function createRuntimeLogger() {
+  const calls = [];
+  const record = (level) => (...args) => calls.push([level, ...args]);
+  return {
+    calls,
+    debug: record("debug"),
+    error: record("error"),
+    info: record("info"),
+    warn: record("warn"),
+  };
+}
+
+function createRuntimeApi(baseDbPath, runtimeLlm) {
+  const commands = [];
+  const logger = createRuntimeLogger();
+  return {
+    pluginConfig: {
+      baseDbPath,
+      embedding: { provider: "local-transformers", local: { dimensions: VECTOR_DIM } },
+      autoCapture: false,
+      autoRecall: false,
+      neo: { enabled: true },
+      merging: { enabled: true },
+      skillMiner: { enabled: true, minEvidenceScore: 3 },
+      dailyConsolidation: { enabled: true },
+      security: { allowedUserIds: ["owner-a"] },
+      obsidianBridge: { enabled: false },
+      featureCronSetup: { auto: false },
+      gc: { enabled: false },
+    },
+    logger,
+    runtime: {
+      llm: runtimeLlm,
+      agent: {
+        async resolveAgentWorkspaceDir(config) { return config?.workspaceDir || baseDbPath; },
+      },
+    },
+    resolvePath: (value) => value,
+    registerCommand(command) { commands.push(command); },
+    registerTool() {},
+    registerService() {},
+    on() {},
+    _commands: commands,
+  };
+}
+
+function runtimeCommand(workspaceDir, args) {
+  return {
+    args,
+    agentId: "agent-a",
+    channel: "telegram",
+    accountId: "default",
+    from: "telegram:12345",
+    to: "telegram:12345",
+    senderId: "owner-a",
+    sessionKey: "agent:agent-a:telegram:direct:12345",
+    config: { workspaceDir },
+  };
+}
+
+async function seedRuntimeMemories(pluginModule, baseDbPath, workspaceDir) {
+  const agentId = "agent-a";
+  const requestContext = resolveMemoryRequestContext({
+    agentId,
+    workspaceDir,
+    userId: "owner-a",
+    channel: "telegram",
+    accountId: "default",
+  });
+  const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
+  const createdAt = Date.now() - 10 * 24 * 60 * 60 * 1000;
+  const rows = [];
+  for (const scope of ["agent-private", "user", "workspace"]) {
+    const ownership = scope === "agent-private"
+      ? { agentId, storedBy: agentId, ownerUserId: "", workspaceId: "", workspaceKey: "" }
+      : scope === "user"
+        ? { agentId, storedBy: agentId, ownerUserId: requestContext.userPrincipal, workspaceId: "", workspaceKey: "" }
+        : { agentId, storedBy: agentId, ownerUserId: "", workspaceId: requestContext.workspaceIdentity, workspaceKey: requestContext.workspaceIdentity };
+    for (let index = 0; index < 3; index++) {
+      rows.push({
+        id: uuidFor(100 + rows.length),
+        text: `${scope.toUpperCase()} LOCAL release procedure ${index}`,
+        summary: `${scope.toUpperCase()} LOCAL release procedure ${index}`,
+        vector: makeVector(),
+        createdAt,
+        sourceTimestamp: createdAt,
+        status: "active",
+        epistemicStatus: "trusted",
+        category: scope === "workspace" ? "workspace_rule" : "fact",
+        origin: "dm",
+        scope,
+        ...ownership,
+      });
+    }
   }
+  try {
+    for (const row of rows) await db.store(row);
+  } finally {
+    await db.shutdown();
+  }
+  return { requestContext, rows };
+}
+
+function responseJson(result) {
+  return JSON.parse(result.text);
+}
+
+function filesUnder(root) {
+  const files = [];
+  const visit = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) visit(path);
+      else files.push(path);
+    }
+  };
+  visit(root);
+  return files;
+}
+
+test("registered internal REM processes every allowed partition with isolated prompts and sinks", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-rem-db-"));
+  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-rem-ws-"));
+  t.after(() => {
+    rmSync(baseDbPath, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  });
+  const prompts = [];
+  const runtimeLlm = {
+    async complete(params) {
+      prompts.push({ purpose: params.purpose, content: params.messages?.map((message) => message.content).join("\n") || "" });
+      return {
+        text: params.purpose === "rem-pattern-analysis"
+          ? JSON.stringify({ patternName: "release", description: "release only", trend: "neu", confidence: 0.9 })
+          : "{}",
+        provider: "runtime-test",
+        model: "runtime-test",
+        usage: {},
+      };
+    },
+  };
+  const pluginModule = await import(`../index.js?release-731-runtime-rem=${Date.now()}-${Math.random()}`);
+  const { requestContext } = await seedRuntimeMemories(pluginModule, baseDbPath, workspaceDir);
+  const api = createRuntimeApi(baseDbPath, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await api._commands.find((command) => command.name === "plur1bus").handler(
+    runtimeCommand(workspaceDir, "internal rem-dream"),
+  );
+  const parsed = responseJson(result);
+  assert.deepEqual(parsed.partitions.map((entry) => entry.scope).sort(), ["agent-private", "user", "workspace"]);
+  const remPrompts = prompts.filter((entry) => entry.purpose === "rem-pattern-analysis");
+  assert.equal(remPrompts.length, 3);
+  for (const prompt of remPrompts) {
+    const scopes = ["AGENT-PRIVATE", "USER", "WORKSPACE"].filter((scope) => prompt.content.includes(`${scope} LOCAL`));
+    assert.equal(scopes.length, 1, prompt.content);
+  }
+  const neoFiles = filesUnder(join(baseDbPath, "_neo"));
+  assert.ok(neoFiles.some((path) => path.endsWith("pattern-analysis.jsonl")));
+  assert.ok(filesUnder(workspaceDir).some((path) => path.includes("dream-diary")));
+  assert.ok(!filesUnder(workspaceDir).some((path) => path.includes("agent-private") || path.includes("user")));
+  assert.equal(requestContext.workspaceIdentity.startsWith("workspace-dir:v1:"), true);
+});
+
+test("registered internal skill-miner processes every allowed partition without workspace leakage", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-skill-db-"));
+  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-skill-ws-"));
+  t.after(() => {
+    rmSync(baseDbPath, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  });
+  const prompts = [];
+  const runtimeLlm = {
+    async complete(params) {
+      prompts.push(params.messages?.map((message) => message.content).join("\n") || "");
+      return {
+        text: JSON.stringify({ skillName: "release-check", skillTitle: "Release check", description: "local", instructions: "check local", examples: [], confidence: 0.9, category: "workflow" }),
+        provider: "runtime-test",
+        model: "runtime-test",
+        usage: {},
+      };
+    },
+  };
+  const pluginModule = await import(`../index.js?release-731-runtime-skill=${Date.now()}-${Math.random()}`);
+  await seedRuntimeMemories(pluginModule, baseDbPath, workspaceDir);
+  const api = createRuntimeApi(baseDbPath, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await api._commands.find((command) => command.name === "plur1bus").handler(
+    runtimeCommand(workspaceDir, "internal skill-miner"),
+  );
+  const parsed = responseJson(result);
+  assert.deepEqual(parsed.partitions.map((entry) => entry.scope).sort(), ["agent-private", "user", "workspace"]);
+  assert.equal(prompts.length, 3);
+  for (const prompt of prompts) {
+    const scopes = ["AGENT-PRIVATE", "USER", "WORKSPACE"].filter((scope) => prompt.includes(`${scope} LOCAL`));
+    assert.equal(scopes.length, 1, prompt);
+  }
+  const proposalFiles = filesUnder(join(baseDbPath, "_neo")).filter((path) => path.endsWith("skill-proposals.jsonl"));
+  assert.equal(proposalFiles.length, 2);
+  assert.equal(filesUnder(workspaceDir).filter((path) => path.endsWith("skill-proposals.jsonl")).length, 1);
+});
+
+test("registered internal daily compaction invokes the partition-aware API per allowed partition", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-daily-db-"));
+  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-daily-ws-"));
+  t.after(() => {
+    rmSync(baseDbPath, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  });
+  const runtimeLlm = {
+    async complete() {
+      return { text: JSON.stringify({ decision: "keep", reason: "runtime test" }), provider: "runtime-test", model: "runtime-test", usage: {} };
+    },
+  };
+  const pluginModule = await import(`../index.js?release-731-runtime-daily=${Date.now()}-${Math.random()}`);
+  await seedRuntimeMemories(pluginModule, baseDbPath, workspaceDir);
+  const api = createRuntimeApi(baseDbPath, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await api._commands.find((command) => command.name === "plur1bus").handler(
+    runtimeCommand(workspaceDir, "internal consolidate-daily"),
+  );
+  const parsed = responseJson(result);
+  assert.deepEqual(parsed.partitionResults.map((entry) => entry.scope).sort(), ["agent-private", "user", "workspace"]);
 });
 
 test("REM provider callback receives only the exact workspace partition", async () => {
