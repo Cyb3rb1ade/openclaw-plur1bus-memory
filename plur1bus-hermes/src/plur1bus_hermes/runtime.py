@@ -645,19 +645,31 @@ class Plur1busRuntime:
         table, _ = self._table(create=False)
         if table is None:
             return False
+        mutation_scope = scope_where_clause(self.scope_binding, include_legacy_private=False)
         rows = table.search().where(
-            f"id = '{card_id}' AND {scope_where_clause(self.scope_binding)}"
+            f"id = '{card_id}' AND {mutation_scope}"
         ).limit(1).to_list()
         if not rows:
             return False
         card = rows[0]
+        if not self._card_matches_scope(card):
+            return False
+        from .tombstone import (
+            append_tombstone_to_registry,
+            archive_card_atomically,
+            archive_path_for,
+            build_tombstone,
+        )
+
+        archive_ref = archive_path_for(self.data_dir, self.agent_id, self.scope_key, card_id)
         # Crash-Recovery/Idempotenz: bereits deleted → fehlenden committed
         # Tombstone und Audit nachtragen, statt einen zweiten widersprüchlichen
         # Delete zu erzeugen.
         if str(card.get("status") or "") == "deleted":
-            from .tombstone import backfill_committed_tombstone
-
             try:
+                archive_card_atomically(archive_ref, card)
+                from .tombstone import backfill_committed_tombstone
+
                 backfill = backfill_committed_tombstone(
                     self.data_dir, card,
                     agent_id=self.agent_id,
@@ -665,6 +677,9 @@ class Plur1busRuntime:
                     actor_type="human",
                     reason="user forget",
                     source_op="forget",
+                    archive_ref=str(archive_ref),
+                    scope_key=self.scope_key,
+                    acl_bindings=self.scope_binding.as_dict(),
                 )
             except Exception as error:
                 raise RuntimeError(f"tombstone backfill failed: {error}") from error
@@ -675,16 +690,25 @@ class Plur1busRuntime:
                 "event": "memory.deleted",
                 "agentId": self.agent_id,
                 "memoryId": card_id,
+                "canonicalOriginId": str(card.get("canonicalOriginId") or card_id),
                 "tombstoneId": backfill["tombstone"]["tombstoneId"],
+                "archivePath": str(archive_ref),
+                "contentFingerprint": backfill["tombstone"]["contentFingerprint"],
+                "scopeKey": self.scope_key,
+                "aclBindings": self.scope_binding.as_dict(),
+                "cardIdentity": {
+                    "memoryId": card_id,
+                    "canonicalOriginId": str(card.get("canonicalOriginId") or card_id),
+                },
+                "ownership": {
+                    "agentId": self.agent_id,
+                    "scopeKey": self.scope_key,
+                    "aclBindings": self.scope_binding.as_dict(),
+                },
                 "result": "already_tombstoned" if backfill["alreadyCommitted"] else "committed",
             })
             return True
-        archive_dir = self.data_dir / "archives"
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        archive_ref = archive_dir / f"{card_id}.json"
-        archive_ref.write_text(json.dumps(card, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-        from .tombstone import append_tombstone_to_registry, build_tombstone
+        archive_card_atomically(archive_ref, card)
 
         tombstone = build_tombstone(
             card=card,
@@ -694,13 +718,25 @@ class Plur1busRuntime:
             reason="user forget",
             source_op="forget",
             archive_ref=str(archive_ref),
+            archive_path=str(archive_ref),
+            scope_key=self.scope_key,
+            acl_bindings=self.scope_binding.as_dict(),
         )
         try:
             append_tombstone_to_registry(self.data_dir, self.agent_id, {**tombstone, "status": "attempted"})
         except OSError:
             return False
+        final_rows = table.search().where(
+            f"id = '{card_id}' AND {mutation_scope} AND status = 'active'"
+        ).limit(1).to_list()
+        if not final_rows or not self._card_matches_scope(final_rows[0]):
+            append_tombstone_to_registry(self.data_dir, self.agent_id, {**tombstone, "status": "failed"})
+            return False
         try:
-            table.update(where=f"id = '{card_id}'", values={"status": "deleted"})
+            table.update(
+                where=f"id = '{card_id}' AND {mutation_scope} AND status = 'active'",
+                values={"status": "deleted"},
+            )
         except Exception:
             append_tombstone_to_registry(self.data_dir, self.agent_id, {**tombstone, "status": "failed"})
             raise
@@ -709,9 +745,42 @@ class Plur1busRuntime:
             "event": "memory.deleted",
             "agentId": self.agent_id,
             "memoryId": card_id,
+            "canonicalOriginId": str(card.get("canonicalOriginId") or card_id),
             "tombstoneId": tombstone["tombstoneId"],
+            "archivePath": str(archive_ref),
+            "contentFingerprint": tombstone["contentFingerprint"],
+            "scopeKey": self.scope_key,
+            "aclBindings": self.scope_binding.as_dict(),
+            "cardIdentity": {
+                "memoryId": card_id,
+                "canonicalOriginId": str(card.get("canonicalOriginId") or card_id),
+            },
+            "ownership": {
+                "agentId": self.agent_id,
+                "scopeKey": self.scope_key,
+                "aclBindings": self.scope_binding.as_dict(),
+            },
             "result": "committed",
         })
+        return True
+
+    def _card_matches_scope(self, card: dict[str, Any]) -> bool:
+        """Verify ownership again in Python before a destructive mutation."""
+        if str(card.get("agentId") or "") != self.agent_id:
+            return False
+        if str(card.get("scopeKey") or "") != self.scope_key:
+            return False
+        if card.get("ownerKey") and str(card.get("ownerKey")) != self.scope_binding.owner_key:
+            return False
+        scope_type = self.scope_binding.scope_type
+        if str(card.get("scopeType") or scope_type) != scope_type:
+            return False
+        if scope_type == "workspace" and str(card.get("workspaceIdentity") or "") != self.scope_binding.workspace:
+            return False
+        if scope_type == "user" and str(card.get("ownerUser") or "") != self.scope_binding.user:
+            return False
+        if scope_type == "chat" and str(card.get("chatScope") or "") != self.scope_binding.chat:
+            return False
         return True
 
     def correct_async(self, memory_id: str, replacement: str, session_id: str) -> bool:
@@ -720,12 +789,12 @@ class Plur1busRuntime:
         if table is None:
             return False
         rows = table.search().where(
-            f"id = '{card_id}' AND {scope_where_clause(self.scope_binding)}"
+            f"id = '{card_id}' AND {scope_where_clause(self.scope_binding, include_legacy_private=False)}"
         ).limit(1).to_list()
         # Same lifecycle guard as OpenClaw correctCard(): a confirmation may
         # outlive /forget, so never turn an already deleted row into a new
         # active replacement.
-        if not rows or str(rows[0].get("status") or "") == "deleted":
+        if not rows or str(rows[0].get("status") or "") == "deleted" or not self._card_matches_scope(rows[0]):
             return False
         if not self.forget(memory_id):
             return False

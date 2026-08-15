@@ -13,6 +13,7 @@ import json
 import copy
 import os
 import re
+import stat
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -24,6 +25,7 @@ import fcntl
 TOMBSTONE_SCHEMA_VERSION = 1
 
 HEX_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+SCOPE_KEY_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def normalize_content_for_fingerprint(text: Any) -> str:
@@ -32,6 +34,80 @@ def normalize_content_for_fingerprint(text: Any) -> str:
 
 def content_fingerprint(text: Any) -> str:
     return hashlib.sha256(normalize_content_for_fingerprint(text).encode("utf-8")).hexdigest()
+
+
+def _assert_no_symlink(path: Path, root: Path) -> None:
+    """Reject symlink components while resolving an archive below ``root``."""
+    current = root
+    for component in path.relative_to(root).parts:
+        current /= component
+        try:
+            if stat.S_ISLNK(os.lstat(current).st_mode):
+                raise ValueError(f"symlink archive component: {current}")
+        except FileNotFoundError:
+            continue
+
+
+def archive_path_for(base_dir: Path, agent_id: str, scope_key: str, memory_id: str) -> Path:
+    """Return the canonical, agent- and scope-partitioned archive path."""
+    from .validation import resolve_inside, safe_agent_id, safe_memory_id
+
+    safe_agent = safe_agent_id(agent_id)
+    safe_id = safe_memory_id(memory_id)
+    normalized_scope = str(scope_key or "").strip()
+    if not SCOPE_KEY_RE.fullmatch(normalized_scope):
+        raise ValueError("scopeKey must be the canonical 64-character digest")
+    root = Path(base_dir).expanduser().resolve()
+    lexical_path = root / "archives" / safe_agent / normalized_scope / f"{safe_id}.json"
+    _assert_no_symlink(lexical_path, root)
+    path = resolve_inside(str(root), "archives", safe_agent, normalized_scope, f"{safe_id}.json")
+    _assert_no_symlink(path, root)
+    return path
+
+
+def archive_card_atomically(path: Path, card: dict[str, Any]) -> None:
+    """Write one archive exactly once, with fsync and no symlink following."""
+    root = path.parents[3] if len(path.parents) > 3 else path.parent
+    _assert_no_symlink(path, root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _assert_no_symlink(path, root)
+    payload = (json.dumps(card, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if path.exists():
+        if path.is_symlink():
+            raise ValueError(f"archive is a symlink: {path}")
+        if path.read_bytes() != payload:
+            raise ValueError(f"archive collision: {path}")
+        return
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        fd = os.open(temporary, flags, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            fd = -1
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if path.is_symlink() or path.read_bytes() != payload:
+                raise ValueError(f"archive collision: {path}")
+        os.unlink(temporary)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def build_tombstone(
@@ -43,6 +119,10 @@ def build_tombstone(
     reason: str = "",
     source_op: str = "forget",
     archive_ref: str = "",
+    archive_path: str = "",
+    scope_key: str = "",
+    acl_bindings: dict[str, Any] | None = None,
+    tombstone_id: str | None = None,
     previous_version: str = "",
     deleted_at: str | None = None,
 ) -> dict[str, Any]:
@@ -51,16 +131,18 @@ def build_tombstone(
     memory_id = safe_memory_id(str(card.get("id") or ""))
     content = str(card.get("content") or card.get("text") or "")
     deleted_at = deleted_at or _utcnow()
+    resolved_scope_key = str(scope_key or card.get("scopeKey") or "")
+    resolved_acl = dict(acl_bindings or card.get("aclBindings") or {})
     return {
         "schemaVersion": TOMBSTONE_SCHEMA_VERSION,
-        "tombstoneId": str(uuid.uuid4()),
+        "tombstoneId": str(tombstone_id or uuid.uuid4()),
         "memoryId": memory_id,
         "canonicalOriginId": str(card.get("canonicalOriginId") or card.get("id") or memory_id),
         "agentId": agent_id,
-        "scope": str(card.get("scope") or "agent-private"),
-        "workspaceId": str(card.get("workspaceId") or card.get("workspaceKey") or ""),
-        "workspaceKey": str(card.get("workspaceKey") or ""),
-        "ownerUserId": str(card.get("ownerUserId") or ""),
+        "scope": str(card.get("scope") or card.get("scopeType") or "agent-private"),
+        "workspaceId": str(card.get("workspaceId") or card.get("workspaceKey") or card.get("workspaceIdentity") or ""),
+        "workspaceKey": str(card.get("workspaceKey") or card.get("workspaceIdentity") or ""),
+        "ownerUserId": str(card.get("ownerUserId") or card.get("ownerUser") or ""),
         "storedBy": str(card.get("storedBy") or ""),
         "deletedAt": deleted_at,
         "actor": str(actor or ""),
@@ -68,6 +150,9 @@ def build_tombstone(
         "reason": str(reason or "")[:500],
         "sourceOp": source_op,
         "archiveRef": str(archive_ref or ""),
+        "archivePath": str(archive_path or archive_ref or ""),
+        "scopeKey": resolved_scope_key,
+        "aclBindings": resolved_acl,
         "previousVersion": str(previous_version or ""),
         "contentFingerprint": content_fingerprint(content),
         "sourceFingerprint": "",
@@ -363,6 +448,12 @@ def is_valid_tombstone(parsed: Any, expected_agent_id: str | None = None) -> boo
     fingerprint = parsed.get("contentFingerprint")
     if not isinstance(fingerprint, str) or not _FINGERPRINT_RE.fullmatch(fingerprint):
         return False
+    if "scopeKey" in parsed and parsed["scopeKey"] and not SCOPE_KEY_RE.fullmatch(str(parsed["scopeKey"])):
+        return False
+    if "aclBindings" in parsed and not isinstance(parsed["aclBindings"], dict):
+        return False
+    if "archivePath" in parsed and parsed["archivePath"] and not isinstance(parsed["archivePath"], str):
+        return False
     return True
 
 
@@ -419,22 +510,36 @@ def find_blocking_tombstone_for_capture(base_dir: Path, opts: dict[str, Any]) ->
     return None
 
 
-def find_tombstone_by_origin_id(base_dir: Path, agent_id: str, origin_id: str) -> dict[str, Any] | None:
+def find_tombstone_by_origin_id(
+    base_dir: Path,
+    agent_id: str,
+    origin_id: str,
+    *,
+    scope_key: str = "",
+) -> dict[str, Any] | None:
     committed = [t for t in read_tombstones_from_registry(base_dir, agent_id) if t.get("status") == "committed"]
-    matches = [t for t in committed if t.get("canonicalOriginId") == origin_id or t.get("memoryId") == origin_id]
+    matches = [
+        t for t in committed
+        if (t.get("canonicalOriginId") == origin_id or t.get("memoryId") == origin_id)
+        and (not scope_key or str(t.get("scopeKey") or "") == scope_key)
+    ]
     return matches[-1] if matches else None
 
 
 def backfill_committed_tombstone(
     base_dir: Path, card: dict[str, Any], *, agent_id: str, actor: str = "", actor_type: str = "human",
     reason: str = "", source_op: str = "forget", archive_ref: str = "", previous_version: str = "",
+    scope_key: str = "", acl_bindings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    existing = find_tombstone_by_origin_id(base_dir, agent_id, str(card.get("id") or ""))
+    existing = find_tombstone_by_origin_id(
+        base_dir, agent_id, str(card.get("id") or ""), scope_key=scope_key,
+    )
     if existing:
         return {"alreadyCommitted": True, "tombstone": existing}
     tombstone = build_tombstone(
         card=card, agent_id=agent_id, actor=actor, actor_type=actor_type, reason=reason,
         source_op=source_op, archive_ref=archive_ref, previous_version=previous_version,
+        archive_path=archive_ref, scope_key=scope_key, acl_bindings=acl_bindings,
     )
     append_tombstone_to_registry(base_dir, agent_id, {**tombstone, "status": "committed"})
     return {"alreadyCommitted": False, "tombstone": tombstone}
