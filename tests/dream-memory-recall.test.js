@@ -83,7 +83,25 @@ describe("Feedback-Spiralen-Guards", () => {
       { id: "m1", text: "echte Erinnerung", vector: [0.1], createdAt: now, status: "active", memoryClass: "standard", scope: "agent-private", agentId: "dream-agent" },
       { id: "d1", text: "geträumter Flur", vector: [0.2], createdAt: now, status: "active", memoryClass: "dream", scope: "agent-private", agentId: "dream-agent" },
     ];
-    const db = { table: { query: () => ({ where: () => ({ limit: () => ({ toArray: async () => rows }) }) }) } };
+    const db = {
+      table: {
+        schema: async () => ({ fields: [
+          { name: "id" }, { name: "text" }, { name: "scope" }, { name: "agentId" },
+          { name: "workspaceKey" }, { name: "createdAt" }, { name: "status" }, { name: "memoryClass" },
+        ] }),
+        query: () => {
+          let offset = 0;
+          let limit = rows.length;
+          const builder = {
+            where: () => builder,
+            offset: (value) => { offset = value; return builder; },
+            limit: (value) => { limit = value; return builder; },
+            toArray: async () => rows.slice(offset, offset + limit),
+          };
+          return builder;
+        },
+      },
+    };
     const memories = await loadCandidateMemories(db, {
       weekStartMs: now - 1000,
       requestContext: context,
