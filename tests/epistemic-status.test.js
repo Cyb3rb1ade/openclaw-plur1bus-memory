@@ -909,9 +909,11 @@ describe("epistemic-status — Requirement 3: assistant/agent-generated content 
       await db.store(entry);
       assert.equal(addedRows.length, 1);
       const storedRow = addedRows[0];
-      assert.equal(storedRow.epistemicStatus, "", `a freshly captured memory (origin="${origin}") must never be auto-trusted — stored value must be the legacy/absent default "", never "trusted"`);
-      assert.equal(normalizeEpistemicStatus(storedRow.epistemicStatus), "untrusted", "resolves conservatively for legality/labeling, exactly like any other never-reviewed memory");
-      assert.equal(epistemicScoreBoost(storedRow.epistemicStatus), 0, "scores neutral, not the +0.25 'trusted' boost");
+      assert.notEqual(storedRow.epistemicStatus, "trusted");
+      assert.notEqual(storedRow.epistemicStatus, "observed");
+      assert.equal(storedRow.epistemicStatus, "untrusted", `a freshly captured memory (origin="${origin}") without user provenance must persist explicit untrusted, never ""`);
+      assert.equal(normalizeEpistemicStatus(storedRow.epistemicStatus), "untrusted");
+      assert.equal(epistemicScoreBoost(storedRow.epistemicStatus), -0.15);
     });
   }
 });
