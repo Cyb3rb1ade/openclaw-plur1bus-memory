@@ -106,7 +106,7 @@ import {
 } from "./lib/directory-capability.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
-import { listPendingProposals, approveProposal, rejectProposal, listActiveSkills, showProposal } from "./lib/telegram-commands/skill-commands.js";
+import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposal, buildSkillReviewPayload } from "./lib/telegram-commands/skill-commands.js";
 import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "./lib/jobs/skill-miner/proposal-writer.js";
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import {
@@ -167,7 +167,10 @@ import {
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
-import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
+import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "./lib/epistemic-capture.js";
+import { ensureEpistemicCutoff } from "./lib/epistemic-cutoff.js";
+import { assertCardWriteAllowed, isContentChangingUpdate, splitAgentDbPath } from "./lib/tombstone-write-guard.js";
+import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
 import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
@@ -1684,6 +1687,24 @@ class MemoryDB {
     if (!text && !summary) {
       throw new Error("store() rejected: entry text and summary are both empty — refusing to store a memory without content.");
     }
+    if (entry && (entry.epistemicStatus == null || entry.epistemicStatus === "")) {
+      entry.epistemicStatus = coerceNewWriteEpistemicStatus(entry.epistemicStatus);
+    }
+    const { baseDbPath, agentId } = splitAgentDbPath(this.dbPath);
+    const guard = assertCardWriteAllowed({
+      baseDbPath,
+      agentId: entry.agentId || entry.storedBy || agentId,
+      text: text || summary,
+      scope: entry.scope || "agent-private",
+      workspaceIdentity: entry.workspaceId || entry.workspaceKey || "",
+      ownerUserId: entry.ownerUserId || "",
+    });
+    if (!guard.allowed) {
+      const error = new Error("tombstone_blocked");
+      error.action = "tombstone_blocked";
+      error.reason = "tombstone_blocked";
+      throw error;
+    }
     await this._write(this.table.add([this.normalizeEntryForTable(entry)]), "MemoryDB.store");
     this._writeCounter++;
     if (this._writeCounter % REINDEX_WRITE_THRESHOLD === 0) {
@@ -2012,6 +2033,24 @@ class MemoryDB {
     }
     const existing = rows[0];
     const patchObject = patch && typeof patch === "object" ? patch : {};
+    if (isContentChangingUpdate(existing, patchObject)) {
+      const { baseDbPath, agentId } = splitAgentDbPath(this.dbPath);
+      const nextText = Object.hasOwn(patchObject, "text") ? patchObject.text : existing.text;
+      const guard = assertCardWriteAllowed({
+        baseDbPath,
+        agentId: existing.agentId || existing.storedBy || agentId,
+        text: nextText || patchObject.summary || existing.summary || "",
+        scope: existing.scope || "agent-private",
+        workspaceIdentity: existing.workspaceId || existing.workspaceKey || "",
+        ownerUserId: existing.ownerUserId || "",
+      });
+      if (!guard.allowed) {
+        const error = new Error("tombstone_blocked");
+        error.action = "tombstone_blocked";
+        error.reason = "tombstone_blocked";
+        throw error;
+      }
+    }
     // Statusvalidierung: unbekannte Statuswerte dürfen nie gespeichert werden.
     if (Object.hasOwn(patchObject, "status") && patchObject.status !== "") {
       patchObject.status = safeStatus(patchObject.status);
@@ -4121,6 +4160,10 @@ const plugin = {
     }
     const detectReactionsCapabilityCached = makeReactionsCapabilityChecker(api);
     const baseDbPath = api.resolvePath(cfg.baseDbPath || DEFAULT_BASE_DB_PATH);
+    const epistemicCutoffBoot = ensureEpistemicCutoff(baseDbPath);
+    if (!epistemicCutoffBoot.ok) {
+      api.logger?.warn?.(`memory-lancedb-namespaced: epistemic cutoff unavailable (${epistemicCutoffBoot.reason})`);
+    }
     const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
       explicit: namespacesExplicit,
       path: `${PLUGIN_CONFIG_PATH}.namespaces`,
@@ -5536,7 +5579,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin }) }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -5627,6 +5670,8 @@ const plugin = {
       api.on(
         "gateway_start",
         async (_event, gatewayContext) => {
+          const cutoff = ensureEpistemicCutoff(baseDbPath);
+          if (!cutoff.ok) api.logger?.warn?.(`memory-lancedb-namespaced: epistemic cutoff unavailable (${cutoff.reason})`);
           if (!cronDirectDispatchReady) {
             await reconcileUnsafeDirectCronsWithService(api, gatewayContext);
           }
@@ -6238,6 +6283,7 @@ const plugin = {
                           { runtimeLlm: skillMinerCallContext.runtimeLlm },
                         ),
                         callLlm,
+                        baseDbPath,
                         maxPerRun: skillMinerCfg.maxPerRun ?? 5,
                         minConfidence: skillMinerCfg.minConfidence ?? 0.6,
                         minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
@@ -6693,7 +6739,67 @@ const plugin = {
                 return { text: t("plur1bus.skills_help", { lang, tone }) };
               }
               if (subKey === "review") {
-                return { text: listPendingProposals(workspaceDir, { lang, tone }) };
+                const identity = resolveIdentity(commandCtx) || {};
+                const payload = buildSkillReviewPayload(workspaceDir, {
+                  lang,
+                  tone,
+                  userId: identity.userId || memoryCtx.userId,
+                  chatId: identity.chatId || memoryCtx.chatId,
+                });
+                for (const pending of payload.confirmations) {
+                  rememberPendingConfirmation(confirmationStore, confirmationIndex, pending);
+                }
+                return { text: payload.text, inline_keyboard: payload.inline_keyboard };
+              }
+              if (subKey === "confirm") {
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+                if (denied) return denied;
+                const nonce = id;
+                let completed = completePendingConfirmation({
+                  confirmationStore,
+                  confirmationIndex,
+                  expectedCommand: "skills-approve",
+                  memoryCtx,
+                  nonce,
+                });
+                let reject = false;
+                if (completed.error) {
+                  completed = completePendingConfirmation({
+                    confirmationStore,
+                    confirmationIndex,
+                    expectedCommand: "skills-reject",
+                    memoryCtx,
+                    nonce,
+                  });
+                  reject = !completed.error;
+                }
+                if (completed.error || !completed.pending) {
+                  return { text: t("skill.approve_not_found", { lang, tone, vars: { id: nonce || "?" } }) };
+                }
+                if (reject || completed.pending.command === "skills-reject") {
+                  return { text: rejectSkillProposal(workspaceDir, completed.pending.targetId, { lang, tone }).text };
+                }
+                const result = await activateSkillProposal(workspaceDir, completed.pending.targetId, {
+                  lang,
+                  tone,
+                  memoryCtx,
+                  loadEvidenceRecord: async (memoryId) => {
+                    try {
+                      return await pool.withDb(commandCtx.agentId || "default", (db) => db.getById(memoryId));
+                    } catch {
+                      return null;
+                    }
+                  },
+                  applyEpistemicStatus: async (memoryId, nextStatus) => pool.withWriteDb(commandCtx.agentId || "default", (db) => applyEpistemicStatusToLanceDb(db, memoryId, nextStatus, {
+                    ctx: memoryCtx,
+                    actor: String(memoryCtx.userId || "human"),
+                    actorTier: "human",
+                    authorized: false,
+                    workspaceDir,
+                    reason: "skill-approve",
+                  })),
+                });
+                return { text: result.text };
               }
               if (subKey === "list") {
                 return { text: listActiveSkills(workspaceDir, { lang, tone }) };
@@ -6706,14 +6812,33 @@ const plugin = {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_approve_usage", { lang, tone }) };
-                const result = approveProposal(workspaceDir, id, { agentId: commandCtx.agentId, workspaceKey: commandCtx.workspaceKey, lang, tone });
+                const result = await activateSkillProposal(workspaceDir, id, {
+                  lang,
+                  tone,
+                  memoryCtx,
+                  loadEvidenceRecord: async (memoryId) => {
+                    try {
+                      return await pool.withDb(commandCtx.agentId || "default", (db) => db.getById(memoryId));
+                    } catch {
+                      return null;
+                    }
+                  },
+                  applyEpistemicStatus: async (memoryId, nextStatus) => pool.withWriteDb(commandCtx.agentId || "default", (db) => applyEpistemicStatusToLanceDb(db, memoryId, nextStatus, {
+                    ctx: memoryCtx,
+                    actor: String(memoryCtx.userId || "human"),
+                    actorTier: "human",
+                    authorized: false,
+                    workspaceDir,
+                    reason: "skill-approve",
+                  })),
+                });
                 return { text: result.text };
               }
               if (subKey === "reject") {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
-                const result = rejectProposal(workspaceDir, id, { lang, tone });
+                const result = rejectSkillProposal(workspaceDir, id, { lang, tone });
                 return { text: result.text };
               }
               return { text: t("plur1bus.skills_unknown", { lang, tone, vars: { sub: subKey } }) };
@@ -6844,6 +6969,9 @@ const plugin = {
               }
 
               if (!id && ["origin", "explain", "promote", "demote", "prune", "tombstone"].includes(sub)) {
+                if (sub === "demote") {
+                  return { text: "Usage: /plur1bus memory demote <id> — withholds the newest neo revision from recall. Reversible with /plur1bus memory promote <id>." };
+                }
                 return { text: `Usage: /plur1bus memory ${sub} <id>` };
               }
               if (["promote", "demote", "prune", "tombstone"].includes(sub)) {
@@ -8159,6 +8287,11 @@ const plugin = {
                   storedBy: agentId,
                   sourceTurnId: turnId || "",
                   sourceMessageRole: p.it.role || "",
+                  epistemicStatus: decideEpistemicStatusForCapture({
+                    text: p.text,
+                    sourceMessageRole: p.it.role || "",
+                    origin: captureOrigin,
+                  }),
                   sourceTimestamp: captureTimestamp,
                   sourceUrl: p.it.sourceUrl || "",
                   evidenceQuote,
@@ -9038,6 +9171,7 @@ const plugin = {
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
                 createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields,
                 sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
+                epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin }),
                 emotionalValence: serializeEmotionalValence(emotion),
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
