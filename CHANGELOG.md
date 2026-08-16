@@ -7,6 +7,30 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.3.5] — 2026-08-16
+
+### Behoben
+
+- **rem-dream findet wieder Muster.** `buildSparseNeighborGraph` verglich
+  `distanceToScore(neighbor._distance)` — also `1/(1+d)` — gegen `minSimilarity = 0.82`.
+  Das ist keine Kosinus-Ähnlichkeit, sondern eine monotone Umformung der Index-Distanz.
+  Live gemessen: eine Zeile mit **echtem Kosinus 1,0000** liefert `_distance = 0.6715` und
+  damit Score 0,598 — selbst ein identischer Vektor blieb unter der Schwelle, es entstanden
+  null Kanten, null Cluster, null Muster. Die Ähnlichkeit wird jetzt aus den ohnehin
+  vorliegenden Vektoren echt gerechnet; der Index bleibt für die Vorauswahl der `topK`
+  Nachbarn zuständig. Dass zwei Skalen gemischt waren, zeigte dieselbe Datei:
+  `validateClusters` rechnete längst mit echtem Kosinus (`centroidMinSimilarity = 0.74`).
+- **Feature-Crons kollidieren auf einer frischen Mehr-Agenten-Installation nicht mehr.**
+  Nur `persona-evolve` und `consolidate-daily` waren versetzt; `skill-miner`, `rem-dream`
+  und `discover-semantic-links` legten alle Agenten auf dieselbe Minute. Live bestätigt:
+  die drei skill-miner-Jobs brachen am 16.08. um 03:05 **alle innerhalb einer Sekunde** mit
+  `cron: isolated agent run stalled before execution start` ab — der 60-Sekunden-Watchdog,
+  weil gleichzeitige isolierte Läufe um Lanes konkurrieren. Ein Test prüft die Bedingung
+  jetzt für **alle** Specs, nicht für einzelne.
+- **Der GC wird genau einmal geplant**, unabhängig von der Agentenzahl. `runGcJob` iteriert
+  selbst über alle Agent-Datenbanken; ein Job je Agent hätte denselben Bestand mehrfach
+  durchgearbeitet, gleichzeitig, zur selben Minute.
+
 ## [7.3.4] — 2026-08-15
 
 ### Behoben
