@@ -39,6 +39,9 @@ import {
 } from "../patches/apply-cron-plugin-direct-dispatch.mjs";
 
 function ensureCronDirectDispatch({ apply }) {
+  if (process.env.PLUR1BUS_SKIP_HOST_PATCH === "1") {
+    return { status: "skipped" };
+  }
   const distDir = resolveOpenClawDistDir();
   if (apply) return applyCronPluginDirectDispatchPatch(distDir);
   if (!isCronPluginDirectDispatchReady(distDir)) {
@@ -317,7 +320,13 @@ export async function runSetupFeatureCrons(options = {}) {
 
     let hostDispatchReady = true;
     try {
-      ensureCronDirectDispatchImpl({ apply: !opts.dryRun });
+      // Atlas: install-time host patch is a supply-chain surface. Operators
+      // can skip it with PLUR1BUS_SKIP_HOST_PATCH=1; npm still exits 0.
+      if (process.env.PLUR1BUS_SKIP_HOST_PATCH === "1") {
+        hostDispatchReady = true;
+      } else {
+        ensureCronDirectDispatchImpl({ apply: !opts.dryRun });
+      }
     } catch {
       hostDispatchReady = false;
     }

@@ -1,0 +1,33 @@
+{
+  "query": "weekly deploy checklist",
+  "items": [
+    {
+      "id": "active",
+      "statement": "Always verify weekly releases with the same deployment checklist",
+      "status": "active",
+      "category": "workflow_preference",
+      "salience": 0.8,
+      "recency": 0.8,
+      "origin": { "trustLevel": "user_asserted", "role": "user" }
+    },
+    {
+      "id": "conflict",
+      "statement": "Always verify weekly releases with the same deployment checklist",
+      "status": "conflict",
+      "category": "workflow_preference",
+      "salience": 0.8,
+      "recency": 0.8,
+      "origin": { "trustLevel": "user_asserted", "role": "user" }
+    },
+    {
+      "id": "demoted",
+      "statement": "Always verify weekly releases with the same deployment checklist",
+      "status": "demoted",
+      "category": "workflow_preference",
+      "salience": 0.8,
+      "recency": 0.8,
+      "origin": { "trustLevel": "user_asserted", "role": "user" }
+    }
+  ],
+  "expectedOrder": ["active", "conflict", "demoted"]
+}
