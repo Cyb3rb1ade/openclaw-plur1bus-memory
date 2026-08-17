@@ -14,7 +14,28 @@ erreichbar in Hermes (dokumentiert, keine Scheinschnittstelle).
 | 825243a | `lib/epistemic-capture.js` | User-Captures `observed`, andere Writes `untrusted`, `""` bleibt Legacy, Injektion → `untrusted` | `MemoryDB.store`, Store-Pfade | `runtime._remember` (einziger Karten-Neuschreibpfad), Epistemik-Spalte idempotent | JS + PY | `tests/epistemic-capture.test.js`, `test_epistemic_capture.py` |
 | 825243a | `lib/epistemic-cutoff.js`, `lib/fsync-atomic.js` | Cutoff beim ersten Upgrade vor erstem Write, frühester `since` gewinnt, fail-closed | Plugin-Init + Store | `runtime.__init__` → `epistemic.ensure_epistemic_cutoff`, Downgrade `observed→untrusted` bei defektem Cutoff | JS + PY | `tests/epistemic-cutoff.test.js`, `test_epistemic_cutoff.py` |
 | 825243a, 3e07caa, 1954ef4 | `lib/jobs/skill-miner*.js`, `lib/telegram-commands/skill-commands.js` | Miner-Admission ohne 30-Tage-Lookback, SKILL.md erst nach Approve, crash-sicher, Confirm-Tokens | Skill-Miner-Cron + Telegram | Kein Skill-Miner und keine Telegram-Oberfläche in Hermes (`parity.py`: `skill-farming` excluded); Epistemikvertrag gilt trotzdem für alle Hermes-Writes (s. o.) | JS + NR | `tests/skill-miner-*.test.js` (JS-seitig) |
-| 825243a, 00897e4, 02e9db2 | `lib/tombstone-write-guard.js`, `index.js`, `scripts/auto-capture-lancedb.mjs`, `lib/dreaming/light-dream.js`, `lib/jobs/memory-compaction.js` | Jeder erreichbare Reinsert prüft Registry vor `table.add`; Content-Update prüft neuen Text; Same-Text-Replay ungeblockt; Light-Dream-Refusal vor Delete | Store/Update/updateCard/Compaction/Auto-Capture/Light-Dream | `runtime._remember` ✓ (bestand), `correct_async` (neuer Text über `_remember`) ✓; **neu:** Migrations-Writer (`migrate._copy_agent_cards`, `workspace_migrate._stage_agents`) mit Ziel-Registry-Guard; GC/Consolidation proposal-only, Reembed kopiert unverändert, Light-Dream nicht vorhanden | JS + PY | `tests/tombstone-*.test.js`, `test_tombstone_migration_guard.py` |
+| 825243a, 00897e4, 02e9db2 | `lib/tombstone-write-guard.js`, `index.js`, `scripts/auto-capture-lancedb.mjs`, `lib/dreaming/light-dream.js`, `lib/jobs/memory-compaction.js` | Jeder erreichbare Reinsert prüft Registry vor `table.add`; Content-Update prüft neuen Text; Same-Text-Replay ungeblockt; Light-Dream-Refusal vor Delete | Store/Update/updateCard/Compaction/Auto-Capture/Light-Dream | `runtime._remember` ✓ (bestand), `correct_async` (neuer Text über `_remember`) ✓; **neu:** Migrations-Writer (`migrate._copy_agent_cards`, `workspace_migrate._stage_agents`) mit Guard gegen die **Ziel**-Registry (Audit R1); GC/Consolidation proposal-only, Reembed kopiert unverändert, Light-Dream nicht vorhanden | JS + PY | `tests/tombstone-*.test.js`, `test_tombstone_migration_guard.py` |
+
+## Unabhängiger Endaudit (2026-08-17, Review-Agent)
+
+- **R1 (behoben):** Der Workspace-Migrations-Guard las anfangs die Registry des
+  frischen Staging-Verzeichnisses und konnte produktiv nie feuern. Jetzt liest
+  `_stage_agents(..., tombstone_base=target)` die Registry des live ersetzten
+  Ziels; `migrate._copy_agent_cards` las bereits korrekt die Ziel-Registry.
+  Zusätzlich überleben `_tombstones` und `_epistemic` den Staging→Target-Wechsel
+  (Registry-Erhalt, getestet inkl. Backup-Pfad).
+- **C2 (dokumentiert):** Der Resume-Pfad (`--resume-staging`) prüft bereits
+  gestagte `existing_rows` nicht erneut — Crash-Recovery-Semantik, unverändert.
+- **C3 (dokumentiert):** `reembed` kopiert Zeilen unverändert inklusive Status;
+  `shared_pools.copy` dupliziert nur aktive Karten aus der guard-geschützten
+  Agent-Tabelle (`share_memory` filtert `status='active'`). Kommentare im Code.
+- **C5 (dokumentiert):** Migrations-Guards binden exakt an Scope-Typ
+  (`workspace`/`default`): ein agent-private vergessener Text kann über die
+  Migration in den Workspace-Scope eintreten — identisch zur Upstream-Semantik
+  (`tombstoneBlocksCapture`), kein Vertragsbruch.
+- **C6 (behoben):** ungenutzte `allowed_rows`-Variable entfernt.
+- Alle übrigen Checklistenpunkte (A–L ohne R1): PASS.
+
 | a5be9b5 | `lib/inject-budget.js` | `recall.globalInjectMaxChars` Default 17000, Memory vor Zeit/Reminder gekürzt | `prependContext`-Assembly | `runtime.recall` ersetzt hartes `[:12000]`; Blocks memories/overlay/explanation droppable, compression non-droppable; Zeit/Reminder laufen in Hermes nicht durch diesen String | JS + PY | `tests/inject-budget.test.js`, `test_inject_budget.py` |
 | a5be9b5 | `lib/prompt-memory-fields.js` | Prompt-Labels status/epistemic vereinheitlicht | Recall-Renderer | Hermes-Recall rendert schlichte Liste ohne Statuslabels; keine Label-Semantik erreichbar | JS + NR | `tests/prompt-memory-fields.test.js` |
 | a5be9b5, a05dd11, 2aae511, bf823fb, b97cfe3 | `lib/curation-resolve.js`, `lib/drop-injected-conflicts.js`, `lib/jobs/apply-conflict-resolution.js` | Curation `keep\|drop`, `drop-injected` mit Preview+Nonce, Drift-Gate, IDOR-frei | `/plur1bus curation …` + Conflict-Apply-Job | Kein neo-`conflict`-Bestand, keine Behavior-Cards, keine injizierten Konflikte in Hermes; Controls-`critical accept\|reject\|edit` bleibt unverändert nonce-gebunden | JS + NR | `tests/curation-resolve.test.js`, `tests/drop-injected-conflicts.test.js` |

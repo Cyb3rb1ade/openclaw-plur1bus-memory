@@ -252,8 +252,14 @@ def _stage_agents(
     config: dict[str, Any],
     batch_size: int,
     log_file: Path | None = None,
+    tombstone_base: Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[int, int]], dict[str, dict[str, str]]]:
-    """Build every target agent table using only fresh embedding vectors."""
+    """Build every target agent table using only fresh embedding vectors.
+
+    ``tombstone_base`` names the data root whose ``_tombstones`` registry the
+    reinsert guard consults — the live target being replaced, never the fresh
+    staging directory (which has no registry and would make the guard vacuous).
+    """
     try:
         import lancedb
     except ImportError as error:
@@ -285,9 +291,11 @@ def _stage_agents(
         pending_rows, contents = _pending_resume_rows(rows, existing_rows, source_agent)
         # Canonical reinsert guard (upstream 7.4.0): forgotten text bound to
         # the migration target scope is never revived by a bulk re-embed.
-        # Blocked rows are skipped before embedding and counted honestly.
-        allowed_rows, blocked_rows = partition_cards_by_tombstone_guard(
-            staging, target_agent,
+        # The registry consulted is the live target's, not the empty staging
+        # directory's. Blocked rows are skipped before embedding and counted
+        # honestly.
+        _, blocked_rows = partition_cards_by_tombstone_guard(
+            tombstone_base or staging, target_agent,
             [{"content": content} for content in contents],
             scope="workspace", workspace_identity="default",
         )
@@ -398,7 +406,18 @@ def run_migrate(args: argparse.Namespace) -> dict[str, Any]:
             args.config,
             args.batch_size,
             log_file,
+            tombstone_base=target,
         )
+        # Sibling registries are user data and must survive the staged switch:
+        # a replaced target's tombstones and epistemic cutoff move into the
+        # staging tree before activation, otherwise forgotten text could be
+        # re-captured and the first-upgrade cutoff would be silently reset.
+        for registry_dirname in ("_tombstones", "_epistemic"):
+            source_registry = target / registry_dirname
+            if source_registry.is_dir():
+                shutil.copytree(
+                    source_registry, staging / registry_dirname, dirs_exist_ok=True,
+                )
         assets = stage_complete_assets(
             snapshot,
             staging,

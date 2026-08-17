@@ -108,6 +108,10 @@ def reembed(data_dir: Path, agent_id: str, config: dict[str, Any], *, apply: boo
         except ImportError as error:
             raise RuntimeError("re-embedding requires the lancedb Python dependency") from error
         staging.mkdir(parents=True, exist_ok=False)
+        # Tombstone note (7.4.0): this copies rows already live in the agent
+        # table verbatim — deleted/archived rows keep their status, no text is
+        # newly introduced, so the canonical reinsert guard cannot fire here.
+        # Revival protection relies on forget deleting the row itself.
         lancedb.connect(str(staging)).create_table("memories", data=cards)
         shutil.copytree(agent_dir, backup)
         shutil.rmtree(agent_dir)

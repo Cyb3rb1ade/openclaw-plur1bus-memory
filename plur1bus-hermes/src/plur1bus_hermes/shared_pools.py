@@ -92,6 +92,10 @@ class SharedPoolStore:
         except Exception:
             database.create_table("memories", data=[shared])
         else:
+            # Idempotent copy of a card that is active in the guard-protected
+            # agent table (share_memory filters status='active'); a forgotten
+            # card can never reach this delete+add, so no tombstone check is
+            # applicable here (7.4.0 contract review).
             table.delete(f"id = '{shared_id}'")
             table.add([shared])
         return {
