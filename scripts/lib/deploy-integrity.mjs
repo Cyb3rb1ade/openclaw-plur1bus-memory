@@ -57,6 +57,7 @@ export const DEPLOY_FILES = [
   "lib/prompt-memory-fields.js",
   "lib/inject-budget.js",
   "lib/curation-resolve.js",
+  "lib/drop-injected-conflicts.js",
   "lib/valid-time.js",
   "lib/event-loop-lag-snapshot.js",
   "lib/explainability.js",
