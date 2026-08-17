@@ -7,10 +7,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-## [7.3.6] — 2026-08-17
+## [7.4.0] — 2026-08-17
 
 Quelle: `dc2f9da` (#114–#119). Kein Hard-Filter, kein Auto-Resolve, kein
 Host-Patch-Removal, kein Weight-Retune.
+
+> Diese Arbeit wurde auf `main` als `7.3.6` gemerged (`51e962e`), aber nie
+> getaggt oder veröffentlicht. Wegen des Umfangs — neue Epistemik-Schicht,
+> Tombstone-Schreibschutz, Inject-Budget, zwei neue Curation-Kommandos — wird
+> sie als **7.4.0** ausgeliefert. Eine Version `7.3.6` existiert nicht.
 
 ### Behoben
 
@@ -31,18 +36,25 @@ Host-Patch-Removal, kein Weight-Retune.
   `table.add` (Store, Content-Update, updateCard, Compaction, Auto-Capture,
   Light-Dream-Rewrite: `table.add === 0`, Quelle bleibt; Same-Text-Replay ungeblockt).
 - **Prompt-Labels** für status/epistemic sind render-seitig vereinheitlicht.
-- **Globales Inject-Budget** (`recall.globalInjectMaxChars`, Default 17000)
-  kürzt Memories vor Zeit/Reminder.
-- **Curation resolve** `keep|drop` beendet neo-`conflict` ohne Hard-Filter.
-- **`/plur1bus curation drop-injected`** demoted nur injizierte Behavior-`conflict`s
-  nach Preview+Nonce; echte Konflikte bleiben.
 - **`isInjectedContextText`** erkennt `BEGIN_OPENCLAW_INTERNAL_CONTEXT`,
   `[Subagent Context]` und `[Inter-session message]` nur als Zeilen-Header.
 - **Conflict-Apply** geht bei Confirm durch `safeUpdate` inkl. Drift-Gate.
 - **Derived records** tragen `visibility` (append-Choke + Pattern/Dream-Writer).
   Reader filtern per Requester; rem-dream übergibt ihn an `readPatterns`.
   Legacy ohne Stamp: nur Own-Agent.
-- **`PLUR1BUS_SKIP_HOST_PATCH=1`** überspringt den Install-Host-Patch.
+
+### Hinzugefügt
+
+- **Globales Inject-Budget** (`recall.globalInjectMaxChars`, Default 17000)
+  kürzt Memories vor Zeit/Reminder.
+- **Curation resolve** `keep|drop` beendet neo-`conflict` ohne Hard-Filter.
+- **`/plur1bus curation drop-injected`** demoted nur injizierte Behavior-`conflict`s
+  nach Preview+Nonce; echte Konflikte bleiben.
+- **`PLUR1BUS_SKIP_HOST_PATCH=1`** überspringt den Host-Patch. Die Variable galt
+  bisher nur in `setup-feature-crons.mjs`; `install-memory-system.sh` wendete die
+  Patches in Schritt 9 trotzdem an. Beide Pfade respektieren sie jetzt, die
+  Installation läuft ohne Host-Patch vollständig durch (Warnung + Nachhol-Hinweis
+  statt Abbruch).
 
 ## [7.3.5] — 2026-08-16
 
