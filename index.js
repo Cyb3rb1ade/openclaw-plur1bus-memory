@@ -173,6 +173,7 @@ import { assertCardWriteAllowed, isContentChangingUpdate, splitAgentDbPath } fro
 import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
 import { applyGlobalInjectBudget } from "./lib/inject-budget.js";
 import { resolveCurationRecord } from "./lib/curation-resolve.js";
+import { previewDropInjected, applyDropInjected } from "./lib/drop-injected-conflicts.js";
 import {
   applyConflictViaSafeUpdate,
   findResolvableConflict,
@@ -5863,7 +5864,7 @@ const plugin = {
           || (actionKey === "temperament" && Boolean(subKey))
           || (actionKey === "persona" && ["regenerate", "accept"].includes(subKey))
           || (actionKey === "skills" && ["approve", "reject"].includes(subKey))
-          || (actionKey === "curation" && ["resolve", "apply-conflict", "confirm"].includes(subKey))
+          || (actionKey === "curation" && ["resolve", "apply-conflict", "drop-injected", "confirm"].includes(subKey))
           || ((actionKey === "reminder" || actionKey === "reminders") && ["cancel", "delete"].includes(subKey))
           || (actionKey === "memory" && ["promote", "demote", "prune", "tombstone", "disable-overlay", "supersede-overlay"].includes(subKey))
           || (actionKey === "behavior" && ["promote", "demote", "prune"].includes(subKey))
@@ -5993,7 +5994,7 @@ const plugin = {
             if ((actionKey === "persona" && !["", "regenerate", "accept"].includes(subKey))
               || (actionKey === "behavior" && !["show", "candidates", "explain", "promote", "demote", "prune"].includes(subKey))
               || ((actionKey === "reminder" || actionKey === "reminders") && !["", "list", "show", "help", "cancel", "delete"].includes(subKey))
-              || (actionKey === "curation" && !["", "conflicts", "stale", "promoted", "resolve", "apply-conflict", "confirm"].includes(subKey))) {
+              || (actionKey === "curation" && !["", "conflicts", "stale", "promoted", "resolve", "apply-conflict", "drop-injected", "confirm"].includes(subKey))) {
               return plur1busHelp("quick", resolveDenialLocale(commandCtx));
             }
             if (actionKey === "migrate-legacy-shared") {
@@ -6955,6 +6956,29 @@ const plugin = {
                 }
                 return formatJsonCommandResult(result);
               }
+              if (sub === "drop-injected") {
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+                if (denied) return denied;
+                const requester = neoRequester(commandCtx, {});
+                const preview = previewDropInjected(commandStore, requester);
+                if (!preview.ok) return formatJsonCommandResult(preview);
+                const confirmationIdentity = resolveConfirmationIdentity(memoryCtx);
+                const confirm = createConfirmation({
+                  userId: confirmationIdentity.userId,
+                  chatId: confirmationIdentity.chatId,
+                  command: "drop-injected",
+                  targetId: randomUUID(),
+                });
+                confirm.payload = { hash: preview.hash, count: preview.count };
+                rememberPendingConfirmation(confirmationStore, confirmationIndex, confirm);
+                return {
+                  text: [
+                    `Drop ${preview.count} injected behavior conflict(s).`,
+                    ...preview.examples.map((ex) => `- ${ex.id}: ${ex.statement}`),
+                    `Confirm: /plur1bus curation confirm ${confirm.nonce}`,
+                  ].join("\n"),
+                };
+              }
               if (sub === "apply-conflict") {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
@@ -6977,6 +7001,32 @@ const plugin = {
               if (sub === "confirm") {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
+                const dropped = completePendingConfirmation({
+                  confirmationStore,
+                  confirmationIndex,
+                  expectedCommand: "drop-injected",
+                  memoryCtx,
+                  nonce: id,
+                });
+                if (!dropped.error) {
+                  const result = applyDropInjected(commandStore, {
+                    authorized: true,
+                    requester: neoRequester(commandCtx, {}),
+                    expectedHash: dropped.pending?.payload?.hash,
+                    expectedCount: dropped.pending?.payload?.count,
+                  });
+                  if (result.ok) {
+                    appendDestructiveOpLog(commandCtx?.workspaceDir, {
+                      event: "curation.drop_injected",
+                      source: "plur1bus_curation",
+                      agentId: commandCtx.agentId || "command",
+                      count: result.dropped,
+                      hash: dropped.pending?.payload?.hash,
+                      timestamp: new Date().toISOString(),
+                    });
+                  }
+                  return formatJsonCommandResult(result);
+                }
                 const { pending, error } = completePendingConfirmation({
                   confirmationStore,
                   confirmationIndex,
