@@ -25,6 +25,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **Jeder erreichbare Card-Reinsert prüft die Tombstone-Registry** bevor
   `table.add` (Store, Content-Update, updateCard, Compaction, Auto-Capture,
   Light-Dream-Fallback nur bei Textwechsel).
+- **Prompt-Labels** für status/epistemic sind render-seitig vereinheitlicht.
+- **Globales Inject-Budget** (`recall.globalInjectMaxChars`, Default 17000)
+  kürzt Memories vor Zeit/Reminder.
+- **Curation resolve** `keep|drop` beendet neo-`conflict` ohne Hard-Filter.
+- **Conflict-Apply** geht bei Confirm durch `safeUpdate` inkl. Drift-Gate.
+- **Derived records** tragen `visibility`; Reader filtern optional per Requester.
+- **`PLUR1BUS_SKIP_HOST_PATCH=1`** überspringt den Install-Host-Patch.
 
 ## [7.3.5] — 2026-08-16
 
