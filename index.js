@@ -170,7 +170,7 @@ import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapt
 import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "./lib/epistemic-capture.js";
 import { ensureEpistemicCutoff } from "./lib/epistemic-cutoff.js";
 import { assertCardWriteAllowed, isContentChangingUpdate, splitAgentDbPath } from "./lib/tombstone-write-guard.js";
-import { isAuthorized, createConfirmation, validateConfirmation, resolveIdentity } from "./lib/security.js";
+import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
 import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
@@ -5964,7 +5964,7 @@ const plugin = {
               return plur1busHelp("quick", resolveDenialLocale(commandCtx));
             }
             const subKey = sub.toLowerCase();
-            if (actionKey === "skills" && !["review", "list", "show", "approve", "reject"].includes(subKey)) {
+            if (actionKey === "skills" && !["review", "list", "show", "approve", "reject", "confirm"].includes(subKey)) {
               const { lang, tone } = resolveDenialLocale(commandCtx);
               return { text: subKey ? t("plur1bus.skills_unknown", { lang, tone, vars: { sub: subKey } }) : t("plur1bus.skills_help", { lang, tone }) };
             }
@@ -6739,12 +6739,12 @@ const plugin = {
                 return { text: t("plur1bus.skills_help", { lang, tone }) };
               }
               if (subKey === "review") {
-                const identity = resolveIdentity(commandCtx) || {};
+                const identity = resolveConfirmationIdentity(memoryCtx);
                 const payload = buildSkillReviewPayload(workspaceDir, {
                   lang,
                   tone,
-                  userId: identity.userId || memoryCtx.userId,
-                  chatId: identity.chatId || memoryCtx.chatId,
+                  userId: identity.userId,
+                  chatId: identity.chatId,
                 });
                 for (const pending of payload.confirmations) {
                   rememberPendingConfirmation(confirmationStore, confirmationIndex, pending);
