@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendTombstoneToRegistry, buildTombstone } from "../lib/tombstone.js";
 import { assertCardWriteAllowed } from "../lib/tombstone-write-guard.js";
+import { executeCompactionMergeAction } from "../lib/jobs/memory-compaction.js";
+import { selectCaptureRowsToAdd } from "../scripts/auto-capture-lancedb.mjs";
 import { MemoryDB } from "../index.js";
 
 const UUID = "00000000-0000-4000-8000-0000000000aa";
@@ -45,6 +47,59 @@ describe("tombstone bulk writers", () => {
       baseDbPath, agentId: "agent-a", text: "session capture of a forgotten fact", scope: "agent-private",
     });
     assert.equal(guard.allowed, false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("compaction merge does not table.add forgotten text and keeps both sources", async () => {
+    const { root, baseDbPath } = base();
+    forgotten(baseDbPath, "forgotten merge text");
+    const idA = "00000000-0000-4000-8000-0000000000a1";
+    const idB = "00000000-0000-4000-8000-0000000000a2";
+    const statuses = { [idA]: "active", [idB]: "active" };
+    let adds = 0;
+    const table = {
+      add: async () => { adds += 1; },
+      update: async ({ where, values }) => {
+        const id = String(where).match(/[0-9a-f-]{36}/i)?.[0];
+        if (id) statuses[id] = values.status;
+      },
+    };
+    const out = await executeCompactionMergeAction(
+      table,
+      { type: "merge", id: idA, targetId: idB, mergedText: "forgotten merge text" },
+      new Map([
+        [idA, { id: idA, text: "keep", scope: "agent-private", agentId: "agent-a", storedBy: "agent-a", vector: [0, 1] }],
+        [idB, { id: idB, text: "other", scope: "agent-private", agentId: "agent-a", storedBy: "agent-a", vector: [0, 1] }],
+      ]),
+      { warn() {}, info() {} },
+      join(root, "out"),
+      null,
+      { baseDbPath, agentId: "agent-a" },
+    );
+    assert.equal(out.error, "tombstone_blocked");
+    assert.equal(out.added, false);
+    assert.equal(adds, 0);
+    assert.equal(statuses[idA], "active");
+    assert.equal(statuses[idB], "active");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("auto-capture does not table.add forgotten text or ack the checkpoint", async () => {
+    const { root, baseDbPath } = base();
+    forgotten(baseDbPath, "session capture of a forgotten fact");
+    const record = { acknowledged: false };
+    let adds = 0;
+    const table = { add: async () => { adds += 1; } };
+    const selected = selectCaptureRowsToAdd([{
+      id: UUID,
+      trimmed: "session capture of a forgotten fact",
+      it: { _record: record },
+    }], { baseDbPath, agentId: "agent-a" });
+    assert.equal(selected.rowsToAdd.length, 0);
+    assert.equal(selected.blocked.length, 1);
+    if (selected.rowsToAdd.length > 0) await table.add(selected.rowsToAdd);
+    assert.equal(adds, 0);
+    assert.equal(record.acknowledged, false);
     rmSync(root, { recursive: true, force: true });
   });
 

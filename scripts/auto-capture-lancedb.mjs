@@ -659,6 +659,53 @@ export async function filterPreparedForStorageByBatchDedup(table, prepared, opti
   return notExisting.filter((_, index) => !inBatchDuplicates.has(index));
 }
 
+/**
+ * Drop tombstoned capture rows before any table.add or checkpoint ack.
+ * @param {object[]} canonicalEntries
+ * @param {{baseDbPath: string, agentId: string, captureTimestamp?: number, buildRow?: Function}} opts
+ * @returns {{rowsToAdd: object[], blocked: object[], entryByRowId: Map<string, object>}}
+ */
+export function selectCaptureRowsToAdd(canonicalEntries, opts = {}) {
+  const {
+    baseDbPath,
+    agentId,
+    captureTimestamp = Date.now(),
+    buildRow,
+  } = opts;
+  const rowsToAdd = [];
+  const blocked = [];
+  const entryByRowId = new Map();
+  for (const entry of canonicalEntries || []) {
+    try {
+      const row = typeof buildRow === "function"
+        ? buildRow(agentId, entry, captureTimestamp)
+        : {
+          id: entry.id,
+          text: entry.trimmed || entry.text,
+          scope: entry.scope || "agent-private",
+          workspaceKey: entry.workspaceKey || "",
+        };
+      const guard = assertCardWriteAllowed({
+        baseDbPath,
+        agentId,
+        text: row.text,
+        scope: row.scope || "agent-private",
+        workspaceIdentity: row.workspaceKey || "",
+        ownerUserId: "",
+      });
+      if (!guard.allowed) {
+        blocked.push(entry);
+        continue;
+      }
+      rowsToAdd.push(row);
+      entryByRowId.set(row.id, entry);
+    } catch (err) {
+      console.error(`[${agentId}] capture error: ${err.message}`);
+    }
+  }
+  return { rowsToAdd, blocked, entryByRowId };
+}
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
 function resolveCheckpointStart(agentId, file, checkpoint) {
   if (checkpoint.offset > file.size) {
@@ -1040,28 +1087,14 @@ async function captureAgent(agentId, embeddings) {
   }
   persistAcknowledgedCheckpoints(safeAgent, stateFiles, fileRuns);
 
-  const rowsToAdd = [];
-  const entryByRowId = new Map();
-  for (const entry of canonicalEntries) {
-    try {
-      const row = buildCaptureRow(safeAgent, entry, captureTimestamp);
-      const guard = assertCardWriteAllowed({
-        baseDbPath: BASE_DB_PATH,
-        agentId: safeAgent,
-        text: row.text,
-        scope: row.scope || "agent-private",
-        workspaceIdentity: row.workspaceKey || "",
-        ownerUserId: "",
-      });
-      if (!guard.allowed) {
-        console.warn(`[${safeAgent}] capture blocked by tombstone`);
-        continue;
-      }
-      rowsToAdd.push(row);
-      entryByRowId.set(row.id, entry);
-    } catch (err) {
-      console.error(`[${safeAgent}] capture error: ${err.message}`);
-    }
+  const { rowsToAdd, blocked, entryByRowId } = selectCaptureRowsToAdd(canonicalEntries, {
+    baseDbPath: BASE_DB_PATH,
+    agentId: safeAgent,
+    captureTimestamp,
+    buildRow: buildCaptureRow,
+  });
+  for (const _blocked of blocked) {
+    console.warn(`[${safeAgent}] capture blocked by tombstone`);
   }
 
   let batchFailed = false;
