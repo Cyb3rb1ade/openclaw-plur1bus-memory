@@ -7,6 +7,7 @@ import { appendTombstoneToRegistry, buildTombstone } from "../lib/tombstone.js";
 import { assertCardWriteAllowed } from "../lib/tombstone-write-guard.js";
 import { executeCompactionMergeAction } from "../lib/jobs/memory-compaction.js";
 import { selectCaptureRowsToAdd } from "../scripts/auto-capture-lancedb.mjs";
+import { replaceLightDreamRow, strengthenMemory } from "../lib/dreaming/light-dream.js";
 import { MemoryDB } from "../index.js";
 
 const UUID = "00000000-0000-4000-8000-0000000000aa";
@@ -129,6 +130,53 @@ describe("tombstone bulk writers", () => {
       baseDbPath, agentId: "agent-a", text: "unrelated replay bump", scope: "agent-private",
     });
     assert.equal(replay.allowed, true);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("light-dream rewrite does not table.add forgotten text and keeps the source", async () => {
+    const { root, baseDbPath } = base();
+    forgotten(baseDbPath, "rewritten dream text");
+    let adds = 0;
+    let deleted = false;
+    const row = {
+      id: UUID, text: "original dream text", summary: "original dream text",
+      scope: "agent-private", agentId: "agent-a", storedBy: "agent-a", vector: [0, 1],
+    };
+    const db = {
+      dbPath: join(baseDbPath, "agent-a"),
+      table: {
+        delete: async () => { deleted = true; },
+        add: async () => { adds += 1; },
+      },
+    };
+    const out = await replaceLightDreamRow(db, row, { ...row, text: "rewritten dream text", summary: "rewritten dream text" });
+    assert.equal(out.blocked, true);
+    assert.equal(out.added, false);
+    assert.equal(adds, 0);
+    assert.equal(deleted, false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("light-dream same-text replay still table.adds", async () => {
+    const { root, baseDbPath } = base();
+    forgotten(baseDbPath, "rewritten dream text");
+    let adds = 0;
+    const row = {
+      id: UUID, text: "unrelated replay bump", replayCount: 0, vector: [0, 1],
+      scope: "agent-private", agentId: "agent-a", storedBy: "agent-a",
+    };
+    const db = {
+      dbPath: join(baseDbPath, "agent-a"),
+      table: {
+        query: () => ({ where: () => ({ limit: () => ({ toArray: async () => [{ ...row }] }) }) }),
+        update: async () => { throw new Error("update() not supported"); },
+        delete: async () => {},
+        add: async () => { adds += 1; },
+      },
+    };
+    const ok = await strengthenMemory(db, UUID);
+    assert.equal(ok, true);
+    assert.equal(adds, 1);
     rmSync(root, { recursive: true, force: true });
   });
 });
