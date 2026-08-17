@@ -93,6 +93,8 @@ raw epistemicStatus is "" or missing
 
 Explicit `untrusted`, `disputed`, `invalidated`, and post-cutoff empties are excluded.
 
+The recency lookback (default 30 days) applies only to explicit `observed|corroborated|trusted` rows. Pre-cutoff empty legacy is admitted regardless of lookback — otherwise the first upgrade cannot form proposals from the existing store. The miner calls `ensureEpistemicCutoff` so first boot creates the cutoff before the scan.
+
 **Preflight before any proposal write**, not during paginated scan: one partitioned `LIMIT 1` query for skill-category rows whose raw status is empty/`NULL` and `createdAt >= since`. If the column is missing, treat every row as empty and query `createdAt >= since AND category ∈ … LIMIT 1`. Any hit closes the legacy path for that run. This query must not use the scan cursor or page size.
 
 Live ratio (comment + fixture): empty-role skill rows outnumber `role=user` (~4 038 vs 1 368). Accepted because SKILL.md still requires approve. Labels distinguish the two.

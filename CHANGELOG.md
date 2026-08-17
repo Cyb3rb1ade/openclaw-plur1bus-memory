@@ -12,7 +12,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **Skill-Miner kann wieder vorschlagen, ohne `trusted` zu erfinden.** Neue
   User-Captures werden `observed`, alle anderen neuen Writes explizit
   `untrusted`. `""` bleibt Legacy. Der Miner clustert `observed|corroborated|trusted`
-  plus gültige Pre-Cutoff-Legacy-Zeilen. SKILL.md entsteht nur nach Approve.
+  plus gültige Pre-Cutoff-Legacy-Zeilen **ohne 30-Tage-Lookback**. Der Cutoff
+  entsteht beim ersten Upgrade vor dem ersten Write. SKILL.md entsteht nur nach
+  Approve. Live-Probe (read-only, 2026-08-17): main 2282 / bernhardine 2124 /
+  heisenberg 256 zugelassene Legacy-Zeilen, LLM erreicht, nicht `scanned: 0`.
 - **Approve ist crash-reparierbar.** SKILL.md zuerst (tmp+fsync+rename), dann
   Evidenz-Transitionen; Teilfehler bleiben `activation_partial` und sind
   idempotent nachziehbar. Review liefert Confirm-Tokens; der Host hat keine
