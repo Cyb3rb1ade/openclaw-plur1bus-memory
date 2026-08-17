@@ -30,7 +30,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   kürzt Memories vor Zeit/Reminder.
 - **Curation resolve** `keep|drop` beendet neo-`conflict` ohne Hard-Filter.
 - **Conflict-Apply** geht bei Confirm durch `safeUpdate` inkl. Drift-Gate.
-- **Derived records** tragen `visibility`; Reader filtern optional per Requester.
+- **Derived records** tragen `visibility` (append-Choke + Pattern/Dream-Writer).
+  Reader filtern per Requester; rem-dream übergibt ihn an `readPatterns`.
+  Legacy ohne Stamp: nur Own-Agent.
 - **`PLUR1BUS_SKIP_HOST_PATCH=1`** überspringt den Install-Host-Patch.
 
 ## [7.3.5] — 2026-08-16
