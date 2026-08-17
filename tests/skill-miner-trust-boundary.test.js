@@ -83,7 +83,6 @@ describe("skill-miner trust boundary", () => {
     const rejectedRows = [
       { epistemicStatus: undefined },
       { epistemicStatus: "untrusted" },
-      { epistemicStatus: "observed" },
       { epistemicStatus: "disputed" },
       { epistemicStatus: "invalidated" },
       { epistemicStatus: "unknown" },

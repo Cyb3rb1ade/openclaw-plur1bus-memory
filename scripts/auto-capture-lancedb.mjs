@@ -28,6 +28,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { resolveInside, safeAgentId, safeUuid, sqlString } from "../lib/sql-safety.js";
+import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
+import { readEpistemicCutoff } from "../lib/epistemic-cutoff.js";
+import { assertCardWriteAllowed } from "../lib/tombstone-write-guard.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 // Operator-local fallback agents. Keep personal IDs out of the public repo.
@@ -780,6 +783,12 @@ function buildCaptureRow(agentId, entry, captureTimestamp) {
     storedBy: agentId,
     sourceTurnId: it.sourceTurnId || "",
     sourceMessageRole: it.role || "",
+    epistemicStatus: decideEpistemicStatusForCapture({
+      text: trimmed,
+      sourceMessageRole: it.role || "",
+      origin,
+      cutoffFailed: !readEpistemicCutoff(BASE_DB_PATH).ok,
+    }),
     sourceTimestamp: it.sourceTimestamp || captureTimestamp,
     sourceUrl: it.sourceUrl || "",
     evidenceQuote,
@@ -1036,6 +1045,18 @@ async function captureAgent(agentId, embeddings) {
   for (const entry of canonicalEntries) {
     try {
       const row = buildCaptureRow(safeAgent, entry, captureTimestamp);
+      const guard = assertCardWriteAllowed({
+        baseDbPath: BASE_DB_PATH,
+        agentId: safeAgent,
+        text: row.text,
+        scope: row.scope || "agent-private",
+        workspaceIdentity: row.workspaceKey || "",
+        ownerUserId: "",
+      });
+      if (!guard.allowed) {
+        console.warn(`[${safeAgent}] capture blocked by tombstone`);
+        continue;
+      }
       rowsToAdd.push(row);
       entryByRowId.set(row.id, entry);
     } catch (err) {
