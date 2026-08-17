@@ -39,6 +39,15 @@ describe("decideEpistemicStatusForCapture", () => {
     }), "untrusted");
   });
 
+  it("writes untrusted when the cutoff failed", () => {
+    assert.equal(decideEpistemicStatusForCapture({
+      text: "Always deploy on Tuesdays after backup",
+      sourceMessageRole: "user",
+      origin: "dm",
+      cutoffFailed: true,
+    }), "untrusted");
+  });
+
   it("never coerces a new write to empty string", () => {
     assert.equal(coerceNewWriteEpistemicStatus(""), "untrusted");
     assert.equal(coerceNewWriteEpistemicStatus(null), "untrusted");

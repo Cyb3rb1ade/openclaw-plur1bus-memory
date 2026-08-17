@@ -29,6 +29,7 @@ import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import { resolveInside, safeAgentId, safeUuid, sqlString } from "../lib/sql-safety.js";
 import { decideEpistemicStatusForCapture } from "../lib/epistemic-capture.js";
+import { readEpistemicCutoff } from "../lib/epistemic-cutoff.js";
 import { assertCardWriteAllowed } from "../lib/tombstone-write-guard.js";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
@@ -786,6 +787,7 @@ function buildCaptureRow(agentId, entry, captureTimestamp) {
       text: trimmed,
       sourceMessageRole: it.role || "",
       origin,
+      cutoffFailed: !readEpistemicCutoff(BASE_DB_PATH).ok,
     }),
     sourceTimestamp: it.sourceTimestamp || captureTimestamp,
     sourceUrl: it.sourceUrl || "",

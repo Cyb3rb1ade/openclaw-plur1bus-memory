@@ -22,7 +22,8 @@ describe("skill review confirmations", () => {
     });
     const payload = buildSkillReviewPayload(dir, { userId: "u1", chatId: "c1" });
     assert.ok(payload.inline_keyboard.length > 0);
-    assert.match(payload.text, /skills confirm/);
+    assert.match(payload.text, /Approve "A Skill" \(prop-1\): \/plur1bus skills confirm /);
+    assert.match(payload.text, /Reject "A Skill" \(prop-1\): \/plur1bus skills confirm /);
     const store = new Map();
     for (const pending of payload.confirmations) {
       store.set(`${pending.nonce}:${pending.targetId}`, pending);
