@@ -20,7 +20,7 @@ cutover yet.
 
 ### Retrieval configuration
 
-The Hermes 7.3.4 release process will create `7.3.4-hermes`. Once that tag
+The Hermes 7.4.0 release process will create `7.4.0-hermes`. Once that tag
 exists, install the release packages from it, or clone it and run
 `scripts/install-hermes-plugins.sh` for the complete Hermes-plugin path. Its
 pip step alone is not a complete installation: the full installer copies the

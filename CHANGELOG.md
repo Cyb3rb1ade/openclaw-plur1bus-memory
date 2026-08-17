@@ -7,6 +7,63 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [Hermes 7.4.0 / 7.4.0-hermes] — 2026-08-17
+
+Integrates PLUR1BUS 7.4.0 (merge of the immutable `v7.4.0` tag) while
+retaining the Hermes provider, controls, installer, Jina, retrieval, and
+model-provider distribution. The full contract matrix lives in
+`docs/audits/hermes-7.4.0-contract-matrix.md`.
+
+### Added
+
+- **Explicit trust state for new Hermes writes.** Genuine user captures start
+  as `observed`; every other new write (assistant, correction, obsidian,
+  migration-originated) is explicitly `untrusted`. Injection-shaped text —
+  recognized only via line headers, quick markers, and the prompt-injection
+  regex ported from upstream — never becomes `observed`. The restore-safe
+  epistemic cutoff is created on the first upgrade before the first write and
+  fails closed: a missing cutoff after the enabled marker, or an unreadable
+  one, downgrades `observed` to `untrusted` and is never silently recreated.
+  Legacy rows keep their absent stamp; nothing invents `trusted`. The
+  `epistemicStatus` column is added to pre-7.4.0 tables idempotently.
+- **Global inject budget.** `recall.globalInjectMaxChars` (default 17000)
+  replaces the hardcoded 12000-char recall cap. Memory content yields before
+  non-droppable structural blocks; block order, priority, and the compression
+  marker are preserved. Hermes never routes time/reminder blocks through this
+  string, so nothing downstream can be eaten.
+- **Tombstone guard for bulk writers.** Migration and workspace-migration
+  card copies now pass the canonical scope-bound tombstone/fingerprint guard
+  before any `table.add`: forgotten text bound to the target scope is skipped
+  and honestly counted (`cardsTombstoneBlocked`), never revived. Foreign-scope
+  tombstones neither block nor are ignored. Live capture, correction, and
+  obsidian sync were already guarded.
+- **Derived-record visibility.** REM-dream records carry an explicit
+  `visibility` stamp beside the physical scope partition and the own-agent
+  legacy fallback.
+- **Parity report entries** for the newly reachable contracts; curation,
+  `drop-injected`, the skill miner, and the OpenClaw cron path are documented
+  as not reachable in Hermes rather than shimmed.
+
+### Fixed
+
+- **A failing optional retrieval sidecar can no longer skip the main plugin
+  activation.** `install-hermes-plugins.sh` degrades a sidecar failure to a
+  warning and continues into the Hermes memory-provider configuration; local
+  E5/BGE remains active.
+- **Job scheduling collision lock.** Regression coverage now proves per-agent
+  launchd labels and staggered schedules never collide.
+
+### Preserved
+
+- Hermes' configured chat provider, endpoint, and model remain authoritative;
+  the installer never rewrites them. Jina stays optional and license-gated.
+  `PLUR1BUS_SKIP_HOST_PATCH=1` is honored by both shipped OpenClaw installer
+  paths; the host patch itself is untouched. No hard filter for `conflict`,
+  no automatic conflict resolve, no weight retuning, no data migration of
+  existing LanceDB stores. The OpenClaw package keeps
+  `publishConfig.registry = https://npm.pkg.github.com` and
+  `publishConfig.tag = hermes`; `latest` is unchanged.
+
 ## [7.4.0] — 2026-08-17
 
 Quelle: `dc2f9da` (#114–#119). Kein Hard-Filter, kein Auto-Resolve, kein
