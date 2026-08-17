@@ -7,6 +7,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.3.6] — 2026-08-17
+
+Quelle: `dc2f9da` (#114–#119). Kein Hard-Filter, kein Auto-Resolve, kein
+Host-Patch-Removal, kein Weight-Retune.
+
 ### Behoben
 
 - **Skill-Miner kann wieder vorschlagen, ohne `trusted` zu erfinden.** Neue
