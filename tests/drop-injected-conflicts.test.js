@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNeoStore } from "../lib/neo-arch.js";
 import { previewDropInjected, applyDropInjected } from "../lib/drop-injected-conflicts.js";
+import { createConfirmation } from "../lib/security.js";
+import { rememberPendingConfirmation, completePendingConfirmation } from "../index.js";
 
 const INJECTED = "Write a dream diary entry from these memory fragments: leftover prompt";
 const REAL = "User prefers short answers in the morning.";
@@ -119,6 +121,77 @@ describe("drop injected behavior conflicts", () => {
     }).reason, "drift");
     const newest = store.readBehaviorCards(50).find((row) => row.id.startsWith("11111111"));
     assert.equal(newest.status, "conflict");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("binds the preview hash to requester scope and aborts drift before any write", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const { dir, store } = storeWith([card(id)]);
+    const preview = previewDropInjected(store, REQUESTER);
+    const otherScope = previewDropInjected(store, {
+      requesterAgentId: "agent-b",
+      requesterWorkspaceKey: "ws-a",
+    });
+    assert.notEqual(preview.hash, otherScope.hash);
+    const drifted = applyDropInjected(store, {
+      authorized: true,
+      requester: { requesterAgentId: "agent-b", requesterWorkspaceKey: "ws-a" },
+      expectedHash: preview.hash,
+      expectedCount: preview.count,
+    });
+    assert.equal(drifted.reason, "drift");
+    store.appendBehaviorCards([card("44444444-4444-4444-8444-444444444444")]);
+    const afterInsert = applyDropInjected(store, {
+      authorized: true,
+      requester: REQUESTER,
+      expectedHash: preview.hash,
+      expectedCount: preview.count,
+    });
+    assert.equal(afterInsert.reason, "drift");
+    const newest = Object.fromEntries(store.readBehaviorCards(50).map((row) => [row.id, row]));
+    assert.equal(newest[id].status, "conflict");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects invalid and replayed drop-injected nonces", () => {
+    const { dir, store } = storeWith([card("11111111-1111-4111-8111-111111111111")]);
+    const preview = previewDropInjected(store, REQUESTER);
+    const confirmationStore = new Map();
+    const confirmationIndex = new Map();
+    const pending = createConfirmation({
+      userId: "owner",
+      chatId: "owner-dm",
+      command: "drop-injected",
+      targetId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    });
+    pending.payload = { hash: preview.hash, count: preview.count };
+    rememberPendingConfirmation(confirmationStore, confirmationIndex, pending);
+    const memoryCtx = { userId: "owner", conversationPrincipal: "owner-dm", chatId: "owner-dm" };
+    const invalid = completePendingConfirmation({
+      confirmationStore,
+      confirmationIndex,
+      expectedCommand: "drop-injected",
+      memoryCtx,
+      nonce: "00000000-0000-4000-8000-000000000099",
+    });
+    assert.ok(invalid.error);
+    const first = completePendingConfirmation({
+      confirmationStore,
+      confirmationIndex,
+      expectedCommand: "drop-injected",
+      memoryCtx,
+      nonce: pending.nonce,
+    });
+    assert.equal(first.pending.payload.hash, preview.hash);
+    const replay = completePendingConfirmation({
+      confirmationStore,
+      confirmationIndex,
+      expectedCommand: "drop-injected",
+      memoryCtx,
+      nonce: pending.nonce,
+    });
+    assert.ok(replay.error);
+    assert.equal(store.readBehaviorCards(50).find((row) => row.id.startsWith("11111111")).status, "conflict");
     rmSync(dir, { recursive: true, force: true });
   });
 });
