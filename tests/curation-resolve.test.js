@@ -17,7 +17,8 @@ describe("resolveCurationRecord", () => {
       category: "workflow_preference",
     };
     store.appendCandidates([rec]);
-    const out = resolveCurationRecord(store, rec.id, "keep", { authorized: true });
+    const out = resolveCurationRecord(store, rec, "keep", { authorized: true });
+    assert.equal(resolveCurationRecord(store, rec, "keep", { authorized: false }).ok, false);
     assert.equal(out.ok, true);
     const newest = store.readCandidates(50).filter((row) => row.id === rec.id).at(-1);
     assert.equal(newest.status, "promoted");
