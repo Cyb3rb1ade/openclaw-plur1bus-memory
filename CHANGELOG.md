@@ -24,7 +24,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Begründung steht am Callsite.
 - **Jeder erreichbare Card-Reinsert prüft die Tombstone-Registry** bevor
   `table.add` (Store, Content-Update, updateCard, Compaction, Auto-Capture,
-  Light-Dream-Fallback nur bei Textwechsel).
+  Light-Dream-Rewrite: `table.add === 0`, Quelle bleibt; Same-Text-Replay ungeblockt).
 - **Prompt-Labels** für status/epistemic sind render-seitig vereinheitlicht.
 - **Globales Inject-Budget** (`recall.globalInjectMaxChars`, Default 17000)
   kürzt Memories vor Zeit/Reminder.
