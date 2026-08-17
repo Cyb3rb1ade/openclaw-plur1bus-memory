@@ -5857,6 +5857,7 @@ const plugin = {
           || (actionKey === "temperament" && Boolean(subKey))
           || (actionKey === "persona" && ["regenerate", "accept"].includes(subKey))
           || (actionKey === "skills" && ["approve", "reject"].includes(subKey))
+          || (actionKey === "curation" && subKey === "resolve")
           || ((actionKey === "reminder" || actionKey === "reminders") && ["cancel", "delete"].includes(subKey))
           || (actionKey === "memory" && ["promote", "demote", "prune", "tombstone", "disable-overlay", "supersede-overlay"].includes(subKey))
           || (actionKey === "behavior" && ["promote", "demote", "prune"].includes(subKey))
@@ -6934,7 +6935,18 @@ const plugin = {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 const keepOrDrop = (tokens[3] || "").toLowerCase();
-                const result = resolveCurationRecord(commandStore, id, keepOrDrop, { authorized: true });
+                const record = findNeoRecord(commandStore, id, neoRequester(commandCtx, {}));
+                const result = resolveCurationRecord(commandStore, record, keepOrDrop, { authorized: true });
+                if (result.ok) {
+                  appendDestructiveOpLog(commandCtx?.workspaceDir, {
+                    event: "curation.resolve",
+                    source: "plur1bus_curation",
+                    agentId: commandCtx.agentId || "command",
+                    recordId: id,
+                    action: keepOrDrop,
+                    timestamp: new Date().toISOString(),
+                  });
+                }
                 return formatJsonCommandResult(result);
               }
               const candidates = commandStore.readCandidates(500, neoRequester(commandCtx, {}));
