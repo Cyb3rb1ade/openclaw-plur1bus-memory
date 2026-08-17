@@ -7,6 +7,79 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.0] — 2026-08-17
+
+Quelle: `dc2f9da` (#114–#119). Kein Hard-Filter, kein Auto-Resolve, kein
+Host-Patch-Removal, kein Weight-Retune.
+
+> Diese Arbeit wurde auf `main` als `7.3.6` gemerged (`51e962e`), aber nie
+> getaggt oder veröffentlicht. Wegen des Umfangs — neue Epistemik-Schicht,
+> Tombstone-Schreibschutz, Inject-Budget, zwei neue Curation-Kommandos — wird
+> sie als **7.4.0** ausgeliefert. Eine Version `7.3.6` existiert nicht.
+
+### Behoben
+
+- **Skill-Miner kann wieder vorschlagen, ohne `trusted` zu erfinden.** Neue
+  User-Captures werden `observed`, alle anderen neuen Writes explizit
+  `untrusted`. `""` bleibt Legacy. Der Miner clustert `observed|corroborated|trusted`
+  plus gültige Pre-Cutoff-Legacy-Zeilen **ohne 30-Tage-Lookback**. Der Cutoff
+  entsteht beim ersten Upgrade vor dem ersten Write. SKILL.md entsteht nur nach
+  Approve. Live-Probe (read-only, 2026-08-17): main 2282 / bernhardine 2124 /
+  heisenberg 256 zugelassene Legacy-Zeilen, LLM erreicht, nicht `scanned: 0`.
+- **Approve ist crash-reparierbar.** SKILL.md zuerst (tmp+fsync+rename), dann
+  Evidenz-Transitionen; Teilfehler bleiben `activation_partial` und sind
+  idempotent nachziehbar. Review liefert Confirm-Tokens; der Host hat keine
+  Callback-API, der Nudge bleibt Text.
+- **Neo-`demoted` hält Recall zurück** (`-Infinity`). `conflict` bleibt Penalty;
+  Begründung steht am Callsite.
+- **Jeder erreichbare Card-Reinsert prüft die Tombstone-Registry** bevor
+  `table.add` (Store, Content-Update, updateCard, Compaction, Auto-Capture,
+  Light-Dream-Rewrite: `table.add === 0`, Quelle bleibt; Same-Text-Replay ungeblockt).
+- **Prompt-Labels** für status/epistemic sind render-seitig vereinheitlicht.
+- **`isInjectedContextText`** erkennt `BEGIN_OPENCLAW_INTERNAL_CONTEXT`,
+  `[Subagent Context]` und `[Inter-session message]` nur als Zeilen-Header.
+- **Conflict-Apply** geht bei Confirm durch `safeUpdate` inkl. Drift-Gate.
+- **Derived records** tragen `visibility` (append-Choke + Pattern/Dream-Writer).
+  Reader filtern per Requester; rem-dream übergibt ihn an `readPatterns`.
+  Legacy ohne Stamp: nur Own-Agent.
+
+### Hinzugefügt
+
+- **Globales Inject-Budget** (`recall.globalInjectMaxChars`, Default 17000)
+  kürzt Memories vor Zeit/Reminder.
+- **Curation resolve** `keep|drop` beendet neo-`conflict` ohne Hard-Filter.
+- **`/plur1bus curation drop-injected`** demoted nur injizierte Behavior-`conflict`s
+  nach Preview+Nonce; echte Konflikte bleiben.
+- **`PLUR1BUS_SKIP_HOST_PATCH=1`** überspringt den Host-Patch. Die Variable galt
+  bisher nur in `setup-feature-crons.mjs`; `install-memory-system.sh` wendete die
+  Patches in Schritt 9 trotzdem an. Beide Pfade respektieren sie jetzt, die
+  Installation läuft ohne Host-Patch vollständig durch (Warnung + Nachhol-Hinweis
+  statt Abbruch).
+
+## [7.3.5] — 2026-08-16
+
+### Behoben
+
+- **rem-dream findet wieder Muster.** `buildSparseNeighborGraph` verglich
+  `distanceToScore(neighbor._distance)` — also `1/(1+d)` — gegen `minSimilarity = 0.82`.
+  Das ist keine Kosinus-Ähnlichkeit, sondern eine monotone Umformung der Index-Distanz.
+  Live gemessen: eine Zeile mit **echtem Kosinus 1,0000** liefert `_distance = 0.6715` und
+  damit Score 0,598 — selbst ein identischer Vektor blieb unter der Schwelle, es entstanden
+  null Kanten, null Cluster, null Muster. Die Ähnlichkeit wird jetzt aus den ohnehin
+  vorliegenden Vektoren echt gerechnet; der Index bleibt für die Vorauswahl der `topK`
+  Nachbarn zuständig. Dass zwei Skalen gemischt waren, zeigte dieselbe Datei:
+  `validateClusters` rechnete längst mit echtem Kosinus (`centroidMinSimilarity = 0.74`).
+- **Feature-Crons kollidieren auf einer frischen Mehr-Agenten-Installation nicht mehr.**
+  Nur `persona-evolve` und `consolidate-daily` waren versetzt; `skill-miner`, `rem-dream`
+  und `discover-semantic-links` legten alle Agenten auf dieselbe Minute. Live bestätigt:
+  die drei skill-miner-Jobs brachen am 16.08. um 03:05 **alle innerhalb einer Sekunde** mit
+  `cron: isolated agent run stalled before execution start` ab — der 60-Sekunden-Watchdog,
+  weil gleichzeitige isolierte Läufe um Lanes konkurrieren. Ein Test prüft die Bedingung
+  jetzt für **alle** Specs, nicht für einzelne.
+- **Der GC wird genau einmal geplant**, unabhängig von der Agentenzahl. `runGcJob` iteriert
+  selbst über alle Agent-Datenbanken; ein Job je Agent hätte denselben Bestand mehrfach
+  durchgearbeitet, gleichzeitig, zur selben Minute.
+
 ## [Hermes 7.3.4 / 7.3.4-hermes] — 2026-08-15
 
 ### Changed
@@ -75,6 +148,65 @@ general OpenClaw `latest` channel is unchanged.
   under Hermes' ownership. Jina remains an explicit, CC-BY-NC-4.0-gated option
   for new stores; it is activated only after a successful download and smoke
   check, otherwise local E5/BGE remains active.
+
+## [7.3.4] — 2026-08-15
+
+### Behoben
+
+- **`importance = 1.0` wirkt wieder.** Der Wert ist dem Agenten vorbehalten: er markiert
+  damit im Gespräch eine Erinnerung, die er subjektiv nicht vergessen will. Die Geste kam
+  bis hierher in der Datenbank an und wurde ignoriert — `computeCoreMemoryScore` verlangte
+  zusätzlich `emotionalIntensity >= 0.95`, und diesen Wert kann der Agent gar nicht setzen;
+  er stammt aus der automatischen Tonanalyse des Textes. Eine ruhig formulierte
+  Sicherheitsnotiz, genau der gemeinte Fall, hat emotionale Intensität 0. Live betroffen:
+  zwei medizinische Sicherheitsnotizen, beide ungeschützt.
+- **Core-Memory war rechnerisch unerreichbar.** `novelty` und `userCorrection` wurden in
+  beide Scores eingerechnet, existieren aber als Spalten nicht und wurden über die gesamte
+  Historie nie geschrieben. Sie trugen 10 % des Core- und 30 % des Flashbulb-Scores: Core
+  lag damit bei maximal 0,90 gegen Schwelle 0,95, Flashbulb feuerte nur im singulären Punkt
+  `1.0/1.0`. Die Gewichte sind auf die tatsächlich vorhandenen Merkmale normiert. Dieser
+  Befund war als M1-03 seit dem 16.06.2026 dokumentiert und nie umgesetzt.
+- Die Beschreibung des `importance`-Parameters nennt den Vertrag jetzt ausdrücklich. Vorher
+  stand dort nur „Importance 0-1 (default 0.5)" — der Agent konnte von der Reservierung
+  nichts wissen.
+
+### Hinzugefügt
+
+- `scripts/backfill-manual-core-markers.mjs` rüstet den Schutz für bereits gespeicherte
+  `importance = 1.0`-Erinnerungen nach. `applyDynamicsDefaults` kodiert nur bei neuen
+  Einträgen, ältere Markierungen blieben deshalb wirkungslos. Dry-Run als Standard.
+
+## [7.3.3] — 2026-08-15
+
+### Behoben
+
+- Der Garbage Collector ist überhaupt erst auslösbar. `gc-run` stand als einziger
+  interner Job in keiner einzigen Cron-Deklaration — weder im Installer noch live —
+  und lief deshalb nie von selbst. Er ist jetzt als achter Feature-Cron aufgenommen
+  (täglich 04:45 Europe/Berlin, nach `consolidate-daily`, das seine Kandidaten erzeugt).
+  Ein Lauf genügt: `runGcJob` iteriert selbst über alle Agent-Datenbanken.
+- Die GC-Policy ist konfigurierbar. `runGcJob` liest `maxDbSizeMb`, `maxMemoryCount` und
+  `minMemoryStrength` und meldet ohne mindestens einen davon `no_policy` — das Manifest-Schema
+  kannte aber nur `enabled` und ist `additionalProperties: false`. Die Policy war damit
+  unerreichbar, der GC konnte strukturell nie etwas archivieren. Alle drei Felder sind jetzt
+  im Schema deklariert, mit Unter- bzw. Obergrenzen.
+- Der GC-Cron wird nur provisioniert, wenn `gc` ausdrücklich eingeschaltet ist — ohne Policy
+  entstünde sonst genau der Leerlauf-Job, den diese Serie beseitigt hat.
+
+## [7.3.2] — 2026-08-15
+
+### Behoben
+
+- Der Klassifizierer schreibt seinen Default-Typ wieder durabel. `fakt` ist der vom
+  Prompt vorgeschriebene Rückfallwert und wird in `critical-classifier.js` ausdrücklich
+  vor der Deklassierung zu `note` geschützt — er fehlte aber im Enum von `safeType`,
+  wodurch `updateCardType` jede nicht-kritische Klassifikation mit
+  `Invalid type: "fakt"` abwies. Live gemessen auf main (15.08., erster Lauf unter
+  7.3.0): `processed: 5, classified: 0, errors: 5`, und der Cron meldete alle drei
+  Stunden Fehlschlag. Der Defekt lag seit dem 28.05.2026 schlafend, weil
+  `findRecentUnclassified` nie etwas lieferte; der Sentinel-Fix aus 7.3.0 hat ihn
+  freigelegt, nicht verursacht.
+
 ## [7.3.1] — 2026-08-15
 
 - Critical Reviews wählen `type`, `confirmed`, `age` und Pagination korrekt aus.

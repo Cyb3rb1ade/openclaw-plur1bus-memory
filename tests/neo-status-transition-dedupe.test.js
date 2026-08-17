@@ -65,7 +65,7 @@ describe("Neo-Status-Transition — die veraltete Kopie darf nicht gewinnen", ()
     const demoted = scoreNeoRecallItem(makeRecord({ status: "demoted" }), QUERY);
 
     assert.ok(active > LIVE_MIN_SCORE, `active (${active}) sollte über minScore liegen`);
-    assert.ok(demoted < active, `demoted (${demoted}) muss schlechter sein als active (${active})`);
+    assert.equal(demoted, -Infinity);
   });
 
   it("der Store behält beide Revisionen — das ist gewollt (Event-Log)", () => {

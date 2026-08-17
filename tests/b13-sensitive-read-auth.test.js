@@ -89,6 +89,7 @@ const ACTION_FIXTURES = [
   ["destructive", "critical accept 9a018"], ["destructive", "critical reject 9a018"], ["destructive", "critical edit 9a018"],
   ["destructive", "temperament calm"], ["destructive", "persona regenerate"], ["destructive", "persona accept"],
   ["destructive", "skills approve proposal-id"], ["destructive", "skills reject proposal-id"],
+  ["destructive", "curation resolve record-id keep"], ["destructive", "curation apply-conflict record-id"], ["destructive", "curation drop-injected"], ["destructive", "curation confirm 00000000-0000-4000-8000-000000000001"],
   ["destructive", "reminder cancel reminder-id"], ["destructive", "reminders delete reminder-id"],
   ["destructive", "memory promote record-id"], ["destructive", "memory demote record-id"], ["destructive", "memory prune record-id"], ["destructive", "memory tombstone record-id"], ["destructive", "memory disable-overlay record-id"], ["destructive", "memory supersede-overlay record-id"],
   ["destructive", "behavior promote record-id"], ["destructive", "behavior demote record-id"], ["destructive", "behavior prune record-id"], ["destructive", "neo workspaces migrate"],

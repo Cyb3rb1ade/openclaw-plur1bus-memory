@@ -88,13 +88,11 @@ describe("skill-miner loadMemories — Deckel darf nicht die Auswahl treffen", (
     assert.equal(memories.length, 3, "nur die drei frischen Zeilen liegen im 30-Tage-Fenster");
   });
 
-  it("hält das Epistemic-Gate aus #109 unverändert scharf", async (t) => {
-    // Der Pushdown darf die Trust-Grenze nicht aufweichen: dieselbe Tabelle,
-    // aber alle Zeilen nur `observed` statt `trusted`.
-    const { table } = await driftTable(tempDir(t), { alt: 8, frisch: 3, epistemicStatus: "observed" });
+  it("hält das Epistemic-Gate für untrusted unverändert scharf", async (t) => {
+    const { table } = await driftTable(tempDir(t), { alt: 8, frisch: 3, epistemicStatus: "untrusted" });
 
     const memories = await loadMemories({ table }, 30, { scanLimit: 5000 });
 
-    assert.equal(memories.length, 0, "unreviewte Evidenz bleibt draußen");
+    assert.equal(memories.length, 0, "explizit untrusted bleibt draußen");
   });
 });

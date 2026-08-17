@@ -6,7 +6,9 @@ import test from "node:test";
 
 import { buildEdgesForSession, createEdge } from "../lib/memory-graph.js";
 import { runConversationReactivationRecall } from "../lib/conversation-reactivation-recall.js";
-import { buildRemPartition, runRemDream } from "../lib/dreaming/rem-dream.js";
+import { buildRemPartition, getPreviousWeekWindow, runRemDream } from "../lib/dreaming/rem-dream.js";
+
+const FROZEN_REM_NOW = new Date("2026-08-10T12:00:00.000Z");
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
 
@@ -30,8 +32,8 @@ function workspaceRow(id, text, overrides = {}) {
     text,
     summary: text,
     vector: [1, 0],
-    createdAt: Date.now() - 10 * 24 * 60 * 60 * 1000,
-    sourceTimestamp: Date.now() - 10 * 24 * 60 * 60 * 1000,
+    createdAt: getPreviousWeekWindow(FROZEN_REM_NOW).startMs + 36 * 60 * 60 * 1000,
+    sourceTimestamp: getPreviousWeekWindow(FROZEN_REM_NOW).startMs + 36 * 60 * 60 * 1000,
     status: "active",
     epistemicStatus: "trusted",
     scope: "workspace",
@@ -168,7 +170,7 @@ async function seedRuntimeMemories(pluginModule, baseDbPath, workspaceDir) {
     accountId: "default",
   });
   const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
-  const createdAt = Date.now() - 10 * 24 * 60 * 60 * 1000;
+  const createdAt = getPreviousWeekWindow().startMs + 36 * 60 * 60 * 1000;
   const rows = [];
   for (const scope of ["agent-private", "user", "workspace"]) {
     const ownership = scope === "agent-private"
@@ -396,6 +398,7 @@ test("REM provider callback receives only the exact workspace partition", async 
       requestContext: REQUEST_CONTEXT,
       aclPartition: partition,
       force: true,
+      now: FROZEN_REM_NOW,
     });
     assert.ok(result.report);
     assert.ok(seen.length > 0);
