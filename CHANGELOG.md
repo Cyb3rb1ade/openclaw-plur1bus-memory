@@ -29,6 +29,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **Globales Inject-Budget** (`recall.globalInjectMaxChars`, Default 17000)
   kürzt Memories vor Zeit/Reminder.
 - **Curation resolve** `keep|drop` beendet neo-`conflict` ohne Hard-Filter.
+- **`/plur1bus curation drop-injected`** demoted nur injizierte Behavior-`conflict`s
+  nach Preview+Nonce; echte Konflikte bleiben.
 - **Conflict-Apply** geht bei Confirm durch `safeUpdate` inkl. Drift-Gate.
 - **Derived records** tragen `visibility` (append-Choke + Pattern/Dream-Writer).
   Reader filtern per Requester; rem-dream übergibt ihn an `readPatterns`.
