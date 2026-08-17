@@ -160,6 +160,24 @@ describe("isInjectedContextText — System-Rauschen", () => {
     }
   });
 
+  it("erkennt strukturierte Runtime-Header am Zeilenanfang", () => {
+    assert.equal(isInjectedContextText("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>> OpenClaw runtime context"), true);
+    assert.equal(isInjectedContextText("[Subagent Context] You are running as a subagent (depth 1/2)."), true);
+    assert.equal(isInjectedContextText("[Inter-session message] sourceSession=agent:faxpert:subagent:x"), true);
+    assert.equal(isInjectedContextText("[Tue 2026-06-02 09:15 GMT+2] [Subagent Context] You are running as a subagent"), true);
+  });
+
+  it("laesst bloße Erwähnungen und echte User-Sätze stehen", () => {
+    for (const text of [
+      "Bernd erwähnte BEGIN_OPENCLAW_INTERNAL_CONTEXT in der Doku.",
+      "Kannst du erklären, was [Subagent Context] bedeutet?",
+      "Ich habe gestern ein [Inter-session message] im Chat gesehen.",
+      "User prefers short answers in the morning.",
+    ]) {
+      assert.equal(isInjectedContextText(text), false, text);
+    }
+  });
+
   it("erfasst diese Turns folglich gar nicht erst", () => {
     const turns = turnEventsFromMessages([
       { role: "user", content: "[OpenClaw heartbeat poll]", timestamp: Date.parse("2026-08-03T10:00:00Z") },
