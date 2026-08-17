@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeProposal, readProposals } from "../lib/jobs/skill-miner/proposal-writer.js";
+import { writeProposal, readProposals, patchProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
 import { activateSkillProposal, rejectSkillProposal } from "../lib/telegram-commands/skill-commands.js";
 
 function workspace() {
@@ -84,6 +84,39 @@ describe("skill approve activation", () => {
     }));
     assert.equal(applied, 0);
     assert.equal(readProposals(dir)[0].status, "pending_review");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("persists the intended transition before apply so retry cannot double-step", async () => {
+    const dir = workspace();
+    seedProposal(dir);
+    const records = {
+      "mem-empty": { id: "mem-empty", epistemicStatus: "observed", scope: "agent-private", agentId: "agent-1" },
+      "mem-obs": { id: "mem-obs", epistemicStatus: "corroborated", scope: "agent-private", agentId: "agent-1" },
+      "mem-bad": { id: "mem-bad", epistemicStatus: "invalidated", scope: "agent-private", agentId: "agent-1" },
+    };
+    patchProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      status: "activation_partial",
+      activation: {
+        skillPath: join(dir, "skills", "weekly-deploy", "SKILL.md"),
+        evidence: {
+          "mem-empty": { ok: false, reason: "pending", from: "", to: "observed" },
+        },
+      },
+    });
+    mkdirSync(join(dir, "skills", "weekly-deploy"), { recursive: true });
+    writeFileSync(join(dir, "skills", "weekly-deploy", "SKILL.md"), "# already written\n");
+    let applied = [];
+    const again = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      loadEvidenceRecord: async (id) => records[id],
+      applyEpistemicStatus: async (id, next) => {
+        applied.push([id, next]);
+        return { ok: true };
+      },
+    });
+    assert.equal(again.partial, false);
+    assert.deepEqual(applied, []);
+    assert.equal(records["mem-empty"].epistemicStatus, "observed");
     rmSync(dir, { recursive: true, force: true });
   });
 

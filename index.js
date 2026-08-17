@@ -168,7 +168,7 @@ import {
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
 import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "./lib/epistemic-capture.js";
-import { ensureEpistemicCutoff } from "./lib/epistemic-cutoff.js";
+import { ensureEpistemicCutoff, readEpistemicCutoff } from "./lib/epistemic-cutoff.js";
 import { assertCardWriteAllowed, isContentChangingUpdate, splitAgentDbPath } from "./lib/tombstone-write-guard.js";
 import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
@@ -1691,6 +1691,13 @@ class MemoryDB {
       entry.epistemicStatus = coerceNewWriteEpistemicStatus(entry.epistemicStatus);
     }
     const { baseDbPath, agentId } = splitAgentDbPath(this.dbPath);
+    const cutoffState = readEpistemicCutoff(baseDbPath);
+    if (
+      (cutoffState.reason === "cutoff_missing_after_upgrade" || cutoffState.reason === "cutoff_read_error")
+      && entry.epistemicStatus === "observed"
+    ) {
+      entry.epistemicStatus = "untrusted";
+    }
     const guard = assertCardWriteAllowed({
       baseDbPath,
       agentId: entry.agentId || entry.storedBy || agentId,
@@ -5579,7 +5586,7 @@ const plugin = {
 
         // 3. Normal store
         const summary = generateSummary(params.text, summaryMaxWords);
-        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin }) }, Date.now(), halfLifeOverrides);
+        const entry = applyDynamicsDefaults({ id: randomUUID(), text: params.text, summary, origin, vector, importance, category, createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields, sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope, validFrom: capturedValidFrom, validUntil: capturedValidUntil, epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }) }, Date.now(), halfLifeOverrides);
         await storeDb.store(entry);
         if (riCfg.enabled) {
           setImmediate(() => {
@@ -8291,6 +8298,7 @@ const plugin = {
                     text: p.text,
                     sourceMessageRole: p.it.role || "",
                     origin: captureOrigin,
+                    cutoffFailed: !epistemicCutoffBoot.ok,
                   }),
                   sourceTimestamp: captureTimestamp,
                   sourceUrl: p.it.sourceUrl || "",
@@ -9171,7 +9179,7 @@ const plugin = {
                 id: randomUUID(), text: params.text, summary, origin, vector, importance, category,
                 createdAt: Date.now(), mergedFrom: "[]", expiresAt, ...ownershipFields,
                 sourceTurnId: "", sourceMessageRole: "", sourceTimestamp: Date.now(), sourceUrl, evidenceQuote, scope,
-                epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin }),
+                epistemicStatus: decideEpistemicStatusForCapture({ text: params.text, sourceMessageRole: "", origin, cutoffFailed: !epistemicCutoffBoot.ok }),
                 emotionalValence: serializeEmotionalValence(emotion),
                 emotionalIntensity: emotion.emotionalIntensity,
                 emotionalDominant: emotion.emotionalDominant,
