@@ -55,7 +55,13 @@ FEATURES: tuple[dict[str, str], ...] = (
     {"id": "temporal-query-ranges", "status": "ready", "evidence": "relative day, last-month and quarter ranges filter Lance recall"},
     {"id": "poor-result-query-refinement", "status": "ready", "evidence": "one bounded content-focused second query before global rerank"},
     {"id": "critical-push-budget", "status": "ready", "evidence": "exactly-once classification ledger and persisted per-agent daily max"},
+    {"id": "epistemic-capture", "status": "ready", "evidence": "observed/untrusted capture decision, restore-safe fail-closed cutoff, legacy rows stay unstamped"},
+    {"id": "inject-budget", "status": "ready", "evidence": "recall.globalInjectMaxChars default 17000 caps memory context before structural blocks"},
+    {"id": "tombstone-bulk-writers", "status": "ready", "evidence": "migration and workspace-migration reinserts pass the canonical scope-bound tombstone guard"},
+    {"id": "derived-record-visibility", "status": "ready", "evidence": "dream records carry visibility stamps beside physical scope partitions and the own-agent legacy fallback"},
+    {"id": "inject-marker-line-headers", "status": "ready", "evidence": "runtime inject headers recognized only as line headers in capture trust decisions"},
     {"id": "skill-farming", "status": "excluded", "evidence": "explicitly excluded by migration scope"},
+    {"id": "curation-drop-injected", "status": "excluded", "evidence": "no neo-conflict or injected behavior-card surface exists in Hermes; upstream-only contracts"},
 )
 
 

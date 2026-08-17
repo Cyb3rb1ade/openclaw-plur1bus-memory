@@ -50,6 +50,34 @@ class JobInstallTests(unittest.TestCase):
             self.assertTrue(all(Path(item["path"]).is_file() for item in installed))
             self.assertTrue(all(not item["loaded"] for item in installed))
 
+    def test_no_label_or_schedule_collisions_across_many_agents(self):
+        # 7.3.5 parity: agent jobs must never share a label, and same-mode
+        # schedules stay staggered so isolated runs cannot pile onto one minute.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agents = [f"agent-{index}" for index in range(12)]
+            jobs = build_launchd_jobs(
+                root / "data",
+                root / "config.json",
+                agents,
+                python_executable="/python",
+                launch_agents_dir=root / "LaunchAgents",
+            )
+
+            labels = [job["label"] for job in jobs]
+            self.assertEqual(len(labels), len(set(labels)))
+            self.assertEqual(len(jobs), 2 * len(agents))
+            for mode in ("hourly", "daily"):
+                schedules = [
+                    tuple(sorted(job["plist"]["StartCalendarInterval"].items()))
+                    for job in jobs
+                    if job["mode"] == mode
+                ]
+                self.assertEqual(
+                    len(schedules), len(set(schedules)),
+                    f"{mode} schedules collide across agents",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

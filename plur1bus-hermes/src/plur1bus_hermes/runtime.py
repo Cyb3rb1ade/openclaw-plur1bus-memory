@@ -16,6 +16,11 @@ from typing import Any
 
 from .cache import EmbeddingCache
 from .domain import Plur1busDomain
+from .epistemic import (
+    decide_epistemic_status_for_capture,
+    ensure_epistemic_cutoff,
+)
+from .inject_budget import apply_global_inject_budget
 from .llm_cache import LlmResultCache
 from .semantic_input import prepare_semantic_input
 from .namespaces import (
@@ -402,6 +407,10 @@ class Plur1busRuntime:
         )
         self._internal_llm = InternalLlmBackend(config, self.agent_id)
         self._domain.set_llm_backend(self._internal_llm)
+        # Restore-safe epistemic cutoff, created on the first upgrade before
+        # the first write (upstream 7.4.0 contract). A broken cutoff fails
+        # closed: `observed` captures degrade to `untrusted`, never the reverse.
+        self._epistemic_cutoff = ensure_epistemic_cutoff(data_dir)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="plur1bus-capture")
         self._futures: set[Future[None]] = set()
         self._lock = threading.RLock()
@@ -596,7 +605,6 @@ class Plur1busRuntime:
             for row in rows
             if row.get("content")
         )
-        recalled = recalled[:12000]
         overlay = self._domain.recall_overlay(semantic_query, rows)
         explanation = self._domain.explain_recall(rows) if explain else ""
         compression = (
@@ -606,8 +614,27 @@ class Plur1busRuntime:
             if prepared["compressed"]
             else ""
         )
-        return "\n\n".join(
-            part for part in (recalled, overlay, explanation, compression) if part
+        # Global inject budget (upstream 7.4.0 `recall.globalInjectMaxChars`,
+        # default 17000): the memory context yields before any downstream
+        # structural block; the compression marker is non-droppable, and block
+        # order plus priority are preserved. Time/reminder blocks never travel
+        # through this string in Hermes, so nothing downstream can be eaten.
+        recall_config = self.config.get("recall")
+        max_chars = (
+            recall_config.get("globalInjectMaxChars")
+            if isinstance(recall_config, dict)
+            else None
+        )
+        if max_chars is None:
+            max_chars = 17_000
+        return apply_global_inject_budget(
+            blocks=[
+                {"name": "memories", "text": recalled, "droppable": True},
+                {"name": "overlay", "text": overlay, "droppable": True},
+                {"name": "explanation", "text": explanation, "droppable": True},
+                {"name": "compression", "text": compression, "droppable": False},
+            ],
+            max_chars=max_chars,
         )
 
     def remember_async(self, text: str, session_id: str, source_role: str = "user") -> None:
@@ -920,15 +947,40 @@ class Plur1busRuntime:
             "sourceRole": source_role,
             "createdAt": _utcnow(),
             "vector": vector,
+            # Explicit trust state (upstream 7.4.0): genuine user captures start
+            # as `observed`; every other new write is explicitly `untrusted`.
+            # A broken cutoff downgrades to `untrusted` — never the reverse.
+            "epistemicStatus": decide_epistemic_status_for_capture(
+                text=content,
+                source_message_role=source_role,
+                cutoff_failed=not self._epistemic_cutoff["ok"],
+            ),
         }
         table, inserted = self._table(create=True, first_record=record)
         if table is not None and not inserted:
+            self._ensure_epistemic_column(table)
             table.add([record])
         if table is not None:
             if importance is None:
                 self._domain.on_memory(record, table)
             else:
                 self._domain.on_memory(record, table, importance=importance)
+
+    @staticmethod
+    def _ensure_epistemic_column(table: Any) -> None:
+        """Ensure pre-7.4.0 memory tables can persist the explicit trust state."""
+        # lancedb exposes `schema` as a property on real tables and as a method
+        # on some fakes; accept both, prefer pyarrow's flat `names` when present.
+        schema_attr = getattr(table, "schema", None)
+        schema = schema_attr() if callable(schema_attr) else schema_attr
+        names = set(getattr(schema, "names", ()) or ()) | {
+            str(getattr(field, "name", "")) for field in getattr(schema, "fields", ()) or ()
+        }
+        if "epistemicStatus" not in names:
+            add_columns = getattr(table, "add_columns", None)
+            if not callable(add_columns):
+                raise RuntimeError("epistemic status column unavailable")
+            add_columns({"epistemicStatus": "''"})
 
     def _table(self, create: bool, first_record: dict[str, Any] | None = None):
         try:

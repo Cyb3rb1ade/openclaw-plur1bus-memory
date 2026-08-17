@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Fixture: an optional sidecar installer that always fails, to prove the main
+# Hermes plugin installer still reaches activation (7.4.0 contract).
+set -euo pipefail
+printf 'failing-sidecar:%s\n' "$*" >> "${MTPLX_TEST_RECORD:?MTPLX_TEST_RECORD is required}"
+exit 1

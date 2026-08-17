@@ -63,4 +63,19 @@ resolved_args_home="$(cd -P "$args_case/hermes" && pwd)"
 grep -Fqx "hermes:--hermes-home $resolved_args_home --no-agent --no-smoke" "$args_case/record" || \
   fail 'retrieval arguments were not forwarded unchanged'
 
+# A failing optional sidecar must degrade to a warning and must never skip the
+# main plugin activation (7.4.0 contract).
+rm "$scratch/repo/scripts/install-mtplx-embed.sh"
+ln -s "$fixtures/failing-sidecar" "$scratch/repo/scripts/install-mtplx-embed.sh"
+sidecar_case="$scratch/sidecar-fails"
+run_plugin_installer sidecar-fails > "$sidecar_case.output" 2>&1 || \
+  fail 'a failing sidecar aborted the main plugin installer'
+resolved_sidecar_home="$(cd -P "$sidecar_case/hermes" && pwd)"
+grep -Fqx "failing-sidecar:--hermes-home $resolved_sidecar_home" "$sidecar_case/record" || \
+  fail 'failing sidecar was not invoked'
+grep -Fqx 'hermes:config set memory.provider plur1bus' "$sidecar_case/record" || \
+  fail 'failing sidecar skipped the main plugin activation'
+grep -Fq 'optional retrieval sidecar failed' "$sidecar_case.output" || \
+  fail 'sidecar failure did not surface as a warning'
+
 printf 'Hermes plugin installer Bash 3.2 regression passed\n'

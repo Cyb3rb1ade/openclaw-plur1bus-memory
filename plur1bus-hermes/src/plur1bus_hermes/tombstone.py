@@ -555,6 +555,47 @@ def find_tombstone_by_fingerprint(base_dir: Path, agent_id: str, fingerprint: st
     return matches[-1] if matches else None
 
 
+def partition_cards_by_tombstone_guard(
+    base_dir: Path,
+    agent_id: str,
+    cards: list[dict[str, Any]],
+    *,
+    scope: str,
+    workspace_identity: str = "",
+    owner_user_id: str = "",
+    platform: str = "",
+    chat: str = "",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partition bulk-write cards into ``(allowed, blocked)`` via the canonical
+    capture guard.
+
+    Bulk writers (migration, workspace migration) must apply the same
+    tombstone/fingerprint contract as a live capture before any ``table.add``:
+    a forgotten text bound to the same agent and target scope is never
+    revived. The scope binding is exact — foreign-scope tombstones neither
+    block nor are ignored; they simply do not match, mirroring
+    ``tombstone_blocks_capture``.
+    """
+    allowed: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    for card in cards:
+        blocking = find_blocking_tombstone_for_capture(base_dir, {
+            "agentId": agent_id,
+            "text": str(card.get("content") or card.get("text") or ""),
+            "scope": scope,
+            "workspaceIdentity": workspace_identity,
+            "userPrincipal": owner_user_id,
+            "platform": platform,
+            "chat": chat,
+        })
+        if blocking is not None:
+            blocked.append(card)
+        else:
+            allowed.append(card)
+    return allowed, blocked
+
+
+
 def find_blocking_tombstone_for_capture(base_dir: Path, opts: dict[str, Any]) -> dict[str, Any] | None:
     text = str(opts.get("text") or "")
     if not text:

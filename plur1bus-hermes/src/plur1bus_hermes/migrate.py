@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .tombstone import partition_cards_by_tombstone_guard
 from .validation import ValidationError, safe_agent_id
 from .validation import safe_memory_id, safe_status, safe_type
 
@@ -98,7 +99,7 @@ def _card_from_legacy(row: dict[str, Any], target_agent: str) -> dict[str, Any]:
         memory_type = safe_type(memory_type)
     except ValidationError:
         memory_type = "observation"
-    return {
+    card = {
         "id": card_id,
         "agentId": target_agent,
         "scopeKey": _migration_scope_key(),
@@ -110,6 +111,12 @@ def _card_from_legacy(row: dict[str, Any], target_agent: str) -> dict[str, Any]:
         "createdAt": str(row.get("createdAt", row.get("created_at", _utcnow()))),
         "vector": vector,
     }
+    # Legacy rows keep an explicitly stored trust state; nothing invents one
+    # for rows that never carried it ("" stays legacy, upstream 7.4.0).
+    source_epistemic = str(row.get("epistemicStatus") or "").strip()
+    if source_epistemic:
+        card["epistemicStatus"] = source_epistemic
+    return card
 
 
 def _copy_agent_cards(snapshot: Path, target: Path, source_agent: str, target_agent: str) -> dict[str, Any]:
@@ -125,6 +132,12 @@ def _copy_agent_cards(snapshot: Path, target: Path, source_agent: str, target_ag
         raise RuntimeError(f"legacy memories table is unreadable for {source_agent}") from error
     rows = source_table.to_arrow().to_pylist()
     cards = [_card_from_legacy(dict(row), target_agent) for row in rows]
+    # Canonical reinsert guard (upstream 7.4.0): a forgotten text bound to the
+    # migration target scope is never revived by a bulk copy. Blocked cards are
+    # skipped and counted honestly instead of failing the whole migration.
+    cards, blocked_cards = partition_cards_by_tombstone_guard(
+        target, target_agent, cards, scope="workspace", workspace_identity="default",
+    )
     target_dir = target / "lancedb" / target_agent
     if target_dir.exists():
         raise RuntimeError(f"target agent directory already exists: {target_dir}")
@@ -132,7 +145,12 @@ def _copy_agent_cards(snapshot: Path, target: Path, source_agent: str, target_ag
     target_db = lancedb.connect(str(target_dir))
     if cards:
         target_db.create_table("memories", data=cards)
-    return {"sourceAgent": source_agent, "targetAgent": target_agent, "cardsCopied": len(cards)}
+    return {
+        "sourceAgent": source_agent,
+        "targetAgent": target_agent,
+        "cardsCopied": len(cards),
+        "cardsTombstoneBlocked": len(blocked_cards),
+    }
 
 
 def _copy_snapshot_assets(snapshot: Path, staging: Path) -> dict[str, Any]:

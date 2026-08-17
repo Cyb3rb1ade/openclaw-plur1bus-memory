@@ -1016,6 +1016,16 @@ class Plur1busDomain:
             acl_bindings=selector.acl_bindings,
             scope_key=selector.scope_key,
         )
+        # Derived-record visibility stamp (upstream 7.4.0): every new dream
+        # record carries an unambiguous scope/owner binding next to its
+        # physical scope partition and aclBindings. Readers stay bound to
+        # their own selector scope; unstamped legacy rows remain own-agent only.
+        dream["visibility"] = {
+            "scope": selector.scope_type,
+            "agentId": self.agent_id,
+            "workspaceIdentity": str(selector.acl_bindings.get("workspaceIdentity") or ""),
+            "ownerUserId": str(selector.acl_bindings.get("userId") or ""),
+        }
         dream.update({
             "selected": page["selected"],
             "planned": 1 if rows else 0,

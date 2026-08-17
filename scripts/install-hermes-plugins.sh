@@ -75,12 +75,16 @@ if [[ "$install_deps" == "1" ]]; then
 fi
 
 if [[ "$install_retrieval" == "1" ]]; then
+  # The retrieval sidecar is optional: its failure must never skip the main
+  # plugin activation below. Degrade to a warning; local E5/BGE stays active.
   if [[ "${#retrieval_args[@]}" -gt 0 ]]; then
     HERMES_HOME="$hermes_home" HERMES_PYTHON="$hermes_python" \
-      "$repo_dir/scripts/install-mtplx-embed.sh" --hermes-home "$hermes_home" "${retrieval_args[@]}"
+      "$repo_dir/scripts/install-mtplx-embed.sh" --hermes-home "$hermes_home" "${retrieval_args[@]}" || \
+      printf 'Warning: optional retrieval sidecar failed; continuing without it (local E5/BGE remains active).\n' >&2
   else
     HERMES_HOME="$hermes_home" HERMES_PYTHON="$hermes_python" \
-      "$repo_dir/scripts/install-mtplx-embed.sh" --hermes-home "$hermes_home"
+      "$repo_dir/scripts/install-mtplx-embed.sh" --hermes-home "$hermes_home" || \
+      printf 'Warning: optional retrieval sidecar failed; continuing without it (local E5/BGE remains active).\n' >&2
   fi
 fi
 

@@ -27,6 +27,7 @@ from .migrate import (
 from .legacy_assets import normalize_legacy_status, stage_card_metadata, stage_complete_assets
 from .reembed import _read_json
 from .runtime import EmbeddingBackend
+from .tombstone import partition_cards_by_tombstone_guard
 from .validation import ValidationError, safe_agent_id, safe_memory_id, safe_status, safe_type
 
 
@@ -119,7 +120,7 @@ def _workspace_card(
         memory_type = safe_type(memory_type)
     except ValidationError:
         memory_type = "observation"
-    return {
+    card = {
         "id": card_id,
         "agentId": agent_id,
         "scopeKey": _migration_scope_key(),
@@ -131,6 +132,12 @@ def _workspace_card(
         "createdAt": str(row.get("createdAt", row.get("created_at", _utcnow()))),
         "vector": vector,
     }
+    # Legacy rows keep an explicitly stored trust state; nothing invents one
+    # for rows that never carried it ("" stays legacy, upstream 7.4.0).
+    source_epistemic = str(row.get("epistemicStatus") or "").strip()
+    if source_epistemic:
+        card["epistemicStatus"] = source_epistemic
+    return card
 
 
 def _legacy_rows(snapshot: Path, source_agent: str) -> list[dict[str, Any]]:
@@ -276,6 +283,30 @@ def _stage_agents(
             agent_dir.mkdir(parents=True, exist_ok=False)
         metadata_count = stage_card_metadata(agent_dir, source_agent, target_agent, rows, id_map)
         pending_rows, contents = _pending_resume_rows(rows, existing_rows, source_agent)
+        # Canonical reinsert guard (upstream 7.4.0): forgotten text bound to
+        # the migration target scope is never revived by a bulk re-embed.
+        # Blocked rows are skipped before embedding and counted honestly.
+        allowed_rows, blocked_rows = partition_cards_by_tombstone_guard(
+            staging, target_agent,
+            [{"content": content} for content in contents],
+            scope="workspace", workspace_identity="default",
+        )
+        if blocked_rows:
+            blocked_contents = {str(card["content"]) for card in blocked_rows}
+            kept = [
+                (row, content)
+                for row, content in zip(pending_rows, contents, strict=True)
+                if content not in blocked_contents
+            ]
+            pending_rows = [row for row, _ in kept]
+            contents = [content for _, content in kept]
+            _append_event(
+                log_file,
+                "tombstone_blocked",
+                sourceAgent=source_agent,
+                targetAgent=target_agent,
+                blockedCards=len(blocked_rows),
+            )
         completed_rows = len(existing_rows)
         _append_event(
             log_file,
@@ -310,8 +341,9 @@ def _stage_agents(
         copied.append({
             "sourceAgent": source_agent,
             "targetAgent": target_agent,
-            "cardsReembedded": len(rows),
-            "cardsResumed": len(rows) - len(pending_rows),
+            "cardsReembedded": len(rows) - len(blocked_rows),
+            "cardsResumed": len(rows) - len(pending_rows) - len(blocked_rows),
+            "cardsTombstoneBlocked": len(blocked_rows),
             "metadataPreserved": metadata_count,
         })
         _write_resume_progress(staging, {
