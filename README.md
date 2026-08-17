@@ -2,13 +2,62 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.2.0 — safer OpenClaw updates**
+**PLUR1BUS 7.4.0 — evidence the agent can stand behind**
 
-Current version: **7.2.0** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.2.0`. See the [changelog](CHANGELOG.md) for the full history.
+Current version: **7.4.0** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.4.0`. See the [changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.4.0 — evidence the agent can stand behind
+
+- **An epistemic status every write earns.** New user captures are recorded as
+  `observed`, every other new write as explicit `untrusted`; nothing invents
+  `trusted` any more. The skill miner clusters `observed | corroborated | trusted`
+  plus valid pre-cutoff legacy rows and no longer applies a 30-day lookback, so
+  an existing install keeps mining its history instead of reporting `scanned: 0`.
+  The cutoff marker is written once, at the first upgrade, before the first write.
+- **Skill approval survives a crash.** `SKILL.md` is written first (tmp + fsync +
+  rename), then the evidence transitions; a partial failure stays
+  `activation_partial` and can be re-applied idempotently.
+- **Forgotten stays forgotten.** Every reachable card re-insert — store, content
+  update, `updateCard`, compaction, auto-capture, light-dream rewrite — checks the
+  tombstone registry before `table.add`. Same-text replay by the user is still
+  allowed.
+- **A global inject budget** (`recall.globalInjectMaxChars`, default 17000) trims
+  memories before time and reminder context, so a large recall can no longer
+  crowd the rest of the prompt out.
+- **Two new curation commands.** `/plur1bus curation resolve <keep|drop>` ends a
+  neo `conflict` without any hard filter, and `/plur1bus curation drop-injected`
+  demotes only *injected* behaviour conflicts after a preview and a nonce —
+  genuine conflicts are never touched.
+- **Derived records carry visibility.** Pattern and dream writers stamp scope;
+  readers filter by requester. Legacy records without a stamp stay own-agent only.
+- **The host patch is optional.** `PLUR1BUS_SKIP_HOST_PATCH=1` is honoured by both
+  `scripts/setup-feature-crons.mjs` and `scripts/install-memory-system.sh`; the
+  install completes without writing into the OpenClaw dist tree.
+
+### New in v7.3.x — memory dynamics that actually fire
+
+Condensed summary of 7.3.0–7.3.5; see the [changelog](CHANGELOG.md) for detail.
+
+- **Valid-time and trust state** (7.3.0) — memories carry temporal validity, and
+  epistemic trust became a first-class field alongside a batch of audit fixes.
+- **Security and scope hardening** (7.3.1) — bound episode-graph endpoints,
+  ownership-partitioned compaction, fail-closed skill scans.
+- **The classifier stopped rejecting its own default** (7.3.2) — `fakt` was
+  missing from the type enum, so every classification run failed validation.
+- **GC got a trigger and a policy** (7.3.3) — an eighth feature cron at 04:45 plus
+  a configurable `maxMemoryCount`; before this, garbage collection had no
+  scheduler at all.
+- **`importance = 1.0` works again** (7.3.4) — the value is the agent's reserved
+  manual core marker; it was silently ignored because the core score also demanded
+  an emotional intensity the agent cannot set. Core scores are now normalised to
+  the features that actually exist.
+- **REM dreaming finds patterns again** (7.3.5) — similarity was compared on two
+  different scales, so even an identical vector fell below the threshold: zero
+  edges, zero clusters, ever. Feature crons are also staggered per agent now.
 
 ### New in v7.2.0 — safer OpenClaw updates
 
@@ -261,23 +310,24 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 
 ### Afterthoughts (delayed follow-ups)
 
-When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 30 minutes, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command itself returns either the composed text or OpenClaw's `NO_REPLY` suppression token. The shipped host patch is applied or verified during gateway registration and again before automatic cron provisioning; it finalizes this exact feature command through OpenClaw's normal delivery path before `executeCronRun()`. If the OpenClaw runtime cannot be patched, a registration-time `before_agent_reply` admission guard claims the two exact feature commands, their shipped legacy carrier contracts, and the precise `[PLUR1BUS]` result envelope added by the previous dispatcher with `NO_REPLY` before model resolution. This closes the pre-`gateway_start` race and pauses only those automatic feature runs without spending outer-model tokens. The gateway hook then safety-disables the same known jobs through OpenClaw's in-process cron service, and CLI setup reconciles and retries. Jobs are marked in their names while preserving delivery configuration. Once the boundary is healthy, only marked jobs inside the current bound-agent plan, with a validated delivery and a still-enabled feature, are atomically migrated, renamed, and re-enabled after restart. Other custom prompts, surrounding whitespace, prefixes, and suffixes are never claimed by the admission guard.
+When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 3 hours, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command itself returns either the composed text or OpenClaw's `NO_REPLY` suppression token. The shipped host patch is applied or verified during gateway registration and again before automatic cron provisioning; it finalizes this exact feature command through OpenClaw's normal delivery path before `executeCronRun()`. If the OpenClaw runtime cannot be patched, a registration-time `before_agent_reply` admission guard claims the two exact feature commands, their shipped legacy carrier contracts, and the precise `[PLUR1BUS]` result envelope added by the previous dispatcher with `NO_REPLY` before model resolution. This closes the pre-`gateway_start` race and pauses only those automatic feature runs without spending outer-model tokens. The gateway hook then safety-disables the same known jobs through OpenClaw's in-process cron service, and CLI setup reconciles and retries. Jobs are marked in their names while preserving delivery configuration. Once the boundary is healthy, only marked jobs inside the current bound-agent plan, with a validated delivery and a still-enabled feature, are atomically migrated, renamed, and re-enabled after restart. Other custom prompts, surrounding whitespace, prefixes, and suffixes are never claimed by the admission guard.
 
 Setting this cron up is automatic when its raw feature gates are explicitly enabled — see below.
 
 #### Multi-agent feature-cron automation
 
-`node scripts/setup-feature-crons.mjs` installs or verifies the host dispatcher first. When healthy, it loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to seven jobs per agent. It fails closed without normal cron planning when the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. If the host patch is unavailable, the safety path does not depend on configuration: it reads cron state only to disable active jobs whose raw payload and canonical PLUR1BUS identity exactly match the two direct feature jobs; custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
+`node scripts/setup-feature-crons.mjs` installs or verifies the host dispatcher first. When healthy, it loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to seven jobs per agent plus one install-wide GC job. It fails closed without normal cron planning when the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. If the host patch is unavailable, the safety path does not depend on configuration: it reads cron state only to disable active jobs whose raw payload and canonical PLUR1BUS identity exactly match the two direct feature jobs; custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
 
 The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
 
 - `persona-evolve`: `personaVoice.enabled && skillMiner.enabled`; Sunday 04:15 local time, staggered five minutes per agent; no delivery.
-- `afterthought`: `afterthought.enabled && (skillMiner.enabled || merging.enabled)`; every 30 minutes; exact-command announce delivery with a direct text/`NO_REPLY` result.
-- `consolidate-daily`: `dailyConsolidation.enabled`; daily 03:00 local time; no delivery.
-- `classify-recent`: `criticalPush.enabled`; every 30 minutes; safe announce delivery of approved pushes or `NO_REPLY`.
+- `afterthought`: `afterthought.enabled && (skillMiner.enabled || merging.enabled)`; every 3 hours; exact-command announce delivery with a direct text/`NO_REPLY` result.
+- `consolidate-daily`: `dailyConsolidation.enabled`; daily 04:00 in `Europe/Berlin`; no delivery.
+- `classify-recent`: `criticalPush.enabled`; every 3 hours; safe announce delivery of approved pushes or `NO_REPLY`.
 - `rem-dream`: `merging.enabled`; daily 01:15 in `Europe/Berlin`; no delivery.
 - `skill-miner`: `skillMiner.enabled`; raw Croner-compatible cron/timezone after conservative syntax validation, defaulting to Sunday 03:00 in `Europe/Berlin` (`timezone: null` means local time). Invalid literals, descending ranges (including named month/day ranges), names, modifiers, or literal-step forms are ineligible.
 - `discover-semantic-links`: `obsidianBridge.enabled && obsidianBridge.graphLinks.semanticDiscovery.enabled`; daily 02:00 in `Europe/Berlin`; no delivery.
+- `gc-run`: `gc.enabled`; daily 04:45 in `Europe/Berlin`, after `consolidate-daily` has produced the candidates; no delivery. This one is a **singleton** — `runGcJob` iterates over every agent database itself, so exactly one job is planned regardless of how many agents the install has.
 
 Every job runs with `--agent <agentId> --session isolated`. Provisioning does not set model, fallback, token, auth, API, or other credential overrides, so OpenClaw's default LLM and per-agent credentials remain authoritative. The script remains idempotent and exit-0 for install safety, so it can run from any of these channels:
 
@@ -289,7 +339,7 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 - **Bound-agent rule**: only agents with `bindings > 0` (i.e. an actual chat channel routes to them) get feature crons. Subagents (`bindings === 0` — researchers, deep-divers, and other internal-use-only agents) are deliberately excluded; they have no chat to receive an automatic persona evolution or an afterthought delivery, and running these jobs against them would be pure compute waste.
 - **One agent per workspace**: PLUR1BUS state for these jobs (persona voice, proactive-governor budget, afterthought dedup state, …) is keyed by workspace directory, not agent id. If two bound agents share a workspace, only one gets the crons (tiebreak: `isDefault` first, then most bindings, then alphabetically-first id) to avoid two crons double-firing against the same state files.
-- **Per-agent identity**: all seven canonical names use `plur1bus <feature> <agentId>`. An existing job is owned only by an exact, case-sensitive agent id plus either its exact canonical name or exact first command line; missing or different agents are untouched. Every exact owned duplicate is inspected and reconciled, even when another duplicate is already safe.
+- **Per-agent identity**: all per-agent canonical names use `plur1bus <feature> <agentId>`. An existing job is owned only by an exact, case-sensitive agent id plus either its exact canonical name or exact first command line; missing or different agents are untouched. Every exact owned duplicate is inspected and reconciled, even when another duplicate is already safe.
 - **Safe delivery**: outbound targets never come from `allowFrom`. Delivery-required jobs use only a conservatively validated Telegram binding `match.peer.id` (including `t.me/<handle>`) or effective account/root `defaultTo`. Every relevant non-ACP binding must agree on channel, and an account inherits only when `match.accountId` is truly absent. Omitted accounts resolve in order from an explicit valid `defaultAccount`, `accounts.default`, one sole named account, or a root account proven by configured `botToken`/`tokenFile`; routing fields alone never invent a root default account. Unsupported providers, wildcard, placeholder, redaction, zero-id, disabled-account, explicit empty/missing account, mixed-account, and conflicting target/channel/account states are rejected. Existing delivery seeds require exact `mode: "announce"`; case or whitespace variants are unsafe. A job without a validated target is created disabled with `--no-deliver`; every unsafe owned delivery job is disabled and stripped of delivery. Non-delivery jobs retain only missing delivery or exact `mode: "none"`; every other delivery object is removed.
 - **Agent discovery/input failure**: if `openclaw agents list --json` fails, is unparseable, or yields no bound agents, no cron is mutated. Passing a validated `--agent <id>` forces one explicit agent; missing, option-like, or invalid `--agent`/`--account` values fail closed, and `--account` without `--agent` is rejected.
 
