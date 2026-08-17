@@ -68,8 +68,14 @@ function makeSink(partition, { counters = {}, memoryStore = null, outputTarget =
   const neoStore = {
     aclBindings: partition,
     hasCompletedRun() { counters.completed = (counters.completed || 0) + 1; return false; },
-    readPatterns() { return []; },
-    appendPatterns() { counters.appended = (counters.appended || 0) + 1; },
+    readPatterns(limit, requester) {
+      counters.readRequester = requester;
+      return [];
+    },
+    appendPatterns(items) {
+      counters.appended = (counters.appended || 0) + 1;
+      counters.patterns = items;
+    },
     markRunCompleted() { counters.completed = (counters.completed || 0) + 1; },
   };
   return {
@@ -232,6 +238,35 @@ test("REM keeps the selected user ownership binding on its persisted dream memor
   assert.equal(stored[0].workspaceKey, "");
   assert.equal(stored[0].agentId, "agent-a");
   assert.equal(result.trends[0].workspaceKey, "");
+});
+
+test("REM reads last-week patterns with a requester and stamps new pattern visibility", async () => {
+  const rows = ["1", "2", "3"].map((id) => row(id, `workspace material ${id}`));
+  const counters = {};
+  const sink = makeSink(WORKSPACE_PARTITION, { counters });
+  let call = 0;
+  const result = await runRemDream({
+    db: dbFor(rows),
+    callLlm: async () => {
+      call += 1;
+      return call === 1
+        ? JSON.stringify({ patternName: "Workspace pattern", description: "Repeated workspace material.", trend: "neu", confidence: 0.9 })
+        : "A sufficiently long workspace dream narrative for visibility stamping.";
+    },
+    patternLlmCfg: {},
+    narrativeLlmCfg: {},
+    neoStore: sink.neoStore,
+    partitionSink: sink,
+    workspaceKey: "workspace-a",
+    agentId: "agent-a",
+    requestContext: REQUEST_CONTEXT,
+    aclPartition: WORKSPACE_PARTITION,
+    narrativeCfg: { enabled: false },
+    force: true,
+  });
+  assert.ok(result.report || result.trends, JSON.stringify(result));
+  assert.equal(counters.readRequester?.requesterAgentId, "agent-a");
+  assert.equal(counters.patterns[0].visibility.agentId, "agent-a");
 });
 
 test("a protected REM echo is not loaded without its matching owner context", (t) => {
