@@ -171,6 +171,8 @@ import { decideEpistemicStatusForCapture, coerceNewWriteEpistemicStatus } from "
 import { ensureEpistemicCutoff, readEpistemicCutoff } from "./lib/epistemic-cutoff.js";
 import { assertCardWriteAllowed, isContentChangingUpdate, splitAgentDbPath } from "./lib/tombstone-write-guard.js";
 import { isAuthorized, createConfirmation, validateConfirmation } from "./lib/security.js";
+import { applyGlobalInjectBudget } from "./lib/inject-budget.js";
+import { resolveCurationRecord } from "./lib/curation-resolve.js";
 import { runReminderDispatch } from "./lib/jobs/reminder-dispatch.js";
 import { runGcJob } from "./lib/jobs/gc-job.js";
 import { runFeedbackAnalyzer } from "./lib/jobs/feedback-analyzer.js";
@@ -5984,7 +5986,7 @@ const plugin = {
             if ((actionKey === "persona" && !["", "regenerate", "accept"].includes(subKey))
               || (actionKey === "behavior" && !["show", "candidates", "explain", "promote", "demote", "prune"].includes(subKey))
               || ((actionKey === "reminder" || actionKey === "reminders") && !["", "list", "show", "help", "cancel", "delete"].includes(subKey))
-              || (actionKey === "curation" && !["", "conflicts", "stale", "promoted"].includes(subKey))) {
+              || (actionKey === "curation" && !["", "conflicts", "stale", "promoted", "resolve"].includes(subKey))) {
               return plur1busHelp("quick", resolveDenialLocale(commandCtx));
             }
             if (actionKey === "migrate-legacy-shared") {
@@ -6928,6 +6930,13 @@ const plugin = {
               }));
             }
             if (action === "curation") {
+              if (sub === "resolve") {
+                const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
+                if (denied) return denied;
+                const keepOrDrop = (tokens[3] || "").toLowerCase();
+                const result = resolveCurationRecord(commandStore, id, keepOrDrop, { authorized: true });
+                return formatJsonCommandResult(result);
+              }
               const candidates = commandStore.readCandidates(500, neoRequester(commandCtx, {}));
               const behavior = commandStore.readBehaviorCards(200, neoRequester(commandCtx, {}));
               const records = [...candidates, ...behavior];
@@ -10592,7 +10601,17 @@ const plugin = {
             api.logger.warn(`plur1bus-reminder: nudge injection failed: ${String(reminderErr)}`);
           }
           throwIfAborted(signal, "recall aborted");
-          return { prependContext: [neoContext, startNoticeContext, fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, timeContext, temporalContinuityContext, reminderNudge].filter(Boolean).join("\n\n") };
+          return { prependContext: applyGlobalInjectBudget({
+            blocks: [
+              { name: "neo", text: neoContext, droppable: true },
+              { name: "start", text: startNoticeContext, droppable: true },
+              { name: "memories", text: fullMemoriesContext + nudge + conflictNudge + skillProposalNudge, droppable: true },
+              { name: "time", text: timeContext, droppable: false },
+              { name: "temporal", text: temporalContinuityContext, droppable: false },
+              { name: "reminder", text: reminderNudge, droppable: false },
+            ],
+            maxChars: cfg.recall?.globalInjectMaxChars ?? 17_000,
+          }) };
         } catch (err) {
           throwIfAborted(signal, "recall aborted");
           api.logger.warn(`memory-lancedb-namespaced: recall failed for agent=${agentId}: ${String(err)}`);

@@ -342,7 +342,9 @@ OpenClaw package from the running entry point or the `openclaw` executable on
 NVM, Homebrew-style layouts, and user installs are not tied to `/usr/lib`.
 When the runtime is not writable or its audited structure cannot be recognized,
 automatic setup disables exact owned direct jobs rather than allowing them to
-fall back to the model carrier.
+fall back to the model carrier. Set `PLUR1BUS_SKIP_HOST_PATCH=1` to skip the
+install-time host rewrite (Atlas supply-chain objection); feature crons then
+need a native dispatcher.
 
 Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
 

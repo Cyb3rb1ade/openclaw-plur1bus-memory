@@ -782,6 +782,10 @@
             "type": "number",
             "default": 12
           },
+          "globalInjectMaxChars": {
+            "type": "number",
+            "default": 17000
+          },
           "candidateTopK": {
             "type": "number",
             "minimum": 1,
