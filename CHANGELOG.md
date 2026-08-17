@@ -31,6 +31,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **Curation resolve** `keep|drop` beendet neo-`conflict` ohne Hard-Filter.
 - **`/plur1bus curation drop-injected`** demoted nur injizierte Behavior-`conflict`s
   nach Preview+Nonce; echte Konflikte bleiben.
+- **`isInjectedContextText`** erkennt `BEGIN_OPENCLAW_INTERNAL_CONTEXT`,
+  `[Subagent Context]` und `[Inter-session message]` nur als Zeilen-Header.
 - **Conflict-Apply** geht bei Confirm durch `safeUpdate` inkl. Drift-Gate.
 - **Derived records** tragen `visibility` (append-Choke + Pattern/Dream-Writer).
   Reader filtern per Requester; rem-dream übergibt ihn an `readPatterns`.
