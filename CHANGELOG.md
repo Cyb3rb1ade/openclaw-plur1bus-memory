@@ -7,6 +7,34 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.1] — 2026-08-20
+
+### Behoben
+
+- **Der Embedding-Drain hungert die Erfassung nicht mehr aus.**
+  `drainEmbeddingQueueFile` war ausschließlich mengenbegrenzt (`maxItems`,
+  Default 250) und lief im `agent_end`-Hook **vor** der eigentlichen Erfassung —
+  im selben 60-Sekunden-Budget. Bei vollem Rückstau verbrauchten die 250
+  Embedding-Calls das Budget vollständig, und die Erfassung wurde danach jedes
+  Mal abgebrochen. Im Log sichtbar als `found 276 texts to capture` gefolgt von
+  `capture worker timed out after 60000ms` rund 30 ms später — der Timer war zu
+  diesem Zeitpunkt schon fast 60 s alt. Die betroffenen Texte blieben unerfasst
+  und tauchten beim nächsten Lauf unverändert wieder auf.
+
+  Der Drain läuft jetzt **nach** der Erfassung und bekommt, was vom Budget übrig
+  bleibt. Ist nichts mehr übrig, bleibt der Rückstau stehen und der nächste Lauf
+  macht weiter — das ist billiger als eine weitere ausgehungerte Erfassung.
+  Zusätzlich respektiert die Drain-Schleife jetzt `options.signal` und ein neues
+  `options.deadlineMs`; sie brach bisher nicht ab, weshalb der `AbortError` erst
+  tief im Embedder auftauchte statt an der Schleifengrenze. Der bis zum Stopp
+  erreichte Fortschritt wird regulär weggeschrieben, ein vorzeitiger Stopp über
+  `stoppedEarly` gemeldet.
+
+  Beobachtet am 2026-08-20 für `bernhardine` (Rückstau 2175 → 1186, 250 pro
+  Lauf, jeder Lauf kostete genau eine Erfassung). **Nicht** die Ursache des
+  Bernhardine-Ausfalls am selben Tag — der lag host-seitig in einem
+  k3-Timeout mit anschließendem Failover auf ein Modell mit 262k Kontext.
+
 ## [7.4.0] — 2026-08-17
 
 Quelle: `dc2f9da` (#114–#119). Kein Hard-Filter, kein Auto-Resolve, kein
