@@ -8130,6 +8130,13 @@ const plugin = {
             abortError.name = "AbortError";
             throw abortError;
           };
+          // Der Embedding-Drain ist Wartungsarbeit und lief bisher VOR der
+          // Erfassung im selben 60s-Budget. Bei vollem Rueckstau (250 Items)
+          // verbrauchte er es komplett, die eigentliche Erfassung wurde danach
+          // jedes Mal abgebrochen — beobachtet am 2026-08-20 fuer bernhardine:
+          // "found 276 texts to capture" gefolgt vom Timeout ~30ms spaeter.
+          // Jetzt laeuft er nach der Erfassung mit dem, was uebrig bleibt.
+          let runNeoEmbeddingDrain = null;
           if (neoEnabled) {
             try {
               const neoWorkspaceKey = rememberNeoWorkspace(ctx, event);
@@ -8179,22 +8186,28 @@ const plugin = {
               if (neoResult?.capture) {
                 api.logger.info(`plur1bus-neo: worker captured turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${background ? " (background)" : ""}`);
               }
-              const drain = neoEmbeddingAutoDrainEnabled
-                ? await neoStore.drainEmbeddingQueue({
-                    impact: neoEmbeddingDrainImpact,
-                    maxItems: neoEmbeddingDrainMaxItems,
-                    dimensions: vectorDim,
-                    embedder: (text) => embeddings.embed(text, { agentId }),
-                  })
-                : neoResult?.drain;
-              if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
-                api.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}`);
+              const logDrain = (drain) => {
+                if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
+                  api.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}${drain.stoppedEarly ? " (fruehzeitig gestoppt)" : ""}`);
+                }
+              };
+              if (neoEmbeddingAutoDrainEnabled) {
+                runNeoEmbeddingDrain = async () => logDrain(await neoStore.drainEmbeddingQueue({
+                  impact: neoEmbeddingDrainImpact,
+                  maxItems: neoEmbeddingDrainMaxItems,
+                  dimensions: vectorDim,
+                  embedder: (text) => embeddings.embed(text, { agentId }),
+                  signal,
+                }));
+              } else {
+                logDrain(neoResult?.drain);
               }
             } catch (neoErr) {
               api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
             }
           }
 
+          try {
           throwIfCaptureAborted();
 
           if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
@@ -8207,7 +8220,10 @@ const plugin = {
             return;
           }
 
-          return pool.withDb(agentId, async (db) => {
+          // await ist hier zwingend: ohne es liefe das finally unten los,
+          // waehrend die Erfassung noch laeuft — genau die Gleichzeitigkeit,
+          // die dieser Umbau beseitigen soll.
+          return await pool.withDb(agentId, async (db) => {
           try {
             throwIfCaptureAborted();
             // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
@@ -8876,6 +8892,18 @@ const plugin = {
             api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
           }
           });
+          } finally {
+            // Rest des Budgets fuer die Wartung. Ist es schon aufgebraucht,
+            // bleibt der Rueckstau stehen und der naechste Lauf macht weiter —
+            // besser als die Erfassung ein weiteres Mal auszuhungern.
+            if (runNeoEmbeddingDrain && !signal?.aborted) {
+              try {
+                await runNeoEmbeddingDrain();
+              } catch (drainErr) {
+                api.logger.warn(`plur1bus-neo: embedding queue drain failed: ${String(drainErr)}`);
+              }
+            }
+          }
         }); // runtimeScheduler.enqueueCapture
       }, { timeoutMs: 60_000 });
     }
