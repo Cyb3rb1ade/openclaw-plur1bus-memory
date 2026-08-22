@@ -8,13 +8,14 @@
  * anschliessend jedes Mal abgebrochen — im Log sichtbar als
  * "found 276 texts to capture" gefolgt vom Timeout ~30ms spaeter.
  *
- * Die Schleife respektiert jetzt options.signal und options.deadlineMs und
- * meldet einen vorzeitigen Stopp ueber stoppedEarly.
+ * Die Schleife und der jeweils laufende Embedder-Aufruf respektieren jetzt
+ * options.signal und options.deadlineMs und melden einen vorzeitigen Stopp
+ * ueber stoppedEarly.
  */
 
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNeoStore } from "../lib/neo-arch.js";
@@ -92,6 +93,45 @@ describe("drainEmbeddingQueue — Zeitbudget des Aufrufers", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("gibt den Capture-Slot frei, wenn ein laufender Embedder die Deadline ignoriert", async () => {
+    const { root, store } = makeWorkspace(1);
+    let resolveEmbedding;
+    const lateEmbedding = new Promise((resolve) => {
+      resolveEmbedding = resolve;
+    });
+    try {
+      const drainPromise = store.drainEmbeddingQueue({
+        impact: "low",
+        maxItems: 1,
+        deadlineMs: 10,
+        dimensions: 3,
+        embedder: () => lateEmbedding,
+      });
+      const winner = await Promise.race([
+        drainPromise.then((result) => ({ kind: "drain", result })),
+        new Promise((resolve) => setTimeout(() => resolve({ kind: "timeout" }), 75)),
+      ]);
+
+      resolveEmbedding([1, 0, 0]);
+      const finalResult = await drainPromise;
+
+      assert.equal(winner.kind, "drain", "der Drain muss vor dem spaeten Embedder zurueckkehren");
+      assert.equal(finalResult.processed, 0, "ein nach der Deadline geliefertes Embedding darf nicht committen");
+      assert.equal(finalResult.pending, 1, "das nicht abgeschlossene Item bleibt fuer den naechsten Lauf pending");
+      assert.equal(finalResult.stoppedEarly, true);
+    } finally {
+      resolveEmbedding?.([1, 0, 0]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("verdrahtet das verbleibende Capture-Budget in den agent_end-Drain", () => {
+    const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+
+    assert.match(indexSource, /captureDeadlineAt\s*=\s*Date\.now\(\)\s*\+/);
+    assert.match(indexSource, /drainEmbeddingQueue\(\{[\s\S]*?deadlineMs:\s*remainingDrainBudgetMs[\s\S]*?\}\)/);
   });
 
   it("laeuft ohne signal/deadline unveraendert weiter (kein Verhaltensbruch)", async () => {

@@ -21,7 +21,11 @@ incremental contract matrix is
   deadline boundaries, persists completed progress, and reports
   `stoppedEarly`. The upstream deadline regression now creates real queue
   targets so it cannot finish within one clock tick without exercising the
-  deadline path.
+  deadline path. An independent release audit additionally found that the
+  upstream loop guard did not bound an already running embed call; the Hermes
+  release races each item against the exact remaining scheduler/hook budget,
+  observes late settlement, and leaves that item pending without retaining the
+  next per-agent capture slot.
 
 ### Hermes reachability
 

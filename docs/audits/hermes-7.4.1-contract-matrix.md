@@ -12,6 +12,7 @@ reachable in Hermes, documented without a compatibility shim.
 |---|---|---|---|---|---|---|
 | `fff59e9` (merged by `1fe0369`) | `index.js`, `lib/neo-arch.js`, `tests/neo-embedding-drain-budget.test.js` | Run Neo embedding maintenance after capture with the remaining hook budget; honor abort/deadline boundaries; persist progress and report `stoppedEarly` | OpenClaw `agent_end` capture scheduler and Neo `embedding-queue.jsonl` drain | None: Hermes lifecycle uses Python `MemoryProvider` hooks and has no Neo JavaScript queue or drain worker | JS + NR | `tests/neo-embedding-drain-budget.test.js` |
 | `fff59e9` | `openclaw.plugin.json` | Ship the contemporaneous OpenClaw schema with the fix | OpenClaw manifest validation | Hermes reads only its provider/plugin manifests; the merged schema remains available to OpenClaw consumers of the Hermes npm channel | JS + NR | schema and package gates |
+| Hermes release audit fix | `index.js`, `lib/neo-arch.js`, `tests/neo-embedding-drain-budget.test.js` | Bound the in-flight embed call, not only the gap between items; pass the exact remaining scheduler/hook budget; never commit a late vector or retain the next capture slot | Same OpenClaw-only drain path | None; still unreachable in Hermes Python | JS + NR | mid-call deadline and hook-wiring regressions in `tests/neo-embedding-drain-budget.test.js` |
 
 ## Reachability evidence
 

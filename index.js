@@ -8123,6 +8123,10 @@ const plugin = {
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+          const captureDeadlineAt = Date.now() + Math.min(
+            runtimeScheduler.config.captureTimeoutMs,
+            60_000,
+          );
           const throwIfCaptureAborted = () => {
             if (!signal?.aborted) return;
             if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
@@ -8192,12 +8196,13 @@ const plugin = {
                 }
               };
               if (neoEmbeddingAutoDrainEnabled) {
-                runNeoEmbeddingDrain = async () => logDrain(await neoStore.drainEmbeddingQueue({
+                runNeoEmbeddingDrain = async (remainingDrainBudgetMs) => logDrain(await neoStore.drainEmbeddingQueue({
                   impact: neoEmbeddingDrainImpact,
                   maxItems: neoEmbeddingDrainMaxItems,
                   dimensions: vectorDim,
-                  embedder: (text) => embeddings.embed(text, { agentId }),
+                  embedder: (text) => embeddings.embed(text, { agentId, signal }),
                   signal,
+                  deadlineMs: remainingDrainBudgetMs,
                 }));
               } else {
                 logDrain(neoResult?.drain);
@@ -8898,7 +8903,10 @@ const plugin = {
             // besser als die Erfassung ein weiteres Mal auszuhungern.
             if (runNeoEmbeddingDrain && !signal?.aborted) {
               try {
-                await runNeoEmbeddingDrain();
+                const remainingDrainBudgetMs = Math.max(0, captureDeadlineAt - Date.now());
+                if (remainingDrainBudgetMs > 0) {
+                  await runNeoEmbeddingDrain(remainingDrainBudgetMs);
+                }
               } catch (drainErr) {
                 api.logger.warn(`plur1bus-neo: embedding queue drain failed: ${String(drainErr)}`);
               }
