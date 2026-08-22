@@ -27,6 +27,7 @@ function makeWorkspace(itemCount) {
   mkdirSync(join(queuePath, ".."), { recursive: true });
 
   const lines = [];
+  const targets = [];
   for (let i = 0; i < itemCount; i++) {
     lines.push(JSON.stringify({
       id: `embq_test_${i}`,
@@ -38,8 +39,13 @@ function makeWorkspace(itemCount) {
       status: "pending",
       queuedAt: new Date().toISOString(),
     }));
+    targets.push(JSON.stringify({
+      id: `mem_test_${i}`,
+      statement: `memory ${i}`,
+    }));
   }
   writeFileSync(queuePath, lines.join("\n") + "\n");
+  writeFileSync(store.paths.candidates, targets.join("\n") + "\n");
   return { root, store };
 }
 
