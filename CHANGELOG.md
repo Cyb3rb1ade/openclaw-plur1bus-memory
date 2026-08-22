@@ -7,6 +7,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.2] — 2026-08-22
+
+### Behoben
+
+- **Der skill-miner-Report wurde nie geschrieben.** `runSkillMiner` baute den
+  Pfad `<workspaceDir>/.adaptive-learning/skill-miner-report.jsonl` und rief
+  `appendFileSync` darauf auf, **ohne das Verzeichnis vorher anzulegen**. Da
+  `.adaptive-learning/` unter den ACL-Workspaces gar nicht existierte, scheiterte
+  jeder Lauf mit `ENOENT: no such file or directory` — verschluckt im `catch` als
+  blosse Warnung (`report append failed: …`). Der Report ging damit still
+  verloren, seit es ihn gibt, und der Ausfall blieb entsprechend lange unbemerkt.
+
+  Das Verzeichnis wird jetzt vor dem Anhängen angelegt, wie es die übrigen
+  Schreiber unter `.adaptive-learning/` (`sql-safety.js`, `feedback-log.js`,
+  `reply-outcome-tracking.js`) ohnehin schon tun. Der Pfad selbst bleibt
+  unverändert.
+
 ## [7.4.1] — 2026-08-20
 
 ### Behoben
