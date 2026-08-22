@@ -8100,6 +8100,7 @@ const plugin = {
 
       api.on("agent_end", (event, ctx) => {
         api.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
+        const captureHookDeadlineAt = Date.now() + 60_000;
 
         const agentId = ctx?.agentId || "default";
         const background = isBackgroundTurn(event, ctx);
@@ -8123,9 +8124,9 @@ const plugin = {
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
-          const captureDeadlineAt = Date.now() + Math.min(
-            runtimeScheduler.config.captureTimeoutMs,
-            60_000,
+          const captureDeadlineAt = Math.min(
+            captureHookDeadlineAt,
+            Date.now() + runtimeScheduler.config.captureTimeoutMs,
           );
           const throwIfCaptureAborted = () => {
             if (!signal?.aborted) return;

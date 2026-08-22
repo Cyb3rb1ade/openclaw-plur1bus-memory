@@ -129,8 +129,17 @@ describe("drainEmbeddingQueue — Zeitbudget des Aufrufers", () => {
 
   it("verdrahtet das verbleibende Capture-Budget in den agent_end-Drain", () => {
     const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8");
+    const hookHandlerAt = indexSource.indexOf('api.on("agent_end", (event, ctx) => {');
+    const hookDeadlineAt = indexSource.indexOf("const captureHookDeadlineAt = Date.now() + 60_000", hookHandlerAt);
+    const enqueueAt = indexSource.indexOf("return runtimeScheduler.enqueueCapture", hookHandlerAt);
 
-    assert.match(indexSource, /captureDeadlineAt\s*=\s*Date\.now\(\)\s*\+/);
+    assert.ok(hookHandlerAt >= 0, "agent_end-Hook muss vorhanden sein");
+    assert.ok(hookDeadlineAt > hookHandlerAt, "die Hook-Deadline muss beim Handler-Aufruf entstehen");
+    assert.ok(hookDeadlineAt < enqueueAt, "Scheduler-Wartezeit darf die 60s-Hook-Uhr nicht zuruecksetzen");
+    assert.match(
+      indexSource,
+      /captureDeadlineAt\s*=\s*Math\.min\(\s*captureHookDeadlineAt,\s*Date\.now\(\)\s*\+\s*runtimeScheduler\.config\.captureTimeoutMs/s,
+    );
     assert.match(indexSource, /drainEmbeddingQueue\(\{[\s\S]*?deadlineMs:\s*remainingDrainBudgetMs[\s\S]*?\}\)/);
   });
 
