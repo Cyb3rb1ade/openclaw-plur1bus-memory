@@ -7,6 +7,36 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [Hermes 7.4.1 / 7.4.1-hermes] — 2026-08-22
+
+Integrates the immutable `v7.4.1` tag while retaining the Hermes provider,
+controls, installer, Jina, retrieval, and model-provider distribution. The
+incremental contract matrix is
+`docs/audits/hermes-7.4.1-contract-matrix.md`.
+
+### Fixed
+
+- **The packaged OpenClaw Neo embedding drain no longer starves capture.** The
+  drain runs after capture with the remaining hook budget, respects abort and
+  deadline boundaries, persists completed progress, and reports
+  `stoppedEarly`. The upstream deadline regression now creates real queue
+  targets so it cannot finish within one clock tick without exercising the
+  deadline path.
+
+### Hermes reachability
+
+- Hermes has no OpenClaw `agent_end` hook, Neo `embedding-queue.jsonl`, or
+  JavaScript drain worker. The 7.4.1 runtime contract is therefore OpenClaw-only
+  and is fully present in the shipped JavaScript package; no unreachable Python
+  shim was added. Python package and plugin metadata move to 7.4.1 so all
+  artifacts from this release share one source coordinate.
+
+### Preserved
+
+- Hermes data, provider/model selection, Jina opt-in, controls, retrieval,
+  installer behavior, and launch scheduling remain unchanged. GitHub Packages
+  stays on `publishConfig.tag = hermes`; npm `latest` is not moved.
+
 ## [Hermes 7.4.0 / 7.4.0-hermes] — 2026-08-17
 
 Integrates PLUR1BUS 7.4.0 (merge of the immutable `v7.4.0` tag) while

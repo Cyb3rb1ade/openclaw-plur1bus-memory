@@ -2,13 +2,20 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.4.0 — evidence the agent can stand behind**
+**PLUR1BUS 7.4.1 — bounded Neo embedding maintenance**
 
-Current version: **7.4.0** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.4.0`. See the [changelog](CHANGELOG.md) for the full history.
+Current version: **7.4.1** — the Hermes channel merges the immutable GitHub tag `v7.4.1` and retains its separate `-hermes` release coordinates. See the [changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.4.1 — bounded Neo embedding maintenance
+
+- **OpenClaw capture runs before Neo embedding maintenance.** The queue drain
+  now uses only the remaining hook budget, honors cancellation/deadlines, and
+  reports a bounded early stop. Hermes has no equivalent `agent_end` Neo queue;
+  no Python shim is introduced. The packaged OpenClaw path contains the fix.
 
 ### New in v7.4.0 — evidence the agent can stand behind
 
@@ -408,24 +415,24 @@ inside a virtual environment, export `HERMES_PYTHON=/path/to/that/python`
 before installing so the runtime and the PLUR1BUS dependencies land in the
 same environment.
 
-This release commit aligns Hermes with PLUR1BUS 7.4.0: the release process
-will create the immutable `7.4.0-hermes` tag. Once that tag exists, install
+This release commit aligns Hermes with PLUR1BUS 7.4.1: the release process
+will create the immutable `7.4.1-hermes` tag. Once that tag exists, install
 both Python packages from it with the Hermes runtime's Python:
 
 ```bash
 export HERMES_PYTHON="${HERMES_PYTHON:-python3}"
-"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.0-hermes#subdirectory=plur1bus-hermes"
-"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.0-hermes#subdirectory=plur1bus-controls"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.1-hermes#subdirectory=plur1bus-hermes"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.1-hermes#subdirectory=plur1bus-controls"
 ```
 
 The Hermes npm/OpenClaw package is a separate channel. The release process
-will publish `7.4.0-hermes` to GitHub Packages with the `hermes` dist-tag,
+will publish `7.4.1-hermes` to GitHub Packages with the `hermes` dist-tag,
 never `latest`; `publishConfig` enforces that registry and tag for a plain
 `npm publish`. After authenticating `@cyb3rb1ade` for
 `https://npm.pkg.github.com`, use either command once the package is available:
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.4.0-hermes --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.4.1-hermes --pin
 openclaw plugins install @cyb3rb1ade/plur1bus-memory@hermes --pin
 ```
 
@@ -436,7 +443,7 @@ Once the release tag exists, use the recommended full setup to clone it and run
 the installer:
 
 ```bash
-git clone --branch 7.4.0-hermes --depth 1 \
+git clone --branch 7.4.1-hermes --depth 1 \
   https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git
 cd openclaw-plur1bus-memory
 ./scripts/install-hermes-plugins.sh
