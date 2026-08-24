@@ -7,6 +7,65 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.3] — 2026-08-24
+
+### Behoben
+
+- **Phantom-Erinnerungen: der Agent erfand Themen zu inhaltslosen Remindern.**
+  Nach jedem Auto-Capture lief die Reminder-Extraktion ungefiltert über *jedes*
+  erfasste Item. Drei Fehler wirkten zusammen:
+
+  1. `parseReminderIntent` erkannte vage Floskeln über `lower.includes(phrase)`
+     — ein Substring-Vergleich ohne Wortgrenze und ohne jede Absichtsprüfung.
+     „Ich schaue das später an" wurde damit zum Reminder, „Eva nimmt abends
+     **Bald**rian" ebenfalls. Gespeichert wurde als Reminder-Text nur die
+     Floskel selbst (`parsed.evidence`), das Thema ging verloren. Beim fälligen
+     `<reminder-nudge>` sah der Agent also „Fällige Erinnerung: 'später'" ohne
+     Gegenstand — und füllte die Lücke mit einem Thema aus dem gerade
+     injizierten Recall-Kontext. Für die Nutzerin sah das aus wie eine
+     Erinnerung an Dinge, über die nie jemand gesprochen hatte.
+
+  2. `source = it.role === "user" ? "user" : "agent"` liess auch die **eigenen**
+     Antworten des Agenten Reminder anlegen. Das ergab eine selbstverstärkende
+     Schleife: der Agent schreibt „ich melde mich in einer halben Stunde",
+     bekommt 30 Minuten später einen themenlosen Reminder und meldet sich
+     erneut.
+
+  3. Das Feature hatte **keinen Schalter** — es liess sich nicht abstellen.
+
+  Der vage Zweig ist ersatzlos entfernt; der Parser erkennt jetzt
+  ausschliesslich relative Zeiten („in 10 Minuten"). Extrahiert wird nur noch
+  aus `role === "user"`. Die Gate-Logik liegt in der neuen, testbaren
+  `lib/reminder-extraction.js`; `index.js` ruft nur noch
+  `planReminderExtraction()`.
+
+  Ausmass im Bestand einer betroffenen Installation: **3741 von 14 817 Zeilen
+  (25 Prozent)** der Agenten-Tabelle waren solche Reminder — 3393 davon mit dem
+  Text „später", „bald", „nachher" oder „later", die als
+  `pending_confirmation` nie zugestellt werden konnten und trotzdem mit
+  `importance: 0.9` samt Embedding im Recall-Pool lagen. Dazu rund **9900
+  Speicherversuche pro Tag** im Log, jeder mit einer LanceDB-Dedupe-Query plus
+  einem `embedQuery`.
+
+### Neu
+
+- **`reminders.autoExtract`** (Default `true`) schaltet die Reminder-Extraktion
+  aus dem Auto-Capture ab, analog zu den übrigen Feature-Gates
+  (`metaCognition.enabled`, `temporalContext.enabled`).
+
+### Migration
+
+Bereits gespeicherter Reminder-Müll verschwindet nicht von selbst. Zum Aufräumen
+pro Namespace:
+
+```
+memoryKind = 'reminder' AND reminderStatus = 'pending_confirmation'
+```
+
+Diese Zeilen sind per Definition unzustellbar (`listDueReminders` listet
+`pending_confirmation` nicht) und können gefahrlos gelöscht werden.
+
+
 ## [7.4.2] — 2026-08-22
 
 ### Behoben
