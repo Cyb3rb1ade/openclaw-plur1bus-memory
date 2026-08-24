@@ -12,11 +12,30 @@ describe("reminder-parser", () => {
     assert.strictEqual(r.requiresConfirmation, false);
   });
 
-  it("parses DE vague: später", () => {
+  // Regression: vage Zeitangaben erzeugten inhaltslose Reminder ("später", "bald").
+  // Der gespeicherte Text war nur die Floskel selbst, ohne Thema — der Agent
+  // konfabulierte beim Nudge ein Thema dazu. Vager Zweig ist entfernt.
+  it("ignores DE vague: später", () => {
     const r = parseReminderIntent("Ich schaue das später an", { now });
-    assert.strictEqual(r.timePrecision, "vague");
-    assert.strictEqual(r.requiresConfirmation, true);
-    assert.strictEqual(r.remindAt, now + 120 * 60_000);
+    assert.strictEqual(r.timePrecision, "none");
+    assert.strictEqual(r.remindAt, null);
+    assert.strictEqual(r.requiresConfirmation, false);
+  });
+
+  for (const vague of ["Ich schaue das später an", "Ich melde mich bald", "Machen wir nachher", "I will check later", "coming soon"]) {
+    it(`ignores vague phrase: ${vague}`, () => {
+      const r = parseReminderIntent(vague, { now });
+      assert.strictEqual(r.timePrecision, "none");
+      assert.strictEqual(r.remindAt, null);
+    });
+  }
+
+  // Regression: "bald" wurde per lower.includes() als Substring gematcht.
+  it("does not match vague words inside longer words", () => {
+    for (const text of ["Eva nimmt abends Baldrian", "Die Mobilisation läuft", "Alsbald war es vorbei"]) {
+      const r = parseReminderIntent(text, { now });
+      assert.strictEqual(r.timePrecision, "none", text);
+    }
   });
 
   it("parses EN relative time: in 30 minutes", () => {
