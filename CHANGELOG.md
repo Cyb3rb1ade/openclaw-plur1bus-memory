@@ -7,6 +7,31 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.4] — 2026-08-24
+
+Nachtrag zu 7.4.3: dort wurde die *Masse* der Phantom-Reminder beseitigt, der
+eigentliche Themenverlust blieb aber bestehen.
+
+### Behoben
+
+- **Reminder speicherten nur die Zeitfloskel, nicht das Thema.** Der Extraktor
+  legte als Text `parsed.evidence` ab — also woertlich „in 10 minuten". Beim
+  faelligen `<reminder-nudge>` las der Agent damit „Faellige Erinnerung: 'in 10
+  minuten'" ohne jeden Gegenstand und ergaenzte einen aus dem Recall-Kontext.
+  Neu wird der **Satz** gespeichert, der die Zeitangabe traegt (neue Funktion
+  `buildReminderText()`): aus „Erinnere mich in 10 Minuten an den Kuchen im
+  Ofen" wird genau dieser Satz statt „in 10 minuten". Laengere Nachrichten
+  werden auf den betroffenen Satz reduziert und bei 200 Zeichen gekappt, damit
+  der Nudge knapp bleibt.
+
+- **`saveReminder()` verwarf das `source`-Feld.** Der Parameter wurde
+  entgegengenommen und destrukturiert, aber nie in die Zeile geschrieben.
+  Gespeicherte Reminder liessen sich dadurch nicht ihrem Urheber zuordnen — bei
+  der Aufarbeitung der 7.4.3-Altlast musste der Urheber muehsam ueber
+  Zeitfenster und Textabgleich rekonstruiert werden. `source` wird jetzt
+  persistiert (Default `"user"`).
+
+
 ## [7.4.3] — 2026-08-24
 
 ### Behoben
