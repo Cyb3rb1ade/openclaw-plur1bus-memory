@@ -8531,8 +8531,9 @@ const plugin = {
                   const parsed = plan.parsed;
                   const wsKey = ctx?.workspaceDir || "default";
                   const source = "user";
-                  // Use evidence (temporal clause) instead of full message text for token efficiency
-                  const reminderText = parsed.evidence || it.text;
+                  // Ursprungssatz statt blosser Zeitfloskel — sonst hat der
+                  // Reminder kein Thema (siehe buildReminderText).
+                  const reminderText = plan.reminderText;
                   if (parsed.requiresConfirmation) {
                     await saveReminder(db, {
                       text: reminderText,
