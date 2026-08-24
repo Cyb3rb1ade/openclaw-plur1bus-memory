@@ -170,6 +170,7 @@ export const DEPLOY_FILES = [
   "lib/metrics.js",
   "patches/apply-cron-plugin-direct-dispatch.mjs",
   // ── reminders / nudges ────────────────────────────────────────────────────
+  "lib/reminder-extraction.js",
   "lib/reminder-nudge.js",
   "lib/reminder-parser.js",
   "lib/reminder-pending.js",
