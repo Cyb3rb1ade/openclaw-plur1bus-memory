@@ -51,6 +51,7 @@ function makeMockApi(baseDbPath) {
 describe("memory_forget late tombstone audit continuation", () => {
   let api;
   let baseDbPath;
+  let tempRoot;
   let openclawHome;
   let originalOpenClawHome;
   let originalTombstone;
@@ -108,7 +109,8 @@ describe("memory_forget late tombstone audit continuation", () => {
   }
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-db-"));
+    tempRoot = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-db-"));
+    baseDbPath = join(tempRoot, "lancedb");
     originalOpenClawHome = process.env.OPENCLAW_HOME;
     openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-home-"));
     process.env.OPENCLAW_HOME = openclawHome;
@@ -128,7 +130,7 @@ describe("memory_forget late tombstone audit continuation", () => {
   after(() => {
     MemoryDB.prototype.tombstone = originalTombstone;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
-    rmSync(baseDbPath, { recursive: true, force: true });
+    rmSync(tempRoot, { recursive: true, force: true });
     for (const workspaceDir of workspaceDirs) {
       rmSync(workspaceDir, { recursive: true, force: true });
     }
