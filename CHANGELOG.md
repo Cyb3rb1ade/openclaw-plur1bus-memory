@@ -7,6 +7,47 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.6] — 2026-08-25
+
+### Behoben
+
+- **`zugang_passwort` klassifizierte auf das Wortfeld statt auf ein Geheimnis.**
+  Die Typdefinition im Klassifizierer-Prompt lautete
+
+  ```
+  - zugang_passwort:  Passwort, API-Key, Login, Token
+  ```
+
+  Alle uebrigen Typen sind ueber VORHANDENEN Inhalt definiert (Diagnose,
+  Medikament, IBAN) — hier stand mit **„Login" eine Taetigkeit** in der Liste.
+  Das Modell stufte daraufhin jede Nachricht ein, die ueber Zugaenge *spricht*.
+
+  In einem produktiven Bestand waren dadurch **4 von 4** offenen
+  `zugang_passwort`-Karten Fehltreffer, keine davon mit Passwort-, Token- oder
+  API-Key-Muster:
+
+  - ein Audio-Transkript („also ich du bist so witzig ne ja ernsthaft …")
+  - eine Werkzeugliste (`browser_find`, `browser_click`, `browser_fill_form`)
+  - die Anweisung „Bitte beide Logins testen, **Zugangsdaten NICHT im Text
+    nennen**" — die Aufforderung, keine zu nennen, galt als Zugangsdaten
+  - die Bemerkung, dass ein Agent Zugriff auf ein Abo hat
+
+  Der Schaden war doppelt: der Inhalt wurde im Push **ausgeblendet**
+  („moeglicherweise Zugangsdaten"), und jede Karte verlangte eine Entscheidung.
+
+  Das Kriterium verschiebt sich jetzt vom Thema auf einen **tatsaechlich
+  vorhandenen Geheimniswert** und grenzt die blosse Erwaehnung von Login,
+  Zugriff, Konten sowie Profil-, Werkzeug- und Dienstnamen ausdruecklich aus.
+  Die uebrigen Typdefinitionen bleiben unveraendert; `gesundheit` arbeitete in
+  derselben Stichprobe korrekt (69 Karten, durchweg echte medizinische Inhalte).
+
+### Hinweis
+
+Bereits falsch eingestufte Karten werden nicht automatisch umgeschrieben. Sie
+lassen sich mit `/plur1bus critical reject <ref>` verwerfen — das loescht die
+Erinnerung nicht, sondern nur die Kennzeichnung.
+
+
 ## [7.4.5] — 2026-08-25
 
 ### Behoben
