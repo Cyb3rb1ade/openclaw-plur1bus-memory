@@ -511,6 +511,63 @@ providers:
     def test_setup_schema_does_not_prompt_for_models_or_ports(self) -> None:
         self.assertEqual(Plur1busMemoryProvider().get_config_schema(), [])
 
+    def test_pre_compress_checkpoint_v2_is_durable_filtered_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            provider = self._provider_for(home)
+            provider.config = {"dataDir": "plur1bus"}
+            messages = [
+                {"role": "system", "content": "private system prompt"},
+                {"role": "user", "content": "Remember the red bicycle."},
+                {
+                    "role": "assistant",
+                    "content": "I will remember that.",
+                    "tool_calls": [{"id": "call-1", "function": {"name": "memory"}}],
+                },
+                {"role": "tool", "content": "tool output must not become evidence"},
+                {
+                    "role": "assistant",
+                    "content": "derivative summary must not be archived",
+                    "_compressed_summary": True,
+                },
+            ]
+
+            first = provider.on_pre_compress(messages)
+            checkpoint_dir = home / "plur1bus" / "state" / "pre-compress-checkpoints"
+            checkpoint_files = list(checkpoint_dir.glob("*.json"))
+            self.assertEqual(len(checkpoint_files), 1)
+            first_bytes = checkpoint_files[0].read_bytes()
+            payload = json.loads(first_bytes)
+            self.assertEqual(payload["apiVersion"], 2)
+            self.assertEqual(payload["sessionId"], "")
+            self.assertEqual(payload["messages"], [
+                {"role": "user", "content": "Remember the red bicycle."},
+                {"role": "assistant", "content": "I will remember that."},
+            ])
+            self.assertIn(payload["digest"], first)
+            self.assertEqual(Plur1busMemoryProvider.pre_compress_checkpoint_api_version, 2)
+
+            second = provider.on_pre_compress(messages)
+            self.assertEqual(second, first)
+            self.assertEqual(list(checkpoint_dir.glob("*.json")), checkpoint_files)
+            self.assertEqual(checkpoint_files[0].read_bytes(), first_bytes)
+            provider.shutdown()
+
+    def test_pre_compress_checkpoint_write_failure_propagates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            provider = self._provider_for(home)
+            provider.config = {"dataDir": "plur1bus"}
+            blocked = home / "plur1bus" / "state" / "pre-compress-checkpoints"
+            blocked.parent.mkdir(parents=True)
+            blocked.write_text("not a directory", encoding="utf-8")
+
+            with self.assertRaises(OSError):
+                provider.on_pre_compress([
+                    {"role": "user", "content": "This evidence must not be discarded."},
+                ])
+            provider.shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

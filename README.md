@@ -2,13 +2,29 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.4.1 — bounded Neo embedding maintenance**
+**PLUR1BUS 7.4.8 — precise critical classification and Hermes checkpoint safety**
 
-Current version: **7.4.1** — the Hermes channel merges the immutable GitHub tag `v7.4.1` and retains its separate `-hermes` release coordinates. See the [changelog](CHANGELOG.md) for the full history.
+Current version: **7.4.8** — the Hermes channel merges the immutable GitHub tag `v7.4.8` and retains its separate `-hermes` release coordinates. See the [changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.4.8 — safer critical classification and compression
+
+- **Credential words alone are no longer critical.** Hermes requires a concrete
+  credential value before a password, token, API-key, or access-code mention can
+  trigger critical review and content suppression. Explicit critical language,
+  `neverForget`, and high importance remain independent signals.
+- **Hermes pre-compression checkpoints are durable.** Providers now advertise
+  checkpoint API v2, retain only direct user/assistant evidence, and commit a
+  content-addressed checkpoint with fsync plus atomic replacement before Hermes
+  may rewrite context. Older Hermes hosts continue to call the same hook safely.
+- **The OpenClaw package includes every 7.4.2–7.4.8 upstream fix.** Skill-miner
+  reports, reminders, LanceDB boolean-filter compatibility, and classify-recent
+  accounting have no native Hermes route and therefore remain JavaScript-only.
+  The exact reachability decision is recorded in
+  `docs/audits/hermes-7.4.8-contract-matrix.md`.
 
 ### New in v7.4.1 — bounded Neo embedding maintenance
 
@@ -415,24 +431,24 @@ inside a virtual environment, export `HERMES_PYTHON=/path/to/that/python`
 before installing so the runtime and the PLUR1BUS dependencies land in the
 same environment.
 
-This release commit aligns Hermes with PLUR1BUS 7.4.1: the release process
-will create the immutable `7.4.1-hermes` tag. Once that tag exists, install
+This release commit aligns Hermes with PLUR1BUS 7.4.8: the release process
+will create the immutable `7.4.8-hermes` tag. Once that tag exists, install
 both Python packages from it with the Hermes runtime's Python:
 
 ```bash
 export HERMES_PYTHON="${HERMES_PYTHON:-python3}"
-"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.1-hermes#subdirectory=plur1bus-hermes"
-"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.1-hermes#subdirectory=plur1bus-controls"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.8-hermes#subdirectory=plur1bus-hermes"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.8-hermes#subdirectory=plur1bus-controls"
 ```
 
 The Hermes npm/OpenClaw package is a separate channel. The release process
-will publish `7.4.1-hermes` to GitHub Packages with the `hermes` dist-tag,
+will publish `7.4.8-hermes` to GitHub Packages with the `hermes` dist-tag,
 never `latest`; `publishConfig` enforces that registry and tag for a plain
 `npm publish`. After authenticating `@cyb3rb1ade` for
 `https://npm.pkg.github.com`, use either command once the package is available:
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.4.1-hermes --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.4.8-hermes --pin
 openclaw plugins install @cyb3rb1ade/plur1bus-memory@hermes --pin
 ```
 
@@ -443,7 +459,7 @@ Once the release tag exists, use the recommended full setup to clone it and run
 the installer:
 
 ```bash
-git clone --branch 7.4.1-hermes --depth 1 \
+git clone --branch 7.4.8-hermes --depth 1 \
   https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git
 cd openclaw-plur1bus-memory
 ./scripts/install-hermes-plugins.sh

@@ -31,8 +31,49 @@ def is_confirmed(value: Any) -> bool:
 _CRITICAL_PATTERNS = (
     r"\b(never forget|nie vergessen|unbedingt merken)\b",
     r"\b(emergency|notfall|lebenswichtig|critical|kritisch)\b",
-    r"\b(password|passwort|api[- ]?key|token|secret)\b",
 )
+
+_SECRET_LABEL = (
+    r"(?:password|passwort|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|"
+    r"token|secret|zugangs?code|wiederherstellungsschl(?:ü|ue)ssel)"
+)
+_SECRET_ASSIGNMENT_RE = re.compile(
+    rf"(?<![\w]){_SECRET_LABEL}(?![\w])\s*"
+    rf"(?:[:=]|(?:lautet|ist|is|equals)\b\s*:?\s*)[\"']?([^\"'\s,;]+)",
+    re.IGNORECASE,
+)
+_DIRECT_SECRET_VALUE_RES = (
+    re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{12,}\b", re.IGNORECASE),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+)
+_NON_SECRET_VALUES = frozenset({
+    "absent",
+    "configured",
+    "empty",
+    "fehlt",
+    "gesetzt",
+    "leer",
+    "missing",
+    "nicht",
+    "noch",
+    "none",
+    "redacted",
+    "unknown",
+    "unbekannt",
+})
+
+
+def _contains_concrete_secret(text: str) -> bool:
+    """Require a concrete credential value, not a credential-related word."""
+    if any(pattern.search(text) for pattern in _DIRECT_SECRET_VALUE_RES):
+        return True
+    match = _SECRET_ASSIGNMENT_RE.search(text)
+    if match is None:
+        return False
+    value = match.group(1).strip().rstrip(".!?")
+    return len(value) >= 4 and value.casefold() not in _NON_SECRET_VALUES
 
 
 def classify_critical(
@@ -56,11 +97,8 @@ def classify_critical(
         for pattern in _CRITICAL_PATTERNS
         if re.search(pattern, value, re.IGNORECASE)
     ]
-    secret_like = any(
-        re.search(pattern, value, re.IGNORECASE)
-        for pattern in _CRITICAL_PATTERNS[-1:]
-    )
-    keyword_signal = bool(matched) and keyword_eligible(source_role)
+    secret_like = _contains_concrete_secret(value)
+    keyword_signal = (bool(matched) or secret_like) and keyword_eligible(source_role)
     eligible = never_forget or importance >= 0.9 or keyword_signal
     reason = (
         "never_forget"

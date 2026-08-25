@@ -61,6 +61,10 @@ class Plur1busMemoryProvider(MemoryProvider):
     persistence operation.
     """
 
+    # Hermes checkpoint API v2 hands normalized direct evidence to providers
+    # and can require a durable success before any lossy context rewrite.
+    pre_compress_checkpoint_api_version = 2
+
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         # Kept apart from `self.config` so every initialize() rebuilds the merge from
         # disk instead of inheriting the previously served profile's values.
@@ -252,12 +256,13 @@ class Plur1busMemoryProvider(MemoryProvider):
         self._flush_captures()
 
     def on_pre_compress(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
-        """Persist queued turns before Hermes discards context during compression."""
-        del messages, kwargs
+        """Durably checkpoint direct evidence before Hermes discards context."""
+        del kwargs
+        checkpoint = self._write_pre_compress_checkpoint(messages)
         self._flush_captures()
         if self._runtime:
             self._runtime.flush()
-        return "PLUR1BUS has persisted long-term memory before compression."
+        return checkpoint
 
     def on_session_end(self, messages: list[dict[str, Any]], **kwargs: Any) -> None:
         del messages, kwargs
@@ -413,6 +418,103 @@ class Plur1busMemoryProvider(MemoryProvider):
         data_dir = self.config.get("dataDir", "plur1bus")
         path = Path(str(data_dir)).expanduser()
         return path if path.is_absolute() else self._hermes_home / path
+
+    @staticmethod
+    def _checkpoint_text(content: Any) -> str:
+        """Extract direct text without retaining tool or multimodal payloads."""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        parts = []
+        for block in content:
+            if not isinstance(block, Mapping):
+                continue
+            if str(block.get("type") or "") not in {"text", "input_text", "output_text"}:
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text)
+        return "\n".join(parts)
+
+    @classmethod
+    def _checkpoint_messages(cls, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """Normalize old-host raw transcripts to Hermes checkpoint-v2 evidence."""
+        evidence = []
+        for message in messages or []:
+            if not isinstance(message, Mapping):
+                continue
+            role = str(message.get("role") or "")
+            if role not in {"user", "assistant"} or message.get("_compressed_summary"):
+                continue
+            content = cls._checkpoint_text(message.get("content"))
+            if not content.strip():
+                continue
+            evidence.append({"role": role, "content": content})
+        return evidence
+
+    def _write_pre_compress_checkpoint(self, messages: list[dict[str, Any]]) -> str:
+        """Write one fsync-backed, content-addressed checkpoint for a transcript."""
+        evidence = self._checkpoint_messages(messages)
+        identity = {
+            "apiVersion": self.pre_compress_checkpoint_api_version,
+            "sessionId": self._session_id,
+            "messages": evidence,
+        }
+        canonical = json.dumps(
+            identity,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        digest = _fingerprint(canonical)
+        root = self._base_path()
+        checkpoint_dir = resolve_inside(
+            str(root), "state", "pre-compress-checkpoints"
+        )
+        checkpoint_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target = resolve_inside(str(checkpoint_dir), f"{digest}.json")
+        summary = (
+            "PLUR1BUS durably checkpointed "
+            f"{len(evidence)} direct evidence messages before compression "
+            f"(sha256:{digest})."
+        )
+        if target.is_file():
+            existing = json.loads(target.read_text(encoding="utf-8"))
+            if not isinstance(existing, dict) or existing.get("digest") != digest:
+                raise RuntimeError("pre-compress checkpoint digest collision")
+            if any(existing.get(key) != value for key, value in identity.items()):
+                raise RuntimeError("pre-compress checkpoint identity mismatch")
+            return summary
+
+        payload = {
+            **identity,
+            "digest": digest,
+            "createdAt": _utcnow_iso(),
+        }
+        temporary = resolve_inside(
+            str(checkpoint_dir),
+            f".{digest}.{os.getpid()}.{threading.get_ident()}.tmp",
+        )
+        try:
+            with temporary.open("x", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, target)
+            directory_fd = os.open(checkpoint_dir, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        return summary
 
     @staticmethod
     def _prefetch_key(query: str, session_id: str) -> str:

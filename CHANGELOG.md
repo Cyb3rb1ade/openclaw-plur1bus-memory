@@ -7,6 +7,48 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [Hermes 7.4.8 / 7.4.8-hermes] — 2026-08-25
+
+Integrates the immutable `v7.4.8` tag while retaining the native Hermes
+provider, controls, installer, Jina, retrieval, and model-provider
+distribution. The incremental contract matrix is
+`docs/audits/hermes-7.4.8-contract-matrix.md`.
+
+### Fixed
+
+- **Secret-related words no longer create false critical events in Hermes.**
+  The native classifier now requires an assigned value or recognizable token
+  shape before credential content is considered secret-like. Concrete
+  credentials remain suppressed and reviewable; explicit critical language,
+  high importance, and `neverForget` keep their existing behavior.
+- **Pre-compression evidence is durable on Hermes checkpoint API v2.** The
+  provider advertises API v2, filters raw legacy-host transcripts down to
+  direct user/assistant evidence, excludes system/tool/prior-summary material,
+  and commits a content-addressed JSON checkpoint using fsync and atomic
+  replacement before flushing queued captures. Checkpoint failures propagate
+  so a host configured with `checkpoint_required` can fail closed.
+
+### Hermes reachability
+
+- The v7.4.2 skill-miner report path, v7.4.3–7.4.4 reminder extraction and
+  persistence, v7.4.5/v7.4.8 JavaScript LanceDB boolean predicates, and v7.4.7
+  classify-recent cron accounting have no native Hermes call path. They remain
+  fully present in the packaged OpenClaw runtime; no unreachable Python shims
+  were added.
+- The v7.4.6 critical-classifier intent is reachable during native Hermes
+  capture and is therefore ported and regression-tested in Python.
+- The current upstream Hermes host adds checkpoint API v2 and optional
+  `compression.checkpoint_required`. The provider remains compatible with the
+  installed Hermes 0.20.5 host while becoming fail-closed-capable after a host
+  update enables that contract.
+
+### Preserved
+
+- Existing Hermes data, provider/model selection, Jina opt-in, profile configs,
+  and launch scheduling are unchanged. GitHub Packages remains on
+  `publishConfig.tag = hermes`; npm `latest` is not moved. Hermes is not
+  published to ClawHub.
+
 ## [Hermes 7.4.1 / 7.4.1-hermes] — 2026-08-22
 
 Integrates the immutable `v7.4.1` tag while retaining the Hermes provider,
