@@ -25,6 +25,80 @@ const STANDARD_OPENCLAW_DIST_DIRS = [
   "/usr/local/lib/node_modules/openclaw/dist",
 ];
 
+function findNativeCapabilityFile(distDir, label, filePattern, predicate) {
+  const matches = readdirSync(distDir)
+    .filter((name) => filePattern.test(name))
+    .filter((name) => predicate(readFileSync(path.join(distDir, name), "utf8")));
+  if (matches.length !== 1) {
+    throw new Error(`expected exactly one OpenClaw native ${label}, found ${matches.length}`);
+  }
+  return matches[0];
+}
+
+/**
+ * Inspect the published OpenClaw dist for the complete public no-model cron
+ * command plus Gateway plugin-command path used by PLUR1BUS.
+ *
+ * @param {string} [distDir]
+ * @returns {{ready: true, status: "native-command", files: {commandRunner: string, cronCli: string, agentCli: string, agentGateway: string, pluginCommand: string}}}
+ */
+export function inspectNativeCronPluginCommandCapability(distDir = resolveOpenClawDistDir()) {
+  const commandRunner = findNativeCapabilityFile(
+    distDir,
+    "command runner with NO_REPLY suppression",
+    /^server-cron-[A-Za-z0-9_-]+\.js$/,
+    (source) => source.includes("Executes a cron command payload without starting an agent/model run")
+      && source.includes("runCronCommandJob")
+      && source.includes('isSilentReplyText(result.summary, "NO_REPLY")'),
+  );
+  const cronCli = findNativeCapabilityFile(
+    distDir,
+    "cron CLI command-argv surface",
+    /^cron-cli-[A-Za-z0-9_-]+\.js$/,
+    (source) => source.includes("--command-argv <json>")
+      && source.includes("--timeout-seconds <n>")
+      && source.includes("--output-max-bytes <n>"),
+  );
+  const agentCli = findNativeCapabilityFile(
+    distDir,
+    "Gateway agent CLI surface",
+    /^register\.agent-turn-[A-Za-z0-9_-]+\.js$/,
+    (source) => source.includes("Run an agent turn via the Gateway")
+      && source.includes("--session-key <key>")
+      && source.includes("--agent <id>")
+      && source.includes("--channel <channel>"),
+  );
+  const agentGateway = findNativeCapabilityFile(
+    distDir,
+    "Gateway agent dispatcher",
+    /^agent-via-gateway-[A-Za-z0-9_-]+\.js$/,
+    (source) => source.includes('method: "agent"')
+      && source.includes("Waiting for agent reply"),
+  );
+  const pluginCommand = findNativeCapabilityFile(
+    distDir,
+    "pre-model plugin command dispatcher",
+    /^commands-handlers\.runtime-[A-Za-z0-9_-]+\.js$/,
+    (source) => source.includes("Handles commands registered by plugins, bypassing the LLM agent")
+      && source.includes("matchPluginCommandInvocation")
+      && source.includes("executePluginCommandDispatch"),
+  );
+  return {
+    ready: true,
+    status: "native-command",
+    files: { commandRunner, cronCli, agentCli, agentGateway, pluginCommand },
+  };
+}
+
+/** Return whether the complete native Beta-era path is present without throwing. */
+export function isNativeCronPluginCommandCapabilityReady(distDir = resolveOpenClawDistDir()) {
+  try {
+    return inspectNativeCronPluginCommandCapability(distDir).ready === true;
+  } catch {
+    return false;
+  }
+}
+
 function openClawDistFromEntry(entryPath) {
   if (typeof entryPath !== "string" || entryPath.length === 0) return null;
   try {

@@ -35,6 +35,50 @@ const {
 } = pluginModule;
 
 describe("gateway registration host-patch guard", () => {
+  it("uses the native Beta-era capability without mutating the OpenClaw bundle", () => {
+    const api = makeApi();
+    let patchCalls = 0;
+
+    assert.equal(
+      ensureCronDirectDispatchAtRegistration(api, {
+        distDir: "/fixture/openclaw/dist",
+        isNativeImpl: () => true,
+        applyImpl: () => {
+          patchCalls += 1;
+          throw new Error("legacy patch must not run");
+        },
+      }),
+      true,
+    );
+    assert.equal(patchCalls, 0);
+    assert.ok(api.logs.some(([level, message]) => (
+      level === "info" && message.includes("native command dispatch ready")
+    )));
+  });
+
+  it("fails closed when native capability inspection itself throws", () => {
+    const api = makeApi();
+    let patchCalls = 0;
+
+    assert.equal(
+      ensureCronDirectDispatchAtRegistration(api, {
+        distDir: "/fixture/openclaw/dist",
+        isNativeImpl: () => {
+          throw new Error("ambiguous native bundle");
+        },
+        applyImpl: () => {
+          patchCalls += 1;
+          return { status: "applied" };
+        },
+      }),
+      false,
+    );
+    assert.equal(patchCalls, 0);
+    assert.ok(api.logs.some(([level, message]) => (
+      level === "warn" && message.includes("ambiguous native bundle")
+    )));
+  });
+
   it("applies the host patch and reports readiness", () => {
     const api = makeApi();
     const calls = [];

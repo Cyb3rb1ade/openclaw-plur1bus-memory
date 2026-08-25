@@ -50,13 +50,17 @@ describe("cron direct-dispatch patch wiring", () => {
     assert.match(indexSource, /guardUnsafeDirectCronTurn/);
   });
 
-  it("gates automatic cron setup on host-patch readiness", () => {
+  it("prefers native command dispatch and gates fallback setup on readiness", () => {
     const source = readFileSync(
       path.join(repoRoot, "scripts/setup-feature-crons.mjs"),
       "utf8",
     );
 
-    assert.match(source, /ensureCronDirectDispatchImpl\(\{ apply: !opts\.dryRun \}\)/);
+    assert.match(source, /probeNativeCronCommandDispatch\(openclawImpl\)/);
+    assert.match(source, /ensureCronDirectDispatchImpl\(\{ apply: !opts\.dryRun, openclawImpl \}\)/);
+    assert.match(source, /dispatch\?\.status === "native-command"/);
+    assert.match(source, /planNativeFeaturePayloadMigration/);
+    assert.match(source, /"--command-argv"/);
     assert.match(source, /host-direct-dispatch-unavailable/);
     assert.match(source, /planUnsafeDirectCronDisables\(existingJobs\)/);
     assert.match(source, /\["cron", "edit", job\.id, "--disable", "--name", job\.safetyName\]/);
