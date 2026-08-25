@@ -97,6 +97,242 @@ model-provider distribution. The full contract matrix lives in
   existing LanceDB stores. The OpenClaw package keeps
   `publishConfig.registry = https://npm.pkg.github.com` and
   `publishConfig.tag = hermes`; `latest` is unchanged.
+## [7.4.8] — 2026-08-25
+
+### Behoben
+
+- **Der Typ-Fix aus 7.4.5 fehlte an einer zweiten Stelle.**
+  `findUnconfirmedCritical` — genutzt vom taeglichen Cron
+  `auto-accept-stale-criticals` — baute weiterhin
+
+  ```sql
+  (confirmed IS NULL OR confirmed = false OR confirmed = 0)
+  ```
+
+  und scheiterte aus demselben Grund: Lance validiert den Filterausdruck vorab
+  und vollstaendig, das nicht zum Spaltentyp passende Literal laesst die ganze
+  Abfrage fallen — auch als OR-Zweig. Beobachtet am 25.08.2026: **3x**
+  `[findUnconfirmedCritical.where] failed`, jeder Lauf fiel auf den vollen
+  Tabellen-Scan zurueck.
+
+  Die Funktion liest jetzt wie ihre Schwester das Schema und waehlt das Literal
+  ueber `buildUnconfirmedClause()`. Gemessen an drei produktiven Tabellen:
+  vorher Fehler, danach 12 / 51 / 0 Treffer in 62 / 39 / 20 ms.
+
+
+## [7.4.7] — 2026-08-25
+
+### Behoben
+
+- **Ein Teilfehler in `classify-recent` wurde als Totalausfall gemeldet — aber
+  nur manchmal.** `formatClassifierCronReply` warf, sobald `errors > 0` **und**
+  zufaellig keine Push-Karte anfiel. Existierte dagegen eine Push-Nachricht, war
+  derselbe Teilfehler bloss eine Warnung. Am 25.08.2026 traf beides am selben
+  Tag denselben Job:
+
+  | Lauf | Ergebnis | Meldung |
+  |---|---|---|
+  | 02:20 | 15 verarbeitet, 1 gepusht, **1 Fehler** | „⚠️ 1 weitere Karte konnte nicht verarbeitet werden" |
+  | 11:19 | 1 verarbeitet, 0 gepusht, **2 Fehler** | **„Cron job failed"** |
+
+  Ein Lauf, bei dem ein Sechzehntel scheiterte, galt als Warnung; einer, bei dem
+  zwei Drittel scheiterten, als Katastrophe. Der Unterschied war allein, ob
+  gerade etwas zu pushen war.
+
+  Neu wird nur noch hart geworfen, wenn **keine einzige** Karte durchkam
+  (`processed === 0`). Kam mindestens eine durch, meldet der Cron dieselbe
+  Teilfehler-Warnung wie der Push-Zweig — sichtbar, aber ohne Fehlalarm. Ein
+  Job-Fehler (`result.error`) wirft unveraendert.
+
+### Hinweis
+
+Die zugrunde liegenden `TimeoutError` der Klassifizierer-Aufrufe behebt das
+nicht: ein Aufruf mit `maxTokens: 16` bricht dabei nach rund 30 Sekunden ab
+(`[model-fetch] error … elapsedMs=29761 AbortError`). Das ist ein Endpunkt- bzw.
+Lastproblem und aelter als dieser Fix — am Vortag traten 9 solche Timeouts auf.
+
+
+## [7.4.6] — 2026-08-25
+
+### Behoben
+
+- **`zugang_passwort` klassifizierte auf das Wortfeld statt auf ein Geheimnis.**
+  Die Typdefinition im Klassifizierer-Prompt lautete
+
+  ```
+  - zugang_passwort:  Passwort, API-Key, Login, Token
+  ```
+
+  Alle uebrigen Typen sind ueber VORHANDENEN Inhalt definiert (Diagnose,
+  Medikament, IBAN) — hier stand mit **„Login" eine Taetigkeit** in der Liste.
+  Das Modell stufte daraufhin jede Nachricht ein, die ueber Zugaenge *spricht*.
+
+  In einem produktiven Bestand waren dadurch **4 von 4** offenen
+  `zugang_passwort`-Karten Fehltreffer, keine davon mit Passwort-, Token- oder
+  API-Key-Muster:
+
+  - ein Audio-Transkript („also ich du bist so witzig ne ja ernsthaft …")
+  - eine Werkzeugliste (`browser_find`, `browser_click`, `browser_fill_form`)
+  - die Anweisung „Bitte beide Logins testen, **Zugangsdaten NICHT im Text
+    nennen**" — die Aufforderung, keine zu nennen, galt als Zugangsdaten
+  - die Bemerkung, dass ein Agent Zugriff auf ein Abo hat
+
+  Der Schaden war doppelt: der Inhalt wurde im Push **ausgeblendet**
+  („moeglicherweise Zugangsdaten"), und jede Karte verlangte eine Entscheidung.
+
+  Das Kriterium verschiebt sich jetzt vom Thema auf einen **tatsaechlich
+  vorhandenen Geheimniswert** und grenzt die blosse Erwaehnung von Login,
+  Zugriff, Konten sowie Profil-, Werkzeug- und Dienstnamen ausdruecklich aus.
+  Die uebrigen Typdefinitionen bleiben unveraendert; `gesundheit` arbeitete in
+  derselben Stichprobe korrekt (69 Karten, durchweg echte medizinische Inhalte).
+
+### Hinweis
+
+Bereits falsch eingestufte Karten werden nicht automatisch umgeschrieben. Sie
+lassen sich mit `/plur1bus critical reject <ref>` verwerfen — das loescht die
+Erinnerung nicht, sondern nur die Kennzeichnung.
+
+
+## [7.4.5] — 2026-08-25
+
+### Behoben
+
+- **Kritische Erinnerungen liessen sich nicht bestaetigen: „I can't find a pending
+  PLUR1BUS review with the reference …".** `findPendingCriticalReviews` baute die
+  Pushdown-Klausel als
+
+  ```sql
+  (confirmed IS NULL OR confirmed = false OR confirmed = 0)
+  ```
+
+  um typ-agnostisch zu sein. Lance/DataFusion validiert einen Filterausdruck aber
+  **vorab und vollstaendig**: das Literal, das nicht zum Spaltentyp passt, laesst
+  die gesamte Abfrage scheitern — auch als blosser OR-Zweig. Die
+  Kompatibilitaetsklausel war damit genau der Grund, warum der Pushdown
+  **auf jeder Tabelle** scheiterte, unabhaengig vom Typ der Spalte.
+
+  Folge: Rueckfall auf den vollen Tabellen-Scan, dort Timeout nach 30 000 ms, der
+  Fehler wurde in ein `catch` verschluckt und die Kartenliste blieb leer. Der
+  Nutzer bekam „Referenz nicht gefunden", obwohl die Karte offen in der Tabelle
+  lag und die Kurzreferenz korrekt war.
+
+  Neu waehlt `buildUnconfirmedClause()` das Literal passend zum tatsaechlichen
+  Arrow-Typ der Spalte (`Bool` → `false`, `Int64`/`Float`/`Decimal` → `0`). Ist
+  der Typ nicht ermittelbar, gilt die Boolean-Form; eine **leere** Klausel waere
+  schaedlich, weil ohne `confirmed`-Pushdown bestaetigte Zeilen die offenen aus
+  dem Limit verdraengen (Regression B2).
+
+  Gemessen an drei produktiven Tabellen: vorher Fehler und 30-Sekunden-Scan,
+  danach 17 Treffer in 42 ms, 59 in 30 ms, 0 in 13 ms.
+
+### Hinweis
+
+Der Spaltentyp von `confirmed` weicht zwischen Installationen ab (`Int64` vs.
+`Bool`) — vermutlich ein Ueberbleibsel frueher Schema-Staende. Der Fix behandelt
+beide; eine Vereinheitlichung ist nicht noetig.
+
+
+## [7.4.4] — 2026-08-24
+
+Nachtrag zu 7.4.3: dort wurde die *Masse* der Phantom-Reminder beseitigt, der
+eigentliche Themenverlust blieb aber bestehen.
+
+### Behoben
+
+- **Reminder speicherten nur die Zeitfloskel, nicht das Thema.** Der Extraktor
+  legte als Text `parsed.evidence` ab — also woertlich „in 10 minuten". Beim
+  faelligen `<reminder-nudge>` las der Agent damit „Faellige Erinnerung: 'in 10
+  minuten'" ohne jeden Gegenstand und ergaenzte einen aus dem Recall-Kontext.
+  Neu wird der **Satz** gespeichert, der die Zeitangabe traegt (neue Funktion
+  `buildReminderText()`): aus „Erinnere mich in 10 Minuten an den Kuchen im
+  Ofen" wird genau dieser Satz statt „in 10 minuten". Laengere Nachrichten
+  werden auf den betroffenen Satz reduziert und bei 200 Zeichen gekappt, damit
+  der Nudge knapp bleibt.
+
+- **`saveReminder()` verwarf das `source`-Feld.** Der Parameter wurde
+  entgegengenommen und destrukturiert, aber nie in die Zeile geschrieben.
+  Gespeicherte Reminder liessen sich dadurch nicht ihrem Urheber zuordnen — bei
+  der Aufarbeitung der 7.4.3-Altlast musste der Urheber muehsam ueber
+  Zeitfenster und Textabgleich rekonstruiert werden. `source` wird jetzt
+  persistiert (Default `"user"`).
+
+
+## [7.4.3] — 2026-08-24
+
+### Behoben
+
+- **Phantom-Erinnerungen: der Agent erfand Themen zu inhaltslosen Remindern.**
+  Nach jedem Auto-Capture lief die Reminder-Extraktion ungefiltert über *jedes*
+  erfasste Item. Drei Fehler wirkten zusammen:
+
+  1. `parseReminderIntent` erkannte vage Floskeln über `lower.includes(phrase)`
+     — ein Substring-Vergleich ohne Wortgrenze und ohne jede Absichtsprüfung.
+     „Ich schaue das später an" wurde damit zum Reminder, „Eva nimmt abends
+     **Bald**rian" ebenfalls. Gespeichert wurde als Reminder-Text nur die
+     Floskel selbst (`parsed.evidence`), das Thema ging verloren. Beim fälligen
+     `<reminder-nudge>` sah der Agent also „Fällige Erinnerung: 'später'" ohne
+     Gegenstand — und füllte die Lücke mit einem Thema aus dem gerade
+     injizierten Recall-Kontext. Für die Nutzerin sah das aus wie eine
+     Erinnerung an Dinge, über die nie jemand gesprochen hatte.
+
+  2. `source = it.role === "user" ? "user" : "agent"` liess auch die **eigenen**
+     Antworten des Agenten Reminder anlegen. Das ergab eine selbstverstärkende
+     Schleife: der Agent schreibt „ich melde mich in einer halben Stunde",
+     bekommt 30 Minuten später einen themenlosen Reminder und meldet sich
+     erneut.
+
+  3. Das Feature hatte **keinen Schalter** — es liess sich nicht abstellen.
+
+  Der vage Zweig ist ersatzlos entfernt; der Parser erkennt jetzt
+  ausschliesslich relative Zeiten („in 10 Minuten"). Extrahiert wird nur noch
+  aus `role === "user"`. Die Gate-Logik liegt in der neuen, testbaren
+  `lib/reminder-extraction.js`; `index.js` ruft nur noch
+  `planReminderExtraction()`.
+
+  Ausmass im Bestand einer betroffenen Installation: **3741 von 14 817 Zeilen
+  (25 Prozent)** der Agenten-Tabelle waren solche Reminder — 3393 davon mit dem
+  Text „später", „bald", „nachher" oder „later", die als
+  `pending_confirmation` nie zugestellt werden konnten und trotzdem mit
+  `importance: 0.9` samt Embedding im Recall-Pool lagen. Dazu rund **9900
+  Speicherversuche pro Tag** im Log, jeder mit einer LanceDB-Dedupe-Query plus
+  einem `embedQuery`.
+
+### Neu
+
+- **`reminders.autoExtract`** (Default `true`) schaltet die Reminder-Extraktion
+  aus dem Auto-Capture ab, analog zu den übrigen Feature-Gates
+  (`metaCognition.enabled`, `temporalContext.enabled`).
+
+### Migration
+
+Bereits gespeicherter Reminder-Müll verschwindet nicht von selbst. Zum Aufräumen
+pro Namespace:
+
+```
+memoryKind = 'reminder' AND reminderStatus = 'pending_confirmation'
+```
+
+Diese Zeilen sind per Definition unzustellbar (`listDueReminders` listet
+`pending_confirmation` nicht) und können gefahrlos gelöscht werden.
+
+
+## [7.4.2] — 2026-08-22
+
+### Behoben
+
+- **Der skill-miner-Report wurde nie geschrieben.** `runSkillMiner` baute den
+  Pfad `<workspaceDir>/.adaptive-learning/skill-miner-report.jsonl` und rief
+  `appendFileSync` darauf auf, **ohne das Verzeichnis vorher anzulegen**. Da
+  `.adaptive-learning/` unter den ACL-Workspaces gar nicht existierte, scheiterte
+  jeder Lauf mit `ENOENT: no such file or directory` — verschluckt im `catch` als
+  blosse Warnung (`report append failed: …`). Der Report ging damit still
+  verloren, seit es ihn gibt, und der Ausfall blieb entsprechend lange unbemerkt.
+
+  Das Verzeichnis wird jetzt vor dem Anhängen angelegt, wie es die übrigen
+  Schreiber unter `.adaptive-learning/` (`sql-safety.js`, `feedback-log.js`,
+  `reply-outcome-tracking.js`) ohnehin schon tun. Der Pfad selbst bleibt
+  unverändert.
+
 ## [7.4.1] — 2026-08-20
 
 ### Behoben
