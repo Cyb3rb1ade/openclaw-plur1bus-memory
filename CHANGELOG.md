@@ -7,6 +7,38 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.7] — 2026-08-25
+
+### Behoben
+
+- **Ein Teilfehler in `classify-recent` wurde als Totalausfall gemeldet — aber
+  nur manchmal.** `formatClassifierCronReply` warf, sobald `errors > 0` **und**
+  zufaellig keine Push-Karte anfiel. Existierte dagegen eine Push-Nachricht, war
+  derselbe Teilfehler bloss eine Warnung. Am 25.08.2026 traf beides am selben
+  Tag denselben Job:
+
+  | Lauf | Ergebnis | Meldung |
+  |---|---|---|
+  | 02:20 | 15 verarbeitet, 1 gepusht, **1 Fehler** | „⚠️ 1 weitere Karte konnte nicht verarbeitet werden" |
+  | 11:19 | 1 verarbeitet, 0 gepusht, **2 Fehler** | **„Cron job failed"** |
+
+  Ein Lauf, bei dem ein Sechzehntel scheiterte, galt als Warnung; einer, bei dem
+  zwei Drittel scheiterten, als Katastrophe. Der Unterschied war allein, ob
+  gerade etwas zu pushen war.
+
+  Neu wird nur noch hart geworfen, wenn **keine einzige** Karte durchkam
+  (`processed === 0`). Kam mindestens eine durch, meldet der Cron dieselbe
+  Teilfehler-Warnung wie der Push-Zweig — sichtbar, aber ohne Fehlalarm. Ein
+  Job-Fehler (`result.error`) wirft unveraendert.
+
+### Hinweis
+
+Die zugrunde liegenden `TimeoutError` der Klassifizierer-Aufrufe behebt das
+nicht: ein Aufruf mit `maxTokens: 16` bricht dabei nach rund 30 Sekunden ab
+(`[model-fetch] error … elapsedMs=29761 AbortError`). Das ist ein Endpunkt- bzw.
+Lastproblem und aelter als dieser Fix — am Vortag traten 9 solche Timeouts auf.
+
+
 ## [7.4.6] — 2026-08-25
 
 ### Behoben
