@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { DEFAULT_LOCAL_RERANKER_MODEL, DEFAULT_LOCAL_E5_MODEL } from "../lib/providers/dimensions.js";
 
 describe("provider defaults", () => {
-  it("DEFAULT_LOCAL_RERANKER_MODEL ist BAAI/bge-reranker-v2-m3", () => {
-    assert.strictEqual(DEFAULT_LOCAL_RERANKER_MODEL, "BAAI/bge-reranker-v2-m3");
+  it("DEFAULT_LOCAL_RERANKER_MODEL ist der verifizierte BGE-ONNX-Export", () => {
+    assert.strictEqual(DEFAULT_LOCAL_RERANKER_MODEL, "woxpas-ai/bge-reranker-v2-m3-onnx");
   });
   it("Alibaba ist NICHT mehr der Default", () => {
     assert.notEqual(DEFAULT_LOCAL_RERANKER_MODEL, "Alibaba-NLP/gte-reranker-modernbert-base");

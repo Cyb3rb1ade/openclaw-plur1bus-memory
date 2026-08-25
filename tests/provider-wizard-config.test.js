@@ -14,10 +14,10 @@ describe("provider-wizard config output", () => {
       provider: "cohere",
       apiKeyEnv: "COHERE_API_KEY",
       fallbackProvider: "local-transformers",
-      fallbackModel: "BAAI/bge-reranker-v2-m3",
+      fallbackModel: "woxpas-ai/bge-reranker-v2-m3-onnx",
     });
     assert.strictEqual(cfg.fallbackProvider, "local-transformers");
-    assert.strictEqual(cfg.fallbackModel, "BAAI/bge-reranker-v2-m3");
+    assert.strictEqual(cfg.fallbackModel, "woxpas-ai/bge-reranker-v2-m3-onnx");
   });
 
   it("Disabled produziert enabled=false", () => {
@@ -33,8 +33,8 @@ describe("provider-wizard config output", () => {
   it("Local BGE Config enthält local.model oder model", () => {
     const cfg = normalizeRerankerConfig({
       provider: "local-transformers",
-      model: "BAAI/bge-reranker-v2-m3",
+      model: "woxpas-ai/bge-reranker-v2-m3-onnx",
     });
-    assert.strictEqual(cfg.local?.model ?? cfg.model, "BAAI/bge-reranker-v2-m3");
+    assert.strictEqual(cfg.local?.model ?? cfg.model, "woxpas-ai/bge-reranker-v2-m3-onnx");
   });
 });

@@ -13,8 +13,8 @@ describe("provider-factory", () => {
     delete process.env._FACTORY_TEST_KEY;
   });
 
-  it("DEFAULT_LOCAL_RERANKER_MODEL ist BAAI/bge-reranker-v2-m3", () => {
-    assert.strictEqual(DEFAULT_LOCAL_RERANKER_MODEL, "BAAI/bge-reranker-v2-m3");
+  it("DEFAULT_LOCAL_RERANKER_MODEL ist der verifizierte BGE-ONNX-Export", () => {
+    assert.strictEqual(DEFAULT_LOCAL_RERANKER_MODEL, "woxpas-ai/bge-reranker-v2-m3-onnx");
   });
 
   it("createEmbeddingProvider mit local-transformers gibt LocalTransformersEmbeddingProvider", async () => {
@@ -52,7 +52,7 @@ describe("provider-factory", () => {
       provider: "cohere",
       apiKeyEnv: "_FACTORY_TEST_KEY",
       fallbackProvider: "local-transformers",
-      fallbackModel: "BAAI/bge-reranker-v2-m3",
+      fallbackModel: "woxpas-ai/bge-reranker-v2-m3-onnx",
     });
     const provider = createRerankerProvider(cfg, null);
     assert.ok(provider instanceof ChainedRerankerProvider);
