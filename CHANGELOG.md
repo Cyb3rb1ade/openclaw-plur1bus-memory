@@ -7,6 +7,29 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.8] — 2026-08-25
+
+### Behoben
+
+- **Der Typ-Fix aus 7.4.5 fehlte an einer zweiten Stelle.**
+  `findUnconfirmedCritical` — genutzt vom taeglichen Cron
+  `auto-accept-stale-criticals` — baute weiterhin
+
+  ```sql
+  (confirmed IS NULL OR confirmed = false OR confirmed = 0)
+  ```
+
+  und scheiterte aus demselben Grund: Lance validiert den Filterausdruck vorab
+  und vollstaendig, das nicht zum Spaltentyp passende Literal laesst die ganze
+  Abfrage fallen — auch als OR-Zweig. Beobachtet am 25.08.2026: **3x**
+  `[findUnconfirmedCritical.where] failed`, jeder Lauf fiel auf den vollen
+  Tabellen-Scan zurueck.
+
+  Die Funktion liest jetzt wie ihre Schwester das Schema und waehlt das Literal
+  ueber `buildUnconfirmedClause()`. Gemessen an drei produktiven Tabellen:
+  vorher Fehler, danach 12 / 51 / 0 Treffer in 62 / 39 / 20 ms.
+
+
 ## [7.4.7] — 2026-08-25
 
 ### Behoben
