@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import stat
 import threading
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
@@ -468,23 +469,26 @@ class Plur1busMemoryProvider(MemoryProvider):
             sort_keys=True,
         )
         digest = _fingerprint(canonical)
-        root = self._base_path()
-        checkpoint_dir = resolve_inside(
-            str(root), "state", "pre-compress-checkpoints"
-        )
+        root = self._base_path().expanduser().resolve()
+        state_dir = resolve_inside(str(root), "state")
+        checkpoint_lexical = state_dir / "pre-compress-checkpoints"
+        if checkpoint_lexical.is_symlink():
+            raise RuntimeError("pre-compress checkpoint directory must not be a symlink")
+        checkpoint_dir = resolve_inside(str(root), "state", "pre-compress-checkpoints")
         checkpoint_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if checkpoint_dir.is_symlink() or not checkpoint_dir.is_dir():
+            raise RuntimeError("pre-compress checkpoint path must be a directory")
+        os.chmod(checkpoint_dir, 0o700)
         target = resolve_inside(str(checkpoint_dir), f"{digest}.json")
         summary = (
             "PLUR1BUS durably checkpointed "
             f"{len(evidence)} direct evidence messages before compression "
             f"(sha256:{digest})."
         )
-        if target.is_file():
-            existing = json.loads(target.read_text(encoding="utf-8"))
-            if not isinstance(existing, dict) or existing.get("digest") != digest:
-                raise RuntimeError("pre-compress checkpoint digest collision")
-            if any(existing.get(key) != value for key, value in identity.items()):
-                raise RuntimeError("pre-compress checkpoint identity mismatch")
+        if target.exists() or target.is_symlink():
+            self._validate_and_sync_checkpoint(
+                target, checkpoint_dir, identity, digest
+            )
             return summary
 
         payload = {
@@ -496,25 +500,74 @@ class Plur1busMemoryProvider(MemoryProvider):
             str(checkpoint_dir),
             f".{digest}.{os.getpid()}.{threading.get_ident()}.tmp",
         )
+        fd = -1
         try:
-            with temporary.open("x", encoding="utf-8") as handle:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(temporary, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
                 json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
                 handle.write("\n")
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.chmod(temporary, 0o600)
             os.replace(temporary, target)
-            directory_fd = os.open(checkpoint_dir, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            self._validate_and_sync_checkpoint(
+                target, checkpoint_dir, identity, digest
+            )
         finally:
+            if fd >= 0:
+                os.close(fd)
             try:
                 temporary.unlink()
             except FileNotFoundError:
                 pass
         return summary
+
+    @staticmethod
+    def _validate_and_sync_checkpoint(
+        target: Path,
+        checkpoint_dir: Path,
+        identity: dict[str, Any],
+        digest: str,
+    ) -> None:
+        """Validate and durably sync a checkpoint on every successful path."""
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(target, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise RuntimeError("pre-compress checkpoint must be a regular file")
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            else:  # pragma: no cover - platform fallback
+                os.chmod(target, 0o600)
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                fd = -1
+                existing = json.load(handle)
+                if not isinstance(existing, dict) or existing.get("digest") != digest:
+                    raise RuntimeError("pre-compress checkpoint digest collision")
+                if any(existing.get(key) != value for key, value in identity.items()):
+                    raise RuntimeError("pre-compress checkpoint identity mismatch")
+                os.fsync(handle.fileno())
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+        directory_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            directory_flags |= os.O_NOFOLLOW
+        directory_fd = os.open(checkpoint_dir, directory_flags)
+        try:
+            if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+                raise RuntimeError("pre-compress checkpoint parent must be a directory")
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     @staticmethod
     def _prefetch_key(query: str, session_id: str) -> str:

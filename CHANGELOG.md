@@ -25,8 +25,11 @@ distribution. The incremental contract matrix is
   provider advertises API v2, filters raw legacy-host transcripts down to
   direct user/assistant evidence, excludes system/tool/prior-summary material,
   and commits a content-addressed JSON checkpoint using fsync and atomic
-  replacement before flushing queued captures. Checkpoint failures propagate
-  so a host configured with `checkpoint_required` can fail closed.
+  replacement before flushing queued captures. Every idempotent reuse
+  revalidates and fsyncs the target plus parent directory before success;
+  private `0700`/`0600` modes apply before evidence is written, including when
+  repairing an existing checkpoint. Checkpoint failures propagate so a host
+  configured with `checkpoint_required` can fail closed.
 
 ### Hermes reachability
 
@@ -48,6 +51,16 @@ distribution. The incremental contract matrix is
   and launch scheduling are unchanged. GitHub Packages remains on
   `publishConfig.tag = hermes`; npm `latest` is not moved. Hermes is not
   published to ClawHub.
+
+### Independent audit
+
+- The release audit found and fixed three blockers before publication:
+  idempotent checkpoint reuse could acknowledge the interval before directory
+  fsync, sensitive temp-file permissions depended briefly on the process umask,
+  and the first secret parser missed whitespace/multiple assignments while
+  accepting masks and placeholders. Deterministic concurrency, post-replace
+  retry, permission, positive-secret, and placeholder regressions cover all
+  three fixes.
 
 ## [Hermes 7.4.1 / 7.4.1-hermes] — 2026-08-22
 

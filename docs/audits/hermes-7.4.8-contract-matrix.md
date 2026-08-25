@@ -29,8 +29,10 @@ context rewriting.
 host's raw transcript, writes a content-addressed checkpoint below
 `state/pre-compress-checkpoints/`, fsyncs file and directory around an atomic
 replacement, and only then flushes queued captures. Identical evidence is
-idempotent. Write or identity failures propagate to preserve the host's
-fail-closed guarantee.
+idempotent but still revalidates and fsyncs the visible file plus its parent
+before acknowledging success. Checkpoint directories are forced to `0700` and
+files are created as `0600` before evidence is written. Write, sync, permission,
+or identity failures propagate to preserve the host's fail-closed guarantee.
 
 The locally installed Hermes checkout audited for this release is
 `76e306c45843607e6dc135d23c13d3654417ebd5` (`0.20.5`). It does not yet enforce
@@ -45,6 +47,7 @@ does not update the Hermes host itself.
 - Concrete-secret positives: assigned password, API key, and access code remain
   critical and content-suppressed.
 - Checkpoint v2: direct evidence only, content-addressed idempotence, byte-stable
-  replay, and propagated filesystem failure.
+  replay, private modes during creation, concurrent fast-path durability,
+  post-replace fsync retry, and propagated filesystem failure.
 - Package inspection requires this matrix and version-aligned npm and Python
   metadata in the Hermes artifact.

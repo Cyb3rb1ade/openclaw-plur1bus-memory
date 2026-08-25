@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import tempfile
 import threading
 import time
@@ -566,6 +568,105 @@ providers:
                 provider.on_pre_compress([
                     {"role": "user", "content": "This evidence must not be discarded."},
                 ])
+            provider.shutdown()
+
+    def test_pre_compress_checkpoint_enforces_private_modes_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            provider = self._provider_for(home)
+            provider.config = {"dataDir": "plur1bus"}
+            checkpoint_dir = home / "plur1bus" / "state" / "pre-compress-checkpoints"
+            checkpoint_dir.mkdir(parents=True)
+            checkpoint_dir.chmod(0o755)
+            observed_write_modes: list[int] = []
+            original_dump = json.dump
+
+            def record_mode(payload, handle, **kwargs):
+                observed_write_modes.append(stat.S_IMODE(os.fstat(handle.fileno()).st_mode))
+                return original_dump(payload, handle, **kwargs)
+
+            previous_umask = os.umask(0o022)
+            try:
+                with patch("plur1bus_hermes.provider.json.dump", side_effect=record_mode):
+                    provider.on_pre_compress([
+                        {"role": "user", "content": "Private checkpoint evidence."},
+                    ])
+            finally:
+                os.umask(previous_umask)
+
+            checkpoint_file = next(checkpoint_dir.glob("*.json"))
+            self.assertEqual(observed_write_modes, [0o600])
+            self.assertEqual(stat.S_IMODE(checkpoint_dir.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(checkpoint_file.stat().st_mode), 0o600)
+            provider.shutdown()
+
+    def test_pre_compress_checkpoint_retry_reestablishes_directory_durability(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            provider = self._provider_for(home)
+            provider.config = {"dataDir": "plur1bus"}
+            original_fsync = os.fsync
+            directory_syncs = 0
+
+            def fail_first_directory_sync(fd: int) -> None:
+                nonlocal directory_syncs
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_syncs += 1
+                    if directory_syncs == 1:
+                        raise OSError("injected directory fsync failure")
+                original_fsync(fd)
+
+            messages = [{"role": "user", "content": "Durable retry evidence."}]
+            with patch("plur1bus_hermes.provider.os.fsync", side_effect=fail_first_directory_sync):
+                with self.assertRaisesRegex(OSError, "directory fsync"):
+                    provider.on_pre_compress(messages)
+                result = provider.on_pre_compress(messages)
+
+            self.assertIn("durably checkpointed", result)
+            self.assertEqual(directory_syncs, 2)
+            provider.shutdown()
+
+    def test_pre_compress_checkpoint_concurrent_fast_path_fsyncs_before_success(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            provider = self._provider_for(home)
+            provider.config = {"dataDir": "plur1bus"}
+            original_fsync = os.fsync
+            first_directory_sync = threading.Event()
+            release_first_sync = threading.Event()
+            directory_syncs = 0
+            errors: list[BaseException] = []
+
+            def block_first_directory_sync(fd: int) -> None:
+                nonlocal directory_syncs
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    directory_syncs += 1
+                    if directory_syncs == 1:
+                        first_directory_sync.set()
+                        if not release_first_sync.wait(timeout=5):
+                            raise TimeoutError("test did not release directory fsync")
+                original_fsync(fd)
+
+            messages = [{"role": "user", "content": "Concurrent checkpoint evidence."}]
+
+            def first_writer() -> None:
+                try:
+                    provider.on_pre_compress(messages)
+                except BaseException as error:
+                    errors.append(error)
+
+            with patch("plur1bus_hermes.provider.os.fsync", side_effect=block_first_directory_sync):
+                writer = threading.Thread(target=first_writer)
+                writer.start()
+                self.assertTrue(first_directory_sync.wait(timeout=5))
+                second = provider.on_pre_compress(messages)
+                release_first_sync.set()
+                writer.join(timeout=5)
+
+            self.assertFalse(writer.is_alive())
+            self.assertEqual(errors, [])
+            self.assertIn("durably checkpointed", second)
+            self.assertEqual(directory_syncs, 2)
             provider.shutdown()
 
 

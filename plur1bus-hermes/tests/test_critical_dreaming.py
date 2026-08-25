@@ -20,6 +20,11 @@ class CriticalDreamingTests(unittest.TestCase):
             "Bitte mein Passwort nicht im Text nennen.",
             "Der API-Key ist noch nicht konfiguriert.",
             "Wir sollten später einen neuen Token anlegen.",
+            "The password is required.",
+            "The token is optional.",
+            "API_KEY=<redacted>",
+            "password=********",
+            "token=${TOKEN}",
         ):
             with self.subTest(text=text):
                 result = classify_critical(
@@ -35,6 +40,11 @@ class CriticalDreamingTests(unittest.TestCase):
             "Mein Passwort lautet: Tr0ub4dor!42",
             "API_KEY=sk-live-example-123456",
             "Der Zugangscode ist 847291.",
+            "API key: actual-value-1234",
+            "password = secret-value-123",
+            "token is missing; password=secret-value-123",
+            "Authorization: Bearer bearer/value+with=punctuation",
+            "postgresql://alice:S3cret-pass@example.com/database",
         ):
             with self.subTest(text=text):
                 result = classify_critical(
