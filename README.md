@@ -4,7 +4,10 @@ PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolate
 
 **PLUR1BUS 7.4.8 — precise critical classification and Hermes checkpoint safety**
 
-Current version: **7.4.8** — the Hermes channel merges the immutable GitHub tag `v7.4.8` and retains its separate `-hermes` release coordinates. See the [changelog](CHANGELOG.md) for the full history.
+Current OpenClaw version: **7.4.8**. The Hermes bugfix channel is
+**7.4.8-hermes.1** with Python plugins **7.4.8.1**; it retains the immutable
+upstream `v7.4.8` code and separate release coordinates. See the
+[changelog](CHANGELOG.md) for the full history.
 
 ## What it does
 
@@ -431,24 +434,24 @@ inside a virtual environment, export `HERMES_PYTHON=/path/to/that/python`
 before installing so the runtime and the PLUR1BUS dependencies land in the
 same environment.
 
-This release commit aligns Hermes with PLUR1BUS 7.4.8: the release process
-will create the immutable `7.4.8-hermes` tag. Once that tag exists, install
+This bugfix release aligns Hermes with PLUR1BUS 7.4.8 and adds upgrade-safe
+LanceDB schema migration under the immutable `7.4.8-hermes.1` tag. Install
 both Python packages from it with the Hermes runtime's Python:
 
 ```bash
 export HERMES_PYTHON="${HERMES_PYTHON:-python3}"
-"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.8-hermes#subdirectory=plur1bus-hermes"
-"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.8-hermes#subdirectory=plur1bus-controls"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.8-hermes.1#subdirectory=plur1bus-hermes"
+"$HERMES_PYTHON" -m pip install "git+https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git@7.4.8-hermes.1#subdirectory=plur1bus-controls"
 ```
 
 The Hermes npm/OpenClaw package is a separate channel. The release process
-will publish `7.4.8-hermes` to GitHub Packages with the `hermes` dist-tag,
+publishes `7.4.8-hermes.1` to GitHub Packages with the `hermes` dist-tag,
 never `latest`; `publishConfig` enforces that registry and tag for a plain
 `npm publish`. After authenticating `@cyb3rb1ade` for
 `https://npm.pkg.github.com`, use either command once the package is available:
 
 ```bash
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.4.8-hermes --pin
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.4.8-hermes.1 --pin
 openclaw plugins install @cyb3rb1ade/plur1bus-memory@hermes --pin
 ```
 
@@ -459,7 +462,7 @@ Once the release tag exists, use the recommended full setup to clone it and run
 the installer:
 
 ```bash
-git clone --branch 7.4.8-hermes --depth 1 \
+git clone --branch 7.4.8-hermes.1 --depth 1 \
   https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git
 cd openclaw-plur1bus-memory
 ./scripts/install-hermes-plugins.sh

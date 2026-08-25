@@ -96,7 +96,10 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
 
             def add_columns(self, columns):
                 self.added_columns.append(columns)
-                self._schema.fields.append(SimpleNamespace(name="epistemicStatus"))
+                names = columns if isinstance(columns, dict) else columns.names
+                self._schema.fields.extend(
+                    SimpleNamespace(name=name) for name in names
+                )
 
             def add(self, records):
                 captured.extend(records)
@@ -120,7 +123,17 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
         self.assertEqual(captured[0]["epistemicStatus"], "observed")
         self.assertEqual(captured[1]["epistemicStatus"], "untrusted")
         # The pre-7.4.0 table gained the column exactly once, idempotently.
-        self.assertEqual(fake_table.added_columns, [{"epistemicStatus": "''"}])
+        self.assertEqual(fake_table.added_columns[0], {"epistemicStatus": "''"})
+        self.assertEqual(set(fake_table.added_columns[1].names), {
+            "scopeType",
+            "ownerKey",
+            "workspaceIdentity",
+            "ownerPlatform",
+            "ownerUser",
+            "chatScope",
+            "aclBindings",
+        })
+        self.assertEqual(len(fake_table.added_columns), 2)
 
     def test_broken_cutoff_downgrades_user_capture(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -157,6 +170,142 @@ class RuntimeCaptureWiringTests(unittest.TestCase):
             # A second ensure keeps the earliest since.
             again = ensure_epistemic_cutoff(base)
             self.assertEqual(again["since"], runtime._epistemic_cutoff["since"])
+
+    def test_legacy_table_gains_scope_columns_before_current_capture(self) -> None:
+        """A pre-scope table must accept the current ACL-bound record shape."""
+        import lancedb
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = Plur1busRuntime(
+                base,
+                {"embedding": {"provider": "local-transformers", "dimensions": 2}},
+                "main",
+            )
+            agent_dir = base / "lancedb" / "main"
+            agent_dir.mkdir(parents=True)
+            legacy_record = {
+                "id": "619c3d51-1d9d-4736-8bf9-91b38aff8246",
+                "agentId": "main",
+                "scopeKey": runtime.scope_key,
+                "sessionId": "legacy",
+                "content": "Legacy memory before ACL columns.",
+                "status": "active",
+                "type": "observation",
+                "sourceRole": "user",
+                "createdAt": "2026-08-17T00:00:00+00:00",
+                "vector": [0.1, 0.2],
+                "epistemicStatus": "",
+            }
+            lancedb.connect(str(agent_dir)).create_table(
+                "memories", data=[legacy_record],
+            )
+            runtime._embedding.embed = lambda text, purpose="passage": [0.2, 0.1]  # type: ignore[method-assign]
+            runtime._domain.on_memory = lambda record, table, **kwargs: None  # type: ignore[method-assign]
+
+            runtime._remember("Current ACL-bound memory.", "current", "user")
+
+            table = lancedb.connect(str(agent_dir)).open_table("memories")
+            self.assertEqual(table.count_rows(), 2)
+            self.assertTrue({
+                "scopeType",
+                "ownerKey",
+                "workspaceIdentity",
+                "ownerPlatform",
+                "ownerUser",
+                "chatScope",
+                "aclBindings",
+            }.issubset(set(table.schema.names)))
+            rows = table.search().where("sessionId = 'current'").limit(1).to_list()
+            self.assertEqual(rows[0]["scopeType"], "agent-private")
+            self.assertEqual(rows[0]["ownerKey"], runtime.scope_binding.owner_key)
+            self.assertEqual(rows[0]["aclBindings"]["scopeKey"], runtime.scope_key)
+            legacy = table.search().where("sessionId = 'legacy'").limit(1).to_list()[0]
+            self.assertIsNone(legacy["aclBindings"])
+
+    def test_partial_null_acl_struct_is_replaced_before_capture(self) -> None:
+        """A manual partial migration may leave a struct without scopeKey."""
+        import lancedb
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = Plur1busRuntime(
+                base,
+                {"embedding": {"provider": "local-transformers", "dimensions": 2}},
+                "main",
+            )
+            agent_dir = base / "lancedb" / "main"
+            agent_dir.mkdir(parents=True)
+            partial_acl = dict(runtime.scope_binding.as_dict())
+            partial_acl.pop("scopeKey")
+            partial_record = {
+                "id": "719c3d51-1d9d-4736-8bf9-91b38aff8246",
+                "agentId": "main",
+                "scopeKey": runtime.scope_key,
+                "scopeType": runtime.scope_binding.scope_type,
+                "ownerKey": runtime.scope_binding.owner_key,
+                "workspaceIdentity": "",
+                "ownerPlatform": "",
+                "ownerUser": "",
+                "chatScope": "",
+                "aclBindings": partial_acl,
+                "sessionId": "partial",
+                "content": "Memory with a partial ACL struct.",
+                "status": "active",
+                "type": "observation",
+                "sourceRole": "user",
+                "createdAt": "2026-08-25T00:00:00+00:00",
+                "vector": [0.1, 0.2],
+                "epistemicStatus": "",
+            }
+            table = lancedb.connect(str(agent_dir)).create_table(
+                "memories", data=[partial_record],
+            )
+            table.update(
+                where="sessionId = 'partial'", values={"aclBindings": None},
+            )
+            runtime._embedding.embed = lambda text, purpose="passage": [0.2, 0.1]  # type: ignore[method-assign]
+            runtime._domain.on_memory = lambda record, table, **kwargs: None  # type: ignore[method-assign]
+
+            runtime._remember("Capture after partial migration.", "current", "user")
+
+            repaired = lancedb.connect(str(agent_dir)).open_table("memories")
+            acl_type = repaired.schema.field("aclBindings").type
+            self.assertIn("scopeKey", {field.name for field in acl_type})
+            current = repaired.search().where(
+                "sessionId = 'current'"
+            ).limit(1).to_list()[0]
+            self.assertEqual(current["aclBindings"]["scopeKey"], runtime.scope_key)
+
+    def test_partial_populated_acl_struct_fails_closed(self) -> None:
+        """Automatic repair must not discard non-null partial ACL evidence."""
+        import lancedb
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = Plur1busRuntime(
+                base,
+                {"embedding": {"provider": "local-transformers", "dimensions": 2}},
+                "main",
+            )
+            agent_dir = base / "lancedb" / "main"
+            agent_dir.mkdir(parents=True)
+            partial_acl = dict(runtime.scope_binding.as_dict())
+            partial_acl.pop("scopeKey")
+            record = {
+                "id": "819c3d51-1d9d-4736-8bf9-91b38aff8246",
+                "agentId": "main",
+                "scopeKey": runtime.scope_key,
+                "aclBindings": partial_acl,
+                "content": "Non-null partial ACL evidence.",
+                "vector": [0.1, 0.2],
+            }
+            table = lancedb.connect(str(agent_dir)).create_table(
+                "memories", data=[record],
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "non-null values"):
+                runtime._ensure_capture_columns(table)
 
 
 if __name__ == "__main__":

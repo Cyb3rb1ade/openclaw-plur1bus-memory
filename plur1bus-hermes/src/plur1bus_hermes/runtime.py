@@ -50,6 +50,30 @@ LOGGER = logging.getLogger(__name__)
 # Mirror of upstream PLUR1BUS MAX_POSTPROCESSING_RETRIES (7.2.1 parity).
 MAX_CAPTURE_RETRIES = 5
 
+_CAPTURE_SCOPE_STRING_COLUMNS = (
+    "scopeType",
+    "ownerKey",
+    "workspaceIdentity",
+    "ownerPlatform",
+    "ownerUser",
+    "chatScope",
+)
+
+_ACL_BINDING_STRING_COLUMNS = (
+    "agentId",
+    "scopeType",
+    "workspace",
+    "workspaceIdentity",
+    "platform",
+    "user",
+    "userId",
+    "chat",
+    "chatId",
+    "account",
+    "ownerKey",
+    "scopeKey",
+)
+
 
 def _omlx_config(config: dict[str, Any]) -> dict[str, Any]:
     """Apply safe local oMLX defaults without persisting a credential."""
@@ -958,7 +982,7 @@ class Plur1busRuntime:
         }
         table, inserted = self._table(create=True, first_record=record)
         if table is not None and not inserted:
-            self._ensure_epistemic_column(table)
+            self._ensure_capture_columns(table)
             table.add([record])
         if table is not None:
             if importance is None:
@@ -967,20 +991,90 @@ class Plur1busRuntime:
                 self._domain.on_memory(record, table, importance=importance)
 
     @staticmethod
-    def _ensure_epistemic_column(table: Any) -> None:
-        """Ensure pre-7.4.0 memory tables can persist the explicit trust state."""
+    def _schema_names(table: Any) -> set[str]:
+        """Return schema names across real LanceDB tables and lightweight fakes."""
         # lancedb exposes `schema` as a property on real tables and as a method
         # on some fakes; accept both, prefer pyarrow's flat `names` when present.
         schema_attr = getattr(table, "schema", None)
         schema = schema_attr() if callable(schema_attr) else schema_attr
-        names = set(getattr(schema, "names", ()) or ()) | {
+        return set(getattr(schema, "names", ()) or ()) | {
             str(getattr(field, "name", "")) for field in getattr(schema, "fields", ()) or ()
         }
+
+    @staticmethod
+    def _ensure_capture_columns(table: Any) -> None:
+        """Migrate legacy memory tables before appending the current record shape."""
+        names = Plur1busRuntime._schema_names(table)
+        add_columns = getattr(table, "add_columns", None)
+        if not callable(add_columns):
+            raise RuntimeError("capture schema migration is unavailable")
+
         if "epistemicStatus" not in names:
-            add_columns = getattr(table, "add_columns", None)
-            if not callable(add_columns):
-                raise RuntimeError("epistemic status column unavailable")
             add_columns({"epistemicStatus": "''"})
+            names.add("epistemicStatus")
+
+        try:
+            import pyarrow as pa
+        except ImportError as error:  # pragma: no cover - LanceDB supplies PyArrow
+            raise RuntimeError("capture schema migration requires pyarrow") from error
+
+        acl_type = pa.struct([
+            pa.field(name, pa.string())
+            for name in _ACL_BINDING_STRING_COLUMNS
+        ])
+        schema_attr = getattr(table, "schema", None)
+        schema = schema_attr() if callable(schema_attr) else schema_attr
+        field_reader = getattr(schema, "field", None)
+        replace_acl = False
+        existing_acl_type = None
+        if "aclBindings" in names and callable(field_reader):
+            existing_acl_type = field_reader("aclBindings").type
+            if pa.types.is_struct(existing_acl_type):
+                children = {field.name: field for field in existing_acl_type}
+                replace_acl = any(
+                    name not in children
+                    or not pa.types.is_string(children[name].type)
+                    for name in _ACL_BINDING_STRING_COLUMNS
+                )
+            else:
+                replace_acl = True
+
+        if replace_acl:
+            # LanceDB cannot widen a Struct through alter_columns. Replacing an
+            # empty/null partial column is lossless; populated incompatible ACL
+            # evidence must stop for explicit repair rather than be discarded.
+            where = "aclBindings IS NOT NULL"
+            if existing_acl_type is not None and pa.types.is_string(existing_acl_type):
+                where += " AND aclBindings != ''"
+            try:
+                populated = table.search().where(where).limit(1).to_list()
+            except Exception as error:
+                raise RuntimeError(
+                    "cannot verify incompatible aclBindings values"
+                ) from error
+            if populated:
+                raise RuntimeError(
+                    "incompatible aclBindings schema contains non-null values"
+                )
+            drop_columns = getattr(table, "drop_columns", None)
+            if not callable(drop_columns):
+                raise RuntimeError("aclBindings schema replacement is unavailable")
+            drop_columns(["aclBindings"])
+            names.remove("aclBindings")
+
+        missing_strings = [
+            name for name in _CAPTURE_SCOPE_STRING_COLUMNS if name not in names
+        ]
+        missing_acl = "aclBindings" not in names
+        if not missing_strings and not missing_acl:
+            return
+
+        fields = [pa.field(name, pa.string()) for name in missing_strings]
+        if missing_acl:
+            fields.append(pa.field("aclBindings", acl_type))
+        # Arrow fields initialize legacy rows as null. Do not invent ACL
+        # principals for old rows whose opaque scope keys cannot be reversed.
+        add_columns(pa.schema(fields))
 
     def _table(self, create: bool, first_record: dict[str, Any] | None = None):
         try:

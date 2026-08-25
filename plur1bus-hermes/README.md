@@ -20,8 +20,9 @@ cutover yet.
 
 ### Retrieval configuration
 
-The Hermes 7.4.8 release process will create `7.4.8-hermes`. Once that tag
-exists, install the release packages from it, or clone it and run
+The Hermes schema-migration bugfix is released as `7.4.8-hermes.1` with
+Python package version `7.4.8.1`. Install the release packages from that tag,
+or clone it and run
 `scripts/install-hermes-plugins.sh` for the complete Hermes-plugin path. Its
 pip step alone is not a complete installation: the full installer copies the
 provider, controls, model-provider plugins, and helpers into the selected

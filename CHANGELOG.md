@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [Hermes 7.4.8.1 / 7.4.8-hermes.1] — 2026-08-25
+
+### Fixed
+
+- **Captures now migrate legacy LanceDB schemas before appending ACL-bound
+  records.** Existing tables gain the six nullable scope/owner string columns
+  plus the correctly typed `aclBindings` Arrow struct before the first current
+  write. Legacy rows remain unmodified and retain their existing vector space.
+- **Partially migrated empty ACL structs are repaired safely.** A manual or
+  interrupted migration that created `aclBindings` without nested `scopeKey`
+  is replaced only when the incompatible column contains no values. Populated
+  incompatible ACL data fails closed instead of being discarded.
+
+### Preserved
+
+- No embedding model or vector dimension changes. The OpenClaw `v7.4.8`
+  release, npm `latest`, existing Hermes tags, and ClawHub remain unchanged.
+
 ## [Hermes 7.4.8 / 7.4.8-hermes] — 2026-08-25
 
 Integrates the immutable `v7.4.8` tag while retaining the native Hermes
