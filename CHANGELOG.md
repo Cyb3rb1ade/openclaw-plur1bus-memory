@@ -7,6 +7,45 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.5] — 2026-08-25
+
+### Behoben
+
+- **Kritische Erinnerungen liessen sich nicht bestaetigen: „I can't find a pending
+  PLUR1BUS review with the reference …".** `findPendingCriticalReviews` baute die
+  Pushdown-Klausel als
+
+  ```sql
+  (confirmed IS NULL OR confirmed = false OR confirmed = 0)
+  ```
+
+  um typ-agnostisch zu sein. Lance/DataFusion validiert einen Filterausdruck aber
+  **vorab und vollstaendig**: das Literal, das nicht zum Spaltentyp passt, laesst
+  die gesamte Abfrage scheitern — auch als blosser OR-Zweig. Die
+  Kompatibilitaetsklausel war damit genau der Grund, warum der Pushdown
+  **auf jeder Tabelle** scheiterte, unabhaengig vom Typ der Spalte.
+
+  Folge: Rueckfall auf den vollen Tabellen-Scan, dort Timeout nach 30 000 ms, der
+  Fehler wurde in ein `catch` verschluckt und die Kartenliste blieb leer. Der
+  Nutzer bekam „Referenz nicht gefunden", obwohl die Karte offen in der Tabelle
+  lag und die Kurzreferenz korrekt war.
+
+  Neu waehlt `buildUnconfirmedClause()` das Literal passend zum tatsaechlichen
+  Arrow-Typ der Spalte (`Bool` → `false`, `Int64`/`Float`/`Decimal` → `0`). Ist
+  der Typ nicht ermittelbar, gilt die Boolean-Form; eine **leere** Klausel waere
+  schaedlich, weil ohne `confirmed`-Pushdown bestaetigte Zeilen die offenen aus
+  dem Limit verdraengen (Regression B2).
+
+  Gemessen an drei produktiven Tabellen: vorher Fehler und 30-Sekunden-Scan,
+  danach 17 Treffer in 42 ms, 59 in 30 ms, 0 in 13 ms.
+
+### Hinweis
+
+Der Spaltentyp von `confirmed` weicht zwischen Installationen ab (`Int64` vs.
+`Bool`) — vermutlich ein Ueberbleibsel frueher Schema-Staende. Der Fix behandelt
+beide; eine Vereinheitlichung ist nicht noetig.
+
+
 ## [7.4.4] — 2026-08-24
 
 Nachtrag zu 7.4.3: dort wurde die *Masse* der Phantom-Reminder beseitigt, der
