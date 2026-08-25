@@ -416,6 +416,7 @@ describe("DEPLOY_FILES coverage", () => {
 
   it("contains the feature-cron bootstrap runtime files", () => {
     const featureCronRuntime = [
+      "lib/setup/feature-cron-native.js",
       "lib/setup/feature-cron-plan.js",
       "scripts/setup-feature-crons.mjs",
       "scripts/lib/openclaw-cli.mjs",

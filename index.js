@@ -144,6 +144,7 @@ import {
 } from "./lib/internal-cron-reply.js";
 import {
   applyCronPluginDirectDispatchPatch,
+  isNativeCronPluginCommandCapabilityReady,
   resolveOpenClawDistDir,
 } from "./patches/apply-cron-plugin-direct-dispatch.mjs";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
@@ -3170,16 +3171,21 @@ function getFeatureCronsSetupHint(baseDbPath) {
  * without disabling the memory plugin.
  *
  * @param {object} api
- * @param {{applyImpl?: Function, distDir?: string}} [options]
+ * @param {{applyImpl?: Function, isNativeImpl?: Function, distDir?: string}} [options]
  * @returns {boolean}
  */
 function ensureCronDirectDispatchAtRegistration(api, options = {}) {
   const {
     applyImpl = applyCronPluginDirectDispatchPatch,
+    isNativeImpl = isNativeCronPluginCommandCapabilityReady,
     distDir,
   } = options;
   try {
     const resolvedDistDir = distDir || resolveOpenClawDistDir();
+    if (isNativeImpl(resolvedDistDir)) {
+      api.logger?.info?.("plur1bus-feature-crons: native command dispatch ready");
+      return true;
+    }
     const result = applyImpl(resolvedDistDir);
     api.logger?.info?.(`plur1bus-feature-crons: host direct dispatch ${result.status}`);
     return true;

@@ -37,17 +37,42 @@ import {
   isCronPluginDirectDispatchReady,
   resolveOpenClawDistDir,
 } from "../patches/apply-cron-plugin-direct-dispatch.mjs";
+import {
+  buildNativeFeatureCommandArgv,
+  planNativeFeaturePayloadMigration,
+} from "../lib/setup/feature-cron-native.js";
 
-function ensureCronDirectDispatch({ apply }) {
-  if (process.env.PLUR1BUS_SKIP_HOST_PATCH === "1") {
-    return { status: "skipped" };
+/**
+ * Probe the two documented CLI surfaces required by native feature crons.
+ *
+ * @param {(args: string[], timeout?: number) => object} [openclawImpl]
+ * @returns {{ready: true, status: "native-command"}}
+ */
+export function probeNativeCronCommandDispatch(openclawImpl = openclaw) {
+  const cronHelp = openclawImpl(["cron", "add", "--help"], 5000);
+  const agentHelp = openclawImpl(["agent", "--help"], 5000);
+  const cronText = `${cronHelp?.stdout ?? ""}\n${cronHelp?.stderr ?? ""}`;
+  const agentText = `${agentHelp?.stdout ?? ""}\n${agentHelp?.stderr ?? ""}`;
+  const ready = cronHelp?.ok === true
+    && agentHelp?.ok === true
+    && ["--command-argv", "--timeout-seconds", "--output-max-bytes"].every((marker) => cronText.includes(marker))
+    && ["Run an agent turn via the Gateway", "--agent", "--session-key", "--channel", "--message", "--timeout"].every((marker) => agentText.includes(marker));
+  if (!ready) throw new Error("native cron command capability unavailable");
+  return { ready: true, status: "native-command" };
+}
+
+function ensureCronDirectDispatch({ apply, openclawImpl = openclaw }) {
+  try {
+    return probeNativeCronCommandDispatch(openclawImpl);
+  } catch (error) {
+    if (process.env.PLUR1BUS_SKIP_HOST_PATCH === "1") throw error;
   }
   const distDir = resolveOpenClawDistDir();
-  if (apply) return applyCronPluginDirectDispatchPatch(distDir);
+  if (apply) return { ready: true, ...applyCronPluginDirectDispatchPatch(distDir) };
   if (!isCronPluginDirectDispatchReady(distDir)) {
     throw new Error("PLUR1BUS cron direct dispatch is not installed");
   }
-  return { status: "already-patched" };
+  return { ready: true, status: "already-patched" };
 }
 
 function parseArgs(argv) {
@@ -107,10 +132,29 @@ function scheduleArgs(schedule) {
  * Build one fail-closed `cron add` invocation from a validated planner job.
  *
  * @param {object} job
+ * @param {{dispatchMode?: "legacy-patch"|"native-command"}} [options]
  * @returns {string[]}
  */
-export function buildAddArgs(job) {
-  const args = ["cron", "add", "--name", job.name, "--message", job.message, ...scheduleArgs(job.schedule)];
+export function buildAddArgs(job, { dispatchMode = "legacy-patch" } = {}) {
+  const args = ["cron", "add", "--name", job.name];
+  if (dispatchMode === "native-command") {
+    const commandArgv = buildNativeFeatureCommandArgv({
+      agentId: job.agent,
+      feature: job.feature,
+      command: job.command,
+    });
+    args.push(
+      "--command-argv",
+      JSON.stringify(commandArgv),
+      "--timeout-seconds",
+      "600",
+      "--output-max-bytes",
+      "65536",
+    );
+  } else {
+    args.push("--message", job.message);
+  }
+  args.push(...scheduleArgs(job.schedule));
   args.push("--session", "isolated");
   if (job.schedule?.kind === "cron" && typeof job.timezone === "string" && job.timezone.length > 0) {
     args.push("--tz", job.timezone);
@@ -130,6 +174,37 @@ export function buildAddArgs(job) {
   if (!job.enabled) args.push("--disabled");
   args.push("--json");
   return args;
+}
+
+/**
+ * Build one `cron edit` invocation, including payload-kind migrations.
+ *
+ * @param {object} update
+ * @returns {string[]}
+ */
+export function buildEditArgs(update) {
+  const editArgs = ["cron", "edit", update.id];
+  if (typeof update.rename === "string") editArgs.push("--name", update.rename);
+  if (Array.isArray(update.commandArgv)) {
+    editArgs.push(
+      "--command-argv",
+      JSON.stringify(update.commandArgv),
+      "--timeout-seconds",
+      "600",
+      "--output-max-bytes",
+      "65536",
+    );
+  } else if (typeof update.message === "string") {
+    editArgs.push("--message", update.message);
+  }
+  if (update.schedule) editArgs.push(...scheduleArgs(update.schedule));
+  if (update.schedule?.kind === "cron" && typeof update.timezone === "string" && update.timezone.length > 0) {
+    editArgs.push("--tz", update.timezone);
+  }
+  if (update.enable) editArgs.push("--enable");
+  if (update.disable) editArgs.push("--disable");
+  if (update.noDeliver) editArgs.push("--no-deliver");
+  return editArgs;
 }
 
 function writeOutput(stream, line) {
@@ -319,14 +394,15 @@ export async function runSetupFeatureCrons(options = {}) {
     }
 
     let hostDispatchReady = true;
+    let dispatchMode = "legacy-patch";
     try {
       // Atlas: install-time host patch is a supply-chain surface. Operators
       // can skip it with PLUR1BUS_SKIP_HOST_PATCH=1; npm still exits 0.
-      if (process.env.PLUR1BUS_SKIP_HOST_PATCH === "1") {
-        hostDispatchReady = true;
-      } else {
-        ensureCronDirectDispatchImpl({ apply: !opts.dryRun });
-      }
+      const dispatch = process.env.PLUR1BUS_SKIP_HOST_PATCH === "1"
+        ? probeNativeCronCommandDispatch(openclawImpl)
+        : ensureCronDirectDispatchImpl({ apply: !opts.dryRun, openclawImpl });
+      if (dispatch?.ready === false) throw new Error("cron direct dispatch unavailable");
+      if (dispatch?.status === "native-command") dispatchMode = "native-command";
     } catch {
       hostDispatchReady = false;
     }
@@ -546,9 +622,14 @@ export async function runSetupFeatureCrons(options = {}) {
     // dry-run/nichts-zu-tun dieses hier, sonst erst das Ergebnis-Objekt nach
     // den cron-add-Aufrufen (vorher wären es zwei konkatenierte Objekte, die
     // der /plur1bus-setup-crons-Parser nicht lesen kann).
+    const nativePayloadMigrations = dispatchMode === "native-command"
+      ? plan.skip
+        .map((entry) => planNativeFeaturePayloadMigration(entry.existingJob, entry.spec))
+        .filter(Boolean)
+      : [];
     const recoveries = planSafetyDisabledCronRecoveries(plan.skip);
     const updates = mergeCronUpdates(
-      Array.isArray(plan.update) ? plan.update : [],
+      mergeCronUpdates(Array.isArray(plan.update) ? plan.update : [], nativePayloadMigrations),
       recoveries,
     );
     plan = { ...plan, update: updates };
@@ -582,7 +663,7 @@ export async function runSetupFeatureCrons(options = {}) {
 
     const results = [];
     for (const job of plan.create) {
-      const args = buildAddArgs(job);
+      const args = buildAddArgs(job, { dispatchMode });
       const r = openclawImpl(args, 15000);
       results.push({ job: job.name, ok: r.ok, stderr: r.ok ? undefined : r.stderr?.trim() });
       if (!opts.json) {
@@ -601,16 +682,7 @@ export async function runSetupFeatureCrons(options = {}) {
     // lastPlanCreateCount, damit der nächste Bootstrap-Lauf sie erneut
     // versucht.
     for (const u of updates) {
-      const editArgs = ["cron", "edit", u.id];
-      if (typeof u.rename === "string") editArgs.push("--name", u.rename);
-      if (typeof u.message === "string") editArgs.push("--message", u.message);
-      if (u.schedule) editArgs.push(...scheduleArgs(u.schedule));
-      if (u.schedule?.kind === "cron" && typeof u.timezone === "string" && u.timezone.length > 0) {
-        editArgs.push("--tz", u.timezone);
-      }
-      if (u.enable) editArgs.push("--enable");
-      if (u.disable) editArgs.push("--disable");
-      if (u.noDeliver) editArgs.push("--no-deliver");
+      const editArgs = buildEditArgs(u);
       const r = openclawImpl(editArgs, 15000);
       results.push({
         job: u.name,

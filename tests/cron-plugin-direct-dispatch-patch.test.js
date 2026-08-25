@@ -16,7 +16,9 @@ import { afterEach, describe, it } from "node:test";
 
 import {
   applyCronPluginDirectDispatchPatch,
+  inspectNativeCronPluginCommandCapability,
   isCronPluginDirectDispatchReady,
+  isNativeCronPluginCommandCapabilityReady,
   patchCronPluginDirectDispatchSource,
   resolveOpenClawDistDir,
 } from "../patches/apply-cron-plugin-direct-dispatch.mjs";
@@ -64,11 +66,12 @@ async function runCronIsolatedAgentTurn(params) {
 
 function executableFixtureSource() {
   return `
-let state = { modelCalls: 0, finalizedPayloads: null };
+let state = { modelCalls: 0, finalizeCalls: 0, finalizedPayloads: null };
 export function getState() {
   return state;
 }
 async function finalizeCronRun({ execution }) {
+  state.finalizeCalls += 1;
   state.finalizedPayloads = execution.runResult.payloads;
   return { status: "ok", delivered: true };
 }
@@ -81,7 +84,7 @@ async function loadCronExecutorRuntime() {
   };
 }
 export async function runCronIsolatedAgentTurn(params) {
-  state = { modelCalls: 0, finalizedPayloads: null };
+  state = { modelCalls: 0, finalizeCalls: 0, finalizedPayloads: null };
   let outcome = "completed";
   let outcomeError;
   let cronRunSessionCleanupAttempted = false;
@@ -101,7 +104,10 @@ export async function runCronIsolatedAgentTurn(params) {
   };
   const match = () => params.job.commandRegistered === false
     ? null
-    : { command: { handler: async () => params.job.handlerResult } };
+    : { command: { handler: async () => {
+      if (params.job.handlerError) throw params.job.handlerError;
+      return params.job.handlerResult;
+    } } };
   try {
     /* plur1bus-cron-cmd-dispatch */
     const _plMsg = (params.job.payload?.message ?? "").split("\\n")[0].trim();
@@ -134,6 +140,42 @@ export async function runCronIsolatedAgentTurn(params) {
 `;
 }
 
+function writeNativeBeta3Fixture(distDir, overrides = {}) {
+  const files = {
+    "server-cron-beta3.js": [
+      "/** Executes a cron command payload without starting an agent/model run. */",
+      "async function runCronCommandJob(params) {}",
+      "isSilentReplyText(result.summary, \"NO_REPLY\")",
+    ].join("\n"),
+    "cron-cli-beta3.js": [
+      ".option(\"--command-argv <json>\", \"Command payload argv as JSON array of strings\")",
+      ".option(\"--timeout-seconds <n>\", \"Command timeout\")",
+      ".option(\"--output-max-bytes <n>\", \"Output limit\")",
+    ].join("\n"),
+    "register.agent-turn-beta3.js": [
+      "Run an agent turn via the Gateway (use --local for embedded)",
+      "--session-key <key>",
+      "--agent <id>",
+      "--channel <channel>",
+    ].join("\n"),
+    "agent-via-gateway-beta3.js": [
+      "Gateway-first agent CLI implementation with explicit --local embedded execution.",
+      "label: \"Waiting for agent reply…\"",
+      "method: \"agent\"",
+    ].join("\n"),
+    "commands-handlers.runtime-beta3.js": [
+      "Handles commands registered by plugins, bypassing the LLM agent.",
+      "const handlePluginCommand = async () => {};",
+      "matchPluginCommandInvocation(createPluginCommandRuntime(), command.commandBodyNormalized)",
+      "executePluginCommandDispatch(dispatch, {})",
+    ].join("\n"),
+    ...overrides,
+  };
+  for (const [name, source] of Object.entries(files)) {
+    writeFileSync(path.join(distDir, name), source);
+  }
+}
+
 afterEach(() => {
   for (const dir of workDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -141,6 +183,73 @@ afterEach(() => {
 });
 
 describe("cron plugin direct-dispatch host patch", () => {
+  it("recognizes the tightly derived OpenClaw Beta-3 native command/plugin capability", () => {
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-beta3-native-")));
+    workDirs.push(distDir);
+    writeNativeBeta3Fixture(distDir);
+
+    const capability = inspectNativeCronPluginCommandCapability(distDir);
+
+    assert.equal(capability.status, "native-command");
+    assert.equal(capability.ready, true);
+    assert.equal(isNativeCronPluginCommandCapabilityReady(distDir), true);
+    assert.deepStrictEqual(Object.keys(capability.files).sort(), [
+      "agentCli",
+      "agentGateway",
+      "commandRunner",
+      "cronCli",
+      "pluginCommand",
+    ]);
+  });
+
+  it("recognizes the actual published OpenClaw Beta-3 dist when supplied", {
+    skip: !process.env.OPENCLAW_BETA3_DIST,
+  }, () => {
+    const capability = inspectNativeCronPluginCommandCapability(process.env.OPENCLAW_BETA3_DIST);
+    assert.equal(capability.status, "native-command");
+    assert.equal(capability.ready, true);
+    assert.match(capability.files.commandRunner, /^server-cron-/);
+    assert.match(capability.files.cronCli, /^cron-cli-/);
+  });
+
+  it("rejects a native capability when the required NO_REPLY contract drifts", () => {
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-beta3-drift-")));
+    workDirs.push(distDir);
+    writeNativeBeta3Fixture(distDir, {
+      "server-cron-beta3.js": [
+        "/** Executes a cron command payload without starting an agent/model run. */",
+        "async function runCronCommandJob(params) {}",
+      ].join("\n"),
+    });
+
+    assert.throws(
+      () => inspectNativeCronPluginCommandCapability(distDir),
+      /NO_REPLY|command runner/i,
+    );
+    assert.equal(isNativeCronPluginCommandCapabilityReady(distDir), false);
+  });
+
+  it("rejects zero and multiple native capability candidates", () => {
+    const emptyDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-beta3-empty-")));
+    workDirs.push(emptyDir);
+    assert.throws(
+      () => inspectNativeCronPluginCommandCapability(emptyDir),
+      /expected exactly one.*command runner/i,
+    );
+
+    const duplicateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-beta3-multi-")));
+    workDirs.push(duplicateDir);
+    writeNativeBeta3Fixture(duplicateDir);
+    writeFileSync(
+      path.join(duplicateDir, "server-cron-duplicate.js"),
+      readFileSync(path.join(duplicateDir, "server-cron-beta3.js"), "utf8"),
+    );
+    assert.throws(
+      () => inspectNativeCronPluginCommandCapability(duplicateDir),
+      /expected exactly one.*command runner.*found 2/i,
+    );
+  });
+
   it("discovers a non-standard OpenClaw dist from the active CLI symlink", () => {
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-openclaw-prefix-")));
     workDirs.push(root);
@@ -346,7 +455,70 @@ async function runCronIsolatedAgentTurn(params) {
 
     assert.equal(result.status, "ok");
     assert.equal(runtime.getState().modelCalls, 0);
+    assert.equal(runtime.getState().finalizeCalls, 1);
     assert.deepStrictEqual(runtime.getState().finalizedPayloads, [reply]);
+  });
+
+  it("preserves exact NO_REPLY and finalizes delivery only once", async () => {
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-runtime.mjs");
+    const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
+    writeFileSync(target, patched.source);
+    const runtime = await import(`${pathToFileURL(target).href}?silent=${Date.now()}`);
+
+    const result = await runtime.runCronIsolatedAgentTurn({
+      job: {
+        payload: { message: "/plur1bus internal afterthought" },
+        handlerResult: { text: "NO_REPLY" },
+      },
+    });
+
+    assert.equal(result.status, "ok");
+    assert.equal(runtime.getState().modelCalls, 0);
+    assert.equal(runtime.getState().finalizeCalls, 1);
+    assert.deepStrictEqual(runtime.getState().finalizedPayloads, [{ text: "NO_REPLY" }]);
+  });
+
+  it("surfaces plugin-handler failures without starting the model", async () => {
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-runtime.mjs");
+    const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
+    writeFileSync(target, patched.source);
+    const runtime = await import(`${pathToFileURL(target).href}?handler-error=${Date.now()}`);
+
+    await assert.rejects(
+      runtime.runCronIsolatedAgentTurn({
+        job: {
+          payload: { message: "/plur1bus internal classify-recent" },
+          handlerError: new Error("fixture plugin failure"),
+        },
+      }),
+      /fixture plugin failure/,
+    );
+    assert.equal(runtime.getState().modelCalls, 0);
+    assert.equal(runtime.getState().finalizeCalls, 0);
+  });
+
+  it("leaves a foreign slash cron on the ordinary model path", async () => {
+    const distDir = realpathSync(mkdtempSync(path.join(tmpdir(), "plur1bus-cron-runtime-")));
+    workDirs.push(distDir);
+    const target = path.join(distDir, "isolated-agent-runtime.mjs");
+    const patched = patchCronPluginDirectDispatchSource(executableFixtureSource());
+    writeFileSync(target, patched.source);
+    const runtime = await import(`${pathToFileURL(target).href}?foreign=${Date.now()}`);
+
+    const result = await runtime.runCronIsolatedAgentTurn({
+      job: {
+        payload: { message: "/custom internal afterthought" },
+        handlerResult: { text: "foreign" },
+      },
+    });
+
+    assert.equal(result.status, "model");
+    assert.equal(runtime.getState().modelCalls, 1);
+    assert.equal(runtime.getState().finalizeCalls, 0);
   });
 
   it("keeps multiline carrier prompts on the legacy model path", async () => {
