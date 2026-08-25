@@ -134,14 +134,14 @@ async function main() {
       const fb = await askLine("[1/2]: ");
       if (fb === "2") {
         cfg.fallbackProvider = "local-transformers";
-        cfg.fallbackModel = "BAAI/bge-reranker-v2-m3";
+        cfg.fallbackModel = "woxpas-ai/bge-reranker-v2-m3-onnx";
         console.error(t("setup.reranker.lazy_load_notice", { lang, tone, vars: { sizeMb: "570" } }));
       }
       return cfg;
     } else if (choice === "2") {
       console.error(t("setup.reranker.local_cpu_warning", { lang, tone }));
       console.error(t("setup.reranker.lazy_load_notice", { lang, tone, vars: { sizeMb: "570" } }));
-      return { provider: "local-transformers", model: "BAAI/bge-reranker-v2-m3", candidates: 20, timeoutMs: 5000, fallbackOnError: true };
+      return { provider: "local-transformers", model: "woxpas-ai/bge-reranker-v2-m3-onnx", candidates: 20, timeoutMs: 5000, fallbackOnError: true };
     } else if (choice === "3") {
       return { provider: "disabled", enabled: false, candidates: 20 };
     } else {

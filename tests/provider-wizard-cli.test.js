@@ -128,7 +128,7 @@ describe("provider wizard CLI input validation", () => {
     assert.strictEqual(result.code, 0, result.stderr);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
       provider: "local-transformers",
-      model: "BAAI/bge-reranker-v2-m3",
+      model: "woxpas-ai/bge-reranker-v2-m3-onnx",
       candidates: 20,
       timeoutMs: 5000,
       fallbackOnError: true,
