@@ -111,6 +111,7 @@ describe("registered memory command reachability", () => {
   const shutdownApis = new WeakSet();
   let api;
   let baseDbPath;
+  let tempRoot;
   let workspaceDir;
   let openclawHome;
   let previousOpenclawHome;
@@ -120,7 +121,8 @@ describe("registered memory command reachability", () => {
   let originalEmbedPassage;
 
   before(async () => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b1-db-"));
+    tempRoot = mkdtempSync(join(tmpdir(), "plur1bus-b1-db-"));
+    baseDbPath = join(tempRoot, "lancedb");
     workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b1-workspace-"));
     openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-b1-home-"));
     previousOpenclawHome = process.env.OPENCLAW_HOME;
@@ -148,7 +150,7 @@ describe("registered memory command reachability", () => {
     }
     if (previousOpenclawHome === undefined) delete process.env.OPENCLAW_HOME;
     else process.env.OPENCLAW_HOME = previousOpenclawHome;
-    for (const dir of [baseDbPath, workspaceDir, openclawHome, join(baseDbPath, "..", "_tombstones")]) {
+    for (const dir of [tempRoot, workspaceDir, openclawHome]) {
       if (dir) rmSync(dir, { recursive: true, force: true });
     }
   });
