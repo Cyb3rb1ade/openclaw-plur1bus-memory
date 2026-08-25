@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import stat
 import threading
 from collections.abc import Mapping
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError
@@ -60,6 +61,10 @@ class Plur1busMemoryProvider(MemoryProvider):
     usable during incremental ports and never blocks a user turn on a failed
     persistence operation.
     """
+
+    # Hermes checkpoint API v2 hands normalized direct evidence to providers
+    # and can require a durable success before any lossy context rewrite.
+    pre_compress_checkpoint_api_version = 2
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
         # Kept apart from `self.config` so every initialize() rebuilds the merge from
@@ -252,12 +257,13 @@ class Plur1busMemoryProvider(MemoryProvider):
         self._flush_captures()
 
     def on_pre_compress(self, messages: list[dict[str, Any]], **kwargs: Any) -> str:
-        """Persist queued turns before Hermes discards context during compression."""
-        del messages, kwargs
+        """Durably checkpoint direct evidence before Hermes discards context."""
+        del kwargs
+        checkpoint = self._write_pre_compress_checkpoint(messages)
         self._flush_captures()
         if self._runtime:
             self._runtime.flush()
-        return "PLUR1BUS has persisted long-term memory before compression."
+        return checkpoint
 
     def on_session_end(self, messages: list[dict[str, Any]], **kwargs: Any) -> None:
         del messages, kwargs
@@ -413,6 +419,159 @@ class Plur1busMemoryProvider(MemoryProvider):
         data_dir = self.config.get("dataDir", "plur1bus")
         path = Path(str(data_dir)).expanduser()
         return path if path.is_absolute() else self._hermes_home / path
+
+    @staticmethod
+    def _checkpoint_text(content: Any) -> str:
+        """Extract direct text without retaining tool or multimodal payloads."""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        parts = []
+        for block in content:
+            if not isinstance(block, Mapping):
+                continue
+            if str(block.get("type") or "") not in {"text", "input_text", "output_text"}:
+                continue
+            text = block.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text)
+        return "\n".join(parts)
+
+    @classmethod
+    def _checkpoint_messages(cls, messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+        """Normalize old-host raw transcripts to Hermes checkpoint-v2 evidence."""
+        evidence = []
+        for message in messages or []:
+            if not isinstance(message, Mapping):
+                continue
+            role = str(message.get("role") or "")
+            if role not in {"user", "assistant"} or message.get("_compressed_summary"):
+                continue
+            content = cls._checkpoint_text(message.get("content"))
+            if not content.strip():
+                continue
+            evidence.append({"role": role, "content": content})
+        return evidence
+
+    def _write_pre_compress_checkpoint(self, messages: list[dict[str, Any]]) -> str:
+        """Write one fsync-backed, content-addressed checkpoint for a transcript."""
+        evidence = self._checkpoint_messages(messages)
+        identity = {
+            "apiVersion": self.pre_compress_checkpoint_api_version,
+            "sessionId": self._session_id,
+            "messages": evidence,
+        }
+        canonical = json.dumps(
+            identity,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        digest = _fingerprint(canonical)
+        root = self._base_path().expanduser().resolve()
+        state_dir = resolve_inside(str(root), "state")
+        checkpoint_lexical = state_dir / "pre-compress-checkpoints"
+        if checkpoint_lexical.is_symlink():
+            raise RuntimeError("pre-compress checkpoint directory must not be a symlink")
+        checkpoint_dir = resolve_inside(str(root), "state", "pre-compress-checkpoints")
+        checkpoint_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if checkpoint_dir.is_symlink() or not checkpoint_dir.is_dir():
+            raise RuntimeError("pre-compress checkpoint path must be a directory")
+        os.chmod(checkpoint_dir, 0o700)
+        target_name = f"{digest}.json"
+        target_lexical = checkpoint_dir / target_name
+        if target_lexical.is_symlink():
+            raise RuntimeError("pre-compress checkpoint target must not be a symlink")
+        target = resolve_inside(str(checkpoint_dir), target_name)
+        summary = (
+            "PLUR1BUS durably checkpointed "
+            f"{len(evidence)} direct evidence messages before compression "
+            f"(sha256:{digest})."
+        )
+        if target.exists() or target.is_symlink():
+            self._validate_and_sync_checkpoint(
+                target, checkpoint_dir, identity, digest
+            )
+            return summary
+
+        payload = {
+            **identity,
+            "digest": digest,
+            "createdAt": _utcnow_iso(),
+        }
+        temporary = resolve_inside(
+            str(checkpoint_dir),
+            f".{digest}.{os.getpid()}.{threading.get_ident()}.tmp",
+        )
+        fd = -1
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(temporary, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                fd = -1
+                json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+            self._validate_and_sync_checkpoint(
+                target, checkpoint_dir, identity, digest
+            )
+        finally:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        return summary
+
+    @staticmethod
+    def _validate_and_sync_checkpoint(
+        target: Path,
+        checkpoint_dir: Path,
+        identity: dict[str, Any],
+        digest: str,
+    ) -> None:
+        """Validate and durably sync a checkpoint on every successful path."""
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(target, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise RuntimeError("pre-compress checkpoint must be a regular file")
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            else:  # pragma: no cover - platform fallback
+                os.chmod(target, 0o600)
+            with os.fdopen(fd, "r", encoding="utf-8") as handle:
+                fd = -1
+                existing = json.load(handle)
+                if not isinstance(existing, dict) or existing.get("digest") != digest:
+                    raise RuntimeError("pre-compress checkpoint digest collision")
+                if any(existing.get(key) != value for key, value in identity.items()):
+                    raise RuntimeError("pre-compress checkpoint identity mismatch")
+                os.fsync(handle.fileno())
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+        directory_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            directory_flags |= os.O_DIRECTORY
+        if hasattr(os, "O_NOFOLLOW"):
+            directory_flags |= os.O_NOFOLLOW
+        directory_fd = os.open(checkpoint_dir, directory_flags)
+        try:
+            if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+                raise RuntimeError("pre-compress checkpoint parent must be a directory")
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     @staticmethod
     def _prefetch_key(query: str, session_id: str) -> str:

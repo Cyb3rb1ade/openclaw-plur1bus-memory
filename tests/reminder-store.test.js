@@ -151,6 +151,28 @@ describe("reminder-store", () => {
     assert.strictEqual(r.versionNumber, 1);
   });
 
+  // Regression: saveReminder nahm `source` entgegen, schrieb es aber nie in die
+  // Zeile. Reminder liessen sich dadurch nicht ihrem Urheber zuordnen.
+  it("persists the source that produced the reminder", async () => {
+    const db = mockDb();
+    const r = await saveReminder(db, {
+      text: "Kuchen aus dem Ofen nehmen",
+      remindAt: Date.now() + 60000,
+      agentId: "agent-1",
+      workspaceKey: "ws-1",
+      source: "user",
+    });
+    assert.strictEqual(r.source, "user");
+  });
+
+  it("defaults source to \"user\" when not given", async () => {
+    const db = mockDb();
+    const r = await saveReminder(db, {
+      text: "x", remindAt: Date.now() + 1000, agentId: "a", workspaceKey: "w",
+    });
+    assert.strictEqual(r.source, "user");
+  });
+
   it("lists due reminders filtered by workspace+agent", async () => {
     const now = Date.now();
     const db = mockDb([

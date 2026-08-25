@@ -58,11 +58,13 @@ function makeMockApi(baseDbPath) {
 describe("query audit recovery respektiert forgetThreshold ohne Klartext", () => {
   let api;
   let baseDbPath;
+  let tempRoot;
   let originalEmbedQuery;
   let originalEmbedPassage;
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-query-recovery-"));
+    tempRoot = mkdtempSync(join(tmpdir(), "plur1bus-query-recovery-"));
+    baseDbPath = join(tempRoot, "lancedb");
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async function (text) {
@@ -78,8 +80,7 @@ describe("query audit recovery respektiert forgetThreshold ohne Klartext", () =>
   after(() => {
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
-    rmSync(baseDbPath, { recursive: true, force: true });
-    rmSync(join(baseDbPath, "..", "_tombstones"), { recursive: true, force: true });
+    rmSync(tempRoot, { recursive: true, force: true });
   });
 
   it("exakte Wiederholung repariert das Audit; unpassende Query liefert 'No matching memory found'", async () => {

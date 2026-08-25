@@ -56,11 +56,13 @@ function makeMockApi(baseDbPath) {
 describe("memory_forget Scope-Enforcement (workspace/user)", () => {
   let api;
   let baseDbPath;
+  let tempRoot;
   let originalEmbedQuery;
   let originalEmbedPassage;
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-forget-scope-"));
+    tempRoot = mkdtempSync(join(tmpdir(), "plur1bus-forget-scope-"));
+    baseDbPath = join(tempRoot, "lancedb");
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async function (text) { return textVector(text); };
@@ -72,8 +74,7 @@ describe("memory_forget Scope-Enforcement (workspace/user)", () => {
   after(() => {
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
-    rmSync(baseDbPath, { recursive: true, force: true });
-    rmSync(join(baseDbPath, "..", "_tombstones"), { recursive: true, force: true });
+    rmSync(tempRoot, { recursive: true, force: true });
   });
 
   function toolsFor(ctx) {

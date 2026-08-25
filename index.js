@@ -277,7 +277,7 @@ import { buildMoodStyleDirective } from "./lib/mood-style-directive.js";
 import { renderTemperamentOverview, applyTemperamentToRawConfig } from "./lib/temperament-command.js";
 import { applyDynamicsDefaults, applyRetrievalReinforcement, createRetrievalLedgerEntry, resolveHalfLifeDays } from "./lib/memory-dynamics.js";
 import { applyRetroactiveInterference } from "./lib/retroactive-interference.js";
-import { parseReminderIntent } from "./lib/reminder-parser.js";
+import { planReminderExtraction } from "./lib/reminder-extraction.js";
 import { saveReminder, listDueReminders, presentReminder, listReminders, cancelReminder } from "./lib/reminder-store.js";
 import { formatReminderNudge } from "./lib/reminder-nudge.js";
 import { recordActivity, formatTimeContext, getLastActivity } from "./lib/session-time.js";
@@ -4468,6 +4468,9 @@ const plugin = {
     const metaCognitionSessionThreshold = metaCognitionCfg.sessionThreshold ?? 50;
     const metaCognitionIntervalMs = (metaCognitionCfg.intervalDays ?? 7) * 24 * 60 * 60 * 1000;
     const metaCognitionLlmReport = metaCognitionCfg.llmReport === true;
+
+    // Reminder-Extraktion aus Auto-Capture (reminders.autoExtract: false schaltet ab)
+    const reminderAutoExtract = (cfg.reminders || {}).autoExtract !== false;
     let sessionCountSinceReflection = 0;
     let lastReflectionAt = 0;
     try {
@@ -8100,6 +8103,7 @@ const plugin = {
 
       api.on("agent_end", (event, ctx) => {
         api.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
+        const captureHookDeadlineAt = Date.now() + 60_000;
 
         const agentId = ctx?.agentId || "default";
         const background = isBackgroundTurn(event, ctx);
@@ -8123,6 +8127,10 @@ const plugin = {
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
+          const captureDeadlineAt = Math.min(
+            captureHookDeadlineAt,
+            Date.now() + runtimeScheduler.config.captureTimeoutMs,
+          );
           const throwIfCaptureAborted = () => {
             if (!signal?.aborted) return;
             if (typeof signal.throwIfAborted === "function") signal.throwIfAborted();
@@ -8130,6 +8138,13 @@ const plugin = {
             abortError.name = "AbortError";
             throw abortError;
           };
+          // Der Embedding-Drain ist Wartungsarbeit und lief bisher VOR der
+          // Erfassung im selben 60s-Budget. Bei vollem Rueckstau (250 Items)
+          // verbrauchte er es komplett, die eigentliche Erfassung wurde danach
+          // jedes Mal abgebrochen — beobachtet am 2026-08-20 fuer bernhardine:
+          // "found 276 texts to capture" gefolgt vom Timeout ~30ms spaeter.
+          // Jetzt laeuft er nach der Erfassung mit dem, was uebrig bleibt.
+          let runNeoEmbeddingDrain = null;
           if (neoEnabled) {
             try {
               const neoWorkspaceKey = rememberNeoWorkspace(ctx, event);
@@ -8179,22 +8194,29 @@ const plugin = {
               if (neoResult?.capture) {
                 api.logger.info(`plur1bus-neo: worker captured turns=${neoResult.capture.turns}, candidates=${neoResult.capture.candidates}, reactions=${neoResult.capture.reactions}, behaviorCards=${neoResult.capture.behaviorCards}${background ? " (background)" : ""}`);
               }
-              const drain = neoEmbeddingAutoDrainEnabled
-                ? await neoStore.drainEmbeddingQueue({
-                    impact: neoEmbeddingDrainImpact,
-                    maxItems: neoEmbeddingDrainMaxItems,
-                    dimensions: vectorDim,
-                    embedder: (text) => embeddings.embed(text, { agentId }),
-                  })
-                : neoResult?.drain;
-              if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
-                api.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}`);
+              const logDrain = (drain) => {
+                if (drain && (drain.processed || drain.skipped || drain.parseErrors)) {
+                  api.logger.info(`plur1bus-neo: embedding queue worker-drain processed=${drain.processed} pending=${drain.pending} skipped=${drain.skipped} parseErrors=${drain.parseErrors}${drain.stoppedEarly ? " (fruehzeitig gestoppt)" : ""}`);
+                }
+              };
+              if (neoEmbeddingAutoDrainEnabled) {
+                runNeoEmbeddingDrain = async (remainingDrainBudgetMs) => logDrain(await neoStore.drainEmbeddingQueue({
+                  impact: neoEmbeddingDrainImpact,
+                  maxItems: neoEmbeddingDrainMaxItems,
+                  dimensions: vectorDim,
+                  embedder: (text) => embeddings.embed(text, { agentId, signal }),
+                  signal,
+                  deadlineMs: remainingDrainBudgetMs,
+                }));
+              } else {
+                logDrain(neoResult?.drain);
               }
             } catch (neoErr) {
               api.logger.warn(`plur1bus-neo: worker capture failed: ${String(neoErr)}`);
             }
           }
 
+          try {
           throwIfCaptureAborted();
 
           if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
@@ -8207,7 +8229,10 @@ const plugin = {
             return;
           }
 
-          return pool.withDb(agentId, async (db) => {
+          // await ist hier zwingend: ohne es liefe das finally unten los,
+          // waehrend die Erfassung noch laeuft — genau die Gleichzeitigkeit,
+          // die dieser Umbau beseitigen soll.
+          return await pool.withDb(agentId, async (db) => {
           try {
             throwIfCaptureAborted();
             // Extrahiere Text aus User- und Assistant-Nachrichten + Provenance
@@ -8504,12 +8529,17 @@ const plugin = {
             for (const it of items) {
               try {
                 throwIfCaptureAborted();
-                const parsed = parseReminderIntent(it.text, { now: Date.now() });
-                if (parsed.remindAt && parsed.timePrecision !== "none") {
+                const plan = planReminderExtraction(it, {
+                  enabled: reminderAutoExtract,
+                  now: Date.now(),
+                });
+                if (!plan.skip) {
+                  const parsed = plan.parsed;
                   const wsKey = ctx?.workspaceDir || "default";
-                  const source = it.role === "user" ? "user" : "agent";
-                  // Use evidence (temporal clause) instead of full message text for token efficiency
-                  const reminderText = parsed.evidence || it.text;
+                  const source = "user";
+                  // Ursprungssatz statt blosser Zeitfloskel — sonst hat der
+                  // Reminder kein Thema (siehe buildReminderText).
+                  const reminderText = plan.reminderText;
                   if (parsed.requiresConfirmation) {
                     await saveReminder(db, {
                       text: reminderText,
@@ -8876,6 +8906,21 @@ const plugin = {
             api.logger.warn(`memory-lancedb-namespaced: capture failed for agent=${agentId}: ${String(err)}`);
           }
           });
+          } finally {
+            // Rest des Budgets fuer die Wartung. Ist es schon aufgebraucht,
+            // bleibt der Rueckstau stehen und der naechste Lauf macht weiter —
+            // besser als die Erfassung ein weiteres Mal auszuhungern.
+            if (runNeoEmbeddingDrain && !signal?.aborted) {
+              try {
+                const remainingDrainBudgetMs = Math.max(0, captureDeadlineAt - Date.now());
+                if (remainingDrainBudgetMs > 0) {
+                  await runNeoEmbeddingDrain(remainingDrainBudgetMs);
+                }
+              } catch (drainErr) {
+                api.logger.warn(`plur1bus-neo: embedding queue drain failed: ${String(drainErr)}`);
+              }
+            }
+          }
         }); // runtimeScheduler.enqueueCapture
       }, { timeoutMs: 60_000 });
     }

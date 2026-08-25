@@ -40,10 +40,12 @@ function makeMockApi(baseDbPath) {
 describe("tombstone end-to-end (real plugin store → forget → re-store)", () => {
   let api;
   let baseDbPath;
+  let tempRoot;
   let originalEmbedQuery;
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-tombstone-e2e-"));
+    tempRoot = mkdtempSync(join(tmpdir(), "plur1bus-tombstone-e2e-"));
+    baseDbPath = join(tempRoot, "lancedb");
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => makeVector();
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => makeVector();
@@ -53,8 +55,7 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
 
   after(() => {
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
-    rmSync(baseDbPath, { recursive: true, force: true });
-    rmSync(join(baseDbPath, "..", "_tombstones"), { recursive: true, force: true });
+    rmSync(tempRoot, { recursive: true, force: true });
   });
 
   function toolsFor(agentId, workspaceDir) {
