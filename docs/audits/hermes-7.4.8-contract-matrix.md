@@ -42,8 +42,8 @@ does not update the Hermes host itself.
 
 ## Regression evidence
 
-- Secret-word negatives: password/API-key/token planning or absence statements
-  do not become critical.
+- Secret-word negatives: password/API-key/token planning, absence/state
+  descriptions, masks, and configuration placeholders do not become critical.
 - Concrete-secret positives: assigned password, API key, and access code remain
   critical and content-suppressed.
 - Checkpoint v2: direct evidence only, content-addressed idempotence, byte-stable

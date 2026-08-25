@@ -479,7 +479,11 @@ class Plur1busMemoryProvider(MemoryProvider):
         if checkpoint_dir.is_symlink() or not checkpoint_dir.is_dir():
             raise RuntimeError("pre-compress checkpoint path must be a directory")
         os.chmod(checkpoint_dir, 0o700)
-        target = resolve_inside(str(checkpoint_dir), f"{digest}.json")
+        target_name = f"{digest}.json"
+        target_lexical = checkpoint_dir / target_name
+        if target_lexical.is_symlink():
+            raise RuntimeError("pre-compress checkpoint target must not be a symlink")
+        target = resolve_inside(str(checkpoint_dir), target_name)
         summary = (
             "PLUR1BUS durably checkpointed "
             f"{len(evidence)} direct evidence messages before compression "

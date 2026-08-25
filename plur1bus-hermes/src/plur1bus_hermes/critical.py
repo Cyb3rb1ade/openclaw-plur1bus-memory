@@ -39,7 +39,9 @@ _SECRET_LABEL = (
 )
 _SECRET_ASSIGNMENT_RE = re.compile(
     rf"(?<![\w]){_SECRET_LABEL}(?![\w])\s*"
-    rf"(?:(?P<assignment>[:=])\s*|(?P<copula>lautet|ist|is|equals)\b\s*:?\s*)"
+    rf"(?:(?P<assignment>[:=])\s*|"
+    rf"(?P<strong_copula>lautet|equals)\b\s*:?\s*|"
+    rf"(?P<weak_copula>ist|is)\b\s*:?\s*)"
     rf"(?P<value>\"[^\"\r\n]{{1,512}}\"|'[^'\r\n]{{1,512}}'|[^\s,;]{{1,512}})",
     re.IGNORECASE,
 )
@@ -86,18 +88,35 @@ _SECRET_PLACEHOLDER_RE = re.compile(
     r"^(?:"
     r"<[^>]*>|\[[^\]]*\]|\$\{[^}]+\}|\{\{?[^}]+\}\}?|"
     r"[*xX•._-]{4,}|(?:redacted|masked|hidden|placeholder|tbd|todo)|"
-    r"(?:your|my|the)[-_ ]?(?:password|token|secret|api[-_ ]?key)"
+    r"(?:your|my|the)[-_ ]?(?:password|token|secret|api[-_ ]?key)(?:[-_ ]?here)?|"
+    r"(?:enter|insert|replace)[-_ ]+(?:password|token|secret|api[-_ ]?key)(?:[-_ ]+here)?"
     r")$",
     re.IGNORECASE,
 )
 
 
-def _is_concrete_secret_value(raw_value: str) -> bool:
+def _has_credible_weak_secret_syntax(value: str) -> bool:
+    """Require syntax unlikely to be a free-form copular state description."""
+    has_lower = any(char.islower() for char in value)
+    has_upper = any(char.isupper() for char in value)
+    has_digit = any(char.isdigit() for char in value)
+    if value.isdigit():
+        return len(value) >= 4
+    if has_digit and (has_lower or has_upper):
+        return len(value) >= 6
+    return has_lower and has_upper and len(value) >= 8
+
+
+def _is_concrete_secret_value(raw_value: str, *, weak_copula: bool = False) -> bool:
     """Reject state words, masks, and configuration placeholders."""
-    value = raw_value.strip().strip("\"'").rstrip(".!?")
+    raw = raw_value.strip()
+    quoted = len(raw) >= 2 and raw[0] in "\"'" and raw[-1] == raw[0]
+    value = (raw[1:-1] if quoted else raw).rstrip(".!?")
     if len(value) < 4 or value.casefold() in _NON_SECRET_VALUES:
         return False
-    return _SECRET_PLACEHOLDER_RE.fullmatch(value) is None
+    if _SECRET_PLACEHOLDER_RE.fullmatch(value) is not None:
+        return False
+    return not weak_copula or quoted or _has_credible_weak_secret_syntax(value)
 
 
 def _contains_concrete_secret(text: str) -> bool:
@@ -111,7 +130,10 @@ def _contains_concrete_secret(text: str) -> bool:
     if connection is not None and _is_concrete_secret_value(connection.group("value")):
         return True
     return any(
-        _is_concrete_secret_value(match.group("value"))
+        _is_concrete_secret_value(
+            match.group("value"),
+            weak_copula=match.group("weak_copula") is not None,
+        )
         for match in _SECRET_ASSIGNMENT_RE.finditer(text)
     )
 

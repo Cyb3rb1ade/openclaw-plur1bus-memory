@@ -626,6 +626,23 @@ providers:
             self.assertEqual(directory_syncs, 2)
             provider.shutdown()
 
+    def test_pre_compress_checkpoint_rejects_an_in_directory_target_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            provider = self._provider_for(home)
+            provider.config = {"dataDir": "plur1bus"}
+            messages = [{"role": "user", "content": "Symlink checkpoint evidence."}]
+            provider.on_pre_compress(messages)
+            checkpoint_dir = home / "plur1bus" / "state" / "pre-compress-checkpoints"
+            target = next(checkpoint_dir.glob("*.json"))
+            saved = target.with_suffix(".saved")
+            target.replace(saved)
+            target.symlink_to(saved.name)
+
+            with self.assertRaisesRegex(RuntimeError, "must not be a symlink"):
+                provider.on_pre_compress(messages)
+            provider.shutdown()
+
     def test_pre_compress_checkpoint_concurrent_fast_path_fsyncs_before_success(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)

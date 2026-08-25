@@ -25,6 +25,12 @@ class CriticalDreamingTests(unittest.TestCase):
             "API_KEY=<redacted>",
             "password=********",
             "token=${TOKEN}",
+            "password=YOUR_PASSWORD_HERE",
+            "The API key is stored in 1Password.",
+            "The password is wrong.",
+            "The token is generated at runtime.",
+            "Das Passwort ist abgelaufen.",
+            "Der Token ist ungültig.",
         ):
             with self.subTest(text=text):
                 result = classify_critical(
@@ -45,6 +51,8 @@ class CriticalDreamingTests(unittest.TestCase):
             "token is missing; password=secret-value-123",
             "Authorization: Bearer bearer/value+with=punctuation",
             "postgresql://alice:S3cret-pass@example.com/database",
+            'The password is "correct horse battery staple".',
+            "The token is AbCdEfGhIjKlMnOp.",
         ):
             with self.subTest(text=text):
                 result = classify_critical(

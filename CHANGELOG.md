@@ -58,9 +58,10 @@ distribution. The incremental contract matrix is
   idempotent checkpoint reuse could acknowledge the interval before directory
   fsync, sensitive temp-file permissions depended briefly on the process umask,
   and the first secret parser missed whitespace/multiple assignments while
-  accepting masks and placeholders. Deterministic concurrency, post-replace
-  retry, permission, positive-secret, and placeholder regressions cover all
-  three fixes.
+  accepting masks, placeholders, and arbitrary state descriptions after
+  `is`/`ist`. Deterministic concurrency, post-replace retry, permission,
+  symlink, positive-secret, placeholder, and copular-state regressions cover
+  all three fixes.
 
 ## [Hermes 7.4.1 / 7.4.1-hermes] — 2026-08-22
 
