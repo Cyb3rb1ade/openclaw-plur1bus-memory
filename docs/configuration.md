@@ -88,7 +88,7 @@ Sharing-Verträge bleiben B13 vorbehalten.
 
 ---
 
-## Lokale E5-, Jina- und BGE-Modelle (7.4.9)
+## Lokale E5-, Jina- und BGE-Modelle (7.5.0)
 
 Der freie Offline-Pfad verwendet revisionsgeprüfte Transformers.js-Artefakte.
 Das Cache-Verzeichnis muss für den unprivilegierten Gateway-Benutzer schreibbar

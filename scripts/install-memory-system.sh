@@ -1505,7 +1505,7 @@ for agent in "${AGENT_LIST[@]}"; do
 done
 
 # ─── Schritt 9: Native OpenClaw-Integration ──────────────────────────────────
-# Seit 7.4.9 nutzt PLUR1BUS ausschließlich öffentliche Plugin-, Gateway- und
+# Seit 7.5.0 nutzt PLUR1BUS ausschließlich öffentliche Plugin-, Gateway- und
 # CLI-Capabilities. Der Installer verändert weder OpenClaw-Dist-Dateien noch
 # node_modules. Fehlende Capabilities werden beim Pluginstart fail-closed
 # gemeldet; nur die betroffenen Feature-Crons bleiben dann deaktiviert.
