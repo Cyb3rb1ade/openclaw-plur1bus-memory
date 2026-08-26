@@ -90,23 +90,26 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
 
   it("warm ist schneller als cold", () => {
     const M = 1000; // mehr Iterationen für stabileren Vergleich
-    const coldCache = createEmbeddingCache();
-    const warmCache = createEmbeddingCache();
+    const coldCache = createEmbeddingCache({ maxEntries: M });
+    const warmCache = createEmbeddingCache({ maxEntries: M });
     const queries = Array.from({ length: M }, (_, i) => `query ${i}`);
+
+    // Warm: alle M Einträge müssen gleichzeitig resident sein. Die bisherige
+    // Default-Kapazität 128 machte 872/1000 vermeintliche Hits zu Misses und
+    // belastete die Messung zusätzlich mit der GC-Arbeit der Vorbefüllung.
+    for (const q of queries) warmCache.set(agentId, q, model, vector);
+    for (const q of queries) warmCache.get(agentId, q, model);
+    const warmMs = measureCpuMilliseconds(() => {
+      for (const q of queries) {
+        warmCache.get(agentId, q, model);
+      }
+    });
 
     // Cold: teurer Miss (Vektor kopieren)
     const coldMs = measureCpuMilliseconds(() => {
       for (const q of queries) {
         const cached = coldCache.get(agentId, q, model);
         if (!cached) coldCache.set(agentId, q, model, vector.slice());
-      }
-    });
-
-    // Warm (alle vorher gesetzt)
-    for (const q of queries) warmCache.set(agentId, q, model, vector);
-    const warmMs = measureCpuMilliseconds(() => {
-      for (const q of queries) {
-        warmCache.get(agentId, q, model);
       }
     });
 
