@@ -2,13 +2,31 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.4.0 — evidence the agent can stand behind**
+**PLUR1BUS 7.4.9 — native OpenClaw Beta-3 compatibility**
 
-Current version: **7.4.0** — package metadata and the OpenClaw manifest are aligned to the GitHub tag `v7.4.0`. See the [changelog](CHANGELOG.md) for the full history.
+Current source version: **7.4.9**. The compatibility target is exactly
+`openclaw@2026.8.1-beta.3`; see the
+[compatibility contract](docs/compatibility-openclaw-2026.8.1-beta.3.md).
+The published `v7.4.8` tag remains immutable and does not contain these fixes.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.4.9 — native integration and verified local models
+
+- **No OpenClaw bundle patching.** Feature cron commands use OpenClaw's public
+  plugin registration and `gateway-runtime` dispatcher capabilities. Missing
+  capabilities fail closed; PLUR1BUS never rewrites OpenClaw source, dist, or
+  `node_modules` files.
+- **Exact Beta-3 release contract.** Package metadata pins the tested host and
+  SDK identity to `2026.8.1-beta.3`, while runtime behavior is guarded by
+  feature detection rather than version-string branches.
+- **Pinned local inference.** E5 embeddings, Jina reranking, and the free BGE
+  fallback use immutable Hugging Face revisions with exact required-file sizes
+  and SHA-256 verification before Transformers.js loads them.
+- **Deterministic regression timing.** CPU-bound performance contracts measure
+  process CPU time; repair diagnostics drain naturally before process exit.
 
 ### New in v7.4.0 — evidence the agent can stand behind
 
@@ -34,9 +52,8 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
   genuine conflicts are never touched.
 - **Derived records carry visibility.** Pattern and dream writers stamp scope;
   readers filter by requester. Legacy records without a stamp stay own-agent only.
-- **The host patch is optional.** `PLUR1BUS_SKIP_HOST_PATCH=1` is honoured by both
-  `scripts/setup-feature-crons.mjs` and `scripts/install-memory-system.sh`; the
-  install completes without writing into the OpenClaw dist tree.
+- **Legacy compatibility note.** The 7.4.0 release could opt out of its then
+  current dispatcher rewrite. Version 7.4.9 removes that rewrite completely.
 
 ### New in v7.3.x — memory dynamics that actually fire
 
@@ -310,13 +327,13 @@ These tags are used for vault filtering and graph grouping; they do not carry se
 
 ### Afterthoughts (delayed follow-ups)
 
-When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 3 hours, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command itself returns either the composed text or OpenClaw's `NO_REPLY` suppression token. The shipped host patch is applied or verified during gateway registration and again before automatic cron provisioning; it finalizes this exact feature command through OpenClaw's normal delivery path before `executeCronRun()`. If the OpenClaw runtime cannot be patched, a registration-time `before_agent_reply` admission guard claims the two exact feature commands, their shipped legacy carrier contracts, and the precise `[PLUR1BUS]` result envelope added by the previous dispatcher with `NO_REPLY` before model resolution. This closes the pre-`gateway_start` race and pauses only those automatic feature runs without spending outer-model tokens. The gateway hook then safety-disables the same known jobs through OpenClaw's in-process cron service, and CLI setup reconciles and retries. Jobs are marked in their names while preserving delivery configuration. Once the boundary is healthy, only marked jobs inside the current bound-agent plan, with a validated delivery and a still-enabled feature, are atomically migrated, renamed, and re-enabled after restart. Other custom prompts, surrounding whitespace, prefixes, and suffixes are never claimed by the admission guard.
+When the last conversation ended 30–120 minutes ago with an open outcome (the user asked for details, or the topic was dropped mid-thread), the plugin can compose a short, casual follow-up message ("Mir ist zu … noch eingefallen…"). This is gated by the shared proactive governor budget, capped at one per day, and skipped for any topic already surfaced as an open thread today. Recommended cron: every 3 hours, run the exact command `/plur1bus internal afterthought` with announce delivery. The plugin command returns either a validated reply payload or OpenClaw's `NO_REPLY` suppression token. PLUR1BUS submits the exact allowlisted command through OpenClaw's public gateway-runtime dispatcher, so OpenClaw owns status finalization and at-most-once announce delivery without an outer carrier-model run. If the required native capability is unavailable, provisioning fails closed and leaves the feature job inactive. Custom prompts, surrounding whitespace, prefixes, and suffixes are never claimed.
 
 Setting this cron up is automatic when its raw feature gates are explicitly enabled — see below.
 
 #### Multi-agent feature-cron automation
 
-`node scripts/setup-feature-crons.mjs` installs or verifies the host dispatcher first. When healthy, it loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to seven jobs per agent plus one install-wide GC job. It fails closed without normal cron planning when the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. If the host patch is unavailable, the safety path does not depend on configuration: it reads cron state only to disable active jobs whose raw payload and canonical PLUR1BUS identity exactly match the two direct feature jobs; custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
+`node scripts/setup-feature-crons.mjs` verifies the public native command-dispatch capability first. When healthy, it loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to seven jobs per agent plus one install-wide GC job. It fails closed without normal cron planning when the capability is absent, the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. Custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
 
 The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
 
@@ -332,7 +349,12 @@ The two configuration views have separate roles: `sourceConfig` alone controls e
 Every job runs with `--agent <agentId> --session isolated`. Provisioning does not set model, fallback, token, auth, API, or other credential overrides, so OpenClaw's default LLM and per-agent credentials remain authoritative. The script remains idempotent and exit-0 for install safety, so it can run from any of these channels:
 
 - **`npm install`/`npm postinstall`** — fires when the plugin is installed via `npm install` (e.g. `npm install -g @cyb3rb1ade/plur1bus-memory`).
-- **Gateway startup (deferred bootstrap)** — a registration-time `before_agent_reply` guard blocks known PLUR1BUS direct-feature cron payloads before model resolution whenever host-patch registration failed, so even a cron firing before `gateway_start` cannot invoke the outer model. A `gateway_start` handler in `index.js` then schedules a one-off, non-blocking run 90 seconds after every healthy gateway start (long enough for the `openclaw` CLI to be able to talk to the now-running gateway). If host-patch registration fails, the awaited startup hook first disables exact active shipped direct jobs through `gatewayContext.getCron()` before scheduling the CLI attempt at 0 ms, even when automatic provisioning is disabled. CLI/config/list/edit and safety-recovery failures are retried in the same gateway process with bounded backoff (1s, 5s, 30s, 2m, 10m). This channel covers the *documented* install path (`git clone` + `rsync` into `~/.openclaw/extensions/...`, which never runs `npm install`) as well as ClawHub installs. Healthy runs are throttled to at most once per ~20h; pending work and plugin version changes retry earlier. Disable normal provisioning with `"featureCronSetup": { "auto": false }`; the fail-closed safety run remains active.
+- **Gateway startup (deferred bootstrap)** — runtime registration verifies the
+  public Gateway method, CLI, and command dispatcher exactly once. A
+  `gateway_start` handler schedules a bounded reconciliation after the gateway
+  becomes reachable. Missing capabilities or invalid config leave exact owned
+  feature jobs inactive; retries use bounded backoff. Disable provisioning with
+  `"featureCronSetup": { "auto": false }`.
 - **Manual** — `/plur1bus setup crons` (optionally `--agent <id>`/`--account <acct>` to force single-agent mode).
 
 The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-derived**, not "have we shown this before": it reads the marker file and only surfaces a hint when setup has never run, ran under an older plugin version, or ran but couldn't create everything it planned (some crons are still pending — e.g. no delivery target could be derived). It's silent once a current-version run reports nothing left to create.
@@ -347,54 +369,22 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 PLUR1BUS requires Node.js 22.5 or newer.
 
-Install the immutable GitHub Release package:
+Until 7.4.9 is published, build an immutable tarball from this exact source
+checkout and install that artifact through OpenClaw's package installer:
 
 ```bash
+npm ci
+npm test
+npm pack
 openclaw plugins install \
-  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.1.8/cyb3rb1ade-plur1bus-memory-7.1.8.tgz
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.4.9.tgz --force
 ```
 
-Or install the exact ClawHub release:
-
-```bash
-openclaw plugins install \
-  clawhub:@cyb3rb1ade/plur1bus-memory@7.1.8 \
-  --acknowledge-clawhub-risk
-```
-
-GitHub Packages requires an authenticated GitHub npm registry. After
-authenticating `@cyb3rb1ade` for `https://npm.pkg.github.com`, install and pin
-the exact package:
-
-```bash
-npm login --scope=@cyb3rb1ade --auth-type=legacy \
-  --registry=https://npm.pkg.github.com
-openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.1.8 --pin
-```
-
-For a source checkout, clone into the OpenClaw extensions folder and restart
-the gateway:
-
-```bash
-git clone https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory.git \
-  ~/.openclaw/extensions/memory-lancedb-namespaced
-cd ~/.openclaw/extensions/memory-lancedb-namespaced
-npm install --omit=dev
-systemctl --user restart openclaw-gateway
-```
-
-The package includes `patches/apply-cron-plugin-direct-dispatch.mjs`. Gateway
-registration reapplies it on every start so OpenClaw upgrades cannot silently
-restore the model-backed carrier. The patcher writes an atomic, source-hash
-bound rollback copy beside the changed runtime bundle. It discovers the active
-OpenClaw package from the running entry point or the `openclaw` executable on
-`PATH` (with `OPENCLAW_DIST_DIR` as an explicit override), so global prefixes,
-NVM, Homebrew-style layouts, and user installs are not tied to `/usr/lib`.
-When the runtime is not writable or its audited structure cannot be recognized,
-automatic setup disables exact owned direct jobs rather than allowing them to
-fall back to the model carrier. Set `PLUR1BUS_SKIP_HOST_PATCH=1` to skip the
-install-time host rewrite (Atlas supply-chain objection); feature crons then
-need a native dispatcher.
+Record the tarball's SHA-256 before transferring it. The installer copies the
+package into OpenClaw's plugin state; a source link is not an equivalent
+package-compatibility test. PLUR1BUS 7.4.9 never patches OpenClaw runtime files.
+The published `v7.4.8` artifacts remain unchanged and must not be relabelled as
+7.4.9.
 
 Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
 
@@ -478,11 +468,11 @@ not PLUR1BUS defaults.
 ```
 
 `hooks.allowConversationAccess: true` is mandatory for this trusted memory
-plugin. OpenClaw otherwise rejects the `before_agent_reply` admission fallback;
-if the independently installed host patch then becomes unavailable, a direct
-feature cron could reach the outer model before startup reconciliation. The
-installer enforces this single permission even in preserve mode while keeping
-all unrelated hook and feature choices unchanged.
+plugin. It authorizes the official typed `before_agent_reply` hook used for
+automatic recall and for the fail-closed admission boundary of exact feature
+commands; OpenClaw otherwise withholds the conversation body. The installer
+enforces this single permission even in preserve mode while keeping all
+unrelated hook and feature choices unchanged.
 
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
 
@@ -687,7 +677,7 @@ An explicit selection records `setupProfile` and `featuresConfirmedAt`. Recommen
 
 LanceDB is the authoritative store: every memory card lives there first, indexed per agent for isolation. The Obsidian bridge mirrors cards into a Markdown vault so the user can read, link, and edit them with normal tools; LanceDB stays the source of truth and the bridge re-syncs on changes.
 
-A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as the exact command `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The plugin SDK currently exposes no outbound send API, so the command handler converts returned `pushMessages` directly into the cron reply. The installed host patch passes that complete reply, including confirmation buttons, into OpenClaw's normal finalization/delivery path and returns before the carrier-agent model executor. Multiple push texts are combined in their original order; partial classifier failures are reported alongside successfully produced pushes. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
+A daily consolidation job detects duplicates and generates merge proposals (never auto-applies). A critical-push classifier (run via the OpenClaw-managed cron as the exact command `/plur1bus internal classify-recent`) labels recently captured cards by sensitive entity type (person, relationship, birthday, money/account, health, access/password) using the configured chat model, and — when a per-agent daily threshold (`maxPerDay`) is not yet exceeded — emits a short confirmation message per critical card. The command handler converts returned `pushMessages` into a validated native command reply; OpenClaw's dispatcher owns finalization and delivery. Multiple push texts are combined in their original order; partial classifier failures are reported alongside successfully produced pushes. The per-day counter is enforced across runs, and each card is classified exactly once, so no card is pushed twice.
 
 The recall pipeline runs embedding → LanceDB vector search → optional query refinement → temporal filter → canonical `KNOWLEDGE.md` search → score/status processing → graph spread and hydration → budget allocation → optional rerank → deduplication → ACL filtering → finalization. The caller may then append bounded Semantic Lens and Conversation Reactivation Recall results; neither replaces the primary recall.
 
@@ -695,7 +685,7 @@ The recall pipeline runs embedding → LanceDB vector search → optional query 
 
 ```bash
 npm install
-npm test              # node --test, 1,931 tests
+npm test              # serialized Node test runner; 4,003 tests in 7.4.9
 ```
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.

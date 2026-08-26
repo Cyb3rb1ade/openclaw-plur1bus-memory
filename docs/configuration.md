@@ -88,6 +88,52 @@ Sharing-Verträge bleiben B13 vorbehalten.
 
 ---
 
+## Lokale E5-, Jina- und BGE-Modelle (7.4.9)
+
+Der freie Offline-Pfad verwendet revisionsgeprüfte Transformers.js-Artefakte.
+Das Cache-Verzeichnis muss für den unprivilegierten Gateway-Benutzer schreibbar
+sein. Die vollständigen erwarteten Größen und SHA-256-Werte stehen in
+`lib/providers/local-model-artifacts.js`; eine falsche Revision oder eine
+unvollständige Datei wird vor der Inferenz abgelehnt.
+
+```json
+{
+  "embedding": {
+    "provider": "local-transformers",
+    "local": {
+      "model": "intfloat/multilingual-e5-small",
+      "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
+      "dimensions": 384,
+      "cacheDir": "~/.openclaw/models/plur1bus"
+    }
+  },
+  "reranker": {
+    "enabled": true,
+    "provider": "local-transformers",
+    "model": "jinaai/jina-reranker-v2-base-multilingual",
+    "local": {
+      "model": "jinaai/jina-reranker-v2-base-multilingual",
+      "revision": "9cfeff2df7d40d1b78e75e5e9cebec92a99813c9",
+      "cacheDir": "~/.openclaw/models/plur1bus"
+    },
+    "fallbackOnError": true,
+    "fallbackProvider": "local-transformers",
+    "fallbackModel": "woxpas-ai/bge-reranker-v2-m3-onnx",
+    "fallbackRevision": "c44ebc43de724ae8816668bb44d2e728e17faa18",
+    "fallbackCacheDir": "~/.openclaw/models/plur1bus"
+  }
+}
+```
+
+Wer Jina abwählt, kann BGE direkt als `reranker.model` und
+`reranker.local.model` setzen. Das Quellrepository
+`BAAI/bge-reranker-v2-m3` ist für diesen Pfad absichtlich ungültig, weil es
+keine von Transformers.js ladbare ONNX-Datei veröffentlicht. Ein Jina-Fehler
+wechselt nur dann kontrolliert zu BGE, wenn der oben gezeigte freie Fallback
+explizit konfiguriert ist.
+
+---
+
 ## B13 Shared-Memory-Routen und Hook-Grenze
 
 Shared-Memory ist keine Konfigurations-Abkürzung für Namespace-Reads.
