@@ -1175,6 +1175,11 @@ describe("B13 canonical memory request context", () => {
       sessionKey: "agent:a:auto-capture-lab-a",
       sessionId: "session-headless-a",
       workspaceDir,
+      // Beta-3's public buildAgentHookContextChannelFields helper derives both
+      // fields from the arbitrary headless session suffix even when there is
+      // no channel transport at all.
+      channelId: "auto-capture-lab-a",
+      chatId: "auto-capture-lab-a",
     }, {
       routingCapability,
       turnRoutes: createMemoryTurnRouteRegistry({ routingCapability }),
@@ -1187,6 +1192,7 @@ describe("B13 canonical memory request context", () => {
     assert.equal(resolved.workspaceDir, realpathSync(workspaceDir));
     assert.equal(resolved.userPrincipal, "");
     assert.equal(resolved.conversationPrincipal, "");
+    assert.equal(resolved.chatId, "");
     assert.equal(sessionReads, 0);
     assert.deepEqual(warnings, []);
   });
