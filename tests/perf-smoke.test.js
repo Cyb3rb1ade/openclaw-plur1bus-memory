@@ -179,6 +179,8 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
       flushFn: async () => {},
       debounceMs: 60_000, // Timer soll während des Tests nicht feuern
     });
+    debouncer.accumulate("/warmup", { latencyMs: 0 });
+    await debouncer.flush();
 
     const accMs = measureCpuMilliseconds(() => {
       for (let i = 0; i < N; i++) {
@@ -201,6 +203,8 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
       flushFn: async () => {},
       debounceMs: 60_000,
     });
+    debouncer.accumulate("/warmup", { latencyMs: 0 });
+    await debouncer.flush();
     const accMs = measureCpuMilliseconds(() => {
       for (let i = 0; i < N; i++) {
         debouncer.accumulate("/ws", { latencyMs: i });
