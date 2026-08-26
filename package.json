@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "7.4.10",
+  "version": "7.5.0",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -10,12 +10,12 @@
       "./index.js"
     ],
     "compat": {
-      "pluginApi": ">=2026.5.12-beta.6",
-      "minGatewayVersion": "2026.5.12-beta.6"
+      "pluginApi": ">=2026.8.1-beta.3",
+      "minGatewayVersion": "2026.8.1-beta.3"
     },
     "build": {
-      "openclawVersion": "2026.5.12",
-      "pluginSdkVersion": "2026.5.12"
+      "openclawVersion": "2026.8.1-beta.3",
+      "pluginSdkVersion": "2026.8.1-beta.3"
     }
   },
   "files": [
@@ -25,6 +25,7 @@
     "docs/audits/",
     "docs/runbooks/",
     "docs/configuration.md",
+    "docs/compatibility-openclaw-2026.8.1-beta.3.md",
     "docs/recall-architecture.md",
     "docs/migration-v6.md",
     "docs/release-checklist.md",

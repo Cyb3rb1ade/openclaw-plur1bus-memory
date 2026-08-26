@@ -7,6 +7,37 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.5.0] — Unreleased
+
+### Kompatibilitaet
+
+- **OpenClaw 2026.8.1-beta.3 ohne Host-Patch.** PLUR1BUS prueft die oeffentlichen
+  Plugin-Capabilities (`registerGatewayMethod`, `registerCli` und
+  `openclaw/plugin-sdk/gateway-runtime`) und nutzt den nativen Command-/Cron-
+  Dispatcher. Es werden weder OpenClaw-Quellen noch `dist`-Bundles oder
+  `node_modules` veraendert. Fehlende Capabilities bleiben fail-closed.
+- **Exakte Release-Identitaet.** Paket, Lockfile und Manifest tragen 7.5.0; die
+  Build- und Mindest-Host-Metadaten nennen exakt OpenClaw 2026.8.1-beta.3. Die
+  bestehenden Tags und der Quellstand 7.4.10 bleiben unveraendert.
+- **Nicht-destruktives Upgrade.** 7.5.0 fuehrt keinen brechenden LanceDB-
+  Schematausch ein. Bestehende agent-spezifische Tabellen, Namespaces,
+  Tombstones, History und Obsidian-Spiegel bleiben erhalten.
+
+### Behoben
+
+- **Jina `Unsupported model type: null`.** Die tatsaechlich veroeffentlichten
+  Metadaten des festgepinnten Jina-Modells werden vor der Inferenz validiert;
+  nur dieses bekannte Profil wird auf seine XLM-RoBERTa-Architektur
+  normalisiert.
+- **Freier BGE-Fallback ohne ONNX-Datei.** Der Fallback nutzt einen realen,
+  revisionsgepinnten ONNX-Export statt eines Repositorys ohne das erwartete
+  Artefakt. E5, Jina und BGE pruefen Dateigroessen und SHA-256 vor dem Laden;
+  Downloads werden atomar veroeffentlicht.
+- **Fluechtige Performance- und Diagnose-Tests.** CPU-gebundene Benchmarks
+  messen Prozess-CPU-Zeit statt Host-Wartezeit. Das Repair-CLI laesst
+  Diagnosedaten vor dem Exit vollstaendig auslaufen. Deadline- und Cache-Tests
+  besitzen injizierte Zeit-/I/O-Grenzen statt von VPS-Last abzuhaengen.
+
 ## [7.4.10] — 2026-08-26
 
 ### Behoben
@@ -52,7 +83,6 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Bewusst *nicht* Teil dieses Fixes, weil beides Retention bzw. Speicherformat
   ändert: die Recordgröße selbst (33 KB pro Turn) und die einmalige
   Index-Hydration beim ersten Append pro Prozess (3,5 s bei 161 MB).
-
 ## [7.4.8] — 2026-08-25
 
 ### Behoben

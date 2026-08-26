@@ -5,6 +5,22 @@
 
 ---
 
+## Upgrade v7.4.8 → v7.4.9
+
+Dieses Upgrade ist nicht-destruktiv und erfordert keine neue LanceDB-DDL oder
+Datenkonvertierung. Bestehende Agent-Verzeichnisse, Namespace-Routen,
+Memory-IDs, Vektoren, Tombstones, History und Obsidian-Spiegel bleiben
+unverändert. Die normale idempotente Initialisierung ergänzt weiterhin nur
+fehlende Spalten älterer Tabellen.
+
+7.4.9 entfernt die OpenClaw-Bundle-Manipulation vollständig und nutzt die
+öffentlichen Fähigkeiten von OpenClaw 2026.8.1-beta.3. Deshalb gibt es weder
+eine neue Host-Patch-Datei noch eine Patch-Rollback-Kopie zu migrieren. Ein
+Plugin-Rollback erfolgt ausschließlich über das zuvor aufbewahrte npm-Pack-
+Artefakt; zusätzliche Spalten werden von älteren PLUR1BUS-Versionen ignoriert.
+
+---
+
 ## Zusammenfassung
 
 Version v6.7.0 führt das **PLUR1BUS Full Experience Policy**- und **Temporal Continuity**-System ein.
