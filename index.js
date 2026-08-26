@@ -3941,15 +3941,33 @@ function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null) {
       const fallback = new LocalTransformersRerankerProvider({
         ...(rerankerCfg.local || {}),
         model: rerankerCfg.fallbackModel || rerankerCfg.local?.model || DEFAULT_LOCAL_RERANKER_MODEL,
+        revision: rerankerCfg.fallbackRevision,
+        cacheDir: rerankerCfg.fallbackCacheDir,
+        logger,
       });
       reranker = new ChainedRerankerProvider(primary, fallback, logger);
     } else {
-      const chained = new ChainedRerankerProvider(primary, { id: "none" }, logger);
-      chained.fallback = null;
-      reranker = chained;
+      reranker = new ChainedRerankerProvider(primary, null, logger);
     }
   } else if (rerankerCfg.provider === "local-transformers" && rerankerCfg.enabled) {
-    reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
+    const primary = new LocalTransformersRerankerProvider({
+      ...(rerankerCfg.local || rerankerCfg),
+      logger,
+    });
+    if (rerankerCfg.fallbackOnError !== false && rerankerCfg.fallbackProvider === "local-transformers") {
+      if (rerankerCfg.fallbackModel === primary.model) {
+        throw new Error("local reranker fallback model must differ from the primary model");
+      }
+      const fallback = new LocalTransformersRerankerProvider({
+        model: rerankerCfg.fallbackModel,
+        revision: rerankerCfg.fallbackRevision,
+        cacheDir: rerankerCfg.fallbackCacheDir,
+        logger,
+      });
+      reranker = new ChainedRerankerProvider(primary, fallback, logger);
+    } else {
+      reranker = primary;
+    }
   }
   return { reranker, rerankerCfg };
 }

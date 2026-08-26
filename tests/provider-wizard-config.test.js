@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { normalizeRerankerConfig, normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
+import {
+  BGE_RERANKER_PROFILE,
+  E5_EMBEDDING_PROFILE,
+  JINA_RERANKER_PROFILE,
+} from "../lib/providers/local-model-artifacts.js";
 
 describe("provider-wizard config output", () => {
   it("Cohere ohne Fallback → fallbackProvider=disabled", () => {
@@ -36,5 +41,26 @@ describe("provider-wizard config output", () => {
       model: "woxpas-ai/bge-reranker-v2-m3-onnx",
     });
     assert.strictEqual(cfg.local?.model ?? cfg.model, "woxpas-ai/bge-reranker-v2-m3-onnx");
+    assert.strictEqual(cfg.local.revision, BGE_RERANKER_PROFILE.revision);
+  });
+
+  it("pinnt E5 auf die verifizierte Revision", () => {
+    const cfg = normalizeEmbeddingConfig({ provider: "local-transformers" });
+    assert.strictEqual(cfg.local.model, E5_EMBEDDING_PROFILE.model);
+    assert.strictEqual(cfg.local.revision, E5_EMBEDDING_PROFILE.revision);
+  });
+
+  it("konfiguriert Jina als Primary mit verifiziertem freien BGE-Fallback", () => {
+    const cfg = normalizeRerankerConfig({
+      provider: "local-transformers",
+      model: JINA_RERANKER_PROFILE.model,
+      fallbackProvider: "local-transformers",
+      fallbackModel: BGE_RERANKER_PROFILE.model,
+      fallbackOnError: true,
+    });
+    assert.strictEqual(cfg.local.revision, JINA_RERANKER_PROFILE.revision);
+    assert.strictEqual(cfg.fallbackProvider, "local-transformers");
+    assert.strictEqual(cfg.fallbackModel, BGE_RERANKER_PROFILE.model);
+    assert.strictEqual(cfg.fallbackRevision, BGE_RERANKER_PROFILE.revision);
   });
 });

@@ -58,6 +58,9 @@
               "dimensions": {
                 "type": "number"
               },
+              "revision": {
+                "type": "string"
+              },
               "queryPrefix": {
                 "type": "string"
               },
@@ -563,6 +566,12 @@
           "fallbackModel": {
             "type": "string"
           },
+          "fallbackRevision": {
+            "type": "string"
+          },
+          "fallbackCacheDir": {
+            "type": "string"
+          },
           "local": {
             "type": "object",
             "additionalProperties": false,
@@ -571,6 +580,12 @@
                 "type": "string"
               },
               "cacheDir": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "string"
+              },
+              "dtype": {
                 "type": "string"
               }
             }

@@ -4,6 +4,10 @@ import assert from "node:assert/strict";
 import { createEmbeddingProvider, createRerankerProvider } from "../lib/providers/factory.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "../lib/providers/config-normalize.js";
 import { DEFAULT_LOCAL_RERANKER_MODEL } from "../lib/providers/dimensions.js";
+import {
+  BGE_RERANKER_PROFILE,
+  JINA_RERANKER_PROFILE,
+} from "../lib/providers/local-model-artifacts.js";
 
 describe("provider-factory", () => {
   before(() => {
@@ -64,5 +68,36 @@ describe("provider-factory", () => {
     const cfg = normalizeRerankerConfig({ provider: "local-transformers" });
     const provider = createRerankerProvider(cfg, null);
     assert.ok(provider instanceof LocalTransformersRerankerProvider);
+  });
+
+  it("falls from a failing local Jina primary to the configured free BGE provider exactly once", async () => {
+    const { ChainedRerankerProvider } = await import("../lib/providers/reranker-chained.js");
+    const cfg = normalizeRerankerConfig({
+      provider: "local-transformers",
+      model: JINA_RERANKER_PROFILE.model,
+      fallbackProvider: "local-transformers",
+      fallbackModel: BGE_RERANKER_PROFILE.model,
+      fallbackOnError: true,
+    });
+    const provider = createRerankerProvider(cfg, null);
+    assert.ok(provider instanceof ChainedRerankerProvider);
+    assert.equal(provider.primary.model, JINA_RERANKER_PROFILE.model);
+    assert.equal(provider.fallback.model, BGE_RERANKER_PROFILE.model);
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    provider.primary._pipeline = async () => {
+      primaryCalls += 1;
+      throw new Error("injected Jina failure");
+    };
+    provider.fallback._pipeline = async () => {
+      fallbackCalls += 1;
+      return [{ score: 0.1 }, { score: 0.9 }];
+    };
+
+    const ranked = await provider.rerank("needle", ["other", "needle"], 2);
+
+    assert.deepStrictEqual(ranked.map((row) => row.index), [1, 0]);
+    assert.ok(primaryCalls >= 1, "the primary is attempted before fallback");
+    assert.equal(fallbackCalls, 1);
   });
 });
