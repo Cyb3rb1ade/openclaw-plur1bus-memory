@@ -4,11 +4,11 @@
  * explicitly enabled PLUR1BUS feature crons for the current OpenClaw
  * installation.
  *
- * Runs as the invoking user. Before any cron read or mutation it installs or
- * verifies the shipped OpenClaw host dispatcher patch, then uses the
- * `openclaw` CLI over its local socket/token. If the runtime path is not
- * writable, setup remains fail-closed by disabling only active jobs with an
- * exact PLUR1BUS direct-feature identity and payload.
+ * Runs as the invoking user. Before any cron mutation it verifies OpenClaw's
+ * public native command and plugin CLI capabilities, then uses the `openclaw`
+ * CLI over its local socket/token. Missing capabilities remain fail-closed by
+ * disabling only active jobs with an exact PLUR1BUS direct-feature identity
+ * and payload. OpenClaw runtime files are never modified.
  *
  * Contract: this script must NEVER fail an install. If the `openclaw` CLI
  * is missing or the gateway is unreachable, it prints a friendly note and
@@ -33,11 +33,6 @@ import { safeAgentId } from "../lib/sql-safety.js";
 import { fileURLToPath } from "node:url";
 import { existsSync, realpathSync } from "node:fs";
 import {
-  applyCronPluginDirectDispatchPatch,
-  isCronPluginDirectDispatchReady,
-  resolveOpenClawDistDir,
-} from "../patches/apply-cron-plugin-direct-dispatch.mjs";
-import {
   FEATURE_CRON_RUNNER_PATH,
   buildNativeFeatureCommandArgv,
   planNativeFeaturePayloadMigration,
@@ -61,20 +56,6 @@ export function probeNativeCronCommandDispatch(openclawImpl = openclaw) {
     && ["plur1bus-feature-cron", "--agent", "--feature"].every((marker) => pluginText.includes(marker));
   if (!ready) throw new Error("native cron command capability unavailable");
   return { ready: true, status: "native-command" };
-}
-
-function ensureCronDirectDispatch({ apply, openclawImpl = openclaw }) {
-  try {
-    return probeNativeCronCommandDispatch(openclawImpl);
-  } catch (error) {
-    if (process.env.PLUR1BUS_SKIP_HOST_PATCH === "1") throw error;
-  }
-  const distDir = resolveOpenClawDistDir();
-  if (apply) return { ready: true, ...applyCronPluginDirectDispatchPatch(distDir) };
-  if (!isCronPluginDirectDispatchReady(distDir)) {
-    throw new Error("PLUR1BUS cron direct dispatch is not installed");
-  }
-  return { ready: true, status: "already-patched" };
 }
 
 function parseArgs(argv) {
@@ -134,28 +115,23 @@ function scheduleArgs(schedule) {
  * Build one fail-closed `cron add` invocation from a validated planner job.
  *
  * @param {object} job
- * @param {{dispatchMode?: "legacy-patch"|"native-command"}} [options]
  * @returns {string[]}
  */
-export function buildAddArgs(job, { dispatchMode = "legacy-patch" } = {}) {
+export function buildAddArgs(job) {
   const args = ["cron", "add", "--name", job.name];
-  if (dispatchMode === "native-command") {
-    const commandArgv = buildNativeFeatureCommandArgv({
-      agentId: job.agent,
-      feature: job.feature,
-      command: job.command,
-    });
-    args.push(
-      "--command-argv",
-      JSON.stringify(commandArgv),
-      "--timeout-seconds",
-      "600",
-      "--output-max-bytes",
-      "65536",
-    );
-  } else {
-    args.push("--message", job.message);
-  }
+  const commandArgv = buildNativeFeatureCommandArgv({
+    agentId: job.agent,
+    feature: job.feature,
+    command: job.command,
+  });
+  args.push(
+    "--command-argv",
+    JSON.stringify(commandArgv),
+    "--timeout-seconds",
+    "600",
+    "--output-max-bytes",
+    "65536",
+  );
   args.push(...scheduleArgs(job.schedule));
   args.push("--session", "isolated");
   if (job.schedule?.kind === "cron" && typeof job.timezone === "string" && job.timezone.length > 0) {
@@ -338,7 +314,7 @@ function discoverAgents(openclawImpl = openclaw) {
  * @param {{
  *   argv?: string[],
  *   openclawImpl?: (args: string[], timeout?: number) => {ok: boolean, stdout?: string, stderr?: string, status?: number|null, error?: Error|undefined},
- *   ensureCronDirectDispatchImpl?: (options: {apply: boolean}) => object,
+ *   probeNativeCronCommandDispatchImpl?: (openclawImpl: Function) => object,
  *   stdout?: NodeJS.WritableStream,
  *   stderr?: NodeJS.WritableStream
  * }} [options]
@@ -348,7 +324,7 @@ export async function runSetupFeatureCrons(options = {}) {
   const {
     argv = process.argv.slice(2),
     openclawImpl = openclaw,
-    ensureCronDirectDispatchImpl = ensureCronDirectDispatch,
+    probeNativeCronCommandDispatchImpl = probeNativeCronCommandDispatch,
     stdout = process.stdout,
   } = options;
   const opts = parseArgs(argv);
@@ -395,21 +371,17 @@ export async function runSetupFeatureCrons(options = {}) {
       return 0;
     }
 
-    let hostDispatchReady = true;
-    let dispatchMode = "legacy-patch";
+    let nativeDispatchReady = true;
+    let nativeDispatchError = null;
     try {
-      // Atlas: install-time host patch is a supply-chain surface. Operators
-      // can skip it with PLUR1BUS_SKIP_HOST_PATCH=1; npm still exits 0.
-      const dispatch = process.env.PLUR1BUS_SKIP_HOST_PATCH === "1"
-        ? probeNativeCronCommandDispatch(openclawImpl)
-        : ensureCronDirectDispatchImpl({ apply: !opts.dryRun, openclawImpl });
+      const dispatch = probeNativeCronCommandDispatchImpl(openclawImpl);
       if (dispatch?.ready === false) throw new Error("cron direct dispatch unavailable");
-      if (dispatch?.status === "native-command") dispatchMode = "native-command";
-    } catch {
-      hostDispatchReady = false;
+    } catch (error) {
+      nativeDispatchReady = false;
+      nativeDispatchError = error instanceof Error ? error.message : String(error);
     }
 
-    if (!hostDispatchReady) {
+    if (!nativeDispatchReady) {
       const list = openclawImpl(["cron", "list", "--json", "--all"], 15000);
       let existingJobs = null;
       if (list.ok) {
@@ -429,7 +401,8 @@ export async function runSetupFeatureCrons(options = {}) {
         const reason = list.ok ? "cron-list-parse-failed" : "cron-list-failed";
         const payload = buildJsonResult({
           reason,
-          message: "host dispatcher unavailable and cron state could not be inspected safely",
+          message: "required native OpenClaw cron capabilities unavailable and cron state could not be inspected safely",
+          configError: nativeDispatchError,
           lastPlanCreateCount: pendingByDefault,
         });
         if (opts.json) {
@@ -437,7 +410,7 @@ export async function runSetupFeatureCrons(options = {}) {
         } else {
           writeOutput(
             stdout,
-            "[setup-feature-crons] host dispatcher unavailable and cron state could not be inspected — safety retry required.",
+            "[setup-feature-crons] required native OpenClaw cron capabilities unavailable and cron state could not be inspected — safety retry required.",
           );
         }
         return 0;
@@ -466,8 +439,9 @@ export async function runSetupFeatureCrons(options = {}) {
         ? unsafeJobs.length
         : results.filter((result) => !result.ok).length;
       const payload = buildJsonResult({
-        reason: "host-direct-dispatch-unavailable",
-        message: "required OpenClaw cron direct-dispatch patch unavailable; active exact direct jobs were safety-disabled",
+        reason: "native-command-capability-unavailable",
+        message: "required native OpenClaw cron capabilities unavailable; active exact direct jobs were safety-disabled",
+        configError: nativeDispatchError,
         disabledJobs,
         wouldDisableJobs: opts.dryRun ? unsafeJobs.map((job) => job.name) : [],
         failedDisables,
@@ -478,7 +452,7 @@ export async function runSetupFeatureCrons(options = {}) {
       } else {
         writeOutput(
           stdout,
-          `[setup-feature-crons] required host dispatcher unavailable — safety-disabled ${disabledJobs.length} exact direct job(s); ${failedDisables} remain unsafe.`,
+          `[setup-feature-crons] required native OpenClaw cron capabilities unavailable — safety-disabled ${disabledJobs.length} exact direct job(s); ${failedDisables} remain unsafe.`,
         );
       }
       return 0;
@@ -624,11 +598,9 @@ export async function runSetupFeatureCrons(options = {}) {
     // dry-run/nichts-zu-tun dieses hier, sonst erst das Ergebnis-Objekt nach
     // den cron-add-Aufrufen (vorher wären es zwei konkatenierte Objekte, die
     // der /plur1bus-setup-crons-Parser nicht lesen kann).
-    const nativePayloadMigrations = dispatchMode === "native-command"
-      ? plan.skip
-        .map((entry) => planNativeFeaturePayloadMigration(entry.existingJob, entry.spec))
-        .filter(Boolean)
-      : [];
+    const nativePayloadMigrations = plan.skip
+      .map((entry) => planNativeFeaturePayloadMigration(entry.existingJob, entry.spec))
+      .filter(Boolean);
     const recoveries = planSafetyDisabledCronRecoveries(plan.skip);
     const updates = mergeCronUpdates(
       mergeCronUpdates(Array.isArray(plan.update) ? plan.update : [], nativePayloadMigrations),
@@ -665,7 +637,7 @@ export async function runSetupFeatureCrons(options = {}) {
 
     const results = [];
     for (const job of plan.create) {
-      const args = buildAddArgs(job, { dispatchMode });
+      const args = buildAddArgs(job);
       const r = openclawImpl(args, 15000);
       results.push({ job: job.name, ok: r.ok, stderr: r.ok ? undefined : r.stderr?.trim() });
       if (!opts.json) {

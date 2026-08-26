@@ -170,7 +170,6 @@ export const DEPLOY_FILES = [
   "lib/jobs/skill-miner/nudge-renderer.js",
   "lib/jobs/skill-miner/proposal-writer.js",
   "lib/metrics.js",
-  "patches/apply-cron-plugin-direct-dispatch.mjs",
   // ── reminders / nudges ────────────────────────────────────────────────────
   "lib/reminder-extraction.js",
   "lib/reminder-nudge.js",

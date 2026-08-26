@@ -22,12 +22,6 @@
 # gelöscht. Plugin-Updates löschen nicht {ziel}/memory/lancedb-namespaced,
 # bestehende Embeddings, Provider-Konfiguration oder Cohere-Reranker-Settings.
 #
-# Umgebungsvariablen:
-#   PLUR1BUS_SKIP_HOST_PATCH=1   Überspringt Schritt 9 (Patches im OpenClaw-
-#                                Dist-Baum). Gilt gleichlautend für
-#                                setup-feature-crons.mjs; die Installation
-#                                läuft ohne Host-Patch vollständig durch.
-#
 # Runtime-Verhalten: Der v4-Normalbetrieb nutzt OpenClaw-Hooks, Plugin-Services
 # und OpenClaw-managed Crons. Dieses Script richtet keine Host-/User-Crontabs
 # als Primärpfad ein, außer --legacy-host-cron wird ausdrücklich gesetzt.
@@ -1510,41 +1504,14 @@ for agent in "${AGENT_LIST[@]}"; do
   fi
 done
 
-# ─── Schritt 9: OpenClaw-Patches anwenden ─────────────────────────────────────
-# Diese Patches schreiben in den OpenClaw-Dist-Baum des Hosts. Wer diese
-# Angriffsfläche nicht will, setzt PLUR1BUS_SKIP_HOST_PATCH=1 — dieselbe
-# Variable, die setup-feature-crons.mjs respektiert. Übersprungen wird nur
-# gewarnt, der Installer läuft weiter: der Cron-Direct-Dispatch-Patch ist
-# best-effort, ohne ihn beantworten Afterthought/Critical Push weiterhin,
-# nur über einen äußeren Agent-Turn.
+# ─── Schritt 9: Native OpenClaw-Integration ──────────────────────────────────
+# Seit 7.4.9 nutzt PLUR1BUS ausschließlich öffentliche Plugin-, Gateway- und
+# CLI-Capabilities. Der Installer verändert weder OpenClaw-Dist-Dateien noch
+# node_modules. Fehlende Capabilities werden beim Pluginstart fail-closed
+# gemeldet; nur die betroffenen Feature-Crons bleiben dann deaktiviert.
 
-step "Schritt 9: OpenClaw-Patches anwenden"
-
-PATCHES_SCRIPT="$SOURCE_DIR/patches/apply-memory-patches.sh"
-PATCHES_USER_SCRIPT="$SOURCE_DIR/patches/apply-plur1bus-user-hotfix.sh"
-PATCHES_CRON_DIRECT_SCRIPT="$SOURCE_DIR/patches/apply-cron-plugin-direct-dispatch.mjs"
-if [[ "${PLUR1BUS_SKIP_HOST_PATCH:-0}" == "1" ]]; then
-  warn "PLUR1BUS_SKIP_HOST_PATCH=1 — Host-Patches werden nicht angewendet."
-  info "Nachholbar mit: bash '$PATCHES_SCRIPT'"
-elif [[ -f "$PATCHES_SCRIPT" ]]; then
-  if [[ "$DRY_RUN" == "0" ]]; then
-    if [[ "$IS_REMOTE" == "1" ]]; then
-      scp "$PATCHES_SCRIPT" "${SSH_HOST}:/tmp/apply-memory-patches.sh"
-      scp "$PATCHES_CRON_DIRECT_SCRIPT" "${SSH_HOST}:/tmp/apply-cron-plugin-direct-dispatch.mjs"
-      if [[ -f "$PATCHES_USER_SCRIPT" ]]; then
-        scp "$PATCHES_USER_SCRIPT" "${SSH_HOST}:/tmp/apply-plur1bus-user-hotfix.sh"
-      fi
-      ssh "$SSH_HOST" "bash /tmp/apply-memory-patches.sh; rc=\$?; rm -f /tmp/apply-memory-patches.sh /tmp/apply-cron-plugin-direct-dispatch.mjs /tmp/apply-plur1bus-user-hotfix.sh; exit \$rc"
-    else
-      bash "$PATCHES_SCRIPT"
-    fi
-    ok "Patches angewendet"
-  else
-    dryrun "Würde Patches anwenden: $PATCHES_SCRIPT"
-  fi
-else
-  warn "patches/apply-memory-patches.sh nicht gefunden — übersprungen"
-fi
+step "Schritt 9: Native OpenClaw-Integration"
+info "Keine OpenClaw-Host-Patches erforderlich oder zulässig."
 
 # ─── Schritt 9b: KNOWLEDGE.md Bootstrap ──────────────────────────────────────
 
