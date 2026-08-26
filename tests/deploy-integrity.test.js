@@ -423,7 +423,6 @@ describe("DEPLOY_FILES coverage", () => {
       "scripts/setup-feature-crons.mjs",
       "scripts/lib/openclaw-cli.mjs",
       "scripts/lib/find-deploy-dir.mjs",
-      "patches/apply-cron-plugin-direct-dispatch.mjs",
     ];
     const missing = featureCronRuntime.filter((f) => !DEPLOY_FILES.includes(f));
     assert.deepStrictEqual(missing, [], `feature-cron runtime files missing from DEPLOY_FILES: ${missing.join(", ")}`);

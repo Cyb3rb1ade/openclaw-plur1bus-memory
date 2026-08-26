@@ -58,7 +58,7 @@ describe("native OpenClaw feature-cron dispatch", () => {
   });
 
   it("creates a native command payload with exactly one delivery owner", () => {
-    const args = buildAddArgs(nativeJob(), { dispatchMode: "native-command" });
+    const args = buildAddArgs(nativeJob());
     const commandIndex = args.indexOf("--command-argv");
     const argv = JSON.parse(args[commandIndex + 1]);
 
@@ -139,7 +139,7 @@ describe("native OpenClaw feature-cron dispatch", () => {
     );
   });
 
-  it("keeps native direct jobs fail-closed when neither compatibility path is ready", () => {
+  it("keeps native direct jobs fail-closed when the required capability is unavailable", () => {
     const argv = buildNativeFeatureCommandArgv({
       agentId: "main",
       feature: "afterthought",
@@ -180,13 +180,13 @@ describe("native OpenClaw feature-cron dispatch", () => {
     );
   });
 
-  it("uses native mode without applying the legacy patch", async () => {
+  it("uses native mode without any mutation fallback", async () => {
     const calls = [];
     const stdout = captureStream();
     const exitCode = await runSetupFeatureCrons({
       argv: ["--json"],
       stdout: stdout.stream,
-      ensureCronDirectDispatchImpl: () => ({ ready: true, status: "native-command" }),
+      probeNativeCronCommandDispatchImpl: () => ({ ready: true, status: "native-command" }),
       openclawImpl: (args) => {
         calls.push(args);
         if (args[0] === "--version") return { ok: true, stdout: "test", stderr: "", status: 0 };
@@ -221,7 +221,7 @@ describe("native OpenClaw feature-cron dispatch", () => {
   });
 
   it("does not fall back to a second execution when a native command fails", () => {
-    const args = buildAddArgs(nativeJob(), { dispatchMode: "native-command" });
+    const args = buildAddArgs(nativeJob());
     const argv = JSON.parse(args[args.indexOf("--command-argv") + 1]);
 
     assert.equal(argv.filter((part) => part === FEATURE_CRON_RUNNER_PATH).length, 1);

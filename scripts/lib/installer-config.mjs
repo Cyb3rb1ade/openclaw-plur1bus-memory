@@ -40,8 +40,8 @@ function ensureRequiredConversationHookAccess(pluginEntry) {
     ...hooks,
     // Required for the fail-closed before_agent_reply cron admission barrier.
     // PLUR1BUS is already a trusted conversation-memory plugin; keeping an
-    // explicit false here would silently re-enable the outer cron model path
-    // whenever the independently installed host patch cannot be applied.
+    // explicit false here would remove the fail-closed admission barrier when
+    // the required native OpenClaw capabilities are unavailable.
     allowConversationAccess: true,
   };
   return pluginEntry;

@@ -143,11 +143,6 @@ import {
   formatAfterthoughtCronReply,
   formatClassifierCronReply,
 } from "./lib/internal-cron-reply.js";
-import {
-  applyCronPluginDirectDispatchPatch,
-  isNativeCronPluginCommandCapabilityReady,
-  resolveOpenClawDistDir,
-} from "./patches/apply-cron-plugin-direct-dispatch.mjs";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import {
@@ -3167,35 +3162,27 @@ function getFeatureCronsSetupHint(baseDbPath) {
 }
 
 /**
- * Apply or verify the OpenClaw host boundary required by model-free feature
- * crons. Failure is logged and returned so cron setup can remain fail-closed
- * without disabling the memory plugin.
+ * Inspect the public OpenClaw capabilities required by model-free feature
+ * crons. Missing capabilities are reported explicitly and leave only the
+ * affected cron path fail-closed; OpenClaw runtime files are never modified.
  *
  * @param {object} api
- * @param {{applyImpl?: Function, isNativeImpl?: Function, distDir?: string}} [options]
  * @returns {boolean}
  */
-function ensureCronDirectDispatchAtRegistration(api, options = {}) {
-  const {
-    applyImpl = applyCronPluginDirectDispatchPatch,
-    isNativeImpl = isNativeCronPluginCommandCapabilityReady,
-    distDir,
-  } = options;
-  try {
-    const resolvedDistDir = distDir || resolveOpenClawDistDir();
-    if (isNativeImpl(resolvedDistDir)) {
-      api.logger?.info?.("plur1bus-feature-crons: native command dispatch ready");
-      return true;
-    }
-    const result = applyImpl(resolvedDistDir);
-    api.logger?.info?.(`plur1bus-feature-crons: host direct dispatch ${result.status}`);
+function inspectCronNativeCapabilities(api) {
+  const missing = [
+    ["registerGatewayMethod", api?.registerGatewayMethod],
+    ["registerCli", api?.registerCli],
+  ].filter(([, capability]) => typeof capability !== "function").map(([name]) => name);
+  if (missing.length === 0) {
+    api.logger?.info?.("plur1bus-feature-crons: native command dispatch ready");
     return true;
-  } catch (error) {
-    api.logger?.warn?.(
-      `plur1bus-feature-crons: host direct dispatch unavailable; feature-cron setup will remain fail-closed (${error?.message || String(error)})`,
-    );
-    return false;
   }
+  api?.logger?.warn?.(
+    `plur1bus-feature-crons: required OpenClaw capability unavailable (${missing.join(", ")}); `
+      + "feature-cron setup will remain fail-closed and no host files will be patched",
+  );
+  return false;
 }
 
 /**
@@ -4170,7 +4157,7 @@ const plugin = {
     pluginLogger = api.logger;
     const cronDirectDispatchReady = process.env.NODE_TEST_CONTEXT
       ? true
-      : ensureCronDirectDispatchAtRegistration(api);
+      : inspectCronNativeCapabilities(api);
     if (!cronDirectDispatchReady && typeof api.on === "function") {
       api.on(
         "before_agent_reply",
@@ -5702,8 +5689,8 @@ const plugin = {
             await reconcileUnsafeDirectCronsWithService(api, gatewayContext);
           }
           // The in-process service closes the immediate safety window first.
-          // CLI reconciliation remains deferred and retried so it can repair
-          // the host patch and restore only safely marked jobs.
+          // CLI reconciliation remains deferred and retried so it can restore
+          // only safely marked jobs after the native capability becomes ready.
           const timer = setTimeout(() => {
             runDeferredFeatureCronBootstrap(api, {
               cfg,
@@ -10913,5 +10900,5 @@ const plugin = {
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, ensureCronDirectDispatchAtRegistration, guardUnsafeDirectCronTurn, parseFeatureCronBootstrapLastPlanCreateCount, reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, inspectCronNativeCapabilities, guardUnsafeDirectCronTurn, parseFeatureCronBootstrapLastPlanCreateCount, reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap };
 export default plugin;
