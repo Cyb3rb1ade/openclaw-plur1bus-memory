@@ -1164,6 +1164,33 @@ describe("B13 canonical memory request context", () => {
     }
   });
 
+  it("accepts an official Beta-3 headless agent hook without inventing a user or warning", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-headless-beta3-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const warnings = [];
+    let sessionReads = 0;
+    const resolved = await resolveHostHookMemoryContext({
+      runId: "run-headless-a",
+      agentId: "a",
+      sessionKey: "agent:a:auto-capture-lab-a",
+      sessionId: "session-headless-a",
+      workspaceDir,
+    }, {
+      routingCapability,
+      turnRoutes: createMemoryTurnRouteRegistry({ routingCapability }),
+      accountTopology: buildMemoryAccountTopology({ channels: {} }),
+      getSessionEntry: () => { sessionReads++; return null; },
+      logger: { warn: (...args) => warnings.push(args) },
+    });
+
+    assert.equal(resolved.agentId, "a");
+    assert.equal(resolved.workspaceDir, realpathSync(workspaceDir));
+    assert.equal(resolved.userPrincipal, "");
+    assert.equal(resolved.conversationPrincipal, "");
+    assert.equal(sessionReads, 0);
+    assert.deepEqual(warnings, []);
+  });
+
   it("ignores non-host flat channelContext identity and thread fields", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-official-channel-context-"));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
