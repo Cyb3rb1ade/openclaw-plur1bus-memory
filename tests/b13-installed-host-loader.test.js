@@ -1,30 +1,34 @@
 import assert from "node:assert/strict";
-import { existsSync, realpathSync } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { it } from "node:test";
 import { pathToFileURL } from "node:url";
 
-function findInstalledOpenClaw() {
-  for (const directory of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
-    const candidate = join(directory, "openclaw");
-    if (existsSync(candidate)) return realpathSync(candidate);
-  }
-  return "";
+const require = createRequire(import.meta.url);
+
+function findPinnedOpenClawLoader() {
+  const packageRoot = dirname(dirname(require.resolve("openclaw")));
+  const packageJson = join(packageRoot, "package.json");
+  const pkg = require(packageJson);
+  assert.equal(pkg.version, "2026.8.1-beta.3", "loader test must use the exact target OpenClaw beta");
+  return join(packageRoot, "dist", "plugins", "loader.js");
 }
 
-it("loads reply_dispatch routing through the real installed OpenClaw plugin loader", async (t) => {
-  const executable = findInstalledOpenClaw();
-  if (!executable) {
-    t.skip("installed OpenClaw executable is unavailable");
-    return;
-  }
-  const loaderPath = join(dirname(executable), "dist", "plugins", "loader.js");
-  if (!existsSync(loaderPath)) {
-    t.skip("installed OpenClaw plugin loader is unavailable");
-    return;
-  }
+it("loads reply_dispatch routing through the exact OpenClaw beta-3 plugin loader", async () => {
+  const loaderPath = findPinnedOpenClawLoader();
+  assert.ok(existsSync(loaderPath), `pinned OpenClaw plugin loader is unavailable: ${loaderPath}`);
+  const isolatedHome = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-loader-"));
+  const previousEnv = Object.fromEntries(
+    ["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"].map((name) => [name, process.env[name]]),
+  );
+  process.env.HOME = isolatedHome;
+  process.env.OPENCLAW_HOME = join(isolatedHome, ".openclaw");
+  process.env.OPENCLAW_STATE_DIR = process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_CONFIG_PATH = join(process.env.OPENCLAW_HOME, "openclaw.json");
 
-  const loader = await import(pathToFileURL(loaderPath).href);
+  const loader = await import(`${pathToFileURL(loaderPath).href}?isolated=${Date.now()}`);
   const projectRoot = resolve(import.meta.dirname, "..");
   const pluginId = "memory-lancedb-namespaced";
   const config = {
@@ -176,5 +180,10 @@ it("loads reply_dispatch routing through the real installed OpenClaw plugin load
     loader.clearPluginLoaderCache?.();
     loader.clearPluginRegistryLoadCache?.();
     loader.clearActivatedPluginRuntimeState?.();
+    for (const [name, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(isolatedHome, { recursive: true, force: true });
   }
 });
