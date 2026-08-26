@@ -5,9 +5,11 @@ import {
   FEATURE_CRON_GATEWAY_METHOD,
   createFeatureCronGatewayHandler,
   executeFeatureCronCli,
+  parseFeatureCronRunnerArgs,
   registerFeatureCronNativeDispatch,
   validateFeatureCronRequest,
 } from "../lib/setup/feature-cron-plugin-runtime.js";
+import { runFeatureCronRunner } from "../scripts/run-feature-cron.mjs";
 
 function responseCapture() {
   const calls = [];
@@ -30,6 +32,21 @@ function fakeProgram() {
 }
 
 describe("PLUR1BUS feature-cron plugin runtime", () => {
+  it("parses only the exact runner CLI shape without accepting carrier commands", () => {
+    assert.deepStrictEqual(
+      parseFeatureCronRunnerArgs(["--agent", "agent-a", "--feature", "afterthought"]),
+      { agentId: "agent-a", feature: "afterthought" },
+    );
+    for (const argv of [
+      ["--agent", "agent-a"],
+      ["--feature", "afterthought"],
+      ["--agent", "agent-a", "--feature", "afterthought", "--message", "/custom"],
+      ["--agent", "agent-a", "--agent", "agent-b", "--feature", "afterthought"],
+    ]) {
+      assert.throws(() => parseFeatureCronRunnerArgs(argv), /runner arguments/i);
+    }
+  });
+
   it("accepts only the exact shipped features and safe agent ids", () => {
     assert.deepStrictEqual(validateFeatureCronRequest({ agentId: "agent-a", feature: "gc-run" }), {
       agentId: "agent-a",
@@ -111,6 +128,26 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
         { progress: false, scopes: ["operator.write"] },
       ]);
     }
+  });
+
+  it("runs through the package runner without loading the OpenClaw plugin CLI", async () => {
+    const calls = [];
+    let output = "";
+    const reply = await runFeatureCronRunner(
+      ["--agent", "agent-a", "--feature", "afterthought"],
+      {
+        loadGatewayRuntime: async () => ({
+          callGatewayFromCli: async (...args) => {
+            calls.push(args);
+            return { reply: { text: "NO_REPLY" } };
+          },
+        }),
+        write: (chunk) => { output += chunk; },
+      },
+    );
+    assert.deepStrictEqual(reply, { text: "NO_REPLY" });
+    assert.equal(output, "NO_REPLY\n");
+    assert.equal(calls.length, 1);
   });
 
   it("fails visibly for plugin errors and malformed ReplyPayloads", async () => {

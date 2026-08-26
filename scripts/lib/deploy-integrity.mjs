@@ -190,6 +190,7 @@ export const DEPLOY_FILES = [
   "lib/telegram-commands/status.js",
   "lib/wiki-command.js",
   "scripts/setup-feature-crons.mjs",
+  "scripts/run-feature-cron.mjs",
   "scripts/lib/openclaw-cli.mjs",
   "scripts/lib/find-deploy-dir.mjs",
   // ── speaker diarization / naming (D1–D4) ───────────────────────────────────

@@ -419,6 +419,7 @@ describe("DEPLOY_FILES coverage", () => {
       "lib/setup/feature-cron-native.js",
       "lib/setup/feature-cron-plugin-runtime.js",
       "lib/setup/feature-cron-plan.js",
+      "scripts/run-feature-cron.mjs",
       "scripts/setup-feature-crons.mjs",
       "scripts/lib/openclaw-cli.mjs",
       "scripts/lib/find-deploy-dir.mjs",

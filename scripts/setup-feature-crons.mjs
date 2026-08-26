@@ -31,13 +31,14 @@ import { openclaw } from "./lib/openclaw-cli.mjs";
 import { validateInput } from "../lib/input-limits.js";
 import { safeAgentId } from "../lib/sql-safety.js";
 import { fileURLToPath } from "node:url";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import {
   applyCronPluginDirectDispatchPatch,
   isCronPluginDirectDispatchReady,
   resolveOpenClawDistDir,
 } from "../patches/apply-cron-plugin-direct-dispatch.mjs";
 import {
+  FEATURE_CRON_RUNNER_PATH,
   buildNativeFeatureCommandArgv,
   planNativeFeaturePayloadMigration,
 } from "../lib/setup/feature-cron-native.js";
@@ -55,6 +56,7 @@ export function probeNativeCronCommandDispatch(openclawImpl = openclaw) {
   const pluginText = `${pluginHelp?.stdout ?? ""}\n${pluginHelp?.stderr ?? ""}`;
   const ready = cronHelp?.ok === true
     && pluginHelp?.ok === true
+    && existsSync(FEATURE_CRON_RUNNER_PATH)
     && ["--command-argv", "--timeout-seconds", "--output-max-bytes"].every((marker) => cronText.includes(marker))
     && ["plur1bus-feature-cron", "--agent", "--feature"].every((marker) => pluginText.includes(marker));
   if (!ready) throw new Error("native cron command capability unavailable");
