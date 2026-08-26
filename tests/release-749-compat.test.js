@@ -27,6 +27,10 @@ test("7.4.9 release identity is synchronized and targets exact OpenClaw beta-3",
     packageJson.files.includes("docs/compatibility-openclaw-2026.8.1-beta.3.md"),
     "the exact-host compatibility contract must ship in the npm package",
   );
+  assert.ok(
+    packageJson.files.includes("CHANGELOG.md"),
+    "the synchronized 7.4.9 changelog must ship in the npm package",
+  );
 });
 
 test("7.4.9 documents native integration, immutable models, and data preservation", async () => {

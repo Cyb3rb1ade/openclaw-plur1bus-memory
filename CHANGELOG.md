@@ -37,6 +37,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   messen Prozess-CPU-Zeit statt Host-Wartezeit. Das Repair-CLI laesst
   Diagnosedaten vor dem Exit vollstaendig auslaufen. Deadline- und Cache-Tests
   besitzen injizierte Zeit-/I/O-Grenzen statt von VPS-Last abzuhaengen.
+- **Optionale OpenClaw-Embedding-Bridge.** Wenn der exakte Beta-3-Host die
+  spaeter eingefuehrte `registerMemoryEmbeddingProvider`-Capability nicht
+  anbietet, wird dies als erwartete Information statt als Laufzeitwarnung
+  protokolliert; der explizit konfigurierte PLUR1BUS-Embedding-Pfad bleibt
+  aktiv und wird unveraendert verwendet.
 
 ## [7.4.10] — 2026-08-26
 
