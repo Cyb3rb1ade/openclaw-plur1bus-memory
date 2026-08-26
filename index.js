@@ -49,6 +49,7 @@ import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryI
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
 import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
+import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import {
   isGuardedDirectFeatureCronMessage,
   planUnsafeDirectCronDisables,
@@ -107,7 +108,7 @@ import {
 } from "./lib/directory-capability.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
-import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposal, buildSkillReviewPayload } from "./lib/telegram-commands/skill-commands.js";
+import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposalWithWorkshop, buildSkillReviewPayload } from "./lib/telegram-commands/skill-commands.js";
 import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "./lib/jobs/skill-miner/proposal-writer.js";
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import {
@@ -4138,7 +4139,7 @@ const plugin = {
   id: "memory-lancedb-namespaced",
   name: "Memory (LanceDB, per-Agent)",
   description: "Per-agent isolated LanceDB memory",
-  kind: "extension",
+  kind: "memory",
 
   register(api, registrationDependencies = {}) {
     if (!registrationDependencies || typeof registrationDependencies !== "object" || Array.isArray(registrationDependencies)) {
@@ -4147,6 +4148,7 @@ const plugin = {
     const {
       importRouting,
       commandRuntimeHooks = null,
+      skillWorkshop: registeredSkillWorkshop,
       handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand,
       shareCard: registeredShareCard = shareCard,
     } = registrationDependencies;
@@ -4162,6 +4164,13 @@ const plugin = {
     if (typeof registeredShareCard !== "function") {
       throw new TypeError("shareCard must be a function when provided");
     }
+    if (
+      registeredSkillWorkshop !== undefined
+      && registeredSkillWorkshop !== null
+      && (typeof registeredSkillWorkshop !== "object" || Array.isArray(registeredSkillWorkshop))
+    ) {
+      throw new TypeError("skillWorkshop must be an object when provided");
+    }
     const emitCommandRuntimeHook = (name, value) => {
       const hook = commandRuntimeHooks?.[name];
       if (hook !== undefined && typeof hook !== "function") {
@@ -4173,9 +4182,26 @@ const plugin = {
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
     pluginLogger = api.logger;
+    if (typeof api.registerMemoryCapability === "function") {
+      api.registerMemoryCapability({
+        deterministicRecallToolName: "memory_recall",
+        supportsPrivateTranscriptRecall: false,
+      });
+    } else {
+      api.logger?.info?.(
+        "memory-lancedb-namespaced: OpenClaw registerMemoryCapability API unavailable; legacy tool and hook surfaces remain active.",
+      );
+    }
     const cronDirectDispatchReady = process.env.NODE_TEST_CONTEXT
       ? true
       : inspectCronNativeCapabilities(api);
+    const openClawSkillWorkshop = registeredSkillWorkshop !== undefined
+      ? registeredSkillWorkshop
+      : (
+          typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function"
+            ? createOpenClawSkillWorkshopClient()
+            : null
+        );
     if (!cronDirectDispatchReady && typeof api.on === "function") {
       api.on(
         "before_agent_reply",
@@ -6308,6 +6334,10 @@ const plugin = {
                         aclPartition: skillAclPartition,
                         workspaceDir: skillWorkspaceDir,
                         workspaceKey: skillAclPartition.workspaceIdentity,
+                        skillWorkshop: skillAclPartition.scope === "workspace"
+                          ? openClawSkillWorkshop
+                          : null,
+                        requireSkillWorkshop: openClawSkillWorkshop !== null,
                         llmCfg: withLlmCallContext(
                           skillMinerLlmCfg,
                           skillMinerCallContext.agentId,
@@ -6809,11 +6839,25 @@ const plugin = {
                   return { text: t("skill.approve_not_found", { lang, tone, vars: { id: nonce || "?" } }) };
                 }
                 if (reject || completed.pending.command === "skills-reject") {
-                  return { text: rejectSkillProposal(workspaceDir, completed.pending.targetId, { lang, tone }).text };
+                  const rejected = await rejectSkillProposalWithWorkshop(
+                    workspaceDir,
+                    completed.pending.targetId,
+                    {
+                      lang,
+                      tone,
+                      agentId: commandCtx.agentId || "default",
+                      logger: api.logger,
+                      skillWorkshop: openClawSkillWorkshop,
+                    },
+                  );
+                  return { text: rejected.text };
                 }
                 const result = await activateSkillProposal(workspaceDir, completed.pending.targetId, {
                   lang,
                   tone,
+                  agentId: commandCtx.agentId || "default",
+                  logger: api.logger,
+                  skillWorkshop: openClawSkillWorkshop,
                   memoryCtx,
                   loadEvidenceRecord: async (memoryId) => {
                     try {
@@ -6847,6 +6891,9 @@ const plugin = {
                 const result = await activateSkillProposal(workspaceDir, id, {
                   lang,
                   tone,
+                  agentId: commandCtx.agentId || "default",
+                  logger: api.logger,
+                  skillWorkshop: openClawSkillWorkshop,
                   memoryCtx,
                   loadEvidenceRecord: async (memoryId) => {
                     try {
@@ -6870,7 +6917,13 @@ const plugin = {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
-                const result = rejectSkillProposal(workspaceDir, id, { lang, tone });
+                const result = await rejectSkillProposalWithWorkshop(workspaceDir, id, {
+                  lang,
+                  tone,
+                  agentId: commandCtx.agentId || "default",
+                  logger: api.logger,
+                  skillWorkshop: openClawSkillWorkshop,
+                });
                 return { text: result.text };
               }
               return { text: t("plur1bus.skills_unknown", { lang, tone, vars: { sub: subKey } }) };

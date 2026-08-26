@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -95,4 +95,77 @@ test("Telegram skills review confirm nonce activates the proposal", async (t) =>
   assert.match(confirm.text, /approved|geschrieben|partial|bestätigt/i);
   const skillPath = join(workspaceDir, "skills", "verify-weekly-releases", "SKILL.md");
   assert.equal(readFileSync(skillPath, "utf8").includes("Verify Weekly Releases"), true);
+});
+
+test("Telegram approval delegates a Workshop-bound proposal to OpenClaw exactly once", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "skill-confirm-workshop-db-"));
+  const workspaceDir = mkdtempSync(join(tmpdir(), "skill-confirm-workshop-ws-"));
+  t.after(() => {
+    rmSync(baseDbPath, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  });
+  mkdirSync(join(workspaceDir, ".adaptive-learning"), { recursive: true });
+  const proposalId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const workshopProposalId = "verify-workshop-releases-20260826";
+  const revisionHash = "c".repeat(64);
+  writeFileSync(join(workspaceDir, ".adaptive-learning", "skill-proposals.jsonl"), `${JSON.stringify({
+    id: proposalId,
+    skillName: "verify-workshop-releases",
+    skillTitle: "Verify Workshop Releases",
+    description: "Use the Workshop checklist",
+    instructions: "Run it",
+    examples: ["verify"],
+    agentId: "agent-a",
+    status: "pending_review",
+    evidence: { memoryIds: [], score: 4, llmConfidence: 0.9, grade: "corroborated" },
+    openClawWorkshop: { proposalId: workshopProposalId, revisionHash, status: "pending" },
+  })}\n`);
+
+  const calls = [];
+  const skillWorkshop = {
+    async inspectProposal(input) {
+      calls.push(["inspect", input]);
+      return {
+        proposalId: workshopProposalId,
+        revisionHash,
+        status: "pending",
+        skillName: "verify-workshop-releases",
+      };
+    },
+    async applyProposal(input) {
+      calls.push(["apply", input]);
+      return {
+        proposalId: workshopProposalId,
+        status: "applied",
+        targetSkillFile: join(workspaceDir, "skills", "verify-workshop-releases", "SKILL.md"),
+      };
+    },
+  };
+  const pluginModule = await import(`../index.js?skill-confirm-workshop=${Date.now()}`);
+  const api = createApi(baseDbPath);
+  pluginModule.default.register(api, {
+    importRouting: async () => routingCapability,
+    skillWorkshop,
+  });
+  const handler = api._commands.find((command) => command.name === "plur1bus").handler;
+  const ctx = {
+    args: `skills approve ${proposalId}`,
+    agentId: "agent-a",
+    channel: "telegram",
+    accountId: "default",
+    from: "telegram:12345",
+    to: "telegram:12345",
+    senderId: "owner-a",
+    userId: "owner-a",
+    chatId: "telegram:12345",
+    sessionKey: "agent:agent-a:telegram:direct:12345",
+    config: { workspaceDir },
+    workspaceDir,
+  };
+
+  const approved = await handler(ctx);
+  assert.match(approved.text, /approved|bestätigt/i);
+  assert.deepEqual(calls.map(([name]) => name), ["inspect", "apply"]);
+  assert.equal(calls[1][1].expectedRevisionHash, revisionHash);
+  assert.equal(existsSync(join(workspaceDir, "skills", "verify-workshop-releases", "SKILL.md")), false);
 });

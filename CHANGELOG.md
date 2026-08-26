@@ -22,6 +22,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **Nicht-destruktives Upgrade.** 7.5.0 fuehrt keinen brechenden LanceDB-
   Schematausch ein. Bestehende agent-spezifische Tabellen, Namespaces,
   Tombstones, History und Obsidian-Spiegel bleiben erhalten.
+- **Exklusiver Beta-3-Memory-Slot.** Manifest und Runtime deklarieren PLUR1BUS
+  als `kind: memory` und registrieren `memory_recall` ueber die oeffentliche
+  `registerMemoryCapability`-API. Damit deaktiviert der ausgewaehlte
+  `plugins.slots.memory`-Vertrag konkurrierende `memory-core`-Recall-/Capture-
+  Tools, statt zwei Memory-Systeme parallel zu laden.
+- **Skill Miner ueber Skill Workshop.** Geminte Skills werden als pending
+  Proposal ueber `skills.proposals.create` in OpenClaws eingebauten Skill
+  Workshop eingestellt. Freigabe und Ablehnung laufen nach erneutem Inspect
+  revisionsgebunden ueber `apply` beziehungsweise `reject`; PLUR1BUS schreibt
+  auf Beta 3 selbst kein `workspace/skills/*/SKILL.md`. Fehlende Capabilities,
+  abweichende Ziele und geaenderte Revisionen bleiben fail-closed.
 
 ### Behoben
 
@@ -37,11 +48,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   messen Prozess-CPU-Zeit statt Host-Wartezeit. Das Repair-CLI laesst
   Diagnosedaten vor dem Exit vollstaendig auslaufen. Deadline- und Cache-Tests
   besitzen injizierte Zeit-/I/O-Grenzen statt von VPS-Last abzuhaengen.
-- **Optionale OpenClaw-Embedding-Bridge.** Wenn der exakte Beta-3-Host die
-  spaeter eingefuehrte `registerMemoryEmbeddingProvider`-Capability nicht
-  anbietet, wird dies als erwartete Information statt als Laufzeitwarnung
-  protokolliert; der explizit konfigurierte PLUR1BUS-Embedding-Pfad bleibt
-  aktiv und wird unveraendert verwendet.
+- **Generischer OpenClaw-Embedding-Vertrag.** Die drei PLUR1BUS-Adapter nutzen
+  jetzt `contracts.embeddingProviders` und `registerEmbeddingProvider` sowie
+  die generische `embed`/`embedBatch`-Form von Beta 3. Der am 21.08.2026
+  entfernte Memory-spezifische Registrar wird nicht mehr verwendet. Fehlt die
+  optionale generische Host-Capability auf einem aelteren Host, bleibt der
+  explizit konfigurierte interne PLUR1BUS-Embedding-Pfad aktiv.
+- **Doppeltes Dreaming verhindert.** `dreaming.enabled` ist als explizites,
+  standardmaessig falsches Kompatibilitaets-Gate dokumentiert. Es haelt den
+  sonst standardmaessig aktiven `memory-core`-Dreaming-Sidecar aus, wenn
+  PLUR1BUS Konsolidierung/REM besitzt; Narrativeinstellungen bleiben davon
+  getrennt.
 
 ## [7.4.10] — 2026-08-26
 
