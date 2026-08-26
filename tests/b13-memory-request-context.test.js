@@ -1175,11 +1175,12 @@ describe("B13 canonical memory request context", () => {
       sessionKey: "agent:a:auto-capture-lab-a",
       sessionId: "session-headless-a",
       workspaceDir,
-      // Beta-3's public buildAgentHookContextChannelFields helper derives both
-      // fields from the arbitrary headless session suffix even when there is
-      // no channel transport at all.
-      channelId: "auto-capture-lab-a",
-      chatId: "auto-capture-lab-a",
+      // Beta-3's public buildAgentHookContextChannelFields helper labels a
+      // Gateway CLI turn with its internal non-delivery webchat sentinel even
+      // though there is no authenticated transport sender or account.
+      channel: "webchat",
+      channelId: "webchat",
+      chatId: "webchat",
     }, {
       routingCapability,
       turnRoutes: createMemoryTurnRouteRegistry({ routingCapability }),
@@ -1195,6 +1196,35 @@ describe("B13 canonical memory request context", () => {
     assert.equal(resolved.chatId, "");
     assert.equal(sessionReads, 0);
     assert.deepEqual(warnings, []);
+  });
+
+  it("does not treat an identity-bearing webchat hook as a headless route", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-webchat-identity-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const warnings = [];
+    const resolved = await resolveHostHookMemoryContext({
+      runId: "run-webchat-user-a",
+      agentId: "a",
+      sessionKey: "agent:a:arbitrary-webchat-session",
+      sessionId: "session-webchat-user-a",
+      workspaceDir,
+      channel: "webchat",
+      channelId: "webchat",
+      chatId: "webchat",
+      accountId: "default",
+      senderId: "owner-a",
+    }, {
+      routingCapability,
+      turnRoutes: createMemoryTurnRouteRegistry({ routingCapability }),
+      accountTopology: buildMemoryAccountTopology({ channels: {} }),
+      getSessionEntry: () => null,
+      logger: { warn: (...args) => warnings.push(args) },
+    });
+
+    assert.equal(resolved.userPrincipal, "");
+    assert.equal(resolved.conversationPrincipal, "");
+    assert.notEqual(resolved.chatId, "");
+    assert.equal(warnings.length, 1);
   });
 
   it("ignores non-host flat channelContext identity and thread fields", async (t) => {
