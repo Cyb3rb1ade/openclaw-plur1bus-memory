@@ -71,7 +71,8 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "c8": "^11.0.0"
+    "c8": "^11.0.0",
+    "openclaw": "2026.8.1-beta.3"
   },
   "overrides": {
     "@huggingface/transformers": {
