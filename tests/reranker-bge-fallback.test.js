@@ -50,6 +50,7 @@ describe("free local BGE reranker fallback", () => {
       options: {
         cache_dir: "/lab/model-cache",
         revision: BGE_RERANKER_ONNX_REVISION,
+        local_files_only: true,
       },
     }]);
     assert.equal(options.revision, BGE_RERANKER_ONNX_REVISION);

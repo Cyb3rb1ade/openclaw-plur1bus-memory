@@ -41,6 +41,7 @@ describe("Jina local reranker compatibility", () => {
       options: {
         cache_dir: "/lab/model-cache",
         revision: JINA_RERANKER_REVISION,
+        local_files_only: true,
       },
     }]);
     assert.equal(options.revision, JINA_RERANKER_REVISION);
