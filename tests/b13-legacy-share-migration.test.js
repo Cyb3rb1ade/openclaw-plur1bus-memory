@@ -551,6 +551,8 @@ describe("legacy workspace_shared migration", () => {
       for (const phase of ["current-read", "target-init", "target-store", "target-readback", "marker-update"]) {
         const sourceRows = [row()];
         const f = fixture(sourceRows);
+        const root = reportRoot();
+        let reportWrites = 0;
         const lateReject = () => new Promise((_, reject) => {
           setTimeout(() => reject(new Error(`late ${phase}`)), 500);
         });
@@ -583,8 +585,13 @@ describe("legacy workspace_shared migration", () => {
           agentId: "agent-a",
           workspaceAliases: aliases(),
           apply: true,
-          reportDir: reportRoot(),
+          reportDir: root,
           maxElapsedMs: 20,
+          writeReport({ workspaceDir }) {
+            reportWrites += 1;
+            assert.equal(workspaceDir, root);
+            return join(root, "deadline-report.json");
+          },
         });
         assert.ok(Date.now() - startedAt < 400, `${phase} exceeded the migration deadline`);
         assert.equal(result.incomplete, true, phase);
@@ -594,6 +601,7 @@ describe("legacy workspace_shared migration", () => {
         assert.equal(f.counts.activeReadLeases, 0, phase);
         assert.equal(f.counts.activeWriteLeases, 0, phase);
         assert.equal(f.counts.activeTargetLeases, 0, phase);
+        assert.equal(reportWrites, 1, `${phase} must still produce exactly one report`);
         if (phase === "marker-update") {
           assert.equal(result.stoppedOperation, "source-marker-update");
           assert.equal(result.uncertainSourceMarkerWrites, 1,
