@@ -66,6 +66,22 @@ describe("free local BGE reranker fallback", () => {
     assert.deepStrictEqual(mod.calls, []);
   });
 
+  it("accepts the pinned export's real one-label config when num_labels is omitted", async () => {
+    const mod = fakeTransformers({
+      architectures: ["XLMRobertaForSequenceClassification"],
+      model_type: "xlm-roberta",
+      id2label: { 0: "LABEL_0" },
+      label2id: { LABEL_0: 0 },
+    });
+
+    const options = await prepareLocalRerankerPipelineOptions(mod, {
+      model: BGE_RERANKER_ONNX_MODEL,
+    });
+
+    assert.equal(options.config.num_labels, 1);
+    assert.equal(options.config.problem_type, "multi_label_classification");
+  });
+
   it("rejects drift in the pinned export's sequence-classifier structure", async () => {
     const mod = fakeTransformers({
       architectures: ["XLMRobertaModel"],
