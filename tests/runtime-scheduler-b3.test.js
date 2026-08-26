@@ -17,10 +17,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function schedulerWith(config = {}) {
+function schedulerWith(config = {}, dependencies = {}) {
   return createBackgroundMemoryScheduler({
     config: { pressureGateEnabled: false, ...config },
     logger: { info() {}, warn() {}, debug() {} },
+    ...dependencies,
   });
 }
 
@@ -92,10 +93,11 @@ describe("runtime scheduler B3 timeout admission and recall cache", () => {
   });
 
   it("bounds and sweeps the real high-cardinality agent/session/prompt recall key shape", async () => {
+    let nowMs = 1_000;
     const scheduler = schedulerWith({
       recallCacheMaxEntries: 3,
       recallCacheTtlMs: 5,
-    });
+    }, { now: () => nowMs });
 
     for (let index = 0; index < 200; index += 1) {
       const cacheKey = `agent-a:session-a:unique conversational prompt ${index}`;
@@ -104,7 +106,7 @@ describe("runtime scheduler B3 timeout admission and recall cache", () => {
     }
 
     assert.equal(scheduler.status().recall.cacheSize, 3, "unique prompt keys must respect the hard LRU bound");
-    await sleep(10);
+    nowMs += 6;
     await scheduler.runRecall(
       { cacheKey: "agent-a:session-a:unique conversational prompt after expiry" },
       async () => ({ prependContext: "fresh" }),
@@ -113,10 +115,11 @@ describe("runtime scheduler B3 timeout admission and recall cache", () => {
   });
 
   it("keeps legitimate timeout hits while using LRU promotion without extending absolute TTL", async () => {
+    let nowMs = 1_000;
     const scheduler = schedulerWith({
       recallCacheMaxEntries: 2,
       recallCacheTtlMs: 80,
-    });
+    }, { now: () => nowMs });
     const keyA = "agent-a:session-a:prompt-a";
     const keyB = "agent-a:session-a:prompt-b";
     const keyC = "agent-a:session-a:prompt-c";
@@ -130,15 +133,14 @@ describe("runtime scheduler B3 timeout admission and recall cache", () => {
       { ok: true, value: "value-a", timedOut: true, fromCache: true, background: false },
       "a live cached recall remains the fast timeout fallback",
     );
-    await sleep(30);
+    nowMs += 30;
 
     await scheduler.runRecall({ cacheKey: keyC }, async () => "value-c");
     const evicted = await timedFallback(scheduler, keyB);
     assert.equal(evicted.ok, false, "the non-promoted LRU entry should be evicted first");
     assert.equal(evicted.timedOut, true);
     await sleep(30);
-
-    await sleep(30);
+    nowMs += 51;
     const expired = await timedFallback(scheduler, keyA);
     assert.equal(expired.ok, false, "cache access must not extend the original absolute expiry");
     assert.equal(expired.timedOut, true);
