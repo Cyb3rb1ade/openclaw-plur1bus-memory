@@ -50,13 +50,13 @@ import {
  */
 export function probeNativeCronCommandDispatch(openclawImpl = openclaw) {
   const cronHelp = openclawImpl(["cron", "add", "--help"], 5000);
-  const agentHelp = openclawImpl(["agent", "--help"], 5000);
+  const pluginHelp = openclawImpl(["plur1bus-feature-cron", "--help"], 5000);
   const cronText = `${cronHelp?.stdout ?? ""}\n${cronHelp?.stderr ?? ""}`;
-  const agentText = `${agentHelp?.stdout ?? ""}\n${agentHelp?.stderr ?? ""}`;
+  const pluginText = `${pluginHelp?.stdout ?? ""}\n${pluginHelp?.stderr ?? ""}`;
   const ready = cronHelp?.ok === true
-    && agentHelp?.ok === true
+    && pluginHelp?.ok === true
     && ["--command-argv", "--timeout-seconds", "--output-max-bytes"].every((marker) => cronText.includes(marker))
-    && ["Run an agent turn via the Gateway", "--agent", "--session-key", "--channel", "--message", "--timeout"].every((marker) => agentText.includes(marker));
+    && ["plur1bus-feature-cron", "--agent", "--feature"].every((marker) => pluginText.includes(marker));
   if (!ready) throw new Error("native cron command capability unavailable");
   return { ready: true, status: "native-command" };
 }

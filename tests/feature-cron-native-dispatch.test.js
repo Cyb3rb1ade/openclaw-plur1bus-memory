@@ -38,7 +38,7 @@ function captureStream() {
 }
 
 describe("native OpenClaw feature-cron dispatch", () => {
-  it("builds an exact agent-isolated Gateway command without an outer model carrier", () => {
+  it("builds an exact plugin-owned Gateway command without an outer model carrier", () => {
     assert.deepStrictEqual(
       buildNativeFeatureCommandArgv({
         agentId: "main",
@@ -47,17 +47,11 @@ describe("native OpenClaw feature-cron dispatch", () => {
       }),
       [
         "openclaw",
-        "agent",
+        "plur1bus-feature-cron",
         "--agent",
         "main",
-        "--session-key",
-        "agent:main:cron:plur1bus-afterthought",
-        "--channel",
-        "cron",
-        "--message",
-        "/plur1bus internal afterthought",
-        "--timeout",
-        "540",
+        "--feature",
+        "afterthought",
       ],
     );
   });
@@ -72,8 +66,10 @@ describe("native OpenClaw feature-cron dispatch", () => {
     assert.equal(args.filter((arg) => arg === "--announce").length, 1);
     assert.equal(argv.includes("--deliver"), false);
     assert.equal(argv.includes("--local"), false);
-    assert.equal(argv[argv.indexOf("--channel") + 1], "cron");
-    assert.equal(argv[argv.indexOf("--session-key") + 1], "agent:main:cron:plur1bus-afterthought");
+    assert.equal(argv[0], "openclaw");
+    assert.equal(argv[1], "plur1bus-feature-cron");
+    assert.equal(argv[argv.indexOf("--agent") + 1], "main");
+    assert.equal(argv[argv.indexOf("--feature") + 1], "afterthought");
     assert.deepStrictEqual(args.slice(commandIndex + 2, commandIndex + 6), [
       "--timeout-seconds",
       "600",
@@ -82,16 +78,15 @@ describe("native OpenClaw feature-cron dispatch", () => {
     ]);
   });
 
-  it("keeps ReplyPayload text and NO_REPLY untouched on the native stdout boundary", () => {
-    for (const text of ["kritische Nachricht", "NO_REPLY"]) {
-      const argv = buildNativeFeatureCommandArgv({
-        agentId: "main",
-        feature: "classify-recent",
-        command: "/plur1bus internal classify-recent",
-      });
-      assert.equal(argv[argv.indexOf("--message") + 1], "/plur1bus internal classify-recent");
-      assert.equal(text.trim(), text);
-    }
+  it("derives the internal command inside the plugin boundary", () => {
+    const argv = buildNativeFeatureCommandArgv({
+      agentId: "main",
+      feature: "classify-recent",
+      command: "/plur1bus internal classify-recent",
+    });
+    assert.equal(argv.includes("--message"), false);
+    assert.equal(argv.includes("/plur1bus internal classify-recent"), false);
+    assert.equal(argv[argv.indexOf("--feature") + 1], "classify-recent");
   });
 
   it("recognizes only exact shipped native payloads and rejects foreign cron commands", () => {
@@ -105,7 +100,7 @@ describe("native OpenClaw feature-cron dispatch", () => {
       feature: "classify-recent",
       command: "/plur1bus internal classify-recent",
     }), true);
-    assert.equal(isNativeFeatureCommandPayload({ kind: "command", argv: ["openclaw", "agent", "--agent", "ops", "--message", "/custom"] }, {
+    assert.equal(isNativeFeatureCommandPayload({ kind: "command", argv: ["openclaw", "plur1bus-feature-cron", "--agent", "ops", "--feature", "custom"] }, {
       agentId: "ops",
       feature: "classify-recent",
       command: "/plur1bus internal classify-recent",
@@ -168,7 +163,7 @@ describe("native OpenClaw feature-cron dispatch", () => {
       ok: true,
       stdout: args[0] === "cron"
         ? "--command-argv <json> --timeout-seconds <n> --output-max-bytes <n>"
-        : "Run an agent turn via the Gateway --agent --session-key --channel --message --timeout",
+        : "plur1bus-feature-cron --agent --feature",
       stderr: "",
       status: 0,
     }));
