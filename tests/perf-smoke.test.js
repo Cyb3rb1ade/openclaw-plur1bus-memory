@@ -16,6 +16,7 @@ import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { buildGraphIndex, queryGraphIndex } from "../lib/graph-index.js";
 import { createMetricsDebouncer } from "../lib/metrics-debounce.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
+import { measureCpuMilliseconds } from "./helpers/benchmark-clock.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -61,11 +62,11 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
     const cache = createEmbeddingCache();
     const queries = Array.from({ length: N }, (_, i) => `query ${i}`);
 
-    const start = performance.now();
-    for (const q of queries) {
-      embedQuery(cache, q);
-    }
-    const coldMs = performance.now() - start;
+    const coldMs = measureCpuMilliseconds(() => {
+      for (const q of queries) {
+        embedQuery(cache, q);
+      }
+    });
 
     // Nur Smoke: darf nicht absurd lange dauern (< 50 ms)
     assert.ok(coldMs < 50, `Cold-Miss dauerte ${coldMs.toFixed(2)}ms, erwartet < 50ms`);
@@ -76,11 +77,11 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
     const query = "warm query";
     cache.set(agentId, query, model, vector);
 
-    const start = performance.now();
-    for (let i = 0; i < N; i++) {
-      embedQuery(cache, query);
-    }
-    const warmMs = performance.now() - start;
+    const warmMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < N; i++) {
+        embedQuery(cache, query);
+      }
+    });
     const perCall = warmMs / N;
 
     assert.ok(warmMs < 100, `Warm-Hit dauerte ${warmMs.toFixed(2)}ms total, erwartet < 100ms`);
@@ -94,20 +95,20 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
     const queries = Array.from({ length: M }, (_, i) => `query ${i}`);
 
     // Cold: teurer Miss (Vektor kopieren)
-    const coldStart = performance.now();
-    for (const q of queries) {
-      const cached = coldCache.get(agentId, q, model);
-      if (!cached) coldCache.set(agentId, q, model, vector.slice());
-    }
-    const coldMs = performance.now() - coldStart;
+    const coldMs = measureCpuMilliseconds(() => {
+      for (const q of queries) {
+        const cached = coldCache.get(agentId, q, model);
+        if (!cached) coldCache.set(agentId, q, model, vector.slice());
+      }
+    });
 
     // Warm (alle vorher gesetzt)
     for (const q of queries) warmCache.set(agentId, q, model, vector);
-    const warmStart = performance.now();
-    for (const q of queries) {
-      warmCache.get(agentId, q, model);
-    }
-    const warmMs = performance.now() - warmStart;
+    const warmMs = measureCpuMilliseconds(() => {
+      for (const q of queries) {
+        warmCache.get(agentId, q, model);
+      }
+    });
 
     assert.ok(
       warmMs < coldMs,
@@ -140,23 +141,23 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
   });
 
   it("mit Index: queryGraphIndex ist schnell", () => {
-    const start = performance.now();
-    for (let i = 0; i < ITERATIONS; i++) {
-      queryGraphIndex(index, { type: "type0", target: "tgt0" });
-    }
-    const idxMs = performance.now() - start;
+    const idxMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < ITERATIONS; i++) {
+        queryGraphIndex(index, { type: "type0", target: "tgt0" });
+      }
+    });
 
     assert.ok(idxMs < 10, `Index-Query dauerte ${idxMs.toFixed(2)}ms, erwartet < 10ms`);
   });
 
   it("Index ist mindestens 10x schneller als Array-Scan", () => {
-    const startScan = performance.now();
-    for (let i = 0; i < ITERATIONS; i++) scanArray("type0", "tgt0");
-    const scanMs = performance.now() - startScan;
+    const scanMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < ITERATIONS; i++) scanArray("type0", "tgt0");
+    });
 
-    const startIdx = performance.now();
-    for (let i = 0; i < ITERATIONS; i++) queryGraphIndex(index, { type: "type0", target: "tgt0" });
-    const idxMs = performance.now() - startIdx;
+    const idxMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < ITERATIONS; i++) queryGraphIndex(index, { type: "type0", target: "tgt0" });
+    });
 
     assert.ok(
       idxMs * 10 < scanMs,
@@ -176,11 +177,11 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
       debounceMs: 60_000, // Timer soll während des Tests nicht feuern
     });
 
-    const start = performance.now();
-    for (let i = 0; i < N; i++) {
-      debouncer.accumulate("/ws", { latencyMs: i });
-    }
-    const accMs = performance.now() - start;
+    const accMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < N; i++) {
+        debouncer.accumulate("/ws", { latencyMs: i });
+      }
+    });
     await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
     assert.ok(accMs < 10, `100x accumulate dauerte ${accMs.toFixed(3)}ms, erwartet < 10ms`);
@@ -197,11 +198,11 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
       flushFn: async () => {},
       debounceMs: 60_000,
     });
-    const accStart = performance.now();
-    for (let i = 0; i < N; i++) {
-      debouncer.accumulate("/ws", { latencyMs: i });
-    }
-    const accMs = performance.now() - accStart;
+    const accMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < N; i++) {
+        debouncer.accumulate("/ws", { latencyMs: i });
+      }
+    });
     await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
     const start = performance.now();
