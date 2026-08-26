@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  FEATURE_CRON_RUNNER_PATH,
   buildNativeFeatureCommandArgv,
   isNativeFeatureCommandPayload,
   planNativeFeaturePayloadMigration,
@@ -46,8 +47,8 @@ describe("native OpenClaw feature-cron dispatch", () => {
         command: "/plur1bus internal afterthought",
       }),
       [
-        "openclaw",
-        "plur1bus-feature-cron",
+        process.execPath,
+        FEATURE_CRON_RUNNER_PATH,
         "--agent",
         "main",
         "--feature",
@@ -66,8 +67,8 @@ describe("native OpenClaw feature-cron dispatch", () => {
     assert.equal(args.filter((arg) => arg === "--announce").length, 1);
     assert.equal(argv.includes("--deliver"), false);
     assert.equal(argv.includes("--local"), false);
-    assert.equal(argv[0], "openclaw");
-    assert.equal(argv[1], "plur1bus-feature-cron");
+    assert.equal(argv[0], process.execPath);
+    assert.equal(argv[1], FEATURE_CRON_RUNNER_PATH);
     assert.equal(argv[argv.indexOf("--agent") + 1], "main");
     assert.equal(argv[argv.indexOf("--feature") + 1], "afterthought");
     assert.deepStrictEqual(args.slice(commandIndex + 2, commandIndex + 6), [
@@ -100,7 +101,7 @@ describe("native OpenClaw feature-cron dispatch", () => {
       feature: "classify-recent",
       command: "/plur1bus internal classify-recent",
     }), true);
-    assert.equal(isNativeFeatureCommandPayload({ kind: "command", argv: ["openclaw", "plur1bus-feature-cron", "--agent", "ops", "--feature", "custom"] }, {
+    assert.equal(isNativeFeatureCommandPayload({ kind: "command", argv: [process.execPath, FEATURE_CRON_RUNNER_PATH, "--agent", "ops", "--feature", "custom"] }, {
       agentId: "ops",
       feature: "classify-recent",
       command: "/plur1bus internal classify-recent",
@@ -223,7 +224,7 @@ describe("native OpenClaw feature-cron dispatch", () => {
     const args = buildAddArgs(nativeJob(), { dispatchMode: "native-command" });
     const argv = JSON.parse(args[args.indexOf("--command-argv") + 1]);
 
-    assert.equal(argv.filter((part) => part === "openclaw").length, 1);
+    assert.equal(argv.filter((part) => part === FEATURE_CRON_RUNNER_PATH).length, 1);
     assert.equal(args.includes("--message"), false);
     assert.equal(args.includes("--command"), false);
   });
