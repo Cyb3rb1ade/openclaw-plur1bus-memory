@@ -7,6 +7,52 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.4.10] — 2026-08-26
+
+### Behoben
+
+- **Der Cap-Check hat bei jedem Append die ganze Datei neu geschrieben.**
+  `appendJsonl()` prüft den Record-Cap absichtlich erst hinter einer
+  Byte-Schwelle (`NEO_CAP_CHECK_BYTES`, 2 MB), damit nicht jeder Append die
+  Datei anfasst. Bei den echten Recordgrößen greift dieser Schutz nicht mehr —
+  gemessen an Bernhardines Workspace:
+
+  | Datei | Records | Größe | ⌀ pro Record |
+  |---|---|---|---|
+  | `turn-journal.jsonl` | 5000 | 161 MB | 33 KB |
+  | `memory-candidates.jsonl` | 5000 | 141 MB | 28 KB |
+  | `behavior-cards.jsonl` | 5000 | 78 MB | 15 KB |
+
+  Damit steht so eine Datei dauerhaft auf exakt `NEO_MAX_RECORDS` **und**
+  dauerhaft über der Byte-Schwelle. Ab da sind bei **jedem** weiteren Append
+  beide Bedingungen erfüllt: `readJsonlTailLines` liest die ganze Datei (bei
+  genau MAX Zeilen *ist* der Tail die Datei), `capJsonl` schreibt sie komplett
+  neu — synchron, im Event-Loop.
+
+  Gemessen bei 161 MB Journal: **3405 ms pro Append**. Im nächtlichen
+  Dreaming-Fenster summierte sich das zu `eventLoopDelayP99` von bis zu
+  **571 s**, in denen das gesamte Gateway stand (Node ist single-threaded):
+  Telegram-Polling-Stalls, `slow SQLite transaction lock wait`,
+  agent_end-Hook-Timeouts. Die verwaiste 156-MB-`.tmp` mit exakt 5000 Zeilen
+  war ein von einem Gateway-Neustart abgeschnittener `capJsonl`-Rewrite.
+
+  Der Cap bekommt jetzt eine **Hysterese**: nach einem Cap wird die nächste
+  (teure) Zeilenprüfung erst fällig, wenn die Datei um rund
+  `NEO_CAP_SLACK_RECORDS` (10 % von `NEO_MAX_RECORDS`) gewachsen ist. Der
+  Abstand wird bewusst in *Records* gedacht und über die gemessene
+  Durchschnittsgröße in Bytes umgerechnet — ein reiner Byte-Mindestabstand
+  wäre bei kleinen Records ein Freibrief für unbegrenztes Wachstum.
+
+  Die Datei pendelt damit zwischen `NEO_MAX_RECORDS` und MAX + 10 %, statt
+  exakt auf dem Cap zu stehen. Es wird also nie *weniger* aufbewahrt als
+  vorher; die Retention-Semantik bleibt unangetastet.
+
+  **Steady State nach dem Fix: 6 ms statt 3405 ms pro Append (548×).**
+
+  Bewusst *nicht* Teil dieses Fixes, weil beides Retention bzw. Speicherformat
+  ändert: die Recordgröße selbst (33 KB pro Turn) und die einmalige
+  Index-Hydration beim ersten Append pro Prozess (3,5 s bei 161 MB).
+
 ## [7.4.8] — 2026-08-25
 
 ### Behoben
