@@ -3,8 +3,9 @@
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
   "version": "7.5.0",
+  "kind": "memory",
   "contracts": {
-    "memoryEmbeddingProviders": [
+    "embeddingProviders": [
       "plur1bus-openai",
       "plur1bus-openai-compatible",
       "plur1bus-e5-small"
@@ -181,6 +182,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Controls OpenClaw memory-core dreaming sidecar compatibility. Keep false when PLUR1BUS owns consolidation/dreaming."
+          },
           "narrative": {
             "type": "object",
             "additionalProperties": false,

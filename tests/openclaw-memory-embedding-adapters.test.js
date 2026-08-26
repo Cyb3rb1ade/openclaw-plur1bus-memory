@@ -40,7 +40,34 @@ async function createCompatibleProvider(dim = 3) {
 }
 
 describe("OpenClaw memory embedding provider adapters", () => {
-  it("reports the optional provider bridge as informational when the host capability is absent", () => {
+  it("registers the Beta-3 generic embedding-provider contract", async () => {
+    const registered = [];
+    const api = {
+      registerEmbeddingProvider(adapter) { registered.push(adapter); },
+      logger: { info() {}, warn() {} },
+    };
+
+    const adapters = registerOpenClawMemoryEmbeddingProviders(api, {
+      embedding: { dimensions: 3, model: "custom-embedding-model" },
+    });
+    assert.equal(adapters.length, 3);
+    assert.deepEqual(registered.map((adapter) => adapter.id), [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small",
+    ]);
+    const compatible = await registered[1].create({
+      model: "custom-embedding-model",
+      dimensions: 3,
+      config: {},
+    });
+    assert.equal(compatible.provider.dimensions, 3);
+    assert.equal(typeof compatible.provider.embed, "function");
+    assert.equal(typeof compatible.provider.embedBatch, "function");
+    assert.equal("embedQuery" in compatible.provider, false);
+  });
+
+  it("reports the optional generic provider bridge as informational when the host capability is absent", () => {
     const messages = { info: [], warn: [] };
     const api = {
       logger: {
@@ -52,7 +79,7 @@ describe("OpenClaw memory embedding provider adapters", () => {
     assert.deepStrictEqual(registerOpenClawMemoryEmbeddingProviders(api), []);
     assert.equal(messages.warn.length, 0);
     assert.equal(messages.info.length, 1);
-    assert.match(messages.info[0], /optional.*unavailable/i);
+    assert.match(messages.info[0], /registerEmbeddingProvider.*unavailable/i);
   });
 
   it("rejects remote embedding vectors with the wrong dimension", async () => {
@@ -60,7 +87,7 @@ describe("OpenClaw memory embedding provider adapters", () => {
     const provider = await createCompatibleProvider(3);
 
     await assert.rejects(
-      () => provider.embedQuery("dimension check"),
+      () => provider.embed("dimension check", { inputType: "query" }),
       /dimension mismatch.*expected 3.*got 2/i,
     );
   });
@@ -69,6 +96,9 @@ describe("OpenClaw memory embedding provider adapters", () => {
     globalThis.fetch = jsonFetch({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
     const provider = await createCompatibleProvider(3);
 
-    assert.deepStrictEqual(await provider.embedQuery("dimension check"), [0.1, 0.2, 0.3]);
+    assert.deepStrictEqual(
+      await provider.embed("dimension check", { inputType: "query" }),
+      [0.1, 0.2, 0.3],
+    );
   });
 });

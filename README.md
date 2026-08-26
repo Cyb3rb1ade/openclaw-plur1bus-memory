@@ -396,7 +396,15 @@ not PLUR1BUS defaults.
 
 ```json
 {
+  "skills": {
+    "workshop": {
+      "autonomous": { "mode": "propose" }
+    }
+  },
   "plugins": {
+    "slots": {
+      "memory": "memory-lancedb-namespaced"
+    },
     "entries": {
       "memory-lancedb-namespaced": {
         "enabled": true,
@@ -432,6 +440,10 @@ not PLUR1BUS defaults.
           "dailyConsolidation": {
             "enabled": true
           },
+          "dreaming": {
+            "enabled": false,
+            "narrative": { "enabled": true, "storeAsMemory": true }
+          },
           "merging": {
             "enabled": true,
             "mode": "safe-versioned",
@@ -466,6 +478,13 @@ not PLUR1BUS defaults.
   }
 }
 ```
+
+`dreaming.enabled: false` is the OpenClaw Beta-3 sidecar gate, not the
+PLUR1BUS narrative toggle. Keep it false when PLUR1BUS owns consolidation or
+REM; otherwise OpenClaw also loads `memory-core` dreaming. When `skillMiner` is
+enabled, use Skill Workshop autonomous `propose` or `off` so both learning
+systems share the governed proposal queue without independently applying
+overlapping skills.
 
 `hooks.allowConversationAccess: true` is mandatory for this trusted memory
 plugin. It authorizes the official typed `before_agent_reply` hook used for

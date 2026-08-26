@@ -9,6 +9,12 @@ PLUR1BUS 7.4.9 targets the immutable OpenClaw package
 
 PLUR1BUS uses only public OpenClaw capabilities:
 
+- `kind: "memory"`, `plugins.slots.memory`, and `registerMemoryCapability`
+  make PLUR1BUS the exclusive memory owner and advertise `memory_recall` as
+  the deterministic recall tool.
+- `registerEmbeddingProvider` plus `contracts.embeddingProviders` exposes the
+  three reusable PLUR1BUS embedding adapters through Beta 3's generic
+  provider contract. The retired memory-specific registrar is not used.
 - `registerGatewayMethod` registers the PLUR1BUS Gateway method.
 - `registerCli` registers the PLUR1BUS CLI.
 - `openclaw/plugin-sdk/gateway-runtime` submits exact, allowlisted feature
@@ -25,6 +31,45 @@ payloads are eligible. Native `commandArgv` execution is bounded, validates the
 reply payload, preserves `NO_REPLY`, and lets OpenClaw own final status and
 announce delivery. A command failure remains visible and cannot enable an
 unsafe fallback carrier-model run.
+
+## Skill Miner and Skill Workshop
+
+PLUR1BUS does not write a live workspace skill on Beta 3. The Skill Miner
+submits a pending draft through `skills.proposals.create`, stores the returned
+proposal id and exact revision hash in its local evidence record, and exposes
+that record through its existing review command. An authorized approval first
+inspects the Workshop proposal, verifies proposal id, agent-scoped target,
+skill name, status, and revision hash, then calls `skills.proposals.apply` with
+that hash. Reject follows the same inspect-and-bind rule. A changed revision or
+missing Workshop capability leaves the proposal unapplied.
+
+OpenClaw's autonomous self-learning defaults to `auto`; PLUR1BUS deployments
+that enable the Skill Miner should set `skills.workshop.autonomous.mode` to
+`propose` (used by the compatibility lab) or `off`. This keeps OpenClaw's own
+experience reviewer and PLUR1BUS's LanceDB evidence miner from independently
+applying overlapping skills. Both can still share the same Workshop proposal
+queue and scanner.
+
+## Feature-overlap policy
+
+| OpenClaw Beta-3 feature | PLUR1BUS overlap | Compatibility policy |
+| --- | --- | --- |
+| Exclusive memory slot and `memory-core` tools | Recall, capture, search, persistence | Select `memory-lancedb-namespaced`; PLUR1BUS registers the native memory capability, so `memory-core` is not a second active memory owner. |
+| Active Memory | Pre-reply deep recall can call `memory_recall` while PLUR1BUS also has `autoRecall` | Native integration is supported through `deterministicRecallToolName`. Enable only one automatic pre-reply lane per agent; the compatibility lab disables Active Memory and tests PLUR1BUS hooks directly. Raw private-transcript recall is explicitly not claimed. |
+| Memory-core dreaming | Consolidation, REM, promotion, diary | Set persisted `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false` when PLUR1BUS owns dreaming. Otherwise OpenClaw intentionally loads `memory-core` as a sidecar. The lab also disables `memory-core` explicitly. |
+| Skill Workshop self-learning | Skill Miner proposals and approval | PLUR1BUS feeds the Workshop and never bypasses its scanner, hashes, ownership, or rollback. Use Workshop autonomous `propose`/`off` when the PLUR1BUS miner is enabled. |
+| Scheduled tasks / cron dispatcher | PLUR1BUS consolidation, classifier, REM, miner, afterthought jobs | PLUR1BUS uses OpenClaw's public Gateway/CLI dispatcher and exact allowlisted commands; OpenClaw owns delivery, `NO_REPLY`, run status, and restart behavior. |
+| Compaction memory flush | Durable capture before compaction | PLUR1BUS supplies no file-memory flush plan because conversation capture is handled by typed hooks. This avoids a second file-memory write lane. |
+| `USER.md` user model | Preference and relationship memories | `USER.md` remains the authoritative current directive; PLUR1BUS is provenance-bearing recall/history. Do not auto-promote contradictory PLUR1BUS observations into `USER.md`. |
+| Standing intents | PLUR1BUS reminders | Complementary: OpenClaw owns event-conditioned intents; exact-time work stays on scheduled tasks/PLUR1BUS reminder state. Do not represent the same obligation in both. |
+| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The lab disables both optional bridges; cross-plugin artifact import is outside the 7.4.9 release claim. |
+| Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS continues to authorize by canonical agent, workspace, sender/chat ACL, and memory scope. |
+
+The lab configuration makes every conflict decision explicit: PLUR1BUS owns
+the memory slot; `memory-core`, Active Memory, OpenClaw dreaming, PLUR1BUS
+dreaming/merging, and both vault bridges are disabled for the baseline memory
+path; Skill Workshop stays enabled in proposal mode for the separate Skill
+Miner integration test.
 
 ## Immutable local model artifacts
 
