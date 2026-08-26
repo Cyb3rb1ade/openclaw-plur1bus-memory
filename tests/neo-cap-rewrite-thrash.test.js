@@ -22,7 +22,7 @@
 
 import { describe, it, before } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,6 +48,12 @@ function makeTurn(i) {
 }
 
 describe("appendJsonl Cap — kein Vollrewrite bei jedem Append", () => {
+  it("meldet Cap-I/O-Fehler redigiert statt sie still zu verschlucken", () => {
+    const source = readFileSync(new URL("../lib/neo-arch.js", import.meta.url), "utf8");
+    assert.doesNotMatch(source, /catch\s*\(_\)\s*\{\s*\/\* Cap ist best-effort/);
+    assert.match(source, /safeWarn\([^;]+neo-arch\.cap/);
+  });
+
   it("laesst die Inode stabil, wenn die Datei schon auf dem Cap steht", () => {
     const root = mkdtempSync(join(tmpdir(), "neo-cap-thrash-"));
     try {

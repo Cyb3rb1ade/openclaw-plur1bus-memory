@@ -1,9 +1,16 @@
 # OpenClaw 2026.8.1-beta.3 compatibility contract
 
-PLUR1BUS 7.4.9 targets the immutable OpenClaw package
+PLUR1BUS 7.5.0 targets the immutable OpenClaw package
 `openclaw@2026.8.1-beta.3`, Git tag `v2026.8.1-beta.3`, commit
 `5831b80721f802072b0ec1893b30a16cf42d538c`, and npm integrity
 `sha512-8v+2Knr+0i1qzWXgJmtcBg78VaoMENahLxcuThOqyCmVaCGPj++mI9yv0R440wMv9Siv4fysd5e0YmBVftDvuQ==`.
+
+The PLUR1BUS upstream base is source version 7.4.10 at exact commit
+`c0a8a4c28ff1cb9c632e185f21f4502d67d1b605` (release metadata commit
+`0e7eb3c3d0f77c23d9e8adb94ac285fd424b3d80`). At integration time the official
+remote had not yet published a `v7.4.10` Git tag or GitHub Release, so this
+document identifies the immutable commit rather than treating `main` as a
+release reference. Its Neo JSONL cap-hysteresis fix is retained in 7.5.0.
 
 ## Native host integration
 
@@ -62,7 +69,7 @@ queue and scanner.
 | Compaction memory flush | Durable capture before compaction | PLUR1BUS supplies no file-memory flush plan because conversation capture is handled by typed hooks. This avoids a second file-memory write lane. |
 | `USER.md` user model | Preference and relationship memories | `USER.md` remains the authoritative current directive; PLUR1BUS is provenance-bearing recall/history. Do not auto-promote contradictory PLUR1BUS observations into `USER.md`. |
 | Standing intents | PLUR1BUS reminders | Complementary: OpenClaw owns event-conditioned intents; exact-time work stays on scheduled tasks/PLUR1BUS reminder state. Do not represent the same obligation in both. |
-| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The lab disables both optional bridges; cross-plugin artifact import is outside the 7.4.9 release claim. |
+| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The lab disables both optional bridges; cross-plugin artifact import is outside the 7.5.0 release claim. |
 | Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS continues to authorize by canonical agent, workspace, sender/chat ACL, and memory scope. |
 
 The lab configuration makes every conflict decision explicit: PLUR1BUS owns
@@ -95,7 +102,7 @@ hashed artifacts fail with a specific diagnostic and are never loaded.
 
 ## Data and upgrade compatibility
 
-The 7.4.8 to 7.4.9 upgrade is non-destructive. It introduces no breaking
+The 7.4.8 or 7.4.10 to 7.5.0 upgrade is non-destructive. It introduces no breaking
 LanceDB schema change and does not rewrite an existing database merely because
 the plugin version changed. Existing per-agent paths, namespace routing,
 memory IDs, embeddings, tombstones, history, and Obsidian mirrors remain in
@@ -106,14 +113,14 @@ containment validation.
 Operators should still take a snapshot before any unrelated destructive
 maintenance or explicit migration. Rollback consists of stopping the gateway,
 installing the previously retained plugin package, and starting it again; no
-OpenClaw rollback copy is required because 7.4.9 performs no host patch.
+OpenClaw rollback copy is required because 7.5.0 performs no host patch.
 
 ## Scope of the compatibility claim
 
 The exact target above is the release gate. Newer OpenClaw commits are reviewed
 for adjacent dispatcher, delivery, restart, and hook behavior but are not
 silently incorporated. Compatibility is established only by testing the
-packed 7.4.9 artifact in a fresh OpenClaw 2026.8.1-beta.3 runtime, including
+packed 7.5.0 artifact in a fresh OpenClaw 2026.8.1-beta.3 runtime, including
 runtime registration, gateway readiness, explicit and automatic memory paths,
 restart persistence, agent isolation, cron delivery, and real local-model
 inference.

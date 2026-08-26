@@ -2,18 +2,19 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.4.9 — native OpenClaw Beta-3 compatibility**
+**PLUR1BUS 7.5.0 — native OpenClaw Beta-3 compatibility**
 
-Current source version: **7.4.9**. The compatibility target is exactly
+Current source version: **7.5.0**. The compatibility target is exactly
 `openclaw@2026.8.1-beta.3`; see the
 [compatibility contract](docs/compatibility-openclaw-2026.8.1-beta.3.md).
-The published `v7.4.8` tag remains immutable and does not contain these fixes.
+The upstream 7.4.10 source base is pinned to commit
+`c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`; existing tags remain immutable.
 
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
 
-### New in v7.4.9 — native integration and verified local models
+### New in v7.5.0 — native integration and verified local models
 
 - **No OpenClaw bundle patching.** Feature cron commands use OpenClaw's public
   plugin registration and `gateway-runtime` dispatcher capabilities. Missing
@@ -53,7 +54,7 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
 - **Derived records carry visibility.** Pattern and dream writers stamp scope;
   readers filter by requester. Legacy records without a stamp stay own-agent only.
 - **Legacy compatibility note.** The 7.4.0 release could opt out of its then
-  current dispatcher rewrite. Version 7.4.9 removes that rewrite completely.
+  current dispatcher rewrite. Version 7.5.0 removes that rewrite completely.
 
 ### New in v7.3.x — memory dynamics that actually fire
 
@@ -369,7 +370,7 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 PLUR1BUS requires Node.js 22.5 or newer.
 
-Until 7.4.9 is published, build an immutable tarball from this exact source
+Until 7.5.0 is published, build an immutable tarball from this exact source
 checkout and install that artifact through OpenClaw's package installer:
 
 ```bash
@@ -377,14 +378,14 @@ npm ci
 npm test
 npm pack
 openclaw plugins install \
-  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.4.9.tgz --force
+  npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.5.0.tgz --force
 ```
 
 Record the tarball's SHA-256 before transferring it. The installer copies the
 package into OpenClaw's plugin state; a source link is not an equivalent
-package-compatibility test. PLUR1BUS 7.4.9 never patches OpenClaw runtime files.
-The published `v7.4.8` artifacts remain unchanged and must not be relabelled as
-7.4.9.
+package-compatibility test. PLUR1BUS 7.5.0 never patches OpenClaw runtime files.
+Existing release artifacts remain unchanged and must not be relabelled as
+7.5.0.
 
 Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
 
@@ -704,7 +705,7 @@ The recall pipeline runs embedding → LanceDB vector search → optional query 
 
 ```bash
 npm install
-npm test              # serialized Node test runner; 4,003 tests in 7.4.9
+npm test              # full serialized Node test runner
 ```
 
 No build step. ESM-only. Tests are unit-level and DB-free; the LanceDB adapter is mocked behind a thin interface.
