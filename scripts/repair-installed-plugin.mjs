@@ -162,7 +162,10 @@ export function assertSuccessfulMaintenanceResult(result) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  if (opts.help) { console.log("Usage: node scripts/repair-installed-plugin.mjs [--dry-run] [--maintain-lancedb] [--run-cron] [--deploy-dir DIR] [--expected-version VERSION]"); process.exit(0); }
+  if (opts.help) {
+    console.log("Usage: node scripts/repair-installed-plugin.mjs [--dry-run] [--maintain-lancedb] [--run-cron] [--deploy-dir DIR] [--expected-version VERSION]");
+    return 0;
+  }
 
   const repoDir = resolve(process.cwd());
   const deployDir = resolve(opts.deployDir ?? findDeployDir(repoDir));
@@ -176,7 +179,7 @@ async function main() {
   if (!existsSync(deployDir)) {
     console.error(`\n✗ Deploy directory not found: ${deployDir}`);
     console.error("  Set PLUR1BUS_DEPLOY or pass --deploy-dir");
-    process.exit(1);
+    return 1;
   }
 
   // 1. Deploy integrity
@@ -271,9 +274,9 @@ async function main() {
     console.log("  ✓ All checks passed — no action needed.");
   }
 
-  if (!integrityOk) process.exit(1);
-  if (!lancedbOk || !cronOk) process.exit(3);
-  process.exit(0);
+  if (!integrityOk) return 1;
+  if (!lancedbOk || !cronOk) return 3;
+  return 0;
 }
 
 const isDirectExecution = process.argv[1]
@@ -281,5 +284,10 @@ const isDirectExecution = process.argv[1]
   : false;
 
 if (isDirectExecution) {
-  main().catch((err) => { console.error("repair-installed-plugin:", err); process.exit(2); });
+  try {
+    process.exitCode = await main();
+  } catch (err) {
+    console.error("repair-installed-plugin:", err);
+    process.exitCode = 2;
+  }
 }
