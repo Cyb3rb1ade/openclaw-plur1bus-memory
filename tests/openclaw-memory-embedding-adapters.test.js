@@ -1,6 +1,9 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { createOpenClawMemoryEmbeddingProviderAdapters } from "../lib/providers/openclaw-memory-embedding-adapters.js";
+import {
+  createOpenClawMemoryEmbeddingProviderAdapters,
+  registerOpenClawMemoryEmbeddingProviders,
+} from "../lib/providers/openclaw-memory-embedding-adapters.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -37,6 +40,21 @@ async function createCompatibleProvider(dim = 3) {
 }
 
 describe("OpenClaw memory embedding provider adapters", () => {
+  it("reports the optional provider bridge as informational when the host capability is absent", () => {
+    const messages = { info: [], warn: [] };
+    const api = {
+      logger: {
+        info(message) { messages.info.push(message); },
+        warn(message) { messages.warn.push(message); },
+      },
+    };
+
+    assert.deepStrictEqual(registerOpenClawMemoryEmbeddingProviders(api), []);
+    assert.equal(messages.warn.length, 0);
+    assert.equal(messages.info.length, 1);
+    assert.match(messages.info[0], /optional.*unavailable/i);
+  });
+
   it("rejects remote embedding vectors with the wrong dimension", async () => {
     globalThis.fetch = jsonFetch({ data: [{ embedding: [0.1, 0.2] }] });
     const provider = await createCompatibleProvider(3);
