@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
   FEATURE_CRON_GATEWAY_METHOD,
   createFeatureCronGatewayHandler,
   executeFeatureCronCli,
+  loadOpenClawGatewayRuntime,
   parseFeatureCronRunnerArgs,
   registerFeatureCronNativeDispatch,
   validateFeatureCronRequest,
@@ -148,6 +152,44 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
     assert.deepStrictEqual(reply, { text: "NO_REPLY" });
     assert.equal(output, "NO_REPLY\n");
     assert.equal(calls.length, 1);
+  });
+
+  it("resolves the active public OpenClaw runtime from PATH in a standalone cron runner", async () => {
+    const root = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-runtime-"));
+    try {
+      const packageRoot = join(root, "openclaw");
+      const packageBin = join(packageRoot, "bin");
+      const packageDist = join(packageRoot, "dist");
+      const pathBin = join(root, "path-bin");
+      mkdirSync(packageBin, { recursive: true });
+      mkdirSync(packageDist, { recursive: true });
+      mkdirSync(pathBin, { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        exports: {
+          "./plugin-sdk/gateway-runtime": "./dist/gateway-runtime.js",
+        },
+      }));
+      writeFileSync(
+        join(packageBin, "openclaw.js"),
+        "#!/usr/bin/env node\n",
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        join(packageDist, "gateway-runtime.js"),
+        "export const runtimeSentinel = 'resolved-from-path';\n",
+      );
+      symlinkSync(join(packageBin, "openclaw.js"), join(pathBin, "openclaw"));
+
+      const runtime = await loadOpenClawGatewayRuntime({
+        entryPath: new URL("../scripts/run-feature-cron.mjs", import.meta.url).pathname,
+        pathValue: pathBin,
+      });
+      assert.equal(runtime.runtimeSentinel, "resolved-from-path");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails visibly for plugin errors and malformed ReplyPayloads", async () => {

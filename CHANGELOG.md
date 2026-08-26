@@ -59,6 +59,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   sonst standardmaessig aktiven `memory-core`-Dreaming-Sidecar aus, wenn
   PLUR1BUS Konsolidierung/REM besitzt; Narrativeinstellungen bleiben davon
   getrennt.
+- **Standalone-Cron-Runner findet den aktiven Host.** Ein von OpenClaws
+  Command-Dispatcher gestarteter `node run-feature-cron.mjs`-Prozess hat nicht
+  den OpenClaw-CLI-Entrypoint als `argv[1]`. Der Runner loest deshalb zusaetzlich
+  die erste explizite, ausfuehrbare `openclaw`-Installation im Prozess-`PATH`
+  auf, validiert deren Paketmanifest und importiert weiterhin ausschliesslich
+  den oeffentlichen `openclaw/plugin-sdk/gateway-runtime`-Export.
 
 ## [7.4.10] — 2026-08-26
 
