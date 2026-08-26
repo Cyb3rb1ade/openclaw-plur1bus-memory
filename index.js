@@ -48,6 +48,7 @@ import {
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
+import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
 import {
   isGuardedDirectFeatureCronMessage,
   planUnsafeDirectCronDisables,
@@ -7212,6 +7213,13 @@ const plugin = {
             }
             return plur1busHelp("quick", resolveCommandLocale(commandCtx));
           };
+        if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
+          registerFeatureCronNativeDispatch({
+            api,
+            runFeatureCommand: (commandCtx) => runPlur1busCommand(commandCtx),
+          });
+        }
+
         const plur1busCommands = [
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
           { name: "plur1bus_start", description: "Show PLUR1BUS status and onboarding guidance.", acceptsArgs: false, prefixTokens: ["start"] },

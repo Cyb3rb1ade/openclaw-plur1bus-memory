@@ -90,6 +90,7 @@ export const DEPLOY_FILES = [
   "lib/setup/config-contract.js",
   "lib/setup/feature-profiles.js",
   "lib/setup/feature-cron-native.js",
+  "lib/setup/feature-cron-plugin-runtime.js",
   "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",
   "lib/temporal-context.js",
