@@ -30,6 +30,7 @@ function sleep(ms) {
 
 function makeMockApi(baseDbPath, overrides = {}) {
   const handlers = {};
+  const services = [];
   return {
     pluginConfig: {
       baseDbPath,
@@ -58,8 +59,20 @@ function makeMockApi(baseDbPath, overrides = {}) {
       }
       return results;
     },
-    registerService() {},
+    registerService(service) {
+      services.push(service);
+    },
+    async shutdown() {
+      await Promise.all(services.map((service) => service?.stop?.()));
+    },
   };
+}
+
+function trackApi(t, api) {
+  t.after(async () => {
+    await api.shutdown();
+  });
+  return api;
 }
 
 async function loadFreshPlugin() {
@@ -102,7 +115,7 @@ describe("auto-capture uses embedBatch when available", () => {
     }
   });
 
-  it("calls embedBatch with captured texts", async () => {
+  it("calls embedBatch with captured texts", async (t) => {
     const batchCalls = [];
     const individualCalls = [];
 
@@ -116,7 +129,7 @@ describe("auto-capture uses embedBatch when available", () => {
     };
 
     const plugin = await loadFreshPlugin();
-    const api = makeMockApi(basePath);
+    const api = trackApi(t, makeMockApi(basePath));
     plugin.register(api);
 
     const event = {
@@ -138,7 +151,7 @@ describe("auto-capture uses embedBatch when available", () => {
     assert.strictEqual(individualCalls.length, 0, "individual embed should not be needed when embedBatch succeeds");
   });
 
-  it("falls back to individual embed when embedBatch is not available", async () => {
+  it("falls back to individual embed when embedBatch is not available", async (t) => {
     const individualCalls = [];
 
     LocalTransformersEmbeddingProvider.prototype.embedBatch = undefined;
@@ -148,7 +161,7 @@ describe("auto-capture uses embedBatch when available", () => {
     };
 
     const plugin = await loadFreshPlugin();
-    const api = makeMockApi(basePath);
+    const api = trackApi(t, makeMockApi(basePath));
     plugin.register(api);
 
     const event = {
@@ -188,9 +201,9 @@ describe("auto-capture uses embedBatch when available", () => {
       pluginModule.MemoryDB.prototype.store = originalStore;
     });
 
-    const api = makeMockApi(basePath, {
+    const api = trackApi(t, makeMockApi(basePath, {
       runtime: { captureTimeoutMs: 20, maxConcurrentCapturePerAgent: 1 },
-    });
+    }));
     pluginModule.default.register(api);
     const event = {
       success: true,
@@ -253,9 +266,9 @@ describe("auto-capture uses embedBatch when available", () => {
       pluginModule.MemoryDB.prototype.store = originalStore;
     });
 
-    const api = makeMockApi(basePath, {
+    const api = trackApi(t, makeMockApi(basePath, {
       runtime: { captureTimeoutMs: 500, maxConcurrentCapturePerAgent: 1 },
-    });
+    }));
     pluginModule.default.register(api);
     const ctx = { agentId: "capture-settlement-agent", workspaceDir: basePath };
     firstRun = api.emit("agent_end", {
@@ -353,9 +366,9 @@ describe("auto-capture uses embedBatch when available", () => {
       LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
     });
 
-    const api = makeMockApi(basePath, {
+    const api = trackApi(t, makeMockApi(basePath, {
       runtime: { captureTimeoutMs: 500, maxConcurrentCapturePerAgent: 1 },
-    });
+    }));
     pluginModule.default.register(api);
     const ctx = { agentId: "reminder-settlement-agent", workspaceDir: basePath };
     firstRun = api.emit("agent_end", {
