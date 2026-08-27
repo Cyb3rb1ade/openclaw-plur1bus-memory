@@ -30,6 +30,14 @@ describe("workspace policy store", () => {
     });
   });
 
+  it("creates a fresh dedicated state root before deriving protected paths", () => {
+    const parent = temporaryStateRoot();
+    const root = join(parent, "fresh-state");
+    const store = createWorkspacePolicyStore({ stateRoot: root });
+    assert.equal(store.get(alpha).enabled, true);
+    assert.equal(statSync(root).isDirectory(), true);
+  });
+
   it("uses canonical agent and workspace identities without owner data", () => {
     assert.equal(workspacePolicyKey(alpha), "agent-a\u0000workspace:v1:alpha");
     assert.equal(
