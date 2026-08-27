@@ -64,6 +64,7 @@
   "homepage": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory#readme",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
+    "apache-arrow": "18.1.0",
     "openai": "^6.27.0"
   },
   "optionalDependencies": {
