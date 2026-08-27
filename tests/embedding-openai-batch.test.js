@@ -19,6 +19,32 @@ function makeFakeOpenAI(responses) {
 }
 
 describe("OpenAIEmbeddingProvider embedBatch", () => {
+  it("resolves a structured SecretInput lazily and only once", async () => {
+    const calls = [];
+    const reference = { source: "store", provider: "lab", id: "PLUR1BUS_EMBEDDING_KEY" };
+    const provider = new OpenAIEmbeddingProvider({
+      model: "text-embedding-3-small",
+      dimensions: 3,
+      apiKey: reference,
+      credentialResolver: async (params) => {
+        calls.push(params);
+        return "resolved-provider-secret";
+      },
+    });
+    provider._client = {
+      embeddings: {
+        create: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+      },
+    };
+
+    await provider.embed("first");
+    await provider.embed("second");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].value, reference);
+    assert.equal(calls[0].path, "plugins.entries.memory-lancedb-namespaced.config.embedding.apiKey");
+    assert.equal(provider._resolvedApiKey, "resolved-provider-secret");
+  });
+
   it("resolves apiKeyEnv before embedding", async () => {
     const previous = process.env._PLUR1BUS_EMBEDDING_TEST_KEY;
     process.env._PLUR1BUS_EMBEDDING_TEST_KEY = "env-test-key";
