@@ -53,6 +53,7 @@ import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plu
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
+import { createMemoryMaintenanceGate } from "./lib/memory-maintenance-gate.js";
 import { buildControlPlaneProjection } from "./lib/control-plane-projection.js";
 import {
   createWorkspacePolicyGuard,
@@ -4607,8 +4608,10 @@ const plugin = {
       stateRoot: baseDbPath,
       logger: api.logger,
     });
+    const memoryMaintenanceGate = createMemoryMaintenanceGate();
     const workspacePolicyGuard = createWorkspacePolicyGuard({
       store: workspacePolicyStore,
+      maintenanceGate: memoryMaintenanceGate,
       invalidate: async () => {
         await clearInitializedTurnRoutes?.();
       },
@@ -6145,15 +6148,17 @@ const plugin = {
               : await resolveRegisteredMemoryContext(commandCtx);
             const workspacePolicyDecision = workspacePolicyGuard.decision(memoryCtx);
             if (!workspacePolicyDecision.allowed) {
+              const rejectionReason = workspacePolicyDecision.reason || "workspace_disabled";
               if (actionKey === "internal") {
                 return {
                   text: "NO_REPLY",
-                  metadata: { skipped: true, reason: "workspace_disabled" },
+                  metadata: { skipped: true, reason: rejectionReason },
                 };
               }
               return formatJsonCommandResult({
                 ok: false,
-                reason: "workspace_disabled",
+                reason: rejectionReason,
+                retryable: workspacePolicyDecision.retryable === true,
                 policy: workspacePolicyDecision.policy,
               });
             }
