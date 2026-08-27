@@ -61,7 +61,10 @@ async function main() {
       entry.isDirectory()
       && !entry.isSymbolicLink()
       && !entry.name.startsWith("_")
-      && existsSync(join(baseDbPath, entry.name, "memories.lance"))
+      && (
+        existsSync(join(baseDbPath, entry.name, "memories.lance"))
+        || existsSync(join(baseDbPath, entry.name, "memories"))
+      )
     ))
     .map((entry) => safeAgentId(entry.name));
 

@@ -88,7 +88,10 @@ function diagnoseLancedb() {
     .filter((entry) => (
       entry.isDirectory()
       && !entry.isSymbolicLink()
-      && existsSync(join(base, entry.name, "memories.lance"))
+      && (
+        existsSync(join(base, entry.name, "memories.lance"))
+        || existsSync(join(base, entry.name, "memories"))
+      )
     ))
     .map((entry) => entry.name);
   if (agentDirs.length === 0) { console.log("  ✓ LanceDB base exists but is empty"); return true; }
