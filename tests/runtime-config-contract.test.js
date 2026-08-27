@@ -252,7 +252,13 @@ describe("runtime config contract", () => {
     assert.equal(typeof hook, "function");
     const result = await hook(
       { prompt: "causal legacy hook recall", messages: [{ role: "user", content: "causal legacy hook recall" }] },
-      { agentId: "hook-agent", workspaceDir: null, sessionKey: `hook-${Math.random()}` },
+      {
+        agentId: "hook-agent",
+        workspaceDir: baseDbPath,
+        sessionKey: "agent:hook-agent:main",
+        sessionId: "hook-session",
+        runId: `hook-run-${Math.random()}`,
+      },
     );
     return { result, activeTableUses, logs: api.logs, baseDbPath };
   }

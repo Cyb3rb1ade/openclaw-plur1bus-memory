@@ -18,7 +18,48 @@
       "memory_store"
     ]
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "embedding.apiKey", "expected": "string" },
+        { "path": "embedding.fallback.apiKey", "expected": "string" },
+        { "path": "reranker.apiKey", "expected": "string" },
+        { "path": "merging.apiKey", "expected": "string" },
+        { "path": "schicht15.apiKey", "expected": "string" },
+        { "path": "skillMiner.apiKey", "expected": "string" },
+        { "path": "criticalPush.apiKey", "expected": "string" },
+        { "path": "emotion.t3.apiKey", "expected": "string" }
+      ]
+    }
+  },
+  "uiHints": {
+    "embedding.apiKey": { "label": "Embedding API Key", "sensitive": true, "advanced": true, "help": "Use OpenClaw Secrets with an env, store, file, or exec SecretRef." },
+    "embedding.fallback.apiKey": { "label": "Fallback Embedding API Key", "sensitive": true, "advanced": true, "help": "Credential for the configured fallback embedding provider." },
+    "reranker.apiKey": { "label": "Reranker API Key", "sensitive": true, "advanced": true, "help": "Credential for a remote reranker; local Jina/BGE does not require one." },
+    "merging.apiKey": { "label": "Merging API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
+    "schicht15.apiKey": { "label": "Knowledge Promotion API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
+    "skillMiner.apiKey": { "label": "Skill Miner API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential used with Skill Workshop." },
+    "criticalPush.apiKey": { "label": "Critical Push API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
+    "emotion.t3.apiKey": { "label": "Emotion Tier 3 API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
+    "autoCapture": { "label": "Automatic Capture", "help": "Capture durable memory from eligible conversations." },
+    "autoRecall": { "label": "Automatic Recall", "help": "Inject relevant durable memory before an eligible turn." },
+    "skillMiner.enabled": { "label": "Skill Miner", "help": "Mine proposals and hand approved skills to OpenClaw Skill Workshop." },
+    "featureCronSetup.auto": { "label": "Automatic Feature Cron Setup", "advanced": true, "help": "Create OpenClaw-native PLUR1BUS feature cron jobs." }
+  },
   "configSchema": {
+    "$defs": {
+      "secretInput": {
+        "type": ["string", "object"],
+        "minLength": 1,
+        "additionalProperties": false,
+        "required": ["source", "provider", "id"],
+        "properties": {
+          "source": { "type": "string", "enum": ["env", "store", "file", "exec"] },
+          "provider": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "id": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
     "type": "object",
     "additionalProperties": false,
     "properties": {
@@ -27,7 +68,7 @@
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": "string"
+            "$ref": "#/$defs/secretInput"
           },
           "apiKeyEnv": {
             "type": "string"
@@ -78,7 +119,7 @@
             "additionalProperties": false,
             "properties": {
               "apiKey": {
-                "type": "string"
+                "$ref": "#/$defs/secretInput"
               },
               "model": {
                 "type": "string"
@@ -543,7 +584,7 @@
             ]
           },
           "apiKey": {
-            "type": "string"
+            "$ref": "#/$defs/secretInput"
           },
           "apiKeyEnv": {
             "type": "string"
@@ -620,7 +661,7 @@
             "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string",
+            "$ref": "#/$defs/secretInput",
             "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
@@ -673,7 +714,7 @@
             "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string",
+            "$ref": "#/$defs/secretInput",
             "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
@@ -733,7 +774,7 @@
             "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string",
+            "$ref": "#/$defs/secretInput",
             "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
@@ -1827,7 +1868,7 @@
             "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string",
+            "$ref": "#/$defs/secretInput",
             "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
@@ -2152,7 +2193,7 @@
                 "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
               },
               "apiKey": {
-                "type": "string",
+                "$ref": "#/$defs/secretInput",
                 "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
               },
               "baseUrl": {
