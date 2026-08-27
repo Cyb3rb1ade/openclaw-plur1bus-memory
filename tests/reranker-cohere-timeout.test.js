@@ -12,6 +12,33 @@ import assert from "node:assert";
 import { CohereRerankerProvider } from "../lib/providers/reranker-cohere.js";
 
 describe("CohereRerankerProvider timeout", () => {
+  it("resolves a structured SecretInput lazily before the real request", async () => {
+    const originalFetch = global.fetch;
+    const resolverCalls = [];
+    const fetchCalls = [];
+    const reference = { source: "env", provider: "default", id: "PLUR1BUS_COHERE_API_KEY" };
+    global.fetch = async (url, options) => {
+      fetchCalls.push({ url, options });
+      return { ok: true, json: async () => ({ results: [{ index: 0, relevance_score: 0.9 }] }) };
+    };
+    try {
+      const provider = new CohereRerankerProvider({
+        apiKey: reference,
+        credentialResolver: async (params) => {
+          resolverCalls.push(params);
+          return "resolved-reranker-secret";
+        },
+      });
+      await provider.rerank("query", ["document"], 1);
+      assert.equal(resolverCalls.length, 1);
+      assert.equal(resolverCalls[0].value, reference);
+      assert.equal(resolverCalls[0].path, "plugins.entries.memory-lancedb-namespaced.config.reranker.apiKey");
+      assert.equal(fetchCalls[0].options.headers.Authorization, "Bearer resolved-reranker-secret");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it("honors a configured timeoutMs and aborts the request at that bound", async () => {
     const originalFetch = global.fetch;
     process.env.COHERE_API_KEY = "test-key";

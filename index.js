@@ -241,6 +241,7 @@ import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
 import { registerOpenClawMemoryEmbeddingProviders } from "./lib/providers/openclaw-memory-embedding-adapters.js";
 import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
+import { createConfiguredSecretInputResolver } from "./lib/providers/secret-input.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
 import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import {
@@ -3939,11 +3940,11 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
 // searchCanonical, runRecallPipeline kommen jetzt aus lib/recall-pipeline.js.
 // stripFrontmatter, buildFrontmatter, withFrontmatter aus lib/frontmatter.js.
 
-function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null) {
+function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null, { credentialResolver } = {}) {
   const rerankerCfg = normalizeRerankerConfig(rawRerankerCfg || {});
   let reranker = null;
   if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
-    const primary = new CohereRerankerProvider(rerankerCfg);
+    const primary = new CohereRerankerProvider({ ...rerankerCfg, credentialResolver });
     if ((rerankerCfg.fallbackProvider ?? "disabled") === "local-transformers") {
       const fallback = new LocalTransformersRerankerProvider({
         ...(rerankerCfg.local || {}),
@@ -4187,6 +4188,9 @@ const plugin = {
     const rawPluginConfig = api.pluginConfig || {};
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
+    const credentialResolver = createConfiguredSecretInputResolver({
+      getConfig: () => api.runtime?.config?.current?.() || api.config || {},
+    });
     pluginLogger = api.logger;
     if (typeof api.registerMemoryCapability === "function") {
       api.registerMemoryCapability({
@@ -4913,6 +4917,7 @@ const plugin = {
           ...normalizedEmbeddingCfg,
           apiKey: normalizedEmbeddingCfg.apiKey,
           apiKeyEnv: normalizedEmbeddingCfg.apiKeyEnv,
+          credentialResolver,
           fallback: embeddingCfg.fallback,
           dimensions: dimensions || vectorDim,
           embeddingCacheEnabled: cfg.runtime?.embeddingCacheEnabled,
@@ -4940,7 +4945,11 @@ const plugin = {
 
     // Reranker (optional — provider-aware since v3.1)
     // Cohere reranker — lokaler Fallback nur wenn fallbackProvider="local-transformers" explizit gesetzt
-    const { reranker, rerankerCfg } = createRuntimeRerankerProvider(cfg.reranker || {}, api.logger);
+    const { reranker, rerankerCfg } = createRuntimeRerankerProvider(
+      cfg.reranker || {},
+      api.logger,
+      { credentialResolver },
+    );
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
     const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
 
