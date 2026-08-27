@@ -13,7 +13,7 @@ const sourceFingerprint = normalizeEmbeddingFingerprint({ provider: "openai", mo
 const targetFingerprint = normalizeEmbeddingFingerprint({ provider: "openai", model: "target", dimensions: 4 }, []);
 const planDigest = `sha256:${"a".repeat(64)}`;
 
-async function readyRecord(store) {
+async function readyRecord(store, { sourceSecretRef = { source: "env", provider: "default", id: "OPENAI_API_KEY" } } = {}) {
   const confirmation = createMigrationConfirmation({
     planDigest,
     expiresAt: 10_000,
@@ -26,8 +26,10 @@ async function readyRecord(store) {
     confirmation: confirmation.persisted,
     source: {
       generation: "generation-source",
+      selection: { mode: "legacy" },
       fingerprint: sourceFingerprint,
       fingerprintId: "source-id",
+      ...(sourceSecretRef ? { secretRef: sourceSecretRef } : {}),
       tables: [],
       configRevision: "config-a",
     },
@@ -70,12 +72,18 @@ describe("maintenance-gated generation switch", () => {
       probeRuntime: async ({ expectedGeneration, rollback }) => {
         assert.equal(active, true);
         if (!rollback && expectedGeneration === "generation-target") throw new Error("readiness probe failed");
+        if (rollback) assert.equal(expectedGeneration, null);
         return { readiness: true, store: true, recall: true };
       },
     });
 
     await assert.rejects(runtime.switchGeneration({ id: "migration-0001", token }), /readiness probe failed/);
-    assert.deepStrictEqual(configPatches.map((value) => value.generation), ["generation-target", "generation-source"]);
+    assert.deepStrictEqual(configPatches.map((value) => value.generation), ["generation-target", null]);
+    assert.deepStrictEqual(configPatches[1].secretRef, {
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
     assert.deepStrictEqual(gateEvents, ["enter", "exit"]);
     assert.equal(active, false);
     assert.equal((await runtime.status("migration-0001")).state, "failed");
@@ -93,11 +101,33 @@ describe("maintenance-gated generation switch", () => {
         exit: async () => gate.push("exit"),
       },
       mutateSelection: async () => gate.push("mutate"),
-      probeRuntime: async () => ({ readiness: true, store: true, recall: true }),
+      probeRuntime: async ({ fingerprint }) => {
+        assert.deepStrictEqual(fingerprint, targetFingerprint);
+        return { readiness: true, store: true, recall: true };
+      },
     });
     const result = await runtime.switchGeneration({ id: "migration-0001", token });
     assert.equal(result.state, "completed");
     assert.deepStrictEqual(gate, ["enter", "mutate", "exit"]);
+  });
+
+  it("refuses a remote source whose rollback credential cannot be persisted safely", async () => {
+    const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
+    const { token } = await readyRecord(stateStore, { sourceSecretRef: null });
+    let mutated = false;
+    const runtime = createReembeddingSwitchRuntime({
+      stateStore,
+      now: () => 1_000,
+      maintenanceGate: { enter: async () => {}, exit: async () => {} },
+      mutateSelection: async () => { mutated = true; },
+      probeRuntime: async () => ({ readiness: true, store: true, recall: true }),
+    });
+    await assert.rejects(
+      runtime.switchGeneration({ id: "migration-0001", token }),
+      /rollback credential reference is required/,
+    );
+    assert.equal(mutated, false);
+    assert.equal((await runtime.status("migration-0001")).state, "ready_to_switch");
   });
 
   it("plans manual rollback as a new reverse copy-on-write migration", async () => {

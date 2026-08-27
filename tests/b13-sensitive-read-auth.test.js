@@ -103,7 +103,7 @@ describe("B13 sensitive command-read authorization matrix", () => {
     const observed = new Set([...source.matchAll(/if \(action(?:Key)? === "([a-z-]+)"/g)].map((match) => match[1]));
     const classes = {
       "public-help": new Set(),
-      "sensitive-read": new Set(["behavior", "curation", "doctor", "dreaming", "embeddings", "memory", "origin", "persona", "recall", "reminder", "reminders", "skills", "start", "state", "status", "temperament", "neo", "critical"]),
+      "sensitive-read": new Set(["behavior", "curation", "doctor", "dreaming", "embeddings", "memory", "origin", "persona", "recall", "reminder", "reminders", "skills", "start", "state", "status", "temperament", "neo", "critical", "workspace"]),
       destructive: new Set(["setup", "enable", "disable", "forget", "correct", "migrate-legacy-shared"]),
       "internal-cron": new Set(["internal"]),
       "B14-obsidian": new Set(["obsidian", "conflicts", "cron", "dashboards", "evening", "evening-review", "morning", "morning-review", "review"]),

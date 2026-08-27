@@ -28,7 +28,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statfsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +54,19 @@ import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
 import { createMemoryMaintenanceGate } from "./lib/memory-maintenance-gate.js";
+import { resolveEmbeddingGenerationLayout } from "./lib/reembedding/generation-layout.js";
+import { createMigrationStateStore } from "./lib/reembedding/state-store.js";
+import { createLanceGenerationBackend } from "./lib/reembedding/lance-backend.js";
+import { createReembeddingCoordinator } from "./lib/reembedding/coordinator.js";
+import { createReembeddingSwitchRuntime } from "./lib/reembedding/switch-runtime.js";
+import { createGenerationRuntimeProbe } from "./lib/reembedding/runtime-probe.js";
+import { embeddingFingerprintId } from "./lib/reembedding/fingerprint.js";
+import {
+  createOpenClawEmbeddingSelectionMutator,
+  embeddingFingerprintFromNormalizedConfig,
+  redactedEmbeddingSecretRef,
+} from "./lib/reembedding/runtime-config.js";
+import { registerReembeddingRuntime } from "./lib/setup/reembedding-plugin-runtime.js";
 import { buildControlPlaneProjection } from "./lib/control-plane-projection.js";
 import {
   createWorkspacePolicyGuard,
@@ -239,9 +252,13 @@ import { ContradictionDetector } from "./lib/contradiction-detector.js";
 import { runOverlayAuditCommand } from "./lib/overlay-commands.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
 import { applyLegacyProviderDefaults } from "./lib/providers/legacy-provider-migration.js";
-import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
+import { DEFAULT_LOCAL_MODEL_CACHE, DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
+import {
+  pinnedLocalModelProfile,
+  validatePinnedModelArtifacts,
+} from "./lib/providers/local-model-artifacts.js";
 import { registerOpenClawMemoryEmbeddingProviders } from "./lib/providers/openclaw-memory-embedding-adapters.js";
 import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
 import { createConfiguredSecretInputResolver } from "./lib/providers/secret-input.js";
@@ -4231,7 +4248,7 @@ const plugin = {
     if (!epistemicCutoffBoot.ok) {
       api.logger?.warn?.(`memory-lancedb-namespaced: epistemic cutoff unavailable (${epistemicCutoffBoot.reason})`);
     }
-    const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
+    const configuredNamespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
       explicit: namespacesExplicit,
       path: `${PLUGIN_CONFIG_PATH}.namespaces`,
     });
@@ -4301,6 +4318,12 @@ const plugin = {
     const model = normalizedEmbeddingCfg.model || DEFAULT_MODEL;
     const baseUrl = normalizedEmbeddingCfg.baseUrl;
     const dimensions = normalizedEmbeddingCfg.dimensions;
+    const embeddingGenerationLayout = resolveEmbeddingGenerationLayout({
+      stateRoot: configuredNamespaceLayout.baseDir,
+      namespaceLayout: configuredNamespaceLayout,
+      selection: cfg.reembedding || {},
+    });
+    const namespaceLayout = embeddingGenerationLayout.dataLayout;
     const fallbackEmbeddingCfg = normalizedEmbeddingCfg.fallback
       ? {
           apiKey: normalizedEmbeddingCfg.fallback.apiKey
@@ -4561,6 +4584,55 @@ const plugin = {
         }
       }
     }
+    const activeEmbeddingFingerprint = embeddingFingerprintFromNormalizedConfig({
+      ...normalizedEmbeddingCfg,
+      dimensions: vectorDim,
+    });
+    const activeEmbeddingFingerprintId = embeddingFingerprintId(activeEmbeddingFingerprint);
+    if (cfg.reembedding && (
+      cfg.reembedding.fingerprintId !== activeEmbeddingFingerprintId
+      || cfg.reembedding.dimensions !== vectorDim
+    )) {
+      throw new Error(
+        "memory-lancedb-namespaced: active reembedding selection does not match the configured embedding fingerprint",
+      );
+    }
+    const reembeddingStateStore = createMigrationStateStore({ stateRoot: baseDbPath, logger: api.logger });
+    const memoryMaintenanceGate = createMemoryMaintenanceGate({
+      externalStatus: () => {
+        const switching = reembeddingStateStore.list().find((record) => record.state === "switching");
+        return switching
+          ? {
+              active: true,
+              reason: "reembedding_switch",
+              since: Date.parse(switching.updatedAt),
+            }
+          : { active: false };
+      },
+    });
+    const reembeddingConfigRevision = createHash("sha256")
+      .update(JSON.stringify({
+        fingerprintId: activeEmbeddingFingerprintId,
+        selection: embeddingGenerationLayout.selection,
+        namespaceMode: configuredNamespaceLayout.mode,
+        activeWriteNamespace: configuredNamespaceLayout.activeWriteNamespace || null,
+      }))
+      .digest("hex");
+    const reembeddingBackend = createLanceGenerationBackend({
+      stateRoot: baseDbPath,
+      activeRoot: embeddingGenerationLayout.activeRoot,
+      activeSharedBaseDir: embeddingGenerationLayout.sharedBaseDir,
+      activeNamespace: configuredNamespaceLayout.mode === "named"
+        ? configuredNamespaceLayout.activeWriteNamespace
+        : null,
+      activeGeneration: embeddingGenerationLayout.selection.mode === "generation"
+        ? embeddingGenerationLayout.selection.generation
+        : "legacy-active",
+      activeSelection: embeddingGenerationLayout.selection,
+      activeFingerprint: activeEmbeddingFingerprint,
+      activeSecretRef: redactedEmbeddingSecretRef(normalizedEmbeddingCfg),
+      configRevision: reembeddingConfigRevision,
+    });
     const neoCfg = cfg.neo || {};
     const neoEnabled = neoCfg.enabled !== false; // 3.0 default: additive cognitive layer on
     const neoRoot = api.resolvePath(neoCfg.statePath || join(baseDbPath, "_neo"));
@@ -4608,7 +4680,6 @@ const plugin = {
       stateRoot: baseDbPath,
       logger: api.logger,
     });
-    const memoryMaintenanceGate = createMemoryMaintenanceGate();
     const workspacePolicyGuard = createWorkspacePolicyGuard({
       store: workspacePolicyStore,
       maintenanceGate: memoryMaintenanceGate,
@@ -4618,11 +4689,16 @@ const plugin = {
     });
     const automaticWorkspacePolicyDecision = (event = {}, ctx = {}) => {
       try {
+        const workspaceDir = ctx?.workspaceDir ?? event?.workspaceDir;
         const memoryCtx = resolveMemoryRequestContext({
           agentId: ctx?.agentId ?? event?.agentId,
-          workspaceDir: ctx?.workspaceDir ?? event?.workspaceDir,
-          workspaceKey: ctx?.workspaceKey ?? event?.workspaceKey,
-          workspaceId: ctx?.workspaceId ?? event?.workspaceId,
+          workspaceDir,
+          ...(workspaceDir
+            ? {}
+            : {
+                workspaceKey: ctx?.workspaceKey ?? event?.workspaceKey,
+                workspaceId: ctx?.workspaceId ?? event?.workspaceId,
+              }),
           sessionKey: ctx?.sessionKey ?? event?.sessionKey,
           sessionId: ctx?.sessionId ?? event?.sessionId,
         }, { workspaceAliases: memoryWorkspaceAliases });
@@ -4878,7 +4954,7 @@ const plugin = {
     };
 
     const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
-    const sharedMemoryPool = new SharedMemoryPool(namespaceLayout.baseDir, vectorDim, AgentDbPool, api.logger);
+    const sharedMemoryPool = new SharedMemoryPool(embeddingGenerationLayout.sharedBaseDir, vectorDim, AgentDbPool, api.logger);
     const legacyMigrationShutdown = new AbortController();
     if (commandRuntimeHooks) {
       const withDb = pool.withDb.bind(pool);
@@ -4946,6 +5022,198 @@ const plugin = {
           return original(...args);
         };
       }
+    }
+
+    const createTargetEmbeddingProvider = async ({ fingerprint, secretRef } = {}) => {
+      if (!fingerprint || typeof fingerprint !== "object") {
+        throw new Error("reembedding target fingerprint is required");
+      }
+      if (fingerprint.provider === "local-transformers") {
+        const profile = pinnedLocalModelProfile(fingerprint.model);
+        if (!profile || profile.revision !== fingerprint.revision) {
+          throw new Error(`reembedding local model is not pinned: ${String(fingerprint.model)}`);
+        }
+        return new LocalTransformersEmbeddingProvider({
+          model: fingerprint.model,
+          revision: fingerprint.revision,
+          dimensions: fingerprint.dimensions,
+          queryPrefix: fingerprint.queryPrefix,
+          passagePrefix: fingerprint.passagePrefix,
+          cacheDir: normalizedEmbeddingCfg.local?.cacheDir || DEFAULT_LOCAL_MODEL_CACHE,
+          embeddingCacheEnabled: false,
+          logger: api.logger,
+        });
+      }
+      return new OpenAIEmbeddingProvider({
+        provider: fingerprint.provider,
+        model: fingerprint.model,
+        baseUrl: fingerprint.endpoint,
+        dimensions: fingerprint.dimensions,
+        ...(secretRef ? { apiKey: secretRef } : {}),
+        credentialResolver,
+        embeddingCacheEnabled: false,
+        logger: api.logger,
+      });
+    };
+    const embedWithTargetProvider = async (provider, text, purpose) => {
+      if (purpose === "query" && typeof provider.embedQuery === "function") {
+        return provider.embedQuery(text, { purpose: "reembedding" });
+      }
+      if (typeof provider.embedPassage === "function") {
+        return provider.embedPassage(text, { purpose: "reembedding" });
+      }
+      return provider.embed(text, { purpose: "reembedding" });
+    };
+    const shutdownTargetProvider = async (provider, operationError = null) => {
+      try {
+        await provider?.shutdown?.();
+      } catch (shutdownError) {
+        if (operationError) {
+          throw new AggregateError([operationError, shutdownError], "reembedding provider operation and shutdown failed");
+        }
+        throw shutdownError;
+      }
+      if (operationError) throw operationError;
+    };
+    const targetGenerationDataRoot = (generation) => {
+      if (generation === null) {
+        return configuredNamespaceLayout.mode === "named"
+          ? resolveInside(configuredNamespaceLayout.baseDir, configuredNamespaceLayout.activeWriteNamespace)
+          : configuredNamespaceLayout.baseDbPath;
+      }
+      const root = resolveInside(baseDbPath, "generations", generation);
+      return configuredNamespaceLayout.mode === "named"
+        ? resolveInside(root, configuredNamespaceLayout.activeWriteNamespace)
+        : root;
+    };
+    const withTargetGenerationDb = async ({ generation, agentId, dimensions: targetDimensions }, operation) => {
+      const targetPool = new AgentDbPool(
+        targetGenerationDataRoot(generation),
+        targetDimensions,
+        api.logger,
+      );
+      let operationError = null;
+      let result;
+      try {
+        result = await targetPool.withDb(agentId, operation);
+      } catch (error) {
+        operationError = error;
+      }
+      try {
+        await targetPool.shutdown();
+      } catch (shutdownError) {
+        if (operationError) {
+          throw new AggregateError([operationError, shutdownError], "reembedding target DB operation and shutdown failed");
+        }
+        throw shutdownError;
+      }
+      if (operationError) throw operationError;
+      return result;
+    };
+    const readConfiguredReembeddingSelection = () => {
+      const current = api.runtime?.config?.current?.() || api.config || {};
+      const currentReembedding = current?.plugins?.entries?.[PLUGIN_KEY]?.config?.reembedding;
+      return Object.freeze({ generation: currentReembedding?.activeGeneration ?? null });
+    };
+    const runTargetGenerationRuntimeProbe = async (input) => {
+      const provider = await createTargetEmbeddingProvider(input);
+      const probe = createGenerationRuntimeProbe({
+        readActiveSelection: readConfiguredReembeddingSelection,
+        embedTarget: ({ text, purpose }) => embedWithTargetProvider(provider, text, purpose),
+        withTargetDb: withTargetGenerationDb,
+        appendAudit: (entry) => appendDestructiveOpLog(baseDbPath, entry),
+      });
+      let operationError = null;
+      let result;
+      try {
+        result = await probe(input);
+      } catch (error) {
+        operationError = error;
+      }
+      await shutdownTargetProvider(provider, operationError);
+      return result;
+    };
+    const reembeddingCoordinator = createReembeddingCoordinator({
+      stateStore: reembeddingStateStore,
+      backend: reembeddingBackend,
+      createTargetProvider: createTargetEmbeddingProvider,
+      plannerDependencies: {
+        statDisk: async () => {
+          const disk = statfsSync(baseDbPath);
+          const freeBytes = Math.floor(Number(disk.bavail) * Number(disk.bsize));
+          return { freeBytes: Math.min(Number.MAX_SAFE_INTEGER, freeBytes) };
+        },
+        inspectTargetArtifacts: async ({ fingerprint }) => {
+          const profile = pinnedLocalModelProfile(fingerprint.model);
+          if (!profile || profile.revision !== fingerprint.revision) {
+            return { ready: false, verified: false };
+          }
+          const provider = await createTargetEmbeddingProvider({ fingerprint });
+          let operationError = null;
+          let inspected;
+          try {
+            inspected = provider.cacheDir
+              ? await validatePinnedModelArtifacts(profile, provider.cacheDir)
+              : { ok: false, artifacts: [] };
+          } catch (error) {
+            operationError = error;
+          }
+          await shutdownTargetProvider(provider, operationError);
+          return { ready: inspected.ok, verified: inspected.ok };
+        },
+        probeTargetProvider: async ({ target, purpose }) => {
+          const provider = await createTargetEmbeddingProvider(target);
+          let operationError = null;
+          let vector;
+          try {
+            vector = await embedWithTargetProvider(
+              provider,
+              `PLUR1BUS ${purpose} provider probe`,
+              "passage",
+            );
+          } catch (error) {
+            operationError = error;
+          }
+          await shutdownTargetProvider(provider, operationError);
+          return vector;
+        },
+      },
+      readPolicySnapshot: async () => workspacePolicyStore.list(),
+      runValidationProbes: async ({ record, backend, provider }) => {
+        const table = record.source.tables.find((candidate) => candidate.rowCount > 0);
+        if (!table) throw new Error("reembedding semantic validation requires at least one source memory");
+        const [sourceRow] = await backend.readSourceBatch(table.tableId, { offset: 0, limit: 1 });
+        if (!sourceRow || typeof sourceRow.text !== "string" || !sourceRow.text.trim()) {
+          throw new Error("reembedding semantic validation source memory is invalid");
+        }
+        const queryVector = await embedWithTargetProvider(provider, sourceRow.text, "query");
+        const recalled = await backend.searchTarget(record.target.generation, table.tableId, queryVector, { limit: 5 });
+        if (!recalled.some((candidate) => candidate.id === sourceRow.id)) {
+          throw new Error("reembedding target generation did not recall the source validation memory");
+        }
+        return { semanticRecall: true, validationMemoryId: sourceRow.id, validationTable: table.tableId };
+      },
+    });
+    const reembeddingConfigMutationAvailable = typeof api.runtime?.config?.mutateConfigFile === "function";
+    const reembeddingSwitchRuntime = reembeddingConfigMutationAvailable
+      ? createReembeddingSwitchRuntime({
+          stateStore: reembeddingStateStore,
+          maintenanceGate: memoryMaintenanceGate,
+          mutateSelection: createOpenClawEmbeddingSelectionMutator({ api }),
+          probeRuntime: runTargetGenerationRuntimeProbe,
+        })
+      : Object.freeze({
+          async switchGeneration() {
+            throw new Error("OpenClaw mutateConfigFile capability is required for reembedding switch");
+          },
+          async planManualRollback() {
+            throw new Error("OpenClaw mutateConfigFile capability is required for reembedding rollback");
+          },
+        });
+    if (!reembeddingConfigMutationAvailable) {
+      api.logger?.warn?.(
+        "memory-lancedb-namespaced: OpenClaw mutateConfigFile capability unavailable; reembedding switch and rollback are disabled",
+      );
     }
 
     // Reranker (optional — provider-aware since v3.1)
@@ -7572,7 +7840,7 @@ const plugin = {
         // Embedder beim ersten /memory-Aufruf noch nicht ready ist, fallback
         // auf Text-Search.
         const memoryDbAdapter = createDbAdapter({
-          basePath: baseDbPath,
+          basePath: embeddingGenerationLayout.activeRoot,
           getEmbedding: async (text) => {
             try {
               return await embeddings.embed(text);
@@ -7626,9 +7894,14 @@ const plugin = {
             guard: workspacePolicyGuard,
             resolveSessionMemoryContext: resolveSessionPolicyMemoryContext,
           });
+          registerReembeddingRuntime({
+            api,
+            coordinator: reembeddingCoordinator,
+            switchRuntime: reembeddingSwitchRuntime,
+          });
         } else {
           api.logger?.warn?.(
-            "memory-lancedb-namespaced: OpenClaw workspace policy RPC/CLI capabilities unavailable; runtime controls are disabled",
+            "memory-lancedb-namespaced: OpenClaw Gateway/CLI capabilities unavailable; workspace and reembedding runtime controls are disabled",
           );
         }
 
@@ -7647,6 +7920,7 @@ const plugin = {
                   model: normalizedEmbeddingCfg.model,
                   revision: normalizedEmbeddingCfg.local?.revision,
                   dimensions: dimensions || vectorDim,
+                  fingerprint: activeEmbeddingFingerprintId,
                 },
                 reranker: reranker
                   ? {
@@ -7659,6 +7933,19 @@ const plugin = {
               namespaces: namespaceLayout.mode === "named"
                 ? namespaceLayout.recallReadNamespaces.map((id) => ({ id, dimensions: vectorDim }))
                 : [{ id: "legacy-flat", dimensions: vectorDim }],
+              migration: (() => {
+                const migrations = reembeddingStateStore.list();
+                const current = migrations.at(-1);
+                return current
+                  ? {
+                      id: current.id,
+                      state: current.state,
+                      processed: current.cursor?.completedRows ?? 0,
+                      total: current.source?.tables?.reduce((sum, table) => sum + table.rowCount, 0) ?? 0,
+                      failureCode: current.error?.code ?? null,
+                    }
+                  : null;
+              })(),
             }),
           });
         } else {
@@ -7681,6 +7968,7 @@ const plugin = {
           llmResultCache,
           embeddings,
           reranker,
+          reembeddingCoordinator,
         });
 
         const runMemoryCommand = async (commandCtx, suppliedMemoryCtx = null) => {

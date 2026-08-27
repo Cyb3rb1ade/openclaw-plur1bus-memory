@@ -128,7 +128,7 @@ describe("auto-capture uses embedBatch when available", () => {
         { role: "assistant", content: "Noted, I will remember that preference." },
       ],
     };
-    const ctx = { agentId: "main" };
+    const ctx = { agentId: "main", workspaceDir: basePath };
 
     await api.emit("agent_end", event, ctx);
 
@@ -159,7 +159,7 @@ describe("auto-capture uses embedBatch when available", () => {
         { role: "user", content: "My favorite color is blue." },
       ],
     };
-    const ctx = { agentId: "main" };
+    const ctx = { agentId: "main", workspaceDir: basePath };
 
     await api.emit("agent_end", event, ctx);
 
@@ -199,7 +199,7 @@ describe("auto-capture uses embedBatch when available", () => {
       messages: [{ role: "user", content: "Remember this delayed batch capture must stop after timeout." }],
     };
 
-    const emitted = api.emit("agent_end", event, { agentId: "abort-agent" });
+    const emitted = api.emit("agent_end", event, { agentId: "abort-agent", workspaceDir: basePath });
     await batchStarted.promise;
     const results = await emitted;
     assert.equal(results[0]?.timedOut, true, "the hook should preserve its prompt timeout result");
@@ -257,7 +257,7 @@ describe("auto-capture uses embedBatch when available", () => {
       runtime: { captureTimeoutMs: 500, maxConcurrentCapturePerAgent: 1 },
     });
     pluginModule.default.register(api);
-    const ctx = { agentId: "capture-settlement-agent" };
+    const ctx = { agentId: "capture-settlement-agent", workspaceDir: basePath };
     firstRun = api.emit("agent_end", {
       success: true,
       turnId: "turn-b3-store-timeout-1",

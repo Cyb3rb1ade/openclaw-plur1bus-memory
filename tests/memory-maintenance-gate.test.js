@@ -53,4 +53,21 @@ describe("memory maintenance gate", () => {
       /already active/,
     );
   });
+
+  it("inherits a durable switching state after plugin reload and releases when it becomes terminal", () => {
+    let migrationState = "switching";
+    const gate = createMemoryMaintenanceGate({
+      externalStatus: () => migrationState === "switching"
+        ? { active: true, reason: "reembedding_switch", since: 5678 }
+        : { active: false },
+    });
+
+    assert.deepStrictEqual(gate.status(), {
+      active: true,
+      reason: "reembedding_switch",
+      since: 5678,
+    });
+    migrationState = "completed";
+    assert.deepStrictEqual(gate.status(), { active: false });
+  });
 });

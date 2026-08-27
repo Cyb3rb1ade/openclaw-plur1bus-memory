@@ -7,7 +7,7 @@ const indexSource = readFileSync(new URL("../index.js", import.meta.url), "utf8"
 describe("workspace policy runtime gates", () => {
   it("constructs one policy store and guard below the PLUR1BUS state root", () => {
     assert.match(indexSource, /createWorkspacePolicyStore\(\{\s*stateRoot: baseDbPath,/);
-    assert.match(indexSource, /const memoryMaintenanceGate = createMemoryMaintenanceGate\(\);/);
+    assert.match(indexSource, /const memoryMaintenanceGate = createMemoryMaintenanceGate\(\{\s*externalStatus:/);
     assert.match(indexSource, /createWorkspacePolicyGuard\(\{/);
     assert.match(indexSource, /maintenanceGate: memoryMaintenanceGate,/);
   });

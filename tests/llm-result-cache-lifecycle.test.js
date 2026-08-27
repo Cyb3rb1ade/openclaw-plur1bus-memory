@@ -18,6 +18,7 @@ function makeDependencies(overrides = {}) {
     llmResultCache: { close: async () => {} },
     embeddings: { shutdown: async () => {} },
     reranker: { shutdown: async () => {} },
+    reembeddingCoordinator: { shutdown: async () => {} },
     ...overrides,
   };
 }
@@ -87,11 +88,13 @@ describe("LLM result cache lifecycle", () => {
       llmResultCache: { close: failing("cache") },
       embeddings: { shutdown: failing("embeddings") },
       reranker: { shutdown: failing("reranker") },
+      reembeddingCoordinator: { shutdown: failing("reembedding") },
     });
     await harness.getRegistration().handler();
 
-    assert.deepStrictEqual(calls, ["adapter", "pool", "shared", "routes", "metrics", "cache", "embeddings", "reranker"]);
+    assert.deepStrictEqual(calls, ["reembedding", "adapter", "pool", "shared", "routes", "metrics", "cache", "embeddings", "reranker"]);
     assert.deepStrictEqual(warnings, [
+      "memory-lancedb-namespaced: reembedding coordinator shutdown failed: reembedding broke",
       "memory-lancedb-namespaced: adapter shutdown failed: adapter broke",
       "memory-lancedb-namespaced: pool shutdown failed: pool broke",
       "memory-lancedb-namespaced: shared pool shutdown failed: shared broke",
@@ -105,6 +108,6 @@ describe("LLM result cache lifecycle", () => {
 
   it("wires the real plugin dependencies into the shutdown boundary", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
-    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*embeddings,\s*reranker,?\s*\}\);/s);
+    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*embeddings,\s*reranker,\s*reembeddingCoordinator,?\s*\}\);/s);
   });
 });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -92,6 +92,13 @@ describe("quarantined LanceDB reembedding generations", () => {
         readBack.map(stableNonVectorRowHash),
         sourceRows.map(stableNonVectorRowHash),
       );
+      const recalled = await backend.searchTarget(
+        "generation-target",
+        "agent-a/memories",
+        migrated[0].vector,
+        { limit: 2 },
+      );
+      assert.equal(recalled[0].id, migrated[0].id);
       assert.equal(await sourceTable.version(), sourceVersionBefore);
       assert.deepStrictEqual((await sourceTable.query().toArray()).map((row) => row.text).sort(), rows.map((row) => row.text).sort());
       const validation = await backend.validateGeneration("generation-target");
@@ -139,6 +146,99 @@ describe("quarantined LanceDB reembedding generations", () => {
       );
     } finally {
       await backend.close();
+    }
+  });
+
+  it("preserves the configured writer namespace inside a target generation", async () => {
+    const backend = createLanceGenerationBackend({
+      stateRoot,
+      activeRoot,
+      activeNamespace: "lab",
+      activeGeneration: "legacy-active",
+      activeFingerprint: { dimensions: 3, fingerprintId: "embedding:v1:sha256:source" },
+    });
+    try {
+      const tables = (await backend.inventoryActiveGeneration())[0].tables;
+      await backend.createQuarantinedGeneration({
+        generation: "generation-named",
+        fingerprintId: "embedding:v1:sha256:target",
+        dimensions: 4,
+        tables,
+      });
+      const sourceRows = await backend.readSourceBatch("agent-a/memories", { offset: 0, limit: 10 });
+      await backend.writeTargetBatch("generation-named", "agent-a/memories", sourceRows.map((row) => ({
+        ...row,
+        vector: [1, 2, 3, 4],
+      })));
+      const namedDb = await connect(join(stateRoot, "generations", "generation-named", "lab", "agent-a"));
+      const namedTable = await namedDb.openTable("memories");
+      assert.equal(await namedTable.countRows(), sourceRows.length);
+      await namedTable.close();
+      await namedDb.close();
+    } finally {
+      await backend.close();
+    }
+  });
+
+  it("migrates private and shared pools while excluding control-plane directories", async () => {
+    const colocatedRoot = join(root, "colocated");
+    const privateDb = await connect(join(colocatedRoot, "agent-a"));
+    const privateTable = await privateDb.createTable("memories", rows);
+    const workspaceKey = `w-${"a".repeat(62)}`;
+    const userKey = `u-${"b".repeat(62)}`;
+    const workspaceDb = await connect(join(colocatedRoot, ".plur1bus-shared", "workspaces", workspaceKey));
+    const workspaceTable = await workspaceDb.createTable("memories", [{ ...rows[0], id: "33333333-3333-4333-8333-333333333333" }]);
+    const userDb = await connect(join(colocatedRoot, ".plur1bus-shared", "users", userKey));
+    const userTable = await userDb.createTable("memories", [{ ...rows[1], id: "44444444-4444-4444-8444-444444444444" }]);
+    mkdirSync(join(colocatedRoot, "control"), { recursive: true });
+    mkdirSync(join(colocatedRoot, "generations"), { recursive: true });
+    const backend = createLanceGenerationBackend({
+      stateRoot: colocatedRoot,
+      activeRoot: colocatedRoot,
+      activeSharedBaseDir: colocatedRoot,
+      activeGeneration: "legacy-active",
+      activeSelection: { mode: "legacy" },
+      activeFingerprint: { dimensions: 3, fingerprintId: "embedding:v1:sha256:source" },
+    });
+    try {
+      const inventory = await backend.inventoryActiveGeneration();
+      assert.deepEqual(inventory[0].tables.map(({ tableId }) => tableId), [
+        `agent-a/memories`,
+        `shared/users/${userKey}/memories`,
+        `shared/workspaces/${workspaceKey}/memories`,
+      ]);
+      await backend.createQuarantinedGeneration({
+        generation: "generation-all",
+        fingerprintId: "embedding:v1:sha256:target",
+        dimensions: 4,
+        tables: inventory[0].tables,
+      });
+      for (const descriptor of inventory[0].tables) {
+        const sourceRows = await backend.readSourceBatch(descriptor.tableId, { limit: 10 });
+        await backend.writeTargetBatch("generation-all", descriptor.tableId, sourceRows.map((row) => ({
+          ...row,
+          vector: [1, 2, 3, 4],
+        })));
+      }
+      assert.deepEqual(await backend.validateGeneration("generation-all"), { tables: 3, rows: 4, dimensions: 4 });
+      const migratedWorkspace = await connect(join(
+        colocatedRoot, "generations", "generation-all", ".plur1bus-shared", "workspaces", workspaceKey,
+      ));
+      const migratedUser = await connect(join(
+        colocatedRoot, "generations", "generation-all", ".plur1bus-shared", "users", userKey,
+      ));
+      assert.equal(await (await migratedWorkspace.openTable("memories")).countRows(), 1);
+      assert.equal(await (await migratedUser.openTable("memories")).countRows(), 1);
+      await migratedWorkspace.close();
+      await migratedUser.close();
+    } finally {
+      await backend.close();
+      await privateTable.close();
+      await privateDb.close();
+      await workspaceTable.close();
+      await workspaceDb.close();
+      await userTable.close();
+      await userDb.close();
     }
   });
 });
