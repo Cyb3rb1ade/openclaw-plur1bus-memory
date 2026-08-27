@@ -7910,6 +7910,7 @@ const plugin = {
             api,
             getProjection: async () => buildControlPlaneProjection({
               config: cfg,
+              hooks: api.config?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {},
               capabilities: {
                 skillWorkshop: Boolean(openClawSkillWorkshop),
                 cronDispatch: cronDirectDispatchReady,

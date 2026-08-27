@@ -4,6 +4,19 @@ import { describe, it } from "node:test";
 import { buildControlPlaneProjection } from "../lib/control-plane-projection.js";
 
 describe("redacted PLUR1BUS control-plane projection", () => {
+  it("accepts OpenClaw plugin-entry hook permissions separately from pluginConfig", () => {
+    const projection = buildControlPlaneProjection({
+      config: { autoCapture: true },
+      hooks: { allowConversationAccess: true },
+    });
+
+    assert.deepStrictEqual(projection.features.autoCapture, {
+      configured: true,
+      effective: true,
+      reason: null,
+    });
+  });
+
   it("reports configured versus effective feature state with stable reasons", () => {
     const projection = buildControlPlaneProjection({
       config: {
