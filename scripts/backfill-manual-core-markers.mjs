@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 
 import { CORE_MEMORY_HALF_LIFE_DAYS, MANUAL_CORE_IMPORTANCE } from "../lib/memory-dynamics.js";
+import { safeAgentId } from "../lib/sql-safety.js";
 
 /**
  * Zeilen, die der Agent bewusst markiert hat und die den Schutz noch nicht tragen.
@@ -56,8 +57,13 @@ async function main() {
 
   const lancedb = await import("@lancedb/lancedb");
   const agents = readdirSync(baseDbPath, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && !e.name.startsWith("_"))
-    .map((e) => e.name);
+    .filter((entry) => (
+      entry.isDirectory()
+      && !entry.isSymbolicLink()
+      && !entry.name.startsWith("_")
+      && existsSync(join(baseDbPath, entry.name, "memories.lance"))
+    ))
+    .map((entry) => safeAgentId(entry.name));
 
   const report = { mode: args.apply ? "apply" : "dry-run", baseDbPath, agents: [], total: 0, failed: 0 };
 

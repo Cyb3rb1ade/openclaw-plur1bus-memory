@@ -20,6 +20,7 @@ const targetFingerprint = normalizeEmbeddingFingerprint({
 function inventory(generations = undefined) {
   return generations ?? [{
     generation: "generation-active",
+    selection: { mode: "legacy" },
     configRevision: "config-sha256-a",
     fingerprint: sourceFingerprint,
     tables: [
@@ -52,6 +53,8 @@ describe("read-only reembedding planner", () => {
 
     assert.deepStrictEqual(calls, ["inventory", "stat", "probe"]);
     assert.equal(result.plan.source.tables[0].rowCount, 17);
+    assert.deepStrictEqual(result.plan.source.selection, { mode: "legacy" });
+    assert.deepStrictEqual(result.plan.target.selection, { mode: "generation", generation: "generation-target" });
     assert.equal(result.plan.estimates.rows, 20);
     assert.equal(result.plan.target.probeStatus, "passed");
     assert.deepStrictEqual(result.plan.target.secretRef, { source: "store", provider: "lab", id: "EMBEDDING_TARGET" });

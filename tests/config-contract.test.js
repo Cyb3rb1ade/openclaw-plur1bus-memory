@@ -193,6 +193,23 @@ describe("manifest-derived configuration contract", () => {
     );
   });
 
+  it("validates the active reembedding generation as a closed atomic selection", () => {
+    const selection = {
+      activeGeneration: "generation-a",
+      fingerprintId: `embedding:v1:sha256:${"a".repeat(64)}`,
+      dimensions: 768,
+    };
+    assert.deepEqual(resolveEffectiveConfig({ reembedding: selection }).reembedding, selection);
+    for (const value of [
+      { ...selection, unknown: true },
+      { ...selection, activeGeneration: "../escape" },
+      { ...selection, fingerprintId: "moving" },
+      { ...selection, dimensions: 0 },
+    ]) {
+      assert.throws(() => validatePluginConfig({ reembedding: value }), /reembedding/);
+    }
+  });
+
   for (const forbidden of ["retroactiveInterference", "quietHours"]) {
     it(`keeps ${forbidden} schema-unreachable in B11`, () => {
       assertConfigError(

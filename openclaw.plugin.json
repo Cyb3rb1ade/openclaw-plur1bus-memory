@@ -44,7 +44,10 @@
     "autoCapture": { "label": "Automatic Capture", "help": "Capture durable memory from eligible conversations." },
     "autoRecall": { "label": "Automatic Recall", "help": "Inject relevant durable memory before an eligible turn." },
     "skillMiner.enabled": { "label": "Skill Miner", "help": "Mine proposals and hand approved skills to OpenClaw Skill Workshop." },
-    "featureCronSetup.auto": { "label": "Automatic Feature Cron Setup", "advanced": true, "help": "Create OpenClaw-native PLUR1BUS feature cron jobs." }
+    "featureCronSetup.auto": { "label": "Automatic Feature Cron Setup", "advanced": true, "help": "Create OpenClaw-native PLUR1BUS feature cron jobs." },
+    "reembedding.activeGeneration": { "label": "Active Embedding Generation", "advanced": true, "help": "Coordinator-managed immutable LanceDB generation. Do not edit without a validated migration." },
+    "reembedding.fingerprintId": { "label": "Active Embedding Fingerprint", "advanced": true, "help": "Coordinator-managed SHA-256 identity of the active vector space." },
+    "reembedding.dimensions": { "label": "Active Generation Dimensions", "advanced": true, "help": "Coordinator-managed vector dimension bound to the selected generation." }
   },
   "configSchema": {
     "$defs": {
@@ -160,6 +163,25 @@
           },
           "crossNamespaceRecall": {
             "type": "boolean"
+          }
+        }
+      },
+      "reembedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activeGeneration", "fingerprintId", "dimensions"],
+        "properties": {
+          "activeGeneration": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "fingerprintId": {
+            "type": "string",
+            "pattern": "^embedding:v1:sha256:[a-f0-9]{64}$"
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },

@@ -85,7 +85,12 @@ function diagnoseLancedb() {
   }
   let ok = true;
   const agentDirs = readdirSync(base, { withFileTypes: true })
-    .filter((d) => d.isDirectory()).map((d) => d.name);
+    .filter((entry) => (
+      entry.isDirectory()
+      && !entry.isSymbolicLink()
+      && existsSync(join(base, entry.name, "memories.lance"))
+    ))
+    .map((entry) => entry.name);
   if (agentDirs.length === 0) { console.log("  ✓ LanceDB base exists but is empty"); return true; }
 
   for (const agent of agentDirs) {
