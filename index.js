@@ -7514,6 +7514,8 @@ const plugin = {
           clearTurnRoutes: clearInitializedTurnRoutes,
           flushMetrics,
           llmResultCache,
+          embeddings,
+          reranker,
         });
 
         const runMemoryCommand = async (commandCtx, suppliedMemoryCtx = null) => {

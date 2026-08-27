@@ -16,6 +16,8 @@ function makeDependencies(overrides = {}) {
     clearTurnRoutes: async () => {},
     flushMetrics: async () => {},
     llmResultCache: { close: async () => {} },
+    embeddings: { shutdown: async () => {} },
+    reranker: { shutdown: async () => {} },
     ...overrides,
   };
 }
@@ -83,10 +85,12 @@ describe("LLM result cache lifecycle", () => {
       clearTurnRoutes: failing("routes"),
       flushMetrics: failing("metrics"),
       llmResultCache: { close: failing("cache") },
+      embeddings: { shutdown: failing("embeddings") },
+      reranker: { shutdown: failing("reranker") },
     });
     await harness.getRegistration().handler();
 
-    assert.deepStrictEqual(calls, ["adapter", "pool", "shared", "routes", "metrics", "cache"]);
+    assert.deepStrictEqual(calls, ["adapter", "pool", "shared", "routes", "metrics", "cache", "embeddings", "reranker"]);
     assert.deepStrictEqual(warnings, [
       "memory-lancedb-namespaced: adapter shutdown failed: adapter broke",
       "memory-lancedb-namespaced: pool shutdown failed: pool broke",
@@ -94,11 +98,13 @@ describe("LLM result cache lifecycle", () => {
       "memory-lancedb-namespaced: turn route shutdown failed: routes broke",
       "metrics flush failed: metrics broke",
       "memory-lancedb-namespaced: LLM result cache shutdown failed: cache broke",
+      "memory-lancedb-namespaced: embedding provider shutdown failed: embeddings broke",
+      "memory-lancedb-namespaced: reranker shutdown failed: reranker broke",
     ]);
   });
 
   it("wires the real plugin dependencies into the shutdown boundary", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
-    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,?\s*\}\);/s);
+    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*embeddings,\s*reranker,?\s*\}\);/s);
   });
 });
