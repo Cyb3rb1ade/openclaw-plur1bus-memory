@@ -63,6 +63,7 @@ function makeMockApi(baseDbPath, overrides = {}) {
       services.push(service);
     },
     async shutdown() {
+      await this.emit("gateway_stop");
       await Promise.all(services.map((service) => service?.stop?.()));
     },
   };
@@ -73,6 +74,15 @@ function trackApi(t, api) {
     await api.shutdown();
   });
   return api;
+}
+
+function emptyQueryTable() {
+  const builder = {
+    where() { return builder; },
+    limit() { return builder; },
+    async toArray() { return []; },
+  };
+  return { query: () => builder };
 }
 
 async function loadFreshPlugin() {
@@ -232,21 +242,23 @@ describe("auto-capture uses embedBatch when available", () => {
     const firstStoreStarted = deferred();
     const secondStoreStarted = deferred();
     const pluginModule = await loadFreshPluginModule();
-    const warmDb = new pluginModule.MemoryDB(join(basePath, "capture-settlement-agent"), VECTOR_DIM);
-    await warmDb.init();
-    await warmDb.shutdown();
     const originalStore = pluginModule.MemoryDB.prototype.store;
-    let storeCalls = 0;
+    const originalSearch = pluginModule.MemoryDB.prototype.search;
+    let firstStoreCalls = 0;
+    let secondStoreCalls = 0;
     let rawActive = 0;
     let rawMaxActive = 0;
     let firstRun;
     let secondRun;
 
-    pluginModule.MemoryDB.prototype.store = function controlledTimedStore() {
-      storeCalls += 1;
-      const call = storeCalls;
-      const gate = call === 1 ? firstStoreGate : secondStoreGate;
-      const started = call === 1 ? firstStoreStarted : secondStoreStarted;
+    pluginModule.MemoryDB.prototype.store = function controlledTimedStore(entry) {
+      const firstTurn = entry?.sourceTurnId === "turn-b3-store-timeout-1";
+      const secondTurn = entry?.sourceTurnId === "turn-b3-store-timeout-2";
+      if (!firstTurn && !secondTurn) throw new Error("unexpected capture turn in settlement test");
+      if (firstTurn) firstStoreCalls += 1;
+      if (secondTurn) secondStoreCalls += 1;
+      const gate = firstTurn ? firstStoreGate : secondStoreGate;
+      const started = firstTurn ? firstStoreStarted : secondStoreStarted;
       const rawStore = (async () => {
         rawActive += 1;
         rawMaxActive = Math.max(rawMaxActive, rawActive);
@@ -257,13 +269,17 @@ describe("auto-capture uses embedBatch when available", () => {
           rawActive -= 1;
         }
       })();
-      return call === 1 ? withTimeout(rawStore, 20, "MemoryDB.store") : rawStore;
+      return firstTurn ? withTimeout(rawStore, 20, "MemoryDB.store") : rawStore;
+    };
+    pluginModule.MemoryDB.prototype.search = async function emptyDedupSearch() {
+      return [];
     };
     t.after(async () => {
       firstStoreGate.resolve();
       secondStoreGate.resolve();
       await Promise.allSettled([firstRun, secondRun].filter(Boolean));
       pluginModule.MemoryDB.prototype.store = originalStore;
+      pluginModule.MemoryDB.prototype.search = originalSearch;
     });
 
     const api = trackApi(t, makeMockApi(basePath, {
@@ -292,7 +308,8 @@ describe("auto-capture uses embedBatch when available", () => {
       sleep(250).then(() => false),
     ]);
     assert.equal(secondStartedBeforeSettlement, false, "the second capture must not reach its store before first settlement");
-    assert.equal(storeCalls, 1, "a second same-agent capture must remain queued while the first raw store is active");
+    assert.equal(firstStoreCalls, 1, "the first turn must have exactly one active raw store");
+    assert.equal(secondStoreCalls, 0, "a second same-agent capture must remain queued while the first raw store is active");
     assert.equal(rawActive, 1);
     assert.equal(rawMaxActive, 1);
     assert.equal(firstResults[0]?.timedOut, true, "the scheduler should still return its prompt timeout");
@@ -319,20 +336,18 @@ describe("auto-capture uses embedBatch when available", () => {
     const reminderStarted = deferred();
     const secondStoreStarted = deferred();
     const pluginModule = await loadFreshPluginModule();
-    const warmDb = new pluginModule.MemoryDB(join(basePath, "reminder-settlement-agent"), VECTOR_DIM);
-    await warmDb.init();
-    await warmDb.shutdown();
     const originalStore = pluginModule.MemoryDB.prototype.store;
-    let normalStoreCalls = 0;
+    const originalSearch = pluginModule.MemoryDB.prototype.search;
+    let firstNormalStoreCalls = 0;
+    let secondStoreCalls = 0;
     let trackedActive = 0;
     let trackedMaxActive = 0;
     let firstRun;
     let secondRun;
 
     pluginModule.MemoryDB.prototype.store = function controlledReminderStore(entry) {
-      if (entry?.memoryKind !== "reminder") {
-        normalStoreCalls += 1;
-        if (normalStoreCalls === 1) return Promise.resolve();
+      if (entry?.sourceTurnId === "turn-b3-reminder-timeout-2") {
+        secondStoreCalls += 1;
         const rawSecondStore = (async () => {
           trackedActive += 1;
           trackedMaxActive = Math.max(trackedMaxActive, trackedActive);
@@ -344,6 +359,15 @@ describe("auto-capture uses embedBatch when available", () => {
           }
         })();
         return rawSecondStore;
+      }
+
+      if (entry?.memoryKind !== "reminder") {
+        if (entry?.sourceTurnId !== "turn-b3-reminder-timeout-1") {
+          throw new Error("unexpected capture turn in reminder settlement test");
+        }
+        firstNormalStoreCalls += 1;
+        this.table = emptyQueryTable();
+        return Promise.resolve();
       }
 
       const rawReminderStore = (async () => {
@@ -358,11 +382,15 @@ describe("auto-capture uses embedBatch when available", () => {
       })();
       return withTimeout(rawReminderStore, 20, "MemoryDB.store:reminder");
     };
+    pluginModule.MemoryDB.prototype.search = async function emptyDedupSearch() {
+      return [];
+    };
     t.after(async () => {
       reminderGate.resolve();
       secondStoreGate.resolve();
       await Promise.allSettled([firstRun, secondRun].filter(Boolean));
       pluginModule.MemoryDB.prototype.store = originalStore;
+      pluginModule.MemoryDB.prototype.search = originalSearch;
       LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
     });
 
@@ -392,7 +420,8 @@ describe("auto-capture uses embedBatch when available", () => {
       sleep(250).then(() => false),
     ]);
     assert.equal(secondStartedBeforeSettlement, false, "the next capture must not reach its store before reminder settlement");
-    assert.equal(normalStoreCalls, 1, "the next same-agent capture must remain queued behind the reminder mutation");
+    assert.ok(firstNormalStoreCalls >= 1, "the first turn must reach its normal memory store before the reminder");
+    assert.equal(secondStoreCalls, 0, "the next same-agent capture must remain queued behind the reminder mutation");
     assert.equal(trackedActive, 1);
     assert.equal(trackedMaxActive, 1);
     assert.equal(firstResults[0]?.timedOut, true, "a pending reminder mutation should preserve prompt timeout behavior");
