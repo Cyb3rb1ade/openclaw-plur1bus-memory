@@ -50,8 +50,10 @@ import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
 import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
+import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
+import { buildControlPlaneProjection } from "./lib/control-plane-projection.js";
 import {
   createWorkspacePolicyGuard,
   guardWorkspaceTools,
@@ -7622,6 +7624,41 @@ const plugin = {
         } else {
           api.logger?.warn?.(
             "memory-lancedb-namespaced: OpenClaw workspace policy RPC/CLI capabilities unavailable; runtime controls are disabled",
+          );
+        }
+
+        if (typeof api.registerGatewayMethod === "function") {
+          registerControlUiRuntime({
+            api,
+            getProjection: async () => buildControlPlaneProjection({
+              config: cfg,
+              capabilities: {
+                skillWorkshop: Boolean(openClawSkillWorkshop),
+                cronDispatch: cronDirectDispatchReady,
+              },
+              providers: {
+                embedding: {
+                  provider: normalizedEmbeddingCfg.provider,
+                  model: normalizedEmbeddingCfg.model,
+                  revision: normalizedEmbeddingCfg.local?.revision,
+                  dimensions: dimensions || vectorDim,
+                },
+                reranker: reranker
+                  ? {
+                      provider: rerankerCfg.provider,
+                      model: reranker.model || rerankerCfg.model,
+                      revision: rerankerCfg.local?.revision || rerankerCfg.fallbackRevision,
+                    }
+                  : null,
+              },
+              namespaces: namespaceLayout.mode === "named"
+                ? namespaceLayout.recallReadNamespaces.map((id) => ({ id, dimensions: vectorDim }))
+                : [{ id: "legacy-flat", dimensions: vectorDim }],
+            }),
+          });
+        } else {
+          api.logger?.warn?.(
+            "memory-lancedb-namespaced: OpenClaw control status Gateway capability unavailable",
           );
         }
 
