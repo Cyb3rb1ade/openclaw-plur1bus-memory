@@ -65,6 +65,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   die erste explizite, ausfuehrbare `openclaw`-Installation im Prozess-`PATH`
   auf, validiert deren Paketmanifest und importiert weiterhin ausschliesslich
   den oeffentlichen `openclaw/plugin-sdk/gateway-runtime`-Export.
+- **Modellressourcen ueberleben keinen Gateway-Reload mehr.** Lokale
+  Transformers.js-Embedding- und Reranker-Pipelines werden beim
+  `gateway_stop` ueber `dispose()` freigegeben; persistente Embedding-Caches
+  werden geschlossen. Auch verkettete Primary-/Fallback-Reranker und der
+  OpenAI-Embedding-Cache besitzen einen idempotenten Shutdown. Dadurch haelt
+  ein Beta-3-In-Process-Reload keine alte ONNX-Pipeline neben der neu geladenen
+  Instanz im Speicher; ein fehlgeschlagener Modellimport bleibt erneut
+  versuchbar.
 
 ## [7.4.10] — 2026-08-26
 
