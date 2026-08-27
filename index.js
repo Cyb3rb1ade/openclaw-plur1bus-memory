@@ -49,7 +49,13 @@ import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryI
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
 import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
+import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
+import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
+import {
+  createWorkspacePolicyGuard,
+  guardWorkspaceTools,
+} from "./lib/workspace-policy-guard.js";
 import {
   isGuardedDirectFeatureCronMessage,
   planUnsafeDirectCronDisables,
@@ -4591,6 +4597,32 @@ const plugin = {
       const turnRoutes = await turnRouteState.initPromise;
       turnRoutes?.clear();
     } : null;
+    const workspacePolicyStore = createWorkspacePolicyStore({
+      stateRoot: baseDbPath,
+      logger: api.logger,
+    });
+    const workspacePolicyGuard = createWorkspacePolicyGuard({
+      store: workspacePolicyStore,
+      invalidate: async () => {
+        await clearInitializedTurnRoutes?.();
+      },
+    });
+    const automaticWorkspacePolicyDecision = (event = {}, ctx = {}) => {
+      try {
+        const memoryCtx = resolveMemoryRequestContext({
+          agentId: ctx?.agentId ?? event?.agentId,
+          workspaceDir: ctx?.workspaceDir ?? event?.workspaceDir,
+          workspaceKey: ctx?.workspaceKey ?? event?.workspaceKey,
+          workspaceId: ctx?.workspaceId ?? event?.workspaceId,
+          sessionKey: ctx?.sessionKey ?? event?.sessionKey,
+          sessionId: ctx?.sessionId ?? event?.sessionId,
+        }, { workspaceAliases: memoryWorkspaceAliases });
+        return workspacePolicyGuard.automatic(memoryCtx);
+      } catch (error) {
+        api.logger?.debug?.(`memory-lancedb-namespaced: workspace policy context unavailable: ${String(error)}`);
+        return { allowed: false, reason: "workspace_identity_required" };
+      }
+    };
     const neoWorkerRuntime = neoEnabled
       ? createNeoWorkerRuntime({ logger: api.logger })
       : null;
@@ -5930,10 +5962,43 @@ const plugin = {
             const sub = tokens[1] || "";
             const id = tokens[2] || "";
 
+            if (actionKey === "workspace") {
+              const memoryCtx = await resolveRegisteredMemoryContext(commandCtx, { requireWorkspace: true });
+              const subKey = sub.toLowerCase() || "status";
+              if (!["status", "enable", "disable"].includes(subKey)) {
+                return { text: "Usage: /plur1bus workspace status|enable|disable <expected-revision>" };
+              }
+              const denied = await checkAuth(
+                memoryCtx,
+                subKey === "status"
+                  ? { chatKind: memoryCtx.chatKind }
+                  : { destructive: true, chatKind: memoryCtx.chatKind },
+                commandCtx,
+              );
+              if (denied) return denied;
+              if (subKey === "status") {
+                return formatJsonCommandResult({ policy: workspacePolicyGuard.decision(memoryCtx).policy });
+              }
+              const expectedRevision = Number(id);
+              if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+                return { text: "A non-negative expected policy revision is required. Run /plur1bus workspace status first." };
+              }
+              const policy = await workspacePolicyGuard.set({
+                memoryCtx,
+                enabled: subKey === "enable",
+                expectedRevision,
+                actorId: memoryCtx.userPrincipal || `user:${memoryCtx.userId}`,
+              });
+              return formatJsonCommandResult({ policy });
+            }
+
             // Obsidian is an explicit B14 boundary. Its command-specific
             // authorization remains delegated unchanged to its own handler.
             if (actionKey === "obsidian" || obsidianActionNames.has(actionKey)) {
               const obsidianMemoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+              if (!workspacePolicyGuard.decision(obsidianMemoryCtx).allowed) {
+                return { text: "PLUR1BUS is disabled for this workspace." };
+              }
               let commandStore = null;
               const getObsidianCommandStore = () => {
                 if (!commandStore) {
@@ -6067,6 +6132,20 @@ const plugin = {
             const memoryCtx = cronInternal
               ? await resolveCronMemoryContext(commandCtx)
               : await resolveRegisteredMemoryContext(commandCtx);
+            const workspacePolicyDecision = workspacePolicyGuard.decision(memoryCtx);
+            if (!workspacePolicyDecision.allowed) {
+              if (actionKey === "internal") {
+                return {
+                  text: "NO_REPLY",
+                  metadata: { skipped: true, reason: "workspace_disabled" },
+                };
+              }
+              return formatJsonCommandResult({
+                ok: false,
+                reason: "workspace_disabled",
+                policy: workspacePolicyDecision.policy,
+              });
+            }
             if (actionKey === "internal") {
               if (!isCronCommandContext(commandCtx)) {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
@@ -7502,6 +7581,41 @@ const plugin = {
           requireUser: options.requireUser === true,
         });
 
+        const resolveSessionPolicyMemoryContext = async ({ sessionKey, agentId: suppliedAgentId }) => {
+          const routingCapability = await hostRoutingLoader();
+          const parsed = routingCapability.parseAgentSessionKey(sessionKey);
+          const agentId = safeAgentId(parsed?.agentId || suppliedAgentId || "");
+          const sessionEntry = api.runtime.agent.session.getSessionEntry({
+            agentId,
+            sessionKey,
+            readConsistency: "latest",
+          });
+          const workspaceDir = sessionEntry?.spawnedWorkspaceDir
+            || sessionEntry?.worktree?.canonicalWorkspaceDir
+            || await api.runtime.agent.resolveAgentWorkspaceDir(api.config, agentId);
+          return resolveMemoryRequestContext({
+            agentId,
+            sessionKey,
+            workspaceDir,
+          }, {
+            requireWorkspace: true,
+            workspaceAliases: memoryWorkspaceAliases,
+          });
+        };
+
+        if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
+          registerWorkspacePolicyRuntime({
+            api,
+            store: workspacePolicyStore,
+            guard: workspacePolicyGuard,
+            resolveSessionMemoryContext: resolveSessionPolicyMemoryContext,
+          });
+        } else {
+          api.logger?.warn?.(
+            "memory-lancedb-namespaced: OpenClaw workspace policy RPC/CLI capabilities unavailable; runtime controls are disabled",
+          );
+        }
+
         registerGatewayShutdown(api, {
           memoryDbAdapter,
           pool: {
@@ -8197,6 +8311,7 @@ const plugin = {
         } catch (err) {
           api.logger?.debug?.(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
         }
+        if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
@@ -8995,6 +9110,7 @@ const plugin = {
       api.on("agent_end", (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
         if (background || !ctx?.workspaceDir) return;
+        if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return;
         const assistantText = lastMessageText(event.messages || [], ["assistant"]);
         if (!assistantText) return;
         try {
@@ -9187,7 +9303,7 @@ const plugin = {
         description: "Alias for memory_recall. Uses the same PLUR1BUS LanceDB vector search and reranked recall pipeline; Obsidian records are not a recall authority.",
       };
 
-      return [
+      const workspaceTools = [
         recallTool,
         searchTool,
         {
@@ -9802,6 +9918,7 @@ const plugin = {
           },
         },
       ];
+      return guardWorkspaceTools(workspaceTools, workspacePolicyGuard.decision(memoryCtx));
     }, {
       names: ["memory_recall", "memory_search", "memory_store", "memory_forget", "knowledge_update"],
     });
@@ -9853,6 +9970,7 @@ const plugin = {
       api.on("before_prompt_build", async (event, ctx) => {
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
         if (!ctx?.workspaceDir || !event?.prompt || skipInternalRecall) return;
+        if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return;
         try {
           await completePendingReplyOutcomes(ctx.workspaceDir, {
             agentId: ctx?.agentId || "default",
@@ -9892,6 +10010,7 @@ const plugin = {
       api.on("before_prompt_build", async (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
+        if (ctx?.workspaceDir && !automaticWorkspacePolicyDecision(event, ctx).allowed) return undefined;
         const agentIdForCache = ctx?.agentId || "default";
         const sessionKeyForCache = ctx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
         const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
@@ -9935,6 +10054,7 @@ const plugin = {
               sessionKey: ctx?.sessionKey ?? event?.sessionKey,
               sessionId: ctx?.sessionId ?? event?.sessionId,
             }, { workspaceAliases: memoryWorkspaceAliases });
+        if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
         let neoContext = "";
         if (neoEnabled) {
           try {
@@ -10876,6 +10996,7 @@ const plugin = {
       // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.
       api.on("before_prompt_build", async (_event, ctx) => {
         const agentId = ctx?.agentId;
+        if (!automaticWorkspacePolicyDecision(_event, ctx).allowed) return undefined;
         if (neoEnabled) {
           try {
             const neoStore = getNeoStore(ctx, _event);

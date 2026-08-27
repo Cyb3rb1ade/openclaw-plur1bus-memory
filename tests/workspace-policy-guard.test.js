@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { createWorkspacePolicyStore } from "../lib/workspace-policy.js";
 import {
   createWorkspacePolicyGuard,
+  guardWorkspaceTools,
   workspaceDisabledResult,
 } from "../lib/workspace-policy-guard.js";
 
@@ -78,5 +79,22 @@ describe("workspace policy guard", () => {
       () => guard.requireEnabled({ agentId: "agent-a" }),
       (error) => error?.code === "workspace_identity_required",
     );
+  });
+
+  it("preserves tool metadata while preventing disabled execution", async () => {
+    let executions = 0;
+    const guarded = guardWorkspaceTools([{
+      name: "memory_store",
+      description: "store",
+      parameters: { type: "object" },
+      async execute() { executions += 1; return { content: [] }; },
+    }], { allowed: false, policy: { ...context, enabled: false, revision: 1 } });
+    assert.equal(guarded[0].name, "memory_store");
+    assert.equal(guarded[0].description, "store");
+    assert.deepStrictEqual(await guarded[0].execute("call", { text: "secret" }), {
+      content: [{ type: "text", text: "PLUR1BUS is disabled for this workspace." }],
+      details: { action: "rejected", reason: "workspace_disabled" },
+    });
+    assert.equal(executions, 0);
   });
 });
