@@ -82,6 +82,26 @@ describe("OpenClaw memory embedding provider adapters", () => {
     assert.match(messages.info[0], /registerEmbeddingProvider.*unavailable/i);
   });
 
+  it("exposes the Beta-3 close contract for the native local provider", async () => {
+    const resources = [];
+    const localModelGeneration = {
+      registerResource(resource, label) { resources.push([resource, label]); },
+      async beforeAcquire() {},
+    };
+    const adapter = createOpenClawMemoryEmbeddingProviderAdapters({}, { localModelGeneration })
+      .find((item) => item.id === "plur1bus-e5-small");
+    const created = await adapter.create({
+      config: {},
+      model: "intfloat/multilingual-e5-small",
+      local: {},
+    });
+
+    assert.equal(typeof created.provider.close, "function");
+    assert.deepEqual(resources, [], "OpenClaw owns adapter-provider close and reuse across plugin registries");
+    await created.provider.close();
+    await created.provider.close();
+  });
+
   it("rejects remote embedding vectors with the wrong dimension", async () => {
     globalThis.fetch = jsonFetch({ data: [{ embedding: [0.1, 0.2] }] });
     const provider = await createCompatibleProvider(3);

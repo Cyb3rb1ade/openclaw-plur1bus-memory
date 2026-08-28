@@ -130,6 +130,7 @@ import { createDbAdapter } from "./lib/db-adapter.js";
 import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
 import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
 import {
+  createLocalModelGenerationLifecycle,
   registerGatewayShutdown,
   startModelPreparationAfterLifecycle,
 } from "./lib/runtime-shutdown.js";
@@ -4120,7 +4121,17 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
 // searchCanonical, runRecallPipeline kommen jetzt aus lib/recall-pipeline.js.
 // stripFrontmatter, buildFrontmatter, withFrontmatter aus lib/frontmatter.js.
 
-function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null, { credentialResolver } = {}) {
+/**
+ * Create the configured runtime reranker and bind local models to the host generation lifecycle.
+ * @param {object} [rawRerankerCfg] Reranker configuration.
+ * @param {object|null} [logger] OpenClaw logger.
+ * @param {{credentialResolver?: Function, localModelGeneration?: object}} [runtimeOptions] Runtime dependencies.
+ * @returns {{reranker: object|null, rerankerCfg: object}} Provider and normalized configuration.
+ */
+function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null, {
+  credentialResolver,
+  localModelGeneration = null,
+} = {}) {
   const rerankerCfg = normalizeRerankerConfig(rawRerankerCfg || {});
   let reranker = null;
   if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
@@ -4132,6 +4143,7 @@ function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null, { cre
         revision: rerankerCfg.fallbackRevision,
         cacheDir: rerankerCfg.fallbackCacheDir,
         logger,
+        localModelGeneration,
       });
       reranker = new ChainedRerankerProvider(primary, fallback, logger);
     } else {
@@ -4141,6 +4153,7 @@ function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null, { cre
     const primary = new LocalTransformersRerankerProvider({
       ...(rerankerCfg.local || rerankerCfg),
       logger,
+      localModelGeneration,
     });
     if (rerankerCfg.fallbackOnError !== false && rerankerCfg.fallbackProvider === "local-transformers") {
       if (rerankerCfg.fallbackModel === primary.model) {
@@ -4151,6 +4164,7 @@ function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null, { cre
         revision: rerankerCfg.fallbackRevision,
         cacheDir: rerankerCfg.fallbackCacheDir,
         logger,
+        localModelGeneration,
       });
       reranker = new ChainedRerankerProvider(primary, fallback, logger);
     } else {
@@ -4368,6 +4382,13 @@ const plugin = {
     const rawPluginConfig = api.pluginConfig || {};
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
+    const localModelGeneration = createLocalModelGenerationLifecycle({
+      enabled: typeof api.runtime?.config?.current === "function"
+        && (
+          typeof api.lifecycle?.registerRuntimeLifecycle === "function"
+          || typeof api.registerRuntimeLifecycle === "function"
+        ),
+    });
     const credentialResolver = createConfiguredSecretInputResolver({
       getConfig: () => api.runtime?.config?.current?.() || api.config || {},
     });
@@ -5191,6 +5212,7 @@ const plugin = {
           embeddingCacheMaxBytes: cfg.runtime?.embeddingCacheMaxBytes,
           cacheBasePath: baseDbPath,
           logger: api.logger,
+          localModelGeneration,
         })
       : new OpenAIEmbeddingProvider({
           ...normalizedEmbeddingCfg,
@@ -5262,6 +5284,7 @@ const plugin = {
           acceptNonCommercialLicense: nonCommercialModelAccepted,
           embeddingCacheEnabled: false,
           logger: api.logger,
+          localModelGeneration,
         });
       }
       return new OpenAIEmbeddingProvider({
@@ -5462,7 +5485,7 @@ const plugin = {
     const { reranker, rerankerCfg } = createRuntimeRerankerProvider(
       cfg.reranker || {},
       api.logger,
-      { credentialResolver },
+      { credentialResolver, localModelGeneration },
     );
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
     const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
@@ -11725,6 +11748,7 @@ const plugin = {
       reranker,
       modelPreparationCoordinator,
       reembeddingCoordinator,
+      localModelGeneration,
     });
     startModelPreparationAfterLifecycle(api, {
       lifecycleRegistered: gatewayShutdownRegistered,
