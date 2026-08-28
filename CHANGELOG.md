@@ -73,6 +73,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   ein Beta-3-In-Process-Reload keine alte ONNX-Pipeline neben der neu geladenen
   Instanz im Speicher; ein fehlgeschlagener Modellimport bleibt erneut
   versuchbar.
+- **Modellabhaengige Embedding-Dimensionen.** Die Operator-Ansicht zeigt fuer
+  OpenAI `text-embedding-3-small` und `text-embedding-3-large` sichere Presets
+  samt zulaessigem Bereich, fuer das gepinnte lokale E5-Modell ausschliesslich
+  die feste reale Breite 384 und fuer unbekannte OpenAI-kompatible Modelle nur
+  einen erforderlichen Runtime-Probe-Hinweis. Unmoegliche bekannte
+  Dimensionen werden vor Provider- oder Datenbankzugriff abgelehnt; jeder
+  Re-Embedding-Lauf validiert weiterhin den tatsaechlich gelieferten Vektor.
+  JinaAI und BGE bleiben davon getrennte Reranker ohne Memory-Vektordimension.
 
 ## [7.4.10] — 2026-08-26
 

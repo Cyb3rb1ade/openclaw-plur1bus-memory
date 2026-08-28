@@ -132,6 +132,22 @@ keine von Transformers.js ladbare ONNX-Datei veröffentlicht. Ein Jina-Fehler
 wechselt nur dann kontrolliert zu BGE, wenn der oben gezeigte freie Fallback
 explizit konfiguriert ist.
 
+### Embedding-Dimensionen
+
+Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer
+`text-embedding-3-small` sind 1 bis 1536 Dimensionen und fuer
+`text-embedding-3-large` 1 bis 3072 Dimensionen zulaessig; die Ansicht bietet
+dafuer bewaehrte Presets und markiert die jeweilige Standardbreite. Das lokale
+`intfloat/multilingual-e5-small` liefert fest 384 Dimensionen. JinaAI und BGE
+sind Reranker und besitzen keine Memory-Vektordimension.
+
+Die Auswahl in der externen Beta-3-Plugin-Registerkarte ist eine lesende
+Planungshilfe. Ein Dimensionswechsel wird ausschliesslich ueber den bestaetigten
+Re-Embedding-Adminpfad angewendet. Unbekannte OpenAI-kompatible Modelle erhalten
+keine erratene Auswahlliste; fuer sie sind eine explizite Dimension und die
+Validierung eines real gelieferten Vektors erforderlich. Auch bekannte Modelle
+werden vor dem Umschalten durch eine echte Providerantwort validiert.
+
 ---
 
 ## B13 Shared-Memory-Routen und Hook-Grenze

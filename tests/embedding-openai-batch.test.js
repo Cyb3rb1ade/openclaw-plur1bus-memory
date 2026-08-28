@@ -96,6 +96,19 @@ describe("OpenAIEmbeddingProvider embedBatch", () => {
     assert.deepStrictEqual(vectors[1], [0.4, 0.5, 0.6]);
   });
 
+  it("does not send the v3-only dimensions parameter to a fixed-width legacy model", () => {
+    const provider = new OpenAIEmbeddingProvider({
+      model: "text-embedding-ada-002",
+      dimensions: 1536,
+      apiKey: "test-key",
+    });
+    assert.deepStrictEqual(provider._buildRequest("text-embedding-ada-002", "legacy"), {
+      model: "text-embedding-ada-002",
+      input: "legacy",
+      encoding_format: "float",
+    });
+  });
+
   it("embed(text) remains compatible and returns a single vector", async () => {
     const provider = new OpenAIEmbeddingProvider({ model: "text-embedding-3-small", dimensions: 3, apiKey: "test-key" });
     provider._client = {

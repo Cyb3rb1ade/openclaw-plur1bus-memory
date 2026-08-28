@@ -257,7 +257,7 @@ import { ContradictionDetector } from "./lib/contradiction-detector.js";
 import { runOverlayAuditCommand } from "./lib/overlay-commands.js";
 import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
 import { applyLegacyProviderDefaults } from "./lib/providers/legacy-provider-migration.js";
-import { DEFAULT_LOCAL_MODEL_CACHE, DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
+import { DEFAULT_LOCAL_MODEL_CACHE, DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL, embeddingDimensionProfiles } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
 import {
@@ -8175,6 +8175,11 @@ const plugin = {
                       }
                     : null,
                 },
+                embeddingDimensionProfiles: embeddingDimensionProfiles({
+                  provider: normalizedEmbeddingCfg.provider,
+                  model: normalizedEmbeddingCfg.model,
+                  dimensions: dimensions || vectorDim,
+                }),
                 namespaces: namespaceLayout.mode === "named"
                   ? namespaceLayout.recallReadNamespaces.map((id) => ({ id, dimensions: vectorDim }))
                   : [{ id: "legacy-flat", dimensions: vectorDim }],
