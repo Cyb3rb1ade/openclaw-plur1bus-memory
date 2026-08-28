@@ -16,6 +16,7 @@ import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
 import { recordOwnedVaultConfirmation } from "../lib/obsidian-vault-authority.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { safeProfile } from "../lib/setup/feature-profiles.js";
+import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 const VECTOR_DIM = 384;
@@ -128,6 +129,33 @@ async function seedMemory(pluginModule, baseDbPath, agentId, overrides = {}) {
     await db.table.update({ where: `id = "${id}"`, values: { type: "" } });
   }
   await db.shutdown();
+}
+
+async function seedWorkspaceMemory(pluginModule, baseDbPath, requestContext, agentId, overrides = {}) {
+  const pool = new SharedMemoryPool(baseDbPath, VECTOR_DIM, pluginModule.AgentDbPool);
+  const id = overrides.id || "11111111-1111-4111-8111-111111111111";
+  try {
+    await pool.withWorkspaceDb(requestContext, async (db) => {
+      await db.init();
+      await db.store({
+        id,
+        text: overrides.text || "Projekt Alpha nutzt den Auth-Service intern.",
+        vector: makeVector(),
+        category: overrides.category || "fact",
+        createdAt: Date.now(),
+        storedBy: agentId,
+        origin: overrides.origin || "dm",
+        epistemicStatus: overrides.epistemicStatus || "",
+        type: overrides.type || "",
+        status: "active",
+        scope: "workspace",
+        workspaceId: requestContext.workspaceIdentity,
+        workspaceKey: requestContext.workspaceIdentity,
+      });
+    });
+  } finally {
+    await pool.shutdown();
+  }
 }
 
 async function readMemory(pluginModule, baseDbPath, agentId, id) {
@@ -873,14 +901,11 @@ test("Skill Miner uses its feature-local native default through the command runt
   const globalCalls = [];
   const sessionCalls = [];
   const pluginModule = await loadFreshPlugin();
-  await seedMemory(pluginModule, baseDbPath, agentId, {
+  await seedWorkspaceMemory(pluginModule, baseDbPath, workspaceContext, agentId, {
     id: "33333333-3333-4333-8333-333333333333",
     text: "Always verify deployment checks before publishing releases.",
     origin: "dm",
     epistemicStatus: "trusted",
-    scope: "workspace",
-    workspaceId: workspaceContext.workspaceIdentity,
-    workspaceKey: workspaceContext.workspaceIdentity,
   });
   const api = createApi(baseDbPath, {
     merging: { enabled: true, model: "foreign/merging-model" },

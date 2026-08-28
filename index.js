@@ -6648,7 +6648,7 @@ const plugin = {
                     && dailyPartition.workspaceIdentity === memoryCtx.workspaceIdentity
                     ? memoryCtx.workspaceDir
                     : dailyStore.paths.workspaceDir;
-                  const partitionResult = await pool.withDb(internalAgent, async (rawDb) => {
+                  const runDailyPartition = async (rawDb) => {
                     await rawDb.init();
                     return runDailyConsolidation(
                       createPartitionScopedDb(rawDb, dailyPartition, memoryCtx),
@@ -6676,7 +6676,12 @@ const plugin = {
                         embeddings,
                       },
                     );
-                  });
+                  };
+                  const partitionResult = dailyPartition.scope === "workspace"
+                    ? await sharedMemoryPool.withWorkspaceDb(memoryCtx, runDailyPartition)
+                    : dailyPartition.scope === "user"
+                      ? await sharedMemoryPool.withUserDb(memoryCtx, runDailyPartition)
+                      : await pool.withDb(internalAgent, runDailyPartition);
                   dailyRuns.push({ scope: dailyPartition.scope, result: partitionResult });
                 }
                 const result = {
@@ -6784,7 +6789,7 @@ const plugin = {
                     remAclPartition.scope,
                     remOutputRoot,
                   );
-                  const partitionResult = await pool.withDb(internalAgent, async (db) => {
+                  const runRemPartition = async (db) => {
                     await db.init();
                     return runRemDream({
                       db,
@@ -6812,7 +6817,12 @@ const plugin = {
                       workspaceDir: remTarget.workspaceDir,
                       temperamentName: resolveTemperamentName(internalAgent),
                     });
-                  });
+                  };
+                  const partitionResult = remAclPartition.scope === "workspace"
+                    ? await sharedMemoryPool.withWorkspaceDb(memoryCtx, runRemPartition)
+                    : remAclPartition.scope === "user"
+                      ? await sharedMemoryPool.withUserDb(memoryCtx, runRemPartition)
+                      : await pool.withDb(internalAgent, runRemPartition);
                   if (partitionResult.report) {
                     writeRemDreamToVault(partitionResult.report, partitionResult.trends, remTarget);
                   }
@@ -6868,7 +6878,7 @@ const plugin = {
                     ? memoryCtx.workspaceDir
                     : skillStore.paths.workspaceDir;
                   try {
-                    const result = await pool.withDb(internalAgent, async (rawDb) => {
+                    const runSkillMinerPartition = async (rawDb) => {
                       await rawDb.init();
                       return runSkillMiner(rawDb, internalAgent, {
                         logger: api.logger,
@@ -6893,7 +6903,24 @@ const plugin = {
                         minConfidence: skillMinerCfg.minConfidence ?? 0.6,
                         minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
                       });
+                    };
+                    const missingSharedPartition = (reason) => ({
+                      timestamp: new Date().toISOString(),
+                      agent: internalAgent,
+                      skipped: true,
+                      reason,
                     });
+                    const result = skillAclPartition.scope === "workspace"
+                      ? await sharedMemoryPool.withWorkspaceReadDb(memoryCtx, async (rawDb) => {
+                        if (!rawDb) return missingSharedPartition("shared_workspace_absent");
+                        return runSkillMinerPartition(rawDb);
+                      })
+                      : skillAclPartition.scope === "user"
+                        ? await sharedMemoryPool.withUserReadDb(memoryCtx, async (rawDb) => {
+                          if (!rawDb) return missingSharedPartition("shared_user_absent");
+                          return runSkillMinerPartition(rawDb);
+                        })
+                        : await pool.withDb(internalAgent, runSkillMinerPartition);
                     skillRuns.push({ scope: skillAclPartition.scope, result });
                   } catch {
                     api.logger?.warn?.(`plur1bus internal skill-miner[${internalAgent}/${skillAclPartition.scope}] partition failed`);
