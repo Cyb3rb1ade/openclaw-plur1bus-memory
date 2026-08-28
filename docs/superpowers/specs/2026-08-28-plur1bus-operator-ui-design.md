@@ -99,7 +99,15 @@ performing a hidden write.
 
 The HTML renderer uses only escaped, server-rendered values and local CSS. It
 does not use JavaScript, forms, `fetch`, external assets, inline event
-handlers, or user-controlled URLs. It retains:
+handlers, or user-controlled URLs. Beta-3 embeds an external tab with an
+opaque `allow-scripts` sandbox origin and does not expose a credentialed CORS
+read bridge. Rather than weaken that boundary for Ajax, an active durable
+re-embedding state (`running`, `validating`, `switching`, or `rolling_back`)
+receives a five-second document refresh. Each refresh is the same signed,
+read-only `GET`; reopening the tab independently reads the persisted
+migration checkpoint. Terminal and waiting states do not refresh. The page
+renders a native progress element, current copied/total card count, and a
+manual refresh link. It retains:
 
 - `Cache-Control: no-store, max-age=0`;
 - `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline';
@@ -130,6 +138,8 @@ Unit and packed-runtime validation prove:
   schema-v1 consumers where applicable;
 - cards, workspace matrix, storage, health state, and migration steps are
   rendered without secrets or content;
+- an active migration renders its persisted checkpoint and a five-second
+  read-only refresh, while a terminal migration does not refresh;
 - a disabled workspace appears as an override while the default remains on;
 - every feature card explains dependency state and safe write route;
 - all iframe mutation verbs remain `405`;
@@ -138,4 +148,3 @@ Unit and packed-runtime validation prove:
   a table or write a card;
 - typed policy actions, re-embedding RPC, Config, and Secrets paths remain the
   only mutation routes.
-

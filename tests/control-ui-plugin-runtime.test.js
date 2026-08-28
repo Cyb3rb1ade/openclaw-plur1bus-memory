@@ -55,13 +55,54 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
     }]);
   });
 
-  it("renders only escaped projection data under a locked-down CSP", async () => {
+  it("renders the schema-v2 operator dashboard under a locked-down CSP", async () => {
     const secret = "sentinel-secret-material";
     const handler = createControlUiHttpHandler({
       getProjection: async () => ({
-        schemaVersion: 1,
-        title: "<unsafe>",
+        schemaVersion: 2,
+        title: secret,
         credentials: { embedding: { status: "configured", source: "store" } },
+        providers: { embedding: { provider: "local-transformers", model: "<unsafe>", dimensions: 768, fingerprint: "embedding:v1:sha256:abc" } },
+        memoryHealth: {
+          status: "degraded",
+          namespaces: [{ id: "lancedb-namespaced", dimensions: 768, rows: 3 }],
+          cards: { byAgent: [{ id: "agent-a", cards: 3 }], byWorkspace: [], byUser: [] },
+          storage: { bytes: 2048, complete: true },
+          lastError: { component: "lancedb", code: "partition_count_failed" },
+          observedAt: 1_000,
+        },
+        workspaceMatrix: {
+          defaultEnabled: true,
+          overrides: [{ agentId: "agent-a", workspace: "workspace:v1:alpha", enabled: false, revision: 2 }],
+          disabledWorkspaceEffects: ["automatic_capture", "automatic_recall"],
+        },
+        featureCards: [{
+          id: "capture",
+          label: "Capture",
+          configured: true,
+          effective: true,
+          reason: null,
+          dependencies: ["conversation_access"],
+          configurationSurface: "/config",
+          credentialSurface: "/secrets",
+          audit: "openclaw_config_audit",
+        }],
+        reembeddingWorkflow: {
+          mutationSurface: "operator_admin",
+          noImplicitDimensionChange: true,
+          migration: {
+            id: "migration-a",
+            state: "running",
+            processed: 2,
+            total: 3,
+            targetDimensions: 1024,
+            targetFingerprint: "embedding:v1:sha256:abc",
+          },
+          steps: [
+            { id: "dry-run", label: "Dry run", state: "complete" },
+            { id: "checkpoint", label: "Copy progress and checkpoint", state: "current" },
+          ],
+        },
       }),
     });
     const response = fakeResponse();
@@ -70,9 +111,64 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
     assert.equal(response.statusCode, 200);
     assert.match(response.getHeader("content-security-policy"), /default-src 'none'/);
     assert.equal(response.getHeader("cache-control"), "no-store, max-age=0");
+    assert.match(response.body, /Memory Health/);
+    assert.match(response.body, /Workspace Matrix/);
+    assert.match(response.body, /Feature Controls/);
+    assert.match(response.body, /Re-Embedding Workflow/);
+    assert.match(response.body, /workspace:v1:alpha/);
+    assert.match(response.body, /href="\/config"/);
+    assert.match(response.body, /href="\/secrets"/);
     assert.match(response.body, /&lt;unsafe&gt;/);
     assert.doesNotMatch(response.body, /<unsafe>|<script|<form|fetch\s*\(/i);
     assert.doesNotMatch(response.body, new RegExp(secret));
+  });
+
+  it("renders durable re-embedding progress and refreshes only an active read-only migration", async () => {
+    let processed = 12;
+    const handler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        reembeddingWorkflow: {
+          mutationSurface: "operator_admin",
+          noImplicitDimensionChange: true,
+          migration: {
+            id: "reembed-20260828",
+            state: "running",
+            processed,
+            total: 100,
+            targetDimensions: 1024,
+            targetFingerprint: "embedding:v1:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
+          steps: [{ id: "checkpoint", label: "Copy progress and checkpoint", state: "current" }],
+        },
+      }),
+    });
+
+    const first = fakeResponse();
+    assert.equal(await handler({ method: "GET", url: CONTROL_UI_PATH }, first), true);
+    assert.match(first.body, /<meta http-equiv="refresh" content="5">/);
+    assert.match(first.body, /12 \/ 100 cards/);
+    assert.match(first.body, /<progress[^>]+value="12"[^>]+max="100"/);
+    assert.match(first.body, /Auto-refresh is active while the migration runs/);
+    assert.doesNotMatch(first.body, /<script|fetch\s*\(/i);
+
+    processed = 73;
+    const reopened = fakeResponse();
+    assert.equal(await handler({ method: "GET", url: CONTROL_UI_PATH }, reopened), true);
+    assert.match(reopened.body, /73 \/ 100 cards/);
+
+    const completedHandler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        reembeddingWorkflow: {
+          migration: { id: "reembed-20260828", state: "completed", processed: 100, total: 100 },
+          steps: [],
+        },
+      }),
+    });
+    const completed = fakeResponse();
+    assert.equal(await completedHandler({ method: "GET", url: CONTROL_UI_PATH }, completed), true);
+    assert.doesNotMatch(completed.body, /<meta http-equiv="refresh"/);
   });
 
   it("supports HEAD and rejects every mutation method", async () => {

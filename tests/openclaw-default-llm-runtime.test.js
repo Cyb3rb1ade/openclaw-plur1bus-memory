@@ -212,6 +212,32 @@ test("registration resolves enabled core routes without making an LLM call", asy
   assert.doesNotMatch(JSON.stringify(api.logger.calls), /model is empty; disabling/i);
 });
 
+test("control status reads aggregate LanceDB health without projecting memory content", async (t) => {
+  const { baseDbPath } = withTempPaths(t);
+  const pluginModule = await loadFreshPlugin();
+  await seedMemory(pluginModule, baseDbPath, "health-agent", {
+    id: "22222222-2222-4222-8222-222222222222",
+    text: "control-health-memory-must-not-leak",
+  });
+  const api = createApi(baseDbPath);
+  const gatewayMethods = [];
+  api.registerGatewayMethod = (...args) => gatewayMethods.push(args);
+
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  const registration = gatewayMethods.find(([name]) => name === "plur1bus.control.status");
+  assert.ok(registration, "the read-scoped control status method is registered");
+  const responses = [];
+  await registration[1]({ params: {}, respond: (...args) => responses.push(args) });
+
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0][0], true);
+  const status = responses[0][1].status;
+  assert.deepStrictEqual(status.memoryHealth.cards.byAgent, [{ id: "health-agent", cards: 1 }]);
+  assert.equal(status.memoryHealth.status, "ready");
+  assert.equal(status.memoryHealth.storage.complete, true);
+  assert.doesNotMatch(JSON.stringify(status), /control-health-memory-must-not-leak|baseDbPath/);
+});
+
 test("global memory_store merge uses the target agent OpenClaw default", async (t) => {
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   installEmbeddingStub(t);
