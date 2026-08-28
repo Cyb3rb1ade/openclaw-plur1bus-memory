@@ -756,7 +756,7 @@ echo ""
 info "Embedding-Provider-Auswahl:"
 info "  1) OpenAI text-embedding-3-large — empfohlen, remote, API-Key erforderlich."
 info "  2) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
-info "  3) Local JinaAI jina-embeddings-v3 — mehrsprachig, Matryoshka, optionaler ~1,16-GB-Download."
+info "  3) Local JinaAI jina-embeddings-v3 — mehrsprachig, Matryoshka, optionaler verifizierter ~0,58-GB-Q8-Download."
 warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
 info "  4) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
 prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=E5, jina=JinaAI, custom=OpenAI-kompatibel" "openai" "openai" "local" "jina" "custom"
@@ -783,14 +783,14 @@ case "$EMBEDDING_PROVIDER_MODE" in
   jina)
     EMBEDDING_PROVIDER="local-transformers"
     EMBEDDING_LOCAL_MODEL="jinaai/jina-embeddings-v3"
-    EMBEDDING_LOCAL_REVISION="ab036b023d30b4d1138c4c3bfa9f0c445ab455d6"
+    EMBEDDING_LOCAL_REVISION="68ed94909d564380f954be27ae2e133214c1adc9"
     EMBEDDING_LOCAL_QUERY_PREFIX=""
     EMBEDDING_LOCAL_PASSAGE_PREFIX=""
     EMBEDDING_MODEL="$EMBEDDING_LOCAL_MODEL"
     EMBEDDING_DIMENSIONS=1024
     info "Lokaler Provider nutzt $EMBEDDING_MODEL (1024d; Matryoshka: 32/64/128/256/512/768/1024)."
     warn "CC BY-NC 4.0: Diese lokale Modelloption ist nur für nicht-kommerzielle Nutzung vorgesehen."
-    info "Der erste echte Aufruf lädt den gepinnten fp16-ONNX-Export nach $EMBEDDING_LOCAL_CACHE_DIR."
+    info "Der erste echte Aufruf lädt den gepinnten Q8-ONNX-Export nach $EMBEDDING_LOCAL_CACHE_DIR."
     ;;
   custom)
     EMBEDDING_PROVIDER="openai-compatible"

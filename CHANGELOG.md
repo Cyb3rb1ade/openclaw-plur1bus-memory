@@ -41,7 +41,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   nur dieses bekannte Profil wird auf seine XLM-RoBERTa-Architektur
   normalisiert. Neben dem getrennten Jina-v2-Reranker steht Jina Embeddings v3
   als optional herunterladbares, mehrsprachiges Embedding mit gepinnter
-  Revision, fp16-ONNX-Artefakt und den sieben veroeffentlichten Matryoshka-
+  Basis- und Konvertierungsrevision, Q8-ONNX-Artefakt und den sieben veroeffentlichten Matryoshka-
   Dimensionen 32/64/128/256/512/768/1024 bereit. Query und Passage verwenden
   die nativen Task-Adapter statt kuenstlicher Textpraefixe. Wegen CC BY-NC 4.0
   ist dieser Embedding-Pfad sichtbar als nicht kommerziell lizenziert markiert.

@@ -91,7 +91,8 @@ Sharing-Verträge bleiben B13 vorbehalten.
 ## Lokale E5-, Jina- und BGE-Modelle (7.5.0)
 
 Der freie Standard-Offline-Pfad verwendet E5. Zusaetzlich kann das
-mehrsprachige `jinaai/jina-embeddings-v3` heruntergeladen werden; dieses Modell
+mehrsprachige `jinaai/jina-embeddings-v3` als revisions- und hashgeprüfte
+Q8-ONNX-Konvertierung heruntergeladen werden; dieses Modell
 steht unter CC BY-NC 4.0 und ist daher ohne gesonderte Lizenz nicht fuer
 kommerzielle Nutzung freigegeben. Beide Pfade verwenden revisionsgeprüfte
 Transformers.js-Artefakte.
@@ -142,7 +143,7 @@ nicht benoetigt.
     "dimensions": 256,
     "local": {
       "model": "jinaai/jina-embeddings-v3",
-      "revision": "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6",
+      "revision": "68ed94909d564380f954be27ae2e133214c1adc9",
       "dimensions": 256,
       "cacheDir": "~/.openclaw/models/plur1bus"
     }

@@ -143,7 +143,7 @@ describe("provider wizard CLI input validation", () => {
       provider: "local-transformers",
       local: {
         model: "jinaai/jina-embeddings-v3",
-        revision: "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6",
+        revision: "68ed94909d564380f954be27ae2e133214c1adc9",
         dimensions: 1024,
         queryPrefix: "",
         passagePrefix: "",
