@@ -39,7 +39,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - **Jina `Unsupported model type: null`.** Die tatsaechlich veroeffentlichten
   Metadaten des festgepinnten Jina-Modells werden vor der Inferenz validiert;
   nur dieses bekannte Profil wird auf seine XLM-RoBERTa-Architektur
-  normalisiert.
+  normalisiert. Neben dem getrennten Jina-v2-Reranker steht Jina Embeddings v3
+  als optional herunterladbares, mehrsprachiges Embedding mit gepinnter
+  Revision, fp16-ONNX-Artefakt und den sieben veroeffentlichten Matryoshka-
+  Dimensionen 32/64/128/256/512/768/1024 bereit. Query und Passage verwenden
+  die nativen Task-Adapter statt kuenstlicher Textpraefixe. Wegen CC BY-NC 4.0
+  ist dieser Embedding-Pfad sichtbar als nicht kommerziell lizenziert markiert.
 - **Freier BGE-Fallback ohne ONNX-Datei.** Der Fallback nutzt einen realen,
   revisionsgepinnten ONNX-Export statt eines Repositorys ohne das erwartete
   Artefakt. E5, Jina und BGE pruefen Dateigroessen und SHA-256 vor dem Laden;
@@ -80,7 +85,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   einen erforderlichen Runtime-Probe-Hinweis. Unmoegliche bekannte
   Dimensionen werden vor Provider- oder Datenbankzugriff abgelehnt; jeder
   Re-Embedding-Lauf validiert weiterhin den tatsaechlich gelieferten Vektor.
-  JinaAI und BGE bleiben davon getrennte Reranker ohne Memory-Vektordimension.
+  Das optionale Jina-v3-Embedding bietet ausschliesslich seine sieben
+  verifizierten Matryoshka-Breiten. Der Jina-v2- und der BGE-Reranker bleiben
+  davon typgetrennt und besitzen keine Memory-Vektordimension.
 
 ## [7.4.10] — 2026-08-26
 

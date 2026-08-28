@@ -738,10 +738,13 @@ EMBEDDING_PROVIDER="openai"
 EMBEDDING_BASE_URL=""
 EMBEDDING_DIMENSIONS=""
 EMBEDDING_LOCAL_MODEL="intfloat/multilingual-e5-small"
+EMBEDDING_LOCAL_REVISION="614241f622f53c4eeff9890bdc4f31cfecc418b3"
+EMBEDDING_LOCAL_QUERY_PREFIX="query: "
+EMBEDDING_LOCAL_PASSAGE_PREFIX="passage: "
 EMBEDDING_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
 RERANKER_PROVIDER="cohere"
 RERANKER_MODEL="rerank-v3.5"
-RERANKER_LOCAL_MODEL="Alibaba-NLP/gte-reranker-modernbert-base"
+RERANKER_LOCAL_MODEL="woxpas-ai/bge-reranker-v2-m3-onnx"
 RERANKER_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
 
 # Provider-Wizard: neue Installationen nutzen scripts/provider-wizard.mjs (Node i18n-konform).
@@ -753,8 +756,10 @@ echo ""
 info "Embedding-Provider-Auswahl:"
 info "  1) OpenAI text-embedding-3-large — empfohlen, remote, API-Key erforderlich."
 info "  2) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
-info "  3) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
-prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=lokal, custom=OpenAI-kompatibel" "openai" "openai" "local" "custom"
+info "  3) Local JinaAI jina-embeddings-v3 — mehrsprachig, Matryoshka, optionaler ~1,16-GB-Download."
+warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
+info "  4) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
+prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=E5, jina=JinaAI, custom=OpenAI-kompatibel" "openai" "openai" "local" "jina" "custom"
 
 case "$EMBEDDING_PROVIDER_MODE" in
   openai)
@@ -766,10 +771,26 @@ case "$EMBEDDING_PROVIDER_MODE" in
     ;;
   local)
     EMBEDDING_PROVIDER="local-transformers"
+    EMBEDDING_LOCAL_MODEL="intfloat/multilingual-e5-small"
+    EMBEDDING_LOCAL_REVISION="614241f622f53c4eeff9890bdc4f31cfecc418b3"
+    EMBEDDING_LOCAL_QUERY_PREFIX="query: "
+    EMBEDDING_LOCAL_PASSAGE_PREFIX="passage: "
     EMBEDDING_MODEL="$EMBEDDING_LOCAL_MODEL"
     EMBEDDING_DIMENSIONS=384
     info "Lokaler Provider nutzt $EMBEDDING_MODEL (384d) mit query/passage Prefixing."
     info "Erster echter Local-Smoke/Call lädt das Modell nach $EMBEDDING_LOCAL_CACHE_DIR."
+    ;;
+  jina)
+    EMBEDDING_PROVIDER="local-transformers"
+    EMBEDDING_LOCAL_MODEL="jinaai/jina-embeddings-v3"
+    EMBEDDING_LOCAL_REVISION="ab036b023d30b4d1138c4c3bfa9f0c445ab455d6"
+    EMBEDDING_LOCAL_QUERY_PREFIX=""
+    EMBEDDING_LOCAL_PASSAGE_PREFIX=""
+    EMBEDDING_MODEL="$EMBEDDING_LOCAL_MODEL"
+    EMBEDDING_DIMENSIONS=1024
+    info "Lokaler Provider nutzt $EMBEDDING_MODEL (1024d; Matryoshka: 32/64/128/256/512/768/1024)."
+    warn "CC BY-NC 4.0: Diese lokale Modelloption ist nur für nicht-kommerzielle Nutzung vorgesehen."
+    info "Der erste echte Aufruf lädt den gepinnten fp16-ONNX-Export nach $EMBEDDING_LOCAL_CACHE_DIR."
     ;;
   custom)
     EMBEDDING_PROVIDER="openai-compatible"
@@ -792,7 +813,7 @@ esac
 echo ""
 info "Reranker-Auswahl:"
 info "  1) Cohere rerank — remote, API-Key erforderlich, stabiler Default."
-info "  2) Local gte-reranker-modernbert-base — lokal, English-primary, beta1 experimental."
+info "  2) Local BGE reranker-v2-m3 — frei, mehrsprachig, verifizierter ~570-MB-ONNX-Download."
 info "  3) Disabled — Vector-only Recall."
 prompt_choice RERANKER_PROVIDER_MODE "Reranker provider: cohere=remote, local=lokal experimental, disabled=aus" "cohere" "cohere" "local" "disabled"
 case "$RERANKER_PROVIDER_MODE" in
@@ -805,7 +826,7 @@ case "$RERANKER_PROVIDER_MODE" in
   local)
     RERANKER_PROVIDER="local-transformers"
     RERANKER_MODEL="$RERANKER_LOCAL_MODEL"
-    warn "Local Reranker ist in v4 weiterhin experimental und English-primary; Pass erst nach grünem Node/Transformers.js-Smoke."
+    info "Lokaler Reranker nutzt den revisions- und hashgeprüften BGE-ONNX-Export."
     ;;
   disabled)
     RERANKER_PROVIDER="disabled"
@@ -1081,6 +1102,9 @@ else
     --arg embedding_base_url "${EMBEDDING_BASE_URL:-}" \
     --argjson embedding_dims "${EMBEDDING_DIMENSIONS:-3072}" \
     --arg embedding_local_model "$EMBEDDING_LOCAL_MODEL" \
+    --arg embedding_local_revision "$EMBEDDING_LOCAL_REVISION" \
+    --arg embedding_local_query_prefix "$EMBEDDING_LOCAL_QUERY_PREFIX" \
+    --arg embedding_local_passage_prefix "$EMBEDDING_LOCAL_PASSAGE_PREFIX" \
     --arg embedding_local_cache_dir "$EMBEDDING_LOCAL_CACHE_DIR" \
     --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
     --argjson obsidian_workspaces "$OBSIDIAN_WORKSPACES_JSON" \
@@ -1097,9 +1121,10 @@ else
               "provider": "local-transformers",
               "local": {
                 "model": $embedding_local_model,
+                "revision": $embedding_local_revision,
                 "dimensions": $embedding_dims,
-                "queryPrefix": "query: ",
-                "passagePrefix": "passage: ",
+                "queryPrefix": $embedding_local_query_prefix,
+                "passagePrefix": $embedding_local_passage_prefix,
                 "cacheDir": $embedding_local_cache_dir
               }
             }

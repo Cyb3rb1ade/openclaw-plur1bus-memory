@@ -29,6 +29,7 @@ const RERANKER_OPTIONS = [
 const EMBEDDING_OPTIONS = [
   { key: "openai",             i18nLabel: "setup.embedding.option.openai",   i18nHelp: "setup.embedding.option.openai_help" },
   { key: "local-transformers", i18nLabel: "setup.embedding.option.local_e5", i18nHelp: "setup.embedding.option.local_e5_help" },
+  { key: "local-jina",         i18nLabel: "setup.embedding.option.local_jina", i18nHelp: "setup.embedding.option.local_jina_help" },
 ];
 
 const ADVANCED_RERANKER_MODELS = [
@@ -89,8 +90,8 @@ async function main() {
     }
     let choice;
     while (true) {
-      choice = await askLine("[1/2]: ");
-      if (choice === "1" || choice === "2") break;
+      choice = await askLine("[1/2/3]: ");
+      if (["1", "2", "3"].includes(choice)) break;
       console.error(t("setup.reranker.invalid_choice", { lang, tone }));
     }
     if (choice === "1") {
@@ -101,9 +102,19 @@ async function main() {
         return { provider: "openai", apiKey: literal, model: "text-embedding-3-large", dimensions: 3072 };
       }
       return { provider: "openai", apiKeyEnv: "OPENAI_API_KEY", model: "text-embedding-3-large", dimensions: 3072 };
-    } else {
+    } else if (choice === "2") {
       return { provider: "local-transformers", model: "intfloat/multilingual-e5-small", dimensions: 384 };
     }
+    return {
+      provider: "local-transformers",
+      local: {
+        model: "jinaai/jina-embeddings-v3",
+        revision: "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6",
+        dimensions: 1024,
+        queryPrefix: "",
+        passagePrefix: "",
+      },
+    };
   }
 
   async function wizardReranker() {

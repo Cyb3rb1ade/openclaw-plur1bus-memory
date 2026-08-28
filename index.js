@@ -5213,6 +5213,9 @@ const plugin = {
         if (!profile || profile.revision !== fingerprint.revision) {
           throw new Error(`reembedding local model is not pinned: ${String(fingerprint.model)}`);
         }
+        if (profile.role !== "embedding") {
+          throw new Error(`reembedding local model is not an embedding model: ${profile.model}`);
+        }
         return new LocalTransformersEmbeddingProvider({
           model: fingerprint.model,
           revision: fingerprint.revision,
