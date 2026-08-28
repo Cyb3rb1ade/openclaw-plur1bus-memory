@@ -8,7 +8,7 @@ import plugin, * as pluginModule from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { TimeoutError } from "../lib/with-timeout.js";
 
-const VECTOR_DIM = 3;
+const VECTOR_DIM = 384;
 
 function makeTempDir(prefix) {
   // realpathSync: macOS tmpdir is a symlink (/var -> /private/var) and the
@@ -86,7 +86,7 @@ function installDbStubs(t, options = {}) {
   const shutdownPaths = [];
   let blockedOnce = false;
 
-  LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => [0.1, 0.2, 0.3];
+  LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => Array(VECTOR_DIM).fill(0.1);
   pluginModule.MemoryDB.prototype.findSimilar = async function findSimilarStub() {
     const agentId = this.dbPath.split(/[/\\]/).pop();
     if (!seenByAgent.has(agentId)) seenByAgent.set(agentId, []);

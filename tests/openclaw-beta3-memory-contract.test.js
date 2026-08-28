@@ -8,7 +8,7 @@ function createApi() {
   return {
     pluginConfig: {
       baseDbPath: "/tmp/plur1bus-beta3-memory-contract",
-      embedding: { provider: "local-transformers", local: { dimensions: 8 } },
+      embedding: { provider: "local-transformers", local: { dimensions: 384 } },
       autoCapture: false,
       autoRecall: false,
       neo: { enabled: false },
