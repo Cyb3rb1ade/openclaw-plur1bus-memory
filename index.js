@@ -28,7 +28,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statfsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statfsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,10 @@ import {
 } from "./lib/reembedding/runtime-config.js";
 import { registerReembeddingRuntime } from "./lib/setup/reembedding-plugin-runtime.js";
 import { buildControlPlaneProjection } from "./lib/control-plane-projection.js";
+import {
+  createControlPlaneHealthInspector,
+  createControlPlaneHealthScan,
+} from "./lib/control-plane-health.js";
 import {
   createWorkspacePolicyGuard,
   guardWorkspaceTools,
@@ -184,6 +188,7 @@ import {
   resolveMemoryRequestContext,
   resolveToolMemoryRequestContext,
   normalizeWorkspaceTarget,
+  workspacePoolKey,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
@@ -2889,6 +2894,150 @@ export class AgentDbPool {
   }
 }
 
+const CONTROL_HEALTH_MAX_PARTITIONS = 128;
+const CONTROL_HEALTH_MAX_STORAGE_ENTRIES = 10_000;
+const CONTROL_HEALTH_SAFE_DIRECTORY_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const CONTROL_HEALTH_TABLE_PATH_NAMES = Object.freeze(["memories.lance", "memories"]);
+
+function isAbsentControlHealthPath(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+}
+
+function hasControlHealthLanceTable(partitionPath) {
+  for (const tableName of CONTROL_HEALTH_TABLE_PATH_NAMES) {
+    try {
+      const tablePath = resolveInside(partitionPath, tableName);
+      const stat = lstatSync(tablePath);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) return true;
+    } catch (error) {
+      if (isAbsentControlHealthPath(error)) continue;
+      throw error;
+    }
+  }
+  return false;
+}
+
+/** List only existing, ordinary, validated PLUR1BUS partition directory names. */
+function listControlHealthPartitions(basePath) {
+  let root;
+  try {
+    root = resolveInside(basePath);
+  } catch (error) {
+    if (isAbsentControlHealthPath(error)) return [];
+    throw error;
+  }
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    if (isAbsentControlHealthPath(error)) return [];
+    throw error;
+  }
+  const partitions = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !CONTROL_HEALTH_SAFE_DIRECTORY_NAME_RE.test(entry.name)) {
+      continue;
+    }
+    const expected = resolve(root, entry.name);
+    const canonical = resolveInside(root, entry.name);
+    if (canonical !== expected) continue;
+    if (!hasControlHealthLanceTable(canonical)) continue;
+    partitions.push(safeAgentId(entry.name));
+  }
+  return partitions.toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Measure bytes below a trusted root without following links or reading file contents. */
+function measureControlHealthStorage(basePath, maxEntries = CONTROL_HEALTH_MAX_STORAGE_ENTRIES) {
+  let root;
+  try {
+    root = resolveInside(basePath);
+  } catch (error) {
+    if (isAbsentControlHealthPath(error)) return { bytes: 0, complete: true };
+    throw error;
+  }
+  let bytes = 0;
+  let entriesSeen = 0;
+  let complete = true;
+
+  const visit = (directory) => {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (isAbsentControlHealthPath(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entriesSeen >= maxEntries) {
+        complete = false;
+        return;
+      }
+      const expected = resolve(directory, entry.name);
+      const canonical = resolveInside(directory, entry.name);
+      if (canonical !== expected) continue;
+      let stat;
+      try {
+        stat = lstatSync(canonical);
+      } catch (error) {
+        if (isAbsentControlHealthPath(error)) continue;
+        throw error;
+      }
+      entriesSeen += 1;
+      if (stat.isDirectory()) {
+        visit(canonical);
+        if (!complete) return;
+      } else if (stat.isFile()) {
+        const size = Number(stat.size);
+        if (!Number.isSafeInteger(size) || size < 0 || size > Number.MAX_SAFE_INTEGER - bytes) {
+          bytes = Number.MAX_SAFE_INTEGER;
+          complete = false;
+          return;
+        }
+        bytes += size;
+      }
+    }
+  };
+
+  visit(root);
+  return { bytes, complete };
+}
+
+/** Create an isolated non-mutating LanceDB row-counter for control-plane health. */
+function createControlHealthRowInspector(vectorDim, logger) {
+  return async ({ basePath, partitionId }) => {
+    const readPool = new AgentDbPool(basePath, vectorDim, logger, { readOnly: true });
+    let result;
+    let operationError = null;
+    try {
+      result = await readPool.withDb(partitionId, async (db) => {
+        const initialized = await db.init();
+        if (!initialized || !db.table) return 0;
+        const count = await db.table.countRows();
+        if (!Number.isSafeInteger(count) || count < 0) {
+          throw new Error("invalid read-only PLUR1BUS health row count");
+        }
+        return count;
+      });
+    } catch (error) {
+      operationError = error;
+    }
+
+    let shutdownError = null;
+    try {
+      await readPool.shutdown();
+    } catch (error) {
+      shutdownError = error;
+    }
+    if (operationError && shutdownError) {
+      throw new AggregateError([operationError, shutdownError], "PLUR1BUS health row inspection and shutdown failed");
+    }
+    if (operationError) throw operationError;
+    if (shutdownError) throw shutdownError;
+    return result;
+  };
+}
+
 class Embeddings {
   constructor(apiKey, model, baseUrl, dimensions, fallbackCfg, cacheOptions = {}) {
     this.apiKey = apiKey;
@@ -4955,6 +5104,37 @@ const plugin = {
 
     const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
     const sharedMemoryPool = new SharedMemoryPool(embeddingGenerationLayout.sharedBaseDir, vectorDim, AgentDbPool, api.logger);
+    // The control surface gets its own bounded, read-only view. It must never
+    // reuse a write pool: a status request is not allowed to create a Lance
+    // table, directory, or card as a side effect.
+    const controlHealthWorkspaceIdentityByKey = new Map();
+    const controlHealthNamespaceRoots = namespaceLayout.mode === "named"
+      ? namespaceLayout.recallReadNamespaces.map((id) => ({
+          id,
+          path: resolve(namespaceLayout.baseDir, id),
+          dimensions: vectorDim,
+        }))
+      : [{ id: "legacy-flat", path: namespaceLayout.baseDbPath, dimensions: vectorDim }];
+    const controlHealth = createControlPlaneHealthInspector({
+      scan: createControlPlaneHealthScan({
+        namespaceRoots: controlHealthNamespaceRoots,
+        sharedRoots: {
+          workspace: {
+            path: resolve(embeddingGenerationLayout.sharedBaseDir, ".plur1bus-shared", "workspaces"),
+            dimensions: vectorDim,
+          },
+          user: {
+            path: resolve(embeddingGenerationLayout.sharedBaseDir, ".plur1bus-shared", "users"),
+            dimensions: vectorDim,
+          },
+        },
+        listPartitions: ({ basePath }) => listControlHealthPartitions(basePath),
+        inspectRows: createControlHealthRowInspector(vectorDim, api.logger),
+        measureStorage: () => measureControlHealthStorage(baseDbPath),
+        workspaceIdentityForKey: (key) => controlHealthWorkspaceIdentityByKey.get(key) ?? null,
+        maxPartitions: CONTROL_HEALTH_MAX_PARTITIONS,
+      }),
+    });
     const legacyMigrationShutdown = new AbortController();
     if (commandRuntimeHooks) {
       const withDb = pool.withDb.bind(pool);
@@ -7908,46 +8088,87 @@ const plugin = {
         if (typeof api.registerGatewayMethod === "function") {
           registerControlUiRuntime({
             api,
-            getProjection: async () => buildControlPlaneProjection({
-              config: cfg,
-              hooks: api.config?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {},
-              capabilities: {
-                skillWorkshop: Boolean(openClawSkillWorkshop),
-                cronDispatch: cronDirectDispatchReady,
-              },
-              providers: {
-                embedding: {
-                  provider: normalizedEmbeddingCfg.provider,
-                  model: normalizedEmbeddingCfg.model,
-                  revision: normalizedEmbeddingCfg.local?.revision,
-                  dimensions: dimensions || vectorDim,
-                  fingerprint: activeEmbeddingFingerprintId,
+            getProjection: async () => {
+              const workspacePolicies = workspacePolicyStore.list();
+              controlHealthWorkspaceIdentityByKey.clear();
+              for (const record of workspacePolicies) {
+                controlHealthWorkspaceIdentityByKey.set(
+                  workspacePoolKey(record.workspaceIdentity),
+                  record.workspaceIdentity,
+                );
+              }
+              const migrations = reembeddingStateStore.list();
+              const currentMigration = migrations.at(-1) || null;
+              const sourceTables = Array.isArray(currentMigration?.source?.tables)
+                ? currentMigration.source.tables
+                : [];
+              const totalRows = sourceTables.reduce((sum, table) => (
+                Number.isSafeInteger(table?.rowCount) && table.rowCount >= 0
+                  ? sum + table.rowCount
+                  : Number.MAX_SAFE_INTEGER
+              ), 0);
+              const sourceBytes = sourceTables.reduce((sum, table) => (
+                Number.isSafeInteger(table?.estimatedBytes) && table.estimatedBytes >= 0
+                  ? sum + table.estimatedBytes
+                  : Number.MAX_SAFE_INTEGER
+              ), 0);
+              const targetDimensions = currentMigration?.target?.fingerprint?.dimensions;
+              const targetVectorBytes = Number.isSafeInteger(totalRows)
+                && Number.isSafeInteger(targetDimensions)
+                && targetDimensions > 0
+                && totalRows <= Math.floor(Number.MAX_SAFE_INTEGER / (targetDimensions * 4))
+                ? totalRows * targetDimensions * 4
+                : null;
+              const estimatedBytes = Number.isSafeInteger(sourceBytes)
+                && targetVectorBytes !== null
+                && sourceBytes <= Number.MAX_SAFE_INTEGER - targetVectorBytes
+                ? sourceBytes + targetVectorBytes
+                : null;
+              return buildControlPlaneProjection({
+                config: cfg,
+                hooks: api.config?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {},
+                capabilities: {
+                  skillWorkshop: Boolean(openClawSkillWorkshop),
+                  cronDispatch: cronDirectDispatchReady,
+                  reranker: Boolean(reranker),
                 },
-                reranker: reranker
+                providers: {
+                  embedding: {
+                    provider: normalizedEmbeddingCfg.provider,
+                    model: normalizedEmbeddingCfg.model,
+                    revision: normalizedEmbeddingCfg.local?.revision,
+                    dimensions: dimensions || vectorDim,
+                    fingerprint: activeEmbeddingFingerprintId,
+                  },
+                  reranker: reranker
+                    ? {
+                        provider: rerankerCfg.provider,
+                        model: reranker.model || rerankerCfg.model,
+                        revision: rerankerCfg.local?.revision || rerankerCfg.fallbackRevision,
+                      }
+                    : null,
+                },
+                namespaces: namespaceLayout.mode === "named"
+                  ? namespaceLayout.recallReadNamespaces.map((id) => ({ id, dimensions: vectorDim }))
+                  : [{ id: "legacy-flat", dimensions: vectorDim }],
+                migration: currentMigration
                   ? {
-                      provider: rerankerCfg.provider,
-                      model: reranker.model || rerankerCfg.model,
-                      revision: rerankerCfg.local?.revision || rerankerCfg.fallbackRevision,
+                      id: currentMigration.id,
+                      state: currentMigration.state,
+                      processed: currentMigration.cursor?.completedRows ?? 0,
+                      total: totalRows,
+                      ...(estimatedBytes !== null ? { estimatedBytes } : {}),
+                      targetFingerprint: currentMigration.target?.fingerprintId,
+                      targetDimensions,
+                      targetProbeStatus: currentMigration.target?.probeStatus,
+                      checkpointBytes: currentMigration.cursor?.bytes ?? 0,
+                      failureCode: currentMigration.error?.code ?? null,
                     }
                   : null,
-              },
-              namespaces: namespaceLayout.mode === "named"
-                ? namespaceLayout.recallReadNamespaces.map((id) => ({ id, dimensions: vectorDim }))
-                : [{ id: "legacy-flat", dimensions: vectorDim }],
-              migration: (() => {
-                const migrations = reembeddingStateStore.list();
-                const current = migrations.at(-1);
-                return current
-                  ? {
-                      id: current.id,
-                      state: current.state,
-                      processed: current.cursor?.completedRows ?? 0,
-                      total: current.source?.tables?.reduce((sum, table) => sum + table.rowCount, 0) ?? 0,
-                      failureCode: current.error?.code ?? null,
-                    }
-                  : null;
-              })(),
-            }),
+                workspacePolicies,
+                health: await controlHealth.snapshot(),
+              });
+            },
           });
         } else {
           api.logger?.warn?.(

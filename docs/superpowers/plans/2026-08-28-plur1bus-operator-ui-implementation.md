@@ -156,10 +156,15 @@ Expected: FAIL because the renderer still emits raw JSON only.
 - [ ] **Step 3: Render semantic cards from fixed fields**
 
 Use escaped text and fixed internal links only (`/config`, `/secrets`). Render
-the required workflow with its current durable state and an explicit note that
-the exact Beta-3 iframe intentionally cannot perform mutations. Provide
-operator-safe guidance to the existing typed control surfaces; do not render a
-form, a secret input, a Gateway token, or a mutation endpoint.
+the required workflow with its current durable state, a native checkpoint
+progress element, and an explicit note that the exact Beta-3 iframe
+intentionally cannot perform mutations. While the durable migration is active,
+use a five-second `<meta http-equiv="refresh">` document refresh rather than
+Ajax: the Beta-3 iframe has an opaque sandbox origin and deliberately has no
+credentialed CORS read bridge. Reopening the tab must independently read the
+persisted checkpoint. Provide operator-safe guidance to the existing typed
+control surfaces; do not render a form, a secret input, a Gateway token, or a
+mutation endpoint.
 
 - [ ] **Step 4: Verify GET/HEAD and all mutation verbs remain blocked**
 
@@ -213,4 +218,3 @@ volumes and evidence, then commit the documentation.
 git add CHANGELOG.md docs/OPENCLAW-COMPATIBILITY.md
 git commit -m "docs: describe operator control ui"
 ```
-
