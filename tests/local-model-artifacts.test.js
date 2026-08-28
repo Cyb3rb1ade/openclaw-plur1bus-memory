@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -33,8 +33,21 @@ function fixtureProfile(bytes, overrides = {}) {
   });
 }
 
-function responseFrom(chunks, { ok = true, status = 200 } = {}) {
-  return { ok, status, body: Readable.from(chunks) };
+function responseFrom(chunks, { ok = true, status = 200, contentLength, onCancel } = {}) {
+  const body = Readable.from(chunks);
+  if (onCancel) body.cancel = onCancel;
+  return {
+    ok,
+    status,
+    body,
+    headers: {
+      get(name) {
+        return name.toLowerCase() === "content-length" && contentLength !== undefined
+          ? String(contentLength)
+          : null;
+      },
+    },
+  };
 }
 
 describe("pinned local model artifacts", () => {
@@ -80,6 +93,240 @@ describe("pinned local model artifacts", () => {
     assert.equal((await validatePinnedModelArtifacts(profile, cacheDir)).ok, true);
   });
 
+  it("reports bounded aggregate progress while preserving atomic publication", async () => {
+    const bytes = Buffer.from("progress-visible-model-bytes");
+    const profile = fixtureProfile(bytes);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-progress-"));
+    const progress = [];
+
+    await ensurePinnedModelArtifacts(profile, cacheDir, {
+      fetchImpl: async () => responseFrom([
+        bytes.subarray(0, 4),
+        bytes.subarray(4, 11),
+        bytes.subarray(11),
+      ]),
+      onProgress: async (entry) => progress.push(structuredClone(entry)),
+    });
+
+    assert.equal(progress[0].state, "downloading");
+    assert.equal(progress.at(-1).state, "verified");
+    assert.equal(progress.at(-1).bytesCompleted, bytes.length);
+    assert.equal(progress.at(-1).bytesTotal, bytes.length);
+    assert.equal(progress.at(-1).artifactsCompleted, 1);
+    assert.equal(progress.at(-1).artifactsTotal, 1);
+    assert.ok(progress.every((entry, index) => (
+      index === 0 || entry.bytesCompleted >= progress[index - 1].bytesCompleted
+    )));
+    assert.ok(progress.every((entry) => !Object.hasOwn(entry, "url")));
+  });
+
+  it("coalesces concurrent preparation and provider downloads for one artifact", async () => {
+    const bytes = Buffer.from("one-network-transfer-for-two-consumers");
+    const profile = fixtureProfile(bytes);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-coalesced-"));
+    let fetches = 0;
+    let releaseFetch;
+    const fetchReady = new Promise((resolve) => { releaseFetch = resolve; });
+    const fetchImpl = async () => {
+      fetches += 1;
+      await fetchReady;
+      return responseFrom([bytes]);
+    };
+
+    const first = ensurePinnedModelArtifacts(profile, cacheDir, { fetchImpl });
+    const second = ensurePinnedModelArtifacts(profile, cacheDir, { fetchImpl });
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseFetch();
+    const results = await Promise.all([first, second]);
+
+    assert.equal(fetches, 1);
+    assert.equal(results[0].downloaded + results[0].reused, 1);
+    assert.equal(results[1].downloaded + results[1].reused, 1);
+    assert.equal((await validatePinnedModelArtifacts(profile, cacheDir)).ok, true);
+  });
+
+  it("rechecks a completed artifact when a delayed subscriber misses the in-flight entry", async () => {
+    const bytes = Buffer.from("late-subscriber-reuses-published-artifact");
+    const profile = fixtureProfile(bytes);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-late-subscriber-"));
+    let fetches = 0;
+    let releaseFetch;
+    let releaseSecondProgress;
+    const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+    const secondProgressGate = new Promise((resolve) => { releaseSecondProgress = resolve; });
+    const fetchImpl = async () => {
+      fetches += 1;
+      await fetchGate;
+      return responseFrom([bytes]);
+    };
+
+    const first = ensurePinnedModelArtifacts(profile, cacheDir, { fetchImpl });
+    await new Promise((resolve) => setImmediate(resolve));
+    let delayed = true;
+    const second = ensurePinnedModelArtifacts(profile, cacheDir, {
+      fetchImpl,
+      onProgress: async (entry) => {
+        if (delayed && entry.state === "downloading" && entry.bytesCompleted === 0) {
+          delayed = false;
+          await secondProgressGate;
+        }
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseFetch();
+    await first;
+    releaseSecondProgress();
+    const result = await second;
+
+    assert.equal(fetches, 1);
+    assert.equal(result.downloaded, 0);
+    assert.equal(result.reused, 1);
+    assert.equal((await validatePinnedModelArtifacts(profile, cacheDir)).ok, true);
+  });
+
+  it("gives every coalesced consumer progress and isolates one consumer abort", async () => {
+    const bytes = Buffer.from("shared-transfer-survives-one-consumer-abort");
+    const profile = fixtureProfile(bytes);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-subscriber-abort-"));
+    const firstAbort = new AbortController();
+    const secondProgress = [];
+    let fetches = 0;
+    let releaseFetch;
+    const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+    const fetchImpl = async (_url, { signal }) => {
+      fetches += 1;
+      await Promise.race([
+        fetchGate,
+        new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })),
+      ]);
+      return responseFrom([bytes]);
+    };
+
+    const first = ensurePinnedModelArtifacts(profile, cacheDir, {
+      fetchImpl,
+      signal: firstAbort.signal,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const second = ensurePinnedModelArtifacts(profile, cacheDir, {
+      fetchImpl,
+      onProgress: async (entry) => secondProgress.push(structuredClone(entry)),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    firstAbort.abort();
+    await assert.rejects(first, /abort/i);
+    releaseFetch();
+    const secondResult = await second;
+
+    assert.equal(fetches, 1);
+    assert.equal(secondResult.downloaded + secondResult.reused, 1);
+    assert.ok(secondProgress.some((entry) => entry.state === "downloading" && entry.bytesCompleted > 0));
+    assert.equal(secondProgress.at(-1).state, "verified");
+    assert.equal((await validatePinnedModelArtifacts(profile, cacheDir)).ok, true);
+  });
+
+  it("isolates a failing coalesced progress subscriber without cancelling the shared transfer", async () => {
+    const bytes = Buffer.from("shared-transfer-survives-progress-listener-failure");
+    const profile = fixtureProfile(bytes);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-progress-failure-"));
+    const survivorProgress = [];
+    let fetches = 0;
+    let releaseFetch;
+    const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+    const fetchImpl = async () => {
+      fetches += 1;
+      await fetchGate;
+      return responseFrom([bytes]);
+    };
+
+    let failOnChunk = false;
+    const failing = ensurePinnedModelArtifacts(profile, cacheDir, {
+      fetchImpl,
+      onProgress: async (entry) => {
+        if (failOnChunk && entry.state === "downloading" && entry.bytesCompleted > 0) {
+          throw new Error("subscriber progress failed");
+        }
+      },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const survivor = ensurePinnedModelArtifacts(profile, cacheDir, {
+      fetchImpl,
+      onProgress: async (entry) => survivorProgress.push(structuredClone(entry)),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    failOnChunk = true;
+    releaseFetch();
+
+    await assert.rejects(failing, /subscriber progress failed/);
+    const result = await survivor;
+    assert.equal(fetches, 1);
+    assert.equal(result.downloaded + result.reused, 1);
+    assert.equal(survivorProgress.at(-1).state, "verified");
+    assert.equal((await validatePinnedModelArtifacts(profile, cacheDir)).ok, true);
+  });
+
+  it("does not create or join a transfer after an awaited initial progress callback aborts", async () => {
+    const bytes = Buffer.from("abort-after-initial-progress");
+    const profile = fixtureProfile(bytes);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-progress-abort-"));
+    const controller = new AbortController();
+    let fetches = 0;
+
+    await assert.rejects(
+      ensurePinnedModelArtifacts(profile, cacheDir, {
+        signal: controller.signal,
+        fetchImpl: async () => {
+          fetches += 1;
+          return responseFrom([bytes]);
+        },
+        onProgress: async (entry) => {
+          if (entry.state === "downloading" && entry.bytesCompleted === 0) controller.abort();
+        },
+      }),
+      /abort/i,
+    );
+
+    assert.equal(fetches, 0);
+  });
+
+  it("aborts the shared transfer only after every coalesced consumer cancels", async () => {
+    const bytes = Buffer.from("all-consumers-cancel");
+    const profile = fixtureProfile(bytes);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-all-abort-"));
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    let sharedSignal;
+    let fetches = 0;
+    let markFetchStarted;
+    const fetchStarted = new Promise((resolve) => { markFetchStarted = resolve; });
+    let markSecondProgress;
+    const secondProgress = new Promise((resolve) => { markSecondProgress = resolve; });
+    const fetchImpl = async (_url, { signal }) => {
+      fetches += 1;
+      sharedSignal = signal;
+      markFetchStarted();
+      await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    };
+
+    const first = ensurePinnedModelArtifacts(profile, cacheDir, { fetchImpl, signal: firstAbort.signal });
+    await fetchStarted;
+    const second = ensurePinnedModelArtifacts(profile, cacheDir, {
+      fetchImpl,
+      signal: secondAbort.signal,
+      onProgress: async () => markSecondProgress(),
+    });
+    await secondProgress;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    firstAbort.abort();
+    await assert.rejects(first, /abort/i);
+    assert.equal(sharedSignal.aborted, false);
+    secondAbort.abort();
+    await assert.rejects(second, /abort/i);
+    assert.equal(sharedSignal.aborted, true);
+    assert.equal(fetches, 1);
+  });
+
   it("downloads a logical model from its pinned conversion repository and source path", async () => {
     const bytes = Buffer.from("verified converted model bytes");
     const profile = fixtureProfile(bytes, {
@@ -118,6 +365,28 @@ describe("pinned local model artifacts", () => {
     assert.equal(JINA_EMBEDDING_PROFILE.artifactRevision, JINA_EMBEDDING_PROFILE.revision);
   });
 
+  it("blocks a non-commercial Jina artifact before network or cache mutation without explicit acknowledgement", async () => {
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-jina-license-gate-"));
+    let fetches = 0;
+
+    await assert.rejects(
+      ensurePinnedModelArtifacts(JINA_EMBEDDING_PROFILE, cacheDir, {
+        fetchImpl: async () => {
+          fetches += 1;
+          return responseFrom([]);
+        },
+      }),
+      (error) => (
+        error?.code === "non_commercial_license_acknowledgement_required"
+        && /CC-BY-NC-4\.0/i.test(error.message)
+        && /acknowledg/i.test(error.message)
+      ),
+    );
+
+    assert.equal(fetches, 0);
+    assert.deepStrictEqual(readdirSync(cacheDir), []);
+  });
+
   it("reuses a valid artifact without a network request", async () => {
     const bytes = Buffer.from("already valid");
     const profile = fixtureProfile(bytes);
@@ -131,7 +400,16 @@ describe("pinned local model artifacts", () => {
       fetchImpl: async () => { throw new Error("network must not be used"); },
     });
 
-    assert.deepStrictEqual(result, { downloaded: 0, reused: 1, artifacts: [target] });
+    assert.equal(result.downloaded, 0);
+    assert.equal(result.reused, 1);
+    assert.deepStrictEqual(result.artifacts, [target]);
+    assert.deepStrictEqual(result.receipts, [{
+      path: target,
+      expected: profile.artifacts[0],
+      ok: true,
+      size: bytes.length,
+      sha256: sha256(bytes),
+    }]);
   });
 
   it("never publishes a truncated or hash-mismatched download", async () => {
@@ -156,17 +434,72 @@ describe("pinned local model artifacts", () => {
     );
   });
 
+  it("rejects an oversized Content-Length before writing and cancels the body", async () => {
+    const expected = Buffer.from("bounded-artifact");
+    const profile = fixtureProfile(expected);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-length-bound-"));
+    const finalPath = join(modelCacheRevisionDir(cacheDir, profile), "onnx/model.onnx");
+    let cancellations = 0;
+
+    await assert.rejects(
+      ensurePinnedModelArtifacts(profile, cacheDir, {
+        fetchImpl: async () => responseFrom([expected], {
+          contentLength: expected.length + 1,
+          onCancel: async () => { cancellations += 1; },
+        }),
+      }),
+      /content-length.*exceeds.*expected/i,
+    );
+
+    assert.equal(cancellations, 1);
+    assert.equal(existsSync(finalPath), false);
+  });
+
+  it("stops an oversized stream before the excess chunk is written and removes partial files", async () => {
+    const expected = Buffer.from("exact-size");
+    const profile = fixtureProfile(expected);
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-stream-bound-"));
+    const revisionDir = modelCacheRevisionDir(cacheDir, profile);
+    const finalPath = join(revisionDir, "onnx/model.onnx");
+    let cancellations = 0;
+
+    await assert.rejects(
+      ensurePinnedModelArtifacts(profile, cacheDir, {
+        fetchImpl: async () => responseFrom(
+          [expected.subarray(0, 4), Buffer.from("far-too-many-bytes")],
+          { onCancel: async () => { cancellations += 1; } },
+        ),
+      }),
+      /stream exceeds.*expected size/i,
+    );
+
+    assert.equal(cancellations, 1);
+    assert.equal(existsSync(finalPath), false);
+    assert.deepStrictEqual(
+      existsSync(join(revisionDir, "onnx"))
+        ? readdirSync(join(revisionDir, "onnx")).filter((name) => name.includes(".part-"))
+        : [],
+      [],
+    );
+  });
+
   it("fails clearly on HTTP errors without creating a usable artifact", async () => {
     const bytes = Buffer.from("expected");
     const profile = fixtureProfile(bytes);
     const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-model-cache-"));
 
+    let cancellations = 0;
     await assert.rejects(
       ensurePinnedModelArtifacts(profile, cacheDir, {
-        fetchImpl: async () => responseFrom([], { ok: false, status: 404 }),
+        fetchImpl: async () => responseFrom([], {
+          ok: false,
+          status: 404,
+          onCancel: async () => { cancellations += 1; },
+        }),
       }),
       /HTTP 404.*fixture\/model.*onnx\/model\.onnx/i,
     );
+    assert.equal(cancellations, 1);
     assert.equal((await validatePinnedModelArtifacts(profile, cacheDir)).ok, false);
   });
 

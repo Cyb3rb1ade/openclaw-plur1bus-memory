@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { registerGatewayShutdown } from "../lib/runtime-shutdown.js";
+import {
+  registerGatewayShutdown,
+  startModelPreparationAfterLifecycle,
+} from "../lib/runtime-shutdown.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -18,6 +21,7 @@ function makeDependencies(overrides = {}) {
     llmResultCache: { close: async () => {} },
     embeddings: { shutdown: async () => {} },
     reranker: { shutdown: async () => {} },
+    modelPreparationCoordinator: { shutdown: async () => {} },
     reembeddingCoordinator: { shutdown: async () => {} },
     ...overrides,
   };
@@ -37,6 +41,38 @@ function captureGatewayStop(warnings = []) {
 }
 
 describe("LLM result cache lifecycle", () => {
+  it("reports lifecycle capability absence and never starts model preparation without shutdown ownership", async () => {
+    let starts = 0;
+    const warnings = [];
+    const api = { logger: { warn: (message) => warnings.push(message) } };
+
+    assert.equal(registerGatewayShutdown(api, makeDependencies()), false);
+    assert.equal(startModelPreparationAfterLifecycle(api, {
+      lifecycleRegistered: false,
+      coordinator: { async start() { starts += 1; } },
+    }), false);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(starts, 0);
+    assert.match(warnings.join("\n"), /model preparation.*gateway lifecycle capability (?:is )?unavailable/i);
+  });
+
+  it("starts model preparation once only after lifecycle ownership is registered", async () => {
+    let starts = 0;
+    const api = { logger: {} };
+    assert.equal(startModelPreparationAfterLifecycle(api, {
+      lifecycleRegistered: true,
+      coordinator: {
+        async start() {
+          starts += 1;
+          return { state: "ready", model: "fixture/model", dimensions: 384 };
+        },
+      },
+    }), true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(starts, 1);
+  });
+
   it("calls and awaits register-local cache close exactly once on gateway_stop", async () => {
     let closeCalls = 0;
     let releaseClose;
@@ -88,12 +124,14 @@ describe("LLM result cache lifecycle", () => {
       llmResultCache: { close: failing("cache") },
       embeddings: { shutdown: failing("embeddings") },
       reranker: { shutdown: failing("reranker") },
+      modelPreparationCoordinator: { shutdown: failing("model-preparation") },
       reembeddingCoordinator: { shutdown: failing("reembedding") },
     });
     await harness.getRegistration().handler();
 
-    assert.deepStrictEqual(calls, ["reembedding", "adapter", "pool", "shared", "routes", "metrics", "cache", "embeddings", "reranker"]);
+    assert.deepStrictEqual(calls, ["model-preparation", "reembedding", "adapter", "pool", "shared", "routes", "metrics", "cache", "embeddings", "reranker"]);
     assert.deepStrictEqual(warnings, [
+      "memory-lancedb-namespaced: model preparation shutdown failed: model-preparation broke",
       "memory-lancedb-namespaced: reembedding coordinator shutdown failed: reembedding broke",
       "memory-lancedb-namespaced: adapter shutdown failed: adapter broke",
       "memory-lancedb-namespaced: pool shutdown failed: pool broke",
@@ -108,6 +146,17 @@ describe("LLM result cache lifecycle", () => {
 
   it("wires the real plugin dependencies into the shutdown boundary", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
-    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*embeddings,\s*reranker,\s*reembeddingCoordinator,?\s*\}\);/s);
+    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*embeddings,\s*reranker,\s*modelPreparationCoordinator,\s*reembeddingCoordinator,?\s*\}\);/s);
+  });
+
+  it("starts optional model preparation only after shutdown ownership and hook registration", () => {
+    const source = readFileSync(join(root, "index.js"), "utf8");
+    const shutdownOwnership = source.indexOf("registerGatewayShutdown(api,");
+    const finalPromptHook = source.lastIndexOf('api.on("before_prompt_build"');
+    const preparationStart = source.lastIndexOf("startModelPreparationAfterLifecycle(api,");
+
+    assert.ok(shutdownOwnership >= 0);
+    assert.ok(shutdownOwnership > finalPromptHook);
+    assert.ok(preparationStart > shutdownOwnership);
   });
 });

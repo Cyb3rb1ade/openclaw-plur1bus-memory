@@ -73,6 +73,24 @@ describe("redacted PLUR1BUS control-plane projection", () => {
         verification: "runtime_vector",
         apiKey: sentinel,
       }],
+      modelPreparation: {
+        state: "downloading",
+        profileId: "jina-v3-multilingual-256",
+        model: "jinaai/jina-embeddings-v3",
+        revision: "68ed94909d564380f954be27ae2e133214c1adc9",
+        dimensions: 256,
+        license: "CC-BY-NC-4.0",
+        commercialUse: false,
+        bytesCompleted: 400,
+        bytesTotal: 1_000,
+        artifactsCompleted: 2,
+        artifactsTotal: 5,
+        targetFingerprintId: null,
+        reembedding: null,
+        errorCode: null,
+        cacheDir: "/must-not-project",
+        secret: sentinel,
+      },
     });
 
     assert.equal(projection.schemaVersion, 2);
@@ -115,6 +133,22 @@ describe("redacted PLUR1BUS control-plane projection", () => {
       selectedDimensions: 512,
       verification: "runtime_vector",
     }]);
+    assert.deepStrictEqual(projection.modelPreparation, {
+      state: "downloading",
+      profileId: "jina-v3-multilingual-256",
+      model: "jinaai/jina-embeddings-v3",
+      revision: "68ed94909d564380f954be27ae2e133214c1adc9",
+      dimensions: 256,
+      license: "CC-BY-NC-4.0",
+      commercialUse: false,
+      bytesCompleted: 400,
+      bytesTotal: 1_000,
+      artifactsCompleted: 2,
+      artifactsTotal: 5,
+      targetFingerprintId: null,
+      reembedding: null,
+      errorCode: null,
+    });
     assert.doesNotMatch(JSON.stringify(projection), /sentinel-secret-material|memory body|must-not-project/);
   });
 

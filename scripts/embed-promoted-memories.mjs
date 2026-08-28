@@ -198,7 +198,9 @@ export async function runCli(argv, runtime = {}) {
           import(pathToFileURL(join(pluginDir, "lib", "providers", "config-normalize.js")).href),
           import(pathToFileURL(join(pluginDir, "lib", "providers", "factory.js")).href),
         ]);
-        const normalized = normalizeEmbeddingConfig(pluginConfig.embedding || {});
+        const normalized = normalizeEmbeddingConfig(pluginConfig.embedding || {}, {
+          acceptNonCommercialLicense: pluginConfig.modelPreparation?.acceptNonCommercialLicense === true,
+        });
         const provider = createEmbeddingProvider(normalized);
         return {
           dimensions: Number(provider.dimensions()),

@@ -78,6 +78,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   ein Beta-3-In-Process-Reload keine alte ONNX-Pipeline neben der neu geladenen
   Instanz im Speicher; ein fehlgeschlagener Modellimport bleibt erneut
   versuchbar.
+- **Sichere Modellvorbereitung im Operator-Dashboard.** Eine geschlossene
+  `modelPreparation.profile`-Auswahl fuer E5 und Jina startet automatisch nur
+  den atomaren, hashgeprueften Download. Fortschritt und Ergebnis ueberleben
+  Seiten- und Gateway-Reloads; parallele Provider-Downloads werden
+  zusammengefuehrt. Ein geaenderter Embedding-Fingerprint erzeugt einen
+  nicht-mutierenden Dry-Run mit Karten-, Speicher- und Platzabschaetzung, aber
+  weder eine Migration noch einen Modellwechsel. Jina bleibt bis zur expliziten
+  CC-BY-NC-4.0-Bestaetigung blockiert; Apply und Umschalten verlangen weiterhin
+  ihre getrennten Operator-Bestaetigungen.
+- **Zentrales Jina-Lizenz- und Cache-Gate.** Die CC-BY-NC-4.0-Bestaetigung wird
+  vor jedem Jina-v3-Download und jeder Provider-Inferenz durchgesetzt, auch im
+  aktiven Provider, in OpenClaw-Adaptern, Wartungsskripten und Zielprobes. Der
+  CLI-Wizard fragt sie ausdruecklich ab. Vorbereitung, Probe, Migration und
+  aktiver Provider teilen einen aufgeloesten lokalen Cachepfad, auch wenn beim
+  Planen noch ein Remote-Embedding aktiv ist.
 - **Modellabhaengige Embedding-Dimensionen.** Die Operator-Ansicht zeigt fuer
   OpenAI `text-embedding-3-small` und `text-embedding-3-large` sichere Presets
   samt zulaessigem Bereich, fuer das gepinnte lokale E5-Modell ausschliesslich

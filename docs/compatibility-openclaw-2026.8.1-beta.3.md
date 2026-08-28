@@ -105,6 +105,19 @@ inference fails and the configured free fallback is BGE, the request is tried
 exactly once with BGE. Missing, partial, incorrectly sized, or incorrectly
 hashed artifacts fail with a specific diagnostic and are never loaded.
 
+Selecting one of the closed `modelPreparation.profile` values in OpenClaw
+Config starts an isolated, resumable preparation stage. It downloads and
+validates the pinned files atomically, persists aggregate progress for the
+read-only Control UI, and coalesces a concurrent provider request for the same
+artifact. Jina preparation additionally requires an explicit CC BY-NC 4.0
+acknowledgement. The same gate is enforced by direct providers, OpenClaw
+embedding adapters, scripts, artifact downloads, and re-embedding target
+probes. Preparation and the eventual target provider resolve one shared local
+cache path even while the active provider is remote. A changed target fingerprint produces a non-mutating row,
+storage, and free-space recommendation only. It never writes LanceDB, creates a
+migration, consumes a confirmation token, or changes the active provider; the
+existing operator-admin plan/apply/switch confirmations remain authoritative.
+
 ## Data and upgrade compatibility
 
 The 7.4.8 or 7.4.10 to 7.5.0 upgrade is non-destructive. It introduces no breaking
