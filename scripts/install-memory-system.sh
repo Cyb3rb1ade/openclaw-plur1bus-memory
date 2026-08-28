@@ -742,6 +742,8 @@ EMBEDDING_LOCAL_REVISION="614241f622f53c4eeff9890bdc4f31cfecc418b3"
 EMBEDDING_LOCAL_QUERY_PREFIX="query: "
 EMBEDDING_LOCAL_PASSAGE_PREFIX="passage: "
 EMBEDDING_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
+JINA_LICENSE_ACCEPTED="false"
+MODEL_PREPARATION_PROFILE=""
 RERANKER_PROVIDER="cohere"
 RERANKER_MODEL="rerank-v3.5"
 RERANKER_LOCAL_MODEL="woxpas-ai/bge-reranker-v2-m3-onnx"
@@ -781,6 +783,12 @@ case "$EMBEDDING_PROVIDER_MODE" in
     info "Erster echter Local-Smoke/Call lädt das Modell nach $EMBEDDING_LOCAL_CACHE_DIR."
     ;;
   jina)
+    if ! confirm "CC BY-NC 4.0 für JinaAI jina-embeddings-v3 ausdrücklich akzeptieren?" "n"; then
+      error "JinaAI jina-embeddings-v3 wird ohne ausdrückliche Zustimmung zur CC BY-NC 4.0 nicht konfiguriert."
+      exit 1
+    fi
+    JINA_LICENSE_ACCEPTED="true"
+    MODEL_PREPARATION_PROFILE="jina-v3-multilingual-1024"
     EMBEDDING_PROVIDER="local-transformers"
     EMBEDDING_LOCAL_MODEL="jinaai/jina-embeddings-v3"
     EMBEDDING_LOCAL_REVISION="68ed94909d564380f954be27ae2e133214c1adc9"
@@ -1094,6 +1102,14 @@ else
   done
   OBSIDIAN_WORKSPACES_JSON+="]"
 
+  if [[ "$JINA_LICENSE_ACCEPTED" == "true" ]]; then
+    MODEL_PREPARATION_BLOCK=$(jq -n \
+      --arg profile "$MODEL_PREPARATION_PROFILE" \
+      '{"profile": $profile, "acceptNonCommercialLicense": true}')
+  else
+    MODEL_PREPARATION_BLOCK='null'
+  fi
+
   # Plugin-Config-Objekt
   PLUGIN_CONFIG=$(jq -n \
     --arg embedding_provider "$EMBEDDING_PROVIDER" \
@@ -1112,9 +1128,10 @@ else
     --argjson merging "$MERGING_BLOCK" \
     --argjson schicht15 "$SCHICHT15_BLOCK" \
     --argjson embedding_fallback "$EMBEDDING_FALLBACK_BLOCK" \
+    --argjson model_preparation "$MODEL_PREPARATION_BLOCK" \
     '{
       "enabled": true,
-      "config": {
+      "config": ({
         "embedding": (
           if $embedding_provider == "local-transformers" then
             {
@@ -1176,7 +1193,7 @@ else
             }
           }
         }
-      }
+      } | if $model_preparation == null then . else . + {"modelPreparation": $model_preparation} end)
     }')
 fi
 

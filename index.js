@@ -60,6 +60,10 @@ import { createLanceGenerationBackend } from "./lib/reembedding/lance-backend.js
 import { createReembeddingCoordinator } from "./lib/reembedding/coordinator.js";
 import { createReembeddingSwitchRuntime } from "./lib/reembedding/switch-runtime.js";
 import { createGenerationRuntimeProbe } from "./lib/reembedding/runtime-probe.js";
+import {
+  createFailedModelPreparationCoordinator,
+  createModelPreparationCoordinator,
+} from "./lib/model-preparation/coordinator.js";
 import { embeddingFingerprintId } from "./lib/reembedding/fingerprint.js";
 import {
   createOpenClawEmbeddingSelectionMutator,
@@ -125,7 +129,10 @@ import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validat
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
 import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
-import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
+import {
+  registerGatewayShutdown,
+  startModelPreparationAfterLifecycle,
+} from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
   openDirectoryCapability,
@@ -255,9 +262,13 @@ import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
 import { OverlayGenerator } from "./lib/overlay-generator.js";
 import { ContradictionDetector } from "./lib/contradiction-detector.js";
 import { runOverlayAuditCommand } from "./lib/overlay-commands.js";
-import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
+import {
+  normalizeEmbeddingConfig,
+  normalizeRerankerConfig,
+  resolveLocalModelCacheDir,
+} from "./lib/providers/config-normalize.js";
 import { applyLegacyProviderDefaults } from "./lib/providers/legacy-provider-migration.js";
-import { DEFAULT_LOCAL_MODEL_CACHE, DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL, embeddingDimensionProfiles } from "./lib/providers/dimensions.js";
+import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL, embeddingDimensionProfiles } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
 import {
@@ -4460,7 +4471,12 @@ const plugin = {
     const obsidianBridgeEnabled = obsidianBridgeCfg.enabled === true;
 
     const embeddingCfg = cfg.embedding || {};
-    const normalizedEmbeddingCfg = normalizeEmbeddingConfig(embeddingCfg, { mode: "existing" });
+    const localModelCacheDir = resolveLocalModelCacheDir(embeddingCfg);
+    const nonCommercialModelAccepted = cfg.modelPreparation?.acceptNonCommercialLicense === true;
+    const normalizedEmbeddingCfg = normalizeEmbeddingConfig(embeddingCfg, {
+      mode: "existing",
+      acceptNonCommercialLicense: nonCommercialModelAccepted,
+    });
     const apiKey = normalizedEmbeddingCfg.provider === "local-transformers"
       ? undefined
       : resolveConfiguredApiKey(normalizedEmbeddingCfg, "${OPENAI_API_KEY}");
@@ -5161,6 +5177,8 @@ const plugin = {
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? new LocalTransformersEmbeddingProvider({
           ...normalizedEmbeddingCfg.local,
+          cacheDir: localModelCacheDir,
+          acceptNonCommercialLicense: nonCommercialModelAccepted,
           dimensions: dimensions || vectorDim,
           embeddingCacheEnabled: cfg.runtime?.embeddingCacheEnabled,
           cacheMaxEntries: cfg.runtime?.embeddingCacheMaxEntries ?? normalizedEmbeddingCfg.cacheMaxEntries,
@@ -5204,6 +5222,24 @@ const plugin = {
       }
     }
 
+    // This adapter also owns plugin-lifecycle resources, so it must exist even
+    // on hosts without the optional chat-command registration capability.
+    const memoryDbAdapter = createDbAdapter({
+      basePath: embeddingGenerationLayout.activeRoot,
+      getEmbedding: async (text) => {
+        try {
+          return await embeddings.embed(text);
+        } catch (error) {
+          safeDebug(api.logger, "memory-adapter.embedding-fallback", error);
+          return null;
+        }
+      },
+      embedder: {
+        embed: async (text) => embeddings.embed(text),
+      },
+      logger: api.logger,
+    });
+
     const createTargetEmbeddingProvider = async ({ fingerprint, secretRef } = {}) => {
       if (!fingerprint || typeof fingerprint !== "object") {
         throw new Error("reembedding target fingerprint is required");
@@ -5222,7 +5258,8 @@ const plugin = {
           dimensions: fingerprint.dimensions,
           queryPrefix: fingerprint.queryPrefix,
           passagePrefix: fingerprint.passagePrefix,
-          cacheDir: normalizedEmbeddingCfg.local?.cacheDir || DEFAULT_LOCAL_MODEL_CACHE,
+          cacheDir: localModelCacheDir,
+          acceptNonCommercialLicense: nonCommercialModelAccepted,
           embeddingCacheEnabled: false,
           logger: api.logger,
         });
@@ -5316,16 +5353,17 @@ const plugin = {
       await shutdownTargetProvider(provider, operationError);
       return result;
     };
+    const readReembeddingDiskStatus = async () => {
+      const disk = statfsSync(baseDbPath);
+      const freeBytes = Math.floor(Number(disk.bavail) * Number(disk.bsize));
+      return { freeBytes: Math.min(Number.MAX_SAFE_INTEGER, freeBytes) };
+    };
     const reembeddingCoordinator = createReembeddingCoordinator({
       stateStore: reembeddingStateStore,
       backend: reembeddingBackend,
       createTargetProvider: createTargetEmbeddingProvider,
       plannerDependencies: {
-        statDisk: async () => {
-          const disk = statfsSync(baseDbPath);
-          const freeBytes = Math.floor(Number(disk.bavail) * Number(disk.bsize));
-          return { freeBytes: Math.min(Number.MAX_SAFE_INTEGER, freeBytes) };
-        },
+        statDisk: readReembeddingDiskStatus,
         inspectTargetArtifacts: async ({ fingerprint }) => {
           const profile = pinnedLocalModelProfile(fingerprint.model);
           if (!profile || profile.revision !== fingerprint.revision) {
@@ -5377,6 +5415,26 @@ const plugin = {
         return { semanticRecall: true, validationMemoryId: sourceRow.id, validationTable: table.tableId };
       },
     });
+    let modelPreparationCoordinator = null;
+    if (cfg.modelPreparation) {
+      try {
+        modelPreparationCoordinator = createModelPreparationCoordinator({
+          stateRoot: baseDbPath,
+          cacheDir: localModelCacheDir,
+          config: cfg.modelPreparation,
+          activeFingerprint: activeEmbeddingFingerprint,
+          inventoryActiveGeneration: reembeddingBackend.inventoryActiveGeneration,
+          statDisk: readReembeddingDiskStatus,
+          logger: api.logger,
+        });
+      } catch (error) {
+        safeWarn(api.logger, "model-preparation.initialize", error);
+        modelPreparationCoordinator = createFailedModelPreparationCoordinator({
+          config: cfg.modelPreparation,
+          activeFingerprint: activeEmbeddingFingerprint,
+        });
+      }
+    }
     const reembeddingConfigMutationAvailable = typeof api.runtime?.config?.mutateConfigFile === "function";
     const reembeddingSwitchRuntime = reembeddingConfigMutationAvailable
       ? createReembeddingSwitchRuntime({
@@ -8044,28 +8102,6 @@ const plugin = {
           },
         });
 
-        // ── /memory, /forget, /correct (Phase 4b) ─────────────────────
-        // Lazy-initialisierter DB-Adapter: nutzt den GLEICHEN baseDbPath wie
-        // die Plugin-interne MemoryDB. getEmbedding ist optional — wenn der
-        // Embedder beim ersten /memory-Aufruf noch nicht ready ist, fallback
-        // auf Text-Search.
-        const memoryDbAdapter = createDbAdapter({
-          basePath: embeddingGenerationLayout.activeRoot,
-          getEmbedding: async (text) => {
-            try {
-              return await embeddings.embed(text);
-            } catch (_) {
-              return null;
-            }
-          },
-          // Phase 6: Embedder-Injection für updateCard mit Re-Embedding.
-          // Adapter braucht .embed(text) → vector.
-          embedder: {
-            embed: async (text) => embeddings.embed(text),
-          },
-          logger: api.logger,
-        });
-
         const resolveRegisteredMemoryContext = (commandCtx, options = {}) => resolveHostCommandMemoryContext(commandCtx, {
           resolveAgentWorkspaceDir: (config, agentId) => api.runtime.agent.resolveAgentWorkspaceDir(config, agentId),
           workspaceAliases: memoryWorkspaceAliases,
@@ -8183,6 +8219,7 @@ const plugin = {
                   model: normalizedEmbeddingCfg.model,
                   dimensions: dimensions || vectorDim,
                 }),
+                modelPreparation: modelPreparationCoordinator?.snapshot() || null,
                 namespaces: namespaceLayout.mode === "named"
                   ? namespaceLayout.recallReadNamespaces.map((id) => ({ id, dimensions: vectorDim }))
                   : [{ id: "legacy-flat", dimensions: vectorDim }],
@@ -8210,23 +8247,6 @@ const plugin = {
             "memory-lancedb-namespaced: OpenClaw control status Gateway capability unavailable",
           );
         }
-
-        registerGatewayShutdown(api, {
-          memoryDbAdapter,
-          pool: {
-            shutdown: async () => {
-              legacyMigrationShutdown.abort();
-              await pool.shutdown();
-            },
-          },
-          sharedMemoryPool,
-          clearTurnRoutes: clearInitializedTurnRoutes,
-          flushMetrics,
-          llmResultCache,
-          embeddings,
-          reranker,
-          reembeddingCoordinator,
-        });
 
         const runMemoryCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
@@ -11686,7 +11706,30 @@ const plugin = {
 
     // Manual tools remain available regardless of autoCapture/autoRecall:
     // memory_store, memory_recall, memory_forget and knowledge_update are not
-    // controlled by the automatic hook opt-outs above.
+    // controlled by the automatic hook opt-outs above. Lifecycle ownership is
+    // intentionally registered after every hook/capability registration and
+    // independently of the optional chat-command surface.
+    const gatewayShutdownRegistered = registerGatewayShutdown(api, {
+      memoryDbAdapter,
+      pool: {
+        shutdown: async () => {
+          legacyMigrationShutdown.abort();
+          await pool.shutdown();
+        },
+      },
+      sharedMemoryPool,
+      clearTurnRoutes: clearInitializedTurnRoutes,
+      flushMetrics,
+      llmResultCache,
+      embeddings,
+      reranker,
+      modelPreparationCoordinator,
+      reembeddingCoordinator,
+    });
+    startModelPreparationAfterLifecycle(api, {
+      lifecycleRegistered: gatewayShutdownRegistered,
+      coordinator: modelPreparationCoordinator,
+    });
   },
 };
 

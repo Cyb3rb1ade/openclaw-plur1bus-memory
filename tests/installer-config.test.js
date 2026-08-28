@@ -16,6 +16,25 @@ const installerSource = readFileSync(
 );
 
 describe("installer feature config policy", () => {
+  it("requires explicit Jina license acceptance and emits the matching preparation profile", () => {
+    const choiceStart = installerSource.indexOf("  jina)");
+    const choiceEnd = installerSource.indexOf("  custom)", choiceStart);
+    assert.ok(choiceStart >= 0 && choiceEnd > choiceStart, "Jina installer choice must be present");
+    const choice = installerSource.slice(choiceStart, choiceEnd);
+    assert.match(choice, /confirm\s+"[^"]*CC BY-NC 4\.0[^"]*"\s+"n"/);
+    assert.match(choice, /JINA_LICENSE_ACCEPTED="true"/);
+    assert.match(choice, /MODEL_PREPARATION_PROFILE="jina-v3-multilingual-1024"/);
+    assert.match(choice, /exit 1/);
+
+    const configStart = installerSource.indexOf('  if [[ "$JINA_LICENSE_ACCEPTED" == "true" ]]');
+    const configEnd = installerSource.indexOf("\nfi\n\nPLUGIN_POLICY_INPUT", configStart);
+    assert.ok(configStart >= 0 && configEnd > configStart, "plugin config generation must be present");
+    const generated = installerSource.slice(configStart, configEnd);
+    assert.match(generated, /--argjson model_preparation/);
+    assert.match(generated, /"modelPreparation":\s*\$model_preparation/);
+    assert.match(generated, /acceptNonCommercialLicense/);
+  });
+
   it("leaves chat model selection to OpenClaw and never copies the merging route into Schicht 1.5", () => {
     const promptStart = installerSource.indexOf('if confirm "LLM-Merging aktivieren?');
     const promptEnd = installerSource.indexOf("\nfi\n\nelse", promptStart);

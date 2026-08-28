@@ -109,7 +109,7 @@ unvollständige Datei wird vor der Inferenz abgelehnt.
       "model": "intfloat/multilingual-e5-small",
       "revision": "614241f622f53c4eeff9890bdc4f31cfecc418b3",
       "dimensions": 384,
-      "cacheDir": "~/.openclaw/models/plur1bus"
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
     }
   },
   "reranker": {
@@ -119,13 +119,13 @@ unvollständige Datei wird vor der Inferenz abgelehnt.
     "local": {
       "model": "jinaai/jina-reranker-v2-base-multilingual",
       "revision": "9cfeff2df7d40d1b78e75e5e9cebec92a99813c9",
-      "cacheDir": "~/.openclaw/models/plur1bus"
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
     },
     "fallbackOnError": true,
     "fallbackProvider": "local-transformers",
     "fallbackModel": "woxpas-ai/bge-reranker-v2-m3-onnx",
     "fallbackRevision": "c44ebc43de724ae8816668bb44d2e728e17faa18",
-    "fallbackCacheDir": "~/.openclaw/models/plur1bus"
+    "fallbackCacheDir": "${OPENCLAW_HOME}/models/plur1bus"
   }
 }
 ```
@@ -145,11 +145,22 @@ nicht benoetigt.
       "model": "jinaai/jina-embeddings-v3",
       "revision": "68ed94909d564380f954be27ae2e133214c1adc9",
       "dimensions": 256,
-      "cacheDir": "~/.openclaw/models/plur1bus"
+      "cacheDir": "${OPENCLAW_HOME}/models/plur1bus"
     }
+  },
+  "modelPreparation": {
+    "profile": "jina-v3-multilingual-256",
+    "acceptNonCommercialLicense": true
   }
 }
 ```
+
+Die Bestaetigung ist kein reiner UI-Hinweis: Ohne sie verweigern sowohl der
+aktive Provider als auch Re-Embedding-Probes und der zentrale Artefakt-
+Downloader Jina vor Netzwerk- oder Modellzugriff. Vorbereitung, Zielprobe und
+der nach einem bestaetigten Switch aktive Provider verwenden exakt dasselbe
+aufgeloeste `embedding.local.cacheDir`; ein Remote-Provider darf diesen
+zukuenftigen lokalen Cache bereits konfigurieren.
 
 Wer Jina abwählt, kann BGE direkt als `reranker.model` und
 `reranker.local.model` setzen. Das Quellrepository
@@ -175,6 +186,35 @@ Re-Embedding-Adminpfad angewendet. Unbekannte OpenAI-kompatible Modelle erhalten
 keine erratene Auswahlliste; fuer sie sind eine explizite Dimension und die
 Validierung eines real gelieferten Vektors erforderlich. Auch bekannte Modelle
 werden vor dem Umschalten durch eine echte Providerantwort validiert.
+
+### Automatische Modellvorbereitung
+
+OpenClaw Config bietet unter `modelPreparation.profile` eine geschlossene
+Auswahl aus E5 384d und den sieben Jina-v3-Matryoshka-Profilen. Speichern der
+Auswahl startet im Gateway nur Download und SHA-256-Validierung. Fortschritt,
+Dateizahl, Revision und Ziel-Fingerprint werden dauerhaft unter dem
+PLUR1BUS-State gespeichert und nach einem erneuten Oeffnen der Operator-Seite
+weiter angezeigt. Gleichzeitige Anforderungen des aktiven Providers und der
+Vorbereitung teilen denselben In-Flight-Download.
+
+```json
+{
+  "modelPreparation": {
+    "profile": "jina-v3-multilingual-256",
+    "acceptNonCommercialLicense": true
+  }
+}
+```
+
+Fuer jeden Jina-v3-Embedding-Pfad ist die ausdrueckliche Bestaetigung der
+nicht-kommerziellen CC-BY-NC-4.0-Lizenz erforderlich. Ohne sie werden weder
+Download noch Inferenz gestartet. Sobald
+alle Artefakte gueltig sind, vergleicht PLUR1BUS den Ziel-Fingerprint mit der
+aktiven Generation und berechnet lesend Kartenanzahl, Zielgroesse und
+Platzbedarf. Eine Abweichung erzeugt nur die Empfehlung fuer
+`plur1bus.reembedding.plan`; sie startet weder Kopieren noch Umschalten. Apply
+und `ready_to_switch` bleiben zwei getrennte explizite Bestaetigungen. Bei
+Fehler, Abbruch oder zu wenig Platz bleibt die aktive Generation unveraendert.
 
 ---
 

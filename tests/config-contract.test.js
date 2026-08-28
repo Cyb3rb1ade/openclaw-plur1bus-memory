@@ -210,6 +210,30 @@ describe("manifest-derived configuration contract", () => {
     }
   });
 
+  it("accepts only closed automatic model-preparation profiles", () => {
+    const selected = resolveEffectiveConfig({
+      modelPreparation: {
+        profile: "jina-v3-multilingual-256",
+        acceptNonCommercialLicense: true,
+      },
+    });
+    assert.deepEqual(selected.modelPreparation, {
+      profile: "jina-v3-multilingual-256",
+      acceptNonCommercialLicense: true,
+    });
+    assert.equal(Object.hasOwn(resolveEffectiveConfig({}), "modelPreparation"), false);
+    assertConfigError(
+      () => validatePluginConfig({ modelPreparation: { profile: "moving-main" } }),
+      `${PLUGIN_CONFIG_PATH}.modelPreparation.profile`,
+      /one of/i,
+    );
+    assertConfigError(
+      () => validatePluginConfig({ modelPreparation: { profile: "e5-multilingual-384", url: "https://example.invalid" } }),
+      `${PLUGIN_CONFIG_PATH}.modelPreparation.url`,
+      /unknown/i,
+    );
+  });
+
   for (const forbidden of ["retroactiveInterference", "quietHours"]) {
     it(`keeps ${forbidden} schema-unreachable in B11`, () => {
       assertConfigError(

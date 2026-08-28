@@ -90,6 +90,22 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
           license: "CC-BY-NC-4.0",
           commercialUse: false,
         }],
+        modelPreparation: {
+          state: "downloading",
+          profileId: "jina-v3-multilingual-256",
+          model: "jinaai/jina-embeddings-v3",
+          revision: "68ed94909d564380f954be27ae2e133214c1adc9",
+          dimensions: 256,
+          license: "CC-BY-NC-4.0",
+          commercialUse: false,
+          bytesCompleted: 400,
+          bytesTotal: 1_000,
+          artifactsCompleted: 2,
+          artifactsTotal: 5,
+          targetFingerprintId: null,
+          reembedding: null,
+          errorCode: null,
+        },
         memoryHealth: {
           status: "degraded",
           namespaces: [{ id: "lancedb-namespaced", dimensions: 768, rows: 3 }],
@@ -143,6 +159,10 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
     assert.match(response.body, /Feature Controls/);
     assert.match(response.body, /Re-Embedding Workflow/);
     assert.match(response.body, /Embedding Dimension Planner/);
+    assert.match(response.body, /Model Preparation/);
+    assert.match(response.body, /400 B of 1,000 B/);
+    assert.match(response.body, /<progress[^>]+aria-label="Local model download progress"[^>]+value="400"[^>]+max="1000"/);
+    assert.match(response.body, /downloaded and hash-validated automatically/i);
     assert.match(response.body, /<select[^>]+aria-label="Dimensions for intfloat\/multilingual-e5-small"/);
     assert.match(response.body, /<option value="384" selected>384 \(fixed\)<\/option>/);
     assert.match(response.body, /jinaai\/jina-embeddings-v3/);
@@ -154,6 +174,81 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
     assert.match(response.body, /&lt;unsafe&gt;/);
     assert.doesNotMatch(response.body, /<unsafe>|<script|<form|fetch\s*\(/i);
     assert.doesNotMatch(response.body, new RegExp(secret));
+  });
+
+  it("renders a persisted model preparation suggestion without starting migration", async () => {
+    const handler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        modelPreparation: {
+          state: "ready",
+          profileId: "jina-v3-multilingual-256",
+          model: "jinaai/jina-embeddings-v3",
+          revision: "68ed94909d564380f954be27ae2e133214c1adc9",
+          dimensions: 256,
+          license: "CC-BY-NC-4.0",
+          commercialUse: false,
+          bytesCompleted: 1_000,
+          bytesTotal: 1_000,
+          artifactsCompleted: 5,
+          artifactsTotal: 5,
+          targetFingerprintId: `embedding:v1:sha256:${"b".repeat(64)}`,
+          errorCode: null,
+          reembedding: {
+            required: true,
+            status: "recommended",
+            rows: 125,
+            targetBytes: 129_000,
+            requiredFreeBytes: 161_250,
+            freeBytes: 5_000_000,
+            nextAction: "plan_with_explicit_confirmation",
+          },
+        },
+        reembeddingWorkflow: { migration: null, steps: [] },
+      }),
+    });
+    const response = fakeResponse();
+
+    await handler({ method: "GET", url: CONTROL_UI_PATH }, response);
+
+    assert.match(response.body, /Re-embedding dry-run recommendation/i);
+    assert.match(response.body, /125 cards/);
+    assert.match(response.body, /does not start copying or switch the active model/i);
+    assert.match(response.body, /acknowledged.*CC-BY-NC-4\.0|CC-BY-NC-4\.0.*acknowledged/i);
+    assert.doesNotMatch(response.body, /License acknowledgement required/i);
+    assert.doesNotMatch(response.body, /<meta http-equiv="refresh"/);
+    assert.doesNotMatch(response.body, /<script|<form|fetch\s*\(/i);
+  });
+
+  it("does not claim Jina license acknowledgement for a failed initialization snapshot", async () => {
+    const handler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        modelPreparation: {
+          state: "failed",
+          profileId: "jina-v3-multilingual-256",
+          model: "jinaai/jina-embeddings-v3",
+          revision: "68ed94909d564380f954be27ae2e133214c1adc9",
+          dimensions: 256,
+          license: "CC-BY-NC-4.0",
+          commercialUse: false,
+          bytesCompleted: 0,
+          bytesTotal: 1_000,
+          artifactsCompleted: 0,
+          artifactsTotal: 5,
+          targetFingerprintId: null,
+          errorCode: "model_preparation_initialization_failed",
+          reembedding: null,
+        },
+        reembeddingWorkflow: { migration: null, steps: [] },
+      }),
+    });
+    const response = fakeResponse();
+
+    await handler({ method: "GET", url: CONTROL_UI_PATH }, response);
+
+    assert.match(response.body, /CC-BY-NC-4\.0.*explicit acknowledgement.*OpenClaw Config/i);
+    assert.doesNotMatch(response.body, /Non-commercial license acknowledged/i);
   });
 
   it("renders durable re-embedding progress and refreshes only an active read-only migration", async () => {

@@ -35,7 +35,7 @@ function runWizard(lines) {
     }, 5_000);
 
     function answerVisiblePrompts() {
-      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3|1\/2\/3\/4|a\/b\/c)\]: /g) || []).length;
+      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3|1\/2\/3\/4|a\/b\/c|yes\/no)\]: /g) || []).length;
       while (sentLines < lines.length && sentLines < promptCount) {
         child.stdin.write(`${lines[sentLines]}\n`);
         sentLines += 1;
@@ -136,7 +136,7 @@ describe("provider wizard CLI input validation", () => {
   });
 
   it("returns the pinned JinaAI v3 local embedding with no credential", async () => {
-    const result = await runWizard(["3", "3"]);
+    const result = await runWizard(["3", "yes", "3"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.embedding, {
@@ -149,5 +149,18 @@ describe("provider wizard CLI input validation", () => {
         passagePrefix: "",
       },
     });
+    assert.deepStrictEqual(parseWizardResult(result.stdout)?.modelPreparation, {
+      profile: "jina-v3-multilingual-1024",
+      acceptNonCommercialLicense: true,
+    });
+    assert.match(result.stderr, /CC BY-NC 4\.0.*non-commercial/i);
+  });
+
+  it("does not emit a usable Jina configuration when the non-commercial license is declined", async () => {
+    const result = await runWizard(["3", "no"]);
+
+    assert.notStrictEqual(result.code, 0);
+    assert.strictEqual(parseWizardResult(result.stdout), null);
+    assert.match(result.stderr, /license acknowledgement.*required/i);
   });
 });

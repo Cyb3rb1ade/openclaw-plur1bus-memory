@@ -45,6 +45,8 @@
     "autoRecall": { "label": "Automatic Recall", "help": "Inject relevant durable memory before an eligible turn." },
     "skillMiner.enabled": { "label": "Skill Miner", "help": "Mine proposals and hand approved skills to OpenClaw Skill Workshop." },
     "featureCronSetup.auto": { "label": "Automatic Feature Cron Setup", "advanced": true, "help": "Create OpenClaw-native PLUR1BUS feature cron jobs." },
+    "modelPreparation.profile": { "label": "Prepare Local Embedding Model", "help": "Selecting a pinned model/dimension profile downloads and hash-validates it automatically. It only creates a dry-run recommendation; it never switches the active embedding generation." },
+    "modelPreparation.acceptNonCommercialLicense": { "label": "Accept Jina CC BY-NC 4.0", "advanced": true, "help": "Required before downloading the optional Jina v3 embedding. This profile is not licensed for commercial use." },
     "reembedding.activeGeneration": { "label": "Active Embedding Generation", "advanced": true, "help": "Coordinator-managed immutable LanceDB generation. Do not edit without a validated migration." },
     "reembedding.fingerprintId": { "label": "Active Embedding Fingerprint", "advanced": true, "help": "Coordinator-managed SHA-256 identity of the active vector space." },
     "reembedding.dimensions": { "label": "Active Generation Dimensions", "advanced": true, "help": "Coordinator-managed vector dimension bound to the selected generation." }
@@ -164,6 +166,29 @@
             }
           },
           "crossNamespaceRecall": {
+            "type": "boolean"
+          }
+        }
+      },
+      "modelPreparation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile"],
+        "properties": {
+          "profile": {
+            "type": "string",
+            "enum": [
+              "e5-multilingual-384",
+              "jina-v3-multilingual-32",
+              "jina-v3-multilingual-64",
+              "jina-v3-multilingual-128",
+              "jina-v3-multilingual-256",
+              "jina-v3-multilingual-512",
+              "jina-v3-multilingual-768",
+              "jina-v3-multilingual-1024"
+            ]
+          },
+          "acceptNonCommercialLicense": {
             "type": "boolean"
           }
         }

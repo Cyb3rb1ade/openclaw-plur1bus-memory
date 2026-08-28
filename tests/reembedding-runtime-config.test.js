@@ -8,6 +8,10 @@ import {
   redactedEmbeddingSecretRef,
 } from "../lib/reembedding/runtime-config.js";
 import {
+  normalizeEmbeddingConfig,
+  resolveLocalModelCacheDir,
+} from "../lib/providers/config-normalize.js";
+import {
   E5_EMBEDDING_PROFILE,
   JINA_EMBEDDING_PROFILE,
   JINA_RERANKER_PROFILE,
@@ -61,6 +65,43 @@ describe("reembedding runtime configuration", () => {
       dimensions: 256,
       revision: JINA_EMBEDDING_PROFILE.revision,
     });
+  });
+
+  it("uses one custom local cache from remote-active preparation through the local target switch", () => {
+    const customCacheDir = "/tmp/plur1bus-custom-local-model-cache";
+    const remoteActive = {
+      provider: "openai",
+      model: "text-embedding-3-small",
+      dimensions: 1536,
+      local: { cacheDir: customCacheDir },
+    };
+    assert.equal(normalizeEmbeddingConfig(remoteActive).provider, "openai");
+    assert.equal(resolveLocalModelCacheDir(remoteActive), customCacheDir);
+
+    const fingerprint = embeddingFingerprintFromNormalizedConfig(normalizeEmbeddingConfig({
+      provider: "local-transformers",
+      local: {
+        model: JINA_EMBEDDING_PROFILE.model,
+        revision: JINA_EMBEDDING_PROFILE.revision,
+        dimensions: 256,
+        cacheDir: customCacheDir,
+      },
+    }, { acceptNonCommercialLicense: true }));
+    const switched = embeddingConfigFromSelection({ fingerprint }, remoteActive);
+    const normalizedTarget = normalizeEmbeddingConfig(switched, {
+      acceptNonCommercialLicense: true,
+    });
+
+    assert.equal(switched.local.cacheDir, customCacheDir);
+    assert.equal(normalizedTarget.local.cacheDir, customCacheDir);
+    assert.equal(normalizedTarget.local.acceptNonCommercialLicense, true);
+  });
+
+  it("preserves the legacy programmatic embedding.cacheDir fallback", () => {
+    assert.equal(
+      resolveLocalModelCacheDir({ cacheDir: "/tmp/plur1bus-legacy-local-model-cache" }),
+      "/tmp/plur1bus-legacy-local-model-cache",
+    );
   });
 
   it("rejects a pinned reranker as an embedding fingerprint", () => {

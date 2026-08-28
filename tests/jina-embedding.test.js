@@ -149,6 +149,7 @@ describe("downloadable multilingual JinaAI embedding", () => {
       model: JINA_EMBEDDING_PROFILE.model,
       dimensions: 256,
       cacheDir,
+      acceptNonCommercialLicense: true,
       embeddingCacheEnabled: false,
       ensureModelArtifacts: async (profile, receivedCacheDir) => {
         calls.push(["artifacts", profile, receivedCacheDir]);
@@ -181,12 +182,57 @@ describe("downloadable multilingual JinaAI embedding", () => {
     assert.equal(calls.filter(([name]) => name === "dispose").length, 1);
   });
 
+  it("fails closed before artifact or Transformers loading without explicit license acknowledgement", async () => {
+    let artifactCalls = 0;
+    let transformerLoads = 0;
+    const provider = new LocalTransformersEmbeddingProvider({
+      model: JINA_EMBEDDING_PROFILE.model,
+      dimensions: 256,
+      cacheDir: mkdtempSync(join(tmpdir(), "plur1bus-jina-license-provider-")),
+      embeddingCacheEnabled: false,
+      ensureModelArtifacts: async () => { artifactCalls += 1; },
+      loadTransformers: async () => {
+        transformerLoads += 1;
+        return fakeTransformersRuntime([]);
+      },
+    });
+
+    await assert.rejects(
+      provider.embed("probe"),
+      (error) => error?.code === "non_commercial_license_acknowledgement_required",
+    );
+    assert.equal(artifactCalls, 0);
+    assert.equal(transformerLoads, 0);
+  });
+
+  it("fails closed before returning an in-memory embedding cache hit without license acknowledgement", async () => {
+    let cacheReads = 0;
+    const provider = new LocalTransformersEmbeddingProvider({
+      model: JINA_EMBEDDING_PROFILE.model,
+      dimensions: 256,
+      cacheDir: mkdtempSync(join(tmpdir(), "plur1bus-jina-license-cache-hit-")),
+    });
+    provider._cache = {
+      async getMany() {
+        cacheReads += 1;
+        return [Array(256).fill(0)];
+      },
+    };
+
+    await assert.rejects(
+      provider.embed("cached probe"),
+      (error) => error?.code === "non_commercial_license_acknowledgement_required",
+    );
+    assert.equal(cacheReads, 0);
+  });
+
   it("fails closed before model loading when the pinned Jina structure drifts", async () => {
     const calls = [];
     const provider = new LocalTransformersEmbeddingProvider({
       model: JINA_EMBEDDING_PROFILE.model,
       dimensions: 1024,
       cacheDir: mkdtempSync(join(tmpdir(), "plur1bus-jina-embedding-drift-")),
+      acceptNonCommercialLicense: true,
       embeddingCacheEnabled: false,
       ensureModelArtifacts: async () => {},
       loadTransformers: async () => fakeTransformersRuntime(calls, { architecture: "UnknownModel" }),
@@ -202,6 +248,7 @@ describe("downloadable multilingual JinaAI embedding", () => {
       model: JINA_EMBEDDING_PROFILE.model,
       dimensions: 256,
       cacheDir: mkdtempSync(join(tmpdir(), "plur1bus-jina-embedding-signature-")),
+      acceptNonCommercialLicense: true,
       embeddingCacheEnabled: false,
       ensureModelArtifacts: async () => {},
       loadTransformers: async () => fakeTransformersRuntime(calls, { taskShape: [] }),

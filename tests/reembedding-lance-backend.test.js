@@ -50,6 +50,70 @@ describe("quarantined LanceDB reembedding generations", () => {
     sourceTable = await sourceDb.createTable("memories", rows);
   });
 
+  it("honors the inventory AbortSignal on the real Lance backend without creating a target generation", async () => {
+    const backend = createLanceGenerationBackend({
+      stateRoot,
+      activeRoot,
+      activeGeneration: "generation-active",
+      activeFingerprint: { dimensions: 3, fingerprintId: "embedding:v1:sha256:source" },
+    });
+    const controller = new AbortController();
+    controller.abort(new Error("operator cancelled inventory"));
+    try {
+      await assert.rejects(
+        backend.inventoryActiveGeneration({ signal: controller.signal }),
+        (error) => error?.name === "AbortError",
+      );
+    } finally {
+      await backend.close();
+    }
+  });
+
+  it("honors an abort that arrives after a live Lance schema read", async () => {
+    const controller = new AbortController();
+    const backend = createLanceGenerationBackend({
+      stateRoot,
+      activeRoot,
+      activeGeneration: "generation-active",
+      activeFingerprint: { dimensions: 3, fingerprintId: "embedding:v1:sha256:source" },
+      connect: async (path) => {
+        const db = await connect(path);
+        return new Proxy(db, {
+          get(target, property, receiver) {
+            if (property === "openTable") {
+              return async (name) => {
+                const table = await target.openTable(name);
+                return new Proxy(table, {
+                  get(tableTarget, tableProperty, tableReceiver) {
+                    if (tableProperty === "schema") {
+                      return async () => {
+                        const schema = await tableTarget.schema();
+                        controller.abort(new Error("operator cancelled after schema"));
+                        return schema;
+                      };
+                    }
+                    const value = Reflect.get(tableTarget, tableProperty, tableReceiver);
+                    return typeof value === "function" ? value.bind(tableTarget) : value;
+                  },
+                });
+              };
+            }
+            const value = Reflect.get(target, property, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      },
+    });
+    try {
+      await assert.rejects(
+        backend.inventoryActiveGeneration({ signal: controller.signal }),
+        (error) => error?.name === "AbortError",
+      );
+    } finally {
+      await backend.close();
+    }
+  });
+
   afterEach(async () => {
     await sourceTable?.close?.();
     await sourceDb?.close?.();

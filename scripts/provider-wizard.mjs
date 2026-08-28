@@ -105,14 +105,25 @@ async function main() {
     } else if (choice === "2") {
       return { provider: "local-transformers", model: "intfloat/multilingual-e5-small", dimensions: 384 };
     }
+    console.error(t("setup.embedding.local_jina_license_confirm", { lang, tone }));
+    const accepted = await askLine("[yes/no]: ");
+    if (accepted !== "yes") {
+      throw new Error(t("setup.embedding.local_jina_license_required", { lang, tone }));
+    }
     return {
-      provider: "local-transformers",
-      local: {
-        model: "jinaai/jina-embeddings-v3",
-        revision: "68ed94909d564380f954be27ae2e133214c1adc9",
-        dimensions: 1024,
-        queryPrefix: "",
-        passagePrefix: "",
+      embedding: {
+        provider: "local-transformers",
+        local: {
+          model: "jinaai/jina-embeddings-v3",
+          revision: "68ed94909d564380f954be27ae2e133214c1adc9",
+          dimensions: 1024,
+          queryPrefix: "",
+          passagePrefix: "",
+        },
+      },
+      modelPreparation: {
+        profile: "jina-v3-multilingual-1024",
+        acceptNonCommercialLicense: true,
       },
     };
   }
@@ -175,9 +186,16 @@ async function main() {
   }
 
   try {
-    const embedding = await wizardEmbedding();
+    const embeddingChoice = await wizardEmbedding();
+    const embedding = embeddingChoice.embedding || embeddingChoice;
     const reranker = await wizardReranker();
-    process.stdout.write(JSON.stringify({ embedding, reranker }, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({
+      embedding,
+      reranker,
+      ...(embeddingChoice.modelPreparation
+        ? { modelPreparation: embeddingChoice.modelPreparation }
+        : {}),
+    }, null, 2) + "\n");
   } finally {
     rl.close();
   }

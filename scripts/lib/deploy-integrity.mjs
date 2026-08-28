@@ -123,6 +123,9 @@ export const DEPLOY_FILES = [
   "lib/providers/reranker-cohere.js",
   "lib/providers/reranker-local-transformers.js",
   "lib/providers/secret-input.js",
+  // ── local model preparation (v7.5.0) ────────────────────────────────────
+  "lib/model-preparation/coordinator.js",
+  "lib/model-preparation/state-store.js",
   // ── copy-on-write embedding migration (v7.5.0) ───────────────────────────
   "lib/reembedding/confirmation.js",
   "lib/reembedding/coordinator.js",
