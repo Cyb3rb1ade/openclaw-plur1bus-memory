@@ -111,6 +111,26 @@ describe("OpenAIEmbeddingProvider embedBatch", () => {
     assert.deepStrictEqual(vector, [0.7, 0.8, 0.9]);
   });
 
+  it("rejects the first provider response when it violates the configured dimensions", async () => {
+    const provider = new OpenAIEmbeddingProvider({
+      model: "text-embedding-3-small",
+      dimensions: 3,
+      apiKey: "test-key",
+      embeddingCacheEnabled: false,
+    });
+    provider._client = {
+      embeddings: {
+        create: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+      },
+    };
+
+    await assert.rejects(
+      provider.embedBatch(["wrong dimensions"], 0),
+      /Embedding-Dimension-Mismatch: erwartet 3, bekam 2/,
+    );
+    assert.equal(provider._detectedDim, null);
+  });
+
   it("falls back to individual embeddings when batch fails", async () => {
     const provider = new OpenAIEmbeddingProvider({ model: "text-embedding-3-small", dimensions: 3, apiKey: "test-key" });
     let calls = 0;
