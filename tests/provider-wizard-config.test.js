@@ -31,7 +31,7 @@ describe("provider-wizard config output", () => {
   });
 
   it("Embedding apiKeyEnv=OPENAI_API_KEY bleibt als String in Config", () => {
-    const cfg = normalizeEmbeddingConfig({ provider: "openai", apiKeyEnv: "OPENAI_API_KEY", dimensions: 3072 });
+    const cfg = normalizeEmbeddingConfig({ provider: "openai", apiKeyEnv: "OPENAI_API_KEY", dimensions: 1536 });
     assert.strictEqual(cfg.apiKeyEnv, "OPENAI_API_KEY");
   });
 

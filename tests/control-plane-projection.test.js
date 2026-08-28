@@ -59,6 +59,20 @@ describe("redacted PLUR1BUS control-plane projection", () => {
         failureCode: null,
         targetSecretRef: { id: sentinel },
       },
+      embeddingDimensionProfiles: [{
+        id: "openai:text-embedding-3-small",
+        provider: "openai",
+        model: "text-embedding-3-small",
+        mode: "selectable",
+        defaultDimensions: 1536,
+        minDimensions: 1,
+        maxDimensions: 1536,
+        presets: [256, 512, 1536],
+        current: true,
+        selectedDimensions: 512,
+        verification: "runtime_vector",
+        apiKey: sentinel,
+      }],
     });
 
     assert.equal(projection.schemaVersion, 2);
@@ -88,6 +102,19 @@ describe("redacted PLUR1BUS control-plane projection", () => {
       failureCode: null,
     });
     assert.equal(projection.reembeddingWorkflow.steps.find((step) => step.id === "checkpoint").state, "current");
+    assert.deepStrictEqual(projection.embeddingDimensionProfiles, [{
+      id: "openai:text-embedding-3-small",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      mode: "selectable",
+      defaultDimensions: 1536,
+      minDimensions: 1,
+      maxDimensions: 1536,
+      presets: [256, 512, 1536],
+      current: true,
+      selectedDimensions: 512,
+      verification: "runtime_vector",
+    }]);
     assert.doesNotMatch(JSON.stringify(projection), /sentinel-secret-material|memory body|must-not-project/);
   });
 

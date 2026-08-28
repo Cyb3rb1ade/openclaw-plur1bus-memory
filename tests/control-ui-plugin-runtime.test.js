@@ -63,6 +63,19 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
         title: secret,
         credentials: { embedding: { status: "configured", source: "store" } },
         providers: { embedding: { provider: "local-transformers", model: "<unsafe>", dimensions: 768, fingerprint: "embedding:v1:sha256:abc" } },
+        embeddingDimensionProfiles: [{
+          id: "local-transformers:intfloat-multilingual-e5-small",
+          provider: "local-transformers",
+          model: "intfloat/multilingual-e5-small",
+          mode: "fixed",
+          defaultDimensions: 384,
+          minDimensions: 384,
+          maxDimensions: 384,
+          presets: [384],
+          current: true,
+          selectedDimensions: 384,
+          verification: "runtime_vector",
+        }],
         memoryHealth: {
           status: "degraded",
           namespaces: [{ id: "lancedb-namespaced", dimensions: 768, rows: 3 }],
@@ -115,6 +128,9 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
     assert.match(response.body, /Workspace Matrix/);
     assert.match(response.body, /Feature Controls/);
     assert.match(response.body, /Re-Embedding Workflow/);
+    assert.match(response.body, /Embedding Dimension Planner/);
+    assert.match(response.body, /<select[^>]+aria-label="Dimensions for intfloat\/multilingual-e5-small"/);
+    assert.match(response.body, /<option value="384" selected>384 \(fixed\)<\/option>/);
     assert.match(response.body, /workspace:v1:alpha/);
     assert.match(response.body, /href="\/config"/);
     assert.match(response.body, /href="\/secrets"/);
