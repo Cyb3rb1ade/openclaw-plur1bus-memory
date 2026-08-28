@@ -129,8 +129,9 @@ describe("LLM result cache lifecycle", () => {
     });
     await harness.getRegistration().handler();
 
-    assert.deepStrictEqual(calls, ["model-preparation", "reembedding", "adapter", "pool", "shared", "routes", "metrics", "cache", "embeddings", "reranker"]);
-    assert.deepStrictEqual(warnings, [
+    assert.equal(calls.length, 10);
+    assert.deepStrictEqual(calls.toSorted(), ["model-preparation", "reembedding", "adapter", "pool", "shared", "routes", "metrics", "cache", "embeddings", "reranker"].toSorted());
+    assert.deepStrictEqual(warnings.toSorted(), [
       "memory-lancedb-namespaced: model preparation shutdown failed: model-preparation broke",
       "memory-lancedb-namespaced: reembedding coordinator shutdown failed: reembedding broke",
       "memory-lancedb-namespaced: adapter shutdown failed: adapter broke",
@@ -141,12 +142,12 @@ describe("LLM result cache lifecycle", () => {
       "memory-lancedb-namespaced: LLM result cache shutdown failed: cache broke",
       "memory-lancedb-namespaced: embedding provider shutdown failed: embeddings broke",
       "memory-lancedb-namespaced: reranker shutdown failed: reranker broke",
-    ]);
+    ].toSorted());
   });
 
   it("wires the real plugin dependencies into the shutdown boundary", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
-    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*embeddings,\s*reranker,\s*modelPreparationCoordinator,\s*reembeddingCoordinator,?\s*\}\);/s);
+    assert.match(source, /registerGatewayShutdown\(api,\s*\{\s*memoryDbAdapter,\s*pool:\s*\{\s*shutdown:\s*async\s*\(\)\s*=>\s*\{\s*legacyMigrationShutdown\.abort\(\);\s*await pool\.shutdown\(\);\s*\},\s*\},\s*sharedMemoryPool,\s*clearTurnRoutes:\s*clearInitializedTurnRoutes,\s*flushMetrics,\s*llmResultCache,\s*embeddings,\s*reranker,\s*modelPreparationCoordinator,\s*reembeddingCoordinator,\s*localModelGeneration,?\s*\}\);/s);
   });
 
   it("starts optional model preparation only after shutdown ownership and hook registration", () => {

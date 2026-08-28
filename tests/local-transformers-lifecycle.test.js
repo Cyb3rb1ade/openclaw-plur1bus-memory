@@ -15,6 +15,153 @@ function disposablePipeline(calls) {
 }
 
 describe("local Transformers.js lifecycle", () => {
+  it("registers local providers and waits for the active runtime generation before model load", async () => {
+    const registered = [];
+    const unregistered = [];
+    let releaseAcquisition;
+    const acquisitionGate = new Promise((resolve) => { releaseAcquisition = resolve; });
+    const generation = {
+      async beforeAcquire() { await acquisitionGate; },
+      registerResource(resource, label) {
+        registered.push([resource, label]);
+        return () => {
+          unregistered.push([resource, label]);
+          return true;
+        };
+      },
+    };
+    let embeddingLoads = 0;
+    let rerankerLoads = 0;
+    const embedding = new LocalTransformersEmbeddingProvider({
+      model: "fixture/e5",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      localModelGeneration: generation,
+      loadTransformers: async () => {
+        embeddingLoads += 1;
+        return { pipeline: async () => disposablePipeline([]) };
+      },
+    });
+    const reranker = new LocalTransformersRerankerProvider({
+      model: "fixture/reranker",
+      localModelGeneration: generation,
+      loadTransformers: async () => {
+        rerankerLoads += 1;
+        return { pipeline: async () => disposablePipeline([]) };
+      },
+    });
+
+    const embeddingLoad = embedding._getPipeline();
+    const rerankerLoad = reranker._getPipeline();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(embeddingLoads, 0);
+    assert.equal(rerankerLoads, 0);
+    assert.deepEqual(registered.map(([, label]) => label), ["embedding:fixture/e5", "reranker:fixture/reranker"]);
+
+    releaseAcquisition();
+    await Promise.all([embeddingLoad, rerankerLoad]);
+    assert.equal(embeddingLoads, 1);
+    assert.equal(rerankerLoads, 1);
+    await Promise.all([embedding.shutdown(), reranker.shutdown()]);
+    assert.deepEqual(unregistered.map(([, label]) => label), ["embedding:fixture/e5", "reranker:fixture/reranker"]);
+  });
+
+  it("does not dispose an embedding pipeline while inference is active", async () => {
+    const calls = [];
+    let signalStarted;
+    let releaseInference;
+    const started = new Promise((resolve) => { signalStarted = resolve; });
+    const blocked = new Promise((resolve) => { releaseInference = resolve; });
+    const pipeline = Object.assign(async () => {
+      calls.push("inference.start");
+      signalStarted();
+      await blocked;
+      calls.push("inference.end");
+      return [1];
+    }, {
+      async dispose() { calls.push("pipeline.dispose"); },
+    });
+    const provider = new LocalTransformersEmbeddingProvider({
+      model: "fixture/e5",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      loadTransformers: async () => ({ pipeline: async () => pipeline }),
+    });
+
+    const inference = provider.embed("active inference");
+    await started;
+    const shutdown = provider.shutdown();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ["inference.start"]);
+
+    releaseInference();
+    await Promise.all([inference, shutdown]);
+    assert.deepEqual(calls, ["inference.start", "inference.end", "pipeline.dispose"]);
+  });
+
+  it("does not dispose a reranker pipeline while inference is active", async () => {
+    const calls = [];
+    let signalStarted;
+    let releaseInference;
+    const started = new Promise((resolve) => { signalStarted = resolve; });
+    const blocked = new Promise((resolve) => { releaseInference = resolve; });
+    const pipeline = Object.assign(async () => {
+      calls.push("rerank.start");
+      signalStarted();
+      await blocked;
+      calls.push("rerank.end");
+      return [{ score: 0.9 }];
+    }, {
+      async dispose() { calls.push("reranker.dispose"); },
+    });
+    const provider = new LocalTransformersRerankerProvider({
+      model: "fixture/reranker",
+      loadTransformers: async () => ({ pipeline: async () => pipeline }),
+    });
+
+    const inference = provider.rerank("query", ["document"], 1);
+    await started;
+    const shutdown = provider.shutdown();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls, ["rerank.start"]);
+
+    releaseInference();
+    await Promise.all([inference, shutdown]);
+    assert.deepEqual(calls, ["rerank.start", "rerank.end", "reranker.dispose"]);
+  });
+
+  it("keeps a provider registered when model disposal fails so generation cleanup remains fail-closed", async () => {
+    const unregistered = [];
+    const generation = {
+      registerResource(resource, label) {
+        return () => {
+          unregistered.push([resource, label]);
+          return true;
+        };
+      },
+    };
+    const embedding = new LocalTransformersEmbeddingProvider({
+      model: "fixture/e5",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      localModelGeneration: generation,
+    });
+    embedding._pipeline = Object.assign(async () => [1], {
+      async dispose() { throw new Error("embedding dispose failed"); },
+    });
+    const reranker = new LocalTransformersRerankerProvider({
+      model: "fixture/reranker",
+      localModelGeneration: generation,
+    });
+    reranker._pipeline = Object.assign(async () => [{ score: 1 }], {
+      async dispose() { throw new Error("reranker dispose failed"); },
+    });
+
+    await assert.rejects(embedding.shutdown(), /embedding dispose failed/);
+    await assert.rejects(reranker.shutdown(), /reranker dispose failed/);
+    assert.deepEqual(unregistered, []);
+  });
+
   it("disposes the embedding pipeline and closes its cache exactly once", async () => {
     const calls = [];
     const provider = new LocalTransformersEmbeddingProvider({
