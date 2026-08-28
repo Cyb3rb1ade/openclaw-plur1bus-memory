@@ -11,6 +11,8 @@ import { buildRemPartition, getPreviousWeekWindow, runRemDream } from "../lib/dr
 const FROZEN_REM_NOW = new Date("2026-08-10T12:00:00.000Z");
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
 import { resolveMemoryRequestContext } from "../lib/memory-request-context.js";
+import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 
 const EMPTY_ALIASES = Object.freeze({ paths: Object.freeze([]), aliases: Object.freeze([]) });
 const USER_A = "user:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -214,11 +216,98 @@ async function seedRuntimeMemories(pluginModule, baseDbPath, workspaceDir) {
     ownerUserId: "",
   });
   try {
-    for (const row of rows) await db.store(row);
+    for (const row of rows.filter((row) => row.scope === "agent-private")) await db.store(row);
   } finally {
     await db.shutdown();
   }
+  const sharedPool = new SharedMemoryPool(baseDbPath, VECTOR_DIM, pluginModule.AgentDbPool);
+  try {
+    await sharedPool.withUserDb(requestContext, async (sharedDb) => {
+      await sharedDb.init();
+      for (const row of rows.filter((candidate) => candidate.scope === "user")) await sharedDb.store(row);
+    });
+    await sharedPool.withWorkspaceDb(requestContext, async (sharedDb) => {
+      await sharedDb.init();
+      for (const row of rows.filter((candidate) => candidate.scope === "workspace" && candidate.workspaceId === requestContext.workspaceIdentity)) {
+        await sharedDb.store(row);
+      }
+    });
+    await sharedPool.withWorkspaceDb({ ...requestContext, workspaceIdentity: "workspace-dir:v1:foreign-workspace" }, async (sharedDb) => {
+      await sharedDb.init();
+      for (const row of rows.filter((candidate) => candidate.scope === "workspace" && candidate.workspaceId === "workspace-dir:v1:foreign-workspace")) {
+        await sharedDb.store(row);
+      }
+    });
+  } finally {
+    await sharedPool.shutdown();
+  }
   return { requestContext, rows };
+}
+
+async function seedPrivateAndWorkspaceSharedSkillEvidence(pluginModule, baseDbPath, workspaceDir) {
+  const agentId = "agent-a";
+  const requestContext = resolveMemoryRequestContext({
+    agentId,
+    workspaceDir,
+    userId: "owner-a",
+    channel: "telegram",
+    accountId: "default",
+  });
+  const createdAt = Date.now();
+  const privateDb = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
+  const privateRows = [0, 1, 2].map((index) => ({
+    id: uuidFor(300 + index),
+    text: `PRIVATE release verification procedure ${index}`,
+    summary: `PRIVATE release verification procedure ${index}`,
+    vector: makeVector(),
+    createdAt,
+    sourceTimestamp: createdAt,
+    status: "active",
+    epistemicStatus: "trusted",
+    category: "fact",
+    origin: "dm",
+    scope: "agent-private",
+    agentId,
+    storedBy: agentId,
+    workspaceId: "",
+    workspaceKey: "",
+    ownerUserId: "",
+  }));
+  try {
+    for (const row of privateRows) await privateDb.store(row);
+  } finally {
+    await privateDb.shutdown();
+  }
+
+  const sharedPool = new SharedMemoryPool(baseDbPath, VECTOR_DIM, pluginModule.AgentDbPool);
+  try {
+    await sharedPool.withWorkspaceDb(requestContext, async (workspaceDb) => {
+      await workspaceDb.init();
+      for (let index = 0; index < 3; index++) {
+        await workspaceDb.store({
+          id: uuidFor(400 + index),
+          text: `SHARED WORKSPACE release verification procedure ${index}`,
+          summary: `SHARED WORKSPACE release verification procedure ${index}`,
+          vector: makeVector(),
+          createdAt,
+          sourceTimestamp: createdAt,
+          status: "active",
+          epistemicStatus: "trusted",
+          category: "workspace_rule",
+          origin: "dm",
+          scope: "workspace",
+          agentId,
+          storedBy: agentId,
+          workspaceId: requestContext.workspaceIdentity,
+          workspaceKey: requestContext.workspaceIdentity,
+          ownerUserId: "",
+        });
+      }
+    });
+  } finally {
+    await sharedPool.shutdown();
+  }
+  return requestContext;
 }
 
 function responseJson(result) {
@@ -326,6 +415,54 @@ test("registered internal skill-miner processes every allowed partition without 
   assert.equal(filesUnder(workspaceDir).filter((path) => path.endsWith("skill-proposals.jsonl")).length, 1);
 });
 
+test("registered internal skill-miner scans physically isolated workspace shared evidence", async (t) => {
+  if (!stableDirectoryCapabilitiesSupported()) {
+    t.skip("shared-memory routing requires stable directory capabilities");
+    return;
+  }
+  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-shared-skill-db-"));
+  const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-shared-skill-ws-"));
+  t.after(() => {
+    rmSync(baseDbPath, { recursive: true, force: true });
+    rmSync(workspaceDir, { recursive: true, force: true });
+  });
+  const prompts = [];
+  const runtimeLlm = {
+    async complete(params) {
+      prompts.push(params.messages?.map((message) => message.content).join("\n") || "");
+      return {
+        text: JSON.stringify({
+          skillName: "shared-release-check",
+          skillTitle: "Shared release check",
+          description: "Shared workspace procedure",
+          instructions: "Check the shared workspace release procedure.",
+          examples: [],
+          confidence: 0.9,
+          category: "workflow",
+        }),
+        provider: "runtime-test",
+        model: "runtime-test",
+        usage: {},
+      };
+    },
+  };
+  const pluginModule = await import(`../index.js?release-731-runtime-shared-skill=${Date.now()}-${Math.random()}`);
+  await seedPrivateAndWorkspaceSharedSkillEvidence(pluginModule, baseDbPath, workspaceDir);
+  const api = createRuntimeApi(baseDbPath, runtimeLlm);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await api._commands.find((command) => command.name === "plur1bus").handler(
+    runtimeCommand(workspaceDir, "internal skill-miner"),
+  );
+  const parsed = responseJson(result);
+  assert.equal(parsed.scanned, 6, "private and physically isolated workspace evidence must both be mined");
+  assert.equal(parsed.proposalsCreated, 2);
+  assert.equal(prompts.length, 2);
+  const workspacePrompt = prompts.find((prompt) => prompt.includes("SHARED WORKSPACE"));
+  assert.ok(workspacePrompt, "the Workspace proposal must be extracted from the shared database");
+  assert.doesNotMatch(workspacePrompt, /PRIVATE release verification procedure/);
+});
+
 test("registered internal daily compaction invokes the partition-aware API per allowed partition", async (t) => {
   const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-daily-db-"));
   const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-daily-ws-"));
@@ -353,6 +490,11 @@ test("registered internal daily compaction invokes the partition-aware API per a
     assert.equal(partitionRun.result.compaction.partitionResults.length, 1);
     assert.equal(partitionRun.result.compaction.partitionResults[0].aclPartition.scope, partitionRun.scope);
     assert.equal(partitionRun.result.compaction.partitionResults[0].aclPartition.agentId, "agent-a");
+    assert.equal(
+      partitionRun.result.compaction.partitionResults[0].result.candidates,
+      3,
+      `${partitionRun.scope} must compact evidence from its physical ownership pool`,
+    );
   }
 });
 
