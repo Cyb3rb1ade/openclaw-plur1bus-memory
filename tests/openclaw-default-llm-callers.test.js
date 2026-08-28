@@ -921,3 +921,59 @@ test("recall commit barriers block writes when the runtime ignores abort and suc
     }
   }
 });
+
+test("continuity overlay contradiction enrichment reuses the recall target set", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-continuity-overlay-targets-"));
+  t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+  const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+  LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => makeVector();
+  LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => makeVector();
+  t.after(() => {
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+  });
+
+  const pluginModule = await loadFreshPlugin();
+  const agentId = "continuity-overlay-targets-agent";
+  const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
+  try {
+    await db.store({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      text: "The release process originally required a full verification run.",
+      summary: "Original release verification process",
+      vector: makeVector(),
+      category: "project",
+      createdAt: Date.now(),
+      storedBy: agentId,
+    });
+  } finally {
+    await db.shutdown();
+  }
+
+  const api = createApi(baseDbPath, {
+    autoRecall: true,
+    runtime: { recallTimeoutMs: 5_000 },
+    continuityEngine: {
+      enabled: true,
+      tasteGate: { enabled: false },
+      overlays: { enabled: true, autoCreateOnRecall: false, maxPerSession: 1 },
+    },
+  });
+  t.after(() => api._shutdown());
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const turn = await observeOfficialTurn(api, {
+    agentId,
+    workspaceDir: baseDbPath,
+    runId: "continuity-overlay-targets",
+    prompt: "The release process now uses a different verification route.",
+  });
+  const results = await api._emit("before_prompt_build", turn.event, turn.ctx);
+
+  assert.ok(results.some((result) => result?.prependContext?.includes("Original release verification process")));
+  assert.doesNotMatch(
+    JSON.stringify(api._logs),
+    /continuity-engine: contradiction enrichment failed/,
+  );
+});
