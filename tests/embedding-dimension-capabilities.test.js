@@ -6,7 +6,10 @@ import {
   embeddingDimensionProfiles,
 } from "../lib/providers/dimensions.js";
 import { normalizeEmbeddingConfig } from "../lib/providers/config-normalize.js";
-import { E5_EMBEDDING_PROFILE } from "../lib/providers/local-model-artifacts.js";
+import {
+  E5_EMBEDDING_PROFILE,
+  JINA_EMBEDDING_PROFILE,
+} from "../lib/providers/local-model-artifacts.js";
 
 describe("embedding dimension capabilities", () => {
   it("publishes bounded selectable dimensions for both OpenAI v3 models", () => {
@@ -75,11 +78,12 @@ describe("embedding dimension capabilities", () => {
       "text-embedding-3-small",
       "text-embedding-3-large",
       E5_EMBEDDING_PROFILE.model,
+      JINA_EMBEDDING_PROFILE.model,
       "runtime-probed-model",
     ]);
     assert.equal(profiles.filter((entry) => entry.current).length, 1);
     assert.equal(profiles.find((entry) => entry.current).selectedDimensions, 384);
-    assert.equal(profiles.some((entry) => /jina|reranker|bge/i.test(entry.model)), false);
+    assert.equal(profiles.some((entry) => /jina-reranker|bge-reranker/i.test(entry.model)), false);
   });
 
   it("rejects impossible known-model dimensions before provider or database access", () => {

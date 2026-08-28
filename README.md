@@ -23,9 +23,11 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
 - **Exact Beta-3 release contract.** Package metadata pins the tested host and
   SDK identity to `2026.8.1-beta.3`, while runtime behavior is guarded by
   feature detection rather than version-string branches.
-- **Pinned local inference.** E5 embeddings, Jina reranking, and the free BGE
-  fallback use immutable Hugging Face revisions with exact required-file sizes
-  and SHA-256 verification before Transformers.js loads them.
+- **Pinned local inference.** E5 embeddings, the optional multilingual Jina v3
+  embedding, Jina reranking, and the free BGE fallback use immutable Hugging
+  Face revisions with exact required-file sizes and SHA-256 verification before
+  Transformers.js loads them. Jina v3 embedding is offered separately because
+  its CC BY-NC 4.0 license does not permit commercial use without other terms.
 - **Deterministic regression timing.** CPU-bound performance contracts measure
   process CPU time; repair diagnostics drain naturally before process exit.
 

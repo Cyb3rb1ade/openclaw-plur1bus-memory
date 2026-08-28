@@ -35,7 +35,7 @@ function runWizard(lines) {
     }, 5_000);
 
     function answerVisiblePrompts() {
-      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3\/4|a\/b\/c)\]: /g) || []).length;
+      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3|1\/2\/3\/4|a\/b\/c)\]: /g) || []).length;
       while (sentLines < lines.length && sentLines < promptCount) {
         child.stdin.write(`${lines[sentLines]}\n`);
         sentLines += 1;
@@ -132,6 +132,22 @@ describe("provider wizard CLI input validation", () => {
       candidates: 20,
       timeoutMs: 5000,
       fallbackOnError: true,
+    });
+  });
+
+  it("returns the pinned JinaAI v3 local embedding with no credential", async () => {
+    const result = await runWizard(["3", "3"]);
+
+    assert.strictEqual(result.code, 0, result.stderr);
+    assert.deepStrictEqual(parseWizardResult(result.stdout)?.embedding, {
+      provider: "local-transformers",
+      local: {
+        model: "jinaai/jina-embeddings-v3",
+        revision: "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6",
+        dimensions: 1024,
+        queryPrefix: "",
+        passagePrefix: "",
+      },
     });
   });
 });

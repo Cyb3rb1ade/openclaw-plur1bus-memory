@@ -75,6 +75,20 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
           current: true,
           selectedDimensions: 384,
           verification: "runtime_vector",
+        }, {
+          id: "local-jina-embeddings-v3",
+          provider: "local-transformers",
+          model: "jinaai/jina-embeddings-v3",
+          mode: "selectable",
+          defaultDimensions: 1024,
+          minDimensions: 32,
+          maxDimensions: 1024,
+          presets: [32, 64, 128, 256, 512, 768, 1024],
+          presetOnly: true,
+          current: false,
+          verification: "runtime_vector",
+          license: "CC-BY-NC-4.0",
+          commercialUse: false,
         }],
         memoryHealth: {
           status: "degraded",
@@ -131,6 +145,9 @@ describe("PLUR1BUS Beta-3 Control UI runtime", () => {
     assert.match(response.body, /Embedding Dimension Planner/);
     assert.match(response.body, /<select[^>]+aria-label="Dimensions for intfloat\/multilingual-e5-small"/);
     assert.match(response.body, /<option value="384" selected>384 \(fixed\)<\/option>/);
+    assert.match(response.body, /jinaai\/jina-embeddings-v3/);
+    assert.match(response.body, /CC-BY-NC-4\.0.*non-commercial only/i);
+    assert.match(response.body, /Only the listed dimensions are valid/);
     assert.match(response.body, /workspace:v1:alpha/);
     assert.match(response.body, /href="\/config"/);
     assert.match(response.body, /href="\/secrets"/);

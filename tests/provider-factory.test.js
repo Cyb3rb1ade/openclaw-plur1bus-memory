@@ -30,7 +30,12 @@ describe("provider-factory", () => {
 
   it("createEmbeddingProvider mit openai + apiKeyEnv instanziiert OpenAIEmbeddingProvider", async () => {
     const { OpenAIEmbeddingProvider } = await import("../lib/providers/embedding-openai.js");
-    const cfg = normalizeEmbeddingConfig({ provider: "openai", apiKeyEnv: "_FACTORY_TEST_KEY", dimensions: 3072 });
+    const cfg = normalizeEmbeddingConfig({
+      provider: "openai",
+      apiKeyEnv: "_FACTORY_TEST_KEY",
+      model: "text-embedding-3-large",
+      dimensions: 3072,
+    });
     const provider = createEmbeddingProvider(cfg);
     assert.ok(provider instanceof OpenAIEmbeddingProvider);
   });

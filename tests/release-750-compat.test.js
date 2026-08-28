@@ -49,6 +49,7 @@ test("7.5.0 documents its exact upstream base, native integration, immutable mod
   assert.match(compatibility, /registerCli/);
   assert.match(compatibility, /gateway-runtime/);
   assert.match(compatibility, /614241f622f53c4eeff9890bdc4f31cfecc418b3/);
+  assert.match(compatibility, /ab036b023d30b4d1138c4c3bfa9f0c445ab455d6/);
   assert.match(compatibility, /9cfeff2df7d40d1b78e75e5e9cebec92a99813c9/);
   assert.match(compatibility, /c44ebc43de724ae8816668bb44d2e728e17faa18/);
   assert.match(compatibility, /non-destructive/i);

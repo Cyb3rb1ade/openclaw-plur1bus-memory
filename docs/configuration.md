@@ -90,7 +90,11 @@ Sharing-Verträge bleiben B13 vorbehalten.
 
 ## Lokale E5-, Jina- und BGE-Modelle (7.5.0)
 
-Der freie Offline-Pfad verwendet revisionsgeprüfte Transformers.js-Artefakte.
+Der freie Standard-Offline-Pfad verwendet E5. Zusaetzlich kann das
+mehrsprachige `jinaai/jina-embeddings-v3` heruntergeladen werden; dieses Modell
+steht unter CC BY-NC 4.0 und ist daher ohne gesonderte Lizenz nicht fuer
+kommerzielle Nutzung freigegeben. Beide Pfade verwenden revisionsgeprüfte
+Transformers.js-Artefakte.
 Das Cache-Verzeichnis muss für den unprivilegierten Gateway-Benutzer schreibbar
 sein. Die vollständigen erwarteten Größen und SHA-256-Werte stehen in
 `lib/providers/local-model-artifacts.js`; eine falsche Revision oder eine
@@ -125,6 +129,27 @@ unvollständige Datei wird vor der Inferenz abgelehnt.
 }
 ```
 
+Als optionales Jina-v3-Embedding wird nur das folgende gepinnte Profil
+akzeptiert. `dimensions` darf ausschliesslich 32, 64, 128, 256, 512, 768 oder
+1024 sein. Query und Passage werden intern ueber die veroeffentlichten
+`retrieval.query`-/`retrieval.passage`-Task-Adapter getrennt; Praefixe werden
+nicht benoetigt.
+
+```json
+{
+  "embedding": {
+    "provider": "local-transformers",
+    "dimensions": 256,
+    "local": {
+      "model": "jinaai/jina-embeddings-v3",
+      "revision": "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6",
+      "dimensions": 256,
+      "cacheDir": "~/.openclaw/models/plur1bus"
+    }
+  }
+}
+```
+
 Wer Jina abwählt, kann BGE direkt als `reranker.model` und
 `reranker.local.model` setzen. Das Quellrepository
 `BAAI/bge-reranker-v2-m3` ist für diesen Pfad absichtlich ungültig, weil es
@@ -138,8 +163,10 @@ Die PLUR1BUS-Operator-Ansicht trennt Embedding- und Reranker-Modelle. Fuer
 `text-embedding-3-small` sind 1 bis 1536 Dimensionen und fuer
 `text-embedding-3-large` 1 bis 3072 Dimensionen zulaessig; die Ansicht bietet
 dafuer bewaehrte Presets und markiert die jeweilige Standardbreite. Das lokale
-`intfloat/multilingual-e5-small` liefert fest 384 Dimensionen. JinaAI und BGE
-sind Reranker und besitzen keine Memory-Vektordimension.
+`intfloat/multilingual-e5-small` liefert fest 384 Dimensionen. Das getrennte
+Jina-v3-Embedding unterstuetzt exakt 32/64/128/256/512/768/1024 Dimensionen.
+Der Jina-v2-Reranker und BGE sind Reranker und besitzen keine Memory-
+Vektordimension.
 
 Die Auswahl in der externen Beta-3-Plugin-Registerkarte ist eine lesende
 Planungshilfe. Ein Dimensionswechsel wird ausschliesslich ueber den bestaetigten

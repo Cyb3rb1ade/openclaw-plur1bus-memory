@@ -7,7 +7,11 @@ import {
   embeddingFingerprintFromNormalizedConfig,
   redactedEmbeddingSecretRef,
 } from "../lib/reembedding/runtime-config.js";
-import { E5_EMBEDDING_PROFILE } from "../lib/providers/local-model-artifacts.js";
+import {
+  E5_EMBEDDING_PROFILE,
+  JINA_EMBEDDING_PROFILE,
+  JINA_RERANKER_PROFILE,
+} from "../lib/providers/local-model-artifacts.js";
 
 describe("reembedding runtime configuration", () => {
   it("binds the pinned E5 revision and artifact hashes into the active fingerprint", () => {
@@ -31,6 +35,44 @@ describe("reembedding runtime configuration", () => {
         .map(({ path, sha256 }) => ({ path, sha256 }))
         .toSorted((left, right) => left.path.localeCompare(right.path)),
     );
+  });
+
+  it("binds Jina v3 dtype and task-adapted vector space without empty prefix fields", () => {
+    const fingerprint = embeddingFingerprintFromNormalizedConfig({
+      provider: "local-transformers",
+      model: JINA_EMBEDDING_PROFILE.model,
+      dimensions: 256,
+      local: {
+        model: JINA_EMBEDDING_PROFILE.model,
+        revision: JINA_EMBEDDING_PROFILE.revision,
+        queryPrefix: "",
+        passagePrefix: "",
+      },
+    });
+    assert.equal(fingerprint.revision, JINA_EMBEDDING_PROFILE.revision);
+    assert.equal(fingerprint.dtype, "fp16");
+    assert.equal(fingerprint.dimensions, 256);
+    assert.equal(Object.hasOwn(fingerprint, "queryPrefix"), false);
+    assert.equal(Object.hasOwn(fingerprint, "passagePrefix"), false);
+
+    const projected = embeddingConfigFromSelection({ fingerprint });
+    assert.deepStrictEqual(projected.local, {
+      model: JINA_EMBEDDING_PROFILE.model,
+      dimensions: 256,
+      revision: JINA_EMBEDDING_PROFILE.revision,
+    });
+  });
+
+  it("rejects a pinned reranker as an embedding fingerprint", () => {
+    assert.throws(() => embeddingFingerprintFromNormalizedConfig({
+      provider: "local-transformers",
+      model: JINA_RERANKER_PROFILE.model,
+      dimensions: 1024,
+      local: {
+        model: JINA_RERANKER_PROFILE.model,
+        revision: JINA_RERANKER_PROFILE.revision,
+      },
+    }), /not a pinned embedding model/);
   });
 
   it("projects a target fingerprint and SecretRef into the closed embedding config", () => {
