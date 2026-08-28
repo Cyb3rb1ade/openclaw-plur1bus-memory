@@ -147,6 +147,11 @@ describe("maintenance-gated generation switch", () => {
     });
     assert.equal(reverse.sourceGeneration, "generation-target");
     assert.deepStrictEqual(reverse.target.fingerprint, sourceFingerprint);
+    assert.deepStrictEqual(reverse.target.secretRef, {
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
     assert.notEqual(reverse.targetGeneration, "generation-source");
     assert.match(reverse.targetGeneration, /^rollback-rollback-0001-/);
   });
