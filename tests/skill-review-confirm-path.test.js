@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-const VECTOR_DIM = 8;
+const VECTOR_DIM = 384;
 
 const routingCapability = Object.freeze({
   parseAgentSessionKey(value) {
