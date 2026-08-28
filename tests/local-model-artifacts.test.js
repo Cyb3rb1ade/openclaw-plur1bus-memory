@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 import {
   BGE_RERANKER_PROFILE,
   E5_EMBEDDING_PROFILE,
+  JINA_EMBEDDING_PROFILE,
   JINA_RERANKER_PROFILE,
   ensurePinnedModelArtifacts,
   modelCacheRevisionDir,
@@ -77,6 +78,44 @@ describe("pinned local model artifacts", () => {
     assert.deepStrictEqual(readFileSync(join(revisionDir, "onnx/model.onnx")), bytes);
     assert.equal(existsSync(join(revisionDir, "onnx/model.onnx.part")), false);
     assert.equal((await validatePinnedModelArtifacts(profile, cacheDir)).ok, true);
+  });
+
+  it("downloads a logical model from its pinned conversion repository and source path", async () => {
+    const bytes = Buffer.from("verified converted model bytes");
+    const profile = fixtureProfile(bytes, {
+      artifactRepository: "converter/model-q8",
+      artifactRevision: "fedcba9876543210fedcba9876543210fedcba98",
+      artifacts: Object.freeze([Object.freeze({
+        path: "onnx/model.onnx",
+        sourcePath: "model.onnx",
+        size: bytes.length,
+        sha256: sha256(bytes),
+      })]),
+    });
+    const cacheDir = mkdtempSync(join(tmpdir(), "plur1bus-converted-model-cache-"));
+    const urls = [];
+
+    await ensurePinnedModelArtifacts(profile, cacheDir, {
+      fetchImpl: async (url) => {
+        urls.push(url);
+        return responseFrom([bytes]);
+      },
+    });
+
+    assert.deepStrictEqual(urls, [
+      "https://huggingface.co/converter/model-q8/resolve/fedcba9876543210fedcba9876543210fedcba98/model.onnx",
+    ]);
+    assert.deepStrictEqual(
+      readFileSync(join(modelCacheRevisionDir(cacheDir, profile), "onnx/model.onnx")),
+      bytes,
+    );
+  });
+
+  it("declares the Jina embedding conversion and base revisions separately", () => {
+    assert.equal(JINA_EMBEDDING_PROFILE.model, "jinaai/jina-embeddings-v3");
+    assert.equal(JINA_EMBEDDING_PROFILE.baseModelRevision, "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6");
+    assert.equal(JINA_EMBEDDING_PROFILE.artifactRepository, "ldwformat/jina-embeddings-v3-Q8-onnx");
+    assert.equal(JINA_EMBEDDING_PROFILE.artifactRevision, JINA_EMBEDDING_PROFILE.revision);
   });
 
   it("reuses a valid artifact without a network request", async () => {

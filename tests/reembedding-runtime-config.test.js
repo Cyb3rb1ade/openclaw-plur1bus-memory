@@ -50,7 +50,7 @@ describe("reembedding runtime configuration", () => {
       },
     });
     assert.equal(fingerprint.revision, JINA_EMBEDDING_PROFILE.revision);
-    assert.equal(fingerprint.dtype, "fp16");
+    assert.equal(fingerprint.dtype, "q8");
     assert.equal(fingerprint.dimensions, 256);
     assert.equal(Object.hasOwn(fingerprint, "queryPrefix"), false);
     assert.equal(Object.hasOwn(fingerprint, "passagePrefix"), false);
