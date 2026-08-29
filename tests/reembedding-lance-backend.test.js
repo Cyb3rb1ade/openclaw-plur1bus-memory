@@ -172,6 +172,36 @@ describe("quarantined LanceDB reembedding generations", () => {
     }
   });
 
+  it("refreshes a cached source table before inventorying or reading external writes", async () => {
+    const backend = createLanceGenerationBackend({
+      stateRoot,
+      activeRoot,
+      activeGeneration: "generation-active",
+      activeFingerprint: { dimensions: 3, fingerprintId: "embedding:v1:sha256:source" },
+    });
+    const externallyWritten = {
+      ...rows[0],
+      id: "33333333-3333-4333-8333-333333333333",
+      text: "memory written through the active runtime",
+    };
+    try {
+      const initial = await backend.inventoryActiveGeneration();
+      assert.equal(initial[0].tables[0].rowCount, 2);
+
+      await sourceTable.add([externallyWritten]);
+
+      const refreshed = await backend.inventoryActiveGeneration();
+      assert.equal(refreshed[0].tables[0].rowCount, 3);
+      const sourceRows = await backend.readSourceBatch("agent-a/memories", { offset: 0, limit: 10 });
+      assert.deepEqual(
+        sourceRows.map((row) => row.id).sort(),
+        [...rows.map((row) => row.id), externallyWritten.id].sort(),
+      );
+    } finally {
+      await backend.close();
+    }
+  });
+
   it("refuses existing generations, unsafe ids, duplicate rows, and invalid vectors", async () => {
     const backend = createLanceGenerationBackend({
       stateRoot,
