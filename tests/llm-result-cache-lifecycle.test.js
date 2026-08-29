@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   registerGatewayShutdown,
   registerModelPreparationServiceAfterLifecycle,
+  registerReembeddingRecoveryServiceAfterLifecycle,
 } from "../lib/runtime-shutdown.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -100,6 +101,30 @@ describe("LLM result cache lifecycle", () => {
 
     assert.equal(starts, 0);
     assert.match(warnings.join("\n"), /model preparation.*plugin service capability.*unavailable/i);
+  });
+
+  it("starts reembedding recovery only as an activation-owned service", async () => {
+    let starts = 0;
+    let stops = 0;
+    let service;
+    const api = {
+      logger: {},
+      registerService(registration) { service = registration; },
+    };
+    assert.equal(registerReembeddingRecoveryServiceAfterLifecycle(api, {
+      lifecycleRegistered: true,
+      recovery: {
+        async start() { starts += 1; return null; },
+        async shutdown() { stops += 1; },
+      },
+    }), true);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(starts, 0, "register() must not reconcile a staged registry");
+    assert.equal(service.id, "plur1bus-reembedding-switch-recovery");
+    await service.start();
+    assert.equal(starts, 1);
+    await service.stop();
+    assert.equal(stops, 1);
   });
 
   it("calls and awaits register-local cache close exactly once on gateway_stop", async () => {

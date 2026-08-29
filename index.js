@@ -58,7 +58,10 @@ import { resolveEmbeddingGenerationLayout } from "./lib/reembedding/generation-l
 import { createMigrationStateStore } from "./lib/reembedding/state-store.js";
 import { createLanceGenerationBackend } from "./lib/reembedding/lance-backend.js";
 import { createReembeddingCoordinator } from "./lib/reembedding/coordinator.js";
-import { createReembeddingSwitchRuntime } from "./lib/reembedding/switch-runtime.js";
+import {
+  createReembeddingSwitchRecovery,
+  createReembeddingSwitchRuntime,
+} from "./lib/reembedding/switch-runtime.js";
 import { createGenerationRuntimeProbe } from "./lib/reembedding/runtime-probe.js";
 import {
   createFailedModelPreparationCoordinator,
@@ -133,6 +136,7 @@ import {
   createLocalModelGenerationLifecycle,
   registerGatewayShutdown,
   registerModelPreparationServiceAfterLifecycle,
+  registerReembeddingRecoveryServiceAfterLifecycle,
   shouldCoordinateLocalModelGeneration,
 } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
@@ -5467,12 +5471,14 @@ const plugin = {
       }
     }
     const reembeddingConfigMutationAvailable = typeof api.runtime?.config?.mutateConfigFile === "function";
+    const reembeddingSelectionMutator = reembeddingConfigMutationAvailable
+      ? createOpenClawEmbeddingSelectionMutator({ api })
+      : null;
     const reembeddingSwitchRuntime = reembeddingConfigMutationAvailable
       ? createReembeddingSwitchRuntime({
           stateStore: reembeddingStateStore,
           maintenanceGate: memoryMaintenanceGate,
-          mutateSelection: createOpenClawEmbeddingSelectionMutator({ api }),
-          probeRuntime: runTargetGenerationRuntimeProbe,
+          mutateSelection: reembeddingSelectionMutator,
         })
       : Object.freeze({
           async switchGeneration() {
@@ -5482,6 +5488,14 @@ const plugin = {
             throw new Error("OpenClaw mutateConfigFile capability is required for reembedding rollback");
           },
         });
+    const reembeddingSwitchRecovery = reembeddingConfigMutationAvailable
+      ? createReembeddingSwitchRecovery({
+          stateStore: reembeddingStateStore,
+          readActiveSelection: readConfiguredReembeddingSelection,
+          mutateSelection: reembeddingSelectionMutator,
+          probeRuntime: runTargetGenerationRuntimeProbe,
+        })
+      : null;
     if (!reembeddingConfigMutationAvailable) {
       api.logger?.warn?.(
         "memory-lancedb-namespaced: OpenClaw mutateConfigFile capability unavailable; reembedding switch and rollback are disabled",
@@ -11759,6 +11773,10 @@ const plugin = {
     registerModelPreparationServiceAfterLifecycle(api, {
       lifecycleRegistered: gatewayShutdownRegistered,
       coordinator: modelPreparationCoordinator,
+    });
+    registerReembeddingRecoveryServiceAfterLifecycle(api, {
+      lifecycleRegistered: gatewayShutdownRegistered,
+      recovery: reembeddingSwitchRecovery,
     });
   },
 };

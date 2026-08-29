@@ -36,6 +36,13 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Re-Embedding-Switch ueberlebt den OpenClaw-Registry-Wechsel.** Der
+  bestaetigte Wechsel bleibt zunaechst dauerhaft im fail-closed Zustand
+  `switching`. Erst der von OpenClaw aktivierte Ersatz-Plugin-Service prueft
+  den neuen Provider sowie echten Store/Recall und markiert den Wechsel als
+  abgeschlossen. Ein Probe-Fehler fuehrt ueber einen zweiten aktivierten
+  Runtime-Durchlauf zur geprueften Quellgeneration zurueck; ein unterbrochener
+  Rollback bleibt gesperrt und wird beim naechsten Start wiederaufgenommen.
 - **Skill-Workshop-Beschreibung an Beta-1-Vertrag gebunden.** Die kurze
   Listing-Beschreibung wird UTF-8-sicher auf OpenClaws oeffentliche 160-Byte-
   Grenze begrenzt; der vollstaendige Skill-Entwurf bleibt unveraendert im
