@@ -28,6 +28,10 @@ function fakeTransformersRuntime(calls, {
       this.data = data;
       this.dims = dims;
     }
+
+    async dispose() {
+      calls.push(["tensor-dispose", this.type, [...this.dims]]);
+    }
   }
   return {
     env: {},
@@ -178,6 +182,11 @@ describe("downloadable multilingual JinaAI embedding", () => {
     assert.equal(modelLoad[2].local_files_only, true);
     assert.equal(modelLoad[2].config.model_type, "xlm-roberta");
     assert.deepStrictEqual(modelLoad[2].session_options, { graphOptimizationLevel: "disabled" });
+    assert.equal(
+      calls.filter(([name]) => name === "tensor-dispose").length,
+      10,
+      "query and passage inference must each release three inputs, one model output, and one pooled tensor",
+    );
     await provider.shutdown();
     assert.equal(calls.filter(([name]) => name === "dispose").length, 1);
   });

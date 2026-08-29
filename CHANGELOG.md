@@ -36,6 +36,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Native Inferenz-Tensoren werden deterministisch freigegeben.** E5- und
+  Jina-Embedding-Aufrufe kopieren ihre Ergebnisvektoren und rufen danach fuer
+  Output-, Pooling- und Eingabe-Tensoren `dispose()` auf. Serielle Capture-
+  Last behaelt dadurch keine ONNX-Tensoren bis zu einem spaeteren GC-Lauf und
+  konkurriert unter dem 4-GiB-Limit nicht mehr mit Recall oder Verwaltungs-CLI.
 - **Re-Embedding blockiert den Gateway-Eventloop nicht minutenlang.** Lokale
   CPU-Inferenz wird in kleine, durable Batches begrenzt. Dadurch bleiben
   OpenClaws Liveness, Status-Polling und die Operator-WebSocket-Verbindung
