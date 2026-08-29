@@ -6,7 +6,7 @@
  * 3. Metrics accumulate vs. direct atomicJsonUpdate
  */
 
-import { describe, it } from "node:test";
+import { before, describe, it } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -123,9 +123,18 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
 // ─── 2. Graph Traversal mit/ohne Index ────────────────────────────────────
 
 describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
-  const edges = buildEdges(10_000);
-  const index = buildGraphIndex(edges);
+  let edges;
+  let index;
   const ITERATIONS = 1000;
+
+  // Build the allocation-heavy graph only after Benchmark 1 has completed.
+  // Constructing it during test registration can leave parallel V8 GC work
+  // running inside the same process while process.cpuUsage() measures the
+  // unrelated cold-cache loop.
+  before(() => {
+    edges = buildEdges(10_000);
+    index = buildGraphIndex(edges);
+  });
 
   function scanArray(type, target) {
     return edges.filter((e) => e.type === type && e.target === target);
