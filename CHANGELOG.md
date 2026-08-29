@@ -36,6 +36,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Rollback-Generationen bleiben innerhalb des LanceDB-ID-Vertrags.** Ein
+  bestaetigter manueller Rueckweg leitet den isolierten Zielnamen nur noch aus
+  einem kollisionsresistenten Digest ab. Auch lange, oeffentlich gueltige
+  Migrations-IDs koennen dadurch keinen intern ungueltigen Generationsnamen
+  ueber 64 Zeichen mehr erzeugen.
 - **Re-Embedding-Switch ueberlebt den OpenClaw-Registry-Wechsel.** Der
   bestaetigte Wechsel bleibt zunaechst dauerhaft im fail-closed Zustand
   `switching`. Erst der von OpenClaw aktivierte Ersatz-Plugin-Service prueft
