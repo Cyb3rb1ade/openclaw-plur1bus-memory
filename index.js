@@ -4487,12 +4487,33 @@ const plugin = {
       );
     }
 
-    // Explicit-profile setup notices: pending setup still warns, while normal
-    // manifest-derived config loading requires no selection history.
-    const applyBlocked = isApplyBlocked(cfg);
+    const obsidianBridgeCfg = cfg.obsidianBridge || {};
+    const configuredObsidianWorkspaces = obsidianBridgeCfg.enabled === true
+      ? discoverObsidianWorkspaces(obsidianBridgeCfg)
+      : [];
+    const obsidianVaultsConfirmed = configuredObsidianWorkspaces.length > 0
+      && configuredObsidianWorkspaces.every((workspace) => {
+        const workspaceIdentity = normalizeWorkspaceTarget(
+          workspace.workspaceId,
+          "Obsidian setup workspace",
+        );
+        return isOwnedVaultConfirmed({
+          baseDbPath,
+          memoryCtx: {
+            agentId: workspace.agentId,
+            workspaceIdentity,
+            workspaceId: workspaceIdentity,
+          },
+          vaultPath: workspace.path,
+        });
+      });
+
+    // Explicit-profile setup notices: protected receipts are the runtime truth;
+    // the safety-gate config bit alone does not mean confirmation is still pending.
+    const applyBlocked = isApplyBlocked(cfg, { vaultConfirmed: obsidianVaultsConfirmed });
     if (applyBlocked.blocked) {
       if (applyBlocked.reason === "pending_setup") {
-        const pending = detectPendingFeatures(cfg);
+        const pending = detectPendingFeatures(cfg, { vaultConfirmed: obsidianVaultsConfirmed });
         for (const p of pending) {
           api.logger.warn(`memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`);
         }
@@ -4500,7 +4521,6 @@ const plugin = {
     }
 
     registerOpenClawMemoryEmbeddingProviders(api, cfg);
-    const obsidianBridgeCfg = cfg.obsidianBridge || {};
     const obsidianBridgeEnabled = obsidianBridgeCfg.enabled === true;
 
     const embeddingCfg = cfg.embedding || {};
