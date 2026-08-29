@@ -36,6 +36,10 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Skill-Workshop-Beschreibung an Beta-1-Vertrag gebunden.** Die kurze
+  Listing-Beschreibung wird UTF-8-sicher auf OpenClaws oeffentliche 160-Byte-
+  Grenze begrenzt; der vollstaendige Skill-Entwurf bleibt unveraendert im
+  revisionsgebundenen Proposal-Inhalt erhalten.
 - **Skill-Workshop-Uebergabe fuer jede ACL-Partition.** Agent-private,
   benutzerweite und Workspace-Vorschlaege erhalten denselben offiziellen,
   agentgebundenen OpenClaw-Workshop-Client. Der Miner verlangt den Workshop
