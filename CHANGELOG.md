@@ -11,18 +11,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Kompatibilitaet
 
-- **OpenClaw 2026.8.1-beta.3 ohne Host-Patch.** PLUR1BUS prueft die oeffentlichen
+- **OpenClaw 2026.9.1-beta.1 ohne Host-Patch.** PLUR1BUS prueft die oeffentlichen
   Plugin-Capabilities (`registerGatewayMethod`, `registerCli` und
   `openclaw/plugin-sdk/gateway-runtime`) und nutzt den nativen Command-/Cron-
   Dispatcher. Es werden weder OpenClaw-Quellen noch `dist`-Bundles oder
   `node_modules` veraendert. Fehlende Capabilities bleiben fail-closed.
 - **Exakte Release-Identitaet.** Paket, Lockfile und Manifest tragen 7.5.0; die
-  Build- und Mindest-Host-Metadaten nennen exakt OpenClaw 2026.8.1-beta.3. Die
+  Build- und Mindest-Host-Metadaten nennen exakt OpenClaw 2026.9.1-beta.1. Die
   bestehenden Tags und der Quellstand 7.4.10 bleiben unveraendert.
 - **Nicht-destruktives Upgrade.** 7.5.0 fuehrt keinen brechenden LanceDB-
   Schematausch ein. Bestehende agent-spezifische Tabellen, Namespaces,
   Tombstones, History und Obsidian-Spiegel bleiben erhalten.
-- **Exklusiver Beta-3-Memory-Slot.** Manifest und Runtime deklarieren PLUR1BUS
+- **Exklusiver OpenClaw-Memory-Slot.** Manifest und Runtime deklarieren PLUR1BUS
   als `kind: memory` und registrieren `memory_recall` ueber die oeffentliche
   `registerMemoryCapability`-API. Damit deaktiviert der ausgewaehlte
   `plugins.slots.memory`-Vertrag konkurrierende `memory-core`-Recall-/Capture-
@@ -31,7 +31,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Proposal ueber `skills.proposals.create` in OpenClaws eingebauten Skill
   Workshop eingestellt. Freigabe und Ablehnung laufen nach erneutem Inspect
   revisionsgebunden ueber `apply` beziehungsweise `reject`; PLUR1BUS schreibt
-  auf Beta 3 selbst kein `workspace/skills/*/SKILL.md`. Fehlende Capabilities,
+  selbst kein `workspace/skills/*/SKILL.md`. Fehlende Capabilities,
   abweichende Ziele und geaenderte Revisionen bleiben fail-closed.
 
 ### Behoben
@@ -55,7 +55,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   besitzen injizierte Zeit-/I/O-Grenzen statt von VPS-Last abzuhaengen.
 - **Generischer OpenClaw-Embedding-Vertrag.** Die drei PLUR1BUS-Adapter nutzen
   jetzt `contracts.embeddingProviders` und `registerEmbeddingProvider` sowie
-  die generische `embed`/`embedBatch`-Form von Beta 3. Der am 21.08.2026
+  die generische `embed`/`embedBatch`-Form von OpenClaw. Der am 21.08.2026
   entfernte Memory-spezifische Registrar wird nicht mehr verwendet. Fehlt die
   optionale generische Host-Capability auf einem aelteren Host, bleibt der
   explizit konfigurierte interne PLUR1BUS-Embedding-Pfad aktiv.
@@ -75,14 +75,16 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `gateway_stop` ueber `dispose()` freigegeben; persistente Embedding-Caches
   werden geschlossen. Auch verkettete Primary-/Fallback-Reranker und der
   OpenAI-Embedding-Cache besitzen einen idempotenten Shutdown. Dadurch haelt
-  ein Beta-3-In-Process-Reload keine alte ONNX-Pipeline neben der neu geladenen
+  ein In-Process-Reload keine alte ONNX-Pipeline neben der neu geladenen
   Instanz im Speicher; ein fehlgeschlagener Modellimport bleibt erneut
   versuchbar.
 - **Sichere Modellvorbereitung im Operator-Dashboard.** Eine geschlossene
   `modelPreparation.profile`-Auswahl fuer E5 und Jina startet automatisch nur
   den atomaren, hashgeprueften Download. Fortschritt und Ergebnis ueberleben
   Seiten- und Gateway-Reloads; parallele Provider-Downloads werden
-  zusammengefuehrt. Ein geaenderter Embedding-Fingerprint erzeugt einen
+  zusammengefuehrt. Der Download beginnt erst im aktivierten OpenClaw-Plugin-
+  Service; ein verworfener Registry-Builder startet keinerlei Modellarbeit.
+  Ein geaenderter Embedding-Fingerprint erzeugt einen
   nicht-mutierenden Dry-Run mit Karten-, Speicher- und Platzabschaetzung, aber
   weder eine Migration noch einen Modellwechsel. Jina bleibt bis zur expliziten
   CC-BY-NC-4.0-Bestaetigung blockiert; Apply und Umschalten verlangen weiterhin

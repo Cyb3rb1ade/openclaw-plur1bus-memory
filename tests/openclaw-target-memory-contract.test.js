@@ -7,7 +7,7 @@ function createApi() {
   const embeddingProviders = [];
   return {
     pluginConfig: {
-      baseDbPath: "/tmp/plur1bus-beta3-memory-contract",
+      baseDbPath: "/tmp/plur1bus-openclaw-target-memory-contract",
       embedding: { provider: "local-transformers", local: { dimensions: 384 } },
       autoCapture: false,
       autoRecall: false,
@@ -38,7 +38,7 @@ function createApi() {
   };
 }
 
-describe("OpenClaw Beta-3 exclusive memory contract", () => {
+describe("OpenClaw target release exclusive memory contract", () => {
   it("declares PLUR1BUS as the selected memory kind with only the generic embedding contract", () => {
     const manifest = JSON.parse(readFileSync(new URL("../openclaw.plugin.json", import.meta.url)));
     assert.equal(manifest.kind, "memory");
@@ -56,7 +56,7 @@ describe("OpenClaw Beta-3 exclusive memory contract", () => {
   });
 
   it("registers one deterministic memory capability and the declared embedding adapters", async () => {
-    const pluginModule = await import(`../index.js?beta3-memory-contract=${Date.now()}`);
+    const pluginModule = await import(`../index.js?openclaw-target-memory-contract=${Date.now()}`);
     const api = createApi();
     pluginModule.default.register(api, {
       importRouting: async () => ({

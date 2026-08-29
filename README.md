@@ -2,11 +2,11 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.5.0 — native OpenClaw Beta-3 compatibility**
+**PLUR1BUS 7.5.0 — native OpenClaw 2026.9.1-beta.1 compatibility**
 
 Current source version: **7.5.0**. The compatibility target is exactly
-`openclaw@2026.8.1-beta.3`; see the
-[compatibility contract](docs/compatibility-openclaw-2026.8.1-beta.3.md).
+`openclaw@2026.9.1-beta.1`; see the
+[compatibility contract](docs/compatibility-openclaw-2026.9.1-beta.1.md).
 The upstream 7.4.10 source base is pinned to commit
 `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`; existing tags remain immutable.
 
@@ -20,14 +20,18 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
   plugin registration and `gateway-runtime` dispatcher capabilities. Missing
   capabilities fail closed; PLUR1BUS never rewrites OpenClaw source, dist, or
   `node_modules` files.
-- **Exact Beta-3 release contract.** Package metadata pins the tested host and
-  SDK identity to `2026.8.1-beta.3`, while runtime behavior is guarded by
+- **Exact 2026.9.1 beta release contract.** Package metadata pins the tested host and
+  SDK identity to `2026.9.1-beta.1`, while runtime behavior is guarded by
   feature detection rather than version-string branches.
 - **Pinned local inference.** E5 embeddings, the optional multilingual Jina v3
   embedding, Jina reranking, and the free BGE fallback use immutable Hugging
   Face revisions with exact required-file sizes and SHA-256 verification before
   Transformers.js loads them. Jina v3 embedding is offered separately because
   its CC BY-NC 4.0 license does not permit commercial use without other terms.
+- **Activation-owned preparation.** Selecting a local-model preparation profile
+  stages no work during plugin discovery. The download begins only after
+  OpenClaw activates the PLUR1BUS service, and shutdown or replacement drains
+  it through the public service/runtime lifecycle.
 - **Deterministic regression timing.** CPU-bound performance contracts measure
   process CPU time; repair diagnostics drain naturally before process exit.
 
@@ -482,7 +486,7 @@ not PLUR1BUS defaults.
 }
 ```
 
-`dreaming.enabled: false` is the OpenClaw Beta-3 sidecar gate, not the
+`dreaming.enabled: false` is the OpenClaw memory-core sidecar gate, not the
 PLUR1BUS narrative toggle. Keep it false when PLUR1BUS owns consolidation or
 REM; otherwise OpenClaw also loads `memory-core` dreaming. When `skillMiner` is
 enabled, use Skill Workshop autonomous `propose` or `off` so both learning

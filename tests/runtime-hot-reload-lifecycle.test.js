@@ -54,7 +54,7 @@ describe("OpenClaw runtime cleanup lifecycle", () => {
     await cleanup;
   });
 
-  it("blocks a new Beta-3 generation from acquiring a local model until the replaced generation releases it", async () => {
+  it("blocks a new OpenClaw registry generation from acquiring a local model until the replaced generation releases it", async () => {
     assert.equal(typeof runtimeShutdown.createLocalModelGenerationLifecycle, "function");
     const oldGeneration = runtimeShutdown.createLocalModelGenerationLifecycle({ waitTimeoutMs: 1_000 });
     const nextGeneration = runtimeShutdown.createLocalModelGenerationLifecycle({ waitTimeoutMs: 1_000 });
@@ -224,7 +224,7 @@ describe("OpenClaw runtime cleanup lifecycle", () => {
     assert.equal(shutdownCalls, 1);
   });
 
-  it("awaits the Beta-3 runtime cleanup hook on hot restart and shuts resources once", async () => {
+  it("awaits the OpenClaw runtime cleanup hook on hot restart and shuts resources once", async () => {
     const calls = [];
     let lifecycle;
     let gatewayStop;

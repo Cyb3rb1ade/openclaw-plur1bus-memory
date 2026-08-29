@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -14,6 +15,8 @@ import {
   validateFeatureCronRequest,
 } from "../lib/setup/feature-cron-plugin-runtime.js";
 import { runFeatureCronRunner } from "../scripts/run-feature-cron.mjs";
+
+const require = createRequire(import.meta.url);
 
 function responseCapture() {
   const calls = [];
@@ -190,6 +193,14 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("loads the exact installed OpenClaw target's public Gateway runtime", async () => {
+    const packageManifestPath = join(dirname(dirname(require.resolve("openclaw"))), "package.json");
+    const manifest = require(packageManifestPath);
+    assert.equal(manifest.version, "2026.9.1-beta.1");
+    const runtime = await loadOpenClawGatewayRuntime({ packageManifestPath });
+    assert.equal(typeof runtime.callGatewayFromCli, "function");
   });
 
   it("fails visibly for plugin errors and malformed ReplyPayloads", async () => {

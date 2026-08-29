@@ -180,7 +180,7 @@ Jina-v3-Embedding unterstuetzt exakt 32/64/128/256/512/768/1024 Dimensionen.
 Der Jina-v2-Reranker und BGE sind Reranker und besitzen keine Memory-
 Vektordimension.
 
-Die Auswahl in der externen Beta-3-Plugin-Registerkarte ist eine lesende
+Die Auswahl in der externen OpenClaw-Plugin-Registerkarte ist eine lesende
 Planungshilfe. Ein Dimensionswechsel wird ausschliesslich ueber den bestaetigten
 Re-Embedding-Adminpfad angewendet. Unbekannte OpenAI-kompatible Modelle erhalten
 keine erratene Auswahlliste; fuer sie sind eine explizite Dimension und die

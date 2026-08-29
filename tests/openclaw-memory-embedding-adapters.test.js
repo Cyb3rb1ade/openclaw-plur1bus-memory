@@ -40,7 +40,7 @@ async function createCompatibleProvider(dim = 3) {
 }
 
 describe("OpenClaw memory embedding provider adapters", () => {
-  it("registers the Beta-3 generic embedding-provider contract", async () => {
+  it("registers the target OpenClaw generic embedding-provider contract", async () => {
     const registered = [];
     const api = {
       registerEmbeddingProvider(adapter) { registered.push(adapter); },
@@ -82,7 +82,7 @@ describe("OpenClaw memory embedding provider adapters", () => {
     assert.match(messages.info[0], /registerEmbeddingProvider.*unavailable/i);
   });
 
-  it("exposes the Beta-3 close contract for the native local provider", async () => {
+  it("exposes the target OpenClaw close contract for the native local provider", async () => {
     const resources = [];
     const localModelGeneration = {
       registerResource(resource, label) { resources.push([resource, label]); },
