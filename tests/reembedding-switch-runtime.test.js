@@ -256,10 +256,12 @@ describe("maintenance-gated generation switch", () => {
       probeRuntime: async () => ({ readiness: true, store: true, recall: true }),
     });
     await recovery.start();
+    const reverseMigrationId = `rollback-e5-${"a".repeat(36)}`;
     const reverse = await runtime.planManualRollback({
       completedId: "migration-0001",
-      newMigrationId: "rollback-0001",
+      newMigrationId: reverseMigrationId,
     });
+    assert.equal(reverse.id, reverseMigrationId);
     assert.equal(reverse.sourceGeneration, "generation-target");
     assert.deepStrictEqual(reverse.target.fingerprint, sourceFingerprint);
     assert.deepStrictEqual(reverse.target.secretRef, {
@@ -268,7 +270,8 @@ describe("maintenance-gated generation switch", () => {
       id: "OPENAI_API_KEY",
     });
     assert.notEqual(reverse.targetGeneration, "generation-source");
-    assert.match(reverse.targetGeneration, /^rollback-rollback-0001-/);
+    assert.match(reverse.targetGeneration, /^rollback-[a-f0-9]{48}$/);
+    assert.ok(reverse.targetGeneration.length <= 64, "derived generation must satisfy the Lance generation-id contract");
     await recovery.shutdown();
   });
 });

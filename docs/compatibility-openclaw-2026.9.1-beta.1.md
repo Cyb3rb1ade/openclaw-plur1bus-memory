@@ -44,6 +44,10 @@ commits `completed`. A failed target probe persists a rollback intent, switches
 back through the same public config API, and is finalized only by the activated
 source runtime after its own probe. Unknown selection drift remains gated
 rather than being reported as a completed or safely rolled-back switch.
+Reverse migrations derive their quarantined LanceDB generation from a bounded
+digest rather than concatenating the operator-visible migration ID, so every
+accepted rollback request also satisfies the backend's 64-character generation
+identifier contract.
 
 These capabilities are detected from the runtime objects and exports before
 use. Missing capabilities produce a fail-closed diagnostic. There is no
