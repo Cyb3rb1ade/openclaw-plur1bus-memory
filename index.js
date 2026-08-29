@@ -132,7 +132,7 @@ import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateVa
 import {
   createLocalModelGenerationLifecycle,
   registerGatewayShutdown,
-  startModelPreparationAfterLifecycle,
+  registerModelPreparationServiceAfterLifecycle,
 } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
@@ -11750,7 +11750,7 @@ const plugin = {
       reembeddingCoordinator,
       localModelGeneration,
     });
-    startModelPreparationAfterLifecycle(api, {
+    registerModelPreparationServiceAfterLifecycle(api, {
       lifecycleRegistered: gatewayShutdownRegistered,
       coordinator: modelPreparationCoordinator,
     });

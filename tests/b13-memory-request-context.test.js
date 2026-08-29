@@ -1164,7 +1164,7 @@ describe("B13 canonical memory request context", () => {
     }
   });
 
-  it("accepts an official Beta-3 headless agent hook without inventing a user or warning", async (t) => {
+  it("accepts an official headless agent hook without inventing a user or warning", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-headless-beta3-"));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
     const warnings = [];
@@ -1175,7 +1175,7 @@ describe("B13 canonical memory request context", () => {
       sessionKey: "agent:a:auto-capture-lab-a",
       sessionId: "session-headless-a",
       workspaceDir,
-      // Beta-3's public buildAgentHookContextChannelFields helper labels a
+      // OpenClaw's public buildAgentHookContextChannelFields helper labels a
       // Gateway CLI turn with its internal non-delivery webchat sentinel even
       // though there is no authenticated transport sender or account.
       channel: "webchat",

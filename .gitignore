@@ -18,6 +18,7 @@ docs/**
 !docs/superpowers/**
 !docs/configuration.md
 !docs/compatibility-openclaw-2026.8.1-beta.3.md
+!docs/compatibility-openclaw-2026.9.1-beta.1.md
 !docs/recall-architecture.md
 !docs/migration-v6.md
 !docs/release-checklist.md

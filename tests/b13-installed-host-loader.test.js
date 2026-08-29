@@ -12,11 +12,11 @@ function findPinnedOpenClawLoader() {
   const packageRoot = dirname(dirname(require.resolve("openclaw")));
   const packageJson = join(packageRoot, "package.json");
   const pkg = require(packageJson);
-  assert.equal(pkg.version, "2026.8.1-beta.3", "loader test must use the exact target OpenClaw beta");
+  assert.equal(pkg.version, "2026.9.1-beta.1", "loader test must use the exact target OpenClaw beta");
   return join(packageRoot, "dist", "plugins", "loader.js");
 }
 
-it("loads reply_dispatch routing through the exact OpenClaw beta-3 plugin loader", async () => {
+it("loads reply_dispatch routing through the exact OpenClaw 2026.9.1-beta.1 plugin loader", async () => {
   const loaderPath = findPinnedOpenClawLoader();
   assert.ok(existsSync(loaderPath), `pinned OpenClaw plugin loader is unavailable: ${loaderPath}`);
   const isolatedHome = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-loader-"));
@@ -31,6 +31,7 @@ it("loads reply_dispatch routing through the exact OpenClaw beta-3 plugin loader
   const loader = await import(`${pathToFileURL(loaderPath).href}?isolated=${Date.now()}`);
   const projectRoot = resolve(import.meta.dirname, "..");
   const pluginId = "memory-lancedb-namespaced";
+  const baseDbPath = join(isolatedHome, "plur1bus-state");
   const config = {
     agents: { list: [{ id: "smoke", workspace: projectRoot }] },
     plugins: {
@@ -40,7 +41,12 @@ it("loads reply_dispatch routing through the exact OpenClaw beta-3 plugin loader
         [pluginId]: {
           enabled: true,
           hooks: { allowPromptInjection: true, allowConversationAccess: true },
-          config: { autoRecall: true, autoCapture: false },
+          config: {
+            autoRecall: true,
+            autoCapture: false,
+            baseDbPath,
+            modelPreparation: { profile: "jina-v3-multilingual-32" },
+          },
         },
       },
       slots: { memory: pluginId },
@@ -66,6 +72,21 @@ it("loads reply_dispatch routing through the exact OpenClaw beta-3 plugin loader
     const plugin = registry.plugins.find((entry) => entry.id === pluginId);
     assert.equal(plugin?.status, "loaded");
     assert.equal(realpathSync(plugin.source), realpathSync(join(projectRoot, "index.js")));
+    const runtimeLifecycles = registry.runtimeLifecycles.filter((entry) => entry.pluginId === pluginId);
+    assert.equal(runtimeLifecycles.length, 1, "installed host must own exactly one PLUR1BUS cleanup lifecycle");
+    assert.equal(runtimeLifecycles[0].lifecycle.id, "plur1bus-runtime-resources");
+    assert.equal(typeof runtimeLifecycles[0].lifecycle.cleanup, "function");
+    const preparationServices = registry.services.filter((entry) => entry.pluginId === pluginId
+      && entry.service?.id === "plur1bus-model-preparation");
+    assert.equal(preparationServices.length, 1, "installed host must stage exactly one preparation service");
+    assert.equal(typeof preparationServices[0].service.start, "function");
+    assert.equal(typeof preparationServices[0].service.stop, "function");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      existsSync(join(baseDbPath, "control", "model-preparation.json")),
+      false,
+      "an inactive OpenClaw registry builder must not start model preparation",
+    );
 
     const dispatchHook = registry.typedHooks.find((entry) => entry.pluginId === pluginId
       && entry.hookName === "reply_dispatch");

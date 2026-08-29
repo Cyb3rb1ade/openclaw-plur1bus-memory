@@ -98,7 +98,7 @@ describe("workspace policy guard", () => {
     assert.equal(executions, 0);
   });
 
-  it("leaves execute wrappable by the OpenClaw Beta-3 plugin-tool proxy", () => {
+  it("leaves execute wrappable by the OpenClaw plugin-tool proxy", () => {
     const [guarded] = guardWorkspaceTools([{
       name: "memory_recall",
       async execute() { return { content: [] }; },

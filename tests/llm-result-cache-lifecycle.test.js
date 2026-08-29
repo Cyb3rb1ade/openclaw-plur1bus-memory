@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   registerGatewayShutdown,
-  startModelPreparationAfterLifecycle,
+  registerModelPreparationServiceAfterLifecycle,
 } from "../lib/runtime-shutdown.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -47,7 +47,7 @@ describe("LLM result cache lifecycle", () => {
     const api = { logger: { warn: (message) => warnings.push(message) } };
 
     assert.equal(registerGatewayShutdown(api, makeDependencies()), false);
-    assert.equal(startModelPreparationAfterLifecycle(api, {
+    assert.equal(registerModelPreparationServiceAfterLifecycle(api, {
       lifecycleRegistered: false,
       coordinator: { async start() { starts += 1; } },
     }), false);
@@ -57,20 +57,49 @@ describe("LLM result cache lifecycle", () => {
     assert.match(warnings.join("\n"), /model preparation.*gateway lifecycle capability (?:is )?unavailable/i);
   });
 
-  it("starts model preparation once only after lifecycle ownership is registered", async () => {
+  it("registers model preparation as a service and starts it only after host activation", async () => {
     let starts = 0;
-    const api = { logger: {} };
-    assert.equal(startModelPreparationAfterLifecycle(api, {
+    let stops = 0;
+    let service;
+    const api = {
+      logger: {},
+      registerService(registration) { service = registration; },
+    };
+    assert.equal(registerModelPreparationServiceAfterLifecycle(api, {
       lifecycleRegistered: true,
       coordinator: {
         async start() {
           starts += 1;
           return { state: "ready", model: "fixture/model", dimensions: 384 };
         },
+        async shutdown() { stops += 1; },
       },
     }), true);
     await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(starts, 0, "register() must not start work in a staged registry");
+    assert.equal(service.id, "plur1bus-model-preparation");
+    assert.equal(typeof service.start, "function");
+    assert.equal(typeof service.stop, "function");
+
+    await service.start();
     assert.equal(starts, 1);
+    await service.stop();
+    assert.equal(stops, 1);
+  });
+
+  it("fails closed when model preparation cannot be owned by an activated host service", async () => {
+    let starts = 0;
+    const warnings = [];
+    const api = { logger: { warn: (message) => warnings.push(message) } };
+
+    assert.equal(registerModelPreparationServiceAfterLifecycle(api, {
+      lifecycleRegistered: true,
+      coordinator: { async start() { starts += 1; } },
+    }), false);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(starts, 0);
+    assert.match(warnings.join("\n"), /model preparation.*plugin service capability.*unavailable/i);
   });
 
   it("calls and awaits register-local cache close exactly once on gateway_stop", async () => {
@@ -154,7 +183,7 @@ describe("LLM result cache lifecycle", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
     const shutdownOwnership = source.indexOf("registerGatewayShutdown(api,");
     const finalPromptHook = source.lastIndexOf('api.on("before_prompt_build"');
-    const preparationStart = source.lastIndexOf("startModelPreparationAfterLifecycle(api,");
+    const preparationStart = source.lastIndexOf("registerModelPreparationServiceAfterLifecycle(api,");
 
     assert.ok(shutdownOwnership >= 0);
     assert.ok(shutdownOwnership > finalPromptHook);

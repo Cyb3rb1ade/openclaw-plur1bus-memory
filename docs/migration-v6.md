@@ -15,7 +15,7 @@ fehlende Spalten älterer Tabellen.
 
 7.5.0 enthält den Neo-Cap-Hysterese-Fix aus dem exakten 7.4.10-Quellcommit und
 entfernt die OpenClaw-Bundle-Manipulation vollständig. Es nutzt die
-öffentlichen Fähigkeiten von OpenClaw 2026.8.1-beta.3. Deshalb gibt es weder
+öffentlichen Fähigkeiten von OpenClaw 2026.9.1-beta.1. Deshalb gibt es weder
 eine neue Host-Patch-Datei noch eine Patch-Rollback-Kopie zu migrieren. Ein
 Plugin-Rollback erfolgt ausschließlich über das zuvor aufbewahrte npm-Pack-
 Artefakt; zusätzliche Spalten werden von älteren PLUR1BUS-Versionen ignoriert.

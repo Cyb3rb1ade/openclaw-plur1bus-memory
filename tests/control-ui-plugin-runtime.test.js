@@ -19,7 +19,7 @@ function fakeResponse() {
   };
 }
 
-describe("PLUR1BUS Beta-3 Control UI runtime", () => {
+describe("PLUR1BUS OpenClaw Control UI runtime", () => {
   it("registers one read-scoped status method and one authenticated external tab", () => {
     const gatewayMethods = [];
     const routes = [];
