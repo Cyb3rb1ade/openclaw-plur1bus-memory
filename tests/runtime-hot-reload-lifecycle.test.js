@@ -26,6 +26,61 @@ function trackedDependencies(calls, releaseEmbedding = null) {
 }
 
 describe("OpenClaw runtime cleanup lifecycle", () => {
+  it("coordinates local models only for activation-owned OpenClaw runtime generations", async () => {
+    assert.equal(typeof runtimeShutdown.shouldCoordinateLocalModelGeneration, "function");
+    const lifecycle = { registerRuntimeLifecycle() {} };
+    const runtime = { config: { current() { return {}; } } };
+
+    assert.equal(runtimeShutdown.shouldCoordinateLocalModelGeneration({
+      registrationMode: "full",
+      lifecycle,
+      runtime,
+    }), true);
+    assert.equal(runtimeShutdown.shouldCoordinateLocalModelGeneration({
+      registrationMode: "tool-discovery",
+      lifecycle,
+      runtime,
+    }), false);
+    assert.equal(runtimeShutdown.shouldCoordinateLocalModelGeneration({
+      registrationMode: "discovery",
+      lifecycle,
+      runtime,
+    }), false);
+    assert.equal(runtimeShutdown.shouldCoordinateLocalModelGeneration({
+      lifecycle,
+      runtime,
+    }), true, "legacy lifecycle-capable hosts retain the activation gate");
+    assert.equal(runtimeShutdown.shouldCoordinateLocalModelGeneration({
+      registrationMode: "full",
+      runtime,
+    }), false, "hosts without cleanup ownership must not enter the global queue");
+  });
+
+  it("does not queue request-scoped tool discovery behind an active gateway generation", async () => {
+    const active = runtimeShutdown.createLocalModelGenerationLifecycle({ waitTimeoutMs: 1_000 });
+    const requestScoped = runtimeShutdown.createLocalModelGenerationLifecycle({
+      enabled: false,
+      waitTimeoutMs: 25,
+    });
+    const successor = runtimeShutdown.createLocalModelGenerationLifecycle({ waitTimeoutMs: 1_000 });
+
+    await active.beforeAcquire();
+    await requestScoped.beforeAcquire();
+    assert.equal(requestScoped.registerResource({ async shutdown() {} }, "request model"), false);
+
+    let successorAcquired = false;
+    const acquisition = successor.beforeAcquire().then(() => { successorAcquired = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(successorAcquired, false, "the next full generation must still wait for the active owner");
+
+    await requestScoped.releaseModels();
+    assert.equal(successorAcquired, false, "request cleanup must not release the active owner barrier");
+    await active.releaseModels();
+    await acquisition;
+    assert.equal(successorAcquired, true);
+    await successor.releaseModels();
+  });
+
   it("starts model disposal even when an earlier coordinator drain is blocked", async () => {
     const calls = [];
     let lifecycle;

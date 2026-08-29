@@ -133,6 +133,7 @@ import {
   createLocalModelGenerationLifecycle,
   registerGatewayShutdown,
   registerModelPreparationServiceAfterLifecycle,
+  shouldCoordinateLocalModelGeneration,
 } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
@@ -4383,11 +4384,7 @@ const plugin = {
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
     const localModelGeneration = createLocalModelGenerationLifecycle({
-      enabled: typeof api.runtime?.config?.current === "function"
-        && (
-          typeof api.lifecycle?.registerRuntimeLifecycle === "function"
-          || typeof api.registerRuntimeLifecycle === "function"
-        ),
+      enabled: shouldCoordinateLocalModelGeneration(api),
     });
     const credentialResolver = createConfiguredSecretInputResolver({
       getConfig: () => api.runtime?.config?.current?.() || api.config || {},
