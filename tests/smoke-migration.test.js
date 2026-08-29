@@ -244,6 +244,25 @@ const TABLE_NAME = "memories";
     const freshDir = mkdtempSync(join(tmpdir(), "plur1bus-migration-smoke-fresh-"));
     const memoryDb = new MemoryDB(freshDir, VECTOR_DIM);
 
+    await memoryDb.init();
+    const freshSchema = await memoryDb.table.schema();
+    const freshFieldNames = new Set(freshSchema.fields.map((field) => field.name));
+    for (const field of [
+      "memoryKind",
+      "reminderStatus",
+      "remindAt",
+      "remindedAt",
+      "dispatchedAt",
+      "acknowledgedAt",
+      "cancelledAt",
+      "reminderKey",
+      "dispatchCount",
+      "lastDispatchAttemptAt",
+      "nextDispatchAttemptAt",
+    ]) {
+      assert.ok(freshFieldNames.has(field), `brand-new table must include reminder field ${field}`);
+    }
+
     const knownValidFrom = Date.parse("2025-03-01T00:00:00.000Z");
     const knownValidUntil = Date.parse("2025-09-01T00:00:00.000Z");
     await memoryDb.store({

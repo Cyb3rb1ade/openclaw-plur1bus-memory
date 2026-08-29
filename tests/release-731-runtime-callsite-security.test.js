@@ -393,7 +393,21 @@ test("registered internal skill-miner processes every allowed partition without 
   const pluginModule = await import(`../index.js?release-731-runtime-skill=${Date.now()}-${Math.random()}`);
   await seedRuntimeMemories(pluginModule, baseDbPath, workspaceDir);
   const api = createRuntimeApi(baseDbPath, runtimeLlm);
-  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  const workshopScopes = [];
+  pluginModule.default.register(api, {
+    importRouting: async () => routingCapability,
+    skillWorkshop: {
+      async createProposal({ proposal }) {
+        workshopScopes.push(proposal.aclBindings?.scope);
+        return {
+          proposalId: `release-check-${proposal.aclBindings?.scope}`,
+          revisionHash: "a".repeat(64),
+          status: "pending",
+          skillName: proposal.skillName,
+        };
+      },
+    },
+  });
 
   const result = await api._commands.find((command) => command.name === "plur1bus").handler(
     runtimeCommand(workspaceDir, "internal skill-miner"),
@@ -406,6 +420,7 @@ test("registered internal skill-miner processes every allowed partition without 
   assert.equal(parsed.pushMessages.length, 3);
   assert.equal(parsed.aclBindings, null);
   assert.equal(prompts.length, 3);
+  assert.deepEqual(workshopScopes.sort(), ["agent-private", "user", "workspace"]);
   for (const prompt of prompts) {
     const scopes = ["AGENT-PRIVATE", "USER", "WORKSPACE"].filter((scope) => prompt.includes(`${scope} LOCAL`));
     assert.equal(scopes.length, 1, prompt);

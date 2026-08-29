@@ -36,6 +36,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Skill-Workshop-Uebergabe fuer jede ACL-Partition.** Agent-private,
+  benutzerweite und Workspace-Vorschlaege erhalten denselben offiziellen,
+  agentgebundenen OpenClaw-Workshop-Client. Der Miner verlangt den Workshop
+  weiterhin fail-closed und erzeugt keine lokalen Ersatzvorschlaege, wenn die
+  native Uebergabe scheitert.
+- **Vollstaendiges Reminder-Schema bei neuen Tabellen.** Eine frisch erzeugte
+  LanceDB-Tabelle enthaelt die Reminder-Spalten bereits in ihrer Bootstrap-
+  Schemazeile. Reminder-Nudges koennen dadurch vor dem zweiten Gateway-Start
+  abfragen, ohne an einer fehlenden `memoryKind`-Spalte zu scheitern.
 - **Jina `Unsupported model type: null`.** Die tatsaechlich veroeffentlichten
   Metadaten des festgepinnten Jina-Modells werden vor der Inferenz validiert;
   nur dieses bekannte Profil wird auf seine XLM-RoBERTa-Architektur
