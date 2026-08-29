@@ -36,6 +36,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Re-Embedding blockiert den Gateway-Eventloop nicht minutenlang.** Lokale
+  CPU-Inferenz wird in kleine, durable Batches begrenzt. Dadurch bleiben
+  OpenClaws Liveness, Status-Polling und die Operator-WebSocket-Verbindung
+  waehrend eines echten Dimensionswechsels erreichbar, ohne Checkpoints oder
+  Validierung abzuschwaechen.
 - **Rollback-Generationen bleiben innerhalb des LanceDB-ID-Vertrags.** Ein
   bestaetigter manueller Rueckweg leitet den isolierten Zielnamen nur noch aus
   einem kollisionsresistenten Digest ab. Auch lange, oeffentlich gueltige
