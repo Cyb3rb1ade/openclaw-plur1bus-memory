@@ -1680,6 +1680,17 @@ class MemoryDB {
             updatedAt: 0,
             workspaceId: "",
             workspaceKey: "",
+            memoryKind: "memory",
+            reminderStatus: "",
+            remindAt: 0,
+            remindedAt: 0,
+            dispatchedAt: 0,
+            acknowledgedAt: 0,
+            cancelledAt: 0,
+            reminderKey: "",
+            dispatchCount: 0,
+            lastDispatchAttemptAt: 0,
+            nextDispatchAttemptAt: 0,
             // Phase 1 — Explicit Trust State (epistemicStatus). See
             // lib/epistemic-status.js for the enum/matrix; absent/'' means
             // "legacy, resolves conservatively" (see plan §5), never "trusted".
@@ -6968,9 +6979,7 @@ const plugin = {
                         aclPartition: skillAclPartition,
                         workspaceDir: skillWorkspaceDir,
                         workspaceKey: skillAclPartition.workspaceIdentity,
-                        skillWorkshop: skillAclPartition.scope === "workspace"
-                          ? openClawSkillWorkshop
-                          : null,
+                        skillWorkshop: openClawSkillWorkshop,
                         requireSkillWorkshop: openClawSkillWorkshop !== null,
                         llmCfg: withLlmCallContext(
                           skillMinerLlmCfg,
