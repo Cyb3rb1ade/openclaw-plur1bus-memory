@@ -81,6 +81,36 @@ function seedWorkshopProposal(dir, extra = {}) {
 }
 
 describe("OpenClaw Skill Workshop gateway adapter", () => {
+  it("bounds the public proposal description to the target host's 160-byte contract", async () => {
+    const calls = [];
+    const client = createOpenClawSkillWorkshopClient({
+      loadGatewayRuntime: async () => ({
+        callGatewayFromCli: async (...args) => {
+          calls.push(args);
+          return {
+            record: {
+              id: "weekly-deploy-20260826",
+              status: "pending",
+              target: { skillKey: "weekly-deploy" },
+            },
+            revisionHash: REVISION,
+          };
+        },
+      }),
+    });
+    const proposal = seedWorkshopProposal(workspace(), {
+      openClawWorkshop: undefined,
+      description: `Prüfe die Veröffentlichung sorgfältig: ${"🧪".repeat(80)}`,
+    });
+
+    await client.createProposal({ agentId: "agent-a", proposal });
+
+    const description = calls[0][2].description;
+    assert.ok(Buffer.byteLength(description, "utf8") <= 160);
+    assert.ok(!description.includes("�"));
+    assert.match(description, /\.\.\.$/u);
+  });
+
   it("uses only the public, agent-scoped proposal RPCs with the required scopes", async () => {
     const calls = [];
     const responses = {
