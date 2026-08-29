@@ -26,7 +26,7 @@ const sourceRows = [
   { id: "33333333-3333-4333-8333-333333333333", text: "gamma", status: "active", vector: [0, 0, 1] },
 ];
 
-function fakeBackend() {
+function fakeBackend(rows = sourceRows) {
   const target = new Map();
   let version = "source-version-1";
   let generationCreated = false;
@@ -42,7 +42,7 @@ function fakeBackend() {
         tables: [{
           tableId: "agent-a/memories",
           version,
-          rowCount: sourceRows.length,
+          rowCount: rows.length,
           estimatedBytes: 1_000,
           dimensions: 3,
         }],
@@ -55,7 +55,7 @@ function fakeBackend() {
     async describeGeneration() {
       return generationCreated ? { generation: "generation-target", dimensions: 4 } : null;
     },
-    async readSourceBatch(_tableId, { offset, limit }) { return sourceRows.slice(offset, offset + limit); },
+    async readSourceBatch(_tableId, { offset, limit }) { return rows.slice(offset, offset + limit); },
     async writeTargetBatch(_generation, _tableId, rows) {
       let added = 0;
       for (const row of rows) {
@@ -72,7 +72,7 @@ function fakeBackend() {
     },
     async readBackTargetRows(_generation, _tableId, ids) { return ids.flatMap((id) => target.has(id) ? [structuredClone(target.get(id))] : []); },
     async validateGeneration() {
-      if (target.size !== sourceRows.length) throw new Error("wrong target count");
+      if (target.size !== rows.length) throw new Error("wrong target count");
       return { tables: 1, rows: target.size, dimensions: 4 };
     },
     async close() { closed = true; },
@@ -84,6 +84,47 @@ describe("resumable reembedding coordinator", () => {
   let stateRoot;
   beforeEach(() => { stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-reembedding-coordinator-")); });
   afterEach(() => { rmSync(stateRoot, { recursive: true, force: true }); });
+
+  it("keeps default CPU inference batches small enough for Gateway liveness", async () => {
+    const rows = Array.from({ length: 17 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      text: `synthetic row ${index + 1}`,
+      status: "active",
+      vector: [1, 0, 0],
+    }));
+    const backend = fakeBackend(rows);
+    const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
+    const observedBatchSizes = [];
+    const coordinator = createReembeddingCoordinator({
+      stateStore,
+      backend,
+      createTargetProvider: async () => ({
+        async embedBatch(texts) {
+          observedBatchSizes.push(texts.length);
+          return texts.map((text) => [text.length, 1, 2, 3]);
+        },
+        async shutdown() {},
+      }),
+      plannerDependencies: {
+        now: () => 1_000,
+        randomBytes: () => Buffer.alloc(32, 8),
+        statDisk: async () => ({ freeBytes: 1_000_000 }),
+        probeTargetProvider: async () => [0, 1, 2, 3],
+      },
+      runValidationProbes: async () => ({ semanticRecall: true }),
+    });
+    const planned = await coordinator.plan({
+      id: "migration-liveness",
+      targetGeneration: "generation-target",
+      target: { fingerprint: targetFingerprint },
+    });
+
+    const applied = await coordinator.apply({ id: planned.record.id, token: planned.confirmation.token });
+
+    assert.equal(applied.cursor.completedRows, rows.length);
+    assert.deepStrictEqual(observedBatchSizes, [8, 8, 1]);
+    await coordinator.shutdown();
+  });
 
   it("does not advance a cursor until target readback and resumes idempotently after a crash", async () => {
     const backend = fakeBackend();
