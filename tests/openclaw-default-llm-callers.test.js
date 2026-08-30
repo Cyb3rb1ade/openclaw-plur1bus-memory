@@ -806,6 +806,57 @@ test("capture scheduler abort reaches summary and Emotion without late durable w
   }
 });
 
+test("automatic capture reflection uses the captured workspace context", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-auto-reflection-workspace-"));
+  t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+  const originalEmbedBatch = LocalTransformersEmbeddingProvider.prototype.embedBatch;
+  LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => makeVector();
+  LocalTransformersEmbeddingProvider.prototype.embedBatch = async (texts) => texts.map(() => makeVector());
+  t.after(() => {
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
+    LocalTransformersEmbeddingProvider.prototype.embedBatch = originalEmbedBatch;
+  });
+
+  const pluginModule = await loadFreshPlugin();
+  const agentId = "auto-reflection-agent";
+  const api = createApi(baseDbPath, {
+    autoCapture: true,
+    metaCognition: { enabled: true, sessionThreshold: 1, intervalDays: 7 },
+    neo: { enabled: true },
+    runtime: { captureTimeoutMs: 10_000 },
+  });
+  t.after(() => api._shutdown());
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  await api._emit("agent_end", {
+    success: true,
+    turnId: "turn-auto-reflection",
+    runId: "run-auto-reflection",
+    sessionKey: `agent:${agentId}:main`,
+    sessionId: "session-auto-reflection",
+    messages: [{
+      role: "user",
+      content: "Remember that automatic reflection should keep the workspace directory from the capture context.",
+    }],
+  }, {
+    agentId,
+    workspaceDir: baseDbPath,
+    sessionKey: `agent:${agentId}:main`,
+    sessionId: "session-auto-reflection",
+    messageProvider: "telegram",
+    senderId: "owner",
+    chatId: "private-chat",
+  });
+
+  assert.doesNotMatch(JSON.stringify(api._logs), /ReferenceError|commandCtx is not defined|workspaceDir is not defined/);
+  assert.match(JSON.stringify(api._logs), /meta-reflection triggered after 1 sessions/);
+  assert.equal(existsSync(join(baseDbPath, ".adaptive-learning", "meta-cognition-metrics.json")), true);
+  const state = JSON.parse(readFileSync(join(baseDbPath, "_meta-cognition-state.json"), "utf8"));
+  assert.equal(state.sessionCountSinceReflection, 0);
+  assert.ok(state.lastReflectionAt > 0);
+});
+
 test("recall commit barriers block writes when the runtime ignores abort and succeeds late", async (t) => {
   for (const scenario of ["emotion-classification", "continuity-overlay"]) {
     const baseDbPath = mkdtempSync(join(tmpdir(), `plur1bus-recall-abort-${scenario}-`));
