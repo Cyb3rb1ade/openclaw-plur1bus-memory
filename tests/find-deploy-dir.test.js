@@ -30,12 +30,12 @@ describe("findDeployDir", () => {
     assert.strictEqual(findDeployDir(dir), "/some/explicit/path");
   });
 
-  it("never returns a hardcoded /root path — resolves under OPENCLAW_HOME/homedir", () => {
+  it("honors OPENCLAW_HOME instead of falling back to the literal production default", () => {
     const openclawHome = join(dir, "openclaw-home");
     process.env.OPENCLAW_HOME = openclawHome;
     const result = findDeployDir(dir);
-    assert.ok(result.startsWith(openclawHome), `expected ${result} to be under ${openclawHome}`);
-    assert.ok(!result.startsWith("/root"), "must not default to /root");
+    assert.strictEqual(result, join(openclawHome, "extensions", "memory-lancedb-namespaced"));
+    assert.notStrictEqual(result, "/root/.openclaw/extensions/memory-lancedb-namespaced");
   });
 
   it("picks the extensions/<pluginId> candidate over an openclaw-plur1bus-memory checkout when both exist, warning on stderr", () => {
