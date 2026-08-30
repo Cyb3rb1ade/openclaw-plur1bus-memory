@@ -71,6 +71,7 @@ async function waitFor(predicate, label, timeoutMs = 3_000) {
 
 function makeApi(baseDbPath, vaultPath, warnings) {
   const hooks = new Map();
+  const services = [];
   const noop = () => {};
   return {
     pluginConfig: {
@@ -107,13 +108,14 @@ function makeApi(baseDbPath, vaultPath, warnings) {
     resolvePath: (value) => value,
     registerCommand: noop,
     registerTool: noop,
-    registerService: noop,
+    registerService(service) { services.push(service); },
     on(event, handler) {
       const handlers = hooks.get(event) || [];
       handlers.push(handler);
       hooks.set(event, handlers);
     },
     _hooks: hooks,
+    _services: services,
   };
 }
 
@@ -192,14 +194,13 @@ describe("registered Obsidian bridge runtime wiring", () => {
     const api = makeApi(baseDbPath, vaultPath, warnings);
     confirmVault(baseDbPath, vaultPath);
     plugin.register(api, { importRouting: async () => routingCapability });
-    const start = api._hooks.get("gateway_start")?.[0];
-    const stop = api._hooks.get("gateway_stop")?.[0];
-    assert.equal(typeof start, "function", "Obsidian gateway_start hook must be registered");
-    assert.equal(typeof stop, "function", "Obsidian gateway_stop hook must be registered");
+    const services = api._services.filter((service) => service.id === "plur1bus-obsidian-bridge");
+    assert.equal(services.length, 1, "Obsidian must register exactly one host-managed service");
+    const [service] = services;
 
-    cleanups.push(() => stop());
+    cleanups.push(() => service.stop());
 
-    await start();
+    await service.start();
     await waitFor(() => existsSync(memoryFile(vaultPath, ids.workspace)), "workspace memory mirror");
 
     assert.equal(scanCount, 1);
@@ -241,11 +242,12 @@ describe("registered Obsidian bridge runtime wiring", () => {
     const api = makeApi(baseDbPath, vaultPath, warnings);
     confirmVault(baseDbPath, vaultPath);
     plugin.register(api, { importRouting: async () => routingCapability });
-    const start = api._hooks.get("gateway_start")?.[0];
-    const stop = api._hooks.get("gateway_stop")?.[0];
-    cleanups.push(() => stop());
+    const services = api._services.filter((service) => service.id === "plur1bus-obsidian-bridge");
+    assert.equal(services.length, 1, "Obsidian must register exactly one host-managed service");
+    const [service] = services;
+    cleanups.push(() => service.stop());
 
-    await start();
+    await service.start();
     await waitFor(
       () => warnings.some((message) => message.includes("injected authoritative scan failure")),
       "visible authoritative scan failure",
