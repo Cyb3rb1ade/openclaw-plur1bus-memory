@@ -124,18 +124,27 @@ describe("local Transformers.js lifecycle", () => {
       loadTransformers,
     };
     const full = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    const beforeActivation = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: false,
+      sharedModelRequireOwner: true,
+    });
+    await assert.rejects(beforeActivation.embed("before activation"), /no activated full-runtime owner/i);
+    assert.equal(pipelineLoads, 0);
+    await full.activateSharedModelOwner();
+    await assert.rejects(
+      beforeActivation.embed("stale after failed admission"),
+      /shared local model.*closed/i,
+    );
     const requestScoped = new LocalTransformersEmbeddingProvider({
       ...common,
       sharedModelOwner: false,
       sharedModelRequireOwner: true,
     });
-
-    await assert.rejects(requestScoped.embed("before activation"), /no activated full-runtime owner/i);
-    assert.equal(pipelineLoads, 0);
-    await full.activateSharedModelOwner();
     assert.deepEqual(await requestScoped.embed("after activation"), [1]);
     assert.equal(pipelineLoads, 1);
     await full.shutdown();
+    await beforeActivation.shutdown();
     await requestScoped.shutdown();
   });
 
@@ -225,6 +234,32 @@ describe("local Transformers.js lifecycle", () => {
     await requestScoped.shutdown();
   });
 
+  it("does not let an activation-managed full provider self-activate through inference", async () => {
+    let pipelineLoads = 0;
+    const owner = new LocalTransformersEmbeddingProvider({
+      model: "fixture/shared-openclaw-e5-service-gate",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      sharedModelOwner: true,
+      sharedModelActivationManaged: true,
+      loadTransformers: async () => ({
+        async pipeline() {
+          pipelineLoads += 1;
+          return Object.assign(async () => ({ data: Float32Array.of(1) }), { async dispose() {} });
+        },
+      }),
+    });
+
+    await assert.rejects(owner.embed("before service start"), /owner is not activated/i);
+    assert.equal(pipelineLoads, 0);
+    await owner.activateSharedModelOwner();
+    assert.deepEqual(await owner.embed("after service start"), [1]);
+    assert.equal(pipelineLoads, 1);
+    await owner.shutdown();
+  });
+
   it("invalidates an idle scoped borrower when its activated owner epoch closes", async () => {
     let pipelineLoads = 0;
     const loadTransformers = async () => ({
@@ -242,18 +277,28 @@ describe("local Transformers.js lifecycle", () => {
       loadTransformers,
     };
     const owner = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    await owner.activateSharedModelOwner();
     const idleBorrower = new LocalTransformersEmbeddingProvider({
       ...common,
       sharedModelOwner: false,
       sharedModelRequireOwner: true,
     });
 
-    await owner.activateSharedModelOwner();
     await owner.embed("owner load");
     await owner.shutdown();
-    await assert.rejects(idleBorrower.embed("after owner close"), /no activated full-runtime owner/i);
-    assert.equal(pipelineLoads, 1, "an idle stale borrower must not allocate a replacement pipeline");
+    const successor = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    await successor.activateSharedModelOwner();
+    await assert.rejects(idleBorrower.embed("after successor activation"), /shared local model.*closed/i);
+    const successorBorrower = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: false,
+      sharedModelRequireOwner: true,
+    });
+    await successorBorrower.embed("fresh successor borrower");
+    assert.equal(pipelineLoads, 2, "only a fresh borrower may allocate in the successor epoch");
     await idleBorrower.shutdown();
+    await successorBorrower.shutdown();
+    await successor.shutdown();
   });
 
   it("keeps a successor owner behind an over-budget scoped operation until cleanup completes", async () => {

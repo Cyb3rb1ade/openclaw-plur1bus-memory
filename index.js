@@ -4400,6 +4400,10 @@ const plugin = {
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
     const coordinatesLocalModelGeneration = shouldCoordinateLocalModelGeneration(api);
+    const requiresActiveSharedModelOwner = typeof api.registrationMode === "string"
+      && api.registrationMode !== "full";
+    const sharesActiveLocalModel = coordinatesLocalModelGeneration
+      || requiresActiveSharedModelOwner;
     const localModelGeneration = createLocalModelGenerationLifecycle({
       enabled: coordinatesLocalModelGeneration,
     });
@@ -5247,8 +5251,10 @@ const plugin = {
           cacheBasePath: baseDbPath,
           logger: api.logger,
           localModelGeneration,
-          sharedModelPool: true,
+          sharedModelPool: sharesActiveLocalModel,
           sharedModelOwner: coordinatesLocalModelGeneration,
+          sharedModelRequireOwner: requiresActiveSharedModelOwner,
+          sharedModelActivationManaged: coordinatesLocalModelGeneration,
         })
       : new OpenAIEmbeddingProvider({
           ...normalizedEmbeddingCfg,
@@ -5321,8 +5327,9 @@ const plugin = {
           embeddingCacheEnabled: false,
           logger: api.logger,
           localModelGeneration,
-          sharedModelPool: true,
-          sharedModelOwner: coordinatesLocalModelGeneration,
+          sharedModelPool: requiresActiveSharedModelOwner,
+          sharedModelOwner: false,
+          sharedModelRequireOwner: requiresActiveSharedModelOwner,
         });
       }
       return new OpenAIEmbeddingProvider({

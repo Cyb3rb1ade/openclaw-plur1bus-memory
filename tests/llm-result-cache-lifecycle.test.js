@@ -263,4 +263,11 @@ describe("LLM result cache lifecycle", () => {
     assert.ok(shutdownOwnership > finalPromptHook);
     assert.ok(preparationStart > shutdownOwnership);
   });
+
+  it("gates exact scoped local providers on the active full-runtime owner", () => {
+    const source = readFileSync(join(root, "index.js"), "utf8");
+    assert.match(source, /requiresActiveSharedModelOwner\s*=\s*typeof api\.registrationMode === "string"\s*&&\s*api\.registrationMode !== "full"/s);
+    assert.match(source, /sharedModelPool:\s*sharesActiveLocalModel,\s*sharedModelOwner:\s*coordinatesLocalModelGeneration,\s*sharedModelRequireOwner:\s*requiresActiveSharedModelOwner,\s*sharedModelActivationManaged:\s*coordinatesLocalModelGeneration/s);
+    assert.match(source, /createTargetEmbeddingProvider[\s\S]*?sharedModelPool:\s*requiresActiveSharedModelOwner,\s*sharedModelOwner:\s*false,\s*sharedModelRequireOwner:\s*requiresActiveSharedModelOwner/s);
+  });
 });
