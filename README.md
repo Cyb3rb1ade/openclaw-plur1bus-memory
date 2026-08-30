@@ -32,6 +32,10 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
   stages no work during plugin discovery. The download begins only after
   OpenClaw activates the PLUR1BUS service, and shutdown or replacement drains
   it through the public service/runtime lifecycle.
+- **Lifecycle-owned Obsidian watcher.** OpenClaw starts the Bridge only after
+  registry activation and stops it before replacement. Periodic scans queue
+  inbound review candidates without starting a Memory write; an authorized
+  explicit apply remains required for durable inbound mutation.
 - **One local model across scoped registries.** OpenClaw's request-scoped
   provider registries delegate local embedding inference to the activated
   PLUR1BUS owner over a private, authenticated Unix socket below the PLUR1BUS
