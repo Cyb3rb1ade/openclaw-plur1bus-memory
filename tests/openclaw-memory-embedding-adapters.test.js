@@ -108,7 +108,7 @@ describe("OpenClaw memory embedding provider adapters", () => {
     await created.provider.close();
   });
 
-  it("routes a tool-discovery local adapter through activation-owned private IPC", async () => {
+  it("keeps a tool-discovery local adapter usable across activation-owner rotation", async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-adapter-ipc-"));
     const calls = [];
     const embeddings = {
@@ -118,7 +118,7 @@ describe("OpenClaw memory embedding provider adapters", () => {
       async embedPassage(text) { calls.push(["passage", text]); return Array(384).fill(0.01); },
       async embedBatch(texts) { calls.push(["batch", texts]); return texts.map(() => Array(384).fill(0.01)); },
     };
-    const server = createScopedEmbeddingIpcServer({
+    let server = createScopedEmbeddingIpcServer({
       stateRoot,
       embeddings,
       fingerprintId: ACTIVE_FINGERPRINT_ID,
@@ -139,6 +139,31 @@ describe("OpenClaw memory embedding provider adapters", () => {
       const vector = await created.provider.embed("scoped query", { inputType: "query" });
       assert.equal(vector.length, 384);
       assert.deepEqual(calls, [["query", "scoped query"]]);
+
+      await server.shutdown();
+      const replacementEmbeddings = {
+        model: "intfloat/multilingual-e5-small",
+        dimensions: () => 384,
+        async embedQuery(text) { calls.push(["replacement-query", text]); return Array(384).fill(0.02); },
+        async embedPassage(text) { calls.push(["replacement-passage", text]); return Array(384).fill(0.02); },
+        async embedBatch(texts) {
+          calls.push(["replacement-batch", texts]);
+          return texts.map(() => Array(384).fill(0.02));
+        },
+      };
+      server = createScopedEmbeddingIpcServer({
+        stateRoot,
+        embeddings: replacementEmbeddings,
+        fingerprintId: ACTIVE_FINGERPRINT_ID,
+      });
+      await server.start();
+      const replacementVector = await created.provider.embed("after hot reload", { inputType: "query" });
+      assert.equal(replacementVector.length, 384);
+      assert.equal(replacementVector[0], 0.02);
+      assert.deepEqual(calls, [
+        ["query", "scoped query"],
+        ["replacement-query", "after hot reload"],
+      ]);
     } finally {
       await created?.provider.close();
       await server.shutdown();

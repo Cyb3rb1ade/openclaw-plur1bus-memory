@@ -41,10 +41,14 @@ OpenClaw instantiates generic embedding providers for request-scoped agent and
 tool-discovery registries outside the activated full-runtime JavaScript owner.
 PLUR1BUS keeps one activation-owned local model and delegates only bounded
 embedding requests over a private Unix socket below `baseDbPath`. A freshly
-rotated 256-bit token, directory/socket permissions, and exact model/dimension
-identity bind every request to the active generation. The socket is not exposed
-as a host port, begins only as an activated OpenClaw plugin service, stops before
-the local model, and fails closed while no owner service is available.
+rotated 256-bit token, directory/socket permissions, and the complete immutable
+embedding fingerprint bind every request to the active generation. Beta-1 can
+retain a discovery facade across a config hot reload, so that facade constructs
+one fresh epoch-bound client per pure embedding operation. Individual clients
+never rebind or reuse a rotated token; a mid-operation rotation fails closed.
+The socket is not exposed as a host port, begins only as an activated OpenClaw
+plugin service, stops before the local model, and fails closed while no owner
+service is available.
 
 A confirmed re-embedding switch is handed off durably in `switching` state
 before the focused config mutation replaces the plugin registry. Only the

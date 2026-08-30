@@ -279,7 +279,7 @@ import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODE
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
 import {
-  IpcScopedEmbeddingProvider,
+  ReloadSafeIpcScopedEmbeddingProvider,
   createScopedEmbeddingIpcServer,
   registerScopedEmbeddingIpcServiceAfterLifecycle,
 } from "./lib/providers/scoped-embedding-ipc.js";
@@ -5255,7 +5255,7 @@ const plugin = {
     });
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
       ? (requiresActiveSharedModelOwner
-          ? new IpcScopedEmbeddingProvider({
+          ? new ReloadSafeIpcScopedEmbeddingProvider({
               stateRoot: baseDbPath,
               model: normalizedEmbeddingCfg.local.model,
               dimensions: dimensions || vectorDim,
