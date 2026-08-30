@@ -259,6 +259,7 @@ describe("MemoryDB active scan ownership projection", () => {
   it("preserves the fields required for ACL-safe and freshness-stable memory mirroring", () => {
     const db = new MemoryDB(join(tmpdir(), "plur1bus-active-scan-projection"), 4);
     const source = memoryRecord("77777777-7777-4777-8777-777777777777", {
+      memoryKind: "memory",
       updatedAt: 101,
       versionCreatedAt: 102,
       sourceTimestamp: 103,
@@ -270,6 +271,7 @@ describe("MemoryDB active scan ownership projection", () => {
       "storedBy",
       "workspaceId",
       "workspaceKey",
+      "memoryKind",
       "updatedAt",
       "versionCreatedAt",
       "sourceTimestamp",
@@ -290,6 +292,7 @@ describe("MemoryDB active scan ownership projection", () => {
       "storedBy",
       "workspaceId",
       "workspaceKey",
+      "memoryKind",
       "updatedAt",
       "versionCreatedAt",
       "sourceTimestamp",

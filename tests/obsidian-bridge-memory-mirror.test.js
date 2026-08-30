@@ -142,6 +142,37 @@ describe("obsidian bridge LanceDB memory mirror", () => {
     }
   });
 
+  it("rebuildDashboards rejects explicit non-memory kinds while preserving legacy rows", async () => {
+    const vault = makeVault("obs-mirror-kind-filter-");
+    const legacyId = "ab11ab11-1111-4111-8111-ab11ab11ab11";
+    const memoryId = "ab22ab22-2222-4222-8222-ab22ab22ab22";
+    const reminderId = "ab33ab33-3333-4333-8333-ab33ab33ab33";
+    const wikiId = "ab44ab44-4444-4444-8444-ab44ab44ab44";
+    const service = createTestService({
+      enabled: true,
+      dryRun: false,
+      reviewRoot: "plur1bus",
+      workspaces: [{ workspace_id: "main", agent_id: "main", path: vault }],
+    }, {
+      loadLanceDbRecords: async () => [
+        memoryRecord(legacyId),
+        memoryRecord(memoryId, { memoryKind: "memory" }),
+        memoryRecord(reminderId, { memoryKind: "reminder" }),
+        memoryRecord(wikiId, { memoryKind: "wiki" }),
+      ],
+      logger: { info() {}, warn() {} },
+    });
+
+    const result = await service.rebuildDashboards();
+
+    assert.ok(existsSync(memoryFile(vault, legacyId)), "legacy rows lacking memoryKind should still materialize");
+    assert.ok(existsSync(memoryFile(vault, memoryId)), "explicit memory rows should materialize");
+    assert.ok(!existsSync(memoryFile(vault, reminderId)), "reminder rows must not be materialized as memory notes");
+    assert.ok(!existsSync(memoryFile(vault, wikiId)), "wiki rows must not be materialized as memory notes");
+    assert.strictEqual(result.memoryMirror.loaded, 4);
+    assert.strictEqual(result.memoryMirror.materialized, 2);
+  });
+
   it("rebuildDashboards keeps workspace memory mirrors isolated", async () => {
     const mainVault = makeVault("obs-mirror-main-");
     const bernVault = makeVault("obs-mirror-bern-");
@@ -268,5 +299,39 @@ describe("obsidian bridge LanceDB memory mirror", () => {
 
     assert.ok(!existsSync(join(missingLoaderVault, "plur1bus", "memories")), "missing loader should not create memory mirror");
     assert.ok(!existsSync(join(emptyLoaderVault, "plur1bus", "memories")), "empty loader should not create memory mirror");
+  });
+
+  it("stop idempotently settles an immediate rebuild and prevents post-stop vault writes", async () => {
+    const vault = makeVault("obs-mirror-stop-rebuild-");
+    const id = "abab5555-5555-4555-8555-abab55555555";
+    let releaseLoader;
+    let loaderStartedResolve;
+    const loaderStarted = new Promise((resolve) => { loaderStartedResolve = resolve; });
+    const loaderReleased = new Promise((resolve) => { releaseLoader = resolve; });
+    const service = createTestService({
+      enabled: true,
+      dryRun: false,
+      watch: false,
+      reviewRoot: "plur1bus",
+      workspaces: [{ workspace_id: "main", agent_id: "main", path: vault }],
+    }, {
+      syncWorkspace: async () => [],
+      loadLanceDbRecords: async () => {
+        loaderStartedResolve();
+        await loaderReleased;
+        return [memoryRecord(id)];
+      },
+      logger: { info() {}, warn() {} },
+    });
+
+    await service.start();
+    await loaderStarted;
+    const stopA = service.stop();
+    const stopB = service.stop();
+    releaseLoader();
+    await Promise.all([stopA, stopB]);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.ok(!existsSync(memoryFile(vault, id)), "in-flight rebuild must not write after stop");
   });
 });
