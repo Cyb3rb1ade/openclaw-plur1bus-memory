@@ -120,6 +120,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   token-geschuetzten Unix-Socket unter seinem State-Verzeichnis. Modell und
   Dimension sind pro Request gebunden, Payloads sind begrenzt, der Socket wird
   nur vom aktivierten Plugin-Service gestartet und vor dem Modell geschlossen.
+  Bereits vor dem Service-Start vorbereitete Discovery-Registries binden sich
+  exakt an die naechste aktivierte Owner-Epoche; veraltete Registries duerfen
+  keine Owner-Epoche ueberspringen und bleiben fail-closed.
   Es wird weder ein Hostport geoeffnet noch eine OpenClaw-Datei gepatcht.
 - **Sichere Modellvorbereitung im Operator-Dashboard.** Eine geschlossene
   `modelPreparation.profile`-Auswahl fuer E5 und Jina startet automatisch nur
