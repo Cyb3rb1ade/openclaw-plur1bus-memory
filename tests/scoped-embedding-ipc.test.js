@@ -92,6 +92,83 @@ describe("scoped embedding through activation-owned Unix IPC", () => {
     }
   });
 
+  it("binds a discovery provider prepared before the first activated owner", async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-scoped-embedding-cold-prepare-"));
+    const embeddings = {
+      model: "fixture/e5",
+      dimensions: () => 1,
+      async embedQuery() { return [1]; },
+      async embedPassage() { return [1]; },
+      async embedBatch(texts) { return texts.map(() => [1]); },
+    };
+    const prepared = new IpcScopedEmbeddingProvider({
+      stateRoot,
+      model: "fixture/e5",
+      dimensions: 1,
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+    });
+    const owner = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings,
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+    });
+    try {
+      await assert.rejects(
+        prepared.embed("before activation"),
+        /activation-owned embedding IPC.*unavailable/i,
+      );
+      await owner.start();
+      assert.deepEqual(await prepared.embed("after activation"), [1]);
+    } finally {
+      await prepared.shutdown();
+      await owner.shutdown();
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("binds a replacement discovery provider only to the next activated owner epoch", async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-scoped-embedding-reload-prepare-"));
+    const embeddings = {
+      model: "fixture/e5",
+      dimensions: () => 1,
+      async embedQuery() { return [1]; },
+      async embedPassage() { return [1]; },
+      async embedBatch(texts) { return texts.map(() => [1]); },
+    };
+    const staleBeforeFirstOwner = new IpcScopedEmbeddingProvider({
+      stateRoot,
+      model: "fixture/e5",
+      dimensions: 1,
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+    });
+    const first = createScopedEmbeddingIpcServer({ stateRoot, embeddings, fingerprintId: ACTIVE_FINGERPRINT_ID });
+    let preparedSuccessor = null;
+    let second = null;
+    try {
+      await first.start();
+      await first.shutdown();
+      preparedSuccessor = new IpcScopedEmbeddingProvider({
+        stateRoot,
+        model: "fixture/e5",
+        dimensions: 1,
+        fingerprintId: ACTIVE_FINGERPRINT_ID,
+      });
+      second = createScopedEmbeddingIpcServer({ stateRoot, embeddings, fingerprintId: ACTIVE_FINGERPRINT_ID });
+      await second.start();
+      assert.deepEqual(await preparedSuccessor.embed("replacement owner"), [1]);
+      await assert.rejects(
+        staleBeforeFirstOwner.embed("must not skip an owner epoch"),
+        /activation-owned embedding owner changed/i,
+      );
+    } finally {
+      await preparedSuccessor?.shutdown();
+      await staleBeforeFirstOwner.shutdown();
+      await second?.shutdown();
+      await first.shutdown();
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rotates private authentication on restart and never rebinds a stale scoped provider", async () => {
     const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-scoped-embedding-restart-"));
     const embeddings = {
