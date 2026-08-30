@@ -42,6 +42,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   aus OpenClaws getrennten Agent-/Hook-Runtimes nicht mehr in einem alten
   Snapshot verloren; ein fehlgeschlagener Refresh bleibt sichtbar und
   fail-closed.
+- **Interne Beta-1-Turns werden nicht als Gespraech gespeichert.** Auto-Recall,
+  NEO und Durable Capture erkennen jetzt auch OpenClaws oeffentliches
+  `trigger`-Feld (`cron`, `heartbeat`, `background`, `manual`). Der Gate laeuft
+  vor jedem Capture-Worker, sodass wiederaufgenommene interne Jobs weder
+  Benutzerkontext injizieren noch ihre eigenen Modellantworten als Memories
+  zurueckschreiben.
 - **Native Inferenz-Tensoren werden deterministisch freigegeben.** E5- und
   Jina-Embedding-Aufrufe kopieren ihre Ergebnisvektoren und rufen danach fuer
   Output-, Pooling- und Eingabe-Tensoren `dispose()` auf. Serielle Capture-
