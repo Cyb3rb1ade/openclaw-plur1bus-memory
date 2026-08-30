@@ -126,6 +126,60 @@ describe("resumable reembedding coordinator", () => {
     await coordinator.shutdown();
   });
 
+  it("bounds one operator request and persists a resumable cursor before the Gateway deadline", async () => {
+    const rows = Array.from({ length: 40 }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      text: `bounded migration row ${index + 1}`,
+      status: "active",
+      vector: [1, 0, 0],
+    }));
+    const backend = fakeBackend(rows);
+    const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
+    const observedBatchSizes = [];
+    const coordinator = createReembeddingCoordinator({
+      stateStore,
+      backend,
+      createTargetProvider: async () => ({
+        async embedBatch(texts) {
+          observedBatchSizes.push(texts.length);
+          return texts.map((text) => [text.length, 1, 2, 3]);
+        },
+        async shutdown() {},
+      }),
+      plannerDependencies: {
+        now: () => 1_000,
+        randomBytes: () => Buffer.alloc(32, 8),
+        statDisk: async () => ({ freeBytes: 1_000_000 }),
+        probeTargetProvider: async () => [0, 1, 2, 3],
+      },
+      runValidationProbes: async () => ({ semanticRecall: true }),
+    });
+    const planned = await coordinator.plan({
+      id: "migration-request-bound",
+      targetGeneration: "generation-target",
+      target: { fingerprint: targetFingerprint },
+    });
+
+    const partial = await coordinator.apply({ id: planned.record.id, token: planned.confirmation.token });
+    assert.equal(partial.state, "running");
+    assert.equal(partial.cursor.completedRows, 32);
+    assert.deepStrictEqual(observedBatchSizes, [8, 8, 8, 8]);
+
+    const copied = await coordinator.resume({ id: planned.record.id, token: planned.confirmation.token });
+    assert.equal(copied.state, "validating");
+    assert.equal(copied.cursor.completedRows, rows.length);
+    assert.deepStrictEqual(observedBatchSizes, [8, 8, 8, 8, 8]);
+    await assert.rejects(
+      coordinator.resume({ id: planned.record.id, token: "reemb_v1_invalid" }),
+      /invalid or expired reembedding confirmation/,
+    );
+    const recovered = await coordinator.resume({ id: planned.record.id, token: planned.confirmation.token });
+    assert.equal(recovered.state, "validating");
+    assert.deepStrictEqual(observedBatchSizes, [8, 8, 8, 8, 8]);
+    assert.equal((await coordinator.validate({ id: planned.record.id })).state, "ready_to_switch");
+    await coordinator.shutdown();
+  });
+
   it("does not advance a cursor until target readback and resumes idempotently after a crash", async () => {
     const backend = fakeBackend();
     const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
