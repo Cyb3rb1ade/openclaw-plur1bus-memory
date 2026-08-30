@@ -42,10 +42,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Last behaelt dadurch keine ONNX-Tensoren bis zu einem spaeteren GC-Lauf und
   konkurriert unter dem 4-GiB-Limit nicht mehr mit Recall oder Verwaltungs-CLI.
 - **Re-Embedding blockiert den Gateway-Eventloop nicht minutenlang.** Lokale
-  CPU-Inferenz wird in kleine, durable Batches begrenzt. Dadurch bleiben
+  CPU-Inferenz wird in kleine, durable Batches und hoechstens vier Batches pro
+  bestaetigtem Operator-Aufruf begrenzt. Groessere Migrationen werden ueber
+  explizite, tokengebundene Resume-Aufrufe fortgesetzt. Dadurch bleiben
   OpenClaws Liveness, Status-Polling und die Operator-WebSocket-Verbindung
   waehrend eines echten Dimensionswechsels erreichbar, ohne Checkpoints oder
-  Validierung abzuschwaechen.
+  Validierung abzuschwaechen oder die feste Gateway-Deadline zu ueberschreiten.
 - **Rollback-Generationen bleiben innerhalb des LanceDB-ID-Vertrags.** Ein
   bestaetigter manueller Rueckweg leitet den isolierten Zielnamen nur noch aus
   einem kollisionsresistenten Digest ab. Auch lange, oeffentlich gueltige
