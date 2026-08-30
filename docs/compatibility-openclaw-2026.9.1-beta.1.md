@@ -42,7 +42,14 @@ on this target. OpenClaw starts it only after the replacement registry is
 active and stops the previous service before handoff, so enabling the Bridge by
 supported config mutation works without waiting for a second
 `gateway_start` event. Older hosts without `registerService` retain the typed
-start/stop hook fallback through capability detection.
+start/stop hook fallback through capability detection. Periodic watcher scans
+are deliberately queue-only: they may stage review candidates but cannot start
+a non-cancellable LanceDB memory mutation. Approved memory apply and tombstone
+operations remain explicit authorized actions. Shutdown fences follow-up work,
+awaits active host and manual work fail-closed, and prevents a stopped
+generation from writing a late Vault mirror or metrics update. If non-cancellable
+I/O exceeds OpenClaw's service-stop deadline, Beta-1 rejects the replacement
+instead of activating a second writer.
 
 OpenClaw instantiates generic embedding providers for request-scoped agent and
 tool-discovery registries outside the activated full-runtime JavaScript owner.
@@ -114,7 +121,7 @@ queue and scanner.
 | Compaction memory flush | Durable capture before compaction | PLUR1BUS supplies no file-memory flush plan because conversation capture is handled by typed hooks. This avoids a second file-memory write lane. |
 | `USER.md` user model | Preference and relationship memories | `USER.md` remains the authoritative current directive; PLUR1BUS is provenance-bearing recall/history. Do not auto-promote contradictory PLUR1BUS observations into `USER.md`. |
 | Standing intents | PLUR1BUS reminders | Complementary: OpenClaw owns event-conditioned intents; exact-time work stays on scheduled tasks/PLUR1BUS reminder state. Do not represent the same obligation in both. |
-| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The baseline disables both optional bridges; a separate isolated-vault probe enables PLUR1BUS apply/watch mode and verifies outbound and inbound synchronization. Cross-plugin artifact import remains outside the 7.5.0 release claim. |
+| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The baseline disables both optional bridges; a separate isolated-vault probe enables PLUR1BUS apply/watch mode. The host-managed watcher mirrors authorized LanceDB records outbound and queues inbound candidates only; inbound memory mutation requires a separate authorized apply. Cross-plugin artifact import remains outside the 7.5.0 release claim. |
 | Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS authorizes by canonical agent, workspace, sender/chat ACL, and memory scope. Beta-1 `sessions.create({ cwd })` is resolved through `spawnedCwd` with feature-detected legacy fallbacks. Automatic captures remain agent-private; explicit workspace-scope cards are the workspace-isolated data path. |
 
 The lab configuration makes every conflict decision explicit: PLUR1BUS owns

@@ -57,7 +57,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   `registerService` startet und stoppt der Watcher als hostverwalteter
   Plugin-Service erst nach der Registry-Aktivierung. Dadurch wird eine per
   Config-Hot-Reload aktivierte Bridge sofort gestartet; der Hook-Fallback
-  bleibt nur fuer Hosts ohne Service-Capability erhalten.
+  bleibt nur fuer Hosts ohne Service-Capability erhalten. Periodische
+  Watcher-Scans bleiben explizit queue-only: Sie koennen Kandidaten vormerken,
+  starten aber keinen nicht abbrechbaren Memory-Write. Freigegebene Apply- und
+  Tombstone-Aktionen bleiben dem expliziten, autorisierten Aufruf vorbehalten.
+  Laufende Watcher- und Dashboard-Aufgaben werden beim Stop beobachtet;
+  spaet fortgesetzte Arbeit bleibt durch eine Write-Schranke wirkungslos.
 - **Skill Miner sieht Captures aus Scoped OpenClaw-Runtimes.** Vor dem
   Evidenzscan wechselt der langlebige Full-Runtime-LanceDB-Handle explizit auf
   die neueste Tabellenversion. Dadurch gehen automatisch erfasste Dialogkarten
