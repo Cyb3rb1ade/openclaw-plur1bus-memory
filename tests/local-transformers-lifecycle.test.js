@@ -15,6 +15,97 @@ function disposablePipeline(calls) {
 }
 
 describe("local Transformers.js lifecycle", () => {
+  it("shares one exact embedding pipeline between full and request-scoped OpenClaw runtimes", async () => {
+    let pipelineLoads = 0;
+    let pipelineDisposals = 0;
+    const loadTransformers = async () => ({
+      async pipeline() {
+        pipelineLoads += 1;
+        return Object.assign(async () => ({
+          data: Float32Array.of(1),
+          async dispose() {},
+        }), {
+          async dispose() { pipelineDisposals += 1; },
+        });
+      },
+    });
+    const common = {
+      model: "fixture/shared-openclaw-e5",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      loadTransformers,
+    };
+    const full = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: true,
+    });
+    const requestScoped = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: false,
+    });
+
+    assert.deepEqual(await Promise.all([
+      full.embedQuery("first query"),
+      requestScoped.embedQuery("second query"),
+    ]), [[1], [1]]);
+    assert.equal(pipelineLoads, 1);
+
+    await requestScoped.shutdown();
+    assert.equal(pipelineDisposals, 0, "a borrower must not dispose the active full-runtime model");
+    await full.shutdown();
+    assert.equal(pipelineDisposals, 1);
+  });
+
+  it("waits for request-scoped inference before the full runtime disposes its shared pipeline", async () => {
+    let calls = 0;
+    let releaseBorrower;
+    let signalBorrower;
+    const borrowerStarted = new Promise((resolve) => { signalBorrower = resolve; });
+    const borrowerGate = new Promise((resolve) => { releaseBorrower = resolve; });
+    let disposals = 0;
+    const loadTransformers = async () => ({
+      async pipeline() {
+        return Object.assign(async () => {
+          calls += 1;
+          if (calls === 2) {
+            signalBorrower();
+            await borrowerGate;
+          }
+          return { data: Float32Array.of(1), async dispose() {} };
+        }, {
+          async dispose() { disposals += 1; },
+        });
+      },
+    });
+    const common = {
+      model: "fixture/shared-openclaw-e5-drain",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      loadTransformers,
+    };
+    const full = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    const requestScoped = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: false });
+    await full.embed("warm owner");
+
+    const inference = requestScoped.embed("active borrower");
+    await borrowerStarted;
+    let shutdownSettled = false;
+    const shutdown = full.shutdown().then(() => { shutdownSettled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(shutdownSettled, false);
+    assert.equal(disposals, 0);
+
+    releaseBorrower();
+    await Promise.all([inference, shutdown]);
+    assert.equal(disposals, 1);
+    await assert.rejects(requestScoped.embed("stale borrower"), /shared local model.*closed/i);
+    await requestScoped.shutdown();
+  });
+
   it("registers local providers and waits for the active runtime generation before model load", async () => {
     const registered = [];
     const unregistered = [];
