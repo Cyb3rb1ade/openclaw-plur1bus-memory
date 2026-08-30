@@ -4398,8 +4398,9 @@ const plugin = {
     const rawPluginConfig = api.pluginConfig || {};
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
+    const coordinatesLocalModelGeneration = shouldCoordinateLocalModelGeneration(api);
     const localModelGeneration = createLocalModelGenerationLifecycle({
-      enabled: shouldCoordinateLocalModelGeneration(api),
+      enabled: coordinatesLocalModelGeneration,
     });
     const credentialResolver = createConfiguredSecretInputResolver({
       getConfig: () => api.runtime?.config?.current?.() || api.config || {},
@@ -5245,6 +5246,8 @@ const plugin = {
           cacheBasePath: baseDbPath,
           logger: api.logger,
           localModelGeneration,
+          sharedModelPool: true,
+          sharedModelOwner: coordinatesLocalModelGeneration,
         })
       : new OpenAIEmbeddingProvider({
           ...normalizedEmbeddingCfg,
@@ -5317,6 +5320,8 @@ const plugin = {
           embeddingCacheEnabled: false,
           logger: api.logger,
           localModelGeneration,
+          sharedModelPool: true,
+          sharedModelOwner: coordinatesLocalModelGeneration,
         });
       }
       return new OpenAIEmbeddingProvider({
