@@ -2178,6 +2178,7 @@ class MemoryDB {
   normalizeActiveScanRow(r) {
     return {
       id: r.id,
+      type: r.type || "memory",
       vector: (Array.isArray(r.vector) && r.vector.length > 0) ? r.vector : null,
       text: r.text || "",
       summary: r.summary || "",
@@ -2185,8 +2186,15 @@ class MemoryDB {
       importance: r.importance ?? 0.5,
       createdAt: r.createdAt || "",
       scope: r.scope || "agent-private",
+      agentId: r.agentId || "",
+      storedBy: r.storedBy || "",
+      workspaceId: r.workspaceId || "",
+      workspaceKey: r.workspaceKey || "",
       ownerUserId: r.ownerUserId || "",
       status: r.status || "active",
+      updatedAt: r.updatedAt ?? 0,
+      versionCreatedAt: r.versionCreatedAt ?? 0,
+      sourceTimestamp: r.sourceTimestamp ?? 0,
       // Carry protection flags so GC can honor the neverForget/core contract.
       neverForget: r.neverForget,
       memoryClass: r.memoryClass,
@@ -2198,7 +2206,11 @@ class MemoryDB {
     this._assertTrustedPath();
     let query = this.table.query().where(statusWhere);
     if (typeof query.select === "function") {
-      query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "ownerUserId", "status", "neverForget", "memoryClass"]);
+      query = query.select([
+        "id", "type", "vector", "text", "summary", "category", "importance", "createdAt",
+        "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId", "status",
+        "updatedAt", "versionCreatedAt", "sourceTimestamp", "neverForget", "memoryClass",
+      ]);
     }
     return query;
   }
@@ -6322,6 +6334,28 @@ const plugin = {
     if (obsidianBridgeEnabled) {
       const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
         logger: api.logger,
+        loadLanceDbRecords: async ({ workspace }) => {
+          const workspaceIdentity = normalizeWorkspaceTarget(
+            workspace.workspaceId,
+            "Obsidian service workspace",
+          );
+          const memoryCtx = Object.freeze({
+            agentId: safeAgentId(workspace.agentId),
+            workspaceIdentity,
+            workspaceId: workspaceIdentity,
+            userPrincipal: "",
+            workspaceAliases: memoryWorkspaceAliases,
+          });
+          return pool.withAuthoritativeReadDb(memoryCtx.agentId, async (mirrorDb) => {
+            const initialized = await mirrorDb.init();
+            if (initialized === false) return [];
+            const records = await mirrorDb.scanActive();
+            if (!Array.isArray(records)) {
+              throw new TypeError("Obsidian memory mirror scan must return an array");
+            }
+            return records.filter((record) => checkAccess(memoryCtx, record).allowed);
+          });
+        },
         mutationPolicyForWorkspace: (workspace) => {
           const workspaceIdentity = normalizeWorkspaceTarget(
             workspace.workspaceId,
