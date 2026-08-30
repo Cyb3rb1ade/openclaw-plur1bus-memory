@@ -6,7 +6,7 @@
  * 3. Metrics accumulate vs. direct atomicJsonUpdate
  */
 
-import { before, describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,6 +40,11 @@ function buildEdges(n = 10_000) {
   return edges;
 }
 
+function median(values) {
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.floor(ordered.length / 2)];
+}
+
 // ─── 1. Embedding-Cache cold vs. warm ─────────────────────────────────────
 
 describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
@@ -47,6 +52,7 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
   const vector = makeVector(384);
   const agentId = "agent-perf";
   const model = "text-embedding-3-small@1";
+  let warmupCache;
 
   // Simuliert embedQuery: Cache-Lookup + bei Miss "teure" Vektor-Erzeugung
   function embedQuery(cache, query) {
@@ -58,15 +64,34 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
     return copy;
   }
 
-  it("cold: 100x embedQuery ohne Cache → Miss", () => {
-    const cache = createEmbeddingCache();
-    const queries = Array.from({ length: N }, (_, i) => `query ${i}`);
+  before(() => {
+    // Compile both the miss and set paths before measuring a separate empty
+    // cache. Keep the warm-up fixture alive until the suite ends so its
+    // allocations cannot become an unrelated main-thread GC charge inside a
+    // later benchmark interval.
+    warmupCache = createEmbeddingCache({ maxEntries: 2_000 });
+    for (let i = 0; i < 2_000; i++) embedQuery(warmupCache, `warmup query ${i}`);
+  });
 
-    const coldMs = measureCpuMilliseconds(() => {
-      for (const q of queries) {
-        embedQuery(cache, q);
-      }
-    });
+  after(() => {
+    warmupCache.clear();
+    warmupCache.close();
+  });
+
+  it("cold: 100x embedQuery ohne Cache → Miss", () => {
+    const queries = Array.from({ length: N }, (_, i) => `query ${i}`);
+    const caches = [];
+    const coldMs = median(Array.from({ length: 5 }, () => {
+      const cache = createEmbeddingCache();
+      caches.push(cache);
+      return measureCpuMilliseconds(() => {
+        for (const q of queries) embedQuery(cache, q);
+      });
+    }));
+    for (const cache of caches) {
+      cache.clear();
+      cache.close();
+    }
 
     // Nur Smoke: darf nicht absurd lange dauern (< 50 ms)
     assert.ok(coldMs < 50, `Cold-Miss dauerte ${coldMs.toFixed(2)}ms, erwartet < 50ms`);
@@ -90,8 +115,8 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
 
   it("warm ist schneller als cold", () => {
     const M = 1000; // mehr Iterationen für stabileren Vergleich
-    const coldCache = createEmbeddingCache({ maxEntries: M });
     const warmCache = createEmbeddingCache({ maxEntries: M });
+    const coldCaches = [];
     const queries = Array.from({ length: M }, (_, i) => `query ${i}`);
 
     // Warm: alle M Einträge müssen gleichzeitig resident sein. Die bisherige
@@ -99,19 +124,29 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
     // belastete die Messung zusätzlich mit der GC-Arbeit der Vorbefüllung.
     for (const q of queries) warmCache.set(agentId, q, model, vector);
     for (const q of queries) warmCache.get(agentId, q, model);
-    const warmMs = measureCpuMilliseconds(() => {
-      for (const q of queries) {
-        warmCache.get(agentId, q, model);
-      }
-    });
-
-    // Cold: teurer Miss (Vektor kopieren)
-    const coldMs = measureCpuMilliseconds(() => {
-      for (const q of queries) {
-        const cached = coldCache.get(agentId, q, model);
-        if (!cached) coldCache.set(agentId, q, model, vector.slice());
-      }
-    });
+    const warmSamples = [];
+    const coldSamples = [];
+    for (let sample = 0; sample < 5; sample++) {
+      warmSamples.push(measureCpuMilliseconds(() => {
+        for (const q of queries) warmCache.get(agentId, q, model);
+      }));
+      const coldCache = createEmbeddingCache({ maxEntries: M });
+      coldCaches.push(coldCache);
+      coldSamples.push(measureCpuMilliseconds(() => {
+        for (const q of queries) {
+          const cached = coldCache.get(agentId, q, model);
+          if (!cached) coldCache.set(agentId, q, model, vector.slice());
+        }
+      }));
+    }
+    const warmMs = median(warmSamples);
+    const coldMs = median(coldSamples);
+    warmCache.clear();
+    warmCache.close();
+    for (const cache of coldCaches) {
+      cache.clear();
+      cache.close();
+    }
 
     assert.ok(
       warmMs < coldMs,
