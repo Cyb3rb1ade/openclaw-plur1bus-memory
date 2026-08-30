@@ -334,4 +334,63 @@ describe("obsidian bridge LanceDB memory mirror", () => {
 
     assert.ok(!existsSync(memoryFile(vault, id)), "in-flight rebuild must not write after stop");
   });
+
+  it("stop waits for the original scheduled rebuild when an overlap is coalesced", async (t) => {
+    const originalSetInterval = globalThis.setInterval;
+    const originalClearInterval = globalThis.clearInterval;
+    const intervals = [];
+    globalThis.setInterval = (callback, delay) => {
+      const handle = { callback, delay, cleared: false };
+      intervals.push(handle);
+      return handle;
+    };
+    globalThis.clearInterval = (handle) => {
+      if (handle) handle.cleared = true;
+    };
+    t.after(() => {
+      globalThis.setInterval = originalSetInterval;
+      globalThis.clearInterval = originalClearInterval;
+    });
+
+    const vault = makeVault("obs-mirror-stop-overlap-");
+    let releaseLoader;
+    let loaderStartedResolve;
+    const loaderStarted = new Promise((resolve) => { loaderStartedResolve = resolve; });
+    const loaderReleased = new Promise((resolve) => { releaseLoader = resolve; });
+    const service = createTestService({
+      enabled: true,
+      dryRun: false,
+      watch: true,
+      reviewRoot: "plur1bus",
+      workspaces: [{ workspace_id: "main", agent_id: "main", path: vault }],
+    }, {
+      syncWorkspace: async () => [],
+      loadLanceDbRecords: async () => {
+        loaderStartedResolve();
+        await loaderReleased;
+        return [memoryRecord("cdcd5555-5555-4555-8555-cdcd55555555")];
+      },
+      logger: { info() {}, warn() {} },
+    });
+
+    await service.start();
+    await loaderStarted;
+    const dashboardInterval = intervals.find((handle) => handle.delay >= 30_000);
+    assert.ok(dashboardInterval, "watch mode should schedule dashboard rebuilds");
+    dashboardInterval.callback();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    let stopSettled = false;
+    const stopPromise = service.stop().then(() => { stopSettled = true; });
+    await new Promise((resolve) => setImmediate(resolve));
+    if (stopSettled) {
+      releaseLoader();
+      await stopPromise;
+      assert.fail("stop settled before the original dashboard rebuild quiesced");
+    }
+
+    releaseLoader();
+    await stopPromise;
+    assert.equal(stopSettled, true);
+  });
 });
