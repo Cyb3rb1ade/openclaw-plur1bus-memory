@@ -271,7 +271,10 @@ describe("LLM result cache lifecycle", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
     assert.match(source, /requiresActiveSharedModelOwner\s*=\s*typeof api\.registrationMode === "string"\s*&&\s*api\.registrationMode !== "full"/s);
     assert.match(source, /requiresActiveSharedModelOwner[\s\S]*?new IpcScopedEmbeddingProvider\(\{[\s\S]*?stateRoot:\s*baseDbPath/s);
-    assert.match(source, /createScopedEmbeddingIpcServer\(\{\s*stateRoot:\s*baseDbPath,\s*embeddings,\s*logger:\s*api\.logger/s);
+    assert.match(
+      source,
+      /createScopedEmbeddingIpcServer\(\{\s*stateRoot:\s*baseDbPath,\s*embeddings,\s*fingerprintId:\s*activeEmbeddingFingerprintId,\s*logger:\s*api\.logger/s,
+    );
     assert.match(source, /registerScopedEmbeddingIpcServiceAfterLifecycle\(\{\s*api,\s*server:\s*scopedEmbeddingServer,\s*enabled:\s*Boolean\(scopedEmbeddingServer\),\s*lifecycleRegistered:\s*gatewayShutdownRegistered/s);
     assert.match(source, /sharedModelPool:\s*sharesActiveLocalModel,\s*sharedModelOwner:\s*coordinatesLocalModelGeneration,\s*sharedModelRequireOwner:\s*requiresActiveSharedModelOwner,\s*sharedModelActivationManaged:\s*coordinatesLocalModelGeneration/s);
     assert.match(source, /createTargetEmbeddingProvider[\s\S]*?sharedModelPool:\s*requiresActiveSharedModelOwner,\s*sharedModelOwner:\s*false,\s*sharedModelRequireOwner:\s*requiresActiveSharedModelOwner/s);
