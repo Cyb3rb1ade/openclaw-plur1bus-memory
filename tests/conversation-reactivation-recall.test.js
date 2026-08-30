@@ -636,31 +636,41 @@ describe("conversation-reactivation-recall", () => {
       assert.ok(Array.isArray(result.additions));
     });
 
-    it("timeout fallback for slow lookup", async () => {
+    it("caller timeout wins when an actual CRR hydration remains pending", async () => {
       const agentId = `timeout-agent-${Math.random()}`;
       const sessionKey = `timeout-session-${Math.random()}`;
       markUserTurn(agentId, sessionKey, now - 60 * 60 * 1000);
-      const slowNeoStore = {
-        readGraphEdges: () => {
-          // Intentionally synchronously slow; the caller's Promise.race handles timeout.
-          const start = Date.now();
-          while (Date.now() - start < 200) {
-            // busy wait
-          }
-          return [];
-        },
-        readPatterns: () => [],
-        readEpisodes: () => [],
+      const tmpDir = mkdtempSync(join(tmpdir(), "crr-pending-hydration-"));
+      mkdirSync(join(tmpDir, ".plur1bus"), { recursive: true });
+      writeFileSync(
+        join(tmpDir, ".plur1bus", "semantic-lens-index.json"),
+        JSON.stringify({
+          version: 1,
+          memoryToCommunity: {},
+          communities: {
+            c1: { id: "c1", representativeMemoryIds: ["pending-memory"] },
+          },
+        }),
+        "utf8",
+      );
+      let hydrationCalls = 0;
+      const getMemoryById = async () => {
+        hydrationCalls++;
+        return await new Promise(() => {});
       };
-      const args = makeArgs({ agentId, sessionKey, neoStore: slowNeoStore });
-      // runConversationReactivationRecall itself does not enforce a timeout; it relies
-      // on the caller. Here we simulate the caller timeout with Promise.race.
+      const args = makeArgs({
+        agentId,
+        sessionKey,
+        workspaceDir: tmpDir,
+        getMemoryById,
+      });
+      const timeoutResult = { context: "", additions: [], timedOut: true };
       const result = await Promise.race([
         runConversationReactivationRecall(args),
-        new Promise((resolve) => setTimeout(() => resolve({ context: "", additions: [] }), 10)),
+        new Promise((resolve) => setTimeout(() => resolve(timeoutResult), baseCfg.timeoutMs)),
       ]);
-      assert.strictEqual(typeof result.context, "string");
-      assert.ok(Array.isArray(result.additions));
+      assert.strictEqual(result, timeoutResult);
+      assert.strictEqual(hydrationCalls, 1);
     });
 
     it("does not write to workspace or memory files", async () => {
@@ -691,7 +701,7 @@ describe("conversation-reactivation-recall", () => {
       assert.deepStrictEqual(filesAfter, filesBefore);
     });
 
-    it("performance dry-run completes fast with <=3 additions", async () => {
+    it("cold dry-run stays on the precomputed path with <=3 additions", async () => {
       const agentId = `perf-agent-${Math.random()}`;
       const sessionKey = `perf-session-${Math.random()}`;
       const tmpDir = mkdtempSync(join(tmpdir(), "crr-perf-"));
@@ -716,6 +726,7 @@ describe("conversation-reactivation-recall", () => {
         "utf8"
       );
       const baseRecallIds = new Set(["base1", "base2", "base3", "base4", "base5"]);
+      let hydrationCalls = 0;
       const args = makeArgs({
         agentId,
         sessionKey,
@@ -723,39 +734,35 @@ describe("conversation-reactivation-recall", () => {
         baseRecallIds,
         prompt: "continue dashboard architecture",
         messageText: "continue dashboard architecture",
+        getMemoryById: async () => {
+          hydrationCalls++;
+          throw new Error("precomputed dry-run must not hydrate");
+        },
       });
-      const start = performance.now();
       const result = await runConversationReactivationRecall(args);
-      const elapsed = performance.now() - start;
-      assert.ok(elapsed <= 50, `expected <=50ms, got ${elapsed}ms`);
+      assert.strictEqual(hydrationCalls, 0);
       assert.ok(result.additions.length <= 3, `expected <=3 additions, got ${result.additions.length}`);
       assert.ok(result.context.includes("<memory-reactivation") || result.additions.length === 0);
     });
 
-    it("timeout fallback when neoStore read is slow", async () => {
+    it("does not consult neoStore when the caller already supplied graph edges", async () => {
       const agentId = `timeout-neo-agent-${Math.random()}`;
       const sessionKey = `timeout-neo-session-${Math.random()}`;
       markUserTurn(agentId, sessionKey, now - 60 * 60 * 1000);
-      const slowNeoStore = {
-        readPatterns: () => {
-          const start = Date.now();
-          while (Date.now() - start < 50) {
-            // synchronously slow; caller's Promise.race must win
-          }
-          return [];
-        },
+      let graphReadCalls = 0;
+      const neoStore = {
+        readPatterns: () => [],
         readEpisodes: () => [],
-        readGraphEdges: () => [],
+        readGraphEdges: () => {
+          graphReadCalls++;
+          throw new Error("neoStore graph reader must not run");
+        },
       };
-      const args = makeArgs({ agentId, sessionKey, neoStore: slowNeoStore });
-      // runConversationReactivationRecall itself does not enforce a timeout;
-      // it relies on the caller. Here we simulate the caller timeout with Promise.race.
-      const result = await Promise.race([
-        runConversationReactivationRecall(args),
-        new Promise((resolve) => setTimeout(() => resolve({ context: "", additions: [] }), 10)),
-      ]);
+      const args = makeArgs({ agentId, sessionKey, neoStore, graphEdges: [] });
+      const result = await runConversationReactivationRecall(args);
       assert.strictEqual(typeof result.context, "string");
       assert.ok(Array.isArray(result.additions));
+      assert.strictEqual(graphReadCalls, 0);
     });
 
     it("delivers additions under caller timeout despite many missing community candidates", async () => {
