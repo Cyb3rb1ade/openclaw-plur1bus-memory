@@ -8254,7 +8254,8 @@ const plugin = {
             sessionKey,
             readConsistency: "latest",
           });
-          const workspaceDir = sessionEntry?.spawnedWorkspaceDir
+          const workspaceDir = sessionEntry?.spawnedCwd
+            || sessionEntry?.spawnedWorkspaceDir
             || sessionEntry?.worktree?.canonicalWorkspaceDir
             || await api.runtime.agent.resolveAgentWorkspaceDir(api.config, agentId);
           return resolveMemoryRequestContext({
