@@ -11,6 +11,7 @@ import {
 import { createScopedEmbeddingIpcServer } from "../lib/providers/scoped-embedding-ipc.js";
 
 const originalFetch = globalThis.fetch;
+const ACTIVE_FINGERPRINT_ID = `embedding:v1:sha256:${"a".repeat(64)}`;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -117,24 +118,29 @@ describe("OpenClaw memory embedding provider adapters", () => {
       async embedPassage(text) { calls.push(["passage", text]); return Array(384).fill(0.01); },
       async embedBatch(texts) { calls.push(["batch", texts]); return texts.map(() => Array(384).fill(0.01)); },
     };
-    const server = createScopedEmbeddingIpcServer({ stateRoot, embeddings });
-    const adapter = createOpenClawMemoryEmbeddingProviderAdapters({}, {
-      scopedEmbeddingIpc: { stateRoot },
-    })
-      .find((item) => item.id === "plur1bus-e5-small");
-    const created = await adapter.create({
-      config: {},
-      model: "intfloat/multilingual-e5-small",
-      local: {},
+    const server = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings,
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
     });
+    let created = null;
 
     try {
       await server.start();
+      const adapter = createOpenClawMemoryEmbeddingProviderAdapters({}, {
+        scopedEmbeddingIpc: { stateRoot, fingerprintId: ACTIVE_FINGERPRINT_ID },
+      })
+        .find((item) => item.id === "plur1bus-e5-small");
+      created = await adapter.create({
+        config: {},
+        model: "intfloat/multilingual-e5-small",
+        local: {},
+      });
       const vector = await created.provider.embed("scoped query", { inputType: "query" });
       assert.equal(vector.length, 384);
       assert.deepEqual(calls, [["query", "scoped query"]]);
     } finally {
-      await created.provider.close();
+      await created?.provider.close();
       await server.shutdown();
       await rm(stateRoot, { recursive: true, force: true });
     }

@@ -4531,9 +4531,6 @@ const plugin = {
       }
     }
 
-    registerOpenClawMemoryEmbeddingProviders(api, cfg, requiresActiveSharedModelOwner
-      ? { scopedEmbeddingIpc: { stateRoot: baseDbPath } }
-      : {});
     const obsidianBridgeEnabled = obsidianBridgeCfg.enabled === true;
 
     const embeddingCfg = cfg.embedding || {};
@@ -4820,6 +4817,9 @@ const plugin = {
       dimensions: vectorDim,
     });
     const activeEmbeddingFingerprintId = embeddingFingerprintId(activeEmbeddingFingerprint);
+    registerOpenClawMemoryEmbeddingProviders(api, cfg, requiresActiveSharedModelOwner
+      ? { scopedEmbeddingIpc: { stateRoot: baseDbPath, fingerprintId: activeEmbeddingFingerprintId } }
+      : {});
     if (cfg.reembedding && (
       cfg.reembedding.fingerprintId !== activeEmbeddingFingerprintId
       || cfg.reembedding.dimensions !== vectorDim
@@ -5246,6 +5246,7 @@ const plugin = {
               stateRoot: baseDbPath,
               model: normalizedEmbeddingCfg.local.model,
               dimensions: dimensions || vectorDim,
+              fingerprintId: activeEmbeddingFingerprintId,
             })
           : new LocalTransformersEmbeddingProvider({
           ...normalizedEmbeddingCfg.local,
@@ -5293,6 +5294,7 @@ const plugin = {
       ? createScopedEmbeddingIpcServer({
           stateRoot: baseDbPath,
           embeddings,
+          fingerprintId: activeEmbeddingFingerprintId,
           logger: api.logger,
         })
       : null;
