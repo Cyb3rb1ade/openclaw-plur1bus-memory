@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -9,6 +12,10 @@ import {
   validateWorkspacePolicyGetRequest,
   validateWorkspacePolicySetRequest,
 } from "../lib/setup/workspace-policy-plugin-runtime.js";
+
+async function loadFreshPlugin() {
+  return import(`../index.js?workspace-policy-beta1=${Date.now()}-${Math.random()}`);
+}
 
 function captureResponse() {
   const calls = [];
@@ -159,5 +166,94 @@ describe("workspace policy OpenClaw runtime", () => {
       WORKSPACE_POLICY_GATEWAY_METHODS.set,
     ]);
     assert.match(output, /"enabled": true/);
+  });
+
+  it("plugin-registered Gateway policy handlers resolve Beta1 spawnedCwd sessions", async (t) => {
+    const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-policy-beta1-state-"));
+    const spawnedCwd = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-policy-beta1-cwd-")));
+    const fallbackWorkspace = realpathSync(mkdtempSync(join(tmpdir(), "plur1bus-policy-beta1-fallback-")));
+    t.after(() => {
+      rmSync(baseDbPath, { recursive: true, force: true });
+      rmSync(spawnedCwd, { recursive: true, force: true });
+      rmSync(fallbackWorkspace, { recursive: true, force: true });
+    });
+    const agentId = "beta1-agent";
+    const sessionKey = `agent:${agentId}:main`;
+    const gateway = new Map();
+    const pluginModule = await loadFreshPlugin();
+    pluginModule.default.register({
+      pluginConfig: {
+        baseDbPath,
+        autoCapture: false,
+        autoRecall: false,
+        neo: { enabled: false },
+        obsidianBridge: { enabled: false },
+        featureCronSetup: { auto: false },
+        gc: { enabled: false },
+        embedding: { provider: "local-transformers", local: { dimensions: 384 } },
+      },
+      config: {},
+      logger: { debug() {}, error() {}, info() {}, warn() {} },
+      runtime: {
+        agent: {
+          resolveAgentWorkspaceDir: async () => fallbackWorkspace,
+          session: {
+            getSessionEntry: () => ({ spawnedCwd }),
+          },
+        },
+      },
+      resolvePath: (value) => value,
+      registerCommand() {},
+      registerTool() {},
+      registerService() {},
+      registerGatewayMethod(name, handler) { gateway.set(name, handler); },
+      registerCli() {},
+      session: { controls: { registerSessionAction() {} } },
+      on() {},
+    }, {
+      importRouting: async () => ({
+        parseAgentSessionKey(value) {
+          const match = /^agent:([^:]+):(.+)$/.exec(value);
+          return match ? { agentId: match[1], rest: match[2] } : null;
+        },
+        parseThreadSessionSuffix(value) {
+          return { baseSessionKey: value, threadId: "" };
+        },
+        normalizeOptionalAccountId(value) {
+          return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+        },
+        normalizeMessageChannel(value) {
+          return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+        },
+      }),
+    });
+
+    const getResponses = [];
+    await gateway.get(WORKSPACE_POLICY_GATEWAY_METHODS.get)({
+      params: { sessionKey },
+      respond: (...args) => getResponses.push(args),
+    });
+    const expectedWorkspaceIdentity = `workspace-dir:v1:${spawnedCwd}`;
+    assert.deepStrictEqual(getResponses, [[true, {
+      policy: {
+        agentId,
+        workspaceIdentity: expectedWorkspaceIdentity,
+        enabled: true,
+        revision: 0,
+        source: "default",
+      },
+    }]]);
+
+    const setResponses = [];
+    await gateway.get(WORKSPACE_POLICY_GATEWAY_METHODS.set)({
+      params: { sessionKey, enabled: false, expectedRevision: 0 },
+      client: { connId: "beta1-test" },
+      respond: (...args) => setResponses.push(args),
+    });
+    assert.equal(setResponses[0][0], true);
+    assert.equal(setResponses[0][1].policy.agentId, agentId);
+    assert.equal(setResponses[0][1].policy.workspaceIdentity, expectedWorkspaceIdentity);
+    assert.equal(setResponses[0][1].policy.enabled, false);
+    assert.equal(setResponses[0][1].policy.source, "override");
   });
 });
