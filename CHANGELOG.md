@@ -36,6 +36,12 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Skill Miner sieht Captures aus Scoped OpenClaw-Runtimes.** Vor dem
+  Evidenzscan wechselt der langlebige Full-Runtime-LanceDB-Handle explizit auf
+  die neueste Tabellenversion. Dadurch gehen automatisch erfasste Dialogkarten
+  aus OpenClaws getrennten Agent-/Hook-Runtimes nicht mehr in einem alten
+  Snapshot verloren; ein fehlgeschlagener Refresh bleibt sichtbar und
+  fail-closed.
 - **Native Inferenz-Tensoren werden deterministisch freigegeben.** E5- und
   Jina-Embedding-Aufrufe kopieren ihre Ergebnisvektoren und rufen danach fuer
   Output-, Pooling- und Eingabe-Tensoren `dispose()` auf. Serielle Capture-
