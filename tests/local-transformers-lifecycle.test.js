@@ -5,6 +5,7 @@ import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-l
 import { OpenAIEmbeddingProvider } from "../lib/providers/embedding-openai.js";
 import { LocalTransformersRerankerProvider } from "../lib/providers/reranker-local-transformers.js";
 import { ChainedRerankerProvider } from "../lib/providers/reranker-chained.js";
+import { createSharedLocalModelLease } from "../lib/providers/local-transformers-shared-pool.js";
 
 function disposablePipeline(calls) {
   return Object.assign(async () => [0], {
@@ -104,6 +105,242 @@ describe("local Transformers.js lifecycle", () => {
     assert.equal(disposals, 1);
     await assert.rejects(requestScoped.embed("stale borrower"), /shared local model.*closed/i);
     await requestScoped.shutdown();
+  });
+
+  it("rejects an owner-required scoped load until the active full runtime claims the pool", async () => {
+    let pipelineLoads = 0;
+    const loadTransformers = async () => ({
+      async pipeline() {
+        pipelineLoads += 1;
+        return Object.assign(async () => ({ data: Float32Array.of(1) }), { async dispose() {} });
+      },
+    });
+    const common = {
+      model: "fixture/shared-openclaw-e5-owner-gate",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      loadTransformers,
+    };
+    const full = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    const requestScoped = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: false,
+      sharedModelRequireOwner: true,
+    });
+
+    await assert.rejects(requestScoped.embed("before activation"), /no activated full-runtime owner/i);
+    assert.equal(pipelineLoads, 0);
+    await full.activateSharedModelOwner();
+    assert.deepEqual(await requestScoped.embed("after activation"), [1]);
+    assert.equal(pipelineLoads, 1);
+    await full.shutdown();
+    await requestScoped.shutdown();
+  });
+
+  it("poisons a shared owner epoch when pipeline disposal fails", async () => {
+    let pipelineLoads = 0;
+    const loadTransformers = async () => ({
+      async pipeline() {
+        pipelineLoads += 1;
+        return Object.assign(async () => ({ data: Float32Array.of(1) }), {
+          async dispose() { throw new Error("fixture disposal failed"); },
+        });
+      },
+    });
+    const common = {
+      model: "fixture/shared-openclaw-e5-poison",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      loadTransformers,
+    };
+    const owner = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    const borrower = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: false,
+      sharedModelRequireOwner: true,
+    });
+    await owner.activateSharedModelOwner();
+    await borrower.embed("load poisoned fixture");
+    await assert.rejects(owner.shutdown(), /fixture disposal failed/);
+
+    const successor = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    await assert.rejects(
+      successor.activateSharedModelOwner(),
+      (error) => error?.code === "shared_local_model_cleanup_failed",
+    );
+    assert.equal(pipelineLoads, 1, "a failed disposal must not allow a second allocation");
+    await assert.rejects(borrower.embed("stale borrower"), /shared local model.*closed/i);
+    await successor.shutdown();
+    await borrower.shutdown();
+  });
+
+  it("rejects incompatible process-global pool state with an explicit ABI diagnostic", async () => {
+    const poolSymbol = Symbol.for("@cyb3rb1ade/plur1bus-memory/shared-local-transformers-model-pool");
+    const previous = globalThis[poolSymbol];
+    globalThis[poolSymbol] = { abiVersion: 999, entries: new Map() };
+    try {
+      const lease = createSharedLocalModelLease({ key: "fixture/abi-drift", owner: true });
+      await assert.rejects(
+        lease.activate(),
+        (error) => error?.code === "shared_local_model_pool_abi_mismatch",
+      );
+    } finally {
+      if (previous === undefined) delete globalThis[poolSymbol];
+      else globalThis[poolSymbol] = previous;
+    }
+  });
+
+  it("lets the activated full runtime own a pipeline loaded first by a scoped borrower", async () => {
+    let pipelineLoads = 0;
+    let pipelineDisposals = 0;
+    const loadTransformers = async () => ({
+      async pipeline() {
+        pipelineLoads += 1;
+        return Object.assign(async () => ({ data: Float32Array.of(1) }), {
+          async dispose() { pipelineDisposals += 1; },
+        });
+      },
+    });
+    const common = {
+      model: "fixture/shared-openclaw-e5-borrower-first",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      loadTransformers,
+    };
+    const full = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    const requestScoped = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: false });
+
+    await full.activateSharedModelOwner();
+    assert.deepEqual(await requestScoped.embed("borrower loads first"), [1]);
+    assert.equal(pipelineLoads, 1);
+    await full.shutdown();
+    assert.equal(pipelineDisposals, 1, "active full-runtime shutdown owns scoped-first disposal");
+    await assert.rejects(requestScoped.embed("stale borrower"), /shared local model.*closed/i);
+    await requestScoped.shutdown();
+  });
+
+  it("invalidates an idle scoped borrower when its activated owner epoch closes", async () => {
+    let pipelineLoads = 0;
+    const loadTransformers = async () => ({
+      async pipeline() {
+        pipelineLoads += 1;
+        return Object.assign(async () => ({ data: Float32Array.of(1) }), { async dispose() {} });
+      },
+    });
+    const common = {
+      model: "fixture/shared-openclaw-e5-idle-borrower",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      loadTransformers,
+    };
+    const owner = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    const idleBorrower = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: false,
+      sharedModelRequireOwner: true,
+    });
+
+    await owner.activateSharedModelOwner();
+    await owner.embed("owner load");
+    await owner.shutdown();
+    await assert.rejects(idleBorrower.embed("after owner close"), /no activated full-runtime owner/i);
+    assert.equal(pipelineLoads, 1, "an idle stale borrower must not allocate a replacement pipeline");
+    await idleBorrower.shutdown();
+  });
+
+  it("keeps a successor owner behind an over-budget scoped operation until cleanup completes", async () => {
+    let signalBorrower;
+    let releaseBorrower;
+    const borrowerStarted = new Promise((resolve) => { signalBorrower = resolve; });
+    const borrowerGate = new Promise((resolve) => { releaseBorrower = resolve; });
+    let calls = 0;
+    const loadTransformers = async () => ({
+      async pipeline() {
+        return Object.assign(async () => {
+          calls += 1;
+          if (calls === 2) {
+            signalBorrower();
+            await borrowerGate;
+          }
+          return { data: Float32Array.of(1) };
+        }, { async dispose() {} });
+      },
+    });
+    const common = {
+      model: "fixture/shared-openclaw-e5-replacement-timeout",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      loadTransformers,
+    };
+    const owner = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    const borrower = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: false,
+      sharedModelRequireOwner: true,
+    });
+    const successor = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    await owner.activateSharedModelOwner();
+    await owner.embed("warm owner");
+    const inference = borrower.embed("long scoped inference");
+    await borrowerStarted;
+    const cleanup = owner.shutdown();
+    const successorStart = successor.activateSharedModelOwner();
+    const outcome = await Promise.race([
+      Promise.all([cleanup, successorStart]).then(() => "settled"),
+      new Promise((resolve) => setTimeout(() => resolve("deadline"), 10)),
+    ]);
+    assert.equal(outcome, "deadline", "replacement remains blocked after the host stop budget expires");
+
+    releaseBorrower();
+    await Promise.all([inference, cleanup, successorStart]);
+    await successor.shutdown();
+    await borrower.shutdown();
+  });
+
+  it("shares equivalent lexical cache paths under one exact model identity", async () => {
+    let pipelineLoads = 0;
+    const loadTransformers = async () => ({
+      env: {},
+      async pipeline() {
+        pipelineLoads += 1;
+        return Object.assign(async () => ({ data: Float32Array.of(1) }), { async dispose() {} });
+      },
+    });
+    const common = {
+      model: "fixture/shared-openclaw-e5-canonical-path",
+      revision: "immutable-revision",
+      dimensions: 1,
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      loadTransformers,
+    };
+    const owner = new LocalTransformersEmbeddingProvider({
+      ...common,
+      cacheDir: "/tmp/plur1bus-model-cache/../plur1bus-model-cache",
+      sharedModelOwner: true,
+    });
+    const borrower = new LocalTransformersEmbeddingProvider({
+      ...common,
+      cacheDir: "/tmp/plur1bus-model-cache",
+      sharedModelOwner: false,
+      sharedModelRequireOwner: true,
+    });
+
+    await owner.activateSharedModelOwner();
+    await Promise.all([owner.embed("owner"), borrower.embed("borrower")]);
+    assert.equal(pipelineLoads, 1);
+    await borrower.shutdown();
+    await owner.shutdown();
   });
 
   it("registers local providers and waits for the active runtime generation before model load", async () => {

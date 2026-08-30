@@ -135,6 +135,7 @@ import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateVa
 import {
   createLocalModelGenerationLifecycle,
   registerGatewayShutdown,
+  registerLocalModelOwnershipServiceAfterLifecycle,
   registerModelPreparationServiceAfterLifecycle,
   registerReembeddingRecoveryServiceAfterLifecycle,
   shouldCoordinateLocalModelGeneration,
@@ -11794,6 +11795,12 @@ const plugin = {
       modelPreparationCoordinator,
       reembeddingCoordinator,
       localModelGeneration,
+    });
+    registerLocalModelOwnershipServiceAfterLifecycle(api, {
+      enabled: coordinatesLocalModelGeneration
+        && typeof embeddings?.activateSharedModelOwner === "function",
+      lifecycleRegistered: gatewayShutdownRegistered,
+      embeddings,
     });
     registerModelPreparationServiceAfterLifecycle(api, {
       lifecycleRegistered: gatewayShutdownRegistered,

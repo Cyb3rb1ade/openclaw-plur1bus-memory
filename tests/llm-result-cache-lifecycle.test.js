@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   registerGatewayShutdown,
+  registerLocalModelOwnershipServiceAfterLifecycle,
   registerModelPreparationServiceAfterLifecycle,
   registerReembeddingRecoveryServiceAfterLifecycle,
 } from "../lib/runtime-shutdown.js";
@@ -42,6 +43,54 @@ function captureGatewayStop(warnings = []) {
 }
 
 describe("LLM result cache lifecycle", () => {
+  it("attaches full-runtime local-model ownership only after host service activation", async () => {
+    let activations = 0;
+    let shutdowns = 0;
+    let service;
+    const embeddings = {
+      async activateSharedModelOwner() { activations += 1; return true; },
+      async shutdown() { shutdowns += 1; },
+    };
+    const api = {
+      logger: {},
+      registerService(registration) { service = registration; },
+    };
+
+    assert.equal(registerLocalModelOwnershipServiceAfterLifecycle(api, {
+      enabled: true,
+      lifecycleRegistered: true,
+      embeddings,
+    }), true);
+    assert.equal(activations, 0, "a staged registry must not claim active model ownership");
+    assert.equal(service.id, "plur1bus-local-model-owner");
+    await Promise.all([service.start(), service.start()]);
+    assert.equal(activations, 1);
+    await service.stop();
+    assert.equal(shutdowns, 1);
+  });
+
+  it("surfaces owner-service activation failure and still runs bounded cleanup", async () => {
+    let shutdowns = 0;
+    let service;
+    const api = {
+      logger: {},
+      registerService(registration) { service = registration; },
+    };
+    registerLocalModelOwnershipServiceAfterLifecycle(api, {
+      enabled: true,
+      lifecycleRegistered: true,
+      embeddings: {
+        async activateSharedModelOwner() { throw new Error("owner activation failed"); },
+        async shutdown() { shutdowns += 1; },
+      },
+    });
+
+    await assert.rejects(service.start(), /owner activation failed/);
+    await assert.rejects(service.start(), /owner activation failed/);
+    await service.stop();
+    assert.equal(shutdowns, 1);
+  });
+
   it("reports lifecycle capability absence and never starts model preparation without shutdown ownership", async () => {
     let starts = 0;
     const warnings = [];
