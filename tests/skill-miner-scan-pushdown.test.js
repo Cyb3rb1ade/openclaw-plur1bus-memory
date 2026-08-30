@@ -69,6 +69,44 @@ async function driftTable(dir, { alt, frisch, epistemicStatus = "trusted" }) {
 }
 
 describe("skill-miner loadMemories — Deckel darf nicht die Auswahl treffen", () => {
+  it("refreshes a reader opened before a scoped runtime commits new evidence", async (t) => {
+    const dir = tempDir(t);
+    const now = Date.now();
+    const firstId = uuidFor(20_000);
+    const laterId = uuidFor(20_001);
+    const row = (id, text) => ({
+      id,
+      text,
+      status: "active",
+      category: "workspace_rule",
+      origin: "dm",
+      createdAt: now,
+      epistemicStatus: "observed",
+      sourceMessageRole: "user",
+      retrievalCount: 0,
+    });
+
+    const writerDb = await lancedb.connect(dir);
+    const writerTable = await writerDb.createTable("memories", [
+      row(firstId, "Release checklist before package staging"),
+    ]);
+    const readerDb = await lancedb.connect(dir);
+    const readerTable = await readerDb.openTable("memories");
+    await readerTable.query().toArray();
+
+    await writerTable.add([
+      row(laterId, "Release checklist before deployment staging"),
+    ]);
+
+    const memories = await loadMemories({ table: readerTable }, 30);
+
+    assert.deepEqual(
+      memories.map((memory) => memory.id).sort(),
+      [firstId, laterId].sort(),
+      "the full runtime must see evidence committed by a scoped runtime",
+    );
+  });
+
   it("findet frische Evidenz hinter einem vollen Präfix alter Zeilen", async (t) => {
     const { table, frischeIds } = await driftTable(tempDir(t), { alt: 40, frisch: 5 });
 
