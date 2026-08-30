@@ -9009,6 +9009,10 @@ const plugin = {
 
         const agentId = ctx?.agentId || "default";
         const background = isBackgroundTurn(event, ctx);
+        if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
+          api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
+          return undefined;
+        }
         let memoryCtx = null;
         try {
           memoryCtx = resolveMemoryRequestContext({
@@ -9116,11 +9120,6 @@ const plugin = {
 
           try {
           throwIfCaptureAborted();
-
-          if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
-            api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
-            return;
-          }
 
           if (!event.success || !event.messages || event.messages.length === 0) {
             api.logger.info(`memory-lancedb-namespaced: skipping capture - success=${event.success}, messages=${event.messages?.length || 0}`);
