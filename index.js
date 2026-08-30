@@ -2190,6 +2190,7 @@ class MemoryDB {
       storedBy: r.storedBy || "",
       workspaceId: r.workspaceId || "",
       workspaceKey: r.workspaceKey || "",
+      memoryKind: r.memoryKind ?? "memory",
       ownerUserId: r.ownerUserId || "",
       status: r.status || "active",
       updatedAt: r.updatedAt ?? 0,
@@ -2208,7 +2209,7 @@ class MemoryDB {
     if (typeof query.select === "function") {
       query = query.select([
         "id", "type", "vector", "text", "summary", "category", "importance", "createdAt",
-        "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "ownerUserId", "status",
+        "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "memoryKind", "ownerUserId", "status",
         "updatedAt", "versionCreatedAt", "sourceTimestamp", "neverForget", "memoryClass",
       ]);
     }
