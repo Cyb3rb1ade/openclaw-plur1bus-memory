@@ -45,6 +45,11 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.9.1-beta.1 plug
             autoRecall: true,
             autoCapture: false,
             baseDbPath,
+            embedding: {
+              provider: "local-transformers",
+              model: "intfloat/multilingual-e5-small",
+              local: { dimensions: 384 },
+            },
             modelPreparation: { profile: "jina-v3-multilingual-32" },
           },
         },
@@ -65,7 +70,7 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.9.1-beta.1 plug
       workspaceDir: projectRoot,
       onlyPluginIds: [pluginId],
       cache: false,
-      activate: false,
+      activate: true,
       throwOnLoadError: true,
       logger,
     });
@@ -76,6 +81,11 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.9.1-beta.1 plug
     assert.equal(runtimeLifecycles.length, 1, "installed host must own exactly one PLUR1BUS cleanup lifecycle");
     assert.equal(runtimeLifecycles[0].lifecycle.id, "plur1bus-runtime-resources");
     assert.equal(typeof runtimeLifecycles[0].lifecycle.cleanup, "function");
+    const localModelOwnerServices = registry.services.filter((entry) => entry.pluginId === pluginId
+      && entry.service?.id === "plur1bus-local-model-owner");
+    assert.equal(localModelOwnerServices.length, 1, "installed host must stage exactly one local-model owner service");
+    assert.equal(typeof localModelOwnerServices[0].service.start, "function");
+    assert.equal(typeof localModelOwnerServices[0].service.stop, "function");
     const preparationServices = registry.services.filter((entry) => entry.pluginId === pluginId
       && entry.service?.id === "plur1bus-model-preparation");
     assert.equal(preparationServices.length, 1, "installed host must stage exactly one preparation service");
@@ -85,7 +95,7 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.9.1-beta.1 plug
     assert.equal(
       existsSync(join(baseDbPath, "control", "model-preparation.json")),
       false,
-      "an inactive OpenClaw registry builder must not start model preparation",
+      "OpenClaw registry activation alone must not start model preparation before services start",
     );
 
     const dispatchHook = registry.typedHooks.find((entry) => entry.pluginId === pluginId
