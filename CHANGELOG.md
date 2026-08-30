@@ -36,6 +36,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Beta-1-Workspace-Sitzungen behalten ihre eigene Policy.** Der native
+  Workspace-Schalter liest bei sichtbaren `sessions.create({ cwd })`-Sitzungen
+  zuerst OpenClaws aktuelles `spawnedCwd` und faellt fuer aeltere Hosts auf
+  `spawnedWorkspaceDir`, Worktree-Metadaten und den Agent-Workspace zurueck.
+  Zwei Sitzungen desselben Agenten koennen damit unterschiedliche dauerhafte
+  PLUR1BUS-Overrides tragen.
+- **Automatische Meta-Reflexion nutzt den Capture-Workspace.** Der
+  `agent_end`-Pfad uebergibt den bereits kanonisch aufgeloesten Workspace statt
+  zweier dort nicht sichtbarer Variablen. Erreicht der Session-Zaehler den
+  Schwellwert, werden Reflexion, Metriken und der dauerhafte Zaehler-Reset
+  wieder ausgefuehrt, ohne die erfolgreiche Memory-Erfassung zu verdecken.
+- **Obsidian-Memory-Mirror ist im echten Plugin-Lifecycle verdrahtet.** Der
+  Bridge-Service liest die autoritative Agent-LanceDB nur lesend, projiziert
+  Ownership-, Workspace-, Typ- und Freshness-Felder und spiegelt nur
+  ACL-sichtbare echte Memories. User-Scope bleibt ohne gebundenen Benutzer
+  fail-closed. Stop wartet auch bei einem zusammengefuehrten periodischen
+  Rebuild auf den urspruenglichen Task und verhindert spaete Vault-Schreibvorgaenge.
 - **Skill Miner sieht Captures aus Scoped OpenClaw-Runtimes.** Vor dem
   Evidenzscan wechselt der langlebige Full-Runtime-LanceDB-Handle explizit auf
   die neueste Tabellenversion. Dadurch gehen automatisch erfasste Dialogkarten
