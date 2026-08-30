@@ -148,6 +148,44 @@ describe("local Transformers.js lifecycle", () => {
     await requestScoped.shutdown();
   });
 
+  it("reports only hashed model identities when a scoped runtime cannot find its owner", async () => {
+    const owner = new LocalTransformersEmbeddingProvider({
+      model: "fixture/shared-openclaw-e5-diagnostic-owner",
+      revision: "immutable-revision",
+      dimensions: 1,
+      cacheDir: "/private/owner/cache",
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      sharedModelOwner: true,
+    });
+    await owner.activateSharedModelOwner();
+    const borrower = new LocalTransformersEmbeddingProvider({
+      model: "fixture/shared-openclaw-e5-diagnostic-borrower",
+      revision: "immutable-revision",
+      dimensions: 1,
+      cacheDir: "/private/borrower/cache",
+      embeddingCacheEnabled: false,
+      sharedModelPool: true,
+      sharedModelRequireOwner: true,
+    });
+
+    await assert.rejects(
+      borrower.embed("diagnostic mismatch"),
+      (error) => {
+        assert.equal(error?.code, "shared_local_model_owner_unavailable");
+        assert.match(error.message, /requested=[a-f0-9]{16}/);
+        assert.match(error.message, /activeOwners=[a-f0-9]{16}/);
+        assert.doesNotMatch(error.message, /private|diagnostic-owner|diagnostic-borrower/);
+        assert.match(error.requestedIdentityDigest, /^[a-f0-9]{16}$/);
+        assert.equal(error.activeOwnerIdentityDigests.length, 1);
+        assert.notEqual(error.requestedIdentityDigest, error.activeOwnerIdentityDigests[0]);
+        return true;
+      },
+    );
+    await borrower.shutdown();
+    await owner.shutdown();
+  });
+
   it("poisons a shared owner epoch when pipeline disposal fails", async () => {
     let pipelineLoads = 0;
     const loadTransformers = async () => ({

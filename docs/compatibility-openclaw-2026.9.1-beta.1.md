@@ -37,6 +37,15 @@ drains in-flight inference before disposal, and serializes model acquisition
 across activated registry generations. It does not depend on private registry
 epochs or watcher implementation details.
 
+OpenClaw instantiates generic embedding providers for request-scoped agent and
+tool-discovery registries outside the activated full-runtime JavaScript owner.
+PLUR1BUS keeps one activation-owned local model and delegates only bounded
+embedding requests over a private Unix socket below `baseDbPath`. A freshly
+rotated 256-bit token, directory/socket permissions, and exact model/dimension
+identity bind every request to the active generation. The socket is not exposed
+as a host port, begins only as an activated OpenClaw plugin service, stops before
+the local model, and fails closed while no owner service is available.
+
 A confirmed re-embedding switch is handed off durably in `switching` state
 before the focused config mutation replaces the plugin registry. Only the
 activated replacement runtime runs the real provider/store/recall probe and

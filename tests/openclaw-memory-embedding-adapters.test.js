@@ -1,9 +1,14 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createOpenClawMemoryEmbeddingProviderAdapters,
   registerOpenClawMemoryEmbeddingProviders,
 } from "../lib/providers/openclaw-memory-embedding-adapters.js";
+import { createScopedEmbeddingIpcServer } from "../lib/providers/scoped-embedding-ipc.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -100,6 +105,39 @@ describe("OpenClaw memory embedding provider adapters", () => {
     assert.deepEqual(resources, [], "OpenClaw owns adapter-provider close and reuse across plugin registries");
     await created.provider.close();
     await created.provider.close();
+  });
+
+  it("routes a tool-discovery local adapter through activation-owned private IPC", async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-adapter-ipc-"));
+    const calls = [];
+    const embeddings = {
+      model: "intfloat/multilingual-e5-small",
+      dimensions: () => 384,
+      async embedQuery(text) { calls.push(["query", text]); return Array(384).fill(0.01); },
+      async embedPassage(text) { calls.push(["passage", text]); return Array(384).fill(0.01); },
+      async embedBatch(texts) { calls.push(["batch", texts]); return texts.map(() => Array(384).fill(0.01)); },
+    };
+    const server = createScopedEmbeddingIpcServer({ stateRoot, embeddings });
+    const adapter = createOpenClawMemoryEmbeddingProviderAdapters({}, {
+      scopedEmbeddingIpc: { stateRoot },
+    })
+      .find((item) => item.id === "plur1bus-e5-small");
+    const created = await adapter.create({
+      config: {},
+      model: "intfloat/multilingual-e5-small",
+      local: {},
+    });
+
+    try {
+      await server.start();
+      const vector = await created.provider.embed("scoped query", { inputType: "query" });
+      assert.equal(vector.length, 384);
+      assert.deepEqual(calls, [["query", "scoped query"]]);
+    } finally {
+      await created.provider.close();
+      await server.shutdown();
+      await rm(stateRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects remote embedding vectors with the wrong dimension", async () => {

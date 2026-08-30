@@ -113,6 +113,14 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   ein In-Process-Reload keine alte ONNX-Pipeline neben der neu geladenen
   Instanz im Speicher; ein fehlgeschlagener Modellimport bleibt erneut
   versuchbar.
+- **Request-scoped Embeddings erreichen den aktivierten Owner.** OpenClaw
+  erzeugt Tool-Discovery- und Agent-Registries in getrennten Laufzeitkontexten;
+  deren JavaScript-Globals koennen den Full-Runtime-Modellpool nicht teilen.
+  PLUR1BUS delegiert diese lokale Inferenz deshalb ueber einen privaten,
+  token-geschuetzten Unix-Socket unter seinem State-Verzeichnis. Modell und
+  Dimension sind pro Request gebunden, Payloads sind begrenzt, der Socket wird
+  nur vom aktivierten Plugin-Service gestartet und vor dem Modell geschlossen.
+  Es wird weder ein Hostport geoeffnet noch eine OpenClaw-Datei gepatcht.
 - **Sichere Modellvorbereitung im Operator-Dashboard.** Eine geschlossene
   `modelPreparation.profile`-Auswahl fuer E5 und Jina startet automatisch nur
   den atomaren, hashgeprueften Download. Fortschritt und Ergebnis ueberleben
