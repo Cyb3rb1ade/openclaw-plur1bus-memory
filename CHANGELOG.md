@@ -53,6 +53,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   ACL-sichtbare echte Memories. User-Scope bleibt ohne gebundenen Benutzer
   fail-closed. Stop wartet auch bei einem zusammengefuehrten periodischen
   Rebuild auf den urspruenglichen Task und verhindert spaete Vault-Schreibvorgaenge.
+- **Obsidian-Watcher folgt dem aktivierten Service-Lifecycle.** Auf Hosts mit
+  `registerService` startet und stoppt der Watcher als hostverwalteter
+  Plugin-Service erst nach der Registry-Aktivierung. Dadurch wird eine per
+  Config-Hot-Reload aktivierte Bridge sofort gestartet; der Hook-Fallback
+  bleibt nur fuer Hosts ohne Service-Capability erhalten.
 - **Skill Miner sieht Captures aus Scoped OpenClaw-Runtimes.** Vor dem
   Evidenzscan wechselt der langlebige Full-Runtime-LanceDB-Handle explizit auf
   die neueste Tabellenversion. Dadurch gehen automatisch erfasste Dialogkarten

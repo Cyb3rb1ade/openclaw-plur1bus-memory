@@ -37,6 +37,13 @@ drains in-flight inference before disposal, and serializes model acquisition
 across activated registry generations. It does not depend on private registry
 epochs or watcher implementation details.
 
+The enabled Obsidian watcher uses the same public `registerService` lifecycle
+on this target. OpenClaw starts it only after the replacement registry is
+active and stops the previous service before handoff, so enabling the Bridge by
+supported config mutation works without waiting for a second
+`gateway_start` event. Older hosts without `registerService` retain the typed
+start/stop hook fallback through capability detection.
+
 OpenClaw instantiates generic embedding providers for request-scoped agent and
 tool-discovery registries outside the activated full-runtime JavaScript owner.
 PLUR1BUS keeps one activation-owned local model and delegates only bounded

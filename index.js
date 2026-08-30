@@ -6392,11 +6392,11 @@ const plugin = {
         },
       });
       if (obsidianBridgeCfg.watch === true) {
-        if (typeof api.on === "function") {
+        if (typeof api.registerService === "function") {
+          api.registerService(bridgeService);
+        } else if (typeof api.on === "function") {
           api.on("gateway_start", () => bridgeService.start(), { timeoutMs: 30_000 });
           api.on("gateway_stop", () => bridgeService.stop(), { timeoutMs: 30_000 });
-        } else if (typeof api.registerService === "function") {
-          api.registerService(bridgeService);
         }
       } else {
         api.logger.info(`plur1bus-obsidian-bridge: configured (watch=false, dryRun=${obsidianBridgeCfg.dryRun !== false})`);
