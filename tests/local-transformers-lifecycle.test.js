@@ -167,12 +167,12 @@ describe("local Transformers.js lifecycle", () => {
       loadTransformers,
     };
     const owner = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    await owner.activateSharedModelOwner();
     const borrower = new LocalTransformersEmbeddingProvider({
       ...common,
       sharedModelOwner: false,
       sharedModelRequireOwner: true,
     });
-    await owner.activateSharedModelOwner();
     await borrower.embed("load poisoned fixture");
     await assert.rejects(owner.shutdown(), /fixture disposal failed/);
 
@@ -328,17 +328,23 @@ describe("local Transformers.js lifecycle", () => {
       loadTransformers,
     };
     const owner = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
+    await owner.activateSharedModelOwner();
     const borrower = new LocalTransformersEmbeddingProvider({
       ...common,
       sharedModelOwner: false,
       sharedModelRequireOwner: true,
     });
     const successor = new LocalTransformersEmbeddingProvider({ ...common, sharedModelOwner: true });
-    await owner.activateSharedModelOwner();
     await owner.embed("warm owner");
     const inference = borrower.embed("long scoped inference");
     await borrowerStarted;
     const cleanup = owner.shutdown();
+    await new Promise((resolve) => setImmediate(resolve));
+    const closingEpochBorrower = new LocalTransformersEmbeddingProvider({
+      ...common,
+      sharedModelOwner: false,
+      sharedModelRequireOwner: true,
+    });
     const successorStart = successor.activateSharedModelOwner();
     const outcome = await Promise.race([
       Promise.all([cleanup, successorStart]).then(() => "settled"),
@@ -348,7 +354,12 @@ describe("local Transformers.js lifecycle", () => {
 
     releaseBorrower();
     await Promise.all([inference, cleanup, successorStart]);
+    await assert.rejects(
+      closingEpochBorrower.embed("must not cross into successor"),
+      /no activated full-runtime owner|shared local model.*closed/i,
+    );
     await successor.shutdown();
+    await closingEpochBorrower.shutdown();
     await borrower.shutdown();
   });
 
