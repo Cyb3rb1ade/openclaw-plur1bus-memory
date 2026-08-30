@@ -385,14 +385,13 @@ describe("local Transformers.js lifecycle", () => {
       cacheDir: "/tmp/plur1bus-model-cache/../plur1bus-model-cache",
       sharedModelOwner: true,
     });
+    await owner.activateSharedModelOwner();
     const borrower = new LocalTransformersEmbeddingProvider({
       ...common,
       cacheDir: "/tmp/plur1bus-model-cache",
       sharedModelOwner: false,
       sharedModelRequireOwner: true,
     });
-
-    await owner.activateSharedModelOwner();
     await Promise.all([owner.embed("owner"), borrower.embed("borrower")]);
     assert.equal(pipelineLoads, 1);
     await borrower.shutdown();
