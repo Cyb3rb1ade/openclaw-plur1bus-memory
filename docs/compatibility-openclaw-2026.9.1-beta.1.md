@@ -103,14 +103,15 @@ queue and scanner.
 | Compaction memory flush | Durable capture before compaction | PLUR1BUS supplies no file-memory flush plan because conversation capture is handled by typed hooks. This avoids a second file-memory write lane. |
 | `USER.md` user model | Preference and relationship memories | `USER.md` remains the authoritative current directive; PLUR1BUS is provenance-bearing recall/history. Do not auto-promote contradictory PLUR1BUS observations into `USER.md`. |
 | Standing intents | PLUR1BUS reminders | Complementary: OpenClaw owns event-conditioned intents; exact-time work stays on scheduled tasks/PLUR1BUS reminder state. Do not represent the same obligation in both. |
-| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The lab disables both optional bridges; cross-plugin artifact import is outside the 7.5.0 release claim. |
-| Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS continues to authorize by canonical agent, workspace, sender/chat ACL, and memory scope. |
+| Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The baseline disables both optional bridges; a separate isolated-vault probe enables PLUR1BUS apply/watch mode and verifies outbound and inbound synchronization. Cross-plugin artifact import remains outside the 7.5.0 release claim. |
+| Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS authorizes by canonical agent, workspace, sender/chat ACL, and memory scope. Beta-1 `sessions.create({ cwd })` is resolved through `spawnedCwd` with feature-detected legacy fallbacks. Automatic captures remain agent-private; explicit workspace-scope cards are the workspace-isolated data path. |
 
 The lab configuration makes every conflict decision explicit: PLUR1BUS owns
 the memory slot; `memory-core`, Active Memory, OpenClaw dreaming, PLUR1BUS
 dreaming/merging, and both vault bridges are disabled for the baseline memory
-path; Skill Workshop stays enabled in proposal mode for the separate Skill
-Miner integration test.
+path. Separate controlled probes enable PLUR1BUS REM and its Obsidian Bridge
+against synthetic lab data and a dedicated vault. Skill Workshop stays enabled
+in proposal mode for the separate Skill Miner integration test.
 
 ## Immutable local model artifacts
 
