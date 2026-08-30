@@ -9438,9 +9438,10 @@ const plugin = {
               if (shouldReflect) {
                 try {
                   const neoStore = createNeoStore(neoRoot, rememberNeoWorkspace(ctx, event));
+                  const reflectionWorkspaceDir = memoryCtx?.workspaceDir || snapshotNeoString(ctx?.workspaceDir) || snapshotNeoString(event?.workspaceDir);
                   const reflectResult = await runReflectionJob({
                     store: neoStore,
-                    workspaceDir: commandCtx?.workspaceDir || workspaceDir,
+                    workspaceDir: reflectionWorkspaceDir,
                     logger: api.logger,
                     llmReport: metaCognitionLlmReport,
                   });
