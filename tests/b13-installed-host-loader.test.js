@@ -86,11 +86,29 @@ it("loads reply_dispatch routing through the exact OpenClaw 2026.9.1-beta.1 plug
     assert.equal(localModelOwnerServices.length, 1, "installed host must stage exactly one local-model owner service");
     assert.equal(typeof localModelOwnerServices[0].service.start, "function");
     assert.equal(typeof localModelOwnerServices[0].service.stop, "function");
+    const scopedEmbeddingServices = registry.services.filter((entry) => entry.pluginId === pluginId
+      && entry.service?.id === "plur1bus-scoped-embedding-owner");
+    assert.equal(scopedEmbeddingServices.length, 1, "installed host must stage exactly one scoped embedding IPC service");
+    assert.equal(typeof scopedEmbeddingServices[0].service.start, "function");
+    assert.equal(typeof scopedEmbeddingServices[0].service.stop, "function");
     const preparationServices = registry.services.filter((entry) => entry.pluginId === pluginId
       && entry.service?.id === "plur1bus-model-preparation");
     assert.equal(preparationServices.length, 1, "installed host must stage exactly one preparation service");
     assert.equal(typeof preparationServices[0].service.start, "function");
     assert.equal(typeof preparationServices[0].service.stop, "function");
+    assert.deepEqual(
+      registry.services
+        .filter((entry) => entry.pluginId === pluginId)
+        .map((entry) => entry.service?.id)
+        .filter((id) => id?.startsWith("plur1bus-")),
+      [
+        "plur1bus-local-model-owner",
+        "plur1bus-scoped-embedding-owner",
+        "plur1bus-model-preparation",
+        "plur1bus-reembedding-switch-recovery",
+      ],
+      "service order must start local ownership before IPC and stop IPC before local ownership",
+    );
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(
       existsSync(join(baseDbPath, "control", "model-preparation.json")),

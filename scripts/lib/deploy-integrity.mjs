@@ -114,6 +114,7 @@ export const DEPLOY_FILES = [
   "lib/providers/dimensions.js",
   "lib/providers/embedding-local-transformers.js",
   "lib/providers/local-transformers-shared-pool.js",
+  "lib/providers/scoped-embedding-ipc.js",
   "lib/providers/local-model-artifacts.js",
   "lib/providers/embedding-openai.js",
   "lib/providers/env.js",

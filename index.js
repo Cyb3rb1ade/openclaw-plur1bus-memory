@@ -279,6 +279,11 @@ import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODE
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
 import {
+  IpcScopedEmbeddingProvider,
+  createScopedEmbeddingIpcServer,
+  registerScopedEmbeddingIpcServiceAfterLifecycle,
+} from "./lib/providers/scoped-embedding-ipc.js";
+import {
   pinnedLocalModelProfile,
   validatePinnedModelArtifacts,
 } from "./lib/providers/local-model-artifacts.js";
@@ -4526,7 +4531,9 @@ const plugin = {
       }
     }
 
-    registerOpenClawMemoryEmbeddingProviders(api, cfg);
+    registerOpenClawMemoryEmbeddingProviders(api, cfg, requiresActiveSharedModelOwner
+      ? { scopedEmbeddingIpc: { stateRoot: baseDbPath } }
+      : {});
     const obsidianBridgeEnabled = obsidianBridgeCfg.enabled === true;
 
     const embeddingCfg = cfg.embedding || {};
@@ -5234,7 +5241,13 @@ const plugin = {
       moodInfluence: emotionMoodInfluence,
     });
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
-      ? new LocalTransformersEmbeddingProvider({
+      ? (requiresActiveSharedModelOwner
+          ? new IpcScopedEmbeddingProvider({
+              stateRoot: baseDbPath,
+              model: normalizedEmbeddingCfg.local.model,
+              dimensions: dimensions || vectorDim,
+            })
+          : new LocalTransformersEmbeddingProvider({
           ...normalizedEmbeddingCfg.local,
           cacheDir: localModelCacheDir,
           acceptNonCommercialLicense: nonCommercialModelAccepted,
@@ -5255,7 +5268,7 @@ const plugin = {
           sharedModelOwner: coordinatesLocalModelGeneration,
           sharedModelRequireOwner: requiresActiveSharedModelOwner,
           sharedModelActivationManaged: coordinatesLocalModelGeneration,
-        })
+        }))
       : new OpenAIEmbeddingProvider({
           ...normalizedEmbeddingCfg,
           apiKey: normalizedEmbeddingCfg.apiKey,
@@ -5275,6 +5288,14 @@ const plugin = {
           cacheBasePath: baseDbPath,
           logger: api.logger,
         });
+    const scopedEmbeddingServer = coordinatesLocalModelGeneration
+      && normalizedEmbeddingCfg.provider === "local-transformers"
+      ? createScopedEmbeddingIpcServer({
+          stateRoot: baseDbPath,
+          embeddings,
+          logger: api.logger,
+        })
+      : null;
     if (commandRuntimeHooks) {
       for (const method of ["embed", "embedQuery", "embedPassage", "embedBatch"]) {
         if (typeof embeddings[method] !== "function") continue;
@@ -11797,6 +11818,7 @@ const plugin = {
       clearTurnRoutes: clearInitializedTurnRoutes,
       flushMetrics,
       llmResultCache,
+      scopedEmbeddingServer,
       embeddings,
       reranker,
       modelPreparationCoordinator,
@@ -11808,6 +11830,12 @@ const plugin = {
         && typeof embeddings?.activateSharedModelOwner === "function",
       lifecycleRegistered: gatewayShutdownRegistered,
       embeddings,
+    });
+    registerScopedEmbeddingIpcServiceAfterLifecycle({
+      api,
+      server: scopedEmbeddingServer,
+      enabled: Boolean(scopedEmbeddingServer),
+      lifecycleRegistered: gatewayShutdownRegistered,
     });
     registerModelPreparationServiceAfterLifecycle(api, {
       lifecycleRegistered: gatewayShutdownRegistered,

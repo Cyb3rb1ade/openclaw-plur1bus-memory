@@ -32,6 +32,11 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
   stages no work during plugin discovery. The download begins only after
   OpenClaw activates the PLUR1BUS service, and shutdown or replacement drains
   it through the public service/runtime lifecycle.
+- **One local model across scoped registries.** OpenClaw's request-scoped
+  provider registries delegate local embedding inference to the activated
+  PLUR1BUS owner over a private, authenticated Unix socket below the PLUR1BUS
+  state directory. It is never published as a host port, binds exact model and
+  dimension identity, and closes before the activation-owned model.
 - **Deterministic regression timing.** CPU-bound performance contracts measure
   process CPU time; repair diagnostics drain naturally before process exit.
 
