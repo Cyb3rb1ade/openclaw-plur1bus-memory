@@ -153,7 +153,11 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   nur vom aktivierten Plugin-Service gestartet und vor dem Modell geschlossen.
   Bereits vor dem Service-Start vorbereitete Discovery-Registries binden sich
   exakt an die naechste aktivierte Owner-Epoche; veraltete Registries duerfen
-  keine Owner-Epoche ueberspringen und bleiben fail-closed.
+  keine Owner-Epoche ueberspringen und bleiben fail-closed. Da Beta-1 eine
+  langlebige Discovery-Fassade ueber einen Config-Hot-Reload hinweg behalten
+  kann, bindet diese Fassade jede reine Embedding-Operation an einen frischen,
+  fingerprintgeprueften Epoch-Client. Der Epoch-Client selbst bleibt strikt
+  einmalig gebunden und kann kein rotiertes Owner-Token wiederverwenden.
   Es wird weder ein Hostport geoeffnet noch eine OpenClaw-Datei gepatcht.
 - **Sichere Modellvorbereitung im Operator-Dashboard.** Eine geschlossene
   `modelPreparation.profile`-Auswahl fuer E5 und Jina startet automatisch nur

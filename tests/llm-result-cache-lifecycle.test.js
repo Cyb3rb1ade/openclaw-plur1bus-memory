@@ -270,7 +270,7 @@ describe("LLM result cache lifecycle", () => {
   it("routes scoped local providers through activation-owned private IPC", () => {
     const source = readFileSync(join(root, "index.js"), "utf8");
     assert.match(source, /requiresActiveSharedModelOwner\s*=\s*typeof api\.registrationMode === "string"\s*&&\s*api\.registrationMode !== "full"/s);
-    assert.match(source, /requiresActiveSharedModelOwner[\s\S]*?new IpcScopedEmbeddingProvider\(\{[\s\S]*?stateRoot:\s*baseDbPath/s);
+    assert.match(source, /requiresActiveSharedModelOwner[\s\S]*?new ReloadSafeIpcScopedEmbeddingProvider\(\{[\s\S]*?stateRoot:\s*baseDbPath/s);
     assert.match(
       source,
       /createScopedEmbeddingIpcServer\(\{\s*stateRoot:\s*baseDbPath,\s*embeddings,\s*fingerprintId:\s*activeEmbeddingFingerprintId,\s*logger:\s*api\.logger/s,
