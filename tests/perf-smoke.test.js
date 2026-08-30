@@ -126,6 +126,7 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
   let edges;
   let index;
   const ITERATIONS = 1000;
+  const INDEX_FILTER = Object.freeze({ type: "type0", target: "tgt0" });
 
   // Build the allocation-heavy graph only after Benchmark 1 has completed.
   // Constructing it during test registration can leave parallel V8 GC work
@@ -134,6 +135,11 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
   before(() => {
     edges = buildEdges(10_000);
     index = buildGraphIndex(edges);
+    // Keep lazy compilation and V8's later optimization tier outside the
+    // steady-state query budget. Without this warm-up, a fresh Node process
+    // can charge either compilation phase to an arbitrary measured round even
+    // though the same index query itself remains unchanged.
+    for (let i = 0; i < ITERATIONS * 10; i++) queryGraphIndex(index, INDEX_FILTER);
   });
 
   function scanArray(type, target) {
@@ -155,7 +161,7 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
   it("mit Index: queryGraphIndex ist schnell", () => {
     const idxMs = measureCpuMilliseconds(() => {
       for (let i = 0; i < ITERATIONS; i++) {
-        queryGraphIndex(index, { type: "type0", target: "tgt0" });
+        queryGraphIndex(index, INDEX_FILTER);
       }
     });
 
@@ -168,7 +174,7 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
     });
 
     const idxMs = measureCpuMilliseconds(() => {
-      for (let i = 0; i < ITERATIONS; i++) queryGraphIndex(index, { type: "type0", target: "tgt0" });
+      for (let i = 0; i < ITERATIONS; i++) queryGraphIndex(index, INDEX_FILTER);
     });
 
     assert.ok(
