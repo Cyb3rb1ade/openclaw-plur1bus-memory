@@ -80,8 +80,8 @@ accepted rollback request also satisfies the backend's 64-character generation
 identifier contract.
 
 CPU-backed migration work is limited to one durable embedding batch per
-operator RPC. Every additional batch is an explicit, idempotent `resume`
-operation against the persisted cursor. The TTL gates only the first
+operator RPC. Every additional batch is an explicit, token-bound,
+crash-resumable `resume` operation against the persisted cursor. The TTL gates only the first
 `planned` to `confirmed` transition: a confirmed migration remains resumable
 after the original token TTL expires, while every subsequent apply, resume,
 validation handoff, and switch still requires the exact token and plan binding.

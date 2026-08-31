@@ -89,7 +89,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Validierung abzuschwaechen oder die feste Gateway-Deadline zu ueberschreiten.
   Nach der ersten rechtzeitigen Bestaetigung bleibt derselbe Token weiterhin
   konstant an den Plan-Digest gebunden, sodass ein laufender Job auch nach
-  Ablauf seines urspruenglichen TTL fortgesetzt und geschaltet werden kann.
+  Ablauf seiner urspruenglichen TTL fortgesetzt und geschaltet werden kann.
   Ein neuer ausdruecklicher Plan darf einen abgelaufenen, inaktiven Job atomar
   als `expired_migration_superseded` beenden; dessen Cursor, Receipts und
   Quarantaene-Daten bleiben erhalten. Der Zielprovider-Cache rotiert dabei
