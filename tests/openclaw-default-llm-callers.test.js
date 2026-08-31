@@ -29,6 +29,9 @@ const routingCapability = Object.freeze({
   normalizeMessageChannel(value) {
     return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
   },
+  isIncognitoSessionKey() {
+    return false;
+  },
 });
 
 function makeVector() {
