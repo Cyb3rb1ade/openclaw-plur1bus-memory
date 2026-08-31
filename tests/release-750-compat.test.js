@@ -63,6 +63,18 @@ test("7.5.0 documents its exact upstream base, native integration, immutable mod
   assert.match(compatibility, /c44ebc43de724ae8816668bb44d2e728e17faa18/);
   assert.match(compatibility, /non-destructive/i);
   assert.match(compatibility, /no OpenClaw runtime files are patched/i);
+  assert.match(compatibility, /one durable embedding batch per\s+operator RPC/i);
+  assert.match(compatibility, /confirmed migration remains resumable\s+after the original token TTL expires/i);
+  assert.match(compatibility, /expired_migration_superseded/);
+});
+
+test("7.5.0 changelog records the bounded and resumable re-embedding contract", async () => {
+  const changelog = await readFile(new URL("../CHANGELOG.md", import.meta.url), "utf8");
+
+  assert.match(changelog, /genau einen dauerhaften Batch pro bestaetigtem Operator-RPC/);
+  assert.match(changelog, /expired_migration_superseded/);
+  assert.match(changelog, /Plan-Digest/);
+  assert.doesNotMatch(changelog, /hoechstens vier Batches pro bestaetigtem Operator-Aufruf/);
 });
 
 test("7.5.0 tracks the exact OpenClaw compatibility document despite the docs denylist", async () => {

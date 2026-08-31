@@ -79,6 +79,19 @@ digest rather than concatenating the operator-visible migration ID, so every
 accepted rollback request also satisfies the backend's 64-character generation
 identifier contract.
 
+CPU-backed migration work is limited to one durable embedding batch per
+operator RPC. Every additional batch is an explicit, idempotent `resume`
+operation against the persisted cursor. The TTL gates only the first
+`planned` to `confirmed` transition: a confirmed migration remains resumable
+after the original token TTL expires, while every subsequent apply, resume,
+validation handoff, and switch still requires the exact token and plan binding.
+An explicit new plan may atomically retire an expired, idle coordinator-owned
+migration as `expired_migration_superseded`; it preserves the old cursor,
+receipts, and quarantined data for audit or recovery. Unexpired work and any
+switch or rollback state remain hard conflicts. Target-provider instances are
+keyed by the complete Plan-Digest and shut down before a replacement plan can
+load a different same-dimension model.
+
 These capabilities are detected from the runtime objects and exports before
 use. Missing capabilities produce a fail-closed diagnostic. There is no
 version-string branch and no OpenClaw runtime files are patched. PLUR1BUS does
