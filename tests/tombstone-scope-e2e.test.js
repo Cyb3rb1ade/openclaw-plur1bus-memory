@@ -8,11 +8,12 @@
 import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { tombstoneRegistryDir } from "../lib/tombstone.js";
 
 const VECTOR_DIM = 384;
 
@@ -55,12 +56,15 @@ function makeMockApi(baseDbPath) {
 
 describe("memory_forget Scope-Enforcement (workspace/user)", () => {
   let api;
+  let testRoot;
   let baseDbPath;
   let originalEmbedQuery;
   let originalEmbedPassage;
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-forget-scope-"));
+    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-forget-scope-"));
+    baseDbPath = join(testRoot, "db");
+    mkdirSync(baseDbPath);
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async function (text) { return textVector(text); };
@@ -72,8 +76,7 @@ describe("memory_forget Scope-Enforcement (workspace/user)", () => {
   after(() => {
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
-    rmSync(baseDbPath, { recursive: true, force: true });
-    rmSync(join(baseDbPath, "..", "_tombstones"), { recursive: true, force: true });
+    rmSync(testRoot, { recursive: true, force: true });
   });
 
   function toolsFor(ctx) {
@@ -89,6 +92,11 @@ describe("memory_forget Scope-Enforcement (workspace/user)", () => {
       await db.shutdown();
     }
   }
+
+  it("uses a suite-private tombstone registry instead of the shared temp root", () => {
+    assert.equal(tombstoneRegistryDir(baseDbPath), join(testRoot, "_tombstones"));
+    assert.notEqual(tombstoneRegistryDir(baseDbPath), join(tmpdir(), "_tombstones"));
+  });
 
   it("Workspace B kann Workspace-A-Memory weder per ID noch per Query finden/tombstonen", async () => {
     const agentId = "scope-agent-a";
