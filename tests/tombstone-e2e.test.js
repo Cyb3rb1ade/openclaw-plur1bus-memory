@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { tombstoneRegistryDir } from "../lib/tombstone.js";
 
 const VECTOR_DIM = 384;
 
@@ -39,11 +40,14 @@ function makeMockApi(baseDbPath) {
 
 describe("tombstone end-to-end (real plugin store → forget → re-store)", () => {
   let api;
+  let testRoot;
   let baseDbPath;
   let originalEmbedQuery;
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-tombstone-e2e-"));
+    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-tombstone-e2e-"));
+    baseDbPath = join(testRoot, "db");
+    mkdirSync(baseDbPath);
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => makeVector();
     LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => makeVector();
@@ -53,8 +57,7 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
 
   after(() => {
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
-    rmSync(baseDbPath, { recursive: true, force: true });
-    rmSync(join(baseDbPath, "..", "_tombstones"), { recursive: true, force: true });
+    rmSync(testRoot, { recursive: true, force: true });
   });
 
   function toolsFor(agentId, workspaceDir) {
@@ -89,6 +92,11 @@ describe("tombstone end-to-end (real plugin store → forget → re-store)", () 
       await db.shutdown();
     }
   }
+
+  it("uses a suite-private tombstone registry instead of the shared temp root", () => {
+    assert.equal(tombstoneRegistryDir(baseDbPath), join(testRoot, "_tombstones"));
+    assert.notEqual(tombstoneRegistryDir(baseDbPath), join(tmpdir(), "_tombstones"));
+  });
 
   it("identischer Store im selben Scope nach Forget wird blockiert", async () => {
     const agentId = "e2e-agent-a";
