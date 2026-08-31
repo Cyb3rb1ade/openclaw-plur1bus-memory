@@ -92,6 +92,30 @@ describe("maintenance-gated generation switch", () => {
     await recovery.shutdown();
   });
 
+  it("accepts the originally bound token after expiry but rejects a different token", async () => {
+    const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
+    const { token } = await readyRecord(stateStore);
+    let mutations = 0;
+    const runtime = createReembeddingSwitchRuntime({
+      stateStore,
+      now: () => 10_000,
+      maintenanceGate: { enter: async () => {}, exit: async () => {} },
+      mutateSelection: async () => { mutations += 1; },
+    });
+    const wrongToken = `${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`;
+
+    await assert.rejects(
+      runtime.switchGeneration({ id: "migration-0001", token: wrongToken }),
+      /invalid or expired reembedding confirmation/,
+    );
+    assert.equal((await runtime.status("migration-0001")).state, "ready_to_switch");
+    assert.equal(mutations, 0);
+
+    const handedOff = await runtime.switchGeneration({ id: "migration-0001", token });
+    assert.equal(handedOff.state, "switching");
+    assert.equal(mutations, 1);
+  });
+
   it("keeps the durable gate active across target failure and source-runtime rollback recovery", async () => {
     const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
     const { token } = await readyRecord(stateStore);
