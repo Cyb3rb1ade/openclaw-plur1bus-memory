@@ -24,6 +24,7 @@ const routingCapability = Object.freeze({
 
 function createApi(baseDbPath) {
   const commands = [];
+  const hooks = [];
   return {
     pluginConfig: {
       baseDbPath,
@@ -44,8 +45,9 @@ function createApi(baseDbPath) {
     registerCommand(command) { commands.push(command); },
     registerTool() {},
     registerService() {},
-    on() {},
+    on(name, handler, options) { hooks.push({ name, handler, options }); },
     _commands: commands,
+    _hooks: hooks,
   };
 }
 
@@ -95,6 +97,65 @@ test("Telegram skills review confirm nonce activates the proposal", async (t) =>
   assert.match(confirm.text, /approved|geschrieben|partial|bestätigt/i);
   const skillPath = join(workspaceDir, "skills", "verify-weekly-releases", "SKILL.md");
   assert.equal(readFileSync(skillPath, "utf8").includes("Verify Weekly Releases"), true);
+});
+
+test("the installed plugin registers one exact Workshop lifecycle hook and synchronizes its isolated local JSONL", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "skill-hook-db-"));
+  const eventWorkspace = mkdtempSync(join(tmpdir(), "skill-hook-event-ws-"));
+  const proposalWorkspace = join(baseDbPath, "_neo", "workspaces", "partition-a");
+  t.after(() => {
+    rmSync(baseDbPath, { recursive: true, force: true });
+    rmSync(eventWorkspace, { recursive: true, force: true });
+  });
+  mkdirSync(join(proposalWorkspace, ".adaptive-learning"), { recursive: true });
+  const revisionHash = "d".repeat(64);
+  writeFileSync(join(proposalWorkspace, ".adaptive-learning", "skill-proposals.jsonl"), `${JSON.stringify({
+    id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    skillName: "native-workshop-sync",
+    skillTitle: "Native Workshop Sync",
+    description: "Synchronize native Workshop lifecycle",
+    instructions: "Use the committed lifecycle event",
+    examples: ["sync"],
+    agentId: "agent-a",
+    status: "pending_review",
+    evidence: { memoryIds: [], score: 4, llmConfidence: 0.9, grade: "corroborated" },
+    openClawWorkshop: {
+      proposalId: "native-workshop-sync-20260831",
+      revisionHash,
+      status: "pending",
+    },
+  })}\n`);
+
+  const pluginModule = await import(`../index.js?skill-lifecycle-hook=${Date.now()}`);
+  const api = createApi(baseDbPath);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  const hooks = api._hooks.filter((hook) => hook.name === "skill_proposal_changed");
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].options?.registrationId, "plur1bus-skill-workshop-lifecycle-v1");
+
+  await hooks[0].handler({
+    eventId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    sequence: 2,
+    action: "applied",
+    occurredAt: "2026-08-31T12:00:00.000Z",
+    proposal: {
+      id: "native-workshop-sync-20260831",
+      kind: "create",
+      status: "applied",
+      revision: "v1",
+      revisionSha256: revisionHash,
+      skillName: "native-workshop-sync",
+      skillKey: "native-workshop-sync",
+      skillFile: join(eventWorkspace, "skills", "native-workshop-sync", "SKILL.md"),
+    },
+  }, { workspaceDir: eventWorkspace, agentId: "agent-a" });
+
+  const local = JSON.parse(readFileSync(
+    join(proposalWorkspace, ".adaptive-learning", "skill-proposals.jsonl"),
+    "utf8",
+  ).trim());
+  assert.equal(local.status, "active");
+  assert.equal(local.openClawWorkshop.status, "applied");
 });
 
 test("Telegram approval delegates a Workshop-bound proposal to OpenClaw exactly once", async (t) => {
