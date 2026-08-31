@@ -80,6 +80,83 @@ function fakeBackend(rows = sourceRows) {
   };
 }
 
+function coordinatorWithProvider({ stateRoot, backend = fakeBackend(), createTargetProvider }) {
+  const stateStore = createMigrationStateStore({ stateRoot, now: () => 1_000 });
+  const coordinator = createReembeddingCoordinator({
+    stateStore,
+    backend,
+    createTargetProvider,
+    plannerDependencies: {
+      now: () => 1_000,
+      randomBytes: () => Buffer.alloc(32, 8),
+      statDisk: async () => ({ freeBytes: 1_000_000 }),
+      probeTargetProvider: async () => [0, 1, 2, 3],
+    },
+    runValidationProbes: async () => ({ semanticRecall: true }),
+  });
+  return { backend, coordinator };
+}
+
+async function expiredProviderRotation({ stateRoot, shutdownFirstProvider, closeBackend = async () => {} }) {
+  let clock = 1_000;
+  const backend = fakeBackend([sourceRows[0]]);
+  const generations = new Set();
+  backend.createQuarantinedGeneration = async ({ generation }) => {
+    if (generations.has(generation)) throw new Error("target generation already exists");
+    generations.add(generation);
+  };
+  backend.describeGeneration = async (generation) => (
+    generations.has(generation) ? { generation, dimensions: 4 } : null
+  );
+  backend.close = closeBackend;
+  const factoryModels = [];
+  const providerEvents = [];
+  const stateStore = createMigrationStateStore({ stateRoot, now: () => clock });
+  const coordinator = createReembeddingCoordinator({
+    stateStore,
+    backend,
+    createTargetProvider: async ({ fingerprint }) => {
+      factoryModels.push(fingerprint.model);
+      return {
+        async embedBatch(texts) {
+          providerEvents.push(`embed:${fingerprint.model}`);
+          return texts.map((text) => [text.length, 1, 2, 3]);
+        },
+        async shutdown() {
+          providerEvents.push(`shutdown:${fingerprint.model}`);
+          if (fingerprint.model === "target-model") await shutdownFirstProvider();
+        },
+      };
+    },
+    plannerDependencies: {
+      now: () => clock,
+      randomBytes: () => Buffer.alloc(32, 8),
+      statDisk: async () => ({ freeBytes: 1_000_000 }),
+      probeTargetProvider: async () => [0, 1, 2, 3],
+    },
+    runValidationProbes: async () => ({ semanticRecall: true }),
+  });
+  const first = await coordinator.plan({
+    id: "migration-provider-first",
+    targetGeneration: "generation-target",
+    target: { fingerprint: targetFingerprint },
+    confirmationTtlMs: 1_000,
+  });
+  await coordinator.apply({ id: first.record.id, token: first.confirmation.token });
+  clock = 2_000;
+  const replacementFingerprint = normalizeEmbeddingFingerprint({
+    provider: "openai",
+    model: "target-replacement-model",
+    dimensions: 4,
+  }, []);
+  const replacement = await coordinator.plan({
+    id: "migration-provider-replacement",
+    targetGeneration: "generation-replacement",
+    target: { fingerprint: replacementFingerprint },
+  });
+  return { coordinator, factoryModels, providerEvents, replacement };
+}
+
 describe("resumable reembedding coordinator", () => {
   let stateRoot;
   beforeEach(() => { stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-reembedding-coordinator-")); });
@@ -459,5 +536,125 @@ describe("resumable reembedding coordinator", () => {
     );
     assert.equal(backend.target.size, 0);
     await coordinator.shutdown();
+  });
+
+  it("closes an invalid resource-owning provider candidate exactly once", async () => {
+    let candidateShutdowns = 0;
+    const { coordinator } = coordinatorWithProvider({
+      stateRoot,
+      createTargetProvider: async () => ({
+        async shutdown() { candidateShutdowns += 1; },
+      }),
+    });
+    const planned = await coordinator.plan({
+      id: "migration-invalid-provider",
+      targetGeneration: "generation-target",
+      target: { fingerprint: targetFingerprint },
+    });
+
+    await assert.rejects(
+      coordinator.apply({ id: planned.record.id, token: planned.confirmation.token }),
+      /target embedding provider is invalid/,
+    );
+    assert.equal(candidateShutdowns, 1);
+    await coordinator.shutdown();
+    assert.equal(candidateShutdowns, 1);
+  });
+
+  it("preserves an invalid-provider error when candidate shutdown also fails", async () => {
+    let candidateShutdowns = 0;
+    const { coordinator } = coordinatorWithProvider({
+      stateRoot,
+      createTargetProvider: async () => ({
+        async shutdown() {
+          candidateShutdowns += 1;
+          throw new Error("invalid candidate shutdown failed");
+        },
+      }),
+    });
+    const planned = await coordinator.plan({
+      id: "migration-invalid-provider-cleanup",
+      targetGeneration: "generation-target",
+      target: { fingerprint: targetFingerprint },
+    });
+
+    await assert.rejects(
+      coordinator.apply({ id: planned.record.id, token: planned.confirmation.token }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepStrictEqual(error.errors.map((failure) => failure.message), [
+          "target embedding provider is invalid",
+          "invalid candidate shutdown failed",
+        ]);
+        return true;
+      },
+    );
+    assert.equal(candidateShutdowns, 1);
+    await coordinator.shutdown();
+    assert.equal(candidateShutdowns, 1);
+  });
+
+  it("retains a stale provider after shutdown failure and retries it before creating a replacement", async () => {
+    let staleShutdowns = 0;
+    const { coordinator, factoryModels, providerEvents, replacement } = await expiredProviderRotation({
+      stateRoot,
+      shutdownFirstProvider: async () => {
+        staleShutdowns += 1;
+        if (staleShutdowns === 1) throw new Error("stale provider shutdown failed");
+      },
+    });
+
+    await assert.rejects(
+      coordinator.apply({ id: replacement.record.id, token: replacement.confirmation.token }),
+      /stale provider shutdown failed/,
+    );
+    assert.equal(staleShutdowns, 1);
+    assert.deepStrictEqual(factoryModels, ["target-model"]);
+
+    const resumed = await coordinator.resume({ id: replacement.record.id, token: replacement.confirmation.token });
+    assert.equal(resumed.state, "validating");
+    assert.equal(staleShutdowns, 2);
+    assert.deepStrictEqual(factoryModels, ["target-model", "target-replacement-model"]);
+    assert.deepStrictEqual(providerEvents, [
+      "embed:target-model",
+      "shutdown:target-model",
+      "shutdown:target-model",
+      "embed:target-replacement-model",
+    ]);
+    await coordinator.shutdown();
+    assert.deepStrictEqual(providerEvents, [
+      "embed:target-model",
+      "shutdown:target-model",
+      "shutdown:target-model",
+      "embed:target-replacement-model",
+      "shutdown:target-replacement-model",
+    ]);
+  });
+
+  it("aggregates a retained stale-provider failure with final backend shutdown", async () => {
+    let staleShutdowns = 0;
+    const { coordinator, factoryModels, replacement } = await expiredProviderRotation({
+      stateRoot,
+      shutdownFirstProvider: async () => {
+        staleShutdowns += 1;
+        throw new Error("stale provider shutdown failed");
+      },
+      closeBackend: async () => { throw new Error("backend shutdown failed"); },
+    });
+
+    await assert.rejects(
+      coordinator.apply({ id: replacement.record.id, token: replacement.confirmation.token }),
+      /stale provider shutdown failed/,
+    );
+    await assert.rejects(coordinator.shutdown(), (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepStrictEqual(error.errors.map((failure) => failure.message), [
+        "stale provider shutdown failed",
+        "backend shutdown failed",
+      ]);
+      return true;
+    });
+    assert.equal(staleShutdowns, 2);
+    assert.deepStrictEqual(factoryModels, ["target-model"]);
   });
 });
