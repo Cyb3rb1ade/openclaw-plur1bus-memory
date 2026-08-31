@@ -161,4 +161,41 @@ describe("PLUR1BUS control-plane health inspector", () => {
       observedAt: 77,
     });
   });
+
+  it("drops only the unsupported partition id and still counts its siblings", async () => {
+    // The directory filter admits "_internal" and "55736530"; the public-id
+    // contract does not. One such name must not discard the whole root.
+    const scan = createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      sharedRoots: {
+        user: { path: "/not-projected/shared/users", dimensions: 768 },
+      },
+      maxPartitions: 8,
+      listPartitions: async ({ kind }) => ({
+        agent: ["_internal", "agent-a", "agent-b"],
+        user: ["55736530", "u-0123456789abcdef"],
+      })[kind],
+      inspectRows: async ({ kind, partitionId }) => ({
+        "agent:agent-a": 3,
+        "agent:agent-b": 5,
+        "user:u-0123456789abcdef": 1,
+      })[`${kind}:${partitionId}`] ?? 0,
+      measureStorage: async () => ({ bytes: 9_876, complete: true }),
+    });
+
+    assert.deepStrictEqual(await scan(), {
+      status: "degraded",
+      namespaces: [
+        { id: "lancedb-namespaced", dimensions: 768, rows: 8 },
+        { id: "shared-users", dimensions: 768, rows: 1 },
+      ],
+      cards: {
+        byAgent: [{ id: "agent-a", cards: 3 }, { id: "agent-b", cards: 5 }],
+        byWorkspace: [],
+        byUser: [{ id: "u-0123456789abcdef", cards: 1 }],
+      },
+      storage: { bytes: 9_876, complete: true },
+      lastError: { component: "health", code: "partition_id_unsupported" },
+    });
+  });
 });

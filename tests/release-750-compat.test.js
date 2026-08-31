@@ -4,6 +4,10 @@ import test from "node:test";
 
 const EXPECTED_VERSION = "7.5.0";
 const EXPECTED_OPENCLAW_VERSION = "2026.9.1-beta.1";
+// The build is verified against the exact beta above, but the accepted host
+// floor is the stable release: 2026.8.1 exposes every plugin-sdk subpath and
+// host API this plugin uses, and semver would otherwise exclude it.
+const EXPECTED_MIN_HOST_VERSION = "2026.8.1";
 const EXPECTED_OPENCLAW_COMMIT = "1d96e5aee2d49cde999ed055eda113e2523a7b5c";
 const EXPECTED_UPSTREAM_VERSION = "7.4.10";
 const EXPECTED_UPSTREAM_TAG = "v7.4.10";
@@ -17,7 +21,7 @@ async function readJson(path) {
   return JSON.parse(await readFile(new URL(path, import.meta.url), "utf8"));
 }
 
-test("7.5.0 release identity is synchronized and targets exact OpenClaw 2026.9.1 beta", async () => {
+test("7.5.0 release identity is synchronized, builds against exact OpenClaw 2026.9.1 beta, and accepts the stable 2026.8.1 floor", async () => {
   const packageJson = await readJson("../package.json");
   const packageLock = await readJson("../package-lock.json");
   const manifest = await readJson("../openclaw.plugin.json");
@@ -28,8 +32,8 @@ test("7.5.0 release identity is synchronized and targets exact OpenClaw 2026.9.1
   assert.equal(manifest.version, EXPECTED_VERSION);
   assert.equal(packageJson.openclaw.build.openclawVersion, EXPECTED_OPENCLAW_VERSION);
   assert.equal(packageJson.openclaw.build.pluginSdkVersion, EXPECTED_OPENCLAW_VERSION);
-  assert.equal(packageJson.openclaw.compat.minGatewayVersion, EXPECTED_OPENCLAW_VERSION);
-  assert.equal(packageJson.openclaw.compat.pluginApi, `>=${EXPECTED_OPENCLAW_VERSION}`);
+  assert.equal(packageJson.openclaw.compat.minGatewayVersion, EXPECTED_MIN_HOST_VERSION);
+  assert.equal(packageJson.openclaw.compat.pluginApi, `>=${EXPECTED_MIN_HOST_VERSION}`);
   assert.ok(
     packageJson.files.includes("docs/compatibility-openclaw-2026.9.1-beta.1.md"),
     "the exact-host compatibility contract must ship in the npm package",
