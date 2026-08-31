@@ -17,8 +17,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Dispatcher. Es werden weder OpenClaw-Quellen noch `dist`-Bundles oder
   `node_modules` veraendert. Fehlende Capabilities bleiben fail-closed.
 - **Exakte Release-Identitaet.** Paket, Lockfile und Manifest tragen 7.5.0; die
-  Build- und Mindest-Host-Metadaten nennen exakt OpenClaw 2026.9.1-beta.1. Die
-  bestehenden Tags und der Quellstand 7.4.10 bleiben unveraendert.
+  Build- und Mindest-Host-Metadaten nennen exakt OpenClaw 2026.9.1-beta.1. Das
+  offizielle Tag `v7.4.10` und sein Quellstand bleiben unveraendert.
 - **Nicht-destruktives Upgrade.** 7.5.0 fuehrt keinen brechenden LanceDB-
   Schematausch ein. Bestehende agent-spezifische Tabellen, Namespaces,
   Tombstones, History und Obsidian-Spiegel bleiben erhalten.
