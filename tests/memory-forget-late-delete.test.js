@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { after, afterEach, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin, { MemoryDB } from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { tombstoneRegistryDir } from "../lib/tombstone.js";
 import { withTimeout } from "../lib/with-timeout.js";
 
 const VECTOR_DIM = 384;
@@ -50,6 +51,7 @@ function makeMockApi(baseDbPath) {
 
 describe("memory_forget late tombstone audit continuation", () => {
   let api;
+  let testRoot;
   let baseDbPath;
   let openclawHome;
   let originalOpenClawHome;
@@ -108,7 +110,9 @@ describe("memory_forget late tombstone audit continuation", () => {
   }
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-db-"));
+    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-db-"));
+    baseDbPath = join(testRoot, "db");
+    mkdirSync(baseDbPath);
     originalOpenClawHome = process.env.OPENCLAW_HOME;
     openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-forget-late-home-"));
     process.env.OPENCLAW_HOME = openclawHome;
@@ -128,13 +132,18 @@ describe("memory_forget late tombstone audit continuation", () => {
   after(() => {
     MemoryDB.prototype.tombstone = originalTombstone;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
-    rmSync(baseDbPath, { recursive: true, force: true });
+    rmSync(testRoot, { recursive: true, force: true });
     for (const workspaceDir of workspaceDirs) {
       rmSync(workspaceDir, { recursive: true, force: true });
     }
     rmSync(openclawHome, { recursive: true, force: true });
     if (originalOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
     else process.env.OPENCLAW_HOME = originalOpenClawHome;
+  });
+
+  it("uses a suite-private tombstone registry instead of the shared temp root", () => {
+    assert.equal(tombstoneRegistryDir(baseDbPath), join(testRoot, "_tombstones"));
+    assert.notEqual(tombstoneRegistryDir(baseDbPath), join(tmpdir(), "_tombstones"));
   });
 
   it("logs an ID tombstone exactly once when its timed-out mutation commits late", async (t) => {
