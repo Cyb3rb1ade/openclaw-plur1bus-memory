@@ -267,6 +267,49 @@ describe("auto-capture uses embedBatch when available", () => {
     assert.ok(storeCalls > 0);
   });
 
+  it("still captures a turn that carries no session key at all", async (t) => {
+    // The host declares sessionKey as optional on most surfaces, and a turn
+    // without one cannot be an incognito session. Dropping it would silently
+    // disable capture, so it must be stored, not skipped.
+    let embedCalls = 0;
+    let classifierCalls = 0;
+    LocalTransformersEmbeddingProvider.prototype.embedBatch = async function keylessEmbed(texts) {
+      embedCalls += 1;
+      return texts.map((_, index) => makeVector(index * 0.01));
+    };
+
+    const pluginModule = await loadFreshPluginModule();
+    const originalStore = pluginModule.MemoryDB.prototype.store;
+    let storeCalls = 0;
+    pluginModule.MemoryDB.prototype.store = async function trackedKeylessStore(...args) {
+      storeCalls += 1;
+      return originalStore.apply(this, args);
+    };
+    t.after(() => {
+      pluginModule.MemoryDB.prototype.store = originalStore;
+    });
+
+    const api = trackApi(t, makeMockApi(basePath));
+    pluginModule.default.register(api, {
+      importRouting: async () => ({
+        isIncognitoSessionKey: () => {
+          classifierCalls += 1;
+          return false;
+        },
+      }),
+    });
+
+    await api.emit("agent_end", {
+      success: true,
+      turnId: "turn-without-session-key",
+      messages: [{ role: "user", content: "Remember this keyless session detail." }],
+    }, { agentId: "keyless-agent", workspaceDir: basePath });
+
+    assert.ok(embedCalls > 0, "a keyless turn must still be embedded");
+    assert.ok(storeCalls > 0, "a keyless turn must still be stored");
+    assert.equal(classifierCalls, 0, "there is no key to classify");
+  });
+
   it("falls back to individual embed when embedBatch is not available", async (t) => {
     const individualCalls = [];
 

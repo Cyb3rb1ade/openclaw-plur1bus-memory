@@ -9111,19 +9111,38 @@ const plugin = {
     if (autoCapture) {
       api.logger.info(`memory-lancedb-namespaced: enabling autoCapture`);
 
+      let warnedMissingCaptureSessionKey = false;
+      let warnedIncognitoClassifierDegraded = false;
+
       api.on("agent_end", async (event, ctx) => {
         const sessionKey = ctx?.sessionKey ?? event?.sessionKey;
-        try {
-          if (typeof sessionKey !== "string" || !sessionKey.trim()) {
-            throw new Error("auto-capture session key is unavailable");
-          }
-          if (await classifyHostIncognitoSession(sessionKey)) {
-            api.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
+        // A turn without a session key cannot be an incognito session: the host
+        // identifies incognito *by* that key. Both the host types and every
+        // other consumer in this file treat sessionKey as optional, so a
+        // missing key must not silently drop the turn — that would disable the
+        // plugin's core function. Classify only when a key is actually present.
+        if (typeof sessionKey === "string" && sessionKey.trim()) {
+          try {
+            if (await classifyHostIncognitoSession(sessionKey)) {
+              api.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
+              return undefined;
+            }
+          } catch (error) {
+            // Fail closed: a keyed session we cannot classify must not be stored.
+            trySafeWarn(api.logger, "auto-capture.incognito-classifier", error);
+            if (!warnedIncognitoClassifierDegraded) {
+              warnedIncognitoClassifierDegraded = true;
+              trySafeWarn(api.logger, "auto-capture.incognito-classifier-degraded", new Error(
+                "incognito classifier unavailable; durable capture is disabled for keyed sessions until it recovers",
+              ));
+            }
             return undefined;
           }
-        } catch (error) {
-          trySafeWarn(api.logger, "auto-capture.incognito-classifier", error);
-          return undefined;
+        } else if (!warnedMissingCaptureSessionKey) {
+          warnedMissingCaptureSessionKey = true;
+          trySafeWarn(api.logger, "auto-capture.session-key-missing", new Error(
+            "agent_end turn has no session key; capturing without incognito classification",
+          ));
         }
         api.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
 
