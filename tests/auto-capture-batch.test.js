@@ -161,6 +161,112 @@ describe("auto-capture uses embedBatch when available", () => {
     assert.strictEqual(individualCalls.length, 0, "individual embed should not be needed when embedBatch succeeds");
   });
 
+  it("skips incognito agent_end before embedding or durable storage", async (t) => {
+    let embedCalls = 0;
+    LocalTransformersEmbeddingProvider.prototype.embedBatch = async function forbiddenIncognitoEmbed() {
+      embedCalls += 1;
+      throw new Error("incognito capture must not embed");
+    };
+
+    const pluginModule = await loadFreshPluginModule();
+    const originalStore = pluginModule.MemoryDB.prototype.store;
+    let storeCalls = 0;
+    pluginModule.MemoryDB.prototype.store = async function forbiddenIncognitoStore(...args) {
+      storeCalls += 1;
+      return originalStore.apply(this, args);
+    };
+    t.after(() => {
+      pluginModule.MemoryDB.prototype.store = originalStore;
+    });
+
+    const api = trackApi(t, makeMockApi(basePath));
+    pluginModule.default.register(api, {
+      importRouting: async () => ({
+        isIncognitoSessionKey: (value) => value === "agent:incognito-agent:dashboard:incognito-review",
+      }),
+    });
+
+    await api.emit("agent_end", {
+      success: true,
+      turnId: "turn-incognito",
+      sessionKey: "agent:incognito-agent:dashboard:incognito-review",
+      messages: [{ role: "user", content: "This incognito detail must never be stored." }],
+    }, { agentId: "incognito-agent", workspaceDir: basePath });
+
+    assert.equal(embedCalls, 0);
+    assert.equal(storeCalls, 0);
+  });
+
+  it("fails closed before capture when the host incognito classifier is unavailable", async (t) => {
+    let embedCalls = 0;
+    LocalTransformersEmbeddingProvider.prototype.embedBatch = async function forbiddenUnclassifiedEmbed() {
+      embedCalls += 1;
+      throw new Error("unclassified capture must not embed");
+    };
+
+    const pluginModule = await loadFreshPluginModule();
+    const originalStore = pluginModule.MemoryDB.prototype.store;
+    let storeCalls = 0;
+    pluginModule.MemoryDB.prototype.store = async function forbiddenUnclassifiedStore(...args) {
+      storeCalls += 1;
+      return originalStore.apply(this, args);
+    };
+    t.after(() => {
+      pluginModule.MemoryDB.prototype.store = originalStore;
+    });
+
+    const api = trackApi(t, makeMockApi(basePath));
+    pluginModule.default.register(api, {
+      importRouting: async () => {
+        throw new Error("routing import unavailable");
+      },
+    });
+
+    await api.emit("agent_end", {
+      success: true,
+      turnId: "turn-unclassified",
+      sessionKey: "agent:unclassified-agent:main",
+      messages: [{ role: "user", content: "This unclassified detail must not reach storage." }],
+    }, { agentId: "unclassified-agent", workspaceDir: basePath });
+
+    assert.equal(embedCalls, 0);
+    assert.equal(storeCalls, 0);
+  });
+
+  it("keeps ordinary agent_end capture enabled after successful classification", async (t) => {
+    let embedCalls = 0;
+    LocalTransformersEmbeddingProvider.prototype.embedBatch = async function classifiedNormalEmbed(texts) {
+      embedCalls += 1;
+      return texts.map((_, index) => makeVector(index * 0.01));
+    };
+
+    const pluginModule = await loadFreshPluginModule();
+    const originalStore = pluginModule.MemoryDB.prototype.store;
+    let storeCalls = 0;
+    pluginModule.MemoryDB.prototype.store = async function trackedClassifiedStore(...args) {
+      storeCalls += 1;
+      return originalStore.apply(this, args);
+    };
+    t.after(() => {
+      pluginModule.MemoryDB.prototype.store = originalStore;
+    });
+
+    const api = trackApi(t, makeMockApi(basePath));
+    pluginModule.default.register(api, {
+      importRouting: async () => ({ isIncognitoSessionKey: () => false }),
+    });
+
+    await api.emit("agent_end", {
+      success: true,
+      turnId: "turn-classified-normal",
+      sessionKey: "agent:classified-agent:main",
+      messages: [{ role: "user", content: "Remember this ordinary classified session detail." }],
+    }, { agentId: "classified-agent", workspaceDir: basePath });
+
+    assert.ok(embedCalls > 0);
+    assert.ok(storeCalls > 0);
+  });
+
   it("falls back to individual embed when embedBatch is not available", async (t) => {
     const individualCalls = [];
 

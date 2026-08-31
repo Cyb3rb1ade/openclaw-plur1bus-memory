@@ -195,6 +195,7 @@ import { checkAccess } from "./lib/acl-middleware.js";
 import {
   buildMemoryAccountTopology,
   buildMemoryWorkspaceAliases,
+  createHostIncognitoSessionClassifier,
   createHostRoutingLoader,
   createMemoryTurnRouteRegistry,
   resolveHostCommandMemoryContext,
@@ -4899,6 +4900,10 @@ const plugin = {
       logger: api.logger,
       ...(importRouting ? { importRouting } : {}),
     });
+    const classifyHostIncognitoSession = createHostIncognitoSessionClassifier({
+      logger: api.logger,
+      ...(importRouting ? { importRouting } : {}),
+    });
     const turnRouteState = autoRecall ? { initPromise: null, registry: null } : null;
     const getMemoryTurnRoutes = autoRecall ? async () => {
       if (turnRouteState.registry) return turnRouteState.registry;
@@ -9106,7 +9111,20 @@ const plugin = {
     if (autoCapture) {
       api.logger.info(`memory-lancedb-namespaced: enabling autoCapture`);
 
-      api.on("agent_end", (event, ctx) => {
+      api.on("agent_end", async (event, ctx) => {
+        const sessionKey = ctx?.sessionKey ?? event?.sessionKey;
+        try {
+          if (typeof sessionKey !== "string" || !sessionKey.trim()) {
+            throw new Error("auto-capture session key is unavailable");
+          }
+          if (await classifyHostIncognitoSession(sessionKey)) {
+            api.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
+            return undefined;
+          }
+        } catch (error) {
+          trySafeWarn(api.logger, "auto-capture.incognito-classifier", error);
+          return undefined;
+        }
         api.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
 
         const agentId = ctx?.agentId || "default";
