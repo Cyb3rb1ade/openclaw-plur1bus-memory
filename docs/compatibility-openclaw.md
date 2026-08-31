@@ -1,9 +1,17 @@
-# OpenClaw 2026.9.1-beta.1 compatibility contract
+# OpenClaw compatibility contract
 
-PLUR1BUS 7.5.0 targets the immutable OpenClaw package
-`openclaw@2026.9.1-beta.1`, Git tag `v2026.9.1-beta.1`, commit
+PLUR1BUS 7.5.0 supports OpenClaw 2026.8.1 stable as its primary host target.
+OpenClaw 2026.9.1-beta.1 is an additionally supported forward-compatibility
+target. The declared compatibility floor is `openclaw@2026.8.1` and plugin API
+`>=2026.8.1`.
+
+The current immutable build baseline remains `openclaw@2026.9.1-beta.1`, Git
+tag `v2026.9.1-beta.1`, commit
 `1d96e5aee2d49cde999ed055eda113e2523a7b5c`, and npm integrity
 `sha512-XaK/3Vn+jDrudy8gVSUfFRUpJu4/E2LaXrvfyFUPrCMVze9LjASr8mI8YYOTu216jiOCfHd42VwINLaviklSog==`.
+The `openclaw.build` metadata intentionally continues to identify that already
+verified build baseline until the primary 2026.8.1 runtime gate has passed. It
+must not be read as making the beta the primary compatibility target.
 
 The PLUR1BUS upstream base is the official annotated Git tag `v7.4.10`
 (tag object `f6cf0e75b4f8df509cac7b68bc437a25d650af73`), dereferencing exact commit
@@ -31,41 +39,60 @@ PLUR1BUS uses only public OpenClaw capabilities:
   commands through the native cron/dispatcher path.
 - typed lifecycle hooks register capture, recall, startup, and shutdown work.
 
-OpenClaw 2026.9.1-beta.1 preserves the public runtime lifecycle and focused
-config mutation contracts while changing registry staging and config-watcher
-handoff internally. PLUR1BUS therefore registers model preparation through an
-OpenClaw plugin service, so an inactive or discarded registry builder cannot
-start a download. It keeps the public runtime lifecycle as a fail-safe owner,
-drains in-flight inference before disposal, and serializes model acquisition
-across activated registry generations. It does not depend on private registry
-epochs or watcher implementation details.
+OpenClaw 2026.8.1 exposes every plugin-SDK subpath and host API used by this
+contract, including `skill_proposal_changed`; its public SDK surface is a
+superset of the 2026.9.1-beta.1 surface used here. Gateway behavior is not
+assumed to be a superset. In particular, registry staging, focused config
+mutation, config-watcher handoff, and restart recovery are explicit runtime
+gates for 2026.8.1 rather than conclusions drawn from release-note PR credits.
 
-The enabled Obsidian watcher uses the same public `registerService` lifecycle
-on this target. OpenClaw starts it only after the replacement registry is
-active and stops the previous service before handoff, so enabling the Bridge by
-supported config mutation works without waiting for a second
-`gateway_start` event. Older hosts without `registerService` retain the typed
-start/stop hook fallback through capability detection. Periodic watcher scans
-are deliberately queue-only: they may stage review candidates but cannot start
-a non-cancellable LanceDB memory mutation. Approved memory apply and tombstone
-operations remain explicit authorized actions. Shutdown fences follow-up work,
-awaits active host and manual work fail-closed, and prevents a stopped
-generation from writing a late Vault mirror or metrics update. If non-cancellable
-I/O exceeds OpenClaw's service-stop deadline, Beta-1 rejects the replacement
-instead of activating a second writer.
+OpenClaw suppresses its own pre-compaction memory flush for Incognito sessions,
+but still dispatches the generic plugin `agent_end` hook. Before automatic
+capture can schedule embedding or storage, PLUR1BUS therefore classifies the
+session through the public `isIncognitoSessionKey` routing export. Incognito
+sessions are skipped. A missing classifier, failed SDK import, missing session
+key, thrown classifier, or non-boolean result also skips capture fail-closed and
+emits a redacted warning; explicit memory tools remain subject to their normal
+authorization and are not silently reclassified as automatic capture.
+
+PLUR1BUS registers model preparation through an OpenClaw plugin service, so an
+inactive or discarded registry builder cannot start a download. It keeps the
+public runtime lifecycle as a fail-safe owner, drains in-flight inference
+before disposal, and serializes model acquisition across activated registry
+generations. It does not depend on private registry epochs or watcher
+implementation details. The full 2026.8.1 matrix must capture evidence that
+the `switching` config mutation activates exactly one replacement registry and
+that restart recovery neither loses the durable handoff nor starts a second
+runtime generation.
+
+The enabled Obsidian watcher uses the public `registerService` lifecycle on
+both supported targets. The compatibility contract requires OpenClaw to start
+it only after the replacement registry is active and to stop the previous
+service before handoff, so enabling the Bridge by supported config mutation
+works without waiting for a second `gateway_start` event. The 2026.8.1 matrix
+must exercise this handoff deliberately and retain evidence that only one
+watcher owns the isolated vault. Older hosts without `registerService` retain
+the typed start/stop hook fallback through capability detection. Periodic
+watcher scans are deliberately queue-only: they may stage review candidates
+but cannot start a non-cancellable LanceDB memory mutation. Approved memory
+apply and tombstone operations remain explicit authorized actions. Shutdown
+fences follow-up work, awaits active host and manual work fail-closed, and
+prevents a stopped generation from writing a late Vault mirror or metrics
+update. If non-cancellable I/O exceeds the service-stop deadline, the handoff
+must reject the replacement instead of activating a second writer.
 
 OpenClaw instantiates generic embedding providers for request-scoped agent and
 tool-discovery registries outside the activated full-runtime JavaScript owner.
 PLUR1BUS keeps one activation-owned local model and delegates only bounded
 embedding requests over a private Unix socket below `baseDbPath`. A freshly
 rotated 256-bit token, directory/socket permissions, and the complete immutable
-embedding fingerprint bind every request to the active generation. Beta-1 can
-retain a discovery facade across a config hot reload, so that facade constructs
-one fresh epoch-bound client per pure embedding operation. Individual clients
-never rebind or reuse a rotated token; a mid-operation rotation fails closed.
-The socket is not exposed as a host port, begins only as an activated OpenClaw
-plugin service, stops before the local model, and fails closed while no owner
-service is available.
+embedding fingerprint bind every request to the active generation. A discovery
+facade retained across a config hot reload constructs one fresh epoch-bound
+client per pure embedding operation. Individual clients never rebind or reuse
+a rotated token; a mid-operation rotation fails closed. The socket is not
+exposed as a host port, begins only as an activated OpenClaw plugin service,
+stops before the local model, and fails closed while no owner service is
+available.
 
 A confirmed re-embedding switch is handed off durably in `switching` state
 before the focused config mutation replaces the plugin registry. Only the
@@ -74,6 +101,11 @@ commits `completed`. A failed target probe persists a rollback intent, switches
 back through the same public config API, and is finalized only by the activated
 source runtime after its own probe. Unknown selection drift remains gated
 rather than being reported as a completed or safely rolled-back switch.
+Because this path depends directly on registry staging and config-watcher
+handoff, the 2026.8.1 matrix must record the config mutation, registry
+replacement, target probe, and durable terminal state as one explicit evidence
+chain. The 2026.9.1-beta.1 smoke repeats the switch once as a forward-
+compatibility check.
 Reverse migrations derive their quarantined LanceDB generation from a bounded
 digest rather than concatenating the operator-visible migration ID, so every
 accepted rollback request also satisfies the backend's 64-character generation
@@ -123,7 +155,7 @@ queue and scanner.
 
 ## Feature-overlap policy
 
-| OpenClaw 2026.9.1 feature | PLUR1BUS overlap | Compatibility policy |
+| OpenClaw feature | PLUR1BUS overlap | Compatibility policy |
 | --- | --- | --- |
 | Exclusive memory slot and `memory-core` tools | Recall, capture, search, persistence | Select `memory-lancedb-namespaced`; PLUR1BUS registers the native memory capability, so `memory-core` is not a second active memory owner. |
 | Active Memory | Pre-reply deep recall can call `memory_recall` while PLUR1BUS also has `autoRecall` | Native integration is supported through `deterministicRecallToolName`. Enable only one automatic pre-reply lane per agent; the compatibility lab disables Active Memory and tests PLUR1BUS hooks directly. Raw private-transcript recall is explicitly not claimed. |
@@ -138,7 +170,7 @@ queue and scanner.
 | `USER.md` user model | Preference and relationship memories | `USER.md` remains the authoritative current directive; PLUR1BUS is provenance-bearing recall/history. Do not auto-promote contradictory PLUR1BUS observations into `USER.md`. |
 | Standing intents | PLUR1BUS reminders | Complementary: OpenClaw owns event-conditioned intents; exact-time work stays on scheduled tasks/PLUR1BUS reminder state. Do not represent the same obligation in both. |
 | Memory Wiki / Obsidian mode | PLUR1BUS Obsidian Bridge and semantic graph | Keep a single writer per vault. The baseline disables both optional bridges; a separate isolated-vault probe enables PLUR1BUS apply/watch mode. The host-managed watcher mirrors authorized LanceDB records outbound and queues inbound candidates only; inbound memory mutation requires a separate authorized apply. Cross-plugin artifact import remains outside the 7.5.0 release claim. |
-| Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS authorizes by canonical agent, workspace, sender/chat ACL, and memory scope. Beta-1 `sessions.create({ cwd })` is resolved through `spawnedCwd` with feature-detected legacy fallbacks. Automatic captures remain agent-private; explicit workspace-scope cards are the workspace-isolated data path. |
+| Session/workspace ownership | Per-agent and per-workspace ACLs | OpenClaw session Owner is responsibility/display metadata, not authorization. PLUR1BUS authorizes by canonical agent, workspace, sender/chat ACL, and memory scope. `sessions.create({ cwd })` is resolved through `spawnedCwd` with feature-detected legacy fallbacks. Automatic captures remain agent-private; explicit workspace-scope cards are the workspace-isolated data path. |
 
 The lab configuration makes every conflict decision explicit: PLUR1BUS owns
 the memory slot; `memory-core`, Active Memory, OpenClaw dreaming, PLUR1BUS
@@ -189,13 +221,15 @@ existing operator-admin plan/apply/switch confirmations remain authoritative.
 
 ## Data and upgrade compatibility
 
-The 7.4.8 or 7.4.10 to 7.5.0 upgrade is non-destructive. It introduces no breaking
+The 7.4.10 to 7.5.0 upgrade is non-destructive. It introduces no breaking
 LanceDB schema change and does not rewrite an existing database merely because
 the plugin version changed. Existing per-agent paths, namespace routing,
 memory IDs, embeddings, tombstones, history, and Obsidian mirrors remain in
 place. Normal idempotent schema initialization continues to supply defaults
 for older tables, and all filesystem paths remain subject to agent-id and
-containment validation.
+containment validation. The primary release gate performs this real upgrade on
+OpenClaw 2026.8.1 with legacy data, package installation, recall before and
+after a Gateway restart, and retained-data evidence.
 
 Operators should still take a snapshot before any unrelated destructive
 maintenance or explicit migration. Rollback consists of stopping the gateway,
@@ -204,10 +238,20 @@ OpenClaw rollback copy is required because 7.5.0 performs no host patch.
 
 ## Scope of the compatibility claim
 
-The exact target above is the release gate. Newer OpenClaw commits are reviewed
-for adjacent dispatcher, delivery, restart, and hook behavior but are not
-silently incorporated. Compatibility is established only by testing the
-packed 7.5.0 artifact in a fresh OpenClaw 2026.9.1-beta.1 runtime, including
-runtime registration, gateway readiness, explicit and automatic memory paths,
-restart persistence, agent isolation, cron delivery, and real local-model
-inference.
+OpenClaw 2026.8.1 stable is the primary release gate. Compatibility is
+established by testing one packed 7.5.0 artifact from the frozen source commit
+in a fresh 2026.8.1 runtime. The single full runtime matrix covers registration,
+Gateway readiness, explicit and automatic memory paths, the re-embedding and
+Obsidian service handoffs above, restart persistence, agent isolation, cron
+delivery, and real local-model inference. The real 7.4.10 to 7.5.0 upgrade test
+also runs on 2026.8.1.
+
+OpenClaw 2026.9.1-beta.1 is additionally supported through a bounded smoke run
+of the same frozen artifact: plugin load, recall, capture, and one re-embedding
+switch. Later OpenClaw commits are not silently incorporated.
+
+Until those 2026.8.1 release-gate runs and the beta smoke are recorded, this
+document defines the compatibility contract and its acceptance criteria; it
+does not claim that the pending 2026.8.1 runtime evidence already exists.
+Earlier beta runtime verification does not substitute for the stable-primary
+matrix or upgrade test.

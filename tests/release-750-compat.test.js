@@ -3,12 +3,12 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const EXPECTED_VERSION = "7.5.0";
-const EXPECTED_OPENCLAW_VERSION = "2026.9.1-beta.1";
-// The build is verified against the exact beta above, but the accepted host
-// floor is the stable release: 2026.8.1 exposes every plugin-sdk subpath and
-// host API this plugin uses, and semver would otherwise exclude it.
-const EXPECTED_MIN_HOST_VERSION = "2026.8.1";
-const EXPECTED_OPENCLAW_COMMIT = "1d96e5aee2d49cde999ed055eda113e2523a7b5c";
+// Build metadata remains on the previously verified beta until the stable
+// primary runtime gate has passed. It must not be advanced by documentation.
+const EXPECTED_BUILD_OPENCLAW_VERSION = "2026.9.1-beta.1";
+const EXPECTED_PRIMARY_OPENCLAW_VERSION = "2026.8.1";
+const EXPECTED_ADDITIONAL_OPENCLAW_VERSION = "2026.9.1-beta.1";
+const EXPECTED_BUILD_OPENCLAW_COMMIT = "1d96e5aee2d49cde999ed055eda113e2523a7b5c";
 const EXPECTED_UPSTREAM_VERSION = "7.4.10";
 const EXPECTED_UPSTREAM_TAG = "v7.4.10";
 const EXPECTED_UPSTREAM_TAG_OBJECT = "f6cf0e75b4f8df509cac7b68bc437a25d650af73";
@@ -21,7 +21,7 @@ async function readJson(path) {
   return JSON.parse(await readFile(new URL(path, import.meta.url), "utf8"));
 }
 
-test("7.5.0 release identity is synchronized, builds against exact OpenClaw 2026.9.1 beta, and accepts the stable 2026.8.1 floor", async () => {
+test("7.5.0 release identity retains its build baseline and declares the stable OpenClaw floor", async () => {
   const packageJson = await readJson("../package.json");
   const packageLock = await readJson("../package-lock.json");
   const manifest = await readJson("../openclaw.plugin.json");
@@ -30,13 +30,13 @@ test("7.5.0 release identity is synchronized, builds against exact OpenClaw 2026
   assert.equal(packageLock.version, EXPECTED_VERSION);
   assert.equal(packageLock.packages[""].version, EXPECTED_VERSION);
   assert.equal(manifest.version, EXPECTED_VERSION);
-  assert.equal(packageJson.openclaw.build.openclawVersion, EXPECTED_OPENCLAW_VERSION);
-  assert.equal(packageJson.openclaw.build.pluginSdkVersion, EXPECTED_OPENCLAW_VERSION);
-  assert.equal(packageJson.openclaw.compat.minGatewayVersion, EXPECTED_MIN_HOST_VERSION);
-  assert.equal(packageJson.openclaw.compat.pluginApi, `>=${EXPECTED_MIN_HOST_VERSION}`);
+  assert.equal(packageJson.openclaw.build.openclawVersion, EXPECTED_BUILD_OPENCLAW_VERSION);
+  assert.equal(packageJson.openclaw.build.pluginSdkVersion, EXPECTED_BUILD_OPENCLAW_VERSION);
+  assert.equal(packageJson.openclaw.compat.minGatewayVersion, EXPECTED_PRIMARY_OPENCLAW_VERSION);
+  assert.equal(packageJson.openclaw.compat.pluginApi, `>=${EXPECTED_PRIMARY_OPENCLAW_VERSION}`);
   assert.ok(
-    packageJson.files.includes("docs/compatibility-openclaw-2026.9.1-beta.1.md"),
-    "the exact-host compatibility contract must ship in the npm package",
+    packageJson.files.includes("docs/compatibility-openclaw.md"),
+    "the host-neutral compatibility contract must ship in the npm package",
   );
   assert.ok(
     packageJson.files.includes("CHANGELOG.md"),
@@ -44,14 +44,21 @@ test("7.5.0 release identity is synchronized, builds against exact OpenClaw 2026
   );
 });
 
-test("7.5.0 documents its exact upstream base, native integration, immutable models, and data preservation", async () => {
+test("7.5.0 documents its host targets, exact upstream base, native integration, immutable models, and data preservation", async () => {
   const compatibility = await readFile(
-    new URL("../docs/compatibility-openclaw-2026.9.1-beta.1.md", import.meta.url),
+    new URL("../docs/compatibility-openclaw.md", import.meta.url),
     "utf8",
   );
 
-  assert.match(compatibility, new RegExp(EXPECTED_OPENCLAW_VERSION.replaceAll(".", "\\.")));
-  assert.match(compatibility, new RegExp(EXPECTED_OPENCLAW_COMMIT));
+  assert.match(
+    compatibility,
+    new RegExp(`primary host target[\\s\\S]*${EXPECTED_PRIMARY_OPENCLAW_VERSION.replaceAll(".", "\\.")}`),
+  );
+  assert.match(
+    compatibility,
+    new RegExp(`additionally supported[\\s\\S]*${EXPECTED_ADDITIONAL_OPENCLAW_VERSION.replaceAll(".", "\\.")}`),
+  );
+  assert.match(compatibility, new RegExp(EXPECTED_BUILD_OPENCLAW_COMMIT));
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_VERSION.replaceAll(".", "\\.")));
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_TAG.replaceAll(".", "\\.")));
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_TAG_OBJECT));
@@ -75,6 +82,11 @@ test("7.5.0 documents its exact upstream base, native integration, immutable mod
   assert.match(compatibility, /one durable embedding batch per\s+operator RPC/i);
   assert.match(compatibility, /confirmed migration remains resumable\s+after the original token TTL expires/i);
   assert.match(compatibility, /expired_migration_superseded/);
+  assert.match(compatibility, /full runtime matrix[\s\S]*2026\.8\.1/i);
+  assert.match(compatibility, /real 7\.4\.10 to 7\.5\.0 upgrade test[\s\S]*2026\.8\.1/i);
+  assert.match(compatibility, /2026\.9\.1-beta\.1[\s\S]*bounded smoke run/i);
+  assert.match(compatibility, /isIncognitoSessionKey[\s\S]*fail-closed/i);
+  assert.match(compatibility, /does not claim that the pending 2026\.8\.1 runtime evidence already exists/i);
 });
 
 test("7.5.0 changelog records the bounded and resumable re-embedding contract", async () => {
@@ -86,9 +98,9 @@ test("7.5.0 changelog records the bounded and resumable re-embedding contract", 
   assert.doesNotMatch(changelog, /hoechstens vier Batches pro bestaetigtem Operator-Aufruf/);
 });
 
-test("7.5.0 tracks the exact OpenClaw compatibility document despite the docs denylist", async () => {
+test("7.5.0 tracks its host-neutral OpenClaw compatibility document despite the docs denylist", async () => {
   const ignore = await readFile(new URL("../.gitignore", import.meta.url), "utf8");
-  assert.match(ignore, /^!docs\/compatibility-openclaw-2026\.9\.1-beta\.1\.md$/mu);
+  assert.match(ignore, /^!docs\/compatibility-openclaw\.md$/mu);
 });
 
 test("7.5.0 package and installer contain no OpenClaw host patch", async () => {

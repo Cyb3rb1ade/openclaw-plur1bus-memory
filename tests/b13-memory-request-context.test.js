@@ -9,6 +9,7 @@ import { createConfirmation, validateConfirmation } from "../lib/security.js";
 import {
   buildMemoryAccountTopology,
   buildMemoryWorkspaceAliases,
+  createHostIncognitoSessionClassifier,
   createHostRoutingLoader,
   createMemoryTurnRouteRegistry,
   normalizeAndFreezeWorkspaceAliases,
@@ -36,6 +37,9 @@ const routingCapability = Object.freeze({
   },
   normalizeMessageChannel(value) {
     return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  isIncognitoSessionKey(value) {
+    return /^agent:[^:]+:dashboard:incognito-[^:]+$/u.test(String(value || ""));
   },
 });
 
@@ -239,6 +243,23 @@ describe("B13 canonical memory request context", () => {
     const source = readFileSync(new URL("../lib/memory-request-context.js", import.meta.url), "utf8");
     assert.match(source, /import\("openclaw\/plugin-sdk\/routing"\)/);
     assert.doesNotMatch(source, /^import .*openclaw\/plugin-sdk\/routing/m);
+  });
+
+  it("loads, validates, and memoizes the public incognito classifier lazily", async () => {
+    let calls = 0;
+    const classify = createHostIncognitoSessionClassifier({
+      importRouting: async () => {
+        calls += 1;
+        return routingCapability;
+      },
+    });
+    assert.equal(calls, 0);
+    assert.equal(await classify("agent:a:main"), false);
+    assert.equal(await classify("agent:a:dashboard:incognito-review"), true);
+    assert.equal(calls, 1);
+
+    const malformed = createHostIncognitoSessionClassifier({ importRouting: async () => ({}) });
+    await assert.rejects(() => malformed("agent:a:main"), /incognito session classifier/);
   });
 
   it("decodes the closed Telegram, Discord, Slack, and Mattermost command route grammar", async (t) => {
