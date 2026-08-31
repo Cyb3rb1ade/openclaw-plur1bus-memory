@@ -6,7 +6,11 @@ const EXPECTED_VERSION = "7.5.0";
 const EXPECTED_OPENCLAW_VERSION = "2026.9.1-beta.1";
 const EXPECTED_OPENCLAW_COMMIT = "1d96e5aee2d49cde999ed055eda113e2523a7b5c";
 const EXPECTED_UPSTREAM_VERSION = "7.4.10";
+const EXPECTED_UPSTREAM_TAG = "v7.4.10";
+const EXPECTED_UPSTREAM_TAG_OBJECT = "f6cf0e75b4f8df509cac7b68bc437a25d650af73";
 const EXPECTED_UPSTREAM_COMMIT = "c0a8a4c28ff1cb9c632e185f21f4502d67d1b605";
+const EXPECTED_UPSTREAM_TREE = "dbdbc17ce194f4389b0399abdc8fcd80acf7095d";
+const EXPECTED_UPSTREAM_RELEASED_AT = "2026-08-28T23:43:38Z";
 
 async function readJson(path) {
   return JSON.parse(await readFile(new URL(path, import.meta.url), "utf8"));
@@ -44,7 +48,12 @@ test("7.5.0 documents its exact upstream base, native integration, immutable mod
   assert.match(compatibility, new RegExp(EXPECTED_OPENCLAW_VERSION.replaceAll(".", "\\.")));
   assert.match(compatibility, new RegExp(EXPECTED_OPENCLAW_COMMIT));
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_VERSION.replaceAll(".", "\\.")));
+  assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_TAG.replaceAll(".", "\\.")));
+  assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_TAG_OBJECT));
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_COMMIT));
+  assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_TREE));
+  assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_RELEASED_AT));
+  assert.doesNotMatch(compatibility, /had not yet published a `v7\.4\.10` Git tag or GitHub Release/);
   assert.match(compatibility, /registerGatewayMethod/);
   assert.match(compatibility, /registerCli/);
   assert.match(compatibility, /gateway-runtime/);

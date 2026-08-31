@@ -5,12 +5,15 @@ PLUR1BUS 7.5.0 targets the immutable OpenClaw package
 `1d96e5aee2d49cde999ed055eda113e2523a7b5c`, and npm integrity
 `sha512-XaK/3Vn+jDrudy8gVSUfFRUpJu4/E2LaXrvfyFUPrCMVze9LjASr8mI8YYOTu216jiOCfHd42VwINLaviklSog==`.
 
-The PLUR1BUS upstream base is source version 7.4.10 at exact commit
-`c0a8a4c28ff1cb9c632e185f21f4502d67d1b605` (release metadata commit
-`0e7eb3c3d0f77c23d9e8adb94ac285fd424b3d80`). At integration time the official
-remote had not yet published a `v7.4.10` Git tag or GitHub Release, so this
-document identifies the immutable commit rather than treating `main` as a
-release reference. Its Neo JSONL cap-hysteresis fix is retained in 7.5.0.
+The PLUR1BUS upstream base is the official annotated Git tag `v7.4.10`
+(tag object `f6cf0e75b4f8df509cac7b68bc437a25d650af73`), dereferencing exact commit
+`c0a8a4c28ff1cb9c632e185f21f4502d67d1b605` and tree
+`dbdbc17ce194f4389b0399abdc8fcd80acf7095d`. The corresponding GitHub Release
+was published at `2026-08-28T23:43:38Z` without binary or npm assets. The tag
+tree is identical to release commit
+`0e7eb3c3d0f77c23d9e8adb94ac285fd424b3d80`, which was the immutable source
+integrated before the tag appeared. Its Neo JSONL cap-hysteresis fix is
+retained in 7.5.0.
 
 ## Native host integration
 
