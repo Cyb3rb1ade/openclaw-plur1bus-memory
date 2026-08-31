@@ -81,12 +81,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Last behaelt dadurch keine ONNX-Tensoren bis zu einem spaeteren GC-Lauf und
   konkurriert unter dem 4-GiB-Limit nicht mehr mit Recall oder Verwaltungs-CLI.
 - **Re-Embedding blockiert den Gateway-Eventloop nicht minutenlang.** Lokale
-  CPU-Inferenz wird in kleine, durable Batches und hoechstens vier Batches pro
-  bestaetigtem Operator-Aufruf begrenzt. Groessere Migrationen werden ueber
-  explizite, tokengebundene Resume-Aufrufe fortgesetzt. Dadurch bleiben
+  CPU-Inferenz wird auf genau einen dauerhaften Batch pro bestaetigtem Operator-RPC
+  begrenzt. Groessere Migrationen werden ueber explizite, tokengebundene
+  Resume-Aufrufe fortgesetzt. Dadurch bleiben
   OpenClaws Liveness, Status-Polling und die Operator-WebSocket-Verbindung
   waehrend eines echten Dimensionswechsels erreichbar, ohne Checkpoints oder
   Validierung abzuschwaechen oder die feste Gateway-Deadline zu ueberschreiten.
+  Nach der ersten rechtzeitigen Bestaetigung bleibt derselbe Token weiterhin
+  konstant an den Plan-Digest gebunden, sodass ein laufender Job auch nach
+  Ablauf seines urspruenglichen TTL fortgesetzt und geschaltet werden kann.
+  Ein neuer ausdruecklicher Plan darf einen abgelaufenen, inaktiven Job atomar
+  als `expired_migration_superseded` beenden; dessen Cursor, Receipts und
+  Quarantaene-Daten bleiben erhalten. Der Zielprovider-Cache rotiert dabei
+  Plan-Digest-gebunden, auch wenn zwei Modelle dieselbe Dimension besitzen.
 - **Rollback-Generationen bleiben innerhalb des LanceDB-ID-Vertrags.** Ein
   bestaetigter manueller Rueckweg leitet den isolierten Zielnamen nur noch aus
   einem kollisionsresistenten Digest ab. Auch lange, oeffentlich gueltige
