@@ -10,10 +10,10 @@ The PLUR1BUS upstream base is the official annotated Git tag `v7.4.10`
 `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605` and tree
 `dbdbc17ce194f4389b0399abdc8fcd80acf7095d`. The corresponding GitHub Release
 was published at `2026-08-28T23:43:38Z` without binary or npm assets. The tag
-tree is identical to release commit
-`0e7eb3c3d0f77c23d9e8adb94ac285fd424b3d80`, which was the immutable source
-integrated before the tag appeared. Its Neo JSONL cap-hysteresis fix is
-retained in 7.5.0.
+commit's content-identical second parent is release-preparation commit
+`0e7eb3c3d0f77c23d9e8adb94ac285fd424b3d80`; the annotated tag still resolves
+only to `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`. Its Neo JSONL
+cap-hysteresis fix is retained in 7.5.0.
 
 ## Native host integration
 

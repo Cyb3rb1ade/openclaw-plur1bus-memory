@@ -10,6 +10,7 @@ const EXPECTED_UPSTREAM_TAG = "v7.4.10";
 const EXPECTED_UPSTREAM_TAG_OBJECT = "f6cf0e75b4f8df509cac7b68bc437a25d650af73";
 const EXPECTED_UPSTREAM_COMMIT = "c0a8a4c28ff1cb9c632e185f21f4502d67d1b605";
 const EXPECTED_UPSTREAM_TREE = "dbdbc17ce194f4389b0399abdc8fcd80acf7095d";
+const EXPECTED_UPSTREAM_CONTENT_PARENT = "0e7eb3c3d0f77c23d9e8adb94ac285fd424b3d80";
 const EXPECTED_UPSTREAM_RELEASED_AT = "2026-08-28T23:43:38Z";
 
 async function readJson(path) {
@@ -52,6 +53,10 @@ test("7.5.0 documents its exact upstream base, native integration, immutable mod
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_TAG_OBJECT));
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_COMMIT));
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_TREE));
+  assert.match(
+    compatibility,
+    new RegExp(`content-identical second parent[\\s\\S]*${EXPECTED_UPSTREAM_CONTENT_PARENT}`),
+  );
   assert.match(compatibility, new RegExp(EXPECTED_UPSTREAM_RELEASED_AT));
   assert.doesNotMatch(compatibility, /had not yet published a `v7\.4\.10` Git tag or GitHub Release/);
   assert.match(compatibility, /registerGatewayMethod/);
