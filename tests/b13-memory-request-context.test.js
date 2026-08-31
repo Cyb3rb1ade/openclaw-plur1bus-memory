@@ -262,6 +262,24 @@ describe("B13 canonical memory request context", () => {
     await assert.rejects(() => malformed("agent:a:main"), /incognito session classifier/);
   });
 
+  it("does not cache a failed classifier load, so a later attempt can recover", async () => {
+    // A cached rejection would fail closed forever and silently disable
+    // durable capture for the whole gateway lifetime.
+    let calls = 0;
+    const classify = createHostIncognitoSessionClassifier({
+      importRouting: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("routing import unavailable");
+        return routingCapability;
+      },
+    });
+
+    await assert.rejects(() => classify("agent:a:main"), /routing import unavailable/);
+    assert.equal(await classify("agent:a:main"), false, "the retry must load the classifier");
+    assert.equal(await classify("agent:a:dashboard:incognito-review"), true);
+    assert.equal(calls, 2, "the healed load is memoized again");
+  });
+
   it("decodes the closed Telegram, Discord, Slack, and Mattermost command route grammar", async (t) => {
     const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-providers-"));
     t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
