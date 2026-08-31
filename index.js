@@ -148,8 +148,8 @@ import {
 } from "./lib/directory-capability.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
-import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposalWithWorkshop, buildSkillReviewPayload } from "./lib/telegram-commands/skill-commands.js";
-import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "./lib/jobs/skill-miner/proposal-writer.js";
+import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposalWithWorkshop, buildSkillReviewPayload, createSkillWorkshopLifecycleSynchronizer } from "./lib/telegram-commands/skill-commands.js";
+import { getPendingProposals, recordPresentation, lastPresentationAgeMs, markProposalStatus, patchProposal } from "./lib/jobs/skill-miner/proposal-writer.js";
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import {
   runSpeakerListCommand,
@@ -246,6 +246,7 @@ import {
   isInjectedContextText,
   isNeoRecordAccessible,
   migrateNeoWorkspaces,
+  listNeoWorkspaceKeys,
   neoSessionKeysFromContext,
   routeNeoRecall,
   transitionRecordStatus,
@@ -5339,6 +5340,71 @@ const plugin = {
       },
       logger: api.logger,
     });
+
+    if (typeof api.on === "function") {
+      const synchronizeSkillWorkshopLifecycle = createSkillWorkshopLifecycleSynchronizer({
+        resolveProposalWorkspaces: ({ eventWorkspaceDir }) => [
+          eventWorkspaceDir,
+          ...listNeoWorkspaceKeys(neoRoot).map((workspaceKey) =>
+            resolve(neoRoot, "workspaces", workspaceKey)),
+        ],
+        onApplied: async ({ workspaceDir, eventWorkspaceDir, agentId, localProposal, workshopEvent }) => {
+          const lifecycleMemoryCtx = resolveMemoryRequestContext({
+            agentId,
+            workspaceDir: eventWorkspaceDir,
+          }, { workspaceAliases: memoryWorkspaceAliases });
+          return activateSkillProposal(workspaceDir, localProposal.id, {
+            agentId,
+            logger: api.logger,
+            committedWorkshopEvent: workshopEvent,
+            memoryCtx: lifecycleMemoryCtx,
+            loadEvidenceRecord: async (memoryId) => pool.withAuthoritativeReadDb(
+              agentId,
+              async (db) => db.getById(memoryId),
+            ),
+            applyEpistemicStatus: async (memoryId, nextStatus) => pool.withWriteDb(
+              agentId,
+              (db) => applyEpistemicStatusToLanceDb(db, memoryId, nextStatus, {
+                ctx: lifecycleMemoryCtx,
+                actor: "openclaw-skill-workshop",
+                actorTier: "system",
+                authorized: false,
+                workspaceDir: eventWorkspaceDir,
+                reason: "skill-workshop-lifecycle",
+              }),
+            ),
+          });
+        },
+        onRejected: async ({ workspaceDir, localProposal }) => {
+          const marked = markProposalStatus(workspaceDir, localProposal.id, "rejected");
+          if (!marked.ok) return marked;
+          return patchProposal(workspaceDir, localProposal.id, {
+            openClawWorkshop: {
+              ...localProposal.openClawWorkshop,
+              status: "rejected",
+            },
+          });
+        },
+      });
+      api.on(
+        "skill_proposal_changed",
+        async (event, context) => {
+          try {
+            return await synchronizeSkillWorkshopLifecycle(event, context);
+          } catch (error) {
+            safeWarn(api.logger, "skill-workshop-lifecycle", error, {
+              proposalId: event?.proposal?.id,
+              action: event?.action,
+            });
+            throw error;
+          }
+        },
+        {
+          registrationId: "plur1bus-skill-workshop-lifecycle-v1",
+          timeoutMs: 30_000,
+        },
+      );
+    }
 
     const createTargetEmbeddingProvider = async ({ fingerprint, secretRef } = {}) => {
       if (!fingerprint || typeof fingerprint !== "object") {

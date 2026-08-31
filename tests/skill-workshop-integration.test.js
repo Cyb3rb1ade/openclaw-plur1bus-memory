@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { runSkillMiner } from "../lib/jobs/skill-miner.js";
-import { readProposals, writeProposal } from "../lib/jobs/skill-miner/proposal-writer.js";
+import {
+  markProposalStatus,
+  patchProposal,
+  readProposals,
+  writeProposal,
+} from "../lib/jobs/skill-miner/proposal-writer.js";
 import {
   activateSkillProposal,
   rejectSkillProposalWithWorkshop,
@@ -404,5 +409,108 @@ describe("Skill Workshop approval lifecycle", () => {
     assert.deepEqual(calls.map(([name]) => name), ["inspect", "reject"]);
     assert.equal(calls[1][1].expectedRevisionHash, REVISION);
     assert.equal(readProposals(dir)[0].status, "rejected");
+  });
+
+  it("does not repeat evidence promotion when the committed hook synchronizes during apply RPC", async (t) => {
+    const dir = workspace();
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    seedWorkshopProposal(dir, { evidence: { memoryIds: ["memory-a"] } });
+    let transitions = 0;
+    const evidenceCtx = {
+      agentId: "agent-a",
+      memoryCtx: { agentId: "agent-a", workspaceAliases: { paths: [], aliases: [] } },
+      async loadEvidenceRecord() {
+        return { id: "memory-a", agentId: "agent-a", scope: "agent-private", epistemicStatus: "observed" };
+      },
+      async applyEpistemicStatus() {
+        transitions += 1;
+        return { ok: true };
+      },
+    };
+    const appliedResult = {
+      proposalId: "weekly-deploy-20260826",
+      status: "applied",
+      targetSkillFile: join(dir, "skills", "weekly-deploy", "SKILL.md"),
+    };
+    const result = await activateSkillProposal(dir, "11111111-1111-4111-8111-111111111111", {
+      ...evidenceCtx,
+      skillWorkshop: {
+        async inspectProposal() {
+          return {
+            proposalId: "weekly-deploy-20260826",
+            revisionHash: REVISION,
+            status: "pending",
+            skillName: "weekly-deploy",
+          };
+        },
+        async applyProposal() {
+          const hookResult = await activateSkillProposal(
+            dir,
+            "11111111-1111-4111-8111-111111111111",
+            {
+              ...evidenceCtx,
+              skillWorkshop: {
+                async inspectProposal() {
+                  return {
+                    proposalId: "weekly-deploy-20260826",
+                    revisionHash: REVISION,
+                    status: "applied",
+                    skillName: "weekly-deploy",
+                  };
+                },
+                async applyProposal() { throw new Error("hook must not apply twice"); },
+              },
+            },
+          );
+          assert.equal(hookResult.ok, true);
+          return appliedResult;
+        },
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "active");
+    assert.equal(transitions, 1);
+    assert.equal(readProposals(dir)[0].activation.evidence["memory-a"].ok, true);
+  });
+
+  it("does not append a second rejection when the committed hook synchronizes during reject RPC", async (t) => {
+    const dir = workspace();
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    seedWorkshopProposal(dir);
+    const result = await rejectSkillProposalWithWorkshop(
+      dir,
+      "11111111-1111-4111-8111-111111111111",
+      {
+        agentId: "agent-a",
+        skillWorkshop: {
+          async inspectProposal() {
+            return {
+              proposalId: "weekly-deploy-20260826",
+              revisionHash: REVISION,
+              status: "pending",
+              skillName: "weekly-deploy",
+            };
+          },
+          async rejectProposal() {
+            markProposalStatus(dir, "11111111-1111-4111-8111-111111111111", "rejected");
+            patchProposal(dir, "11111111-1111-4111-8111-111111111111", {
+              openClawWorkshop: {
+                proposalId: "weekly-deploy-20260826",
+                revisionHash: REVISION,
+                status: "rejected",
+              },
+            });
+            return { proposalId: "weekly-deploy-20260826", status: "rejected" };
+          },
+        },
+      },
+    );
+
+    assert.equal(result.ok, true);
+    const rejected = readFileSync(join(dir, ".adaptive-learning", "skill-rejected.jsonl"), "utf8")
+      .trim().split("\n").filter(Boolean).map(JSON.parse);
+    assert.equal(rejected.length, 1);
+    assert.equal(readProposals(dir)[0].openClawWorkshop.status, "rejected");
   });
 });
