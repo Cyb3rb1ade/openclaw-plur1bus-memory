@@ -1089,14 +1089,82 @@ else
     EMBEDDING_FALLBACK_BLOCK='null'
   fi
 
-  # Workspaces-Array für obsidianBridge aus WORKSPACE_MAP bauen
+  # --- Obsidian-Vault einrichten -------------------------------------------
+  # Bis 7.5.0 zeigte obsidianBridge.workspaces auf die Agenten-Workspaces, die
+  # keine Vaults sind. requireVaultPathConfirmation blieb damit dauerhaft
+  # unerfüllt und jede Installation stand auf "PENDING SETUP", ohne dass es
+  # einen Weg gab, das abzuschliessen. Jetzt wird der Vault hier geklaert.
+  OBSIDIAN_VAULT_PATH=""
+  OBSIDIAN_BRIDGE_ENABLED="true"
+  declare -a FOUND_VAULTS=()
+  for probe_root in "$HOME/Documents" "$HOME/Obsidian" "$HOME"; do
+    [[ -d "$probe_root" ]] || continue
+    while IFS= read -r marker; do
+      [[ -n "$marker" ]] || continue
+      FOUND_VAULTS+=("$(dirname "$(dirname "$marker")")")
+    done < <(find "$probe_root" -maxdepth 3 -type f \
+      \( -name app.json -o -name workspace.json \) -path '*/.obsidian/*' 2>/dev/null | head -20)
+  done
+  # Duplikate entfernen, Reihenfolge erhalten
+  if ((${#FOUND_VAULTS[@]} > 0)); then
+    mapfile -t FOUND_VAULTS < <(printf '%s\n' "${FOUND_VAULTS[@]}" | awk '!seen[$0]++')
+  fi
+
+  if ((${#FOUND_VAULTS[@]} > 0)); then
+    info "Obsidian erkannt. Gefundene Vaults:"
+    for idx in "${!FOUND_VAULTS[@]}"; do
+      printf '    [%d] %s\n' "$((idx + 1))" "${FOUND_VAULTS[$idx]}"
+    done
+    prompt_choice OBSIDIAN_VAULT_MODE \
+      "Obsidian-Vault: existing=vorhandenen nutzen, new=neuen anlegen, skip=Bridge aus" \
+      "existing" "existing" "new" "skip"
+  else
+    info "Kein Obsidian-Vault gefunden."
+    prompt_choice OBSIDIAN_VAULT_MODE \
+      "Obsidian-Vault: new=neuen anlegen, skip=Bridge aus" \
+      "new" "new" "skip"
+  fi
+
+  case "$OBSIDIAN_VAULT_MODE" in
+    existing)
+      if ((${#FOUND_VAULTS[@]} == 1)); then
+        OBSIDIAN_VAULT_PATH="${FOUND_VAULTS[0]}"
+      else
+        prompt_input OBSIDIAN_VAULT_PATH "Pfad des zu nutzenden Vaults" "${FOUND_VAULTS[0]}"
+      fi
+      ;;
+    new)
+      prompt_input OBSIDIAN_VAULT_PATH "Pfad fuer den neuen Vault" "$HOME/Documents/PLUR1BUS"
+      if [[ -n "$OBSIDIAN_VAULT_PATH" ]]; then
+        mkdir -p "$OBSIDIAN_VAULT_PATH/.obsidian"
+        if [[ ! -f "$OBSIDIAN_VAULT_PATH/.obsidian/app.json" ]]; then
+          printf '{\n  "attachmentFolderPath": "attachments"\n}\n' \
+            > "$OBSIDIAN_VAULT_PATH/.obsidian/app.json"
+        fi
+        info "Vault angelegt: $OBSIDIAN_VAULT_PATH"
+      fi
+      ;;
+    skip)
+      OBSIDIAN_BRIDGE_ENABLED="false"
+      info "Obsidian-Bridge bleibt ausgeschaltet."
+      ;;
+  esac
+
+  if [[ "$OBSIDIAN_BRIDGE_ENABLED" == "true" && -n "$OBSIDIAN_VAULT_PATH" ]]; then
+    info "Vault bestaetigen nach dem Start:"
+    info "  plur1bus-obsidian use --session <key> --path $OBSIDIAN_VAULT_PATH"
+    info "  plur1bus-obsidian confirm --session <key> --path $OBSIDIAN_VAULT_PATH --token <token>"
+  fi
+
+  # Workspaces-Array für obsidianBridge bauen: der gewaehlte Vault, sonst leer
   OBSIDIAN_WORKSPACES_JSON="["
   first_ws=1
   for agent in "${AGENT_LIST[@]}"; do
-    ws_path="${WORKSPACE_MAP[$agent]}"
-    [[ -z "$ws_path" ]] && continue
+    # Der Bridge spiegelt in den Vault, nicht in den Agenten-Workspace. Ohne
+    # gewaehlten Vault bleibt die Liste leer und die Bridge damit inaktiv.
+    [[ -n "$OBSIDIAN_VAULT_PATH" ]] || continue
     [[ "$first_ws" -eq 0 ]] && OBSIDIAN_WORKSPACES_JSON+=","
-    OBSIDIAN_WORKSPACES_JSON+=$(jq -n --arg id "$agent" --arg path "$ws_path" \
+    OBSIDIAN_WORKSPACES_JSON+=$(jq -n --arg id "$agent" --arg path "$OBSIDIAN_VAULT_PATH" \
       '{"workspaceId": $id, "agentId": $id, "path": $path}')
     first_ws=0
   done
@@ -1124,6 +1192,7 @@ else
     --arg embedding_local_cache_dir "$EMBEDDING_LOCAL_CACHE_DIR" \
     --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
     --argjson obsidian_workspaces "$OBSIDIAN_WORKSPACES_JSON" \
+    --argjson obsidian_enabled "$OBSIDIAN_BRIDGE_ENABLED" \
     --argjson reranker "$RERANKER_BLOCK" \
     --argjson merging "$MERGING_BLOCK" \
     --argjson schicht15 "$SCHICHT15_BLOCK" \
@@ -1178,7 +1247,7 @@ else
         "merging": $merging,
         "schicht15": $schicht15,
         "obsidianBridge": {
-          "enabled": true,
+          "enabled": $obsidian_enabled,
           "watch": false,
           "mode": "augment",
           "dryRun": true,
