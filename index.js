@@ -3301,7 +3301,10 @@ function resolveNeoHooksConfig(api, commandConfig) {
   try {
     const cfg = commandConfig || api.runtime?.config?.current?.();
     return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {};
-  } catch (_) {
+  } catch (error) {
+    // An empty object disables every Neo hook. Say so rather than looking
+    // like a deliberately empty configuration.
+    api?.logger?.warn?.(`memory-lancedb-namespaced: neo hook config unreadable, all neo hooks stay disabled: ${String(error)}`);
     return {};
   }
 }
@@ -7698,7 +7701,10 @@ const plugin = {
                   loadEvidenceRecord: async (memoryId) => {
                     try {
                       return await pool.withDb(commandCtx.agentId || "default", (db) => db.getById(memoryId));
-                    } catch {
+                    } catch (error) {
+                      // null is indistinguishable from "no evidence exists",
+                      // so record that this was a failed read instead.
+                      api.logger?.warn?.(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
                       return null;
                     }
                   },
@@ -7734,7 +7740,10 @@ const plugin = {
                   loadEvidenceRecord: async (memoryId) => {
                     try {
                       return await pool.withDb(commandCtx.agentId || "default", (db) => db.getById(memoryId));
-                    } catch {
+                    } catch (error) {
+                      // null is indistinguishable from "no evidence exists",
+                      // so record that this was a failed read instead.
+                      api.logger?.warn?.(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
                       return null;
                     }
                   },

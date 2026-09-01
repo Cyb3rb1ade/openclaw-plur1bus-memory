@@ -449,6 +449,22 @@ describeSqlite("embedding-cache v2 persistence", () => {
     return mkdtempSync(join(tmpdir(), "plur1bus-emb-cache-"));
   }
 
+  it("creates a configured but not-yet-existing cache base instead of silently skipping persistence", async () => {
+    // resolveInside() realpath()s the base, so a missing directory used to
+    // throw ENOENT, get swallowed, and turn persist:true into a no-op.
+    const basePath = join(makeTempBase(), "provider-lifecycle", "run-0001");
+    assert.equal(existsSync(basePath), false);
+
+    const cache = createEmbeddingCache({ cacheBasePath: basePath, persist: true, ttlMs: 60_000 });
+    await cache.getMany(["persist into a fresh base"], { agentId: "a1" }, (missing) =>
+      missing.map(() => [0.4, 0.5, 0.6])
+    );
+
+    const metrics = cache.getMetrics();
+    assert.strictEqual(metrics.persistWrites, 1, "persistence must actually run");
+    assert.equal(existsSync(join(basePath, "embedding-cache-v2")), true);
+  });
+
   it("persists vectors to SQLite and reloads after restart", async () => {
     const basePath = makeTempBase();
     const cache1 = createEmbeddingCache({
