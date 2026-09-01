@@ -299,6 +299,45 @@ describe("PLUR1BUS OpenClaw Control UI runtime", () => {
     assert.doesNotMatch(completed.body, /<meta http-equiv="refresh"/);
   });
 
+  it("renders every projected credential with its config path and hover help", async () => {
+    // The projection carries eight credentials; the table used to show four,
+    // leaving merging, knowledge promotion, critical push and emotion tier 3
+    // invisible to the operator.
+    const handler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        credentials: {
+          embedding: { status: "configured", source: "store" },
+          embeddingFallback: { status: "missing", source: null },
+          reranker: { status: "configured", source: "plaintext" },
+          merging: { status: "missing", source: null },
+          knowledgePromotion: { status: "missing", source: null },
+          skillMiner: { status: "configured", source: "env" },
+          criticalPush: { status: "missing", source: null },
+          emotionTier3: { status: "invalid", source: null },
+        },
+      }),
+    });
+    const response = fakeResponse();
+    assert.equal(await handler({ method: "GET", url: CONTROL_UI_PATH }, response), true);
+
+    for (const path of [
+      "embedding.apiKey",
+      "embedding.fallback.apiKey",
+      "reranker.apiKey",
+      "merging.apiKey",
+      "schicht15.apiKey",
+      "skillMiner.apiKey",
+      "criticalPush.apiKey",
+      "emotion.t3.apiKey",
+    ]) {
+      assert.match(response.body, new RegExp(path.replaceAll(".", "\\.")), path);
+    }
+    assert.match(response.body, /title="[^"]*Turns text into vectors/, "capability purpose is offered as hover help");
+    assert.match(response.body, /title="[^"]*sits directly in the config file/, "source type is explained on hover");
+    assert.doesNotMatch(response.body, /sk-[A-Za-z0-9_-]{8}/, "no secret-shaped value may ever be rendered");
+  });
+
   it("supports HEAD and rejects every mutation method", async () => {
     let projections = 0;
     const handler = createControlUiHttpHandler({
