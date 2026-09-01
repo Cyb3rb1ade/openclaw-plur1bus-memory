@@ -104,10 +104,19 @@ describe("redacted PLUR1BUS control-plane projection", () => {
       revision: 2,
     });
     assert.match(projection.workspaceMatrix.overrides[1].workspace, /^workspace-ref:w-[a-f0-9]{62}$/);
-    assert.deepStrictEqual(
-      projection.featureCards.map((card) => card.id),
-      ["capture", "recall", "skill-miner", "feature-cron", "rem", "obsidian", "reranker"],
-    );
+    // Every projected feature gets a card; the tab must not show a subset of
+    // what is actually running.
+    const cardIds = projection.featureCards.map((card) => card.id);
+    for (const id of ["capture", "recall", "skill-miner", "feature-cron", "rem", "obsidian", "reranker",
+      "merging", "daily-consolidation", "gc", "emotion-t3", "knowledge-promotion", "critical-push",
+      "afterthought", "persona-voice", "dream-echo", "continuity", "reply-outcome", "contradiction",
+      "semantic-lens", "query-refinement", "decision-trace", "semantic-compression", "neo",
+      "meta-cognition", "temporal-context"]) {
+      assert.ok(cardIds.includes(id), `missing feature card: ${id}`);
+    }
+    assert.equal(new Set(cardIds).size, cardIds.length, "card ids are unique");
+    assert.ok(projection.featureCards.every((card) => typeof card.purpose === "string" && card.purpose),
+      "every card explains what its feature does");
     assert.deepStrictEqual(projection.reembeddingWorkflow.migration, {
       id: "migration-a",
       state: "running",
