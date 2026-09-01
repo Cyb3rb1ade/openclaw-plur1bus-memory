@@ -50,6 +50,7 @@ import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
 import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
+import { registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
@@ -4544,7 +4545,13 @@ const plugin = {
       if (applyBlocked.reason === "pending_setup") {
         const pending = detectPendingFeatures(cfg, { vaultConfirmed: obsidianVaultsConfirmed });
         for (const p of pending) {
-          api.logger.warn(`memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`);
+          // A feature the operator explicitly switched on and left unconfigured
+          // is worth a warning. One that is merely on by default is not: with
+          // opt-out that would warn every user on every start about something
+          // they never asked for.
+          const line = `memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`;
+          if (p.explicit === true) api.logger.warn(line);
+          else api.logger.info?.(line);
         }
       }
     }
@@ -8348,6 +8355,10 @@ const plugin = {
           });
         };
 
+        // One-time vault confirmations live for the lifetime of the plugin
+        // instance; a restart simply invalidates anything not yet redeemed.
+        const obsidianVaultConfirmationStore = new Map();
+
         if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
           registerWorkspacePolicyRuntime({
             api,
@@ -8359,6 +8370,16 @@ const plugin = {
             api,
             coordinator: reembeddingCoordinator,
             switchRuntime: reembeddingSwitchRuntime,
+          });
+          // The vault confirmation flow existed but had no caller, so every
+          // install stayed pending with no way to finish setup.
+          registerObsidianVaultRuntime({
+            api,
+            baseDbPath,
+            confirmationStore: obsidianVaultConfirmationStore,
+            resolveSessionMemoryContext: resolveSessionPolicyMemoryContext,
+            getObsidianBridgeConfig: () => cfg.obsidianBridge || {},
+            loadGatewayRuntime,
           });
         } else {
           api.logger?.warn?.(
