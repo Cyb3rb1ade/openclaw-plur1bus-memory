@@ -224,17 +224,28 @@ describe("selectEnabledFeatureCronSpecs", () => {
     },
   });
 
-  it("provisions no job from missing or runtime-defaulted feature values", () => {
+  // CONTRACT CHANGE (7.5.0): features are opt-out. The provisioner used to
+  // refuse every job that came from a default, so a fresh install got no
+  // feature crons at all. It now provisions from defaults, and only an
+  // explicit `enabled: false` keeps a job out. A config without the plugin
+  // entry still yields nothing.
+  it("provisions from defaults and drops only explicitly disabled features", () => {
     assert.deepStrictEqual(selectEnabledFeatureCronSpecs({}), []);
-    assert.deepStrictEqual(selectEnabledFeatureCronSpecs(sourceConfig({})), []);
-    assert.deepStrictEqual(
-      selectEnabledFeatureCronSpecs(sourceConfig({
-        personaVoice: { enabled: false },
-        afterthought: { enabled: false },
-        criticalPush: { enabled: false },
-      })),
-      [],
-    );
+
+    const fromDefaults = selectEnabledFeatureCronSpecs(sourceConfig({}))
+      .map((spec) => spec.feature);
+    assert.ok(fromDefaults.length > 0, "an empty feature config now provisions the default jobs");
+    assert.ok(fromDefaults.includes("gc-run"));
+    assert.ok(fromDefaults.includes("consolidate-daily"));
+
+    const withDisabled = selectEnabledFeatureCronSpecs(sourceConfig({
+      personaVoice: { enabled: false },
+      afterthought: { enabled: false },
+      criticalPush: { enabled: false },
+    })).map((spec) => spec.feature);
+    assert.ok(!withDisabled.includes("persona-evolve"));
+    assert.ok(!withDisabled.includes("afterthought"));
+    assert.ok(!withDisabled.includes("classify-recent"));
   });
 
   it("selects all eight jobs only from their explicit owning gates", () => {
@@ -254,37 +265,49 @@ describe("selectEnabledFeatureCronSpecs", () => {
     assert.deepStrictEqual(selected.map((spec) => spec.feature), REQUIRED_FEATURE_CRONS.map((spec) => spec.feature));
   });
 
-  // Ohne konfigurierte Policy meldet runGcJob nur `no_policy`. Ein Cron dafür
-  // wäre genau der Leerlauf-Job, den diese Serie überall beseitigt hat — also
-  // wird er erst provisioniert, wenn `gc` ausdrücklich eingeschaltet ist.
-  it("provisions the collector only when gc is explicitly enabled", () => {
+  // Der GC-Cron entsteht jetzt per Default mit. Ohne konfigurierte Policy
+  // meldet runGcJob weiterhin `no_policy` und tut nichts — der Job ist also
+  // wirkungslos, nicht destruktiv. Nur ein ausdrückliches `false` hält ihn raus.
+  it("provisions the collector by default and omits it only when gc is disabled", () => {
     assert.ok(
-      !selectEnabledFeatureCronSpecs(sourceConfig({ dailyConsolidation: { enabled: true } }))
+      selectEnabledFeatureCronSpecs(sourceConfig({ dailyConsolidation: { enabled: true } }))
         .some((spec) => spec.feature === "gc-run"),
-      "ohne gc-Gate darf kein GC-Cron entstehen",
+      "gc ist per Default an und bekommt seinen Cron",
     );
-    assert.deepStrictEqual(
-      selectEnabledFeatureCronSpecs(sourceConfig({ gc: { enabled: true } })).map((spec) => spec.feature),
-      ["gc-run"],
+    assert.ok(
+      !selectEnabledFeatureCronSpecs(sourceConfig({ gc: { enabled: false } }))
+        .some((spec) => spec.feature === "gc-run"),
+      "ein ausdrückliches gc:false haelt den Cron raus",
     );
   });
 
+  // Under opt-out every dependency is satisfied by default, so the gates are
+  // exercised by switching a dependency explicitly off instead of leaving it
+  // unset. persona-evolve still needs the skill miner, and afterthought still
+  // needs either the skill miner or merging.
   it("honors dependency gates and top-level plugin disable", () => {
-    assert.deepStrictEqual(
-      selectEnabledFeatureCronSpecs(sourceConfig({ personaVoice: { enabled: true } })).map((spec) => spec.feature),
-      [],
-    );
-    assert.deepStrictEqual(
-      selectEnabledFeatureCronSpecs(sourceConfig({ afterthought: { enabled: true } })).map((spec) => spec.feature),
-      [],
-    );
-    assert.deepStrictEqual(
-      selectEnabledFeatureCronSpecs(sourceConfig({
-        afterthought: { enabled: true },
-        merging: { enabled: true },
-      })).map((spec) => spec.feature),
-      ["afterthought", "rem-dream"],
-    );
+    const withoutMiner = selectEnabledFeatureCronSpecs(sourceConfig({
+      personaVoice: { enabled: true },
+      skillMiner: { enabled: false },
+    })).map((spec) => spec.feature);
+    assert.ok(!withoutMiner.includes("persona-evolve"), "persona-evolve requires the skill miner");
+
+    const withoutBothDeps = selectEnabledFeatureCronSpecs(sourceConfig({
+      afterthought: { enabled: true },
+      skillMiner: { enabled: false },
+      merging: { enabled: false },
+    })).map((spec) => spec.feature);
+    assert.ok(!withoutBothDeps.includes("afterthought"), "afterthought requires the skill miner or merging");
+
+    const withMerging = selectEnabledFeatureCronSpecs(sourceConfig({
+      afterthought: { enabled: true },
+      skillMiner: { enabled: false },
+      merging: { enabled: true },
+    })).map((spec) => spec.feature);
+    assert.ok(withMerging.includes("afterthought"), "merging alone satisfies the afterthought gate");
+    assert.ok(withMerging.includes("rem-dream"));
+
+    // A disabled plugin entry still provisions nothing at all.
     assert.deepStrictEqual(
       selectEnabledFeatureCronSpecs(sourceConfig({ criticalPush: { enabled: true } }, { enabled: false })),
       [],
