@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { detectConflicts } from "../lib/shared-memory.js";
+import { measureCpuMilliseconds } from "./helpers/benchmark-clock.js";
 
 describe("shared-memory detectConflicts limits", () => {
   it("returns identical results for small inputs", () => {
@@ -43,18 +44,21 @@ describe("shared-memory detectConflicts limits", () => {
       text: `shared memory text ${i % 50}`,
       createdAt: i,
     }));
-    const start = performance.now();
-    const conflicts = detectConflicts(memories);
-    const elapsed = performance.now() - start;
+    let conflicts;
+    // CPU time, not wall clock. This guards algorithmic blow-up: the capped
+    // path runs ~125K comparisons for a 2000-item input / 500-candidate O(n²)
+    // scan, against 4M for the uncapped path. The test data produces no
+    // conflicts (jaccard < 0.8 for all pairs), so the maxConflicts early exit
+    // never fires and every comparison runs. Measured on CPU time the work is
+    // consistently 120-160ms; a wall-clock reading of the same work reached
+    // 639ms purely from scheduler pressure while the runtime matrix ran
+    // alongside it, which says nothing about the algorithm. 500ms keeps
+    // meaningful headroom without charging this assertion for host load.
+    const elapsed = measureCpuMilliseconds(() => {
+      conflicts = detectConflicts(memories);
+    });
     assert.ok(conflicts.length <= 100, `conflicts capped at 100, got ${conflicts.length}`);
-    // Threshold raised from 100ms to 500ms: on this production host (vmd190201,
-    // running OpenClaw gateway + several other node processes) the algorithm
-    // consistently takes 120–160ms for 2000-item input / 500-candidate O(n²)
-    // scan. The test data produces no conflicts (jaccard < 0.8 for all pairs),
-    // so the maxConflicts early-exit never fires and all ~125K comparisons run.
-    // 500ms is still a meaningful "bounded" check (not the 4M comparisons of
-    // the uncapped path) and gives stable headroom across CI and loaded servers.
-    assert.ok(elapsed < 500, `large input took ${elapsed.toFixed(2)}ms`);
+    assert.ok(elapsed < 500, `large input took ${elapsed.toFixed(2)}ms of CPU time`);
   });
 
   it("stops early at maxConflicts", () => {
