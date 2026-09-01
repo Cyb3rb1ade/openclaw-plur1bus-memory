@@ -50,7 +50,7 @@ import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
 import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
-import { registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
+import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
@@ -8379,7 +8379,6 @@ const plugin = {
             confirmationStore: obsidianVaultConfirmationStore,
             resolveSessionMemoryContext: resolveSessionPolicyMemoryContext,
             getObsidianBridgeConfig: () => cfg.obsidianBridge || {},
-            loadGatewayRuntime,
           });
         } else {
           api.logger?.warn?.(
@@ -8426,8 +8425,18 @@ const plugin = {
                 && sourceBytes <= Number.MAX_SAFE_INTEGER - targetVectorBytes
                 ? sourceBytes + targetVectorBytes
                 : null;
+              // Path-free by design; describeVaultCandidates only yields a count here.
+              const obsidianCandidates = (() => {
+                try { return describeVaultCandidates(cfg.obsidianBridge || {}).vaultPaths.length; }
+                catch { return 0; }
+              })();
               return buildControlPlaneProjection({
                 config: cfg,
+                obsidianVault: {
+                  configured: configuredObsidianWorkspaces.length > 0,
+                  confirmed: obsidianVaultsConfirmed === true,
+                  candidates: obsidianCandidates,
+                },
                 hooks: api.config?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {},
                 capabilities: {
                   skillWorkshop: Boolean(openClawSkillWorkshop),

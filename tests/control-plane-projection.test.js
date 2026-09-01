@@ -239,7 +239,7 @@ describe("redacted PLUR1BUS control-plane projection", () => {
           fallback: { apiKey: sentinel },
         },
         reranker: {
-          apiKey: { source: "exec", provider: "vault", id: `command/${sentinel}` },
+          apiKey: { source: "exec", provider: "acme-secrets", id: `command/${sentinel}` },
         },
       },
     });
@@ -249,7 +249,9 @@ describe("redacted PLUR1BUS control-plane projection", () => {
     assert.deepStrictEqual(projection.credentials.reranker, { status: "configured", source: "exec" });
     const serialized = JSON.stringify(projection);
     assert.doesNotMatch(serialized, new RegExp(sentinel));
-    assert.doesNotMatch(serialized, /private\/credential\/id|private-provider|vault/);
+    // The alias sentinel must stay unambiguous: "vault" is also the domain
+    // term for the Obsidian target the tab legitimately reports on.
+    assert.doesNotMatch(serialized, /private\/credential\/id|private-provider|acme-secrets/);
   });
 
   it("copies only closed provider, namespace, and migration status fields", () => {

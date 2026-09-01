@@ -341,6 +341,33 @@ describe("PLUR1BUS OpenClaw Control UI runtime", () => {
     assert.doesNotMatch(response.body, /sk-[A-Za-z0-9_-]{8}/, "no secret-shaped value may ever be rendered");
   });
 
+  it("shows the Obsidian target state and its commands without leaking a path", async () => {
+    const handler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        obsidianVault: {
+          configured: true,
+          confirmed: false,
+          candidates: 2,
+          mutationSurface: "operator_cli",
+          commands: [
+            { id: "detect", command: "plur1bus-obsidian detect --session <key>", purpose: "List the targets found." },
+            { id: "confirm", command: "plur1bus-obsidian confirm --session <key> --path <target> --token <token>", purpose: "Redeem the token." },
+          ],
+        },
+      }),
+    });
+    const response = fakeResponse();
+    assert.equal(await handler({ method: "GET", url: CONTROL_UI_PATH }, response), true);
+
+    assert.match(response.body, /Obsidian Target/);
+    assert.match(response.body, /configured but not yet confirmed/);
+    assert.match(response.body, /2 targets detected/);
+    assert.match(response.body, /plur1bus-obsidian confirm/);
+    // The page must never render a filesystem path for the target.
+    assert.doesNotMatch(response.body, /\/home\/|\/Users\/|\/root\//);
+  });
+
   it("supports HEAD and rejects every mutation method", async () => {
     let projections = 0;
     const handler = createControlUiHttpHandler({
