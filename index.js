@@ -4517,7 +4517,7 @@ const plugin = {
     }
 
     const obsidianBridgeCfg = cfg.obsidianBridge || {};
-    const configuredObsidianWorkspaces = obsidianBridgeCfg.enabled === true
+    const configuredObsidianWorkspaces = obsidianBridgeCfg.enabled !== false
       ? discoverObsidianWorkspaces(obsidianBridgeCfg)
       : [];
     const obsidianVaultsConfirmed = configuredObsidianWorkspaces.length > 0
@@ -4549,7 +4549,7 @@ const plugin = {
       }
     }
 
-    const obsidianBridgeEnabled = obsidianBridgeCfg.enabled === true;
+    const obsidianBridgeEnabled = obsidianBridgeCfg.enabled !== false;
 
     const embeddingCfg = cfg.embedding || {};
     const localModelCacheDir = resolveLocalModelCacheDir(embeddingCfg);
@@ -4643,7 +4643,7 @@ const plugin = {
 
     // Merging config
     const mergingCfg = cfg.merging || {};
-    const mergingEnabled = mergingCfg.enabled === true;
+    const mergingEnabled = mergingCfg.enabled !== false;
     const mergingAutoApply = mergingCfg.autoApply === true;
     const mergingThreshold = mergingCfg.threshold ?? 0.70;
     const mergingLlmCfg = mergingEnabled
@@ -4681,7 +4681,7 @@ const plugin = {
 
     // Skill Miner config
     const skillMinerCfg = cfg.skillMiner || {};
-    const skillMinerEnabled = skillMinerCfg.enabled === true;
+    const skillMinerEnabled = skillMinerCfg.enabled !== false;
     const skillMinerLlmCfg = skillMinerEnabled
       ? createFeatureRoute("skillMiner", skillMinerCfg)
       : null;
