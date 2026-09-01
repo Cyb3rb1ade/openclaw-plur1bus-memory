@@ -885,7 +885,7 @@ async function runMergedNamespaceRecall(
       dedupJaccard: baseParams.dedupJaccard,
       trace,
     });
-    if (baseParams.adaptiveBudget?.enabled === true) {
+    if (baseParams.adaptiveBudget?.enabled !== false) {
       merged = applyMergedRecallBudget(merged, baseParams.budget);
     }
     emitRetrievalLedger({
@@ -4593,7 +4593,7 @@ const plugin = {
     const canonicalMaxItems = recallCfg.canonicalMaxItems ?? 5;
     const maxPromptMemories = normalizeBoundedRecallInteger(recallCfg.maxPromptMemories, 12, 1, 100);
     const candidateTopK     = normalizeBoundedRecallInteger(recallCfg.candidateTopK, 40, 1, 100);
-    const queryRefinerEnabled = recallCfg.queryRefinement?.enabled === true;
+    const queryRefinerEnabled = recallCfg.queryRefinement?.enabled !== false;
     const adaptiveBudgetCfg = recallCfg.adaptiveBudget || {};
     const semanticCompressionCfg = recallCfg.semanticCompression || {};
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
@@ -4629,7 +4629,7 @@ const plugin = {
 
     // P2 Recall Decision Trace config
     const traceCfg = cfg.recall?.decisionTrace || {};
-    const traceEnabled = traceCfg.enabled === true;
+    const traceEnabled = traceCfg.enabled !== false;
     const traceInPrompt = traceEnabled && traceCfg.includeInPrompt === true;
 
     const riCfg = cfg.retroactiveInterference ?? {};
@@ -4669,7 +4669,7 @@ const plugin = {
 
     // Schicht 1.5 config
     const schicht15Cfg = cfg.schicht15 || {};
-    const schicht15Enabled = schicht15Cfg.enabled === true;
+    const schicht15Enabled = schicht15Cfg.enabled !== false;
     const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
     const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 3;
     const schicht15LlmCfg = schicht15Enabled
@@ -4713,7 +4713,7 @@ const plugin = {
     const emotionT2Enabled = emotionCfg.t2?.enabled !== false;
     // Tier 3: enabled if wanted AND its feature-local route is available.
     // onlyWhenProviderAvailable (default: true) makes T3 soft-skip instead of error when no provider.
-    const emotionT3WantsEnabled = emotionCfg.t3?.enabled === true;
+    const emotionT3WantsEnabled = emotionCfg.t3?.enabled !== false;
     const emotionT3LlmCfg = emotionT3WantsEnabled
       ? createFeatureRoute("emotionT3", emotionCfg.t3 || {})
       : null;
@@ -11049,7 +11049,7 @@ const plugin = {
           } catch (_e) { dbg(_e); }
           // Inner Continuity Engine config (Phase 1)
           const continuityCfg = cfg.continuityEngine || {};
-          const continuityEnabled = continuityCfg.enabled === true;
+          const continuityEnabled = continuityCfg.enabled !== false;
           const assocCfg = continuityCfg.associativeRecall || {};
           const patternCfg = continuityCfg.patternSurfacing || {};
           const tasteCfg = continuityCfg.tasteGate || {};
@@ -11267,7 +11267,7 @@ const plugin = {
               });
             }
 
-            if (patternCfg.enabled === true) {
+            if (patternCfg.enabled !== false) {
               try {
                 const patternRecords = getNeoStore(ctx, event).readPatterns(100);
                 matchedPattern = await findBestPattern({
@@ -11377,7 +11377,7 @@ const plugin = {
           // K1-06: detect contradictory factual memories among recalled items.
           let memoryTextContradictions = [];
           const contraCfg = cfg?.continuityEngine?.contradictionDetection || {};
-          if (contraCfg.enabled === true && ctx?.workspaceDir) {
+          if (contraCfg.enabled !== false && ctx?.workspaceDir) {
             try {
               const memoryContradictionCallCfg = mergingEnabled ? withLlmCallContext(
                 memoryTextContradictionLlmCfg,
@@ -11465,7 +11465,7 @@ const plugin = {
           let reactivationContext = "";
           let reactivationAdditions = [];
           const crrCfg = cfg.conversationReactivationRecall || {};
-          if (crrCfg.enabled === true) {
+          if (crrCfg.enabled !== false) {
             try {
               const baseRecallIds = new Set(associativeItems.map(i => i.id));
               const baseRecallTopScore = associativeItems[0]?.relevanceScore
@@ -11557,7 +11557,7 @@ const plugin = {
 
           let promptItems = framedItems;
           let promptSemanticLensItems = semanticLensItems;
-          if (semanticCompressionCfg.enabled === true) {
+          if (semanticCompressionCfg.enabled !== false) {
             const allPromptItems = [...framedItems, ...semanticLensItems];
             const tokenBudget = normalizeBoundedRecallInteger(
               semanticCompressionCfg.tokenBudget,
