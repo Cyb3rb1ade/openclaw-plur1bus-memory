@@ -100,6 +100,7 @@ export const DEPLOY_FILES = [
   "lib/setup/feature-cron-plan.js",
   "lib/setup/feature-cron-bootstrap.js",
   "lib/setup/control-ui-plugin-runtime.js",
+  "lib/setup/obsidian-vault-plugin-runtime.js",
   "lib/setup/reembedding-plugin-runtime.js",
   "lib/setup/workspace-policy-plugin-runtime.js",
   "lib/temporal-context.js",
