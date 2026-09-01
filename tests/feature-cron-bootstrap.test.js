@@ -331,7 +331,10 @@ async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
       return {
         ok: true,
         stdout: JSON.stringify(validCronConfigSnapshot({
+          // Silent baseline plus the three features these cases care about, so
+          // opt-out defaults do not add jobs to unrelated assertions.
           pluginConfig: {
+            ...ALL_FEATURES_DISABLED,
             personaVoice: { enabled: true },
             afterthought: { enabled: true },
             skillMiner: { enabled: true },
@@ -359,6 +362,19 @@ async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
     parsed: JSON.parse(text),
   };
 }
+
+// Features are opt-out since 7.5.0, so a bare config provisions every job.
+// Tests that isolate one behaviour start from an explicitly silent baseline.
+const ALL_FEATURES_DISABLED = Object.freeze({
+  personaVoice: { enabled: false },
+  afterthought: { enabled: false },
+  dailyConsolidation: { enabled: false },
+  criticalPush: { enabled: false },
+  merging: { enabled: false },
+  skillMiner: { enabled: false },
+  obsidianBridge: { enabled: false },
+  gc: { enabled: false },
+});
 
 function validCronConfigSnapshot({ pluginConfig = {}, runtimeConfig = {} } = {}) {
   return {
@@ -536,7 +552,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
         return {
           ok: true,
           stdout: JSON.stringify(validCronConfigSnapshot({
-            pluginConfig: { criticalPush: { enabled: true } },
+            pluginConfig: { ...ALL_FEATURES_DISABLED, criticalPush: { enabled: true } },
           })),
           stderr: "",
           status: 0,
@@ -617,7 +633,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
         return {
           ok: true,
           stdout: JSON.stringify(validCronConfigSnapshot({
-            pluginConfig: { dailyConsolidation: { enabled: true } },
+            pluginConfig: { ...ALL_FEATURES_DISABLED, dailyConsolidation: { enabled: true } },
           })),
           stderr: "",
           status: 0,
@@ -651,7 +667,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     const calls = [];
     const cronAdds = [];
     const snapshot = validCronConfigSnapshot({
-      pluginConfig: { dailyConsolidation: { enabled: true } },
+      pluginConfig: { ...ALL_FEATURES_DISABLED, dailyConsolidation: { enabled: true } },
       runtimeConfig: {
         bindings: [{ agentId: "main", match: { channel: "telegram", peer: { kind: "group", id: "-100123" } } }],
         channels: { telegram: { defaultAccount: "default", accounts: { default: { enabled: true } } } },
@@ -707,7 +723,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     }
   });
 
-  it("creates the exact seven per-agent jobs without model, auth, token, or API overrides", async () => {
+  it("creates the exact eight per-agent jobs without model, auth, token, or API overrides", async () => {
     const cronAdds = [];
     const snapshot = validCronConfigSnapshot({
       pluginConfig: {
@@ -745,7 +761,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     });
 
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(cronAdds.length, 7);
+    assert.strictEqual(cronAdds.length, 8);
     const byName = new Map(cronAdds.map((args) => [args[args.indexOf("--name") + 1], args]));
     assert.deepStrictEqual([...byName.keys()], [
       "plur1bus persona-evolve main",
@@ -755,6 +771,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       "plur1bus rem-dream main",
       "plur1bus skill-miner main",
       "plur1bus discover-semantic-links main",
+      "plur1bus gc-run main",
     ]);
     for (const args of cronAdds) {
       assert.deepStrictEqual(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2), ["--agent", "main"]);
@@ -881,7 +898,12 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       if (args.join(" ") === "gateway call config.get --json") {
         return {
           ok: true,
-          stdout: JSON.stringify(validCronConfigSnapshot({ runtimeConfig: runtimeOnlyFeatures })),
+          // Silent source baseline: anything provisioned here could only have come
+          // from runtimeConfig, which is exactly what must not happen.
+          stdout: JSON.stringify(validCronConfigSnapshot({
+            pluginConfig: ALL_FEATURES_DISABLED,
+            runtimeConfig: runtimeOnlyFeatures,
+          })),
           stderr: "",
           status: 0,
         };

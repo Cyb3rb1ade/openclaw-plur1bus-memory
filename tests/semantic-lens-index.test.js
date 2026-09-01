@@ -72,9 +72,10 @@ const memoryById = new Map([
 describe("semantic lens index", () => {
   beforeEach(() => clearSemanticLensIndexCache());
 
-  it("uses safe disabled defaults", () => {
+  it("defaults to enabled and honours an explicit opt-out", () => {
     assert.deepStrictEqual(resolveSemanticLensConfig({}), DEFAULT_SEMANTIC_LENS_CONFIG);
-    assert.equal(resolveSemanticLensConfig({ enabled: true }).enabled, true);
+    assert.equal(resolveSemanticLensConfig({}).enabled, true);
+    assert.equal(resolveSemanticLensConfig({ enabled: false }).enabled, false);
   });
 
   it("missing index returns null instead of throwing", () => {

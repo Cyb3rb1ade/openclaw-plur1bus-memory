@@ -299,7 +299,7 @@ describe("PLUR1BUS OpenClaw Control UI runtime", () => {
     assert.doesNotMatch(completed.body, /<meta http-equiv="refresh"/);
   });
 
-  it("renders every projected credential with its config path and hover help", async () => {
+  it("renders every projected credential with its config path and visible help", async () => {
     // The projection carries eight credentials; the table used to show four,
     // leaving merging, knowledge promotion, critical push and emotion tier 3
     // invisible to the operator.
@@ -333,8 +333,11 @@ describe("PLUR1BUS OpenClaw Control UI runtime", () => {
     ]) {
       assert.match(response.body, new RegExp(path.replaceAll(".", "\\.")), path);
     }
-    assert.match(response.body, /title="[^"]*Turns text into vectors/, "capability purpose is offered as hover help");
-    assert.match(response.body, /title="[^"]*sits directly in the config file/, "source type is explained on hover");
+    // Help must be readable text, not a title attribute: a hover reaches
+    // neither the keyboard nor most screen readers.
+    assert.match(response.body, /Turns text into vectors/, "capability purpose is rendered as text");
+    assert.match(response.body, /sits directly in the config file/, "source types are explained in the legend");
+    assert.doesNotMatch(response.body, /title="/, "no help may hide in a title attribute");
     assert.doesNotMatch(response.body, /sk-[A-Za-z0-9_-]{8}/, "no secret-shaped value may ever be rendered");
   });
 
