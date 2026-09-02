@@ -342,7 +342,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { buildRemPartitions, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { buildRemPartitions, describeRemPartitionRun, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
 import {
@@ -7152,7 +7152,7 @@ const plugin = {
                 }
                 return formatJsonCommandResult({
                   job: "rem-dream",
-                  partitions: remRuns.map((run) => ({ scope: run.scope, skipped: run.result?.skipped ?? false })),
+                  partitions: remRuns.map((run) => describeRemPartitionRun(run)),
                   ...(result.report || result),
                 });
               }

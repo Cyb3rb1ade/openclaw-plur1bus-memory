@@ -358,6 +358,11 @@ test("registered internal REM processes every allowed partition with isolated pr
   );
   const parsed = responseJson(result);
   assert.deepEqual(parsed.partitions.map((entry) => entry.scope).sort(), ["agent-private", "user", "workspace"]);
+  for (const entry of parsed.partitions) {
+    assert.equal(entry.skipped, false, JSON.stringify(entry));
+    assert.match(entry.runKey, /^rem:.+:\d{4}-W\d{1,2}$/);
+    assert.ok(Number.isSafeInteger(entry.patternsFound) && entry.patternsFound >= 1, JSON.stringify(entry));
+  }
   const remPrompts = prompts.filter((entry) => entry.purpose === "rem-pattern-analysis");
   assert.equal(remPrompts.length, 3);
   for (const prompt of remPrompts) {
