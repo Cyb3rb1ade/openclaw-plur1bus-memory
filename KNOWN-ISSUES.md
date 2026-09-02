@@ -16,6 +16,7 @@ source-level verification of the 2026.8.1 floor, and a bounded smoke run on
 - Obsidian runtime verification — the registered inbound apply surface and the complete installed-runtime command path have not been re-run on the frozen commit; unit and earlier harness evidence do not substitute for the deferred runtime matrix.
 - Transitive dependencies — npm may warn that `boolean@3.2.0` and `node-domexception@1.0.0` are deprecated; the lockfile audit has not identified a vulnerability caused by these warnings, and replacing transitive packages belongs in a separately planned dependency update.
 - Historical host invariant — an earlier, incorrectly isolated lab process accessed `/root/.openclaw` and migrated the production state database; the production repair is outside this repository freeze, and whole-engagement host integrity therefore cannot be claimed even if later isolated runs are clean.
+- `index.js` scheduled jobs (`rem-dream`, `consolidate-daily`, `skill-miner`) — since 5311ce7 their `workspace` and `user` partitions read only the shared pools under `.plur1bus-shared/`, which are populated solely by `/share`. Rows that `memory_store` writes with `scope: workspace` (or `user`) into the agent table are therefore covered by none of these jobs' partitions. Observed on OpenClaw 2026.8.2: three workspace-scoped rows in the agent table, an empty shared pool, and `rem-dream` reporting `too_few_memories, count: 0` for both partitions. Whether such agent-table rows should be read by the agent's own partition or migrated into the pool is a design decision — the routing is security-tested in `tests/release-731-runtime-callsite-security.test.js` — and is not changed in 7.5.0. The command payload now reports `reason`, `count`, `runKey` and `patternsFound` per partition so the outcome is visible instead of hidden behind the first partition's fields.
 
 ## Closed findings retained for traceability
 
@@ -68,3 +69,10 @@ source-level verification of the 2026.8.1 floor, and a bounded smoke run on
   directory instead of a sticky `/tmp`.
 - The lab still lacks a cleanup routine for finished runs; per-run containers,
   volumes and build cache blocked new runs several times.
+- The `rem-dream` gate of the Obsidian stage was never reached before the
+  2026.8.2 runs and assumed candidates the fixture never produced: every row
+  was `workspace`-scoped and the only `agent-private` row was the invalidated
+  negative fixture. The stage now stores three `agent-private` rows through the
+  real Gateway `memory_store` immediately before the run and asserts the
+  deterministic partition contract (agent-private runs, workspace skips);
+  silent `set -e` aborts now name the failing line through an ERR trap.
