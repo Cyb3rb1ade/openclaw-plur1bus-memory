@@ -3,12 +3,14 @@ import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const EXPECTED_VERSION = "7.5.0";
-// Build metadata remains on the previously verified beta until the stable
-// primary runtime gate has passed. It must not be advanced by documentation.
-const EXPECTED_BUILD_OPENCLAW_VERSION = "2026.9.1-beta.1";
+// Built and runtime-verified against the stable host the package targets, not
+// against a beta no user runs. The installed-host loader test exercises this
+// exact OpenClaw, so a build-metadata drift would silently change what that
+// contract is measured against.
+const EXPECTED_BUILD_OPENCLAW_VERSION = "2026.8.2";
 const EXPECTED_PRIMARY_OPENCLAW_VERSION = "2026.8.1";
 const EXPECTED_ADDITIONAL_OPENCLAW_VERSION = "2026.9.1-beta.1";
-const EXPECTED_BUILD_OPENCLAW_COMMIT = "1d96e5aee2d49cde999ed055eda113e2523a7b5c";
+const EXPECTED_BUILD_OPENCLAW_COMMIT = "0965053fe6b9341776df147a6934b7485c60b5ca";
 const EXPECTED_UPSTREAM_VERSION = "7.4.10";
 const EXPECTED_UPSTREAM_TAG = "v7.4.10";
 const EXPECTED_UPSTREAM_TAG_OBJECT = "f6cf0e75b4f8df509cac7b68bc437a25d650af73";
