@@ -170,6 +170,7 @@ import {
   detectObsidianVaults,
   detectPendingFeatures,
   isApplyBlocked,
+  reportDormantFeature,
   recommendedProfile,
   renderPlur1busStartStatus,
   safeProfile,
@@ -4549,9 +4550,10 @@ const plugin = {
           // is worth a warning. One that is merely on by default is not: with
           // opt-out that would warn every user on every start about something
           // they never asked for.
-          const line = `memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`;
-          if (p.explicit === true) api.logger.warn(line);
-          else api.logger.info?.(line);
+          reportDormantFeature(api.logger, {
+            explicit: p.explicit,
+            message: `memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`,
+          });
         }
       }
     }
@@ -4978,7 +4980,10 @@ const plugin = {
     // Episoden-Extraktion brauchen eine aktive Merging-Route. Ohne sie laufen
     // diese Features still als No-op, obwohl sie "aktiv" wirken.
     if (neoEnabled && !mergingLlmCfg) {
-      api.logger.warn("memory-lancedb-namespaced: light/REM dreaming and episode extraction require merging.enabled and an available LLM route. They will no-op until that route is available.");
+      reportDormantFeature(api.logger, {
+        explicit: cfg.neo?.enabled === true,
+        message: "memory-lancedb-namespaced: light/REM dreaming and episode extraction require merging.enabled and an available LLM route. They will no-op until that route is available.",
+      });
     }
     const sessionWorkspaceKeys = new Map();
     const rememberNeoWorkspace = (ctx = {}, event = {}) => {
