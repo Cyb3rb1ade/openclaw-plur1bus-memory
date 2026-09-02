@@ -94,7 +94,7 @@ import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
 import { loadLinkIndex } from "./lib/obsidian/link-index.js";
 import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
 import { mutationAllowed, parseObsidianCommandPlan } from "./lib/obsidian-mutation-policy.js";
-import { isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
+import { describeOwnedVaultConfirmation, isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
 import { renderStatus } from "./lib/telegram-commands/status.js";
 import { collectStatusData } from "./lib/telegram-commands/status-data.js";
 import {
@@ -6791,6 +6791,15 @@ const plugin = {
                       vaultPath: requestedVaultPath,
                     })
                   : false,
+                // Fingerprint-and-booleans explanation of that check, so a
+                // denial can say which binding failed instead of a bare false.
+                vaultConfirmation: requestedVaultPath
+                  ? describeOwnedVaultConfirmation({
+                      baseDbPath,
+                      memoryCtx: obsidianMemoryCtx,
+                      vaultPath: requestedVaultPath,
+                    })
+                  : null,
                 semanticConfirmationStore: confirmationStore,
                 confirmationStore,
                 loadSemanticRecords: async () => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
