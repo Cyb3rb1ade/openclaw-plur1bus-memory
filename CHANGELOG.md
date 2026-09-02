@@ -11,14 +11,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Kompatibilitaet
 
-- **OpenClaw 2026.9.1-beta.1 ohne Host-Patch.** PLUR1BUS prueft die oeffentlichen
+- **OpenClaw 2026.8.1 ohne Host-Patch.** PLUR1BUS prueft die oeffentlichen
   Plugin-Capabilities (`registerGatewayMethod`, `registerCli` und
   `openclaw/plugin-sdk/gateway-runtime`) und nutzt den nativen Command-/Cron-
   Dispatcher. Es werden weder OpenClaw-Quellen noch `dist`-Bundles oder
   `node_modules` veraendert. Fehlende Capabilities bleiben fail-closed.
+  Primaeres Host-Ziel ist OpenClaw 2026.8.1 (Floor `>=2026.8.1`); die
+  Laufzeitmatrix lief gegen 2026.8.2. OpenClaw 2026.9.1-beta.1 ist nur
+  quellverifiziert unterstuetzt (SDK-Oberflaeche, Paketaufloesung), ohne
+  Laufzeit-Smoke; siehe `docs/compatibility-openclaw.md`.
 - **Exakte Release-Identitaet.** Paket, Lockfile und Manifest tragen 7.5.0; die
-  Build- und Mindest-Host-Metadaten nennen exakt OpenClaw 2026.9.1-beta.1. Das
-  offizielle Tag `v7.4.10` und sein Quellstand bleiben unveraendert.
+  Build-Metadaten nennen exakt OpenClaw 2026.8.2 (Commit `0965053f`), die
+  Mindest-Host-Metadaten 2026.8.1. Das offizielle Tag `v7.4.10` und sein
+  Quellstand bleiben unveraendert.
+- **Eingeschraenkte Registrierung.** Unter OpenClaws `cli-metadata`- und
+  `setup-only`-Registrierung (werfende Runtime-Proxys) registriert das Plugin
+  ohne Laufzeitzugriffe; Laufzeitpfade werden ueber `runtimeIfUsable`
+  geprueft statt vorausgesetzt.
 - **Nicht-destruktives Upgrade.** 7.5.0 fuehrt keinen brechenden LanceDB-
   Schematausch ein. Bestehende agent-spezifische Tabellen, Namespaces,
   Tombstones, History und Obsidian-Spiegel bleiben erhalten.
@@ -36,6 +45,22 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **LanceDB-Leser sehen jeden Schreibvorgang.** `MemoryDB` verbindet mit
+  `readConsistencyInterval: 0`. Ohne Intervall behielt ein einmal geoeffnetes
+  Tabellenobjekt seine Version; im Gateway sah der rem-dream-Lauf drei acht
+  Sekunden zuvor per `memory_store` committete Zeilen ueber zwei Minuten nicht,
+  ein frischer Prozess nach 1,3 s. Ein Zwei-Handle-Test pinnt das Verhalten.
+- **rem-dream nennt jede Partition.** Die Kommando-Antwort traegt je
+  ACL-Partition `reason`, `count`, `runKey` und `patternsFound`; vorher stammten
+  die Felder nur aus der ersten Partition, und ein uebersprungener
+  Workspace-Lauf war nicht erklaerbar.
+- **Kein Warn-Rauschen in CLI-Prozessen.** Die Meldung ueber die fehlende
+  `mutateConfigFile`-Faehigkeit ist in `discovery`-, `cli-metadata`- und
+  `setup-only`-Registrierungen eine Info; im Gateway bleibt sie eine Warnung.
+- **Vault-Freigabe ueber Telegram findet ihren Beleg.** Der Apply-Pfad loest
+  den Vault-Pfad ueber denselben Selektor wie die Freigabe auf und bindet die
+  einmalige Bestaetigung an die persistierte Sitzung des Chats; die
+  Diagnose nennt geschlossene Gates und abweichende Felder namentlich.
 - **Beta-1-Workspace-Sitzungen behalten ihre eigene Policy.** Der native
   Workspace-Schalter liest bei sichtbaren `sessions.create({ cwd })`-Sitzungen
   zuerst OpenClaws aktuelles `spawnedCwd` und faellt fuer aeltere Hosts auf
