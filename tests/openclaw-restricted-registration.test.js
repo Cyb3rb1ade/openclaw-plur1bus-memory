@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 
 import plugin from "../index.js";
-import { runtimeIfUsable, shouldCoordinateLocalModelGeneration } from "../lib/runtime-shutdown.js";
+import { runtimeIfUsable, shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "../lib/runtime-shutdown.js";
 
 /**
  * OpenClaw 2026.8.x registers plugins twice: once in a restricted mode to learn
@@ -124,6 +124,38 @@ describe("registration under a restricted OpenClaw runtime", () => {
         registerRuntimeLifecycle: () => {},
       };
       assert.equal(shouldCoordinateLocalModelGeneration(api), false);
+    }
+  });
+});
+
+describe("configMutationLogNotice", () => {
+  const usable = (mutate) => ({ config: mutate ? { mutateConfigFile() {} } : {} });
+
+  it("bleibt still, wenn mutateConfigFile verfügbar ist", () => {
+    assert.equal(configMutationLogNotice({ registrationMode: "full", runtime: usable(true) }), null);
+    assert.equal(configMutationLogNotice({ registrationMode: "discovery", runtime: usable(true) }), null);
+  });
+
+  it("warnt im Gateway und bei unbekanntem Modus", () => {
+    for (const api of [
+      { registrationMode: "full", runtime: usable(false) },
+      { runtime: usable(false) },
+      { registrationMode: "full" },
+    ]) {
+      const notice = configMutationLogNotice(api);
+      assert.equal(notice.level, "warn", JSON.stringify(api));
+      assert.match(notice.message, /capability unavailable; reembedding switch and rollback are disabled$/u);
+    }
+  });
+
+  it("senkt die Meldung in CLI-Prozessen auf info", () => {
+    for (const mode of ["discovery", "cli-metadata", "setup-only"]) {
+      const notice = configMutationLogNotice({
+        registrationMode: mode,
+        runtime: mode === "discovery" ? usable(false) : createUnavailableRuntime(mode),
+      });
+      assert.equal(notice.level, "info", mode);
+      assert.match(notice.message, /run inside the gateway$/u);
     }
   });
 });
