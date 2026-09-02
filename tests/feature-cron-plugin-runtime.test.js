@@ -198,7 +198,7 @@ describe("PLUR1BUS feature-cron plugin runtime", () => {
   it("loads the exact installed OpenClaw target's public Gateway runtime", async () => {
     const packageManifestPath = join(dirname(dirname(require.resolve("openclaw"))), "package.json");
     const manifest = require(packageManifestPath);
-    assert.equal(manifest.version, "2026.9.1-beta.1");
+    assert.equal(manifest.version, "2026.8.2");
     const runtime = await loadOpenClawGatewayRuntime({ packageManifestPath });
     assert.equal(typeof runtime.callGatewayFromCli, "function");
   });

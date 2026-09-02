@@ -14,8 +14,8 @@
       "minGatewayVersion": "2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.9.1-beta.1",
-      "pluginSdkVersion": "2026.9.1-beta.1"
+      "openclawVersion": "2026.8.2",
+      "pluginSdkVersion": "2026.8.2"
     }
   },
   "files": [
@@ -73,7 +73,7 @@
   },
   "devDependencies": {
     "c8": "^11.0.0",
-    "openclaw": "2026.9.1-beta.1"
+    "openclaw": "2026.8.2"
   },
   "overrides": {
     "@huggingface/transformers": {

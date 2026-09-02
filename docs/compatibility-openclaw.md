@@ -5,13 +5,13 @@ OpenClaw 2026.9.1-beta.1 is an additionally supported forward-compatibility
 target. The declared compatibility floor is `openclaw@2026.8.1` and plugin API
 `>=2026.8.1`.
 
-The current immutable build baseline remains `openclaw@2026.9.1-beta.1`, Git
-tag `v2026.9.1-beta.1`, commit
-`1d96e5aee2d49cde999ed055eda113e2523a7b5c`, and npm integrity
-`sha512-XaK/3Vn+jDrudy8gVSUfFRUpJu4/E2LaXrvfyFUPrCMVze9LjASr8mI8YYOTu216jiOCfHd42VwINLaviklSog==`.
-The `openclaw.build` metadata intentionally continues to identify that already
-verified build baseline until the primary 2026.8.1 runtime gate has passed. It
-must not be read as making the beta the primary compatibility target.
+The immutable build baseline is `openclaw@2026.8.2`, commit
+`0965053fe6b9341776df147a6934b7485c60b5ca`, and npm integrity
+`sha512-I9aqK1attaONePpWs2gPqh23s1s1EDcN/6icF2AAfONdtowu4156QD7g6oD7KlA2vQ9yiqnvlAVH6yduvGH9Ig==`.
+The package is built and tested against a host in its own supported range
+rather than against a beta no operator runs. This matters beyond metadata: the
+installed-host loader test drives that exact OpenClaw plugin loader, so the
+build baseline decides which host contract the fast test loop measures.
 
 The PLUR1BUS upstream base is the official annotated Git tag `v7.4.10`
 (tag object `f6cf0e75b4f8df509cac7b68bc437a25d650af73`), dereferencing exact commit

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { buildControlPlaneProjection } from "../lib/control-plane-projection.js";
+import {
+  FEATURE_CARD_DEFINITIONS,
+  FEATURE_DEFINITIONS,
+  buildControlPlaneProjection,
+} from "../lib/control-plane-projection.js";
 
 describe("redacted PLUR1BUS control-plane projection", () => {
   it("builds the schema-v2 operator view from aggregate health and explicit workspace overrides", () => {
@@ -294,5 +298,45 @@ describe("redacted PLUR1BUS control-plane projection", () => {
       failureCode: null,
     });
     assert.doesNotMatch(JSON.stringify(projection), /must-not-copy|secret@example/);
+  });
+});
+
+describe("legacy dreaming sidecar compatibility switch", () => {
+  it("stays off under an all-features-on profile and is not the dream engine", () => {
+    // dreaming.enabled is documented in the config schema as "Controls OpenClaw
+    // memory-core dreaming sidecar compatibility. Keep false when PLUR1BUS owns
+    // consolidation/dreaming." Nothing in the plugin reads it -- the light/REM
+    // engines are gated by neo.enabled. Defaulting it to true under the
+    // all-features-on profile re-enabled a bridge that was deliberately retired.
+    const sidecar = FEATURE_DEFINITIONS.find((entry) => entry.name === "dreamingSidecarCompat");
+    assert.ok(sidecar, "the legacy switch must stay visible under its own name");
+    assert.deepEqual(sidecar.path, ["dreaming", "enabled"]);
+    assert.equal(sidecar.defaultValue, false);
+    assert.equal(
+      FEATURE_DEFINITIONS.some((entry) => entry.name === "dreaming"),
+      false,
+      "no feature may claim the ambiguous name 'dreaming'",
+    );
+
+    const neo = FEATURE_DEFINITIONS.find((entry) => entry.name === "neo");
+    assert.deepEqual(neo.path, ["neo", "enabled"]);
+    assert.equal(neo.defaultValue, true);
+
+    // The REM card describes the real engine, so it must follow neo.
+    const rem = FEATURE_CARD_DEFINITIONS.find((card) => card.id === "rem");
+    assert.equal(rem.feature, "neo");
+    for (const card of FEATURE_CARD_DEFINITIONS) {
+      assert.ok(
+        FEATURE_DEFINITIONS.some((entry) => entry.name === card.feature),
+        `card ${card.id} points at unknown feature ${card.feature}`,
+      );
+    }
+  });
+
+  it("keeps every other feature on by default", () => {
+    for (const entry of FEATURE_DEFINITIONS) {
+      if (entry.name === "dreamingSidecarCompat") continue;
+      assert.equal(entry.defaultValue, true, `${entry.name} must stay on by default`);
+    }
   });
 });

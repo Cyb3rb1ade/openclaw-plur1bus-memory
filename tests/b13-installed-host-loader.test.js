@@ -12,11 +12,11 @@ function findPinnedOpenClawLoader() {
   const packageRoot = dirname(dirname(require.resolve("openclaw")));
   const packageJson = join(packageRoot, "package.json");
   const pkg = require(packageJson);
-  assert.equal(pkg.version, "2026.9.1-beta.1", "loader test must use the exact target OpenClaw beta");
+  assert.equal(pkg.version, "2026.8.2", "loader test must use the exact target OpenClaw release");
   return join(packageRoot, "dist", "plugins", "loader.js");
 }
 
-it("loads reply_dispatch routing through the exact OpenClaw 2026.9.1-beta.1 plugin loader", async () => {
+it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin loader", async () => {
   const loaderPath = findPinnedOpenClawLoader();
   assert.ok(existsSync(loaderPath), `pinned OpenClaw plugin loader is unavailable: ${loaderPath}`);
   const isolatedHome = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-loader-"));
