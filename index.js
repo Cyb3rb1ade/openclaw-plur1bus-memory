@@ -8350,6 +8350,18 @@ const plugin = {
           requireConversation: options.requireConversation !== false,
           requireWorkspace: options.requireWorkspace === true,
           requireUser: options.requireUser === true,
+          // Bind conversation identity to the persisted session, not to the id
+          // the host minted for this one call (see resolveHostCommandMemoryContext).
+          resolveSessionEntry: async ({ agentId, sessionKey }) => {
+            const getSessionEntry = runtimeIfUsable(api)?.agent?.session?.getSessionEntry;
+            if (typeof getSessionEntry !== "function") return { available: false };
+            try {
+              return { available: true, entry: getSessionEntry({ agentId, sessionKey, readConsistency: "latest" }) ?? null };
+            } catch {
+              // A lookup that throws is not evidence of anything; keep today's binding.
+              return { available: false };
+            }
+          },
         });
 
         const resolveSessionPolicyMemoryContext = async ({ sessionKey, agentId: suppliedAgentId }) => {
