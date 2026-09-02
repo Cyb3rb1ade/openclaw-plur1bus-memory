@@ -26,6 +26,12 @@ source-level verification of the 2026.8.1 floor, and a bounded smoke run on
 
 ## Host behaviour worth knowing (not defects in 7.5.0)
 
+- Removing a Telegram account through `config.patch` makes OpenClaw 2026.8.2
+  restart the gateway in-process (`config change requires gateway restart
+  (channels)`, SIGUSR1, HTTP server back after about three seconds); the
+  restarted process then calls `deleteMyCommands` for the removed bot. The
+  container reports healthy for about a second before the restart begins, so a
+  health probe alone does not prove the restart is over.
 - OpenClaw 2026.8.2 requires package lifecycle scripts: an install with
   `--ignore-scripts` fails with `package lifecycle is incomplete` and
   `EROFS ... .openclaw-lifecycle-lock`. 2026.8.1 does not.
