@@ -133,15 +133,7 @@ import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validat
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
 import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
-import {
-  createLocalModelGenerationLifecycle,
-  registerGatewayShutdown,
-  registerLocalModelOwnershipServiceAfterLifecycle,
-  registerModelPreparationServiceAfterLifecycle,
-  registerReembeddingRecoveryServiceAfterLifecycle,
-  runtimeIfUsable,
-  shouldCoordinateLocalModelGeneration,
-} from "./lib/runtime-shutdown.js";
+import { createLocalModelGenerationLifecycle, registerGatewayShutdown, registerLocalModelOwnershipServiceAfterLifecycle, registerModelPreparationServiceAfterLifecycle, registerReembeddingRecoveryServiceAfterLifecycle, runtimeIfUsable, shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
   openDirectoryCapability,
@@ -5652,10 +5644,9 @@ const plugin = {
           probeRuntime: runTargetGenerationRuntimeProbe,
         })
       : null;
-    if (!reembeddingConfigMutationAvailable) {
-      api.logger?.warn?.(
-        "memory-lancedb-namespaced: OpenClaw mutateConfigFile capability unavailable; reembedding switch and rollback are disabled",
-      );
+    const configMutationNotice = configMutationLogNotice(api);
+    if (configMutationNotice) {
+      api.logger?.[configMutationNotice.level]?.(configMutationNotice.message);
     }
 
     // Reranker (optional — provider-aware since v3.1)
