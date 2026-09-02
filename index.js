@@ -92,7 +92,7 @@ import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/o
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
 import { loadLinkIndex } from "./lib/obsidian/link-index.js";
-import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
+import { handleObsidianBridgeCommand, resolveCommandVaultPath } from "./lib/obsidian-control-room.js";
 import { mutationAllowed, parseObsidianCommandPlan } from "./lib/obsidian-mutation-policy.js";
 import { describeOwnedVaultConfirmation, isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
 import { renderStatus } from "./lib/telegram-commands/status.js";
@@ -6772,7 +6772,14 @@ const plugin = {
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
               const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
               const obsidianTokens = actionKey === "obsidian" ? tokens.slice(1) : tokens;
-              const requestedVaultPath = obsidianBridgeCfg?.vaultPath || obsidianBridgeCfg?.vault || commandCtx.workspaceDir || "";
+              // Resolve the vault the way the handler will, so the confirmed
+              // receipt is looked up under the same path it was written for.
+              const requestedVaultPath = resolveCommandVaultPath(obsidianBridgeCfg, {
+                agentId: obsidianMemoryCtx.agentId,
+                workspaceKey: obsidianMemoryCtx.workspaceIdentity,
+                workspaceDir: commandCtx.workspaceDir,
+                commandCtx,
+              });
               return registeredObsidianCommandHandler(obsidianTokens, {
                 config: obsidianBridgeCfg,
                 configPath: openclawConfigPath,
