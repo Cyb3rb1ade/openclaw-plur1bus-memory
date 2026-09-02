@@ -4,6 +4,12 @@
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
   "version": "7.5.0",
   "kind": "memory",
+  "cliCommands": [
+    { "name": "plur1bus-feature-cron", "description": "Run one PLUR1BUS feature cron without an agent/model turn", "hasSubcommands": false },
+    { "name": "plur1bus-obsidian", "description": "Detect, adopt, or create the Obsidian vault PLUR1BUS mirrors into", "hasSubcommands": false },
+    { "name": "plur1bus-reembedding", "description": "Run the PLUR1BUS copy-on-write re-embedding workflow", "hasSubcommands": false },
+    { "name": "plur1bus-workspace", "description": "Read or change PLUR1BUS policy for a session workspace", "hasSubcommands": false }
+  ],
   "contracts": {
     "embeddingProviders": [
       "plur1bus-openai",
