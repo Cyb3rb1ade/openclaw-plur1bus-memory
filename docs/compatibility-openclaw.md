@@ -104,8 +104,8 @@ rather than being reported as a completed or safely rolled-back switch.
 Because this path depends directly on registry staging and config-watcher
 handoff, the 2026.8.1 matrix must record the config mutation, registry
 replacement, target probe, and durable terminal state as one explicit evidence
-chain. The 2026.9.1-beta.1 smoke repeats the switch once as a forward-
-compatibility check.
+chain. A 2026.9.1-beta.1 smoke would repeat the switch once as a forward-
+compatibility check; it has not been executed for 7.5.0.
 Reverse migrations derive their quarantined LanceDB generation from a bounded
 digest rather than concatenating the operator-visible migration ID, so every
 accepted rollback request also satisfies the backend's 64-character generation
@@ -259,10 +259,15 @@ persistence, agent isolation, and the install lifecycle. The real 7.4.10 to
 evidence for both is recorded under the laboratory evidence root cited in the
 release report.
 
-OpenClaw 2026.9.1-beta.1 is additionally supported through a bounded smoke run
-of the same frozen artifact: plugin load, recall, capture, and one re-embedding
-switch. Findings there are recorded in KNOWN-ISSUES.md and do not block the
-release. Later OpenClaw commits are not silently incorporated.
+OpenClaw 2026.9.1-beta.1 is additionally supported as a source-verified
+forward-compatibility target: the public plugin-SDK surface used here is a
+subset of the 2026.8.1 surface, no SDK subpath exists only in the beta, and the
+package resolution is recorded under the evidence root. No runtime smoke was
+executed against the beta for 7.5.0. The bounded smoke run (plugin load,
+recall, capture, one re-embedding switch) is an open item in the release
+report; it needs the beta's version and integrity as build arguments plus a
+version override in the evidence gate and image pin. Later OpenClaw commits are
+not silently incorporated.
 
 The runtime matrix proves that every feature is enabled and coexists without
 warnings; it asserts the behaviour of the paths listed above, not of every

@@ -86,7 +86,9 @@ test("7.5.0 documents its host targets, exact upstream base, native integration,
   assert.match(compatibility, /expired_migration_superseded/);
   assert.match(compatibility, /full runtime matrix was executed against OpenClaw 2026\.8\.2/i);
   assert.match(compatibility, /upgrade test also runs on 2026\.8\.2/i);
-  assert.match(compatibility, /2026\.9\.1-beta\.1[\s\S]*bounded smoke run/i);
+  assert.match(compatibility, /2026\.9\.1-beta\.1 is additionally supported as a source-verified\s+forward-compatibility target/i);
+  assert.match(compatibility, /no runtime smoke was\s+executed against the beta/i);
+  assert.doesNotMatch(compatibility, /findings there are recorded in KNOWN-ISSUES/i);
   assert.match(compatibility, /isIncognitoSessionKey[\s\S]*fail-closed/i);
   // The floor is a source-verified claim and must say so; it must not borrow
   // the 8.2 runtime evidence.
