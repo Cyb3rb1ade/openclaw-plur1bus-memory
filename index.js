@@ -1510,7 +1510,14 @@ class MemoryDB {
         this._beforeLancePathOperation("connect");
         const lancePath = this._lancePath();
         this.db = await this._acquireInitHandle(
-          lancedb.connect(lancePath),
+          // Strong read consistency: without an interval a LanceDB table
+          // object keeps the version it was opened with, so rows written
+          // through another handle (memory_store in the gateway, another
+          // process) stay invisible to it. On OpenClaw 2026.8.2 the gateway's
+          // rem-dream reader missed three rows committed eight seconds
+          // earlier for more than two minutes; a fresh process saw them
+          // after 1.3 s. Zero checks the latest version on every read.
+          lancedb.connect(lancePath, { readConsistencyInterval: 0 }),
           "MemoryDB.connect",
           "connection",
         );
