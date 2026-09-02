@@ -6287,7 +6287,12 @@ const plugin = {
             { validFrom: capturedValidFrom, validUntil: capturedValidUntil },
           );
           if (!safeDuplicate) {
-            api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+            // Nothing went wrong here: a near-duplicate was found, merging was refused
+            // because the validity windows differ, and the memory was stored separately.
+            // That is the conservative outcome, and the decision is already durable in the
+            // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
+            // routine store into an operator alarm -- 192 of them in one seeded run.
+            api.logger?.info?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
             addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
           } else {
             if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
@@ -10321,7 +10326,12 @@ const plugin = {
                     { validFrom: capturedValidFrom, validUntil: capturedValidUntil },
                   );
                 if (!safeDuplicate) {
-                  api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+                  // Nothing went wrong here: a near-duplicate was found, merging was refused
+            // because the validity windows differ, and the memory was stored separately.
+            // That is the conservative outcome, and the decision is already durable in the
+            // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
+            // routine store into an operator alarm -- 192 of them in one seeded run.
+            api.logger?.info?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
                   addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
                 } else {
                   if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
