@@ -139,6 +139,7 @@ import {
   registerLocalModelOwnershipServiceAfterLifecycle,
   registerModelPreparationServiceAfterLifecycle,
   registerReembeddingRecoveryServiceAfterLifecycle,
+  runtimeIfUsable,
   shouldCoordinateLocalModelGeneration,
 } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
@@ -3301,7 +3302,7 @@ function buildMaintenanceNudges({ workspaceDir, schicht15Enabled, lang = "en", t
 
 function resolveNeoHooksConfig(api, commandConfig) {
   try {
-    const cfg = commandConfig || api.runtime?.config?.current?.();
+    const cfg = commandConfig || runtimeIfUsable(api)?.config?.current?.();
     return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {};
   } catch (error) {
     // An empty object disables every Neo hook. Say so rather than looking
@@ -4228,9 +4229,9 @@ function makeReactionsCapabilityChecker(api) {
     if (_reactionsCapability !== null) return _reactionsCapability;
     try {
       const { detectReactionsCapability } = await import("./lib/reaction-directive.js");
-      const runtimeConfig = typeof api.runtime?.config?.current === "function"
-        ? api.runtime.config.current()
-        : (api.runtime?.config && typeof api.runtime.config === "object" ? api.runtime.config : null);
+      const runtimeConfig = typeof runtimeIfUsable(api)?.config?.current === "function"
+        ? runtimeIfUsable(api).config.current()
+        : (runtimeIfUsable(api)?.config && typeof runtimeIfUsable(api).config === "object" ? runtimeIfUsable(api).config : null);
       _reactionsCapability = detectReactionsCapability(runtimeConfig);
     } catch (_) { _reactionsCapability = false; }
     try { api.logger?.info?.(`plur1bus: reaction capability auto-detect → ${_reactionsCapability}`); } catch (_) { /* non-blocking */ }
@@ -4433,7 +4434,7 @@ const plugin = {
       enabled: coordinatesLocalModelGeneration,
     });
     const credentialResolver = createConfiguredSecretInputResolver({
-      getConfig: () => api.runtime?.config?.current?.() || api.config || {},
+      getConfig: () => runtimeIfUsable(api)?.config?.current?.() || api.config || {},
     });
     pluginLogger = api.logger;
     if (typeof api.registerMemoryCapability === "function") {
@@ -4505,7 +4506,7 @@ const plugin = {
       }
       const route = resolveFeatureLlmRoute(routeConfig, {
         feature,
-        runtimeLlm: api.runtime?.llm,
+        runtimeLlm: runtimeIfUsable(api)?.llm,
         logger: api.logger,
         resultCache: llmResultCache,
         credentialUnavailable,
@@ -4729,7 +4730,7 @@ const plugin = {
     const emotionT3HasProvider = Boolean(
       emotionT3LlmCfg
       && (emotionT3LlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
-        || typeof api.runtime?.llm?.complete === "function"),
+        || typeof runtimeIfUsable(api)?.llm?.complete === "function"),
     );
     const emotionT3OnlyWhenProviderAvailable = emotionCfg.t3?.onlyWhenProviderAvailable !== false;
     const emotionT3Enabled = emotionT3WantsEnabled && (emotionT3HasProvider || !emotionT3OnlyWhenProviderAvailable);
@@ -4903,7 +4904,7 @@ const plugin = {
     const memoryWorkspaceAliases = buildMemoryWorkspaceAliases(cfg, neoWorkspaceAliases);
     let hostMemoryConfig = {};
     try {
-      hostMemoryConfig = typeof api.runtime?.config?.current === "function" ? api.runtime.config.current() : (api.runtime?.config || {});
+      hostMemoryConfig = typeof runtimeIfUsable(api)?.config?.current === "function" ? runtimeIfUsable(api).config.current() : (runtimeIfUsable(api)?.config || {});
     } catch (error) {
       api.logger?.warn?.(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
     }
@@ -4991,7 +4992,7 @@ const plugin = {
         event,
         defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
         rootDir: neoRoot,
-        runtime: api.runtime,
+        runtime: runtimeIfUsable(api),
         sessionWorkspaceKeys,
         workspaceAliases: neoWorkspaceAliases,
       });
@@ -5521,7 +5522,7 @@ const plugin = {
       return result;
     };
     const readConfiguredReembeddingSelection = () => {
-      const current = api.runtime?.config?.current?.() || api.config || {};
+      const current = runtimeIfUsable(api)?.config?.current?.() || api.config || {};
       const currentReembedding = current?.plugins?.entries?.[PLUGIN_KEY]?.config?.reembedding;
       return Object.freeze({ generation: currentReembedding?.activeGeneration ?? null });
     };
@@ -5625,7 +5626,7 @@ const plugin = {
         });
       }
     }
-    const reembeddingConfigMutationAvailable = typeof api.runtime?.config?.mutateConfigFile === "function";
+    const reembeddingConfigMutationAvailable = typeof runtimeIfUsable(api)?.config?.mutateConfigFile === "function";
     const reembeddingSelectionMutator = reembeddingConfigMutationAvailable
       ? createOpenClawEmbeddingSelectionMutator({ api })
       : null;
@@ -6553,7 +6554,7 @@ const plugin = {
               event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
-              runtime: api.runtime,
+              runtime: runtimeIfUsable(api),
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
@@ -6586,7 +6587,7 @@ const plugin = {
               event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
-              runtime: api.runtime,
+              runtime: runtimeIfUsable(api),
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
@@ -6645,7 +6646,7 @@ const plugin = {
         };
         const resolveCronMemoryContext = async (commandCtx) => {
           const agentId = safeAgentId(commandCtx?.agentId || "default");
-          const workspaceDir = await api.runtime.agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
+          const workspaceDir = await runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
           return resolveMemoryRequestContext({
             agentId,
             workspaceDir,
@@ -6757,10 +6758,10 @@ const plugin = {
               };
               let runtimeConfig = null;
               try {
-                if (typeof api.runtime?.config?.current === "function") {
-                  runtimeConfig = api.runtime.config.current();
-                } else if (api.runtime?.config && typeof api.runtime.config === "object") {
-                  runtimeConfig = api.runtime.config;
+                if (typeof runtimeIfUsable(api)?.config?.current === "function") {
+                  runtimeConfig = runtimeIfUsable(api).config.current();
+                } else if (runtimeIfUsable(api)?.config && typeof runtimeIfUsable(api).config === "object") {
+                  runtimeConfig = runtimeIfUsable(api).config;
                 }
               } catch (_e) { dbg(_e); }
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
@@ -8329,7 +8330,7 @@ const plugin = {
         });
 
         const resolveRegisteredMemoryContext = (commandCtx, options = {}) => resolveHostCommandMemoryContext(commandCtx, {
-          resolveAgentWorkspaceDir: (config, agentId) => api.runtime.agent.resolveAgentWorkspaceDir(config, agentId),
+          resolveAgentWorkspaceDir: (config, agentId) => runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(config, agentId),
           workspaceAliases: memoryWorkspaceAliases,
           routingLoader: hostRoutingLoader,
           requireConversation: options.requireConversation !== false,
@@ -8341,7 +8342,7 @@ const plugin = {
           const routingCapability = await hostRoutingLoader();
           const parsed = routingCapability.parseAgentSessionKey(sessionKey);
           const agentId = safeAgentId(parsed?.agentId || suppliedAgentId || "");
-          const sessionEntry = api.runtime.agent.session.getSessionEntry({
+          const sessionEntry = runtimeIfUsable(api).agent.session.getSessionEntry({
             agentId,
             sessionKey,
             readConsistency: "latest",
@@ -8349,7 +8350,7 @@ const plugin = {
           const workspaceDir = sessionEntry?.spawnedCwd
             || sessionEntry?.spawnedWorkspaceDir
             || sessionEntry?.worktree?.canonicalWorkspaceDir
-            || await api.runtime.agent.resolveAgentWorkspaceDir(api.config, agentId);
+            || await runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(api.config, agentId);
           return resolveMemoryRequestContext({
             agentId,
             sessionKey,
@@ -10937,7 +10938,7 @@ const plugin = {
               sessionKey: ctx?.sessionKey ?? event?.sessionKey,
               sessionId: ctx?.sessionId ?? event?.sessionId,
             }, {
-              getSessionEntry: ({ agentId, sessionKey, readConsistency }) => api.runtime.agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
+              getSessionEntry: ({ agentId, sessionKey, readConsistency }) => runtimeIfUsable(api).agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
               workspaceAliases: memoryWorkspaceAliases,
               accountTopology: memoryAccountTopology,
               turnRoutes,
