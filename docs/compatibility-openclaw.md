@@ -238,20 +238,34 @@ OpenClaw rollback copy is required because 7.5.0 performs no host patch.
 
 ## Scope of the compatibility claim
 
-OpenClaw 2026.8.1 stable is the primary release gate. Compatibility is
-established by testing one packed 7.5.0 artifact from the frozen source commit
-in a fresh 2026.8.1 runtime. The single full runtime matrix covers registration,
-Gateway readiness, explicit and automatic memory paths, the re-embedding and
-Obsidian service handoffs above, restart persistence, agent isolation, cron
-delivery, and real local-model inference. The real 7.4.10 to 7.5.0 upgrade test
-also runs on 2026.8.1.
+OpenClaw 2026.8.1 stable is the declared compatibility floor. Two host
+behaviours that decide whether this plugin works at all were verified in the
+released 2026.8.1 package, not inferred from a beta: the restricted
+`cli-metadata` registration proxy that aborted every CLI command before the
+fix, and the Telegram command path's `entry?.sessionId || randomUUID()`
+fallback that made two-step confirmations unreachable in a fresh chat. Both
+fixes cover 2026.8.1 and 2026.8.2 alike. 2026.8.1 is source-verified in this
+way; its runtime matrix has not been executed.
+
+The full runtime matrix was executed against OpenClaw 2026.8.2 stable, testing
+one packed 7.5.0 artifact from the frozen source commit in a fresh 2026.8.2
+runtime, with every PLUR1BUS feature enabled. It covers registration, Gateway
+readiness, explicit and automatic memory paths, workspace policy, cron
+delivery, the Skill Workshop lifecycle, the Obsidian bridge including the
+vault confirmation and apply driven through a real Telegram ingress, real
+local-model providers, the re-embedding and rollback handoffs above, restart
+persistence, agent isolation, and the install lifecycle. The real 7.4.10 to
+7.5.0 upgrade test also runs on 2026.8.2 against the final commit. Runtime
+evidence for both is recorded under the laboratory evidence root cited in the
+release report.
 
 OpenClaw 2026.9.1-beta.1 is additionally supported through a bounded smoke run
 of the same frozen artifact: plugin load, recall, capture, and one re-embedding
-switch. Later OpenClaw commits are not silently incorporated.
+switch. Findings there are recorded in KNOWN-ISSUES.md and do not block the
+release. Later OpenClaw commits are not silently incorporated.
 
-Until those 2026.8.1 release-gate runs and the beta smoke are recorded, this
-document defines the compatibility contract and its acceptance criteria; it
-does not claim that the pending 2026.8.1 runtime evidence already exists.
-Earlier beta runtime verification does not substitute for the stable-primary
-matrix or upgrade test.
+The runtime matrix proves that every feature is enabled and coexists without
+warnings; it asserts the behaviour of the paths listed above, not of every
+feature individually. Emotion tiers, knowledge promotion, afterthoughts,
+persona voice, dream echo and the other additive layers are covered by the
+source test suite, not by a runtime stage.

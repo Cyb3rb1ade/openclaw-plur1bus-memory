@@ -84,11 +84,15 @@ test("7.5.0 documents its host targets, exact upstream base, native integration,
   assert.match(compatibility, /one durable embedding batch per\s+operator RPC/i);
   assert.match(compatibility, /confirmed migration remains resumable\s+after the original token TTL expires/i);
   assert.match(compatibility, /expired_migration_superseded/);
-  assert.match(compatibility, /full runtime matrix[\s\S]*2026\.8\.1/i);
-  assert.match(compatibility, /real 7\.4\.10 to 7\.5\.0 upgrade test[\s\S]*2026\.8\.1/i);
+  assert.match(compatibility, /full runtime matrix was executed against OpenClaw 2026\.8\.2/i);
+  assert.match(compatibility, /upgrade test also runs on 2026\.8\.2/i);
   assert.match(compatibility, /2026\.9\.1-beta\.1[\s\S]*bounded smoke run/i);
   assert.match(compatibility, /isIncognitoSessionKey[\s\S]*fail-closed/i);
-  assert.match(compatibility, /does not claim that the pending 2026\.8\.1 runtime evidence already exists/i);
+  // The floor is a source-verified claim and must say so; it must not borrow
+  // the 8.2 runtime evidence.
+  assert.match(compatibility, /2026\.8\.1 is source-verified[\s\S]*runtime matrix has not been executed/i);
+  assert.match(compatibility, /covered by the\s+source test suite, not by a runtime stage/i);
+  assert.doesNotMatch(compatibility, /pending 2026\.8\.1 runtime evidence/i);
 });
 
 test("7.5.0 changelog records the bounded and resumable re-embedding contract", async () => {

@@ -1,8 +1,10 @@
 # Known issues and 7.5.1 backlog
 
 This file records non-blocking findings that are deliberately not reopening the
-PLUR1BUS 7.5.0 source freeze. Runtime claims remain limited to the exact
-OpenClaw `2026.9.1-beta.1` target.
+PLUR1BUS 7.5.0 source freeze. Runtime claims are limited to what the recorded
+evidence shows: a full runtime matrix and upgrade test on OpenClaw 2026.8.2,
+source-level verification of the 2026.8.1 floor, and a bounded smoke run on
+2026.9.1-beta.1 (see docs/compatibility-openclaw.md).
 
 ## Deferred findings
 
@@ -20,3 +22,49 @@ OpenClaw `2026.9.1-beta.1` target.
 - Invalid-candidate and stale-provider cleanup leaks in re-embedding were fixed by `6f11ff3`; they are not open release blockers.
 - Re-embedding wording and official PLUR1BUS 7.4.10 ancestry wording were corrected by `947be94` and `46b1977`.
 - Shared `/tmp/_tombstones` test-fixture races were isolated by `d703497`, `7e7a308`, and their focused stress evidence; they do not change product semantics.
+
+## Host behaviour worth knowing (not defects in 7.5.0)
+
+- OpenClaw 2026.8.2 requires package lifecycle scripts: an install with
+  `--ignore-scripts` fails with `package lifecycle is incomplete` and
+  `EROFS ... .openclaw-lifecycle-lock`. 2026.8.1 does not.
+- OpenClaw hands plugin commands `entry?.sessionId || randomUUID()` (2026.8.1
+  and 2026.8.2 alike): in a chat with no persisted session every command
+  carries a fresh id. 7.5.0 binds the persisted session instead. Edge kept on
+  purpose: a `vault-confirm prepare` issued before the chat's first agent turn
+  is refused at confirm with `mismatchedFields: ["conversationPrincipal"]`;
+  repeat `prepare`. Pinned by `tests/vault-confirmation-first-turn-edge.test.js`.
+- Plugins cannot enumerate the secret store (`listSecrets` is not in the
+  plugin-sdk) nor write to it (`buildPluginSecretRefSetupPlan` demands an
+  exec-backed provider config).
+- OpenClaw has no reranking concept; PLUR1BUS supplies it entirely.
+- Memory diagnostics: RSS thresholds derive from Node's heap limit and the
+  process memory limit and have no config surface (default 1.09/1.64 GiB,
+  raised via `--max-old-space-size`); RSS growth is a hard-coded 1 GiB per
+  window, which loading a local embedding model exceeds by design; local
+  inference on the gateway thread produces `liveness warning` diagnostics.
+  None of these occur with the recommended OpenAI + Cohere setup.
+
+## Recall observations (backlog, not 7.5.0 defects)
+
+- `minScore` and `forgetThreshold` default to 0.3 while `1/(1+distance)` cannot
+  fall below 1/3: the floor never filters. Practically inert because ranking,
+  the reranker and the recommended embedding models carry the result; visible
+  only with local E5 and no reranker. Calibrate per embedding profile from a
+  golden set before changing it.
+- A bare UUID is not a semantic query; there is no lexical/exact retrieval
+  path. A hybrid path (exact id and metadata, lexical for rare tokens, vector
+  for meaning, one reranked pool) is the 7.5.1 candidate.
+- The runtime matrix asserts the behaviour of ten paths; the additive layers
+  (emotion tiers, knowledge promotion, afterthoughts, persona voice, dream echo,
+  meta-cognition, temporal context) are covered by the source suite only.
+
+## Laboratory findings (harness, not product)
+
+- Every stage needs a cleanup that can run without a healthy gateway; a
+  synthetic Telegram channel left configured after its credential file was
+  removed poisoned all following stages. Fixed by declaring the shrinking array
+  paths in the restore patch and by keeping the driver in the lab-owned fixture
+  directory instead of a sticky `/tmp`.
+- The lab still lacks a cleanup routine for finished runs; per-run containers,
+  volumes and build cache blocked new runs several times.
