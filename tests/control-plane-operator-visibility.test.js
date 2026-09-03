@@ -45,14 +45,14 @@ test("a key configured through apiKeyEnv counts as configured", () => {
   const projection = buildControlPlaneProjection({
     config: { reranker: { provider: "cohere", apiKeyEnv: "COHERE_API_KEY" } },
   });
-  assert.deepEqual(projection.credentials.reranker, { status: "configured", source: "env" });
+  assert.deepEqual(projection.credentials.reranker, { status: "configured", source: "env", path: "reranker.apiKeyEnv" });
 });
 
 test("apiKey wins over apiKeyEnv and keeps its own source", () => {
   const projection = buildControlPlaneProjection({
     config: { reranker: { apiKey: "sk-literal", apiKeyEnv: "COHERE_API_KEY" } },
   });
-  assert.deepEqual(projection.credentials.reranker, { status: "configured", source: "plaintext" });
+  assert.deepEqual(projection.credentials.reranker, { status: "configured", source: "plaintext", path: "reranker.apiKey" });
 });
 
 test("host-routed capabilities are marked as such instead of looking abandoned", () => {
@@ -61,10 +61,11 @@ test("host-routed capabilities are marked as such instead of looking abandoned",
   // them run without a key of their own.
   const projection = buildControlPlaneProjection({ config: {} });
   for (const name of ["merging", "knowledgePromotion", "skillMiner", "criticalPush", "emotionTier3"]) {
-    assert.deepEqual(projection.credentials[name], { status: "missing", source: "host_route" }, name);
+    assert.deepEqual(projection.credentials[name], { status: "missing", source: "host_route", path: projection.credentials[name].path }, name);
+    assert.match(projection.credentials[name].path, /\.apiKey$/, `${name} names a config path`);
   }
   // Embedding has no host route: without a key it really is unset.
-  assert.deepEqual(projection.credentials.embedding, { status: "missing", source: null });
+  assert.deepEqual(projection.credentials.embedding, { status: "missing", source: null, path: "embedding.apiKey" });
 });
 
 test("the reranking provider reaches the projection", () => {
@@ -119,4 +120,43 @@ test("with no reranker the card says so and still explains the switch", async ()
   const html = String(res.body);
   assert.match(html, /No reranker is active/);
   assert.match(html, /reranker\.provider/);
+});
+
+test("the resolved credential path travels with the result", () => {
+  // The table used to print a fixed "<section>.apiKey" label, so a key living
+  // in apiKeyEnv sent the reader to a config line that did not exist.
+  const viaEnv = buildControlPlaneProjection({ config: { reranker: { apiKeyEnv: "COHERE_API_KEY" } } });
+  assert.equal(viaEnv.credentials.reranker.path, "reranker.apiKeyEnv");
+
+  const viaLiteral = buildControlPlaneProjection({ config: { reranker: { apiKey: "sk-literal" } } });
+  assert.equal(viaLiteral.credentials.reranker.path, "reranker.apiKey");
+
+  // With nothing configured the primary path is still named, so the reader
+  // knows where to put a key.
+  const absent = buildControlPlaneProjection({ config: {} });
+  assert.equal(absent.credentials.reranker.path, "reranker.apiKey");
+});
+
+test("the dashboard names the path that holds the key and explains host_route", async () => {
+  const { createControlUiHttpHandler } = await import("../lib/setup/control-ui-plugin-runtime.js");
+  const res = {
+    statusCode: 0, body: "",
+    setHeader() {}, getHeader() { return undefined; },
+    end(body = "") { this.body = body; },
+  };
+  const handler = createControlUiHttpHandler({
+    getProjection: async () => buildControlPlaneProjection({
+      config: resolveEffectiveConfig({ reranker: { provider: "cohere", apiKeyEnv: "COHERE_API_KEY" } }),
+    }),
+  });
+  await handler({ method: "GET", url: CONTROL_UI_PATH_FOR_TEST }, res);
+  const html = String(res.body);
+  assert.match(html, /reranker\.apiKeyEnv/);
+  // The legend must explain the source a host-routed capability reports,
+  // otherwise "missing / host_route" reads like a defect.
+  assert.match(html, /host_route/);
+  // The apostrophe is HTML-escaped on render, so match the plain part.
+  assert.match(html, /configured model route/);
+  // And "missing" must no longer claim the feature stays off unconditionally.
+  assert.doesNotMatch(html, /Nothing is configured at this path\. The feature that needs it stays off\./);
 });

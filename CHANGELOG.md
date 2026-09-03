@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Behoben
+
+- **Credential Readiness nannte den falschen Konfigurationspfad.** Die Tabelle
+  druckte fest `<bereich>.apiKey`, auch wenn der Schluessel in `apiKeyEnv` lag.
+  Der Leser wurde damit auf eine Zeile geschickt, die es in seiner Konfiguration
+  gar nicht gibt. Der aufgeloeste Pfad wandert jetzt mit dem Ergebnis mit und
+  wird angezeigt.
+- **`host_route` war in der Legende nicht erklaert.** Die Quelle erschien ohne
+  Erlaeuterung, und der `missing`-Text behauptete pauschal, das Feature bleibe
+  deshalb aus. Beides ist korrigiert: die Legende beschreibt die Host-Route, und
+  der Status-Text verweist auf die Quellenspalte.
+
+
 ## [7.5.1] — 2026-09-03
 
 ### Behoben

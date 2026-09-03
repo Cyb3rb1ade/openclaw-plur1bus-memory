@@ -248,9 +248,9 @@ describe("redacted PLUR1BUS control-plane projection", () => {
       },
     });
 
-    assert.deepStrictEqual(projection.credentials.embedding, { status: "configured", source: "store" });
-    assert.deepStrictEqual(projection.credentials.embeddingFallback, { status: "configured", source: "plaintext" });
-    assert.deepStrictEqual(projection.credentials.reranker, { status: "configured", source: "exec" });
+    assert.deepStrictEqual(projection.credentials.embedding, { status: "configured", source: "store", path: "embedding.apiKey" });
+    assert.deepStrictEqual(projection.credentials.embeddingFallback, { status: "configured", source: "plaintext", path: "embedding.fallback.apiKey" });
+    assert.deepStrictEqual(projection.credentials.reranker, { status: "configured", source: "exec", path: "reranker.apiKey" });
     const serialized = JSON.stringify(projection);
     assert.doesNotMatch(serialized, new RegExp(sentinel));
     // The alias sentinel must stay unambiguous: "vault" is also the domain
