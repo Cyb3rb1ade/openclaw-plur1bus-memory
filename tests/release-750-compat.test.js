@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-const EXPECTED_VERSION = "7.5.5";
+const EXPECTED_VERSION = "7.5.6";
 // Built and runtime-verified against the stable host the package targets, not
 // against a beta no user runs. The installed-host loader test exercises this
 // exact OpenClaw, so a build-metadata drift would silently change what that
 // contract is measured against.
 const EXPECTED_BUILD_OPENCLAW_VERSION = "2026.8.2";
 const EXPECTED_PRIMARY_OPENCLAW_VERSION = "2026.8.1";
-const EXPECTED_ADDITIONAL_OPENCLAW_VERSION = "2026.9.1-beta.1";
+// 7.5.6: the additional target is the 2026.9.1 stable release, verified against
+// its own loader and the full suite. The former beta wording described a
+// release nobody runs and is gone from the contract.
+const EXPECTED_ADDITIONAL_OPENCLAW_VERSION = "2026.9.1";
 const EXPECTED_BUILD_OPENCLAW_COMMIT = "0965053fe6b9341776df147a6934b7485c60b5ca";
 const EXPECTED_UPSTREAM_VERSION = "7.4.10";
 const EXPECTED_UPSTREAM_TAG = "v7.4.10";
@@ -86,8 +89,13 @@ test("7.5.0 documents its host targets, exact upstream base, native integration,
   assert.match(compatibility, /expired_migration_superseded/);
   assert.match(compatibility, /full runtime matrix was executed against OpenClaw 2026\.8\.2/i);
   assert.match(compatibility, /upgrade test also runs on 2026\.8\.2/i);
-  assert.match(compatibility, /2026\.9\.1-beta\.1 is additionally supported as a source-verified\s+forward-compatibility target/i);
-  assert.match(compatibility, /no runtime smoke was\s+executed against the beta/i);
+  assert.match(compatibility, /OpenClaw 2026\.9\.1 stable is additionally supported and verified/i);
+  assert.match(compatibility, /## OpenClaw 2026\.9\.1/);
+  assert.doesNotMatch(compatibility, /2026\.9\.1-beta\.1 is additionally supported/i);
+  // 7.5.6: the 2026.9.1 evidence is a real loader run plus the full suite, not
+  // an unexecuted beta smoke. What it does not cover is stated instead.
+  assert.match(compatibility, /the full test suite, not a\s+second live re-embedding switch/i);
+  assert.match(compatibility, /No live re-embedding switch and no Telegram ingress run were repeated on\s+2026\.9\.1/i);
   assert.doesNotMatch(compatibility, /findings there are recorded in KNOWN-ISSUES/i);
   assert.match(compatibility, /isIncognitoSessionKey[\s\S]*fail-closed/i);
   // The floor is a source-verified claim and must say so; it must not borrow

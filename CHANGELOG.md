@@ -7,6 +7,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.5.6] — 2026-09-04
+
+### Geändert
+
+- **Kompatibilitätsvertrag auf OpenClaw 2026.9.1 nachgezogen.** Für die am
+  03.09.2026 erschienene Version war keine Codeänderung nötig. Belegt durch den
+  echten 2026.9.1-Plugin-Loader und die vollständige Suite gegen diesen Host
+  (4176 Zusicherungen grün; die zwei Fehlschläge sind der absichtliche
+  Baseline-Pin und ein Laborartefakt). Die Dokumentation nennt jetzt
+  2026.9.1 stable statt der nie ausgeführten Beta 2026.9.1-beta.1. Die
+  Build-Baseline bleibt `openclaw@2026.8.2`.
+
 ## [7.5.5] — 2026-09-04
 
 ### Behoben

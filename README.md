@@ -2,12 +2,13 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.5.5 — native OpenClaw 2026.8.x compatibility**
+**PLUR1BUS 7.5.6 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.5.5**. PLUR1BUS 7.5.5 supports OpenClaw `2026.8.1`
-as its primary host target; the declared compatibility floor is
-`openclaw@2026.8.1` and plugin API `>=2026.8.1`. The package is built and
-tested against the immutable build baseline `openclaw@2026.8.2`; see the
+Current source version: **7.5.6**. PLUR1BUS 7.5.6 supports OpenClaw `2026.8.1`
+as its primary host target and is additionally verified against OpenClaw
+`2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
+API `>=2026.8.1`. The package is built and tested against the immutable build
+baseline `openclaw@2026.8.2`; see the
 [compatibility contract](docs/compatibility-openclaw.md) for the full runtime
 matrix and evidence. The upstream source base is the immutable official tag
 `v7.4.10`, commit `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`.
@@ -24,6 +25,13 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.5.6 — verified against OpenClaw 2026.9.1
+
+- **No code change was needed for the 2026.9.1 host.** PLUR1BUS was loaded
+  through that release's own plugin loader and the full suite was run against
+  it. The compatibility contract now names 2026.9.1 stable and drops the
+  2026.9.1-beta.1 wording, which described a beta nobody runs.
 
 ### New in v7.5.5 — readiness agrees with the runtime
 
@@ -86,8 +94,7 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
 - **Exact 2026.8.x release contract.** Package metadata pins the tested host
   and SDK identity to `2026.8.1`/`2026.8.2`, while runtime behavior is guarded
   by feature detection rather than version-string branches. OpenClaw
-  `2026.9.1-beta.1` is additionally supported as a source-verified
-  forward-compatibility target (see the compatibility contract).
+  `2026.9.1` stable is additionally verified (see the compatibility contract).
 - **Pinned local inference.** E5 embeddings, the optional multilingual Jina v3
   embedding, Jina reranking, and the free BGE fallback use immutable Hugging
   Face revisions with exact required-file sizes and SHA-256 verification before
@@ -448,7 +455,7 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
-PLUR1BUS 7.5.3 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
+PLUR1BUS 7.5.6 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
 On an older host the installer refuses the package instead of deploying it:
 `requires plugin API >=2026.8.1, but this OpenClaw runtime exposes <version>`.
 

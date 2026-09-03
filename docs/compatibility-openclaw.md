@@ -1,9 +1,10 @@
 # OpenClaw compatibility contract
 
-PLUR1BUS 7.5.0 supports OpenClaw 2026.8.1 stable as its primary host target.
-OpenClaw 2026.9.1-beta.1 is an additionally supported forward-compatibility
-target. The declared compatibility floor is `openclaw@2026.8.1` and plugin API
-`>=2026.8.1`.
+PLUR1BUS supports OpenClaw 2026.8.1 stable as its primary host target.
+OpenClaw 2026.9.1 stable is additionally supported and verified; it replaces
+2026.9.1-beta.1, which was only ever a source-verified forward-compatibility
+target and is no longer referenced. The declared compatibility floor is
+`openclaw@2026.8.1` and plugin API `>=2026.8.1`.
 
 The immutable build baseline is `openclaw@2026.8.2`, commit
 `0965053fe6b9341776df147a6934b7485c60b5ca`, and npm integrity
@@ -41,7 +42,7 @@ PLUR1BUS uses only public OpenClaw capabilities:
 
 OpenClaw 2026.8.1 exposes every plugin-SDK subpath and host API used by this
 contract, including `skill_proposal_changed`; its public SDK surface is a
-superset of the 2026.9.1-beta.1 surface used here. Gateway behavior is not
+superset of the 2026.9.1 surface used here. Gateway behavior is not
 assumed to be a superset. In particular, registry staging, focused config
 mutation, config-watcher handoff, and restart recovery are explicit runtime
 gates for 2026.8.1 rather than conclusions drawn from release-note PR credits.
@@ -104,8 +105,9 @@ rather than being reported as a completed or safely rolled-back switch.
 Because this path depends directly on registry staging and config-watcher
 handoff, the 2026.8.1 matrix must record the config mutation, registry
 replacement, target probe, and durable terminal state as one explicit evidence
-chain. A 2026.9.1-beta.1 smoke would repeat the switch once as a forward-
-compatibility check; it has not been executed for 7.5.0.
+chain. The same switch has not been re-driven end to end on 2026.9.1; the
+2026.9.1 evidence below covers plugin load and the full test suite, not a
+second live re-embedding switch.
 Reverse migrations derive their quarantined LanceDB generation from a bounded
 digest rather than concatenating the operator-visible migration ID, so every
 accepted rollback request also satisfies the backend's 64-character generation
@@ -259,15 +261,36 @@ persistence, agent isolation, and the install lifecycle. The real 7.4.10 to
 evidence for both is recorded under the laboratory evidence root cited in the
 release report.
 
-OpenClaw 2026.9.1-beta.1 is additionally supported as a source-verified
-forward-compatibility target: the public plugin-SDK surface used here is a
-subset of the 2026.8.1 surface, no SDK subpath exists only in the beta, and the
-package resolution is recorded under the evidence root. No runtime smoke was
-executed against the beta for 7.5.0. The bounded smoke run (plugin load,
-recall, capture, one re-embedding switch) is an open item in the release
-report; it needs the beta's version and integrity as build arguments plus a
-version override in the evidence gate and image pin. Later OpenClaw commits are
-not silently incorporated.
+## OpenClaw 2026.9.1
+
+OpenClaw 2026.9.1 stable (published 2026-09-03) is a verified host target,
+checked on 2026-09-04 against `openclaw@2026.9.1` from the npm registry with
+that release's own `@openclaw/*` dependencies installed. Mixing a 2026.9.1
+distribution with 2026.8.2 dependencies produces a spurious load failure
+(`@openclaw/ai/diagnostics` missing `hasRetryableConnectionErrorCode`) that also
+takes down OpenClaw's own memory-core plugin; that is a laboratory artefact, not
+a compatibility finding.
+
+Evidence:
+
+- The `b13-installed-host-loader` test drives the real 2026.9.1 plugin loader.
+  PLUR1BUS loads, and every registration the test pins (runtime lifecycle,
+  local-model owner service, scoped embedding IPC service, preparation service,
+  the `reply_dispatch` hook, and the named registrations) is present.
+- The full suite runs against 2026.9.1: 4176 assertions pass. The two failures
+  are not compatibility defects. `feature-cron-plugin-runtime` asserts the
+  installed host is exactly the 2026.8.2 build baseline, which is the pin doing
+  its job, and `local-inference-dependency` fails identically on 2026.8.2 in the
+  same sandbox.
+- Host contract comparison, 2026.8.2 against 2026.9.1: the accepted plugin API
+  range is unchanged at `>=2026.5.17`, all 42 hook names are identical, every
+  registrar used here is present, the export map only gains
+  `./plugin-sdk/blob-runtime` and `./plugin-sdk/node-cli-runtime`, the plugin
+  config key remains the manifest id, and the Control UI design tokens are
+  value-identical, so the operator dashboard styling still matches its host.
+
+No live re-embedding switch and no Telegram ingress run were repeated on
+2026.9.1. Later OpenClaw commits are not silently incorporated.
 
 The runtime matrix proves that every feature is enabled and coexists without
 warnings; it asserts the behaviour of the paths listed above, not of every
