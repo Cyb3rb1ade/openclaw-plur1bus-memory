@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.5.5] — 2026-09-04
+
+### Behoben
+
+- **Credential Readiness meldete ein laufendes Embedding als fehlend.** Die
+  Tabelle las nur `embedding.apiKey` und `embedding.apiKeyEnv`. Die Laufzeit
+  nimmt den Schlüssel aber aus `OPENAI_API_KEY` (Fallback-Embedder:
+  `OPENAI_API_KEY_FALLBACK`), wenn keiner der beiden Pfade gesetzt ist; so
+  trägt eine Standardinstallation ihren Schlüssel. Die Projektion folgt jetzt
+  denselben Regeln: eine gesetzte Standardvariable zählt als `configured` mit
+  Quelle `env_default`, die Pfadspalte nennt den Variablennamen, der Wert wird
+  nie gelesen. Provider ohne Schlüsselbedarf (`local-transformers`,
+  abgeschalteter Reranker) stehen auf `not_required`, ein nicht eingeschalteter
+  Fallback auf `optional` statt `missing`.
+
 ## [7.5.4] — 2026-09-03
 
 ### Geändert
