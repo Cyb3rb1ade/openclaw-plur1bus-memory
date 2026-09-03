@@ -2,12 +2,24 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.5.0 — native OpenClaw 2026.8.x
+**PLUR1BUS 7.5.0 — native OpenClaw 2026.8.x compatibility**
 
-Current source version: **7.5.0**. The compatibility target is exactly
-`openclaw@2026.8.2`;
-The upstream source base is the immutable official tag `v7.4.10`, commit
-`c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`.
+Current source version: **7.5.0**. PLUR1BUS 7.5.0 supports OpenClaw `2026.8.1`
+as its primary host target; the declared compatibility floor is
+`openclaw@2026.8.1` and plugin API `>=2026.8.1`. The package is built and
+tested against the immutable build baseline `openclaw@2026.8.2`; see the
+[compatibility contract](docs/compatibility-openclaw.md) for the full runtime
+matrix and evidence. The upstream source base is the immutable official tag
+`v7.4.10`, commit `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`.
+
+### Web interface
+
+PLUR1BUS registers its own **"PLUR1BUS" tab in OpenClaw's Control UI**
+(`/plugins/memory-lancedb-namespaced/control`) — memory health, the workspace
+matrix, provider status, and migration progress, all in the browser. It rides
+on the OpenClaw Gateway's own port and authentication (no separate port, no
+separate login); reach it through however you already reach your Gateway
+(loopback, or a Tailscale/VPN front end), then open that tab.
 
 ## What it does
 
@@ -19,9 +31,11 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
   plugin registration and `gateway-runtime` dispatcher capabilities. Missing
   capabilities fail closed; PLUR1BUS never rewrites OpenClaw source, dist, or
   `node_modules` files.
-- **Exact 2026.9.1 beta release contract.** Package metadata pins the tested host and
-  SDK identity to `2026.9.1-beta.1`, while runtime behavior is guarded by
-  feature detection rather than version-string branches.
+- **Exact 2026.8.x release contract.** Package metadata pins the tested host
+  and SDK identity to `2026.8.1`/`2026.8.2`, while runtime behavior is guarded
+  by feature detection rather than version-string branches. OpenClaw
+  `2026.9.1-beta.1` is additionally supported as a source-verified
+  forward-compatibility target (see the compatibility contract).
 - **Pinned local inference.** E5 embeddings, the optional multilingual Jina v3
   embedding, Jina reranking, and the free BGE fallback use immutable Hugging
   Face revisions with exact required-file sizes and SHA-256 verification before
