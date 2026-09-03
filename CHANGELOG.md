@@ -7,6 +7,21 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.5.3] — 2026-09-03
+
+### Behoben
+
+- **Der Control-UI-Reiter wurde nie registriert.** OpenClaw 2026.8.2 bietet
+  `registerControlUiDescriptor` flach am Plugin-Objekt an; PLUR1BUS las
+  ausschliesslich `api.session.controls`. Die HTTP-Route antwortete deshalb
+  zwar, das Dashboard meldete aber "Plugin panel unavailable". Beide Wege
+  werden jetzt gelesen, der flache zuerst.
+- **"missing / host_route" las sich wie ein Defekt.** Faehigkeiten ohne eigenen
+  Schluessel, die auf OpenClaws Modellroute laufen, trugen das
+  `missing`-Abzeichen. Sie bekommen jetzt einen eigenen Status, und die Quelle
+  nennt die Route im Klartext.
+
+
 ## [7.5.2] — 2026-09-03
 
 ### Behoben

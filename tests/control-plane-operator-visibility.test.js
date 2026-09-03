@@ -160,3 +160,39 @@ test("the dashboard names the path that holds the key and explains host_route", 
   // And "missing" must no longer claim the feature stays off unconditionally.
   assert.doesNotMatch(html, /Nothing is configured at this path\. The feature that needs it stays off\./);
 });
+
+test("a host-routed capability does not wear the missing badge", async () => {
+  // "missing / host_route" read like a defect on a healthy install. The status
+  // column now carries the meaning and the source names the route.
+  const { createControlUiHttpHandler } = await import("../lib/setup/control-ui-plugin-runtime.js");
+  const res = { statusCode: 0, body: "", setHeader() {}, getHeader() { return undefined; }, end(b = "") { this.body = b; } };
+  const handler = createControlUiHttpHandler({
+    getProjection: async () => buildControlPlaneProjection({ config: resolveEffectiveConfig({}) }),
+  });
+  await handler({ method: "GET", url: CONTROL_UI_PATH_FOR_TEST }, res);
+  const html = String(res.body);
+  assert.match(html, /badge-host_route/);
+  assert.match(html, /OpenClaw default route/);
+  assert.match(html, /Nothing is missing here/);
+  // Embedding has no host route, so it keeps the honest "missing" badge.
+  assert.match(html, /badge-missing/);
+});
+
+test("the control UI tab registers through the flat api method", async () => {
+  // 2026.8.2 exposes registerControlUiDescriptor flat on the api object. Reading
+  // only api.session.controls left the tab unregistered: the route answered but
+  // the dashboard said "Plugin panel unavailable".
+  const { registerControlUiRuntime } = await import("../lib/setup/control-ui-plugin-runtime.js");
+  const descriptors = [];
+  const routes = [];
+  const api = {
+    registerHttpRoute: (route) => routes.push(route),
+    registerControlUiDescriptor: (descriptor) => descriptors.push(descriptor),
+    registerGatewayMethod: () => {},
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+  };
+  registerControlUiRuntime({ api, getProjection: async () => ({}) });
+  assert.equal(descriptors.length, 1, "a descriptor must be registered");
+  assert.equal(descriptors[0].id, "plur1bus");
+  assert.equal(routes.length, 1, "the http route must still be registered");
+});
