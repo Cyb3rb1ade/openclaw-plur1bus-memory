@@ -14,7 +14,7 @@
 - [x] B13 ownership, ACL, sharing, and legacy-migration closure
 - [x] Patched `brace-expansion`/`protobufjs` dependency updates
 - [x] `sharp@0.35.3`
-- [x] Node.js `>=22.5.0`
+- [x] Node.js `>=22.22.3`
 - [x] Exact LLM result cache and OpenClaw-default LLM routing
 - [x] No new runtime feature or schema migration in the release-preparation commits
 

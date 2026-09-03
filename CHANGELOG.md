@@ -43,6 +43,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   selbst kein `workspace/skills/*/SKILL.md`. Fehlende Capabilities,
   abweichende Ziele und geaenderte Revisionen bleiben fail-closed.
 
+### Geaendert
+
+- **Node.js 22.22.3 ist die neue Laufzeit-Untergrenze** (vorher 22.5.0). Die
+  alte Zusage hielt nicht: auf 22.5 bis 22.11 laeuft `node:sqlite` nur mit
+  `--experimental-sqlite`, und die Auto-Capture-Tests scheitern dort an der
+  Semantik des damaligen Testlaeufers (gemessen am 03.09.2026: 22.5.0, 22.6
+  und 22.9 rot, ab 22.12 gruen). Massgeblich ist der Host: OpenClaw 2026.8.2
+  verlangt `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`, und dieses Plugin
+  laeuft ausschliesslich in OpenClaw. `engines`, Lockfile, CI-Matrix und
+  Dokumentation nennen jetzt denselben Wert.
+
 ### Behoben
 
 - **Extern freigegebene Skills werden lokal fertig aktiviert.** Der
