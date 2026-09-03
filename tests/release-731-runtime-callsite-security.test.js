@@ -593,6 +593,13 @@ test("skill-miner callback receives one authorized partition, not foreign eviden
     requestContext: REQUEST_CONTEXT,
     aclPartition: partition,
     workspaceDir,
+    // The fixture rows are stamped against FROZEN_REM_NOW, but the miner's
+    // 30-day scan window used the real clock, so the rows aged out of it: the
+    // row sits at 2026-08-04T10:00Z and the cutoff passed it on 2026-09-03 at
+    // 10:00Z. The suite was green at 09:15 that morning and red at 12:13, and
+    // would have stayed red for good. The clock is frozen here like the
+    // fixture, so the window no longer depends on the day the test runs.
+    now: FROZEN_REM_NOW.getTime(),
     workspaceKey: partition.workspaceIdentity,
     llmCfg: { model: "test" },
     callLlm: async (messages) => {
