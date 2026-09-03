@@ -396,10 +396,34 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
-PLUR1BUS requires Node.js 22.22 or newer.
+PLUR1BUS 7.5.0 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
+On an older host the installer refuses the package instead of deploying it:
+`requires plugin API >=2026.8.1, but this OpenClaw runtime exposes <version>`.
 
-Until 7.5.0 is published, build an immutable tarball from this exact source
-checkout and install that artifact through OpenClaw's package installer:
+Install the published release through OpenClaw's package installer:
+
+```bash
+openclaw plugins install clawhub:@cyb3rb1ade/plur1bus-memory@7.5.0 \
+  --acknowledge-clawhub-risk --pin
+```
+
+The same release is on the npm-compatible registry, if your `@cyb3rb1ade`
+scope already points there:
+
+```bash
+openclaw plugins install @cyb3rb1ade/plur1bus-memory@7.5.0 --pin
+```
+
+Or install the immutable GitHub Release tarball:
+
+```bash
+openclaw plugins install \
+  https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory/releases/download/v7.5.0/cyb3rb1ade-plur1bus-memory-7.5.0.tgz
+```
+
+To build from this source checkout instead, produce a tarball and install that
+artifact rather than linking the directory; a source link is not an equivalent
+package-compatibility test:
 
 ```bash
 npm ci
@@ -409,11 +433,11 @@ openclaw plugins install \
   npm-pack:/absolute/path/cyb3rb1ade-plur1bus-memory-7.5.0.tgz --force
 ```
 
-Record the tarball's SHA-256 before transferring it. The installer copies the
-package into OpenClaw's plugin state; a source link is not an equivalent
-package-compatibility test. PLUR1BUS 7.5.0 never patches OpenClaw runtime files.
-Existing release artifacts remain unchanged and must not be relabelled as
-7.5.0.
+Record the tarball's SHA-256 before transferring it. PLUR1BUS 7.5.0 never
+patches OpenClaw runtime files. Existing release artifacts remain unchanged and
+must not be relabelled as 7.5.0.
+
+Restart the gateway after installing, so the new plugin version is loaded.
 
 Then add a `plugins.entries["memory-lancedb-namespaced"]` block to your `openclaw.json` (see below).
 
