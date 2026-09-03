@@ -1,6 +1,6 @@
 {
   "name": "@cyb3rb1ade/plur1bus-memory",
-  "version": "7.4.10",
+  "version": "7.5.0",
   "description": "Persistent, per-agent memory for OpenClaw. Turns every conversation into lasting knowledge — recalls, learns, and grows with your agent.",
   "type": "module",
   "main": "./index.js",
@@ -10,35 +10,36 @@
       "./index.js"
     ],
     "compat": {
-      "pluginApi": ">=2026.5.12-beta.6",
-      "minGatewayVersion": "2026.5.12-beta.6"
+      "pluginApi": ">=2026.8.1",
+      "minGatewayVersion": "2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.5.12",
-      "pluginSdkVersion": "2026.5.12"
+      "openclawVersion": "2026.8.2",
+      "pluginSdkVersion": "2026.8.2"
     }
   },
   "files": [
     "index.js",
     "lib/",
-    "patches/apply-cron-plugin-direct-dispatch.mjs",
     "scripts/",
     "docs/audits/",
     "docs/runbooks/",
     "docs/configuration.md",
+    "docs/compatibility-openclaw.md",
     "docs/recall-architecture.md",
     "docs/migration-v6.md",
     "docs/release-checklist.md",
     "docs/known-issues.md",
     ".openclaw/extensions/emotional-state-injector/",
     "openclaw.plugin.json",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
     "lint": "node --check index.js && find lib tests test -name '*.js' -exec node --check {} + && find scripts -name '*.mjs' -exec node --check {} +",
-    "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test tests/*.test.js test/*.test.js",
-    "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test tests/*.test.js test/*.test.js",
+    "test": "node --check index.js && node --check lib/memory-dynamics.js && node --check lib/safe-update.js && node --check lib/memory-history.js && node --test --test-concurrency=1 tests/*.test.js test/*.test.js",
+    "test:coverage": "c8 --include='index.js' --include='lib/**/*.js' --reporter=text --reporter=html --check-coverage=false node --test --test-concurrency=1 tests/*.test.js test/*.test.js",
     "repair": "node scripts/repair-installed-plugin.mjs",
     "repair:dry-run": "node scripts/repair-installed-plugin.mjs --dry-run",
     "repair:full": "node scripts/repair-installed-plugin.mjs --maintain-lancedb --run-cron",
@@ -51,7 +52,7 @@
     "postinstall": "node scripts/setup-feature-crons.mjs || true"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.22.3"
   },
   "repository": {
     "type": "git",
@@ -63,6 +64,7 @@
   "homepage": "https://github.com/Cyb3rb1ade/openclaw-plur1bus-memory#readme",
   "dependencies": {
     "@lancedb/lancedb": "^0.26.2",
+    "apache-arrow": "18.1.0",
     "openai": "^6.27.0"
   },
   "optionalDependencies": {
@@ -70,7 +72,8 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "c8": "^11.0.0"
+    "c8": "^11.0.0",
+    "openclaw": "2026.8.2"
   },
   "overrides": {
     "@huggingface/transformers": {

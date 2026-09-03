@@ -29,6 +29,9 @@ const routingCapability = Object.freeze({
   normalizeMessageChannel(value) {
     return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
   },
+  isIncognitoSessionKey() {
+    return false;
+  },
 });
 
 function makeVector() {
@@ -806,6 +809,57 @@ test("capture scheduler abort reaches summary and Emotion without late durable w
   }
 });
 
+test("automatic capture reflection uses the captured workspace context", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-auto-reflection-workspace-"));
+  t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+  const originalEmbedBatch = LocalTransformersEmbeddingProvider.prototype.embedBatch;
+  LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => makeVector();
+  LocalTransformersEmbeddingProvider.prototype.embedBatch = async (texts) => texts.map(() => makeVector());
+  t.after(() => {
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
+    LocalTransformersEmbeddingProvider.prototype.embedBatch = originalEmbedBatch;
+  });
+
+  const pluginModule = await loadFreshPlugin();
+  const agentId = "auto-reflection-agent";
+  const api = createApi(baseDbPath, {
+    autoCapture: true,
+    metaCognition: { enabled: true, sessionThreshold: 1, intervalDays: 7 },
+    neo: { enabled: true },
+    runtime: { captureTimeoutMs: 10_000 },
+  });
+  t.after(() => api._shutdown());
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  await api._emit("agent_end", {
+    success: true,
+    turnId: "turn-auto-reflection",
+    runId: "run-auto-reflection",
+    sessionKey: `agent:${agentId}:main`,
+    sessionId: "session-auto-reflection",
+    messages: [{
+      role: "user",
+      content: "Remember that automatic reflection should keep the workspace directory from the capture context.",
+    }],
+  }, {
+    agentId,
+    workspaceDir: baseDbPath,
+    sessionKey: `agent:${agentId}:main`,
+    sessionId: "session-auto-reflection",
+    messageProvider: "telegram",
+    senderId: "owner",
+    chatId: "private-chat",
+  });
+
+  assert.doesNotMatch(JSON.stringify(api._logs), /ReferenceError|commandCtx is not defined|workspaceDir is not defined/);
+  assert.match(JSON.stringify(api._logs), /meta-reflection triggered after 1 sessions/);
+  assert.equal(existsSync(join(baseDbPath, ".adaptive-learning", "meta-cognition-metrics.json")), true);
+  const state = JSON.parse(readFileSync(join(baseDbPath, "_meta-cognition-state.json"), "utf8"));
+  assert.equal(state.sessionCountSinceReflection, 0);
+  assert.ok(state.lastReflectionAt > 0);
+});
+
 test("recall commit barriers block writes when the runtime ignores abort and succeeds late", async (t) => {
   for (const scenario of ["emotion-classification", "continuity-overlay"]) {
     const baseDbPath = mkdtempSync(join(tmpdir(), `plur1bus-recall-abort-${scenario}-`));
@@ -920,4 +974,60 @@ test("recall commit barriers block writes when the runtime ignores abort and suc
       assert.equal(existsSync(join(baseDbPath, ".current-mood.txt")), false);
     }
   }
+});
+
+test("continuity overlay contradiction enrichment reuses the recall target set", async (t) => {
+  const baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-continuity-overlay-targets-"));
+  t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  const originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
+  const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
+  LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => makeVector();
+  LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => makeVector();
+  t.after(() => {
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
+  });
+
+  const pluginModule = await loadFreshPlugin();
+  const agentId = "continuity-overlay-targets-agent";
+  const db = new pluginModule.MemoryDB(join(baseDbPath, agentId), VECTOR_DIM);
+  try {
+    await db.store({
+      id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      text: "The release process originally required a full verification run.",
+      summary: "Original release verification process",
+      vector: makeVector(),
+      category: "project",
+      createdAt: Date.now(),
+      storedBy: agentId,
+    });
+  } finally {
+    await db.shutdown();
+  }
+
+  const api = createApi(baseDbPath, {
+    autoRecall: true,
+    runtime: { recallTimeoutMs: 5_000 },
+    continuityEngine: {
+      enabled: true,
+      tasteGate: { enabled: false },
+      overlays: { enabled: true, autoCreateOnRecall: false, maxPerSession: 1 },
+    },
+  });
+  t.after(() => api._shutdown());
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const turn = await observeOfficialTurn(api, {
+    agentId,
+    workspaceDir: baseDbPath,
+    runId: "continuity-overlay-targets",
+    prompt: "The release process now uses a different verification route.",
+  });
+  const results = await api._emit("before_prompt_build", turn.event, turn.ctx);
+
+  assert.ok(results.some((result) => result?.prependContext?.includes("Original release verification process")));
+  assert.doesNotMatch(
+    JSON.stringify(api._logs),
+    /continuity-engine: contradiction enrichment failed/,
+  );
 });

@@ -1,8 +1,17 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { createOpenClawMemoryEmbeddingProviderAdapters } from "../lib/providers/openclaw-memory-embedding-adapters.js";
+import { mkdtempSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createOpenClawMemoryEmbeddingProviderAdapters,
+  registerOpenClawMemoryEmbeddingProviders,
+} from "../lib/providers/openclaw-memory-embedding-adapters.js";
+import { createScopedEmbeddingIpcServer } from "../lib/providers/scoped-embedding-ipc.js";
 
 const originalFetch = globalThis.fetch;
+const ACTIVE_FINGERPRINT_ID = `embedding:v1:sha256:${"a".repeat(64)}`;
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -37,12 +46,137 @@ async function createCompatibleProvider(dim = 3) {
 }
 
 describe("OpenClaw memory embedding provider adapters", () => {
+  it("registers the target OpenClaw generic embedding-provider contract", async () => {
+    const registered = [];
+    const api = {
+      registerEmbeddingProvider(adapter) { registered.push(adapter); },
+      logger: { info() {}, warn() {} },
+    };
+
+    const adapters = registerOpenClawMemoryEmbeddingProviders(api, {
+      embedding: { dimensions: 3, model: "custom-embedding-model" },
+    });
+    assert.equal(adapters.length, 3);
+    assert.deepEqual(registered.map((adapter) => adapter.id), [
+      "plur1bus-openai",
+      "plur1bus-openai-compatible",
+      "plur1bus-e5-small",
+    ]);
+    const compatible = await registered[1].create({
+      model: "custom-embedding-model",
+      dimensions: 3,
+      config: {},
+    });
+    assert.equal(compatible.provider.dimensions, 3);
+    assert.equal(typeof compatible.provider.embed, "function");
+    assert.equal(typeof compatible.provider.embedBatch, "function");
+    assert.equal("embedQuery" in compatible.provider, false);
+  });
+
+  it("reports the optional generic provider bridge as informational when the host capability is absent", () => {
+    const messages = { info: [], warn: [] };
+    const api = {
+      logger: {
+        info(message) { messages.info.push(message); },
+        warn(message) { messages.warn.push(message); },
+      },
+    };
+
+    assert.deepStrictEqual(registerOpenClawMemoryEmbeddingProviders(api), []);
+    assert.equal(messages.warn.length, 0);
+    assert.equal(messages.info.length, 1);
+    assert.match(messages.info[0], /registerEmbeddingProvider.*unavailable/i);
+  });
+
+  it("exposes the target OpenClaw close contract for the native local provider", async () => {
+    const resources = [];
+    const localModelGeneration = {
+      registerResource(resource, label) { resources.push([resource, label]); },
+      async beforeAcquire() {},
+    };
+    const adapter = createOpenClawMemoryEmbeddingProviderAdapters({}, { localModelGeneration })
+      .find((item) => item.id === "plur1bus-e5-small");
+    const created = await adapter.create({
+      config: {},
+      model: "intfloat/multilingual-e5-small",
+      local: {},
+    });
+
+    assert.equal(typeof created.provider.close, "function");
+    assert.deepEqual(resources, [], "OpenClaw owns adapter-provider close and reuse across plugin registries");
+    await created.provider.close();
+    await created.provider.close();
+  });
+
+  it("keeps a tool-discovery local adapter usable across activation-owner rotation", async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), "plur1bus-adapter-ipc-"));
+    const calls = [];
+    const embeddings = {
+      model: "intfloat/multilingual-e5-small",
+      dimensions: () => 384,
+      async embedQuery(text) { calls.push(["query", text]); return Array(384).fill(0.01); },
+      async embedPassage(text) { calls.push(["passage", text]); return Array(384).fill(0.01); },
+      async embedBatch(texts) { calls.push(["batch", texts]); return texts.map(() => Array(384).fill(0.01)); },
+    };
+    let server = createScopedEmbeddingIpcServer({
+      stateRoot,
+      embeddings,
+      fingerprintId: ACTIVE_FINGERPRINT_ID,
+    });
+    let created = null;
+
+    try {
+      await server.start();
+      const adapter = createOpenClawMemoryEmbeddingProviderAdapters({}, {
+        scopedEmbeddingIpc: { stateRoot, fingerprintId: ACTIVE_FINGERPRINT_ID },
+      })
+        .find((item) => item.id === "plur1bus-e5-small");
+      created = await adapter.create({
+        config: {},
+        model: "intfloat/multilingual-e5-small",
+        local: {},
+      });
+      const vector = await created.provider.embed("scoped query", { inputType: "query" });
+      assert.equal(vector.length, 384);
+      assert.deepEqual(calls, [["query", "scoped query"]]);
+
+      await server.shutdown();
+      const replacementEmbeddings = {
+        model: "intfloat/multilingual-e5-small",
+        dimensions: () => 384,
+        async embedQuery(text) { calls.push(["replacement-query", text]); return Array(384).fill(0.02); },
+        async embedPassage(text) { calls.push(["replacement-passage", text]); return Array(384).fill(0.02); },
+        async embedBatch(texts) {
+          calls.push(["replacement-batch", texts]);
+          return texts.map(() => Array(384).fill(0.02));
+        },
+      };
+      server = createScopedEmbeddingIpcServer({
+        stateRoot,
+        embeddings: replacementEmbeddings,
+        fingerprintId: ACTIVE_FINGERPRINT_ID,
+      });
+      await server.start();
+      const replacementVector = await created.provider.embed("after hot reload", { inputType: "query" });
+      assert.equal(replacementVector.length, 384);
+      assert.equal(replacementVector[0], 0.02);
+      assert.deepEqual(calls, [
+        ["query", "scoped query"],
+        ["replacement-query", "after hot reload"],
+      ]);
+    } finally {
+      await created?.provider.close();
+      await server.shutdown();
+      await rm(stateRoot, { recursive: true, force: true });
+    }
+  });
+
   it("rejects remote embedding vectors with the wrong dimension", async () => {
     globalThis.fetch = jsonFetch({ data: [{ embedding: [0.1, 0.2] }] });
     const provider = await createCompatibleProvider(3);
 
     await assert.rejects(
-      () => provider.embedQuery("dimension check"),
+      () => provider.embed("dimension check", { inputType: "query" }),
       /dimension mismatch.*expected 3.*got 2/i,
     );
   });
@@ -51,6 +185,9 @@ describe("OpenClaw memory embedding provider adapters", () => {
     globalThis.fetch = jsonFetch({ data: [{ embedding: [0.1, 0.2, 0.3] }] });
     const provider = await createCompatibleProvider(3);
 
-    assert.deepStrictEqual(await provider.embedQuery("dimension check"), [0.1, 0.2, 0.3]);
+    assert.deepStrictEqual(
+      await provider.embed("dimension check", { inputType: "query" }),
+      [0.1, 0.2, 0.3],
+    );
   });
 });

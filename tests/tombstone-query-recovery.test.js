@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import plugin from "../index.js";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { tombstoneRegistryDir } from "../lib/tombstone.js";
 
 const VECTOR_DIM = 384;
 
@@ -57,12 +58,15 @@ function makeMockApi(baseDbPath) {
 
 describe("query audit recovery respektiert forgetThreshold ohne Klartext", () => {
   let api;
+  let testRoot;
   let baseDbPath;
   let originalEmbedQuery;
   let originalEmbedPassage;
 
   before(() => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-query-recovery-"));
+    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-query-recovery-"));
+    baseDbPath = join(testRoot, "db");
+    mkdirSync(baseDbPath);
     originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
     originalEmbedPassage = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     LocalTransformersEmbeddingProvider.prototype.embedQuery = async function (text) {
@@ -78,8 +82,12 @@ describe("query audit recovery respektiert forgetThreshold ohne Klartext", () =>
   after(() => {
     LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
     LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbedPassage;
-    rmSync(baseDbPath, { recursive: true, force: true });
-    rmSync(join(baseDbPath, "..", "_tombstones"), { recursive: true, force: true });
+    rmSync(testRoot, { recursive: true, force: true });
+  });
+
+  it("uses a suite-private tombstone registry instead of the shared temp root", () => {
+    assert.equal(tombstoneRegistryDir(baseDbPath), join(testRoot, "_tombstones"));
+    assert.notEqual(tombstoneRegistryDir(baseDbPath), join(tmpdir(), "_tombstones"));
   });
 
   it("exakte Wiederholung repariert das Audit; unpassende Query liefert 'No matching memory found'", async () => {

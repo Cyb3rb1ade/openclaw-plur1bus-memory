@@ -22,12 +22,6 @@
 # gelöscht. Plugin-Updates löschen nicht {ziel}/memory/lancedb-namespaced,
 # bestehende Embeddings, Provider-Konfiguration oder Cohere-Reranker-Settings.
 #
-# Umgebungsvariablen:
-#   PLUR1BUS_SKIP_HOST_PATCH=1   Überspringt Schritt 9 (Patches im OpenClaw-
-#                                Dist-Baum). Gilt gleichlautend für
-#                                setup-feature-crons.mjs; die Installation
-#                                läuft ohne Host-Patch vollständig durch.
-#
 # Runtime-Verhalten: Der v4-Normalbetrieb nutzt OpenClaw-Hooks, Plugin-Services
 # und OpenClaw-managed Crons. Dieses Script richtet keine Host-/User-Crontabs
 # als Primärpfad ein, außer --legacy-host-cron wird ausdrücklich gesetzt.
@@ -744,10 +738,15 @@ EMBEDDING_PROVIDER="openai"
 EMBEDDING_BASE_URL=""
 EMBEDDING_DIMENSIONS=""
 EMBEDDING_LOCAL_MODEL="intfloat/multilingual-e5-small"
+EMBEDDING_LOCAL_REVISION="614241f622f53c4eeff9890bdc4f31cfecc418b3"
+EMBEDDING_LOCAL_QUERY_PREFIX="query: "
+EMBEDDING_LOCAL_PASSAGE_PREFIX="passage: "
 EMBEDDING_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
+JINA_LICENSE_ACCEPTED="false"
+MODEL_PREPARATION_PROFILE=""
 RERANKER_PROVIDER="cohere"
 RERANKER_MODEL="rerank-v3.5"
-RERANKER_LOCAL_MODEL="Alibaba-NLP/gte-reranker-modernbert-base"
+RERANKER_LOCAL_MODEL="woxpas-ai/bge-reranker-v2-m3-onnx"
 RERANKER_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
 
 # Provider-Wizard: neue Installationen nutzen scripts/provider-wizard.mjs (Node i18n-konform).
@@ -759,8 +758,10 @@ echo ""
 info "Embedding-Provider-Auswahl:"
 info "  1) OpenAI text-embedding-3-large — empfohlen, remote, API-Key erforderlich."
 info "  2) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
-info "  3) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
-prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=lokal, custom=OpenAI-kompatibel" "openai" "openai" "local" "custom"
+info "  3) Local JinaAI jina-embeddings-v3 — mehrsprachig, Matryoshka, optionaler verifizierter ~0,58-GB-Q8-Download."
+warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
+info "  4) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
+prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=E5, jina=JinaAI, custom=OpenAI-kompatibel" "openai" "openai" "local" "jina" "custom"
 
 case "$EMBEDDING_PROVIDER_MODE" in
   openai)
@@ -772,10 +773,32 @@ case "$EMBEDDING_PROVIDER_MODE" in
     ;;
   local)
     EMBEDDING_PROVIDER="local-transformers"
+    EMBEDDING_LOCAL_MODEL="intfloat/multilingual-e5-small"
+    EMBEDDING_LOCAL_REVISION="614241f622f53c4eeff9890bdc4f31cfecc418b3"
+    EMBEDDING_LOCAL_QUERY_PREFIX="query: "
+    EMBEDDING_LOCAL_PASSAGE_PREFIX="passage: "
     EMBEDDING_MODEL="$EMBEDDING_LOCAL_MODEL"
     EMBEDDING_DIMENSIONS=384
     info "Lokaler Provider nutzt $EMBEDDING_MODEL (384d) mit query/passage Prefixing."
     info "Erster echter Local-Smoke/Call lädt das Modell nach $EMBEDDING_LOCAL_CACHE_DIR."
+    ;;
+  jina)
+    if ! confirm "CC BY-NC 4.0 für JinaAI jina-embeddings-v3 ausdrücklich akzeptieren?" "n"; then
+      error "JinaAI jina-embeddings-v3 wird ohne ausdrückliche Zustimmung zur CC BY-NC 4.0 nicht konfiguriert."
+      exit 1
+    fi
+    JINA_LICENSE_ACCEPTED="true"
+    MODEL_PREPARATION_PROFILE="jina-v3-multilingual-1024"
+    EMBEDDING_PROVIDER="local-transformers"
+    EMBEDDING_LOCAL_MODEL="jinaai/jina-embeddings-v3"
+    EMBEDDING_LOCAL_REVISION="68ed94909d564380f954be27ae2e133214c1adc9"
+    EMBEDDING_LOCAL_QUERY_PREFIX=""
+    EMBEDDING_LOCAL_PASSAGE_PREFIX=""
+    EMBEDDING_MODEL="$EMBEDDING_LOCAL_MODEL"
+    EMBEDDING_DIMENSIONS=1024
+    info "Lokaler Provider nutzt $EMBEDDING_MODEL (1024d; Matryoshka: 32/64/128/256/512/768/1024)."
+    warn "CC BY-NC 4.0: Diese lokale Modelloption ist nur für nicht-kommerzielle Nutzung vorgesehen."
+    info "Der erste echte Aufruf lädt den gepinnten Q8-ONNX-Export nach $EMBEDDING_LOCAL_CACHE_DIR."
     ;;
   custom)
     EMBEDDING_PROVIDER="openai-compatible"
@@ -798,7 +821,7 @@ esac
 echo ""
 info "Reranker-Auswahl:"
 info "  1) Cohere rerank — remote, API-Key erforderlich, stabiler Default."
-info "  2) Local gte-reranker-modernbert-base — lokal, English-primary, beta1 experimental."
+info "  2) Local BGE reranker-v2-m3 — frei, mehrsprachig, verifizierter ~570-MB-ONNX-Download."
 info "  3) Disabled — Vector-only Recall."
 prompt_choice RERANKER_PROVIDER_MODE "Reranker provider: cohere=remote, local=lokal experimental, disabled=aus" "cohere" "cohere" "local" "disabled"
 case "$RERANKER_PROVIDER_MODE" in
@@ -811,7 +834,7 @@ case "$RERANKER_PROVIDER_MODE" in
   local)
     RERANKER_PROVIDER="local-transformers"
     RERANKER_MODEL="$RERANKER_LOCAL_MODEL"
-    warn "Local Reranker ist in v4 weiterhin experimental und English-primary; Pass erst nach grünem Node/Transformers.js-Smoke."
+    info "Lokaler Reranker nutzt den revisions- und hashgeprüften BGE-ONNX-Export."
     ;;
   disabled)
     RERANKER_PROVIDER="disabled"
@@ -1066,18 +1089,94 @@ else
     EMBEDDING_FALLBACK_BLOCK='null'
   fi
 
-  # Workspaces-Array für obsidianBridge aus WORKSPACE_MAP bauen
+  # --- Obsidian-Vault einrichten -------------------------------------------
+  # Bis 7.5.0 zeigte obsidianBridge.workspaces auf die Agenten-Workspaces, die
+  # keine Vaults sind. requireVaultPathConfirmation blieb damit dauerhaft
+  # unerfüllt und jede Installation stand auf "PENDING SETUP", ohne dass es
+  # einen Weg gab, das abzuschliessen. Jetzt wird der Vault hier geklaert.
+  OBSIDIAN_VAULT_PATH=""
+  OBSIDIAN_BRIDGE_ENABLED="true"
+  declare -a FOUND_VAULTS=()
+  for probe_root in "$HOME/Documents" "$HOME/Obsidian" "$HOME"; do
+    [[ -d "$probe_root" ]] || continue
+    while IFS= read -r marker; do
+      [[ -n "$marker" ]] || continue
+      FOUND_VAULTS+=("$(dirname "$(dirname "$marker")")")
+    done < <(find "$probe_root" -maxdepth 3 -type f \
+      \( -name app.json -o -name workspace.json \) -path '*/.obsidian/*' 2>/dev/null | head -20)
+  done
+  # Duplikate entfernen, Reihenfolge erhalten
+  if ((${#FOUND_VAULTS[@]} > 0)); then
+    mapfile -t FOUND_VAULTS < <(printf '%s\n' "${FOUND_VAULTS[@]}" | awk '!seen[$0]++')
+  fi
+
+  if ((${#FOUND_VAULTS[@]} > 0)); then
+    info "Obsidian erkannt. Gefundene Vaults:"
+    for idx in "${!FOUND_VAULTS[@]}"; do
+      printf '    [%d] %s\n' "$((idx + 1))" "${FOUND_VAULTS[$idx]}"
+    done
+    prompt_choice OBSIDIAN_VAULT_MODE \
+      "Obsidian-Vault: existing=vorhandenen nutzen, new=neuen anlegen, skip=Bridge aus" \
+      "existing" "existing" "new" "skip"
+  else
+    info "Kein Obsidian-Vault gefunden."
+    prompt_choice OBSIDIAN_VAULT_MODE \
+      "Obsidian-Vault: new=neuen anlegen, skip=Bridge aus" \
+      "new" "new" "skip"
+  fi
+
+  case "$OBSIDIAN_VAULT_MODE" in
+    existing)
+      if ((${#FOUND_VAULTS[@]} == 1)); then
+        OBSIDIAN_VAULT_PATH="${FOUND_VAULTS[0]}"
+      else
+        prompt_input OBSIDIAN_VAULT_PATH "Pfad des zu nutzenden Vaults" "${FOUND_VAULTS[0]}"
+      fi
+      ;;
+    new)
+      prompt_input OBSIDIAN_VAULT_PATH "Pfad fuer den neuen Vault" "$HOME/Documents/PLUR1BUS"
+      if [[ -n "$OBSIDIAN_VAULT_PATH" ]]; then
+        mkdir -p "$OBSIDIAN_VAULT_PATH/.obsidian"
+        if [[ ! -f "$OBSIDIAN_VAULT_PATH/.obsidian/app.json" ]]; then
+          printf '{\n  "attachmentFolderPath": "attachments"\n}\n' \
+            > "$OBSIDIAN_VAULT_PATH/.obsidian/app.json"
+        fi
+        info "Vault angelegt: $OBSIDIAN_VAULT_PATH"
+      fi
+      ;;
+    skip)
+      OBSIDIAN_BRIDGE_ENABLED="false"
+      info "Obsidian-Bridge bleibt ausgeschaltet."
+      ;;
+  esac
+
+  if [[ "$OBSIDIAN_BRIDGE_ENABLED" == "true" && -n "$OBSIDIAN_VAULT_PATH" ]]; then
+    info "Vault bestaetigen nach dem Start:"
+    info "  plur1bus-obsidian use --session <key> --path $OBSIDIAN_VAULT_PATH"
+    info "  plur1bus-obsidian confirm --session <key> --path $OBSIDIAN_VAULT_PATH --token <token>"
+  fi
+
+  # Workspaces-Array für obsidianBridge bauen: der gewaehlte Vault, sonst leer
   OBSIDIAN_WORKSPACES_JSON="["
   first_ws=1
   for agent in "${AGENT_LIST[@]}"; do
-    ws_path="${WORKSPACE_MAP[$agent]}"
-    [[ -z "$ws_path" ]] && continue
+    # Der Bridge spiegelt in den Vault, nicht in den Agenten-Workspace. Ohne
+    # gewaehlten Vault bleibt die Liste leer und die Bridge damit inaktiv.
+    [[ -n "$OBSIDIAN_VAULT_PATH" ]] || continue
     [[ "$first_ws" -eq 0 ]] && OBSIDIAN_WORKSPACES_JSON+=","
-    OBSIDIAN_WORKSPACES_JSON+=$(jq -n --arg id "$agent" --arg path "$ws_path" \
+    OBSIDIAN_WORKSPACES_JSON+=$(jq -n --arg id "$agent" --arg path "$OBSIDIAN_VAULT_PATH" \
       '{"workspaceId": $id, "agentId": $id, "path": $path}')
     first_ws=0
   done
   OBSIDIAN_WORKSPACES_JSON+="]"
+
+  if [[ "$JINA_LICENSE_ACCEPTED" == "true" ]]; then
+    MODEL_PREPARATION_BLOCK=$(jq -n \
+      --arg profile "$MODEL_PREPARATION_PROFILE" \
+      '{"profile": $profile, "acceptNonCommercialLicense": true}')
+  else
+    MODEL_PREPARATION_BLOCK='null'
+  fi
 
   # Plugin-Config-Objekt
   PLUGIN_CONFIG=$(jq -n \
@@ -1087,25 +1186,31 @@ else
     --arg embedding_base_url "${EMBEDDING_BASE_URL:-}" \
     --argjson embedding_dims "${EMBEDDING_DIMENSIONS:-3072}" \
     --arg embedding_local_model "$EMBEDDING_LOCAL_MODEL" \
+    --arg embedding_local_revision "$EMBEDDING_LOCAL_REVISION" \
+    --arg embedding_local_query_prefix "$EMBEDDING_LOCAL_QUERY_PREFIX" \
+    --arg embedding_local_passage_prefix "$EMBEDDING_LOCAL_PASSAGE_PREFIX" \
     --arg embedding_local_cache_dir "$EMBEDDING_LOCAL_CACHE_DIR" \
     --arg db_path "${EXISTING_BASE_DB_PATH:-$TARGET_DIR/memory/lancedb-namespaced}" \
     --argjson obsidian_workspaces "$OBSIDIAN_WORKSPACES_JSON" \
+    --argjson obsidian_enabled "$OBSIDIAN_BRIDGE_ENABLED" \
     --argjson reranker "$RERANKER_BLOCK" \
     --argjson merging "$MERGING_BLOCK" \
     --argjson schicht15 "$SCHICHT15_BLOCK" \
     --argjson embedding_fallback "$EMBEDDING_FALLBACK_BLOCK" \
+    --argjson model_preparation "$MODEL_PREPARATION_BLOCK" \
     '{
       "enabled": true,
-      "config": {
+      "config": ({
         "embedding": (
           if $embedding_provider == "local-transformers" then
             {
               "provider": "local-transformers",
               "local": {
                 "model": $embedding_local_model,
+                "revision": $embedding_local_revision,
                 "dimensions": $embedding_dims,
-                "queryPrefix": "query: ",
-                "passagePrefix": "passage: ",
+                "queryPrefix": $embedding_local_query_prefix,
+                "passagePrefix": $embedding_local_passage_prefix,
                 "cacheDir": $embedding_local_cache_dir
               }
             }
@@ -1142,7 +1247,7 @@ else
         "merging": $merging,
         "schicht15": $schicht15,
         "obsidianBridge": {
-          "enabled": true,
+          "enabled": $obsidian_enabled,
           "watch": false,
           "mode": "augment",
           "dryRun": true,
@@ -1157,7 +1262,7 @@ else
             }
           }
         }
-      }
+      } | if $model_preparation == null then . else . + {"modelPreparation": $model_preparation} end)
     }')
 fi
 
@@ -1510,41 +1615,14 @@ for agent in "${AGENT_LIST[@]}"; do
   fi
 done
 
-# ─── Schritt 9: OpenClaw-Patches anwenden ─────────────────────────────────────
-# Diese Patches schreiben in den OpenClaw-Dist-Baum des Hosts. Wer diese
-# Angriffsfläche nicht will, setzt PLUR1BUS_SKIP_HOST_PATCH=1 — dieselbe
-# Variable, die setup-feature-crons.mjs respektiert. Übersprungen wird nur
-# gewarnt, der Installer läuft weiter: der Cron-Direct-Dispatch-Patch ist
-# best-effort, ohne ihn beantworten Afterthought/Critical Push weiterhin,
-# nur über einen äußeren Agent-Turn.
+# ─── Schritt 9: Native OpenClaw-Integration ──────────────────────────────────
+# Seit 7.5.0 nutzt PLUR1BUS ausschließlich öffentliche Plugin-, Gateway- und
+# CLI-Capabilities. Der Installer verändert weder OpenClaw-Dist-Dateien noch
+# node_modules. Fehlende Capabilities werden beim Pluginstart fail-closed
+# gemeldet; nur die betroffenen Feature-Crons bleiben dann deaktiviert.
 
-step "Schritt 9: OpenClaw-Patches anwenden"
-
-PATCHES_SCRIPT="$SOURCE_DIR/patches/apply-memory-patches.sh"
-PATCHES_USER_SCRIPT="$SOURCE_DIR/patches/apply-plur1bus-user-hotfix.sh"
-PATCHES_CRON_DIRECT_SCRIPT="$SOURCE_DIR/patches/apply-cron-plugin-direct-dispatch.mjs"
-if [[ "${PLUR1BUS_SKIP_HOST_PATCH:-0}" == "1" ]]; then
-  warn "PLUR1BUS_SKIP_HOST_PATCH=1 — Host-Patches werden nicht angewendet."
-  info "Nachholbar mit: bash '$PATCHES_SCRIPT'"
-elif [[ -f "$PATCHES_SCRIPT" ]]; then
-  if [[ "$DRY_RUN" == "0" ]]; then
-    if [[ "$IS_REMOTE" == "1" ]]; then
-      scp "$PATCHES_SCRIPT" "${SSH_HOST}:/tmp/apply-memory-patches.sh"
-      scp "$PATCHES_CRON_DIRECT_SCRIPT" "${SSH_HOST}:/tmp/apply-cron-plugin-direct-dispatch.mjs"
-      if [[ -f "$PATCHES_USER_SCRIPT" ]]; then
-        scp "$PATCHES_USER_SCRIPT" "${SSH_HOST}:/tmp/apply-plur1bus-user-hotfix.sh"
-      fi
-      ssh "$SSH_HOST" "bash /tmp/apply-memory-patches.sh; rc=\$?; rm -f /tmp/apply-memory-patches.sh /tmp/apply-cron-plugin-direct-dispatch.mjs /tmp/apply-plur1bus-user-hotfix.sh; exit \$rc"
-    else
-      bash "$PATCHES_SCRIPT"
-    fi
-    ok "Patches angewendet"
-  else
-    dryrun "Würde Patches anwenden: $PATCHES_SCRIPT"
-  fi
-else
-  warn "patches/apply-memory-patches.sh nicht gefunden — übersprungen"
-fi
+step "Schritt 9: Native OpenClaw-Integration"
+info "Keine OpenClaw-Host-Patches erforderlich oder zulässig."
 
 # ─── Schritt 9b: KNOWLEDGE.md Bootstrap ──────────────────────────────────────
 

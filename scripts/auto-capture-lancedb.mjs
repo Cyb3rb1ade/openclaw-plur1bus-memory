@@ -161,7 +161,9 @@ export function buildEmbeddingConfig(pluginConfig = {}, env = process.env) {
 }
 
 export function createEmbeddings(modules, pluginConfig = readPluginConfig()) {
-  const embeddingConfig = modules.normalizeEmbeddingConfig(buildEmbeddingConfig(pluginConfig));
+  const embeddingConfig = modules.normalizeEmbeddingConfig(buildEmbeddingConfig(pluginConfig), {
+    acceptNonCommercialLicense: pluginConfig.modelPreparation?.acceptNonCommercialLicense === true,
+  });
   const provider = modules.createEmbeddingProvider(embeddingConfig);
   const dim = Number(provider.dimensions?.() || embeddingConfig.dimensions || 3072);
   return {

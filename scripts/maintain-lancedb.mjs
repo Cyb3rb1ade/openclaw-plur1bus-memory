@@ -166,6 +166,13 @@ function discoverVersionDirs(base) {
   for (const entry of agentEntries) {
     if (entry.isSymbolicLink()) throw new Error(`Unsafe agent symlink: ${entry.name}`);
     if (!entry.isDirectory()) continue;
+    if (
+      !existsSync(join(resolvedBase, entry.name, "memories.lance"))
+      && !existsSync(join(resolvedBase, entry.name, "memories"))
+    ) {
+      skipped.push(entry.name);
+      continue;
+    }
     // Namen, die keine gültige Agent-ID sind, in zwei Klassen trennen:
     //
     // 1. Gefährlich (Path-Traversal, Separatoren) → weiterhin harter Abbruch,

@@ -9,7 +9,7 @@ import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capabilit
 import { MultiNamespacePool } from "../lib/multi-namespace-pool.js";
 import { resolveNamespaceLayout } from "../lib/namespace-config.js";
 
-const VECTOR_DIM = 3;
+const VECTOR_DIM = 384;
 const OWNER = "owner";
 const OTHER_OWNER = "other-owner";
 const SOURCE_IDS = Object.freeze({
@@ -171,7 +171,9 @@ function createShareRuntime(cards, { baseDbPath, legacyCards = [], namespaces } 
   const embeddings = {
     async embed() {
       counters.embed += 1;
-      return [1, 0, 0];
+      const vector = Array(VECTOR_DIM).fill(0);
+      vector[0] = 1;
+      return vector;
     },
   };
   const targetLease = (scope) => async (ctx, operation) => {

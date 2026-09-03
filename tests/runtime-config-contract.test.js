@@ -179,15 +179,15 @@ describe("runtime config contract", () => {
 
     const originalEmbed = LocalTransformersEmbeddingProvider.prototype.embedPassage;
     const originalEmbedQuery = LocalTransformersEmbeddingProvider.prototype.embedQuery;
-    LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => [0.1, 0.2, 0.3];
-    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => [0.1, 0.2, 0.3];
+    LocalTransformersEmbeddingProvider.prototype.embedPassage = async () => Array(384).fill(0.1);
+    LocalTransformersEmbeddingProvider.prototype.embedQuery = async () => Array(384).fill(0.1);
     t.after(() => {
       LocalTransformersEmbeddingProvider.prototype.embedPassage = originalEmbed;
       LocalTransformersEmbeddingProvider.prototype.embedQuery = originalEmbedQuery;
     });
 
     const api = makeApi(minimalConfig(baseDbPath, {
-      embedding: { provider: "local-transformers", local: { dimensions: 3 } },
+      embedding: { provider: "local-transformers", local: { dimensions: 384 } },
       merging: { enabled: false },
       namespaces: { activeWriteNamespace: "ns-write" },
     }));
@@ -252,7 +252,13 @@ describe("runtime config contract", () => {
     assert.equal(typeof hook, "function");
     const result = await hook(
       { prompt: "causal legacy hook recall", messages: [{ role: "user", content: "causal legacy hook recall" }] },
-      { agentId: "hook-agent", workspaceDir: null, sessionKey: `hook-${Math.random()}` },
+      {
+        agentId: "hook-agent",
+        workspaceDir: baseDbPath,
+        sessionKey: "agent:hook-agent:main",
+        sessionId: "hook-session",
+        runId: `hook-run-${Math.random()}`,
+      },
     );
     return { result, activeTableUses, logs: api.logs, baseDbPath };
   }

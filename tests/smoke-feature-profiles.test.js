@@ -187,6 +187,14 @@ describe("feature-profiles", () => {
     assert.ok(result.pending.some((p) => p.feature === "obsidianBridge"));
   });
 
+  it("isApplyBlocked accepts an externally verified protected vault receipt", () => {
+    const config = {
+      obsidianBridge: { enabled: true, requireVaultPathConfirmation: true },
+    };
+    const result = isApplyBlocked(config, { vaultConfirmed: true });
+    assert.deepStrictEqual(result, { blocked: false });
+  });
+
   it("explicit Recommended forces reranker timeout while preserving the feature opt-out", () => {
     const existing = { plugins: { entries: { "memory-lancedb-namespaced": { enabled: true, config: { reranker: { enabled: false, timeoutMs: 9999 } } } } } };
     const merged = applyFeatureProfile(existing, recommendedProfile(), { confirmed: true });

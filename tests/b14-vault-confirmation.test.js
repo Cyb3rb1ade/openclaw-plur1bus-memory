@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -138,5 +138,56 @@ describe("B14 public protected vault confirmation", () => {
     const confirmPayload = JSON.parse(confirmResult.text);
     assert.equal(confirmPayload.ok, true);
     assert.equal(isOwnedVaultConfirmed({ baseDbPath, memoryCtx: ctx, vaultPath }), true);
+  });
+});
+
+describe("binding mismatch names its fields", () => {
+  const base = {
+    userId: "42",
+    userPrincipal: "telegram:42",
+    conversationPrincipal: "telegram:chat-7",
+    agentId: "lab-alpha",
+    workspaceIdentity: "workspace:v1:lab-alpha",
+  };
+
+  function prepared(vaultPath, baseDbPath, memoryCtx) {
+    const confirmationStore = new Map();
+    const p = prepareVaultConfirmation({ baseDbPath, memoryCtx, vaultPath, confirmationStore });
+    assert.equal(p.ok, true);
+    return { confirmationStore, callbackData: p.callbackData };
+  }
+
+  it("names only the field that moved between prepare and confirm", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-bind-"));
+    const vaultPath = join(dir, "vault");
+    mkdirSync(vaultPath, { recursive: true });
+    const { confirmationStore, callbackData } = prepared(vaultPath, dir, base);
+    const result = confirmVaultConfirmation({
+      callbackData,
+      confirmationStore,
+      baseDbPath: dir,
+      vaultPath,
+      // Same actor, same agent -- only the conversation differs.
+      memoryCtx: { ...base, conversationPrincipal: "telegram:chat-8" },
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "binding_mismatch");
+    assert.deepEqual(result.mismatchedFields, ["conversationPrincipal"]);
+  });
+
+  it("names every field that moved, and no values", (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "plur1bus-bind-"));
+    const vaultPath = join(dir, "vault");
+    mkdirSync(vaultPath, { recursive: true });
+    const { confirmationStore, callbackData } = prepared(vaultPath, dir, base);
+    const result = confirmVaultConfirmation({
+      callbackData,
+      confirmationStore,
+      baseDbPath: dir,
+      vaultPath,
+      memoryCtx: { ...base, userId: "99", userPrincipal: "telegram:99" },
+    });
+    assert.deepEqual(result.mismatchedFields, ["userId", "userPrincipal"]);
+    assert.doesNotMatch(JSON.stringify(result), /telegram:99|telegram:42|chat-7/u, "leaks a bound value");
   });
 });

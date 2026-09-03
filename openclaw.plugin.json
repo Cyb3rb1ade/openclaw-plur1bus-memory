@@ -2,9 +2,16 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.4.10",
+  "version": "7.5.0",
+  "kind": "memory",
+  "cliCommands": [
+    { "name": "plur1bus-feature-cron", "description": "Run one PLUR1BUS feature cron without an agent/model turn", "hasSubcommands": false },
+    { "name": "plur1bus-obsidian", "description": "Detect, adopt, or create the Obsidian vault PLUR1BUS mirrors into", "hasSubcommands": false },
+    { "name": "plur1bus-reembedding", "description": "Run the PLUR1BUS copy-on-write re-embedding workflow", "hasSubcommands": false },
+    { "name": "plur1bus-workspace", "description": "Read or change PLUR1BUS policy for a session workspace", "hasSubcommands": false }
+  ],
   "contracts": {
-    "memoryEmbeddingProviders": [
+    "embeddingProviders": [
       "plur1bus-openai",
       "plur1bus-openai-compatible",
       "plur1bus-e5-small"
@@ -17,7 +24,53 @@
       "memory_store"
     ]
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "embedding.apiKey", "expected": "string" },
+        { "path": "embedding.fallback.apiKey", "expected": "string" },
+        { "path": "reranker.apiKey", "expected": "string" },
+        { "path": "merging.apiKey", "expected": "string" },
+        { "path": "schicht15.apiKey", "expected": "string" },
+        { "path": "skillMiner.apiKey", "expected": "string" },
+        { "path": "criticalPush.apiKey", "expected": "string" },
+        { "path": "emotion.t3.apiKey", "expected": "string" }
+      ]
+    }
+  },
+  "uiHints": {
+    "embedding.apiKey": { "label": "Embedding API Key", "sensitive": true, "advanced": true, "help": "Use OpenClaw Secrets with an env, store, file, or exec SecretRef." },
+    "embedding.fallback.apiKey": { "label": "Fallback Embedding API Key", "sensitive": true, "advanced": true, "help": "Credential for the configured fallback embedding provider." },
+    "reranker.apiKey": { "label": "Reranker API Key", "sensitive": true, "advanced": true, "help": "Credential for a remote reranker; local Jina/BGE does not require one." },
+    "merging.apiKey": { "label": "Merging API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
+    "schicht15.apiKey": { "label": "Knowledge Promotion API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
+    "skillMiner.apiKey": { "label": "Skill Miner API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential used with Skill Workshop." },
+    "criticalPush.apiKey": { "label": "Critical Push API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
+    "emotion.t3.apiKey": { "label": "Emotion Tier 3 API Key", "sensitive": true, "advanced": true, "help": "Optional feature-local model credential." },
+    "autoCapture": { "label": "Automatic Capture", "help": "Capture durable memory from eligible conversations." },
+    "autoRecall": { "label": "Automatic Recall", "help": "Inject relevant durable memory before an eligible turn." },
+    "skillMiner.enabled": { "label": "Skill Miner", "help": "Mine proposals and hand approved skills to OpenClaw Skill Workshop." },
+    "featureCronSetup.auto": { "label": "Automatic Feature Cron Setup", "advanced": true, "help": "Create OpenClaw-native PLUR1BUS feature cron jobs." },
+    "modelPreparation.profile": { "label": "Prepare Local Embedding Model", "help": "Selecting a pinned model/dimension profile downloads and hash-validates it automatically. It only creates a dry-run recommendation; it never switches the active embedding generation." },
+    "modelPreparation.acceptNonCommercialLicense": { "label": "Accept Jina CC BY-NC 4.0", "advanced": true, "help": "Required before downloading the optional Jina v3 embedding. This profile is not licensed for commercial use." },
+    "reembedding.activeGeneration": { "label": "Active Embedding Generation", "advanced": true, "help": "Coordinator-managed immutable LanceDB generation. Do not edit without a validated migration." },
+    "reembedding.fingerprintId": { "label": "Active Embedding Fingerprint", "advanced": true, "help": "Coordinator-managed SHA-256 identity of the active vector space." },
+    "reembedding.dimensions": { "label": "Active Generation Dimensions", "advanced": true, "help": "Coordinator-managed vector dimension bound to the selected generation." }
+  },
   "configSchema": {
+    "$defs": {
+      "secretInput": {
+        "type": ["string", "object"],
+        "minLength": 1,
+        "additionalProperties": false,
+        "required": ["source", "provider", "id"],
+        "properties": {
+          "source": { "type": "string", "enum": ["env", "store", "file", "exec"] },
+          "provider": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "id": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
     "type": "object",
     "additionalProperties": false,
     "properties": {
@@ -26,7 +79,7 @@
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": "string"
+            "$ref": "#/$defs/secretInput"
           },
           "apiKeyEnv": {
             "type": "string"
@@ -46,7 +99,8 @@
             "type": "string"
           },
           "dimensions": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           },
           "local": {
             "type": "object",
@@ -56,7 +110,11 @@
                 "type": "string"
               },
               "dimensions": {
-                "type": "number"
+                "type": "integer",
+                "minimum": 1
+              },
+              "revision": {
+                "type": "string"
               },
               "queryPrefix": {
                 "type": "string"
@@ -74,7 +132,7 @@
             "additionalProperties": false,
             "properties": {
               "apiKey": {
-                "type": "string"
+                "$ref": "#/$defs/secretInput"
               },
               "model": {
                 "type": "string"
@@ -115,6 +173,48 @@
           },
           "crossNamespaceRecall": {
             "type": "boolean"
+          }
+        }
+      },
+      "modelPreparation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile"],
+        "properties": {
+          "profile": {
+            "type": "string",
+            "enum": [
+              "e5-multilingual-384",
+              "jina-v3-multilingual-32",
+              "jina-v3-multilingual-64",
+              "jina-v3-multilingual-128",
+              "jina-v3-multilingual-256",
+              "jina-v3-multilingual-512",
+              "jina-v3-multilingual-768",
+              "jina-v3-multilingual-1024"
+            ]
+          },
+          "acceptNonCommercialLicense": {
+            "type": "boolean"
+          }
+        }
+      },
+      "reembedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["activeGeneration", "fingerprintId", "dimensions"],
+        "properties": {
+          "activeGeneration": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          },
+          "fingerprintId": {
+            "type": "string",
+            "pattern": "^embedding:v1:sha256:[a-f0-9]{64}$"
+          },
+          "dimensions": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },
@@ -178,6 +278,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false,
+            "description": "Controls OpenClaw memory-core dreaming sidecar compatibility. Keep false when PLUR1BUS owns consolidation/dreaming."
+          },
           "narrative": {
             "type": "object",
             "additionalProperties": false,
@@ -534,7 +639,7 @@
             ]
           },
           "apiKey": {
-            "type": "string"
+            "$ref": "#/$defs/secretInput"
           },
           "apiKeyEnv": {
             "type": "string"
@@ -563,6 +668,12 @@
           "fallbackModel": {
             "type": "string"
           },
+          "fallbackRevision": {
+            "type": "string"
+          },
+          "fallbackCacheDir": {
+            "type": "string"
+          },
           "local": {
             "type": "object",
             "additionalProperties": false,
@@ -571,6 +682,12 @@
                 "type": "string"
               },
               "cacheDir": {
+                "type": "string"
+              },
+              "revision": {
+                "type": "string"
+              },
+              "dtype": {
                 "type": "string"
               }
             }
@@ -599,7 +716,7 @@
             "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string",
+            "$ref": "#/$defs/secretInput",
             "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
@@ -652,7 +769,7 @@
             "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string",
+            "$ref": "#/$defs/secretInput",
             "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
@@ -712,7 +829,7 @@
             "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string",
+            "$ref": "#/$defs/secretInput",
             "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
@@ -1806,7 +1923,7 @@
             "description": "Optional direct endpoint. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "apiKey": {
-            "type": "string",
+            "$ref": "#/$defs/secretInput",
             "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
           },
           "disableThinking": {
@@ -2131,7 +2248,7 @@
                 "description": "Optional feature-local chat model. When absent, uses the effective OpenClaw agent model."
               },
               "apiKey": {
-                "type": "string",
+                "$ref": "#/$defs/secretInput",
                 "description": "Optional direct credential or environment reference. A feature-local explicit model is required for direct transport; otherwise the route fails closed."
               },
               "baseUrl": {

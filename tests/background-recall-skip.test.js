@@ -19,6 +19,26 @@ describe("shouldSkipAutoRecallForInternalTurn", () => {
     assert.strictEqual(shouldSkipAutoRecallForInternalTurn({ kind: "background" }, {}), true);
   });
 
+  it("skips the exact OpenClaw Beta-1 cron trigger carried only by hook context", () => {
+    assert.strictEqual(
+      shouldSkipAutoRecallForInternalTurn(
+        { prompt: "run scheduled internal maintenance" },
+        { trigger: "cron" },
+      ),
+      true,
+    );
+  });
+
+  it("skips an OpenClaw internal manual trigger carried only by the event", () => {
+    assert.strictEqual(
+      shouldSkipAutoRecallForInternalTurn(
+        { prompt: "resume an internal host task", trigger: "manual" },
+        {},
+      ),
+      true,
+    );
+  });
+
   it("skips cron session key", () => {
     assert.strictEqual(shouldSkipAutoRecallForInternalTurn({}, { sessionKey: "agent:main:cron:job-a" }), true);
   });

@@ -7,6 +7,248 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.5.0] — Unreleased
+
+### Kompatibilitaet
+
+- **OpenClaw 2026.8.1 ohne Host-Patch.** PLUR1BUS prueft die oeffentlichen
+  Plugin-Capabilities (`registerGatewayMethod`, `registerCli` und
+  `openclaw/plugin-sdk/gateway-runtime`) und nutzt den nativen Command-/Cron-
+  Dispatcher. Es werden weder OpenClaw-Quellen noch `dist`-Bundles oder
+  `node_modules` veraendert. Fehlende Capabilities bleiben fail-closed.
+  Primaeres Host-Ziel ist OpenClaw 2026.8.1 (Floor `>=2026.8.1`); die
+  Laufzeitmatrix lief gegen 2026.8.2. OpenClaw 2026.9.1-beta.1 ist nur
+  quellverifiziert unterstuetzt (SDK-Oberflaeche, Paketaufloesung), ohne
+  Laufzeit-Smoke; siehe `docs/compatibility-openclaw.md`.
+- **Exakte Release-Identitaet.** Paket, Lockfile und Manifest tragen 7.5.0; die
+  Build-Metadaten nennen exakt OpenClaw 2026.8.2 (Commit `0965053f`), die
+  Mindest-Host-Metadaten 2026.8.1. Das offizielle Tag `v7.4.10` und sein
+  Quellstand bleiben unveraendert.
+- **Eingeschraenkte Registrierung.** Unter OpenClaws `cli-metadata`- und
+  `setup-only`-Registrierung (werfende Runtime-Proxys) registriert das Plugin
+  ohne Laufzeitzugriffe; Laufzeitpfade werden ueber `runtimeIfUsable`
+  geprueft statt vorausgesetzt.
+- **Nicht-destruktives Upgrade.** 7.5.0 fuehrt keinen brechenden LanceDB-
+  Schematausch ein. Bestehende agent-spezifische Tabellen, Namespaces,
+  Tombstones, History und Obsidian-Spiegel bleiben erhalten.
+- **Exklusiver OpenClaw-Memory-Slot.** Manifest und Runtime deklarieren PLUR1BUS
+  als `kind: memory` und registrieren `memory_recall` ueber die oeffentliche
+  `registerMemoryCapability`-API. Damit deaktiviert der ausgewaehlte
+  `plugins.slots.memory`-Vertrag konkurrierende `memory-core`-Recall-/Capture-
+  Tools, statt zwei Memory-Systeme parallel zu laden.
+- **Skill Miner ueber Skill Workshop.** Geminte Skills werden als pending
+  Proposal ueber `skills.proposals.create` in OpenClaws eingebauten Skill
+  Workshop eingestellt. Freigabe und Ablehnung laufen nach erneutem Inspect
+  revisionsgebunden ueber `apply` beziehungsweise `reject`; PLUR1BUS schreibt
+  selbst kein `workspace/skills/*/SKILL.md`. Fehlende Capabilities,
+  abweichende Ziele und geaenderte Revisionen bleiben fail-closed.
+
+### Geaendert
+
+- **Node.js 22.22.3 ist die neue Laufzeit-Untergrenze** (vorher 22.5.0). Die
+  alte Zusage hielt nicht: auf 22.5 bis 22.11 laeuft `node:sqlite` nur mit
+  `--experimental-sqlite`, und die Auto-Capture-Tests scheitern dort an der
+  Semantik des damaligen Testlaeufers (gemessen am 03.09.2026: 22.5.0, 22.6
+  und 22.9 rot, ab 22.12 gruen). Massgeblich ist der Host: OpenClaw 2026.8.2
+  verlangt `>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0`, und dieses Plugin
+  laeuft ausschliesslich in OpenClaw. `engines`, Lockfile, CI-Matrix und
+  Dokumentation nennen jetzt denselben Wert.
+
+### Behoben
+
+- **Extern freigegebene Skills werden lokal fertig aktiviert.** Der
+  Lebenszyklus-Pfad fuer eine Freigabe aus OpenClaws Skill Workshop uebergab
+  die Akteursstufe `system`, die das Vertrauensmodell nie kannte. Jeder
+  Nachweisuebergang scheiterte mit „illegal transition", der lokale Datensatz
+  blieb dauerhaft auf `activation_partial`, und die zitierten Erinnerungen
+  wurden nie bestaetigt. Neu ist die eng begrenzte Stufe
+  `system:skill-workshop`: sie darf ausschliesslich bestaetigen, niemals
+  `trusted` vergeben, niemals invalidieren und einen invalidierten Datensatz
+  gar nicht anfassen.
+- **LanceDB-Leser sehen jeden Schreibvorgang.** `MemoryDB` verbindet mit
+  `readConsistencyInterval: 0`. Ohne Intervall behielt ein einmal geoeffnetes
+  Tabellenobjekt seine Version; im Gateway sah der rem-dream-Lauf drei acht
+  Sekunden zuvor per `memory_store` committete Zeilen ueber zwei Minuten nicht,
+  ein frischer Prozess nach 1,3 s. Ein Zwei-Handle-Test pinnt das Verhalten.
+- **rem-dream nennt jede Partition.** Die Kommando-Antwort traegt je
+  ACL-Partition `reason`, `count`, `runKey` und `patternsFound`; vorher stammten
+  die Felder nur aus der ersten Partition, und ein uebersprungener
+  Workspace-Lauf war nicht erklaerbar.
+- **Kein Warn-Rauschen in CLI-Prozessen.** Die Meldung ueber die fehlende
+  `mutateConfigFile`-Faehigkeit ist in `discovery`-, `cli-metadata`- und
+  `setup-only`-Registrierungen eine Info; im Gateway bleibt sie eine Warnung.
+- **Vault-Freigabe ueber Telegram findet ihren Beleg.** Der Apply-Pfad loest
+  den Vault-Pfad ueber denselben Selektor wie die Freigabe auf und bindet die
+  einmalige Bestaetigung an die persistierte Sitzung des Chats; die
+  Diagnose nennt geschlossene Gates und abweichende Felder namentlich.
+- **Beta-1-Workspace-Sitzungen behalten ihre eigene Policy.** Der native
+  Workspace-Schalter liest bei sichtbaren `sessions.create({ cwd })`-Sitzungen
+  zuerst OpenClaws aktuelles `spawnedCwd` und faellt fuer aeltere Hosts auf
+  `spawnedWorkspaceDir`, Worktree-Metadaten und den Agent-Workspace zurueck.
+  Zwei Sitzungen desselben Agenten koennen damit unterschiedliche dauerhafte
+  PLUR1BUS-Overrides tragen.
+- **Automatische Meta-Reflexion nutzt den Capture-Workspace.** Der
+  `agent_end`-Pfad uebergibt den bereits kanonisch aufgeloesten Workspace statt
+  zweier dort nicht sichtbarer Variablen. Erreicht der Session-Zaehler den
+  Schwellwert, werden Reflexion, Metriken und der dauerhafte Zaehler-Reset
+  wieder ausgefuehrt, ohne die erfolgreiche Memory-Erfassung zu verdecken.
+- **Obsidian-Memory-Mirror ist im echten Plugin-Lifecycle verdrahtet.** Der
+  Bridge-Service liest die autoritative Agent-LanceDB nur lesend, projiziert
+  Ownership-, Workspace-, Typ- und Freshness-Felder und spiegelt nur
+  ACL-sichtbare echte Memories. User-Scope bleibt ohne gebundenen Benutzer
+  fail-closed. Stop wartet auch bei einem zusammengefuehrten periodischen
+  Rebuild auf den urspruenglichen Task und verhindert spaete Vault-Schreibvorgaenge.
+- **Obsidian-Watcher folgt dem aktivierten Service-Lifecycle.** Auf Hosts mit
+  `registerService` startet und stoppt der Watcher als hostverwalteter
+  Plugin-Service erst nach der Registry-Aktivierung. Dadurch wird eine per
+  Config-Hot-Reload aktivierte Bridge sofort gestartet; der Hook-Fallback
+  bleibt nur fuer Hosts ohne Service-Capability erhalten. Periodische
+  Watcher-Scans bleiben explizit queue-only: Sie koennen Kandidaten vormerken,
+  starten aber keinen nicht abbrechbaren Memory-Write. Freigegebene Apply- und
+  Tombstone-Aktionen bleiben dem expliziten, autorisierten Aufruf vorbehalten.
+  Laufende Watcher- und Dashboard-Aufgaben werden beim Stop beobachtet;
+  spaet fortgesetzte Arbeit bleibt durch eine Write-Schranke wirkungslos.
+- **Skill Miner sieht Captures aus Scoped OpenClaw-Runtimes.** Vor dem
+  Evidenzscan wechselt der langlebige Full-Runtime-LanceDB-Handle explizit auf
+  die neueste Tabellenversion. Dadurch gehen automatisch erfasste Dialogkarten
+  aus OpenClaws getrennten Agent-/Hook-Runtimes nicht mehr in einem alten
+  Snapshot verloren; ein fehlgeschlagener Refresh bleibt sichtbar und
+  fail-closed.
+- **Interne Beta-1-Turns werden nicht als Gespraech gespeichert.** Auto-Recall,
+  NEO und Durable Capture erkennen jetzt auch OpenClaws oeffentliches
+  `trigger`-Feld (`cron`, `heartbeat`, `background`, `manual`). Der Gate laeuft
+  vor jedem Capture-Worker, sodass wiederaufgenommene interne Jobs weder
+  Benutzerkontext injizieren noch ihre eigenen Modellantworten als Memories
+  zurueckschreiben.
+- **Native Inferenz-Tensoren werden deterministisch freigegeben.** E5- und
+  Jina-Embedding-Aufrufe kopieren ihre Ergebnisvektoren und rufen danach fuer
+  Output-, Pooling- und Eingabe-Tensoren `dispose()` auf. Serielle Capture-
+  Last behaelt dadurch keine ONNX-Tensoren bis zu einem spaeteren GC-Lauf und
+  konkurriert unter dem 4-GiB-Limit nicht mehr mit Recall oder Verwaltungs-CLI.
+- **Re-Embedding blockiert den Gateway-Eventloop nicht minutenlang.** Lokale
+  CPU-Inferenz wird auf genau einen dauerhaften Batch pro bestaetigtem Operator-RPC
+  begrenzt. Groessere Migrationen werden ueber explizite, tokengebundene
+  Resume-Aufrufe fortgesetzt. Dadurch bleiben
+  OpenClaws Liveness, Status-Polling und die Operator-WebSocket-Verbindung
+  waehrend eines echten Dimensionswechsels erreichbar, ohne Checkpoints oder
+  Validierung abzuschwaechen oder die feste Gateway-Deadline zu ueberschreiten.
+  Nach der ersten rechtzeitigen Bestaetigung bleibt derselbe Token weiterhin
+  konstant an den Plan-Digest gebunden, sodass ein laufender Job auch nach
+  Ablauf seiner urspruenglichen TTL fortgesetzt und geschaltet werden kann.
+  Ein neuer ausdruecklicher Plan darf einen abgelaufenen, inaktiven Job atomar
+  als `expired_migration_superseded` beenden; dessen Cursor, Receipts und
+  Quarantaene-Daten bleiben erhalten. Der Zielprovider-Cache rotiert dabei
+  Plan-Digest-gebunden, auch wenn zwei Modelle dieselbe Dimension besitzen.
+- **Rollback-Generationen bleiben innerhalb des LanceDB-ID-Vertrags.** Ein
+  bestaetigter manueller Rueckweg leitet den isolierten Zielnamen nur noch aus
+  einem kollisionsresistenten Digest ab. Auch lange, oeffentlich gueltige
+  Migrations-IDs koennen dadurch keinen intern ungueltigen Generationsnamen
+  ueber 64 Zeichen mehr erzeugen.
+- **Re-Embedding-Switch ueberlebt den OpenClaw-Registry-Wechsel.** Der
+  bestaetigte Wechsel bleibt zunaechst dauerhaft im fail-closed Zustand
+  `switching`. Erst der von OpenClaw aktivierte Ersatz-Plugin-Service prueft
+  den neuen Provider sowie echten Store/Recall und markiert den Wechsel als
+  abgeschlossen. Ein Probe-Fehler fuehrt ueber einen zweiten aktivierten
+  Runtime-Durchlauf zur geprueften Quellgeneration zurueck; ein unterbrochener
+  Rollback bleibt gesperrt und wird beim naechsten Start wiederaufgenommen.
+- **Skill-Workshop-Beschreibung an Beta-1-Vertrag gebunden.** Die kurze
+  Listing-Beschreibung wird UTF-8-sicher auf OpenClaws oeffentliche 160-Byte-
+  Grenze begrenzt; der vollstaendige Skill-Entwurf bleibt unveraendert im
+  revisionsgebundenen Proposal-Inhalt erhalten.
+- **Skill-Workshop-Uebergabe fuer jede ACL-Partition.** Agent-private,
+  benutzerweite und Workspace-Vorschlaege erhalten denselben offiziellen,
+  agentgebundenen OpenClaw-Workshop-Client. Der Miner verlangt den Workshop
+  weiterhin fail-closed und erzeugt keine lokalen Ersatzvorschlaege, wenn die
+  native Uebergabe scheitert.
+- **Vollstaendiges Reminder-Schema bei neuen Tabellen.** Eine frisch erzeugte
+  LanceDB-Tabelle enthaelt die Reminder-Spalten bereits in ihrer Bootstrap-
+  Schemazeile. Reminder-Nudges koennen dadurch vor dem zweiten Gateway-Start
+  abfragen, ohne an einer fehlenden `memoryKind`-Spalte zu scheitern.
+- **Jina `Unsupported model type: null`.** Die tatsaechlich veroeffentlichten
+  Metadaten des festgepinnten Jina-Modells werden vor der Inferenz validiert;
+  nur dieses bekannte Profil wird auf seine XLM-RoBERTa-Architektur
+  normalisiert. Neben dem getrennten Jina-v2-Reranker steht Jina Embeddings v3
+  als optional herunterladbares, mehrsprachiges Embedding mit gepinnter
+  Basis- und Konvertierungsrevision, Q8-ONNX-Artefakt und den sieben veroeffentlichten Matryoshka-
+  Dimensionen 32/64/128/256/512/768/1024 bereit. Query und Passage verwenden
+  die nativen Task-Adapter statt kuenstlicher Textpraefixe. Wegen CC BY-NC 4.0
+  ist dieser Embedding-Pfad sichtbar als nicht kommerziell lizenziert markiert.
+- **Freier BGE-Fallback ohne ONNX-Datei.** Der Fallback nutzt einen realen,
+  revisionsgepinnten ONNX-Export statt eines Repositorys ohne das erwartete
+  Artefakt. E5, Jina und BGE pruefen Dateigroessen und SHA-256 vor dem Laden;
+  Downloads werden atomar veroeffentlicht.
+- **Fluechtige Performance- und Diagnose-Tests.** CPU-gebundene Benchmarks
+  messen Prozess-CPU-Zeit statt Host-Wartezeit. Das Repair-CLI laesst
+  Diagnosedaten vor dem Exit vollstaendig auslaufen. Deadline- und Cache-Tests
+  besitzen injizierte Zeit-/I/O-Grenzen statt von VPS-Last abzuhaengen.
+- **Generischer OpenClaw-Embedding-Vertrag.** Die drei PLUR1BUS-Adapter nutzen
+  jetzt `contracts.embeddingProviders` und `registerEmbeddingProvider` sowie
+  die generische `embed`/`embedBatch`-Form von OpenClaw. Der am 21.08.2026
+  entfernte Memory-spezifische Registrar wird nicht mehr verwendet. Fehlt die
+  optionale generische Host-Capability auf einem aelteren Host, bleibt der
+  explizit konfigurierte interne PLUR1BUS-Embedding-Pfad aktiv.
+- **Doppeltes Dreaming verhindert.** `dreaming.enabled` ist als explizites,
+  standardmaessig falsches Kompatibilitaets-Gate dokumentiert. Es haelt den
+  sonst standardmaessig aktiven `memory-core`-Dreaming-Sidecar aus, wenn
+  PLUR1BUS Konsolidierung/REM besitzt; Narrativeinstellungen bleiben davon
+  getrennt.
+- **Standalone-Cron-Runner findet den aktiven Host.** Ein von OpenClaws
+  Command-Dispatcher gestarteter `node run-feature-cron.mjs`-Prozess hat nicht
+  den OpenClaw-CLI-Entrypoint als `argv[1]`. Der Runner loest deshalb zusaetzlich
+  die erste explizite, ausfuehrbare `openclaw`-Installation im Prozess-`PATH`
+  auf, validiert deren Paketmanifest und importiert weiterhin ausschliesslich
+  den oeffentlichen `openclaw/plugin-sdk/gateway-runtime`-Export.
+- **Modellressourcen ueberleben keinen Gateway-Reload mehr.** Lokale
+  Transformers.js-Embedding- und Reranker-Pipelines werden beim
+  `gateway_stop` ueber `dispose()` freigegeben; persistente Embedding-Caches
+  werden geschlossen. Auch verkettete Primary-/Fallback-Reranker und der
+  OpenAI-Embedding-Cache besitzen einen idempotenten Shutdown. Dadurch haelt
+  ein In-Process-Reload keine alte ONNX-Pipeline neben der neu geladenen
+  Instanz im Speicher; ein fehlgeschlagener Modellimport bleibt erneut
+  versuchbar.
+- **Request-scoped Embeddings erreichen den aktivierten Owner.** OpenClaw
+  erzeugt Tool-Discovery- und Agent-Registries in getrennten Laufzeitkontexten;
+  deren JavaScript-Globals koennen den Full-Runtime-Modellpool nicht teilen.
+  PLUR1BUS delegiert diese lokale Inferenz deshalb ueber einen privaten,
+  token-geschuetzten Unix-Socket unter seinem State-Verzeichnis. Modell und
+  Dimension sind pro Request gebunden, Payloads sind begrenzt, der Socket wird
+  nur vom aktivierten Plugin-Service gestartet und vor dem Modell geschlossen.
+  Bereits vor dem Service-Start vorbereitete Discovery-Registries binden sich
+  exakt an die naechste aktivierte Owner-Epoche; veraltete Registries duerfen
+  keine Owner-Epoche ueberspringen und bleiben fail-closed. Da Beta-1 eine
+  langlebige Discovery-Fassade ueber einen Config-Hot-Reload hinweg behalten
+  kann, bindet diese Fassade jede reine Embedding-Operation an einen frischen,
+  fingerprintgeprueften Epoch-Client. Der Epoch-Client selbst bleibt strikt
+  einmalig gebunden und kann kein rotiertes Owner-Token wiederverwenden.
+  Es wird weder ein Hostport geoeffnet noch eine OpenClaw-Datei gepatcht.
+- **Sichere Modellvorbereitung im Operator-Dashboard.** Eine geschlossene
+  `modelPreparation.profile`-Auswahl fuer E5 und Jina startet automatisch nur
+  den atomaren, hashgeprueften Download. Fortschritt und Ergebnis ueberleben
+  Seiten- und Gateway-Reloads; parallele Provider-Downloads werden
+  zusammengefuehrt. Der Download beginnt erst im aktivierten OpenClaw-Plugin-
+  Service; ein verworfener Registry-Builder startet keinerlei Modellarbeit.
+  Ein geaenderter Embedding-Fingerprint erzeugt einen
+  nicht-mutierenden Dry-Run mit Karten-, Speicher- und Platzabschaetzung, aber
+  weder eine Migration noch einen Modellwechsel. Jina bleibt bis zur expliziten
+  CC-BY-NC-4.0-Bestaetigung blockiert; Apply und Umschalten verlangen weiterhin
+  ihre getrennten Operator-Bestaetigungen.
+- **Zentrales Jina-Lizenz- und Cache-Gate.** Die CC-BY-NC-4.0-Bestaetigung wird
+  vor jedem Jina-v3-Download und jeder Provider-Inferenz durchgesetzt, auch im
+  aktiven Provider, in OpenClaw-Adaptern, Wartungsskripten und Zielprobes. Der
+  CLI-Wizard fragt sie ausdruecklich ab. Vorbereitung, Probe, Migration und
+  aktiver Provider teilen einen aufgeloesten lokalen Cachepfad, auch wenn beim
+  Planen noch ein Remote-Embedding aktiv ist.
+- **Modellabhaengige Embedding-Dimensionen.** Die Operator-Ansicht zeigt fuer
+  OpenAI `text-embedding-3-small` und `text-embedding-3-large` sichere Presets
+  samt zulaessigem Bereich, fuer das gepinnte lokale E5-Modell ausschliesslich
+  die feste reale Breite 384 und fuer unbekannte OpenAI-kompatible Modelle nur
+  einen erforderlichen Runtime-Probe-Hinweis. Unmoegliche bekannte
+  Dimensionen werden vor Provider- oder Datenbankzugriff abgelehnt; jeder
+  Re-Embedding-Lauf validiert weiterhin den tatsaechlich gelieferten Vektor.
+  Das optionale Jina-v3-Embedding bietet ausschliesslich seine sieben
+  verifizierten Matryoshka-Breiten. Der Jina-v2- und der BGE-Reranker bleiben
+  davon typgetrennt und besitzen keine Memory-Vektordimension.
+
 ## [7.4.10] — 2026-08-26
 
 ### Behoben
@@ -52,7 +294,6 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   Bewusst *nicht* Teil dieses Fixes, weil beides Retention bzw. Speicherformat
   ändert: die Recordgröße selbst (33 KB pro Turn) und die einmalige
   Index-Hydration beim ersten Append pro Prozess (3,5 s bei 161 MB).
-
 ## [7.4.8] — 2026-08-25
 
 ### Behoben

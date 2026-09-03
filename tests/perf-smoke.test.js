@@ -6,7 +6,7 @@
  * 3. Metrics accumulate vs. direct atomicJsonUpdate
  */
 
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
 import assert from "node:assert";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,6 +16,7 @@ import { createEmbeddingCache } from "../lib/embedding-cache.js";
 import { buildGraphIndex, queryGraphIndex } from "../lib/graph-index.js";
 import { createMetricsDebouncer } from "../lib/metrics-debounce.js";
 import { atomicJsonUpdate } from "../lib/atomic-json.js";
+import { measureCpuMilliseconds } from "./helpers/benchmark-clock.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -39,6 +40,11 @@ function buildEdges(n = 10_000) {
   return edges;
 }
 
+function median(values) {
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.floor(ordered.length / 2)];
+}
+
 // ─── 1. Embedding-Cache cold vs. warm ─────────────────────────────────────
 
 describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
@@ -46,6 +52,7 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
   const vector = makeVector(384);
   const agentId = "agent-perf";
   const model = "text-embedding-3-small@1";
+  let warmupCache;
 
   // Simuliert embedQuery: Cache-Lookup + bei Miss "teure" Vektor-Erzeugung
   function embedQuery(cache, query) {
@@ -57,15 +64,34 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
     return copy;
   }
 
-  it("cold: 100x embedQuery ohne Cache → Miss", () => {
-    const cache = createEmbeddingCache();
-    const queries = Array.from({ length: N }, (_, i) => `query ${i}`);
+  before(() => {
+    // Compile both the miss and set paths before measuring a separate empty
+    // cache. Keep the warm-up fixture alive until the suite ends so its
+    // allocations cannot become an unrelated main-thread GC charge inside a
+    // later benchmark interval.
+    warmupCache = createEmbeddingCache({ maxEntries: 2_000 });
+    for (let i = 0; i < 2_000; i++) embedQuery(warmupCache, `warmup query ${i}`);
+  });
 
-    const start = performance.now();
-    for (const q of queries) {
-      embedQuery(cache, q);
+  after(() => {
+    warmupCache.clear();
+    warmupCache.close();
+  });
+
+  it("cold: 100x embedQuery ohne Cache → Miss", () => {
+    const queries = Array.from({ length: N }, (_, i) => `query ${i}`);
+    const caches = [];
+    const coldMs = median(Array.from({ length: 5 }, () => {
+      const cache = createEmbeddingCache();
+      caches.push(cache);
+      return measureCpuMilliseconds(() => {
+        for (const q of queries) embedQuery(cache, q);
+      });
+    }));
+    for (const cache of caches) {
+      cache.clear();
+      cache.close();
     }
-    const coldMs = performance.now() - start;
 
     // Nur Smoke: darf nicht absurd lange dauern (< 50 ms)
     assert.ok(coldMs < 50, `Cold-Miss dauerte ${coldMs.toFixed(2)}ms, erwartet < 50ms`);
@@ -76,11 +102,11 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
     const query = "warm query";
     cache.set(agentId, query, model, vector);
 
-    const start = performance.now();
-    for (let i = 0; i < N; i++) {
-      embedQuery(cache, query);
-    }
-    const warmMs = performance.now() - start;
+    const warmMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < N; i++) {
+        embedQuery(cache, query);
+      }
+    });
     const perCall = warmMs / N;
 
     assert.ok(warmMs < 100, `Warm-Hit dauerte ${warmMs.toFixed(2)}ms total, erwartet < 100ms`);
@@ -89,25 +115,38 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
 
   it("warm ist schneller als cold", () => {
     const M = 1000; // mehr Iterationen für stabileren Vergleich
-    const coldCache = createEmbeddingCache();
-    const warmCache = createEmbeddingCache();
+    const warmCache = createEmbeddingCache({ maxEntries: M });
+    const coldCaches = [];
     const queries = Array.from({ length: M }, (_, i) => `query ${i}`);
 
-    // Cold: teurer Miss (Vektor kopieren)
-    const coldStart = performance.now();
-    for (const q of queries) {
-      const cached = coldCache.get(agentId, q, model);
-      if (!cached) coldCache.set(agentId, q, model, vector.slice());
-    }
-    const coldMs = performance.now() - coldStart;
-
-    // Warm (alle vorher gesetzt)
+    // Warm: alle M Einträge müssen gleichzeitig resident sein. Die bisherige
+    // Default-Kapazität 128 machte 872/1000 vermeintliche Hits zu Misses und
+    // belastete die Messung zusätzlich mit der GC-Arbeit der Vorbefüllung.
     for (const q of queries) warmCache.set(agentId, q, model, vector);
-    const warmStart = performance.now();
-    for (const q of queries) {
-      warmCache.get(agentId, q, model);
+    for (const q of queries) warmCache.get(agentId, q, model);
+    const warmSamples = [];
+    const coldSamples = [];
+    for (let sample = 0; sample < 5; sample++) {
+      warmSamples.push(measureCpuMilliseconds(() => {
+        for (const q of queries) warmCache.get(agentId, q, model);
+      }));
+      const coldCache = createEmbeddingCache({ maxEntries: M });
+      coldCaches.push(coldCache);
+      coldSamples.push(measureCpuMilliseconds(() => {
+        for (const q of queries) {
+          const cached = coldCache.get(agentId, q, model);
+          if (!cached) coldCache.set(agentId, q, model, vector.slice());
+        }
+      }));
     }
-    const warmMs = performance.now() - warmStart;
+    const warmMs = median(warmSamples);
+    const coldMs = median(coldSamples);
+    warmCache.clear();
+    warmCache.close();
+    for (const cache of coldCaches) {
+      cache.clear();
+      cache.close();
+    }
 
     assert.ok(
       warmMs < coldMs,
@@ -119,9 +158,24 @@ describe("Benchmark 1: Embedding-Cache cold vs. warm", () => {
 // ─── 2. Graph Traversal mit/ohne Index ────────────────────────────────────
 
 describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
-  const edges = buildEdges(10_000);
-  const index = buildGraphIndex(edges);
+  let edges;
+  let index;
   const ITERATIONS = 1000;
+  const INDEX_FILTER = Object.freeze({ type: "type0", target: "tgt0" });
+
+  // Build the allocation-heavy graph only after Benchmark 1 has completed.
+  // Constructing it during test registration can leave parallel V8 GC work
+  // running inside the same process while process.cpuUsage() measures the
+  // unrelated cold-cache loop.
+  before(() => {
+    edges = buildEdges(10_000);
+    index = buildGraphIndex(edges);
+    // Keep lazy compilation and V8's later optimization tier outside the
+    // steady-state query budget. Without this warm-up, a fresh Node process
+    // can charge either compilation phase to an arbitrary measured round even
+    // though the same index query itself remains unchanged.
+    for (let i = 0; i < ITERATIONS * 10; i++) queryGraphIndex(index, INDEX_FILTER);
+  });
 
   function scanArray(type, target) {
     return edges.filter((e) => e.type === type && e.target === target);
@@ -140,23 +194,23 @@ describe("Benchmark 2: Graph Traversal mit/ohne Index (10k Edges)", () => {
   });
 
   it("mit Index: queryGraphIndex ist schnell", () => {
-    const start = performance.now();
-    for (let i = 0; i < ITERATIONS; i++) {
-      queryGraphIndex(index, { type: "type0", target: "tgt0" });
-    }
-    const idxMs = performance.now() - start;
+    const idxMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < ITERATIONS; i++) {
+        queryGraphIndex(index, INDEX_FILTER);
+      }
+    });
 
     assert.ok(idxMs < 10, `Index-Query dauerte ${idxMs.toFixed(2)}ms, erwartet < 10ms`);
   });
 
   it("Index ist mindestens 10x schneller als Array-Scan", () => {
-    const startScan = performance.now();
-    for (let i = 0; i < ITERATIONS; i++) scanArray("type0", "tgt0");
-    const scanMs = performance.now() - startScan;
+    const scanMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < ITERATIONS; i++) scanArray("type0", "tgt0");
+    });
 
-    const startIdx = performance.now();
-    for (let i = 0; i < ITERATIONS; i++) queryGraphIndex(index, { type: "type0", target: "tgt0" });
-    const idxMs = performance.now() - startIdx;
+    const idxMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < ITERATIONS; i++) queryGraphIndex(index, INDEX_FILTER);
+    });
 
     assert.ok(
       idxMs * 10 < scanMs,
@@ -175,12 +229,14 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
       flushFn: async () => {},
       debounceMs: 60_000, // Timer soll während des Tests nicht feuern
     });
+    debouncer.accumulate("/warmup", { latencyMs: 0 });
+    await debouncer.flush();
 
-    const start = performance.now();
-    for (let i = 0; i < N; i++) {
-      debouncer.accumulate("/ws", { latencyMs: i });
-    }
-    const accMs = performance.now() - start;
+    const accMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < N; i++) {
+        debouncer.accumulate("/ws", { latencyMs: i });
+      }
+    });
     await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
     assert.ok(accMs < 10, `100x accumulate dauerte ${accMs.toFixed(3)}ms, erwartet < 10ms`);
@@ -197,11 +253,13 @@ describe("Benchmark 3: Metrics accumulate vs. direct atomicJsonUpdate", () => {
       flushFn: async () => {},
       debounceMs: 60_000,
     });
-    const accStart = performance.now();
-    for (let i = 0; i < N; i++) {
-      debouncer.accumulate("/ws", { latencyMs: i });
-    }
-    const accMs = performance.now() - accStart;
+    debouncer.accumulate("/warmup", { latencyMs: 0 });
+    await debouncer.flush();
+    const accMs = measureCpuMilliseconds(() => {
+      for (let i = 0; i < N; i++) {
+        debouncer.accumulate("/ws", { latencyMs: i });
+      }
+    });
     await debouncer.stop(); // Timer aufräumen, sonst hält er den Prozess offen
 
     const start = performance.now();

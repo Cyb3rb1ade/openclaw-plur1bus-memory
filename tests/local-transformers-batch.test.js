@@ -23,6 +23,45 @@ describe("local-transformers batching", () => {
     assert.deepStrictEqual(calls[0].options, { pooling: "mean", normalize: true });
   });
 
+  it("disposes every native embedding output after copying its vectors", async () => {
+    const provider = new LocalTransformersEmbeddingProvider({
+      dimensions: 2,
+      embeddingCacheEnabled: false,
+    });
+    const disposed = [];
+    provider._pipeline = async (input) => {
+      const batch = Array.isArray(input);
+      return {
+        data: new Float32Array(batch ? [1, 0, 0, 1] : [1, 0]),
+        dims: batch ? [2, 2] : [1, 2],
+        dispose() { disposed.push(batch ? "batch" : input); },
+      };
+    };
+
+    assert.deepStrictEqual(await provider.embedBatch(["alpha", "beta"]), [[1, 0], [0, 1]]);
+    assert.deepStrictEqual(await provider.embed("gamma"), [1, 0]);
+    assert.deepStrictEqual(disposed, ["batch", "passage: gamma"]);
+  });
+
+  it("disposes per-text native outputs after batch fallback", async () => {
+    const provider = new LocalTransformersEmbeddingProvider({
+      dimensions: 2,
+      embeddingCacheEnabled: false,
+    });
+    const disposed = [];
+    provider._pipeline = async (input) => {
+      if (Array.isArray(input)) throw new Error("batch unsupported");
+      return {
+        data: new Float32Array(input.endsWith("alpha") ? [1, 0] : [0, 1]),
+        dims: [1, 2],
+        dispose() { disposed.push(input); },
+      };
+    };
+
+    assert.deepStrictEqual(await provider.embedBatch(["alpha", "beta"]), [[1, 0], [0, 1]]);
+    assert.deepStrictEqual(disposed, ["passage: alpha", "passage: beta"]);
+  });
+
   it("falls back to per-text embedding calls when a pipeline rejects batch input", async () => {
     const provider = new LocalTransformersEmbeddingProvider({
       dimensions: 2,

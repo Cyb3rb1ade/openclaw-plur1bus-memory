@@ -14,4 +14,16 @@ describe("runtime reranker config", () => {
 
     assert.equal(reranker.fallback.model, "custom/local-reranker");
   });
+
+  it("passes the host SecretInput resolver only to the remote primary", () => {
+    const credentialResolver = async () => "secret";
+    const { reranker } = createRuntimeRerankerProvider({
+      provider: "cohere",
+      apiKey: { source: "store", provider: "lab", id: "PLUR1BUS_COHERE_API_KEY" },
+      fallbackProvider: "local-transformers",
+    }, null, { credentialResolver });
+
+    assert.equal(reranker.primary.credentialResolver, credentialResolver);
+    assert.equal(reranker.fallback.credentialResolver, undefined);
+  });
 });

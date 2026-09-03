@@ -29,6 +29,7 @@ const RERANKER_OPTIONS = [
 const EMBEDDING_OPTIONS = [
   { key: "openai",             i18nLabel: "setup.embedding.option.openai",   i18nHelp: "setup.embedding.option.openai_help" },
   { key: "local-transformers", i18nLabel: "setup.embedding.option.local_e5", i18nHelp: "setup.embedding.option.local_e5_help" },
+  { key: "local-jina",         i18nLabel: "setup.embedding.option.local_jina", i18nHelp: "setup.embedding.option.local_jina_help" },
 ];
 
 const ADVANCED_RERANKER_MODELS = [
@@ -89,8 +90,8 @@ async function main() {
     }
     let choice;
     while (true) {
-      choice = await askLine("[1/2]: ");
-      if (choice === "1" || choice === "2") break;
+      choice = await askLine("[1/2/3]: ");
+      if (["1", "2", "3"].includes(choice)) break;
       console.error(t("setup.reranker.invalid_choice", { lang, tone }));
     }
     if (choice === "1") {
@@ -101,9 +102,30 @@ async function main() {
         return { provider: "openai", apiKey: literal, model: "text-embedding-3-large", dimensions: 3072 };
       }
       return { provider: "openai", apiKeyEnv: "OPENAI_API_KEY", model: "text-embedding-3-large", dimensions: 3072 };
-    } else {
+    } else if (choice === "2") {
       return { provider: "local-transformers", model: "intfloat/multilingual-e5-small", dimensions: 384 };
     }
+    console.error(t("setup.embedding.local_jina_license_confirm", { lang, tone }));
+    const accepted = await askLine("[yes/no]: ");
+    if (accepted !== "yes") {
+      throw new Error(t("setup.embedding.local_jina_license_required", { lang, tone }));
+    }
+    return {
+      embedding: {
+        provider: "local-transformers",
+        local: {
+          model: "jinaai/jina-embeddings-v3",
+          revision: "68ed94909d564380f954be27ae2e133214c1adc9",
+          dimensions: 1024,
+          queryPrefix: "",
+          passagePrefix: "",
+        },
+      },
+      modelPreparation: {
+        profile: "jina-v3-multilingual-1024",
+        acceptNonCommercialLicense: true,
+      },
+    };
   }
 
   async function wizardReranker() {
@@ -134,14 +156,14 @@ async function main() {
       const fb = await askLine("[1/2]: ");
       if (fb === "2") {
         cfg.fallbackProvider = "local-transformers";
-        cfg.fallbackModel = "BAAI/bge-reranker-v2-m3";
+        cfg.fallbackModel = "woxpas-ai/bge-reranker-v2-m3-onnx";
         console.error(t("setup.reranker.lazy_load_notice", { lang, tone, vars: { sizeMb: "570" } }));
       }
       return cfg;
     } else if (choice === "2") {
       console.error(t("setup.reranker.local_cpu_warning", { lang, tone }));
       console.error(t("setup.reranker.lazy_load_notice", { lang, tone, vars: { sizeMb: "570" } }));
-      return { provider: "local-transformers", model: "BAAI/bge-reranker-v2-m3", candidates: 20, timeoutMs: 5000, fallbackOnError: true };
+      return { provider: "local-transformers", model: "woxpas-ai/bge-reranker-v2-m3-onnx", candidates: 20, timeoutMs: 5000, fallbackOnError: true };
     } else if (choice === "3") {
       return { provider: "disabled", enabled: false, candidates: 20 };
     } else {
@@ -164,9 +186,16 @@ async function main() {
   }
 
   try {
-    const embedding = await wizardEmbedding();
+    const embeddingChoice = await wizardEmbedding();
+    const embedding = embeddingChoice.embedding || embeddingChoice;
     const reranker = await wizardReranker();
-    process.stdout.write(JSON.stringify({ embedding, reranker }, null, 2) + "\n");
+    process.stdout.write(JSON.stringify({
+      embedding,
+      reranker,
+      ...(embeddingChoice.modelPreparation
+        ? { modelPreparation: embeddingChoice.modelPreparation }
+        : {}),
+    }, null, 2) + "\n");
   } finally {
     rl.close();
   }

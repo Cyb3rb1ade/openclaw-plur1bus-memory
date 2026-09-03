@@ -1,10 +1,11 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
+import { tombstoneRegistryDir } from "../lib/tombstone.js";
 
 // Explicit shared memory requires verified fd-backed directory aliases, which
 // are unavailable on darwin; the share write path fails closed there.
@@ -110,6 +111,7 @@ describe("registered memory command reachability", () => {
   const registeredApis = [];
   const shutdownApis = new WeakSet();
   let api;
+  let testRoot;
   let baseDbPath;
   let workspaceDir;
   let openclawHome;
@@ -120,7 +122,9 @@ describe("registered memory command reachability", () => {
   let originalEmbedPassage;
 
   before(async () => {
-    baseDbPath = mkdtempSync(join(tmpdir(), "plur1bus-b1-db-"));
+    testRoot = mkdtempSync(join(tmpdir(), "plur1bus-b1-db-"));
+    baseDbPath = join(testRoot, "db");
+    mkdirSync(baseDbPath);
     workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b1-workspace-"));
     openclawHome = mkdtempSync(join(tmpdir(), "plur1bus-b1-home-"));
     previousOpenclawHome = process.env.OPENCLAW_HOME;
@@ -148,7 +152,7 @@ describe("registered memory command reachability", () => {
     }
     if (previousOpenclawHome === undefined) delete process.env.OPENCLAW_HOME;
     else process.env.OPENCLAW_HOME = previousOpenclawHome;
-    for (const dir of [baseDbPath, workspaceDir, openclawHome, join(baseDbPath, "..", "_tombstones")]) {
+    for (const dir of [testRoot, workspaceDir, openclawHome]) {
       if (dir) rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -184,6 +188,11 @@ describe("registered memory command reachability", () => {
     assert.ok(command, `${name} command must be registered`);
     return command.handler(ctx);
   }
+
+  it("uses a suite-private tombstone registry instead of the shared temp root", () => {
+    assert.equal(tombstoneRegistryDir(baseDbPath), join(testRoot, "_tombstones"));
+    assert.notEqual(tombstoneRegistryDir(baseDbPath), join(tmpdir(), "_tombstones"));
+  });
 
   it("validates the narrow routing importer registration seam before setup", () => {
     const rejectedApi = makeApi(baseDbPath, workspaceDir);

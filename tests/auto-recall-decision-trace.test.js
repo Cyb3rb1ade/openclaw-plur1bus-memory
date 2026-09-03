@@ -224,7 +224,7 @@ describe("auto-recall decision trace integration", () => {
 
     return await hook(
       { prompt, messages: [{ role: "user", content: prompt }] },
-      { agentId, workspaceDir: overrides.workspaceDir ?? null, sessionKey: "sess-1" }
+      { agentId, workspaceDir: overrides.workspaceDir ?? basePath, sessionKey: "sess-1" }
     );
   }
 

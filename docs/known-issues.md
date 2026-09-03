@@ -1,7 +1,7 @@
-# Known Issues — v7.1.0
+# Known Issues — v7.5.0
 
-> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-07-24 (v7.1.0)
-> Release: v7.1.0 Current Baseline
+> Erstellt: 2026-06-07 · Zuletzt aktualisiert: 2026-08-26 (v7.5.0)
+> Release: v7.5.0 Current Baseline
 
 ---
 
@@ -21,7 +21,7 @@
 
 ---
 
-## 3. Reranker-Scoring-Qualität
+## 3. ~~Reranker-Scoring-Qualität~~ — ✅ Behoben in v7.5.0
 
 **Beschreibung:** Ein bereits vor v7.1.0 bestehender Scoring-Fehler kann die
 Qualität bzw. Reihenfolge einzelner Reranker-Ergebnisse beeinträchtigen.
@@ -30,8 +30,12 @@ Qualität bzw. Reihenfolge einzelner Reranker-Ergebnisse beeinträchtigen.
 Timeouts auf die ungerankte Reihenfolge zurück. Das Problem betrifft die
 Ranking-Qualität, nicht die ACL-, Speicher- oder Installationssicherheit.
 
-**Status:** Offen — separat zu analysieren und zu beheben. Nicht durch v7.1.0
-eingeführt.
+**Auflösung (v7.5.0):** Jina wird als validierter Ein-Label-
+XLM-RoBERTa-Classifier geladen und über Sigmoid statt einer konstanten
+Ein-Klassen-Softmax ausgewertet. Der freie BGE-Pfad verweist auf einen realen,
+revisionsgepinnten ONNX-Export. E5, Jina und BGE validieren vor dem Laden Größe
+und SHA-256 jedes erforderlichen Artefakts; Jina kann bei expliziter
+Konfiguration genau einmal auf BGE zurückfallen.
 
 ---
 
@@ -67,7 +71,7 @@ eingeführt.
 |-------|---------|--------|------------|
 | Embedding-Cache nicht hot-verdrahtet | Mittel | ✅ Behoben | v6.2.1 |
 | metricsDebounceMs hartcodiert | Niedrig | ✅ Behoben | v6.2.x |
-| Reranker-Scoring-Qualität | Mittel | Offen | — |
+| Reranker-Scoring-Qualität | Mittel | ✅ Behoben | v7.5.0 |
 | 60+ Over-Exports | Niedrig | Offen | — |
 | atomic-json Reentrancy-Deadlock | Niedrig-Mittel | ✅ Behoben | v6.x |
 | user-scope owner-bound Zugriff | Niedrig-Mittel | ✅ Behoben | v6.8.11 |

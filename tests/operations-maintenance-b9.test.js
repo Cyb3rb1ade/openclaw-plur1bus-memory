@@ -585,6 +585,34 @@ describe("B9 repair-installed-plugin maintenance verification", () => {
     }
   });
 
+  it("flushes the verified post-maintenance summary before a successful piped exit", () => {
+    const root = makeTempDir("plur1bus-b9-repair-flush-");
+    try {
+      const versionsDir = makeElevatedHome(root);
+      const binDir = join(root, "bin");
+      const delayedStdoutPreload = pathToFileURL(
+        join(TEST_DIR, "fixtures", "delayed-stdout-preload.mjs"),
+      ).href;
+      installFakeOpenClaw(binDir);
+      const result = runNode(REPAIR_SCRIPT, ["--maintain-lancedb", "--no-smoke"], {
+        env: {
+          HOME: root,
+          NODE_OPTIONS: `--import=${delayedStdoutPreload}`,
+          PATH: `${binDir}:${process.env.PATH}`,
+          PLUR1BUS_DEPLOY: REPO_ROOT,
+        },
+        timeout: 60_000,
+      });
+
+      assert.equal(result.status, 0, result.output);
+      assert.equal(readdirSync(versionsDir).filter((name) => name.endsWith(".manifest")).length, 50);
+      assert.match(result.stdout, /LanceDB versions:\s+✓ OK/);
+      assert.match(result.stdout, /All checks passed/);
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
   it("propagates a nonzero maintenance child exit", () => {
     const root = makeTempDir("plur1bus-b9-repair-exit-");
     try {

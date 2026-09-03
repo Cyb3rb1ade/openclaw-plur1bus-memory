@@ -19,6 +19,32 @@ function makeFakeOpenAI(responses) {
 }
 
 describe("OpenAIEmbeddingProvider embedBatch", () => {
+  it("resolves a structured SecretInput lazily and only once", async () => {
+    const calls = [];
+    const reference = { source: "store", provider: "lab", id: "PLUR1BUS_EMBEDDING_KEY" };
+    const provider = new OpenAIEmbeddingProvider({
+      model: "text-embedding-3-small",
+      dimensions: 3,
+      apiKey: reference,
+      credentialResolver: async (params) => {
+        calls.push(params);
+        return "resolved-provider-secret";
+      },
+    });
+    provider._client = {
+      embeddings: {
+        create: async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }),
+      },
+    };
+
+    await provider.embed("first");
+    await provider.embed("second");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].value, reference);
+    assert.equal(calls[0].path, "plugins.entries.memory-lancedb-namespaced.config.embedding.apiKey");
+    assert.equal(provider._resolvedApiKey, "resolved-provider-secret");
+  });
+
   it("resolves apiKeyEnv before embedding", async () => {
     const previous = process.env._PLUR1BUS_EMBEDDING_TEST_KEY;
     process.env._PLUR1BUS_EMBEDDING_TEST_KEY = "env-test-key";
@@ -70,6 +96,19 @@ describe("OpenAIEmbeddingProvider embedBatch", () => {
     assert.deepStrictEqual(vectors[1], [0.4, 0.5, 0.6]);
   });
 
+  it("does not send the v3-only dimensions parameter to a fixed-width legacy model", () => {
+    const provider = new OpenAIEmbeddingProvider({
+      model: "text-embedding-ada-002",
+      dimensions: 1536,
+      apiKey: "test-key",
+    });
+    assert.deepStrictEqual(provider._buildRequest("text-embedding-ada-002", "legacy"), {
+      model: "text-embedding-ada-002",
+      input: "legacy",
+      encoding_format: "float",
+    });
+  });
+
   it("embed(text) remains compatible and returns a single vector", async () => {
     const provider = new OpenAIEmbeddingProvider({ model: "text-embedding-3-small", dimensions: 3, apiKey: "test-key" });
     provider._client = {
@@ -83,6 +122,26 @@ describe("OpenAIEmbeddingProvider embedBatch", () => {
 
     const vector = await provider.embed("single text");
     assert.deepStrictEqual(vector, [0.7, 0.8, 0.9]);
+  });
+
+  it("rejects the first provider response when it violates the configured dimensions", async () => {
+    const provider = new OpenAIEmbeddingProvider({
+      model: "text-embedding-3-small",
+      dimensions: 3,
+      apiKey: "test-key",
+      embeddingCacheEnabled: false,
+    });
+    provider._client = {
+      embeddings: {
+        create: async () => ({ data: [{ embedding: [0.1, 0.2] }] }),
+      },
+    };
+
+    await assert.rejects(
+      provider.embedBatch(["wrong dimensions"], 0),
+      /Embedding-Dimension-Mismatch: erwartet 3, bekam 2/,
+    );
+    assert.equal(provider._detectedDim, null);
   });
 
   it("falls back to individual embeddings when batch fails", async () => {

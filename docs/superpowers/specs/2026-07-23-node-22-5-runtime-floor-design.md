@@ -1,3 +1,10 @@
+> **Überholt seit 7.5.0.** Der Boden liegt jetzt bei Node 22.22.3, der
+> Untergrenze von OpenClaw 2026.8.2.
+> `node:sqlite` ist erst ab 22.12 ohne `--experimental-sqlite` nutzbar,
+> und die Auto-Capture-Tests scheitern auf 22.5 bis 22.11 an der
+> Semantik des damaligen Testläufers (gemessen am 03.09.2026).
+> Dieses Dokument beschreibt den historischen Stand.
+
 # Node.js 22.5 Runtime Floor Design
 
 **Date:** 2026-07-23

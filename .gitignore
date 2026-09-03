@@ -17,6 +17,8 @@ docs/**
 !docs/superpowers/
 !docs/superpowers/**
 !docs/configuration.md
+!docs/compatibility-openclaw-2026.8.1-beta.3.md
+!docs/compatibility-openclaw.md
 !docs/recall-architecture.md
 !docs/migration-v6.md
 !docs/release-checklist.md
@@ -48,6 +50,7 @@ BREAKING_CHANGE_AUDIT.md
 !scripts/install-memory-system.sh
 !scripts/provider-wizard.mjs
 !scripts/setup-feature-crons.mjs
+!scripts/run-feature-cron.mjs
 !scripts/lib/
 !scripts/lib/deploy-integrity.mjs
 !scripts/lib/find-deploy-dir.mjs

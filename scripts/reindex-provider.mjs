@@ -52,8 +52,10 @@ async function main() {
     console.error(`[reindex] Kann openclaw.json nicht lesen: ${e.message}`);
     process.exit(1);
   }
-  const pluginCfg = config?.plugins?.entries?.["memory-lancedb-namespaced"] || {};
-  const embCfg = normalizeEmbeddingConfig(pluginCfg.embedding || {});
+  const pluginCfg = config?.plugins?.entries?.["memory-lancedb-namespaced"]?.config || {};
+  const embCfg = normalizeEmbeddingConfig(pluginCfg.embedding || {}, {
+    acceptNonCommercialLicense: pluginCfg.modelPreparation?.acceptNonCommercialLicense === true,
+  });
   console.log(`[reindex] Ziel-Provider: ${embCfg.provider}, ${embCfg.dimensions ?? "?"} dims`);
 
   const FROM_PATH = join(MEMORY_BASE, fromNamespace, agentId);

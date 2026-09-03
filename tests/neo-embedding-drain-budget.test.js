@@ -26,6 +26,25 @@ function makeWorkspace(itemCount) {
     || join(root, "workspaces", "testws", "embedding-queue.jsonl");
   mkdirSync(join(queuePath, ".."), { recursive: true });
 
+  // Every queue item needs its target record, otherwise the drain skips it as
+  // "missing_target" before it ever calls the embedder. Without the targets
+  // the deadline case below decided nothing but whether fifty no-op rounds
+  // happen to take longer than one millisecond — green on a loaded machine,
+  // red on a fast one (CI, Node 22, 2026-09-03).
+  const targetPath = store.paths?.candidates
+    || join(root, "workspaces", "testws", "candidates.jsonl");
+  mkdirSync(join(targetPath, ".."), { recursive: true });
+  const targets = [];
+  for (let i = 0; i < itemCount; i++) {
+    targets.push(JSON.stringify({
+      id: `mem_test_${i}`,
+      statement: `Testaussage ${i}`,
+      workspaceKey: "testws",
+      agentId: "testagent",
+    }));
+  }
+  writeFileSync(targetPath, targets.join("\n") + "\n");
+
   const lines = [];
   for (let i = 0; i < itemCount; i++) {
     lines.push(JSON.stringify({
@@ -69,19 +88,22 @@ describe("drainEmbeddingQueue — Zeitbudget des Aufrufers", () => {
   it("stoppt an der Deadline, statt maxItems auszuschoepfen", async () => {
     const { root, store } = makeWorkspace(50);
     try {
-      // Deadline liegt in der Vergangenheit, sobald die Schleife startet:
-      // der Guard greift vor dem ersten Item.
+      // deadlineMs ist ein Budget ab Schleifenstart, keine Vergangenheit. Je
+      // nach Maschine ist es schon vor dem ersten Item verbraucht oder erst
+      // danach — der Embedder allein braucht das Fuenfzigfache. Geprüft wird
+      // deshalb die Invariante (vorzeitiger Stopp, hoechstens ein Item), nicht
+      // eine Rundenzahl, die vom Tempo der Maschine abhinge.
       const result = await store.drainEmbeddingQueue({
         impact: "low",
         maxItems: 50,
         deadlineMs: 1,
-        embedder: async (text) => {
+        embedder: async () => {
           await new Promise((r) => setTimeout(r, 50));
           return [0, 0, 0];
         },
       });
 
-      assert.ok(result.processed < 50, `processed=${result.processed} muss unter maxItems liegen`);
+      assert.ok(result.processed <= 1, `processed=${result.processed} darf das Budget nicht ausschoepfen`);
       assert.equal(result.stoppedEarly, true, "stoppedEarly muss gesetzt sein");
     } finally {
       rmSync(root, { recursive: true, force: true });

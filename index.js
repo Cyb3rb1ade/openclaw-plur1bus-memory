@@ -28,7 +28,7 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statfsSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,6 +48,42 @@ import {
 import { stripFrontmatter, buildFrontmatter, withFrontmatter, parseSourceMemoryIds } from "./lib/frontmatter.js";
 import { readJsonSafe, writeJsonAtomic } from "./lib/atomic-file.js";
 import { shouldRunCronBootstrap, featureCronsHintFromMarker } from "./lib/setup/feature-cron-bootstrap.js";
+import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plugin-runtime.js";
+import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
+import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
+import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
+import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
+import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
+import { createMemoryMaintenanceGate } from "./lib/memory-maintenance-gate.js";
+import { resolveEmbeddingGenerationLayout } from "./lib/reembedding/generation-layout.js";
+import { createMigrationStateStore } from "./lib/reembedding/state-store.js";
+import { createLanceGenerationBackend } from "./lib/reembedding/lance-backend.js";
+import { createReembeddingCoordinator } from "./lib/reembedding/coordinator.js";
+import {
+  createReembeddingSwitchRecovery,
+  createReembeddingSwitchRuntime,
+} from "./lib/reembedding/switch-runtime.js";
+import { createGenerationRuntimeProbe } from "./lib/reembedding/runtime-probe.js";
+import {
+  createFailedModelPreparationCoordinator,
+  createModelPreparationCoordinator,
+} from "./lib/model-preparation/coordinator.js";
+import { embeddingFingerprintId } from "./lib/reembedding/fingerprint.js";
+import {
+  createOpenClawEmbeddingSelectionMutator,
+  embeddingFingerprintFromNormalizedConfig,
+  redactedEmbeddingSecretRef,
+} from "./lib/reembedding/runtime-config.js";
+import { registerReembeddingRuntime } from "./lib/setup/reembedding-plugin-runtime.js";
+import { buildControlPlaneProjection } from "./lib/control-plane-projection.js";
+import {
+  createControlPlaneHealthInspector,
+  createControlPlaneHealthScan,
+} from "./lib/control-plane-health.js";
+import {
+  createWorkspacePolicyGuard,
+  guardWorkspaceTools,
+} from "./lib/workspace-policy-guard.js";
 import {
   isGuardedDirectFeatureCronMessage,
   planUnsafeDirectCronDisables,
@@ -56,9 +92,9 @@ import { createObsidianBridgeService, discoverObsidianWorkspaces } from "./lib/o
 import { discoverSemanticLinks } from "./lib/obsidian/semantic-link-discoverer.js";
 import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
 import { loadLinkIndex } from "./lib/obsidian/link-index.js";
-import { handleObsidianBridgeCommand } from "./lib/obsidian-control-room.js";
+import { handleObsidianBridgeCommand, resolveCommandVaultPath } from "./lib/obsidian-control-room.js";
 import { mutationAllowed, parseObsidianCommandPlan } from "./lib/obsidian-mutation-policy.js";
-import { isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
+import { describeOwnedVaultConfirmation, isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
 import { renderStatus } from "./lib/telegram-commands/status.js";
 import { collectStatusData } from "./lib/telegram-commands/status-data.js";
 import {
@@ -97,7 +133,7 @@ import { INPUT_LIMITS, validateSemanticCommandArgs, validateCommandArgs, validat
 import { createDbAdapter } from "./lib/db-adapter.js";
 import { EPISTEMIC_STATUSES, normalizeEpistemicStatus, transitionEpistemicStatus, isLegalEpistemicTransition, combineEpistemicStatusForMerge } from "./lib/epistemic-status.js";
 import { normalizeCapturedTimestamp, normalizeCapturedValidityWindow, validateValidTimeInputFields, buildValidTimeClosePatch, hasDisjointValidityWindows, combineValidTimeForMerge } from "./lib/valid-time.js";
-import { registerGatewayShutdown } from "./lib/runtime-shutdown.js";
+import { createLocalModelGenerationLifecycle, registerGatewayShutdown, registerLocalModelOwnershipServiceAfterLifecycle, registerModelPreparationServiceAfterLifecycle, registerReembeddingRecoveryServiceAfterLifecycle, runtimeIfUsable, shouldCoordinateLocalModelGeneration, configMutationLogNotice } from "./lib/runtime-shutdown.js";
 import { makeBoundedCache } from "./lib/bounded-cache.js";
 import {
   openDirectoryCapability,
@@ -106,8 +142,8 @@ import {
 } from "./lib/directory-capability.js";
 import { runConsolidation as runDailyConsolidation } from "./lib/jobs/daily-consolidation.js";
 import { runSkillMiner } from "./lib/jobs/skill-miner.js";
-import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposal, buildSkillReviewPayload } from "./lib/telegram-commands/skill-commands.js";
-import { getPendingProposals, recordPresentation, lastPresentationAgeMs } from "./lib/jobs/skill-miner/proposal-writer.js";
+import { listPendingProposals, listActiveSkills, showProposal, activateSkillProposal, rejectSkillProposalWithWorkshop, buildSkillReviewPayload, createSkillWorkshopLifecycleSynchronizer } from "./lib/telegram-commands/skill-commands.js";
+import { getPendingProposals, recordPresentation, lastPresentationAgeMs, markProposalStatus, patchProposal } from "./lib/jobs/skill-miner/proposal-writer.js";
 import { renderSkillProposalNudge } from "./lib/jobs/skill-miner/nudge-renderer.js";
 import {
   runSpeakerListCommand,
@@ -127,6 +163,7 @@ import {
   detectObsidianVaults,
   detectPendingFeatures,
   isApplyBlocked,
+  reportDormantFeature,
   recommendedProfile,
   renderPlur1busStartStatus,
   safeProfile,
@@ -142,10 +179,6 @@ import {
   formatAfterthoughtCronReply,
   formatClassifierCronReply,
 } from "./lib/internal-cron-reply.js";
-import {
-  applyCronPluginDirectDispatchPatch,
-  resolveOpenClawDistDir,
-} from "./patches/apply-cron-plugin-direct-dispatch.mjs";
 import { autoAcceptStale as runAutoAcceptStale } from "./lib/jobs/auto-accept-stale-criticals.js";
 import { safeUpdate } from "./lib/safe-update.js";
 import {
@@ -157,6 +190,7 @@ import { checkAccess } from "./lib/acl-middleware.js";
 import {
   buildMemoryAccountTopology,
   buildMemoryWorkspaceAliases,
+  createHostIncognitoSessionClassifier,
   createHostRoutingLoader,
   createMemoryTurnRouteRegistry,
   resolveHostCommandMemoryContext,
@@ -164,6 +198,7 @@ import {
   resolveMemoryRequestContext,
   resolveToolMemoryRequestContext,
   normalizeWorkspaceTarget,
+  workspacePoolKey,
 } from "./lib/memory-request-context.js";
 import { safeUuid, safeUuidList, safeTimestamp, safeAgentId, resolveInside, appendDestructiveOpLog, safeStatus } from "./lib/sql-safety.js";
 import { buildTombstone, appendTombstoneToRegistry, findBlockingTombstoneForCapture, backfillCommittedTombstone } from "./lib/tombstone.js";
@@ -207,6 +242,7 @@ import {
   isInjectedContextText,
   isNeoRecordAccessible,
   migrateNeoWorkspaces,
+  listNeoWorkspaceKeys,
   neoSessionKeysFromContext,
   routeNeoRecall,
   transitionRecordStatus,
@@ -230,13 +266,27 @@ import { InterpretationOverlayStore } from "./lib/interpretation-overlay.js";
 import { OverlayGenerator } from "./lib/overlay-generator.js";
 import { ContradictionDetector } from "./lib/contradiction-detector.js";
 import { runOverlayAuditCommand } from "./lib/overlay-commands.js";
-import { normalizeEmbeddingConfig, normalizeRerankerConfig } from "./lib/providers/config-normalize.js";
+import {
+  normalizeEmbeddingConfig,
+  normalizeRerankerConfig,
+  resolveLocalModelCacheDir,
+} from "./lib/providers/config-normalize.js";
 import { applyLegacyProviderDefaults } from "./lib/providers/legacy-provider-migration.js";
-import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL } from "./lib/providers/dimensions.js";
+import { DEFAULT_LOCAL_RERANKER_MODEL, EMBEDDING_DIMENSIONS, LEGACY_DEFAULT_MODEL, embeddingDimensionProfiles } from "./lib/providers/dimensions.js";
 import { OpenAIEmbeddingProvider } from "./lib/providers/embedding-openai.js";
 import { LocalTransformersEmbeddingProvider } from "./lib/providers/embedding-local-transformers.js";
+import {
+  ReloadSafeIpcScopedEmbeddingProvider,
+  createScopedEmbeddingIpcServer,
+  registerScopedEmbeddingIpcServiceAfterLifecycle,
+} from "./lib/providers/scoped-embedding-ipc.js";
+import {
+  pinnedLocalModelProfile,
+  validatePinnedModelArtifacts,
+} from "./lib/providers/local-model-artifacts.js";
 import { registerOpenClawMemoryEmbeddingProviders } from "./lib/providers/openclaw-memory-embedding-adapters.js";
 import { CohereRerankerProvider } from "./lib/providers/reranker-cohere.js";
+import { createConfiguredSecretInputResolver } from "./lib/providers/secret-input.js";
 import { LocalTransformersRerankerProvider } from "./lib/providers/reranker-local-transformers.js";
 import { ChainedRerankerProvider } from "./lib/providers/reranker-chained.js";
 import {
@@ -284,7 +334,7 @@ import { recordActivity, formatTimeContext, getLastActivity } from "./lib/sessio
 import { formatTemporalContinuityContext } from "./lib/temporal-context.js";
 import { readPendingReminders, writePendingReminders, removePendingReminder } from "./lib/reminder-pending.js";
 import { lightDream, writeLightDreamToVault } from "./lib/dreaming/light-dream.js";
-import { buildRemPartitions, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
+import { buildRemPartitions, describeRemPartitionRun, runRemDream, writeRemDreamToVault } from "./lib/dreaming/rem-dream.js";
 import { extractEpisodesFromTurns, writeEpisodeToVault } from "./lib/episodes.js";
 import { filterAlreadyEpisoded, mergeEpisodedTurnIds, resolveWatermarkAdvance } from "./lib/episode-watermark.js";
 import {
@@ -830,7 +880,7 @@ async function runMergedNamespaceRecall(
       dedupJaccard: baseParams.dedupJaccard,
       trace,
     });
-    if (baseParams.adaptiveBudget?.enabled === true) {
+    if (baseParams.adaptiveBudget?.enabled !== false) {
       merged = applyMergedRecallBudget(merged, baseParams.budget);
     }
     emitRetrievalLedger({
@@ -1460,7 +1510,14 @@ class MemoryDB {
         this._beforeLancePathOperation("connect");
         const lancePath = this._lancePath();
         this.db = await this._acquireInitHandle(
-          lancedb.connect(lancePath),
+          // Strong read consistency: without an interval a LanceDB table
+          // object keeps the version it was opened with, so rows written
+          // through another handle (memory_store in the gateway, another
+          // process) stay invisible to it. On OpenClaw 2026.8.2 the gateway's
+          // rem-dream reader missed three rows committed eight seconds
+          // earlier for more than two minutes; a fresh process saw them
+          // after 1.3 s. Zero checks the latest version on every read.
+          lancedb.connect(lancePath, { readConsistencyInterval: 0 }),
           "MemoryDB.connect",
           "connection",
         );
@@ -1637,6 +1694,17 @@ class MemoryDB {
             updatedAt: 0,
             workspaceId: "",
             workspaceKey: "",
+            memoryKind: "memory",
+            reminderStatus: "",
+            remindAt: 0,
+            remindedAt: 0,
+            dispatchedAt: 0,
+            acknowledgedAt: 0,
+            cancelledAt: 0,
+            reminderKey: "",
+            dispatchCount: 0,
+            lastDispatchAttemptAt: 0,
+            nextDispatchAttemptAt: 0,
             // Phase 1 — Explicit Trust State (epistemicStatus). See
             // lib/epistemic-status.js for the enum/matrix; absent/'' means
             // "legacy, resolves conservatively" (see plan §5), never "trusted".
@@ -2114,6 +2182,7 @@ class MemoryDB {
   normalizeActiveScanRow(r) {
     return {
       id: r.id,
+      type: r.type || "memory",
       vector: (Array.isArray(r.vector) && r.vector.length > 0) ? r.vector : null,
       text: r.text || "",
       summary: r.summary || "",
@@ -2121,8 +2190,16 @@ class MemoryDB {
       importance: r.importance ?? 0.5,
       createdAt: r.createdAt || "",
       scope: r.scope || "agent-private",
+      agentId: r.agentId || "",
+      storedBy: r.storedBy || "",
+      workspaceId: r.workspaceId || "",
+      workspaceKey: r.workspaceKey || "",
+      memoryKind: r.memoryKind ?? "memory",
       ownerUserId: r.ownerUserId || "",
       status: r.status || "active",
+      updatedAt: r.updatedAt ?? 0,
+      versionCreatedAt: r.versionCreatedAt ?? 0,
+      sourceTimestamp: r.sourceTimestamp ?? 0,
       // Carry protection flags so GC can honor the neverForget/core contract.
       neverForget: r.neverForget,
       memoryClass: r.memoryClass,
@@ -2134,7 +2211,11 @@ class MemoryDB {
     this._assertTrustedPath();
     let query = this.table.query().where(statusWhere);
     if (typeof query.select === "function") {
-      query = query.select(["id", "vector", "text", "summary", "category", "importance", "createdAt", "scope", "ownerUserId", "status", "neverForget", "memoryClass"]);
+      query = query.select([
+        "id", "type", "vector", "text", "summary", "category", "importance", "createdAt",
+        "scope", "agentId", "storedBy", "workspaceId", "workspaceKey", "memoryKind", "ownerUserId", "status",
+        "updatedAt", "versionCreatedAt", "sourceTimestamp", "neverForget", "memoryClass",
+      ]);
     }
     return query;
   }
@@ -2864,6 +2945,150 @@ export class AgentDbPool {
   }
 }
 
+const CONTROL_HEALTH_MAX_PARTITIONS = 128;
+const CONTROL_HEALTH_MAX_STORAGE_ENTRIES = 10_000;
+const CONTROL_HEALTH_SAFE_DIRECTORY_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const CONTROL_HEALTH_TABLE_PATH_NAMES = Object.freeze(["memories.lance", "memories"]);
+
+function isAbsentControlHealthPath(error) {
+  return error?.code === "ENOENT" || error?.code === "ENOTDIR";
+}
+
+function hasControlHealthLanceTable(partitionPath) {
+  for (const tableName of CONTROL_HEALTH_TABLE_PATH_NAMES) {
+    try {
+      const tablePath = resolveInside(partitionPath, tableName);
+      const stat = lstatSync(tablePath);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) return true;
+    } catch (error) {
+      if (isAbsentControlHealthPath(error)) continue;
+      throw error;
+    }
+  }
+  return false;
+}
+
+/** List only existing, ordinary, validated PLUR1BUS partition directory names. */
+function listControlHealthPartitions(basePath) {
+  let root;
+  try {
+    root = resolveInside(basePath);
+  } catch (error) {
+    if (isAbsentControlHealthPath(error)) return [];
+    throw error;
+  }
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    if (isAbsentControlHealthPath(error)) return [];
+    throw error;
+  }
+  const partitions = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || !CONTROL_HEALTH_SAFE_DIRECTORY_NAME_RE.test(entry.name)) {
+      continue;
+    }
+    const expected = resolve(root, entry.name);
+    const canonical = resolveInside(root, entry.name);
+    if (canonical !== expected) continue;
+    if (!hasControlHealthLanceTable(canonical)) continue;
+    partitions.push(safeAgentId(entry.name));
+  }
+  return partitions.toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Measure bytes below a trusted root without following links or reading file contents. */
+function measureControlHealthStorage(basePath, maxEntries = CONTROL_HEALTH_MAX_STORAGE_ENTRIES) {
+  let root;
+  try {
+    root = resolveInside(basePath);
+  } catch (error) {
+    if (isAbsentControlHealthPath(error)) return { bytes: 0, complete: true };
+    throw error;
+  }
+  let bytes = 0;
+  let entriesSeen = 0;
+  let complete = true;
+
+  const visit = (directory) => {
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (isAbsentControlHealthPath(error)) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (entriesSeen >= maxEntries) {
+        complete = false;
+        return;
+      }
+      const expected = resolve(directory, entry.name);
+      const canonical = resolveInside(directory, entry.name);
+      if (canonical !== expected) continue;
+      let stat;
+      try {
+        stat = lstatSync(canonical);
+      } catch (error) {
+        if (isAbsentControlHealthPath(error)) continue;
+        throw error;
+      }
+      entriesSeen += 1;
+      if (stat.isDirectory()) {
+        visit(canonical);
+        if (!complete) return;
+      } else if (stat.isFile()) {
+        const size = Number(stat.size);
+        if (!Number.isSafeInteger(size) || size < 0 || size > Number.MAX_SAFE_INTEGER - bytes) {
+          bytes = Number.MAX_SAFE_INTEGER;
+          complete = false;
+          return;
+        }
+        bytes += size;
+      }
+    }
+  };
+
+  visit(root);
+  return { bytes, complete };
+}
+
+/** Create an isolated non-mutating LanceDB row-counter for control-plane health. */
+function createControlHealthRowInspector(vectorDim, logger) {
+  return async ({ basePath, partitionId }) => {
+    const readPool = new AgentDbPool(basePath, vectorDim, logger, { readOnly: true });
+    let result;
+    let operationError = null;
+    try {
+      result = await readPool.withDb(partitionId, async (db) => {
+        const initialized = await db.init();
+        if (!initialized || !db.table) return 0;
+        const count = await db.table.countRows();
+        if (!Number.isSafeInteger(count) || count < 0) {
+          throw new Error("invalid read-only PLUR1BUS health row count");
+        }
+        return count;
+      });
+    } catch (error) {
+      operationError = error;
+    }
+
+    let shutdownError = null;
+    try {
+      await readPool.shutdown();
+    } catch (error) {
+      shutdownError = error;
+    }
+    if (operationError && shutdownError) {
+      throw new AggregateError([operationError, shutdownError], "PLUR1BUS health row inspection and shutdown failed");
+    }
+    if (operationError) throw operationError;
+    if (shutdownError) throw shutdownError;
+    return result;
+  };
+}
+
 class Embeddings {
   constructor(apiKey, model, baseUrl, dimensions, fallbackCfg, cacheOptions = {}) {
     this.apiKey = apiKey;
@@ -3076,9 +3301,12 @@ function buildMaintenanceNudges({ workspaceDir, schicht15Enabled, lang = "en", t
 
 function resolveNeoHooksConfig(api, commandConfig) {
   try {
-    const cfg = commandConfig || api.runtime?.config?.current?.();
+    const cfg = commandConfig || runtimeIfUsable(api)?.config?.current?.();
     return cfg?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {};
-  } catch (_) {
+  } catch (error) {
+    // An empty object disables every Neo hook. Say so rather than looking
+    // like a deliberately empty configuration.
+    api?.logger?.warn?.(`memory-lancedb-namespaced: neo hook config unreadable, all neo hooks stay disabled: ${String(error)}`);
     return {};
   }
 }
@@ -3165,30 +3393,27 @@ function getFeatureCronsSetupHint(baseDbPath) {
 }
 
 /**
- * Apply or verify the OpenClaw host boundary required by model-free feature
- * crons. Failure is logged and returned so cron setup can remain fail-closed
- * without disabling the memory plugin.
+ * Inspect the public OpenClaw capabilities required by model-free feature
+ * crons. Missing capabilities are reported explicitly and leave only the
+ * affected cron path fail-closed; OpenClaw runtime files are never modified.
  *
  * @param {object} api
- * @param {{applyImpl?: Function, distDir?: string}} [options]
  * @returns {boolean}
  */
-function ensureCronDirectDispatchAtRegistration(api, options = {}) {
-  const {
-    applyImpl = applyCronPluginDirectDispatchPatch,
-    distDir,
-  } = options;
-  try {
-    const resolvedDistDir = distDir || resolveOpenClawDistDir();
-    const result = applyImpl(resolvedDistDir);
-    api.logger?.info?.(`plur1bus-feature-crons: host direct dispatch ${result.status}`);
+function inspectCronNativeCapabilities(api) {
+  const missing = [
+    ["registerGatewayMethod", api?.registerGatewayMethod],
+    ["registerCli", api?.registerCli],
+  ].filter(([, capability]) => typeof capability !== "function").map(([name]) => name);
+  if (missing.length === 0) {
+    api.logger?.info?.("plur1bus-feature-crons: native command dispatch ready");
     return true;
-  } catch (error) {
-    api.logger?.warn?.(
-      `plur1bus-feature-crons: host direct dispatch unavailable; feature-cron setup will remain fail-closed (${error?.message || String(error)})`,
-    );
-    return false;
   }
+  api?.logger?.warn?.(
+    `plur1bus-feature-crons: required OpenClaw capability unavailable (${missing.join(", ")}); `
+      + "feature-cron setup will remain fail-closed and no host files will be patched",
+  );
+  return false;
 }
 
 /**
@@ -3938,24 +4163,55 @@ async function updateKnowledgeMd(workspaceDir, text, category, importance, llmCf
 // searchCanonical, runRecallPipeline kommen jetzt aus lib/recall-pipeline.js.
 // stripFrontmatter, buildFrontmatter, withFrontmatter aus lib/frontmatter.js.
 
-function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null) {
+/**
+ * Create the configured runtime reranker and bind local models to the host generation lifecycle.
+ * @param {object} [rawRerankerCfg] Reranker configuration.
+ * @param {object|null} [logger] OpenClaw logger.
+ * @param {{credentialResolver?: Function, localModelGeneration?: object}} [runtimeOptions] Runtime dependencies.
+ * @returns {{reranker: object|null, rerankerCfg: object}} Provider and normalized configuration.
+ */
+function createRuntimeRerankerProvider(rawRerankerCfg = {}, logger = null, {
+  credentialResolver,
+  localModelGeneration = null,
+} = {}) {
   const rerankerCfg = normalizeRerankerConfig(rawRerankerCfg || {});
   let reranker = null;
   if (rerankerCfg.provider === "cohere" && rerankerCfg.enabled) {
-    const primary = new CohereRerankerProvider(rerankerCfg);
+    const primary = new CohereRerankerProvider({ ...rerankerCfg, credentialResolver });
     if ((rerankerCfg.fallbackProvider ?? "disabled") === "local-transformers") {
       const fallback = new LocalTransformersRerankerProvider({
         ...(rerankerCfg.local || {}),
         model: rerankerCfg.fallbackModel || rerankerCfg.local?.model || DEFAULT_LOCAL_RERANKER_MODEL,
+        revision: rerankerCfg.fallbackRevision,
+        cacheDir: rerankerCfg.fallbackCacheDir,
+        logger,
+        localModelGeneration,
       });
       reranker = new ChainedRerankerProvider(primary, fallback, logger);
     } else {
-      const chained = new ChainedRerankerProvider(primary, { id: "none" }, logger);
-      chained.fallback = null;
-      reranker = chained;
+      reranker = new ChainedRerankerProvider(primary, null, logger);
     }
   } else if (rerankerCfg.provider === "local-transformers" && rerankerCfg.enabled) {
-    reranker = new LocalTransformersRerankerProvider(rerankerCfg.local || rerankerCfg);
+    const primary = new LocalTransformersRerankerProvider({
+      ...(rerankerCfg.local || rerankerCfg),
+      logger,
+      localModelGeneration,
+    });
+    if (rerankerCfg.fallbackOnError !== false && rerankerCfg.fallbackProvider === "local-transformers") {
+      if (rerankerCfg.fallbackModel === primary.model) {
+        throw new Error("local reranker fallback model must differ from the primary model");
+      }
+      const fallback = new LocalTransformersRerankerProvider({
+        model: rerankerCfg.fallbackModel,
+        revision: rerankerCfg.fallbackRevision,
+        cacheDir: rerankerCfg.fallbackCacheDir,
+        logger,
+        localModelGeneration,
+      });
+      reranker = new ChainedRerankerProvider(primary, fallback, logger);
+    } else {
+      reranker = primary;
+    }
   }
   return { reranker, rerankerCfg };
 }
@@ -3972,9 +4228,9 @@ function makeReactionsCapabilityChecker(api) {
     if (_reactionsCapability !== null) return _reactionsCapability;
     try {
       const { detectReactionsCapability } = await import("./lib/reaction-directive.js");
-      const runtimeConfig = typeof api.runtime?.config?.current === "function"
-        ? api.runtime.config.current()
-        : (api.runtime?.config && typeof api.runtime.config === "object" ? api.runtime.config : null);
+      const runtimeConfig = typeof runtimeIfUsable(api)?.config?.current === "function"
+        ? runtimeIfUsable(api).config.current()
+        : (runtimeIfUsable(api)?.config && typeof runtimeIfUsable(api).config === "object" ? runtimeIfUsable(api).config : null);
       _reactionsCapability = detectReactionsCapability(runtimeConfig);
     } catch (_) { _reactionsCapability = false; }
     try { api.logger?.info?.(`plur1bus: reaction capability auto-detect → ${_reactionsCapability}`); } catch (_) { /* non-blocking */ }
@@ -4126,7 +4382,7 @@ const plugin = {
   id: "memory-lancedb-namespaced",
   name: "Memory (LanceDB, per-Agent)",
   description: "Per-agent isolated LanceDB memory",
-  kind: "extension",
+  kind: "memory",
 
   register(api, registrationDependencies = {}) {
     if (!registrationDependencies || typeof registrationDependencies !== "object" || Array.isArray(registrationDependencies)) {
@@ -4135,6 +4391,7 @@ const plugin = {
     const {
       importRouting,
       commandRuntimeHooks = null,
+      skillWorkshop: registeredSkillWorkshop,
       handleObsidianBridgeCommand: registeredObsidianCommandHandler = handleObsidianBridgeCommand,
       shareCard: registeredShareCard = shareCard,
     } = registrationDependencies;
@@ -4150,6 +4407,13 @@ const plugin = {
     if (typeof registeredShareCard !== "function") {
       throw new TypeError("shareCard must be a function when provided");
     }
+    if (
+      registeredSkillWorkshop !== undefined
+      && registeredSkillWorkshop !== null
+      && (typeof registeredSkillWorkshop !== "object" || Array.isArray(registeredSkillWorkshop))
+    ) {
+      throw new TypeError("skillWorkshop must be an object when provided");
+    }
     const emitCommandRuntimeHook = (name, value) => {
       const hook = commandRuntimeHooks?.[name];
       if (hook !== undefined && typeof hook !== "function") {
@@ -4160,10 +4424,38 @@ const plugin = {
     const rawPluginConfig = api.pluginConfig || {};
     const namespacesExplicit = Object.hasOwn(rawPluginConfig, "namespaces");
     let cfg = resolveEffectiveConfig(rawPluginConfig);
+    const coordinatesLocalModelGeneration = shouldCoordinateLocalModelGeneration(api);
+    const requiresActiveSharedModelOwner = typeof api.registrationMode === "string"
+      && api.registrationMode !== "full";
+    const sharesActiveLocalModel = coordinatesLocalModelGeneration
+      || requiresActiveSharedModelOwner;
+    const localModelGeneration = createLocalModelGenerationLifecycle({
+      enabled: coordinatesLocalModelGeneration,
+    });
+    const credentialResolver = createConfiguredSecretInputResolver({
+      getConfig: () => runtimeIfUsable(api)?.config?.current?.() || api.config || {},
+    });
     pluginLogger = api.logger;
+    if (typeof api.registerMemoryCapability === "function") {
+      api.registerMemoryCapability({
+        deterministicRecallToolName: "memory_recall",
+        supportsPrivateTranscriptRecall: false,
+      });
+    } else {
+      api.logger?.info?.(
+        "memory-lancedb-namespaced: OpenClaw registerMemoryCapability API unavailable; legacy tool and hook surfaces remain active.",
+      );
+    }
     const cronDirectDispatchReady = process.env.NODE_TEST_CONTEXT
       ? true
-      : ensureCronDirectDispatchAtRegistration(api);
+      : inspectCronNativeCapabilities(api);
+    const openClawSkillWorkshop = registeredSkillWorkshop !== undefined
+      ? registeredSkillWorkshop
+      : (
+          typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function"
+            ? createOpenClawSkillWorkshopClient()
+            : null
+        );
     if (!cronDirectDispatchReady && typeof api.on === "function") {
       api.on(
         "before_agent_reply",
@@ -4180,7 +4472,7 @@ const plugin = {
     if (!epistemicCutoffBoot.ok) {
       api.logger?.warn?.(`memory-lancedb-namespaced: epistemic cutoff unavailable (${epistemicCutoffBoot.reason})`);
     }
-    const namespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
+    const configuredNamespaceLayout = resolveNamespaceLayout(baseDbPath, cfg.namespaces || {}, {
       explicit: namespacesExplicit,
       path: `${PLUGIN_CONFIG_PATH}.namespaces`,
     });
@@ -4213,7 +4505,7 @@ const plugin = {
       }
       const route = resolveFeatureLlmRoute(routeConfig, {
         feature,
-        runtimeLlm: api.runtime?.llm,
+        runtimeLlm: runtimeIfUsable(api)?.llm,
         logger: api.logger,
         resultCache: llmResultCache,
         credentialUnavailable,
@@ -4226,30 +4518,67 @@ const plugin = {
       );
     }
 
-    // Explicit-profile setup notices: pending setup still warns, while normal
-    // manifest-derived config loading requires no selection history.
-    const applyBlocked = isApplyBlocked(cfg);
+    const obsidianBridgeCfg = cfg.obsidianBridge || {};
+    const configuredObsidianWorkspaces = obsidianBridgeCfg.enabled !== false
+      ? discoverObsidianWorkspaces(obsidianBridgeCfg)
+      : [];
+    const obsidianVaultsConfirmed = configuredObsidianWorkspaces.length > 0
+      && configuredObsidianWorkspaces.every((workspace) => {
+        const workspaceIdentity = normalizeWorkspaceTarget(
+          workspace.workspaceId,
+          "Obsidian setup workspace",
+        );
+        return isOwnedVaultConfirmed({
+          baseDbPath,
+          memoryCtx: {
+            agentId: workspace.agentId,
+            workspaceIdentity,
+            workspaceId: workspaceIdentity,
+          },
+          vaultPath: workspace.path,
+        });
+      });
+
+    // Explicit-profile setup notices: protected receipts are the runtime truth;
+    // the safety-gate config bit alone does not mean confirmation is still pending.
+    const applyBlocked = isApplyBlocked(cfg, { vaultConfirmed: obsidianVaultsConfirmed });
     if (applyBlocked.blocked) {
       if (applyBlocked.reason === "pending_setup") {
-        const pending = detectPendingFeatures(cfg);
+        const pending = detectPendingFeatures(cfg, { vaultConfirmed: obsidianVaultsConfirmed });
         for (const p of pending) {
-          api.logger.warn(`memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`);
+          // A feature the operator explicitly switched on and left unconfigured
+          // is worth a warning. One that is merely on by default is not: with
+          // opt-out that would warn every user on every start about something
+          // they never asked for.
+          reportDormantFeature(api.logger, {
+            explicit: p.explicit,
+            message: `memory-lancedb-namespaced: PENDING SETUP — ${p.feature}: ${p.reason}. Run /plur1bus start for the setup status.`,
+          });
         }
       }
     }
 
-    registerOpenClawMemoryEmbeddingProviders(api, cfg);
-    const obsidianBridgeCfg = cfg.obsidianBridge || {};
-    const obsidianBridgeEnabled = obsidianBridgeCfg.enabled === true;
+    const obsidianBridgeEnabled = obsidianBridgeCfg.enabled !== false;
 
     const embeddingCfg = cfg.embedding || {};
-    const normalizedEmbeddingCfg = normalizeEmbeddingConfig(embeddingCfg, { mode: "existing" });
+    const localModelCacheDir = resolveLocalModelCacheDir(embeddingCfg);
+    const nonCommercialModelAccepted = cfg.modelPreparation?.acceptNonCommercialLicense === true;
+    const normalizedEmbeddingCfg = normalizeEmbeddingConfig(embeddingCfg, {
+      mode: "existing",
+      acceptNonCommercialLicense: nonCommercialModelAccepted,
+    });
     const apiKey = normalizedEmbeddingCfg.provider === "local-transformers"
       ? undefined
       : resolveConfiguredApiKey(normalizedEmbeddingCfg, "${OPENAI_API_KEY}");
     const model = normalizedEmbeddingCfg.model || DEFAULT_MODEL;
     const baseUrl = normalizedEmbeddingCfg.baseUrl;
     const dimensions = normalizedEmbeddingCfg.dimensions;
+    const embeddingGenerationLayout = resolveEmbeddingGenerationLayout({
+      stateRoot: configuredNamespaceLayout.baseDir,
+      namespaceLayout: configuredNamespaceLayout,
+      selection: cfg.reembedding || {},
+    });
+    const namespaceLayout = embeddingGenerationLayout.dataLayout;
     const fallbackEmbeddingCfg = normalizedEmbeddingCfg.fallback
       ? {
           apiKey: normalizedEmbeddingCfg.fallback.apiKey
@@ -4273,7 +4602,7 @@ const plugin = {
     const canonicalMaxItems = recallCfg.canonicalMaxItems ?? 5;
     const maxPromptMemories = normalizeBoundedRecallInteger(recallCfg.maxPromptMemories, 12, 1, 100);
     const candidateTopK     = normalizeBoundedRecallInteger(recallCfg.candidateTopK, 40, 1, 100);
-    const queryRefinerEnabled = recallCfg.queryRefinement?.enabled === true;
+    const queryRefinerEnabled = recallCfg.queryRefinement?.enabled !== false;
     const adaptiveBudgetCfg = recallCfg.adaptiveBudget || {};
     const semanticCompressionCfg = recallCfg.semanticCompression || {};
     const halfLifeOverrides = recallCfg.halfLifeDaysMap   || {};
@@ -4309,7 +4638,7 @@ const plugin = {
 
     // P2 Recall Decision Trace config
     const traceCfg = cfg.recall?.decisionTrace || {};
-    const traceEnabled = traceCfg.enabled === true;
+    const traceEnabled = traceCfg.enabled !== false;
     const traceInPrompt = traceEnabled && traceCfg.includeInPrompt === true;
 
     const riCfg = cfg.retroactiveInterference ?? {};
@@ -4323,7 +4652,7 @@ const plugin = {
 
     // Merging config
     const mergingCfg = cfg.merging || {};
-    const mergingEnabled = mergingCfg.enabled === true;
+    const mergingEnabled = mergingCfg.enabled !== false;
     const mergingAutoApply = mergingCfg.autoApply === true;
     const mergingThreshold = mergingCfg.threshold ?? 0.70;
     const mergingLlmCfg = mergingEnabled
@@ -4349,7 +4678,7 @@ const plugin = {
 
     // Schicht 1.5 config
     const schicht15Cfg = cfg.schicht15 || {};
-    const schicht15Enabled = schicht15Cfg.enabled === true;
+    const schicht15Enabled = schicht15Cfg.enabled !== false;
     const schicht15MinImportance = schicht15Cfg.minImportance ?? 0.7;
     const schicht15MaxPromotions = schicht15Cfg.maxPromotionsPerRun ?? 3;
     const schicht15LlmCfg = schicht15Enabled
@@ -4361,7 +4690,7 @@ const plugin = {
 
     // Skill Miner config
     const skillMinerCfg = cfg.skillMiner || {};
-    const skillMinerEnabled = skillMinerCfg.enabled === true;
+    const skillMinerEnabled = skillMinerCfg.enabled !== false;
     const skillMinerLlmCfg = skillMinerEnabled
       ? createFeatureRoute("skillMiner", skillMinerCfg)
       : null;
@@ -4393,14 +4722,14 @@ const plugin = {
     const emotionT2Enabled = emotionCfg.t2?.enabled !== false;
     // Tier 3: enabled if wanted AND its feature-local route is available.
     // onlyWhenProviderAvailable (default: true) makes T3 soft-skip instead of error when no provider.
-    const emotionT3WantsEnabled = emotionCfg.t3?.enabled === true;
+    const emotionT3WantsEnabled = emotionCfg.t3?.enabled !== false;
     const emotionT3LlmCfg = emotionT3WantsEnabled
       ? createFeatureRoute("emotionT3", emotionCfg.t3 || {})
       : null;
     const emotionT3HasProvider = Boolean(
       emotionT3LlmCfg
       && (emotionT3LlmCfg.kind === LLM_ROUTE_KINDS.DIRECT_OVERRIDE
-        || typeof api.runtime?.llm?.complete === "function"),
+        || typeof runtimeIfUsable(api)?.llm?.complete === "function"),
     );
     const emotionT3OnlyWhenProviderAvailable = emotionCfg.t3?.onlyWhenProviderAvailable !== false;
     const emotionT3Enabled = emotionT3WantsEnabled && (emotionT3HasProvider || !emotionT3OnlyWhenProviderAvailable);
@@ -4510,6 +4839,58 @@ const plugin = {
         }
       }
     }
+    const activeEmbeddingFingerprint = embeddingFingerprintFromNormalizedConfig({
+      ...normalizedEmbeddingCfg,
+      dimensions: vectorDim,
+    });
+    const activeEmbeddingFingerprintId = embeddingFingerprintId(activeEmbeddingFingerprint);
+    registerOpenClawMemoryEmbeddingProviders(api, cfg, requiresActiveSharedModelOwner
+      ? { scopedEmbeddingIpc: { stateRoot: baseDbPath, fingerprintId: activeEmbeddingFingerprintId } }
+      : {});
+    if (cfg.reembedding && (
+      cfg.reembedding.fingerprintId !== activeEmbeddingFingerprintId
+      || cfg.reembedding.dimensions !== vectorDim
+    )) {
+      throw new Error(
+        "memory-lancedb-namespaced: active reembedding selection does not match the configured embedding fingerprint",
+      );
+    }
+    const reembeddingStateStore = createMigrationStateStore({ stateRoot: baseDbPath, logger: api.logger });
+    const memoryMaintenanceGate = createMemoryMaintenanceGate({
+      externalStatus: () => {
+        const switching = reembeddingStateStore.list().find((record) => record.state === "switching");
+        return switching
+          ? {
+              active: true,
+              reason: "reembedding_switch",
+              since: Date.parse(switching.updatedAt),
+            }
+          : { active: false };
+      },
+    });
+    const reembeddingConfigRevision = createHash("sha256")
+      .update(JSON.stringify({
+        fingerprintId: activeEmbeddingFingerprintId,
+        selection: embeddingGenerationLayout.selection,
+        namespaceMode: configuredNamespaceLayout.mode,
+        activeWriteNamespace: configuredNamespaceLayout.activeWriteNamespace || null,
+      }))
+      .digest("hex");
+    const reembeddingBackend = createLanceGenerationBackend({
+      stateRoot: baseDbPath,
+      activeRoot: embeddingGenerationLayout.activeRoot,
+      activeSharedBaseDir: embeddingGenerationLayout.sharedBaseDir,
+      activeNamespace: configuredNamespaceLayout.mode === "named"
+        ? configuredNamespaceLayout.activeWriteNamespace
+        : null,
+      activeGeneration: embeddingGenerationLayout.selection.mode === "generation"
+        ? embeddingGenerationLayout.selection.generation
+        : "legacy-active",
+      activeSelection: embeddingGenerationLayout.selection,
+      activeFingerprint: activeEmbeddingFingerprint,
+      activeSecretRef: redactedEmbeddingSecretRef(normalizedEmbeddingCfg),
+      configRevision: reembeddingConfigRevision,
+    });
     const neoCfg = cfg.neo || {};
     const neoEnabled = neoCfg.enabled !== false; // 3.0 default: additive cognitive layer on
     const neoRoot = api.resolvePath(neoCfg.statePath || join(baseDbPath, "_neo"));
@@ -4522,12 +4903,16 @@ const plugin = {
     const memoryWorkspaceAliases = buildMemoryWorkspaceAliases(cfg, neoWorkspaceAliases);
     let hostMemoryConfig = {};
     try {
-      hostMemoryConfig = typeof api.runtime?.config?.current === "function" ? api.runtime.config.current() : (api.runtime?.config || {});
+      hostMemoryConfig = typeof runtimeIfUsable(api)?.config?.current === "function" ? runtimeIfUsable(api).config.current() : (runtimeIfUsable(api)?.config || {});
     } catch (error) {
       api.logger?.warn?.(`memory-lancedb-namespaced: account topology snapshot unavailable: ${String(error)}`);
     }
     const memoryAccountTopology = buildMemoryAccountTopology(hostMemoryConfig);
     const hostRoutingLoader = createHostRoutingLoader({
+      logger: api.logger,
+      ...(importRouting ? { importRouting } : {}),
+    });
+    const classifyHostIncognitoSession = createHostIncognitoSessionClassifier({
       logger: api.logger,
       ...(importRouting ? { importRouting } : {}),
     });
@@ -4553,6 +4938,38 @@ const plugin = {
       const turnRoutes = await turnRouteState.initPromise;
       turnRoutes?.clear();
     } : null;
+    const workspacePolicyStore = createWorkspacePolicyStore({
+      stateRoot: baseDbPath,
+      logger: api.logger,
+    });
+    const workspacePolicyGuard = createWorkspacePolicyGuard({
+      store: workspacePolicyStore,
+      maintenanceGate: memoryMaintenanceGate,
+      invalidate: async () => {
+        await clearInitializedTurnRoutes?.();
+      },
+    });
+    const automaticWorkspacePolicyDecision = (event = {}, ctx = {}) => {
+      try {
+        const workspaceDir = ctx?.workspaceDir ?? event?.workspaceDir;
+        const memoryCtx = resolveMemoryRequestContext({
+          agentId: ctx?.agentId ?? event?.agentId,
+          workspaceDir,
+          ...(workspaceDir
+            ? {}
+            : {
+                workspaceKey: ctx?.workspaceKey ?? event?.workspaceKey,
+                workspaceId: ctx?.workspaceId ?? event?.workspaceId,
+              }),
+          sessionKey: ctx?.sessionKey ?? event?.sessionKey,
+          sessionId: ctx?.sessionId ?? event?.sessionId,
+        }, { workspaceAliases: memoryWorkspaceAliases });
+        return workspacePolicyGuard.automatic(memoryCtx);
+      } catch (error) {
+        api.logger?.debug?.(`memory-lancedb-namespaced: workspace policy context unavailable: ${String(error)}`);
+        return { allowed: false, reason: "workspace_identity_required" };
+      }
+    };
     const neoWorkerRuntime = neoEnabled
       ? createNeoWorkerRuntime({ logger: api.logger })
       : null;
@@ -4563,7 +4980,10 @@ const plugin = {
     // Episoden-Extraktion brauchen eine aktive Merging-Route. Ohne sie laufen
     // diese Features still als No-op, obwohl sie "aktiv" wirken.
     if (neoEnabled && !mergingLlmCfg) {
-      api.logger.warn("memory-lancedb-namespaced: light/REM dreaming and episode extraction require merging.enabled and an available LLM route. They will no-op until that route is available.");
+      reportDormantFeature(api.logger, {
+        explicit: cfg.neo?.enabled === true,
+        message: "memory-lancedb-namespaced: light/REM dreaming and episode extraction require merging.enabled and an available LLM route. They will no-op until that route is available.",
+      });
     }
     const sessionWorkspaceKeys = new Map();
     const rememberNeoWorkspace = (ctx = {}, event = {}) => {
@@ -4571,7 +4991,7 @@ const plugin = {
         event,
         defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
         rootDir: neoRoot,
-        runtime: api.runtime,
+        runtime: runtimeIfUsable(api),
         sessionWorkspaceKeys,
         workspaceAliases: neoWorkspaceAliases,
       });
@@ -4799,7 +5219,38 @@ const plugin = {
     };
 
     const pool = new MultiNamespacePool(namespaceLayout, vectorDim, AgentDbPool, api.logger);
-    const sharedMemoryPool = new SharedMemoryPool(namespaceLayout.baseDir, vectorDim, AgentDbPool, api.logger);
+    const sharedMemoryPool = new SharedMemoryPool(embeddingGenerationLayout.sharedBaseDir, vectorDim, AgentDbPool, api.logger);
+    // The control surface gets its own bounded, read-only view. It must never
+    // reuse a write pool: a status request is not allowed to create a Lance
+    // table, directory, or card as a side effect.
+    const controlHealthWorkspaceIdentityByKey = new Map();
+    const controlHealthNamespaceRoots = namespaceLayout.mode === "named"
+      ? namespaceLayout.recallReadNamespaces.map((id) => ({
+          id,
+          path: resolve(namespaceLayout.baseDir, id),
+          dimensions: vectorDim,
+        }))
+      : [{ id: "legacy-flat", path: namespaceLayout.baseDbPath, dimensions: vectorDim }];
+    const controlHealth = createControlPlaneHealthInspector({
+      scan: createControlPlaneHealthScan({
+        namespaceRoots: controlHealthNamespaceRoots,
+        sharedRoots: {
+          workspace: {
+            path: resolve(embeddingGenerationLayout.sharedBaseDir, ".plur1bus-shared", "workspaces"),
+            dimensions: vectorDim,
+          },
+          user: {
+            path: resolve(embeddingGenerationLayout.sharedBaseDir, ".plur1bus-shared", "users"),
+            dimensions: vectorDim,
+          },
+        },
+        listPartitions: ({ basePath }) => listControlHealthPartitions(basePath),
+        inspectRows: createControlHealthRowInspector(vectorDim, api.logger),
+        measureStorage: () => measureControlHealthStorage(baseDbPath),
+        workspaceIdentityForKey: (key) => controlHealthWorkspaceIdentityByKey.get(key) ?? null,
+        maxPartitions: CONTROL_HEALTH_MAX_PARTITIONS,
+      }),
+    });
     const legacyMigrationShutdown = new AbortController();
     if (commandRuntimeHooks) {
       const withDb = pool.withDb.bind(pool);
@@ -4824,8 +5275,17 @@ const plugin = {
       moodInfluence: emotionMoodInfluence,
     });
     const embeddings = normalizedEmbeddingCfg.provider === "local-transformers"
-      ? new LocalTransformersEmbeddingProvider({
+      ? (requiresActiveSharedModelOwner
+          ? new ReloadSafeIpcScopedEmbeddingProvider({
+              stateRoot: baseDbPath,
+              model: normalizedEmbeddingCfg.local.model,
+              dimensions: dimensions || vectorDim,
+              fingerprintId: activeEmbeddingFingerprintId,
+            })
+          : new LocalTransformersEmbeddingProvider({
           ...normalizedEmbeddingCfg.local,
+          cacheDir: localModelCacheDir,
+          acceptNonCommercialLicense: nonCommercialModelAccepted,
           dimensions: dimensions || vectorDim,
           embeddingCacheEnabled: cfg.runtime?.embeddingCacheEnabled,
           cacheMaxEntries: cfg.runtime?.embeddingCacheMaxEntries ?? normalizedEmbeddingCfg.cacheMaxEntries,
@@ -4838,11 +5298,17 @@ const plugin = {
           embeddingCacheMaxBytes: cfg.runtime?.embeddingCacheMaxBytes,
           cacheBasePath: baseDbPath,
           logger: api.logger,
-        })
+          localModelGeneration,
+          sharedModelPool: sharesActiveLocalModel,
+          sharedModelOwner: coordinatesLocalModelGeneration,
+          sharedModelRequireOwner: requiresActiveSharedModelOwner,
+          sharedModelActivationManaged: coordinatesLocalModelGeneration,
+        }))
       : new OpenAIEmbeddingProvider({
           ...normalizedEmbeddingCfg,
           apiKey: normalizedEmbeddingCfg.apiKey,
           apiKeyEnv: normalizedEmbeddingCfg.apiKeyEnv,
+          credentialResolver,
           fallback: embeddingCfg.fallback,
           dimensions: dimensions || vectorDim,
           embeddingCacheEnabled: cfg.runtime?.embeddingCacheEnabled,
@@ -4857,6 +5323,15 @@ const plugin = {
           cacheBasePath: baseDbPath,
           logger: api.logger,
         });
+    const scopedEmbeddingServer = coordinatesLocalModelGeneration
+      && normalizedEmbeddingCfg.provider === "local-transformers"
+      ? createScopedEmbeddingIpcServer({
+          stateRoot: baseDbPath,
+          embeddings,
+          fingerprintId: activeEmbeddingFingerprintId,
+          logger: api.logger,
+        })
+      : null;
     if (commandRuntimeHooks) {
       for (const method of ["embed", "embedQuery", "embedPassage", "embedBatch"]) {
         if (typeof embeddings[method] !== "function") continue;
@@ -4868,9 +5343,329 @@ const plugin = {
       }
     }
 
+    // This adapter also owns plugin-lifecycle resources, so it must exist even
+    // on hosts without the optional chat-command registration capability.
+    const memoryDbAdapter = createDbAdapter({
+      basePath: embeddingGenerationLayout.activeRoot,
+      getEmbedding: async (text) => {
+        try {
+          return await embeddings.embed(text);
+        } catch (error) {
+          safeDebug(api.logger, "memory-adapter.embedding-fallback", error);
+          return null;
+        }
+      },
+      embedder: {
+        embed: async (text) => embeddings.embed(text),
+      },
+      logger: api.logger,
+    });
+
+    if (typeof api.on === "function") {
+      const synchronizeSkillWorkshopLifecycle = createSkillWorkshopLifecycleSynchronizer({
+        resolveProposalWorkspaces: ({ eventWorkspaceDir }) => [
+          eventWorkspaceDir,
+          ...listNeoWorkspaceKeys(neoRoot).map((workspaceKey) =>
+            resolve(neoRoot, "workspaces", workspaceKey)),
+        ],
+        onApplied: async ({ workspaceDir, eventWorkspaceDir, agentId, localProposal, workshopEvent }) => {
+          const lifecycleMemoryCtx = resolveMemoryRequestContext({
+            agentId,
+            workspaceDir: eventWorkspaceDir,
+          }, { workspaceAliases: memoryWorkspaceAliases });
+          return activateSkillProposal(workspaceDir, localProposal.id, {
+            agentId,
+            logger: api.logger,
+            committedWorkshopEvent: workshopEvent,
+            memoryCtx: lifecycleMemoryCtx,
+            loadEvidenceRecord: async (memoryId) => pool.withAuthoritativeReadDb(
+              agentId,
+              async (db) => db.getById(memoryId),
+            ),
+            applyEpistemicStatus: async (memoryId, nextStatus) => pool.withWriteDb(
+              agentId,
+              (db) => applyEpistemicStatusToLanceDb(db, memoryId, nextStatus, {
+                ctx: lifecycleMemoryCtx,
+                actor: "openclaw-skill-workshop",
+                // "system" was never a legal tier, so every evidence
+                // transition of an externally applied skill failed and the
+                // local record stayed at activation_partial for good.
+                actorTier: "system:skill-workshop",
+                authorized: false,
+                workspaceDir: eventWorkspaceDir,
+                reason: "skill-workshop-lifecycle",
+              }),
+            ),
+          });
+        },
+        onRejected: async ({ workspaceDir, localProposal }) => {
+          const marked = markProposalStatus(workspaceDir, localProposal.id, "rejected");
+          if (!marked.ok) return marked;
+          return patchProposal(workspaceDir, localProposal.id, {
+            openClawWorkshop: {
+              ...localProposal.openClawWorkshop,
+              status: "rejected",
+            },
+          });
+        },
+      });
+      api.on(
+        "skill_proposal_changed",
+        async (event, context) => {
+          try {
+            return await synchronizeSkillWorkshopLifecycle(event, context);
+          } catch (error) {
+            safeWarn(api.logger, "skill-workshop-lifecycle", error, {
+              proposalId: event?.proposal?.id,
+              action: event?.action,
+            });
+            throw error;
+          }
+        },
+        {
+          registrationId: "plur1bus-skill-workshop-lifecycle-v1",
+          timeoutMs: 30_000,
+        },
+      );
+    }
+
+    const createTargetEmbeddingProvider = async ({ fingerprint, secretRef } = {}) => {
+      if (!fingerprint || typeof fingerprint !== "object") {
+        throw new Error("reembedding target fingerprint is required");
+      }
+      if (fingerprint.provider === "local-transformers") {
+        const profile = pinnedLocalModelProfile(fingerprint.model);
+        if (!profile || profile.revision !== fingerprint.revision) {
+          throw new Error(`reembedding local model is not pinned: ${String(fingerprint.model)}`);
+        }
+        if (profile.role !== "embedding") {
+          throw new Error(`reembedding local model is not an embedding model: ${profile.model}`);
+        }
+        return new LocalTransformersEmbeddingProvider({
+          model: fingerprint.model,
+          revision: fingerprint.revision,
+          dimensions: fingerprint.dimensions,
+          queryPrefix: fingerprint.queryPrefix,
+          passagePrefix: fingerprint.passagePrefix,
+          cacheDir: localModelCacheDir,
+          acceptNonCommercialLicense: nonCommercialModelAccepted,
+          embeddingCacheEnabled: false,
+          logger: api.logger,
+          localModelGeneration,
+          sharedModelPool: requiresActiveSharedModelOwner,
+          sharedModelOwner: false,
+          sharedModelRequireOwner: requiresActiveSharedModelOwner,
+        });
+      }
+      return new OpenAIEmbeddingProvider({
+        provider: fingerprint.provider,
+        model: fingerprint.model,
+        baseUrl: fingerprint.endpoint,
+        dimensions: fingerprint.dimensions,
+        ...(secretRef ? { apiKey: secretRef } : {}),
+        credentialResolver,
+        embeddingCacheEnabled: false,
+        logger: api.logger,
+      });
+    };
+    const embedWithTargetProvider = async (provider, text, purpose) => {
+      if (purpose === "query" && typeof provider.embedQuery === "function") {
+        return provider.embedQuery(text, { purpose: "reembedding" });
+      }
+      if (typeof provider.embedPassage === "function") {
+        return provider.embedPassage(text, { purpose: "reembedding" });
+      }
+      return provider.embed(text, { purpose: "reembedding" });
+    };
+    const shutdownTargetProvider = async (provider, operationError = null) => {
+      try {
+        await provider?.shutdown?.();
+      } catch (shutdownError) {
+        if (operationError) {
+          throw new AggregateError([operationError, shutdownError], "reembedding provider operation and shutdown failed");
+        }
+        throw shutdownError;
+      }
+      if (operationError) throw operationError;
+    };
+    const targetGenerationDataRoot = (generation) => {
+      if (generation === null) {
+        return configuredNamespaceLayout.mode === "named"
+          ? resolveInside(configuredNamespaceLayout.baseDir, configuredNamespaceLayout.activeWriteNamespace)
+          : configuredNamespaceLayout.baseDbPath;
+      }
+      const root = resolveInside(baseDbPath, "generations", generation);
+      return configuredNamespaceLayout.mode === "named"
+        ? resolveInside(root, configuredNamespaceLayout.activeWriteNamespace)
+        : root;
+    };
+    const withTargetGenerationDb = async ({ generation, agentId, dimensions: targetDimensions }, operation) => {
+      const targetPool = new AgentDbPool(
+        targetGenerationDataRoot(generation),
+        targetDimensions,
+        api.logger,
+      );
+      let operationError = null;
+      let result;
+      try {
+        result = await targetPool.withDb(agentId, operation);
+      } catch (error) {
+        operationError = error;
+      }
+      try {
+        await targetPool.shutdown();
+      } catch (shutdownError) {
+        if (operationError) {
+          throw new AggregateError([operationError, shutdownError], "reembedding target DB operation and shutdown failed");
+        }
+        throw shutdownError;
+      }
+      if (operationError) throw operationError;
+      return result;
+    };
+    const readConfiguredReembeddingSelection = () => {
+      const current = runtimeIfUsable(api)?.config?.current?.() || api.config || {};
+      const currentReembedding = current?.plugins?.entries?.[PLUGIN_KEY]?.config?.reembedding;
+      return Object.freeze({ generation: currentReembedding?.activeGeneration ?? null });
+    };
+    const runTargetGenerationRuntimeProbe = async (input) => {
+      const provider = await createTargetEmbeddingProvider(input);
+      const probe = createGenerationRuntimeProbe({
+        readActiveSelection: readConfiguredReembeddingSelection,
+        embedTarget: ({ text, purpose }) => embedWithTargetProvider(provider, text, purpose),
+        withTargetDb: withTargetGenerationDb,
+        appendAudit: (entry) => appendDestructiveOpLog(baseDbPath, entry),
+      });
+      let operationError = null;
+      let result;
+      try {
+        result = await probe(input);
+      } catch (error) {
+        operationError = error;
+      }
+      await shutdownTargetProvider(provider, operationError);
+      return result;
+    };
+    const readReembeddingDiskStatus = async () => {
+      const disk = statfsSync(baseDbPath);
+      const freeBytes = Math.floor(Number(disk.bavail) * Number(disk.bsize));
+      return { freeBytes: Math.min(Number.MAX_SAFE_INTEGER, freeBytes) };
+    };
+    const reembeddingCoordinator = createReembeddingCoordinator({
+      stateStore: reembeddingStateStore,
+      backend: reembeddingBackend,
+      createTargetProvider: createTargetEmbeddingProvider,
+      plannerDependencies: {
+        statDisk: readReembeddingDiskStatus,
+        inspectTargetArtifacts: async ({ fingerprint }) => {
+          const profile = pinnedLocalModelProfile(fingerprint.model);
+          if (!profile || profile.revision !== fingerprint.revision) {
+            return { ready: false, verified: false };
+          }
+          const provider = await createTargetEmbeddingProvider({ fingerprint });
+          let operationError = null;
+          let inspected;
+          try {
+            inspected = provider.cacheDir
+              ? await validatePinnedModelArtifacts(profile, provider.cacheDir)
+              : { ok: false, artifacts: [] };
+          } catch (error) {
+            operationError = error;
+          }
+          await shutdownTargetProvider(provider, operationError);
+          return { ready: inspected.ok, verified: inspected.ok };
+        },
+        probeTargetProvider: async ({ target, purpose }) => {
+          const provider = await createTargetEmbeddingProvider(target);
+          let operationError = null;
+          let vector;
+          try {
+            vector = await embedWithTargetProvider(
+              provider,
+              `PLUR1BUS ${purpose} provider probe`,
+              "passage",
+            );
+          } catch (error) {
+            operationError = error;
+          }
+          await shutdownTargetProvider(provider, operationError);
+          return vector;
+        },
+      },
+      readPolicySnapshot: async () => workspacePolicyStore.list(),
+      runValidationProbes: async ({ record, backend, provider }) => {
+        const table = record.source.tables.find((candidate) => candidate.rowCount > 0);
+        if (!table) throw new Error("reembedding semantic validation requires at least one source memory");
+        const [sourceRow] = await backend.readSourceBatch(table.tableId, { offset: 0, limit: 1 });
+        if (!sourceRow || typeof sourceRow.text !== "string" || !sourceRow.text.trim()) {
+          throw new Error("reembedding semantic validation source memory is invalid");
+        }
+        const queryVector = await embedWithTargetProvider(provider, sourceRow.text, "query");
+        const recalled = await backend.searchTarget(record.target.generation, table.tableId, queryVector, { limit: 5 });
+        if (!recalled.some((candidate) => candidate.id === sourceRow.id)) {
+          throw new Error("reembedding target generation did not recall the source validation memory");
+        }
+        return { semanticRecall: true, validationMemoryId: sourceRow.id, validationTable: table.tableId };
+      },
+    });
+    let modelPreparationCoordinator = null;
+    if (cfg.modelPreparation) {
+      try {
+        modelPreparationCoordinator = createModelPreparationCoordinator({
+          stateRoot: baseDbPath,
+          cacheDir: localModelCacheDir,
+          config: cfg.modelPreparation,
+          activeFingerprint: activeEmbeddingFingerprint,
+          inventoryActiveGeneration: reembeddingBackend.inventoryActiveGeneration,
+          statDisk: readReembeddingDiskStatus,
+          logger: api.logger,
+        });
+      } catch (error) {
+        safeWarn(api.logger, "model-preparation.initialize", error);
+        modelPreparationCoordinator = createFailedModelPreparationCoordinator({
+          config: cfg.modelPreparation,
+          activeFingerprint: activeEmbeddingFingerprint,
+        });
+      }
+    }
+    const reembeddingConfigMutationAvailable = typeof runtimeIfUsable(api)?.config?.mutateConfigFile === "function";
+    const reembeddingSelectionMutator = reembeddingConfigMutationAvailable
+      ? createOpenClawEmbeddingSelectionMutator({ api })
+      : null;
+    const reembeddingSwitchRuntime = reembeddingConfigMutationAvailable
+      ? createReembeddingSwitchRuntime({
+          stateStore: reembeddingStateStore,
+          maintenanceGate: memoryMaintenanceGate,
+          mutateSelection: reembeddingSelectionMutator,
+        })
+      : Object.freeze({
+          async switchGeneration() {
+            throw new Error("OpenClaw mutateConfigFile capability is required for reembedding switch");
+          },
+          async planManualRollback() {
+            throw new Error("OpenClaw mutateConfigFile capability is required for reembedding rollback");
+          },
+        });
+    const reembeddingSwitchRecovery = reembeddingConfigMutationAvailable
+      ? createReembeddingSwitchRecovery({
+          stateStore: reembeddingStateStore,
+          readActiveSelection: readConfiguredReembeddingSelection,
+          mutateSelection: reembeddingSelectionMutator,
+          probeRuntime: runTargetGenerationRuntimeProbe,
+        })
+      : null;
+    const configMutationNotice = configMutationLogNotice(api);
+    if (configMutationNotice) {
+      api.logger?.[configMutationNotice.level]?.(configMutationNotice.message);
+    }
+
     // Reranker (optional — provider-aware since v3.1)
     // Cohere reranker — lokaler Fallback nur wenn fallbackProvider="local-transformers" explizit gesetzt
-    const { reranker, rerankerCfg } = createRuntimeRerankerProvider(cfg.reranker || {}, api.logger);
+    const { reranker, rerankerCfg } = createRuntimeRerankerProvider(
+      cfg.reranker || {},
+      api.logger,
+      { credentialResolver, localModelGeneration },
+    );
     // Wie viele Kandidaten vor dem Re-Ranking holen (dann auf limit/top_n reduzieren)
     const rerankCandidates = rerankerCfg.candidates ?? candidateTopK;
 
@@ -5493,7 +6288,12 @@ const plugin = {
             { validFrom: capturedValidFrom, validUntil: capturedValidUntil },
           );
           if (!safeDuplicate) {
-            api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+            // Nothing went wrong here: a near-duplicate was found, merging was refused
+            // because the validity windows differ, and the memory was stored separately.
+            // That is the conservative outcome, and the decision is already durable in the
+            // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
+            // routine store into an operator alarm -- 192 of them in one seeded run.
+            api.logger?.info?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
             addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
           } else {
             if (storeCtx.workspaceDir) appendCurationLog(storeCtx.workspaceDir, storeAgentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId: storeAgentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
@@ -5628,6 +6428,28 @@ const plugin = {
     if (obsidianBridgeEnabled) {
       const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
         logger: api.logger,
+        loadLanceDbRecords: async ({ workspace }) => {
+          const workspaceIdentity = normalizeWorkspaceTarget(
+            workspace.workspaceId,
+            "Obsidian service workspace",
+          );
+          const memoryCtx = Object.freeze({
+            agentId: safeAgentId(workspace.agentId),
+            workspaceIdentity,
+            workspaceId: workspaceIdentity,
+            userPrincipal: "",
+            workspaceAliases: memoryWorkspaceAliases,
+          });
+          return pool.withAuthoritativeReadDb(memoryCtx.agentId, async (mirrorDb) => {
+            const initialized = await mirrorDb.init();
+            if (initialized === false) return [];
+            const records = await mirrorDb.scanActive();
+            if (!Array.isArray(records)) {
+              throw new TypeError("Obsidian memory mirror scan must return an array");
+            }
+            return records.filter((record) => checkAccess(memoryCtx, record).allowed);
+          });
+        },
         mutationPolicyForWorkspace: (workspace) => {
           const workspaceIdentity = normalizeWorkspaceTarget(
             workspace.workspaceId,
@@ -5663,11 +6485,11 @@ const plugin = {
         },
       });
       if (obsidianBridgeCfg.watch === true) {
-        if (typeof api.on === "function") {
+        if (typeof api.registerService === "function") {
+          api.registerService(bridgeService);
+        } else if (typeof api.on === "function") {
           api.on("gateway_start", () => bridgeService.start(), { timeoutMs: 30_000 });
           api.on("gateway_stop", () => bridgeService.stop(), { timeoutMs: 30_000 });
-        } else if (typeof api.registerService === "function") {
-          api.registerService(bridgeService);
         }
       } else {
         api.logger.info(`plur1bus-obsidian-bridge: configured (watch=false, dryRun=${obsidianBridgeCfg.dryRun !== false})`);
@@ -5695,8 +6517,8 @@ const plugin = {
             await reconcileUnsafeDirectCronsWithService(api, gatewayContext);
           }
           // The in-process service closes the immediate safety window first.
-          // CLI reconciliation remains deferred and retried so it can repair
-          // the host patch and restore only safely marked jobs.
+          // CLI reconciliation remains deferred and retried so it can restore
+          // only safely marked jobs after the native capability becomes ready.
           const timer = setTimeout(() => {
             runDeferredFeatureCronBootstrap(api, {
               cfg,
@@ -5738,7 +6560,7 @@ const plugin = {
               event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
-              runtime: api.runtime,
+              runtime: runtimeIfUsable(api),
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
@@ -5771,7 +6593,7 @@ const plugin = {
               event: { agentSessionKey: params?.agentSessionKey, workspaceKey: params?.workspaceKey },
               defaultWorkspaceKey: neoCfg.corpusDefaultWorkspaceKey,
               rootDir: neoRoot,
-              runtime: api.runtime,
+              runtime: runtimeIfUsable(api),
               sessionWorkspaceKeys,
               workspaceAliases: neoWorkspaceAliases,
             });
@@ -5830,7 +6652,7 @@ const plugin = {
         };
         const resolveCronMemoryContext = async (commandCtx) => {
           const agentId = safeAgentId(commandCtx?.agentId || "default");
-          const workspaceDir = await api.runtime.agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
+          const workspaceDir = await runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(commandCtx?.config, agentId);
           return resolveMemoryRequestContext({
             agentId,
             workspaceDir,
@@ -5892,10 +6714,43 @@ const plugin = {
             const sub = tokens[1] || "";
             const id = tokens[2] || "";
 
+            if (actionKey === "workspace") {
+              const memoryCtx = await resolveRegisteredMemoryContext(commandCtx, { requireWorkspace: true });
+              const subKey = sub.toLowerCase() || "status";
+              if (!["status", "enable", "disable"].includes(subKey)) {
+                return { text: "Usage: /plur1bus workspace status|enable|disable <expected-revision>" };
+              }
+              const denied = await checkAuth(
+                memoryCtx,
+                subKey === "status"
+                  ? { chatKind: memoryCtx.chatKind }
+                  : { destructive: true, chatKind: memoryCtx.chatKind },
+                commandCtx,
+              );
+              if (denied) return denied;
+              if (subKey === "status") {
+                return formatJsonCommandResult({ policy: workspacePolicyGuard.decision(memoryCtx).policy });
+              }
+              const expectedRevision = Number(id);
+              if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+                return { text: "A non-negative expected policy revision is required. Run /plur1bus workspace status first." };
+              }
+              const policy = await workspacePolicyGuard.set({
+                memoryCtx,
+                enabled: subKey === "enable",
+                expectedRevision,
+                actorId: memoryCtx.userPrincipal || `user:${memoryCtx.userId}`,
+              });
+              return formatJsonCommandResult({ policy });
+            }
+
             // Obsidian is an explicit B14 boundary. Its command-specific
             // authorization remains delegated unchanged to its own handler.
             if (actionKey === "obsidian" || obsidianActionNames.has(actionKey)) {
               const obsidianMemoryCtx = await resolveRegisteredMemoryContext(commandCtx);
+              if (!workspacePolicyGuard.decision(obsidianMemoryCtx).allowed) {
+                return { text: "PLUR1BUS is disabled for this workspace." };
+              }
               let commandStore = null;
               const getObsidianCommandStore = () => {
                 if (!commandStore) {
@@ -5909,16 +6764,23 @@ const plugin = {
               };
               let runtimeConfig = null;
               try {
-                if (typeof api.runtime?.config?.current === "function") {
-                  runtimeConfig = api.runtime.config.current();
-                } else if (api.runtime?.config && typeof api.runtime.config === "object") {
-                  runtimeConfig = api.runtime.config;
+                if (typeof runtimeIfUsable(api)?.config?.current === "function") {
+                  runtimeConfig = runtimeIfUsable(api).config.current();
+                } else if (runtimeIfUsable(api)?.config && typeof runtimeIfUsable(api).config === "object") {
+                  runtimeConfig = runtimeIfUsable(api).config;
                 }
               } catch (_e) { dbg(_e); }
               const openclawHome = process.env.OPENCLAW_HOME || join(homedir(), ".openclaw");
               const openclawConfigPath = process.env.OPENCLAW_CONFIG_PATH || join(openclawHome, "openclaw.json");
               const obsidianTokens = actionKey === "obsidian" ? tokens.slice(1) : tokens;
-              const requestedVaultPath = obsidianBridgeCfg?.vaultPath || obsidianBridgeCfg?.vault || commandCtx.workspaceDir || "";
+              // Resolve the vault the way the handler will, so the confirmed
+              // receipt is looked up under the same path it was written for.
+              const requestedVaultPath = resolveCommandVaultPath(obsidianBridgeCfg, {
+                agentId: obsidianMemoryCtx.agentId,
+                workspaceKey: obsidianMemoryCtx.workspaceIdentity,
+                workspaceDir: commandCtx.workspaceDir,
+                commandCtx,
+              });
               return registeredObsidianCommandHandler(obsidianTokens, {
                 config: obsidianBridgeCfg,
                 configPath: openclawConfigPath,
@@ -5937,6 +6799,15 @@ const plugin = {
                       vaultPath: requestedVaultPath,
                     })
                   : false,
+                // Fingerprint-and-booleans explanation of that check, so a
+                // denial can say which binding failed instead of a bare false.
+                vaultConfirmation: requestedVaultPath
+                  ? describeOwnedVaultConfirmation({
+                      baseDbPath,
+                      memoryCtx: obsidianMemoryCtx,
+                      vaultPath: requestedVaultPath,
+                    })
+                  : null,
                 semanticConfirmationStore: confirmationStore,
                 confirmationStore,
                 loadSemanticRecords: async () => pool.withAuthoritativeReadDb(obsidianMemoryCtx.agentId, async (semanticDb) => {
@@ -6029,6 +6900,22 @@ const plugin = {
             const memoryCtx = cronInternal
               ? await resolveCronMemoryContext(commandCtx)
               : await resolveRegisteredMemoryContext(commandCtx);
+            const workspacePolicyDecision = workspacePolicyGuard.decision(memoryCtx);
+            if (!workspacePolicyDecision.allowed) {
+              const rejectionReason = workspacePolicyDecision.reason || "workspace_disabled";
+              if (actionKey === "internal") {
+                return {
+                  text: "NO_REPLY",
+                  metadata: { skipped: true, reason: rejectionReason },
+                };
+              }
+              return formatJsonCommandResult({
+                ok: false,
+                reason: rejectionReason,
+                retryable: workspacePolicyDecision.retryable === true,
+                policy: workspacePolicyDecision.policy,
+              });
+            }
             if (actionKey === "internal") {
               if (!isCronCommandContext(commandCtx)) {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
@@ -6067,7 +6954,7 @@ const plugin = {
                     && dailyPartition.workspaceIdentity === memoryCtx.workspaceIdentity
                     ? memoryCtx.workspaceDir
                     : dailyStore.paths.workspaceDir;
-                  const partitionResult = await pool.withDb(internalAgent, async (rawDb) => {
+                  const runDailyPartition = async (rawDb) => {
                     await rawDb.init();
                     return runDailyConsolidation(
                       createPartitionScopedDb(rawDb, dailyPartition, memoryCtx),
@@ -6095,7 +6982,12 @@ const plugin = {
                         embeddings,
                       },
                     );
-                  });
+                  };
+                  const partitionResult = dailyPartition.scope === "workspace"
+                    ? await sharedMemoryPool.withWorkspaceDb(memoryCtx, runDailyPartition)
+                    : dailyPartition.scope === "user"
+                      ? await sharedMemoryPool.withUserDb(memoryCtx, runDailyPartition)
+                      : await pool.withDb(internalAgent, runDailyPartition);
                   dailyRuns.push({ scope: dailyPartition.scope, result: partitionResult });
                 }
                 const result = {
@@ -6203,7 +7095,7 @@ const plugin = {
                     remAclPartition.scope,
                     remOutputRoot,
                   );
-                  const partitionResult = await pool.withDb(internalAgent, async (db) => {
+                  const runRemPartition = async (db) => {
                     await db.init();
                     return runRemDream({
                       db,
@@ -6231,7 +7123,12 @@ const plugin = {
                       workspaceDir: remTarget.workspaceDir,
                       temperamentName: resolveTemperamentName(internalAgent),
                     });
-                  });
+                  };
+                  const partitionResult = remAclPartition.scope === "workspace"
+                    ? await sharedMemoryPool.withWorkspaceDb(memoryCtx, runRemPartition)
+                    : remAclPartition.scope === "user"
+                      ? await sharedMemoryPool.withUserDb(memoryCtx, runRemPartition)
+                      : await pool.withDb(internalAgent, runRemPartition);
                   if (partitionResult.report) {
                     writeRemDreamToVault(partitionResult.report, partitionResult.trends, remTarget);
                   }
@@ -6256,7 +7153,7 @@ const plugin = {
                 }
                 return formatJsonCommandResult({
                   job: "rem-dream",
-                  partitions: remRuns.map((run) => ({ scope: run.scope, skipped: run.result?.skipped ?? false })),
+                  partitions: remRuns.map((run) => describeRemPartitionRun(run)),
                   ...(result.report || result),
                 });
               }
@@ -6287,7 +7184,7 @@ const plugin = {
                     ? memoryCtx.workspaceDir
                     : skillStore.paths.workspaceDir;
                   try {
-                    const result = await pool.withDb(internalAgent, async (rawDb) => {
+                    const runSkillMinerPartition = async (rawDb) => {
                       await rawDb.init();
                       return runSkillMiner(rawDb, internalAgent, {
                         logger: api.logger,
@@ -6296,6 +7193,8 @@ const plugin = {
                         aclPartition: skillAclPartition,
                         workspaceDir: skillWorkspaceDir,
                         workspaceKey: skillAclPartition.workspaceIdentity,
+                        skillWorkshop: openClawSkillWorkshop,
+                        requireSkillWorkshop: openClawSkillWorkshop !== null,
                         llmCfg: withLlmCallContext(
                           skillMinerLlmCfg,
                           skillMinerCallContext.agentId,
@@ -6308,7 +7207,24 @@ const plugin = {
                         minConfidence: skillMinerCfg.minConfidence ?? 0.6,
                         minEvidenceScore: skillMinerCfg.minEvidenceScore ?? 3,
                       });
+                    };
+                    const missingSharedPartition = (reason) => ({
+                      timestamp: new Date().toISOString(),
+                      agent: internalAgent,
+                      skipped: true,
+                      reason,
                     });
+                    const result = skillAclPartition.scope === "workspace"
+                      ? await sharedMemoryPool.withWorkspaceReadDb(memoryCtx, async (rawDb) => {
+                        if (!rawDb) return missingSharedPartition("shared_workspace_absent");
+                        return runSkillMinerPartition(rawDb);
+                      })
+                      : skillAclPartition.scope === "user"
+                        ? await sharedMemoryPool.withUserReadDb(memoryCtx, async (rawDb) => {
+                          if (!rawDb) return missingSharedPartition("shared_user_absent");
+                          return runSkillMinerPartition(rawDb);
+                        })
+                        : await pool.withDb(internalAgent, runSkillMinerPartition);
                     skillRuns.push({ scope: skillAclPartition.scope, result });
                   } catch {
                     api.logger?.warn?.(`plur1bus internal skill-miner[${internalAgent}/${skillAclPartition.scope}] partition failed`);
@@ -6797,16 +7713,33 @@ const plugin = {
                   return { text: t("skill.approve_not_found", { lang, tone, vars: { id: nonce || "?" } }) };
                 }
                 if (reject || completed.pending.command === "skills-reject") {
-                  return { text: rejectSkillProposal(workspaceDir, completed.pending.targetId, { lang, tone }).text };
+                  const rejected = await rejectSkillProposalWithWorkshop(
+                    workspaceDir,
+                    completed.pending.targetId,
+                    {
+                      lang,
+                      tone,
+                      agentId: commandCtx.agentId || "default",
+                      logger: api.logger,
+                      skillWorkshop: openClawSkillWorkshop,
+                    },
+                  );
+                  return { text: rejected.text };
                 }
                 const result = await activateSkillProposal(workspaceDir, completed.pending.targetId, {
                   lang,
                   tone,
+                  agentId: commandCtx.agentId || "default",
+                  logger: api.logger,
+                  skillWorkshop: openClawSkillWorkshop,
                   memoryCtx,
                   loadEvidenceRecord: async (memoryId) => {
                     try {
                       return await pool.withDb(commandCtx.agentId || "default", (db) => db.getById(memoryId));
-                    } catch {
+                    } catch (error) {
+                      // null is indistinguishable from "no evidence exists",
+                      // so record that this was a failed read instead.
+                      api.logger?.warn?.(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
                       return null;
                     }
                   },
@@ -6835,11 +7768,17 @@ const plugin = {
                 const result = await activateSkillProposal(workspaceDir, id, {
                   lang,
                   tone,
+                  agentId: commandCtx.agentId || "default",
+                  logger: api.logger,
+                  skillWorkshop: openClawSkillWorkshop,
                   memoryCtx,
                   loadEvidenceRecord: async (memoryId) => {
                     try {
                       return await pool.withDb(commandCtx.agentId || "default", (db) => db.getById(memoryId));
-                    } catch {
+                    } catch (error) {
+                      // null is indistinguishable from "no evidence exists",
+                      // so record that this was a failed read instead.
+                      api.logger?.warn?.(`memory-lancedb-namespaced: evidence record unreadable for ${String(memoryId)}: ${String(error)}`);
                       return null;
                     }
                   },
@@ -6858,7 +7797,13 @@ const plugin = {
                 const denied = await checkAuth(memoryCtx, { destructive: true, chatKind: memoryCtx.chatKind }, commandCtx);
                 if (denied) return denied;
                 if (!id) return { text: t("plur1bus.skills_reject_usage", { lang, tone }) };
-                const result = rejectSkillProposal(workspaceDir, id, { lang, tone });
+                const result = await rejectSkillProposalWithWorkshop(workspaceDir, id, {
+                  lang,
+                  tone,
+                  agentId: commandCtx.agentId || "default",
+                  logger: api.logger,
+                  skillWorkshop: openClawSkillWorkshop,
+                });
                 return { text: result.text };
               }
               return { text: t("plur1bus.skills_unknown", { lang, tone, vars: { sub: subKey } }) };
@@ -7206,6 +8151,13 @@ const plugin = {
             }
             return plur1busHelp("quick", resolveCommandLocale(commandCtx));
           };
+        if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
+          registerFeatureCronNativeDispatch({
+            api,
+            runFeatureCommand: (commandCtx) => runPlur1busCommand(commandCtx),
+          });
+        }
+
         const plur1busCommands = [
           { name: "plur1bus", description: "Show PLUR1BUS memory commands.", acceptsArgs: true, prefixTokens: [] },
           { name: "plur1bus_start", description: "Show PLUR1BUS status and onboarding guidance.", acceptsArgs: false, prefixTokens: ["start"] },
@@ -7399,50 +8351,187 @@ const plugin = {
           },
         });
 
-        // ── /memory, /forget, /correct (Phase 4b) ─────────────────────
-        // Lazy-initialisierter DB-Adapter: nutzt den GLEICHEN baseDbPath wie
-        // die Plugin-interne MemoryDB. getEmbedding ist optional — wenn der
-        // Embedder beim ersten /memory-Aufruf noch nicht ready ist, fallback
-        // auf Text-Search.
-        const memoryDbAdapter = createDbAdapter({
-          basePath: baseDbPath,
-          getEmbedding: async (text) => {
-            try {
-              return await embeddings.embed(text);
-            } catch (_) {
-              return null;
-            }
-          },
-          // Phase 6: Embedder-Injection für updateCard mit Re-Embedding.
-          // Adapter braucht .embed(text) → vector.
-          embedder: {
-            embed: async (text) => embeddings.embed(text),
-          },
-          logger: api.logger,
-        });
-
         const resolveRegisteredMemoryContext = (commandCtx, options = {}) => resolveHostCommandMemoryContext(commandCtx, {
-          resolveAgentWorkspaceDir: (config, agentId) => api.runtime.agent.resolveAgentWorkspaceDir(config, agentId),
+          resolveAgentWorkspaceDir: (config, agentId) => runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(config, agentId),
           workspaceAliases: memoryWorkspaceAliases,
           routingLoader: hostRoutingLoader,
           requireConversation: options.requireConversation !== false,
           requireWorkspace: options.requireWorkspace === true,
           requireUser: options.requireUser === true,
+          // Bind conversation identity to the persisted session, not to the id
+          // the host minted for this one call (see resolveHostCommandMemoryContext).
+          resolveSessionEntry: async ({ agentId, sessionKey }) => {
+            const getSessionEntry = runtimeIfUsable(api)?.agent?.session?.getSessionEntry;
+            if (typeof getSessionEntry !== "function") return { available: false };
+            try {
+              return { available: true, entry: getSessionEntry({ agentId, sessionKey, readConsistency: "latest" }) ?? null };
+            } catch {
+              // A lookup that throws is not evidence of anything; keep today's binding.
+              return { available: false };
+            }
+          },
         });
 
-        registerGatewayShutdown(api, {
-          memoryDbAdapter,
-          pool: {
-            shutdown: async () => {
-              legacyMigrationShutdown.abort();
-              await pool.shutdown();
+        const resolveSessionPolicyMemoryContext = async ({ sessionKey, agentId: suppliedAgentId }) => {
+          const routingCapability = await hostRoutingLoader();
+          const parsed = routingCapability.parseAgentSessionKey(sessionKey);
+          const agentId = safeAgentId(parsed?.agentId || suppliedAgentId || "");
+          const sessionEntry = runtimeIfUsable(api).agent.session.getSessionEntry({
+            agentId,
+            sessionKey,
+            readConsistency: "latest",
+          });
+          const workspaceDir = sessionEntry?.spawnedCwd
+            || sessionEntry?.spawnedWorkspaceDir
+            || sessionEntry?.worktree?.canonicalWorkspaceDir
+            || await runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(api.config, agentId);
+          return resolveMemoryRequestContext({
+            agentId,
+            sessionKey,
+            workspaceDir,
+          }, {
+            requireWorkspace: true,
+            workspaceAliases: memoryWorkspaceAliases,
+          });
+        };
+
+        // One-time vault confirmations live for the lifetime of the plugin
+        // instance; a restart simply invalidates anything not yet redeemed.
+        const obsidianVaultConfirmationStore = new Map();
+
+        if (typeof api.registerGatewayMethod === "function" && typeof api.registerCli === "function") {
+          registerWorkspacePolicyRuntime({
+            api,
+            store: workspacePolicyStore,
+            guard: workspacePolicyGuard,
+            resolveSessionMemoryContext: resolveSessionPolicyMemoryContext,
+          });
+          registerReembeddingRuntime({
+            api,
+            coordinator: reembeddingCoordinator,
+            switchRuntime: reembeddingSwitchRuntime,
+          });
+          // The vault confirmation flow existed but had no caller, so every
+          // install stayed pending with no way to finish setup.
+          registerObsidianVaultRuntime({
+            api,
+            baseDbPath,
+            confirmationStore: obsidianVaultConfirmationStore,
+            resolveSessionMemoryContext: resolveSessionPolicyMemoryContext,
+            getObsidianBridgeConfig: () => cfg.obsidianBridge || {},
+          });
+        } else {
+          api.logger?.warn?.(
+            "memory-lancedb-namespaced: OpenClaw Gateway/CLI capabilities unavailable; workspace and reembedding runtime controls are disabled",
+          );
+        }
+
+        if (typeof api.registerGatewayMethod === "function") {
+          registerControlUiRuntime({
+            api,
+            getProjection: async () => {
+              const workspacePolicies = workspacePolicyStore.list();
+              controlHealthWorkspaceIdentityByKey.clear();
+              for (const record of workspacePolicies) {
+                controlHealthWorkspaceIdentityByKey.set(
+                  workspacePoolKey(record.workspaceIdentity),
+                  record.workspaceIdentity,
+                );
+              }
+              const migrations = reembeddingStateStore.list();
+              const currentMigration = migrations.at(-1) || null;
+              const sourceTables = Array.isArray(currentMigration?.source?.tables)
+                ? currentMigration.source.tables
+                : [];
+              const totalRows = sourceTables.reduce((sum, table) => (
+                Number.isSafeInteger(table?.rowCount) && table.rowCount >= 0
+                  ? sum + table.rowCount
+                  : Number.MAX_SAFE_INTEGER
+              ), 0);
+              const sourceBytes = sourceTables.reduce((sum, table) => (
+                Number.isSafeInteger(table?.estimatedBytes) && table.estimatedBytes >= 0
+                  ? sum + table.estimatedBytes
+                  : Number.MAX_SAFE_INTEGER
+              ), 0);
+              const targetDimensions = currentMigration?.target?.fingerprint?.dimensions;
+              const targetVectorBytes = Number.isSafeInteger(totalRows)
+                && Number.isSafeInteger(targetDimensions)
+                && targetDimensions > 0
+                && totalRows <= Math.floor(Number.MAX_SAFE_INTEGER / (targetDimensions * 4))
+                ? totalRows * targetDimensions * 4
+                : null;
+              const estimatedBytes = Number.isSafeInteger(sourceBytes)
+                && targetVectorBytes !== null
+                && sourceBytes <= Number.MAX_SAFE_INTEGER - targetVectorBytes
+                ? sourceBytes + targetVectorBytes
+                : null;
+              // Path-free by design; describeVaultCandidates only yields a count here.
+              const obsidianCandidates = (() => {
+                try { return describeVaultCandidates(cfg.obsidianBridge || {}).vaultPaths.length; }
+                catch { return 0; }
+              })();
+              return buildControlPlaneProjection({
+                config: cfg,
+                obsidianVault: {
+                  configured: configuredObsidianWorkspaces.length > 0,
+                  confirmed: obsidianVaultsConfirmed === true,
+                  candidates: obsidianCandidates,
+                },
+                hooks: api.config?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {},
+                capabilities: {
+                  skillWorkshop: Boolean(openClawSkillWorkshop),
+                  cronDispatch: cronDirectDispatchReady,
+                  reranker: Boolean(reranker),
+                },
+                providers: {
+                  embedding: {
+                    provider: normalizedEmbeddingCfg.provider,
+                    model: normalizedEmbeddingCfg.model,
+                    revision: normalizedEmbeddingCfg.local?.revision,
+                    dimensions: dimensions || vectorDim,
+                    fingerprint: activeEmbeddingFingerprintId,
+                  },
+                  reranker: reranker
+                    ? {
+                        provider: rerankerCfg.provider,
+                        model: reranker.model || rerankerCfg.model,
+                        revision: rerankerCfg.local?.revision || rerankerCfg.fallbackRevision,
+                      }
+                    : null,
+                },
+                embeddingDimensionProfiles: embeddingDimensionProfiles({
+                  provider: normalizedEmbeddingCfg.provider,
+                  model: normalizedEmbeddingCfg.model,
+                  dimensions: dimensions || vectorDim,
+                }),
+                modelPreparation: modelPreparationCoordinator?.snapshot() || null,
+                namespaces: namespaceLayout.mode === "named"
+                  ? namespaceLayout.recallReadNamespaces.map((id) => ({ id, dimensions: vectorDim }))
+                  : [{ id: "legacy-flat", dimensions: vectorDim }],
+                migration: currentMigration
+                  ? {
+                      id: currentMigration.id,
+                      state: currentMigration.state,
+                      processed: currentMigration.cursor?.completedRows ?? 0,
+                      total: totalRows,
+                      ...(estimatedBytes !== null ? { estimatedBytes } : {}),
+                      targetFingerprint: currentMigration.target?.fingerprintId,
+                      targetDimensions,
+                      targetProbeStatus: currentMigration.target?.probeStatus,
+                      checkpointBytes: currentMigration.cursor?.bytes ?? 0,
+                      failureCode: currentMigration.error?.code ?? null,
+                    }
+                  : null,
+                workspacePolicies,
+                health: await controlHealth.snapshot(),
+              });
             },
-          },
-          sharedMemoryPool,
-          clearTurnRoutes: clearInitializedTurnRoutes,
-          flushMetrics,
-          llmResultCache,
-        });
+          });
+        } else {
+          api.logger?.warn?.(
+            "memory-lancedb-namespaced: OpenClaw control status Gateway capability unavailable",
+          );
+        }
 
         const runMemoryCommand = async (commandCtx, suppliedMemoryCtx = null) => {
           try {
@@ -8101,11 +9190,47 @@ const plugin = {
     if (autoCapture) {
       api.logger.info(`memory-lancedb-namespaced: enabling autoCapture`);
 
-      api.on("agent_end", (event, ctx) => {
+      let warnedMissingCaptureSessionKey = false;
+      let warnedIncognitoClassifierDegraded = false;
+
+      api.on("agent_end", async (event, ctx) => {
+        const sessionKey = ctx?.sessionKey ?? event?.sessionKey;
+        // A turn without a session key cannot be an incognito session: the host
+        // identifies incognito *by* that key. Both the host types and every
+        // other consumer in this file treat sessionKey as optional, so a
+        // missing key must not silently drop the turn — that would disable the
+        // plugin's core function. Classify only when a key is actually present.
+        if (typeof sessionKey === "string" && sessionKey.trim()) {
+          try {
+            if (await classifyHostIncognitoSession(sessionKey)) {
+              api.logger.info("memory-lancedb-namespaced: skipping durable capture for incognito session");
+              return undefined;
+            }
+          } catch (error) {
+            // Fail closed: a keyed session we cannot classify must not be stored.
+            trySafeWarn(api.logger, "auto-capture.incognito-classifier", error);
+            if (!warnedIncognitoClassifierDegraded) {
+              warnedIncognitoClassifierDegraded = true;
+              trySafeWarn(api.logger, "auto-capture.incognito-classifier-degraded", new Error(
+                "incognito classifier unavailable; durable capture is disabled for keyed sessions until it recovers",
+              ));
+            }
+            return undefined;
+          }
+        } else if (!warnedMissingCaptureSessionKey) {
+          warnedMissingCaptureSessionKey = true;
+          trySafeWarn(api.logger, "auto-capture.session-key-missing", new Error(
+            "agent_end turn has no session key; capturing without incognito classification",
+          ));
+        }
         api.logger.info(`memory-lancedb-namespaced: agent_end hook fired`);
 
         const agentId = ctx?.agentId || "default";
         const background = isBackgroundTurn(event, ctx);
+        if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
+          api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
+          return undefined;
+        }
         let memoryCtx = null;
         try {
           memoryCtx = resolveMemoryRequestContext({
@@ -8123,6 +9248,7 @@ const plugin = {
         } catch (err) {
           api.logger?.debug?.(`memory-lancedb-namespaced: capture memory context unavailable: ${String(err)}`);
         }
+        if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
 
         // Rückgabe des Capture-Promises ermöglicht Tests, auf Abschluss zu warten.
         return runtimeScheduler.enqueueCapture(agentId, { background }, async (signal) => {
@@ -8212,11 +9338,6 @@ const plugin = {
 
           try {
           throwIfCaptureAborted();
-
-          if (shouldSkipAutoCaptureForInternalTurn(event, ctx)) {
-            api.logger.info(`memory-lancedb-namespaced: skipping durable capture for internal/background turn (agent=${agentId})`);
-            return;
-          }
 
           if (!event.success || !event.messages || event.messages.length === 0) {
             api.logger.info(`memory-lancedb-namespaced: skipping capture - success=${event.success}, messages=${event.messages?.length || 0}`);
@@ -8500,9 +9621,10 @@ const plugin = {
               if (shouldReflect) {
                 try {
                   const neoStore = createNeoStore(neoRoot, rememberNeoWorkspace(ctx, event));
+                  const reflectionWorkspaceDir = memoryCtx?.workspaceDir || snapshotNeoString(ctx?.workspaceDir) || snapshotNeoString(event?.workspaceDir);
                   const reflectResult = await runReflectionJob({
                     store: neoStore,
-                    workspaceDir: commandCtx?.workspaceDir || workspaceDir,
+                    workspaceDir: reflectionWorkspaceDir,
                     logger: api.logger,
                     llmReport: metaCognitionLlmReport,
                   });
@@ -8921,6 +10043,7 @@ const plugin = {
       api.on("agent_end", (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
         if (background || !ctx?.workspaceDir) return;
+        if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return;
         const assistantText = lastMessageText(event.messages || [], ["assistant"]);
         if (!assistantText) return;
         try {
@@ -9113,7 +10236,7 @@ const plugin = {
         description: "Alias for memory_recall. Uses the same PLUR1BUS LanceDB vector search and reranked recall pipeline; Obsidian records are not a recall authority.",
       };
 
-      return [
+      const workspaceTools = [
         recallTool,
         searchTool,
         {
@@ -9232,7 +10355,12 @@ const plugin = {
                     { validFrom: capturedValidFrom, validUntil: capturedValidUntil },
                   );
                 if (!safeDuplicate) {
-                  api.logger?.warn?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
+                  // Nothing went wrong here: a near-duplicate was found, merging was refused
+            // because the validity windows differ, and the memory was stored separately.
+            // That is the conservative outcome, and the decision is already durable in the
+            // trace as unsafe_duplicate_rejected. Reporting a safe refusal at warn turned a
+            // routine store into an operator alarm -- 192 of them in one seeded run.
+            api.logger?.info?.(`[memory-merge-safety] high similarity but no safe duplicate; storing separately: "${params.text.slice(0, 120)}"`);
                   addTraceStoreDecision(trace, { action: "unsafe_duplicate_rejected", memoryId: existing[0].entry.id, reason: "high similarity but no safe duplicate" });
                 } else {
                   if (ctx.workspaceDir) appendCurationLog(ctx.workspaceDir, agentId, { event: "memory.rejected_duplicate", timestamp: new Date().toISOString(), agentId, memoryId: safeDuplicate.entry.id, text: params.text.slice(0, 200), category, origin, reason: `duplicate_score:${safeDuplicate.score.toFixed(3)}`, relatedId: safeDuplicate.entry.id });
@@ -9728,6 +10856,7 @@ const plugin = {
           },
         },
       ];
+      return guardWorkspaceTools(workspaceTools, workspacePolicyGuard.decision(memoryCtx));
     }, {
       names: ["memory_recall", "memory_search", "memory_store", "memory_forget", "knowledge_update"],
     });
@@ -9779,6 +10908,7 @@ const plugin = {
       api.on("before_prompt_build", async (event, ctx) => {
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
         if (!ctx?.workspaceDir || !event?.prompt || skipInternalRecall) return;
+        if (!automaticWorkspacePolicyDecision(event, ctx).allowed) return;
         try {
           await completePendingReplyOutcomes(ctx.workspaceDir, {
             agentId: ctx?.agentId || "default",
@@ -9818,6 +10948,7 @@ const plugin = {
       api.on("before_prompt_build", async (event, ctx) => {
         const background = isBackgroundTurn(event, ctx);
         const skipInternalRecall = shouldSkipAutoRecallForInternalTurn(event, ctx);
+        if (ctx?.workspaceDir && !automaticWorkspacePolicyDecision(event, ctx).allowed) return undefined;
         const agentIdForCache = ctx?.agentId || "default";
         const sessionKeyForCache = ctx?.sessionKey || event?.sessionKey || event?.sessionId || event?.runId || "";
         const cacheKey = `${agentIdForCache}:${sessionKeyForCache}:${String(event?.prompt || "").slice(0, 500)}`;
@@ -9846,7 +10977,7 @@ const plugin = {
               sessionKey: ctx?.sessionKey ?? event?.sessionKey,
               sessionId: ctx?.sessionId ?? event?.sessionId,
             }, {
-              getSessionEntry: ({ agentId, sessionKey, readConsistency }) => api.runtime.agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
+              getSessionEntry: ({ agentId, sessionKey, readConsistency }) => runtimeIfUsable(api).agent.session.getSessionEntry({ agentId, sessionKey, readConsistency }),
               workspaceAliases: memoryWorkspaceAliases,
               accountTopology: memoryAccountTopology,
               turnRoutes,
@@ -9861,6 +10992,7 @@ const plugin = {
               sessionKey: ctx?.sessionKey ?? event?.sessionKey,
               sessionId: ctx?.sessionId ?? event?.sessionId,
             }, { workspaceAliases: memoryWorkspaceAliases });
+        if (!workspacePolicyGuard.automatic(memoryCtx).allowed) return undefined;
         let neoContext = "";
         if (neoEnabled) {
           try {
@@ -9992,7 +11124,7 @@ const plugin = {
           } catch (_e) { dbg(_e); }
           // Inner Continuity Engine config (Phase 1)
           const continuityCfg = cfg.continuityEngine || {};
-          const continuityEnabled = continuityCfg.enabled === true;
+          const continuityEnabled = continuityCfg.enabled !== false;
           const assocCfg = continuityCfg.associativeRecall || {};
           const patternCfg = continuityCfg.patternSurfacing || {};
           const tasteCfg = continuityCfg.tasteGate || {};
@@ -10210,7 +11342,7 @@ const plugin = {
               });
             }
 
-            if (patternCfg.enabled === true) {
+            if (patternCfg.enabled !== false) {
               try {
                 const patternRecords = getNeoStore(ctx, event).readPatterns(100);
                 matchedPattern = await findBestPattern({
@@ -10238,11 +11370,11 @@ const plugin = {
           // Inner Continuity Engine: interpretation overlays
           let overlays = [];
           if (continuityEnabled && overlayCfg.enabled !== false && ctx?.workspaceDir) {
+            const targetIds = associativeItems.map((item) => item.id);
             try {
               if (!overlayStore) {
                 overlayStore = new InterpretationOverlayStore(ctx.workspaceDir);
               }
-              const targetIds = associativeItems.map(i => i.id);
               overlays = await overlayStore.loadForTargets(targetIds, overlayCfg.maxAgeDays ?? 30);
             } catch (e) {
               api.logger.warn?.(`continuity-engine: overlay load failed: ${String(e)}`);
@@ -10320,7 +11452,7 @@ const plugin = {
           // K1-06: detect contradictory factual memories among recalled items.
           let memoryTextContradictions = [];
           const contraCfg = cfg?.continuityEngine?.contradictionDetection || {};
-          if (contraCfg.enabled === true && ctx?.workspaceDir) {
+          if (contraCfg.enabled !== false && ctx?.workspaceDir) {
             try {
               const memoryContradictionCallCfg = mergingEnabled ? withLlmCallContext(
                 memoryTextContradictionLlmCfg,
@@ -10408,7 +11540,7 @@ const plugin = {
           let reactivationContext = "";
           let reactivationAdditions = [];
           const crrCfg = cfg.conversationReactivationRecall || {};
-          if (crrCfg.enabled === true) {
+          if (crrCfg.enabled !== false) {
             try {
               const baseRecallIds = new Set(associativeItems.map(i => i.id));
               const baseRecallTopScore = associativeItems[0]?.relevanceScore
@@ -10500,7 +11632,7 @@ const plugin = {
 
           let promptItems = framedItems;
           let promptSemanticLensItems = semanticLensItems;
-          if (semanticCompressionCfg.enabled === true) {
+          if (semanticCompressionCfg.enabled !== false) {
             const allPromptItems = [...framedItems, ...semanticLensItems];
             const tokenBudget = normalizeBoundedRecallInteger(
               semanticCompressionCfg.tokenBudget,
@@ -10802,6 +11934,7 @@ const plugin = {
       // Auto-recall is off — record hook dispatch and run non-recall maintenance/nudges only.
       api.on("before_prompt_build", async (_event, ctx) => {
         const agentId = ctx?.agentId;
+        if (!automaticWorkspacePolicyDecision(_event, ctx).allowed) return undefined;
         if (neoEnabled) {
           try {
             const neoStore = getNeoStore(ctx, _event);
@@ -10895,9 +12028,50 @@ const plugin = {
 
     // Manual tools remain available regardless of autoCapture/autoRecall:
     // memory_store, memory_recall, memory_forget and knowledge_update are not
-    // controlled by the automatic hook opt-outs above.
+    // controlled by the automatic hook opt-outs above. Lifecycle ownership is
+    // intentionally registered after every hook/capability registration and
+    // independently of the optional chat-command surface.
+    const gatewayShutdownRegistered = registerGatewayShutdown(api, {
+      memoryDbAdapter,
+      pool: {
+        shutdown: async () => {
+          legacyMigrationShutdown.abort();
+          await pool.shutdown();
+        },
+      },
+      sharedMemoryPool,
+      clearTurnRoutes: clearInitializedTurnRoutes,
+      flushMetrics,
+      llmResultCache,
+      scopedEmbeddingServer,
+      embeddings,
+      reranker,
+      modelPreparationCoordinator,
+      reembeddingCoordinator,
+      localModelGeneration,
+    });
+    registerLocalModelOwnershipServiceAfterLifecycle(api, {
+      enabled: coordinatesLocalModelGeneration
+        && typeof embeddings?.activateSharedModelOwner === "function",
+      lifecycleRegistered: gatewayShutdownRegistered,
+      embeddings,
+    });
+    registerScopedEmbeddingIpcServiceAfterLifecycle({
+      api,
+      server: scopedEmbeddingServer,
+      enabled: Boolean(scopedEmbeddingServer),
+      lifecycleRegistered: gatewayShutdownRegistered,
+    });
+    registerModelPreparationServiceAfterLifecycle(api, {
+      lifecycleRegistered: gatewayShutdownRegistered,
+      coordinator: modelPreparationCoordinator,
+    });
+    registerReembeddingRecoveryServiceAfterLifecycle(api, {
+      lifecycleRegistered: gatewayShutdownRegistered,
+      recovery: reembeddingSwitchRecovery,
+    });
   },
 };
 
-export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, ensureCronDirectDispatchAtRegistration, guardUnsafeDirectCronTurn, parseFeatureCronBootstrapLastPlanCreateCount, reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap };
+export { MemoryDB, buildMaintenanceNudges, appendConflictLog, buildConflictSummaryFromLog, createRuntimeRerankerProvider, inspectCronNativeCapabilities, guardUnsafeDirectCronTurn, parseFeatureCronBootstrapLastPlanCreateCount, reconcileUnsafeDirectCronsWithService, runDeferredFeatureCronBootstrap };
 export default plugin;

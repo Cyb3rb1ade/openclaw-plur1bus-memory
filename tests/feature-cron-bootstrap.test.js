@@ -17,6 +17,7 @@ import {
   runSetupFeatureCrons,
 } from "../scripts/setup-feature-crons.mjs";
 import { REQUIRED_FEATURE_CRONS } from "../lib/setup/feature-cron-plan.js";
+import { buildNativeFeatureCommandArgv } from "../lib/setup/feature-cron-native.js";
 
 // Auf den fail-closed-Pfaden meldet das Skript `pendingByDefault`, also die
 // Zahl der ausgelieferten Feature-Crons. Gegen die Konstante prüfen statt gegen
@@ -27,53 +28,50 @@ const NOW = Date.parse("2026-07-14T12:00:00Z");
 const PV = "1.2.3";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const {
-  ensureCronDirectDispatchAtRegistration,
+  inspectCronNativeCapabilities,
   guardUnsafeDirectCronTurn,
   parseFeatureCronBootstrapLastPlanCreateCount,
   reconcileUnsafeDirectCronsWithService,
   runDeferredFeatureCronBootstrap,
 } = pluginModule;
 
-describe("gateway registration host-patch guard", () => {
-  it("applies the host patch and reports readiness", () => {
+describe("gateway registration native capability guard", () => {
+  it("accepts the public Beta-era capabilities without mutating the OpenClaw bundle", () => {
     const api = makeApi();
-    const calls = [];
-
-    assert.equal(
-      ensureCronDirectDispatchAtRegistration(api, {
-        distDir: "/fixture/openclaw/dist",
-        applyImpl: (distDir) => {
-          calls.push(distDir);
-          return { status: "applied" };
-        },
-      }),
-      true,
-    );
-    assert.deepStrictEqual(calls, ["/fixture/openclaw/dist"]);
+    api.registerGatewayMethod = () => {};
+    api.registerCli = () => {};
+    assert.equal(inspectCronNativeCapabilities(api), true);
     assert.ok(api.logs.some(([level, message]) => (
-      level === "info" && message.includes("host direct dispatch applied")
+      level === "info" && message.includes("native command dispatch ready")
     )));
   });
 
-  it("logs and reports an unavailable host patch without throwing", () => {
+  it("fails closed with an explicit diagnostic when registerGatewayMethod is missing", () => {
     const api = makeApi();
-    let receivedDistDir;
-
-    assert.equal(
-      ensureCronDirectDispatchAtRegistration(api, {
-        distDir: "/fixture/openclaw/dist",
-        applyImpl: (distDir) => {
-          receivedDistDir = distDir;
-          throw new Error("fixture patch failure");
-        },
-      }),
-      false,
-    );
-    assert.equal(receivedDistDir, "/fixture/openclaw/dist");
+    api.registerCli = () => {};
+    assert.equal(inspectCronNativeCapabilities(api), false);
     assert.ok(api.logs.some(([level, message]) => (
       level === "warn"
-      && message.includes("host direct dispatch unavailable")
-      && message.includes("fixture patch failure")
+      && message.includes("registerGatewayMethod")
+      && message.includes("no host files will be patched")
+    )));
+  });
+
+  it("fails closed with an explicit diagnostic when registerCli is missing", () => {
+    const api = makeApi();
+    api.registerGatewayMethod = () => {};
+    assert.equal(inspectCronNativeCapabilities(api), false);
+    assert.ok(api.logs.some(([level, message]) => (
+      level === "warn" && message.includes("registerCli")
+    )));
+  });
+
+  it("reports both missing capabilities in one deterministic diagnostic", () => {
+    const api = makeApi();
+    assert.equal(inspectCronNativeCapabilities(api), false);
+    assert.ok(api.logs.some(([level, message]) => (
+      level === "warn"
+      && message.includes("registerGatewayMethod, registerCli")
     )));
   });
 
@@ -110,7 +108,7 @@ describe("gateway registration host-patch guard", () => {
     assert.deepStrictEqual(result, { available: true, disabled: 1, failed: 0 });
   });
 
-  it("claims unsafe exact cron turns before the model when the host patch is unavailable", () => {
+  it("claims unsafe exact cron turns before the model when native dispatch is unavailable", () => {
     const exact = guardUnsafeDirectCronTurn(
       { cleanedBody: "/plur1bus internal afterthought" },
       { trigger: "cron" },
@@ -333,7 +331,10 @@ async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
       return {
         ok: true,
         stdout: JSON.stringify(validCronConfigSnapshot({
+          // Silent baseline plus the three features these cases care about, so
+          // opt-out defaults do not add jobs to unrelated assertions.
           pluginConfig: {
+            ...ALL_FEATURES_DISABLED,
             personaVoice: { enabled: true },
             afterthought: { enabled: true },
             skillMiner: { enabled: true },
@@ -349,7 +350,7 @@ async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
   const exitCode = await runSetupFeatureCrons({
     argv,
     openclawImpl: wrappedOpenClaw,
-    ensureCronDirectDispatchImpl: () => ({ status: "already-patched" }),
+    probeNativeCronCommandDispatchImpl: () => ({ ready: true, status: "native-command" }),
     stdout: stdout.stream,
     stderr: stderr.stream,
   });
@@ -361,6 +362,19 @@ async function runJsonSetupWith(openclawImpl, argv = ["--json"]) {
     parsed: JSON.parse(text),
   };
 }
+
+// Features are opt-out since 7.5.0, so a bare config provisions every job.
+// Tests that isolate one behaviour start from an explicitly silent baseline.
+const ALL_FEATURES_DISABLED = Object.freeze({
+  personaVoice: { enabled: false },
+  afterthought: { enabled: false },
+  dailyConsolidation: { enabled: false },
+  criticalPush: { enabled: false },
+  merging: { enabled: false },
+  skillMiner: { enabled: false },
+  obsidianBridge: { enabled: false },
+  gc: { enabled: false },
+});
 
 function validCronConfigSnapshot({ pluginConfig = {}, runtimeConfig = {} } = {}) {
   return {
@@ -380,6 +394,8 @@ describe("buildAddArgs delivery boundary", () => {
   it("pins delivery off when the plan has no validated delivery object", () => {
     const args = buildAddArgs({
       name: "plur1bus afterthought main",
+      feature: "afterthought",
+      command: "/plur1bus internal afterthought",
       message: "/plur1bus internal afterthought",
       schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
       needsDelivery: true,
@@ -401,14 +417,14 @@ describe("buildAddArgs delivery boundary", () => {
 async function runJsonSetupDirect(
   openclawImpl,
   argv = ["--json"],
-  ensureCronDirectDispatchImpl = () => ({ status: "already-patched" }),
+  probeNativeCronCommandDispatchImpl = () => ({ ready: true, status: "native-command" }),
 ) {
   const stdout = createWritableBuffer();
   const stderr = createWritableBuffer();
   const exitCode = await runSetupFeatureCrons({
     argv,
     openclawImpl,
-    ensureCronDirectDispatchImpl,
+    probeNativeCronCommandDispatchImpl,
     stdout: stdout.stream,
     stderr: stderr.stream,
   });
@@ -457,7 +473,7 @@ describe("loadFeatureCronConfig timeout budget", () => {
 });
 
 describe("runSetupFeatureCrons effective config snapshot", () => {
-  it("fails closed by disabling only active exact direct jobs when the host patch is unavailable", async () => {
+  it("fails closed by disabling only active exact direct jobs when native dispatch is unavailable", async () => {
     const calls = [];
     const result = await runJsonSetupDirect(
       (args) => {
@@ -508,12 +524,12 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       },
       ["--json"],
       () => {
-        throw new Error("host patch unavailable");
+        throw new Error("native command capability unavailable");
       },
     );
 
     assert.equal(result.exitCode, 0);
-    assert.equal(result.parsed.reason, "host-direct-dispatch-unavailable");
+    assert.equal(result.parsed.reason, "native-command-capability-unavailable");
     assert.equal(result.parsed.lastPlanCreateCount, AUSGELIEFERTE_JOBS);
     assert.deepStrictEqual(
       calls.map((args) => args.join(" ")),
@@ -536,7 +552,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
         return {
           ok: true,
           stdout: JSON.stringify(validCronConfigSnapshot({
-            pluginConfig: { criticalPush: { enabled: true } },
+            pluginConfig: { ...ALL_FEATURES_DISABLED, criticalPush: { enabled: true } },
           })),
           stderr: "",
           status: 0,
@@ -593,14 +609,22 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       "critical-main",
       "--name",
       "plur1bus classify-recent main",
-      "--message",
-      "/plur1bus internal classify-recent",
+      "--command-argv",
+      JSON.stringify(buildNativeFeatureCommandArgv({
+        agentId: "main",
+        feature: "classify-recent",
+        command: "/plur1bus internal classify-recent",
+      })),
+      "--timeout-seconds",
+      "600",
+      "--output-max-bytes",
+      "65536",
       "--enable",
     ]]);
   });
 
-  it("applies the host patch normally and only verifies it during dry-run", async () => {
-    const applyModes = [];
+  it("probes the same immutable native capabilities in normal and dry-run mode", async () => {
+    const probes = [];
     const openclawImpl = (args) => {
       if (args[0] === "--version") {
         return { ok: true, stdout: "OpenClaw test", stderr: "", status: 0 };
@@ -609,7 +633,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
         return {
           ok: true,
           stdout: JSON.stringify(validCronConfigSnapshot({
-            pluginConfig: { dailyConsolidation: { enabled: true } },
+            pluginConfig: { ...ALL_FEATURES_DISABLED, dailyConsolidation: { enabled: true } },
           })),
           stderr: "",
           status: 0,
@@ -628,22 +652,22 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       }
       return { ok: true, stdout: "{}", stderr: "", status: 0 };
     };
-    const ensure = ({ apply }) => {
-      applyModes.push(apply);
-      return { status: "already-patched" };
+    const probe = (receivedOpenClaw) => {
+      probes.push(receivedOpenClaw);
+      return { ready: true, status: "native-command" };
     };
 
-    await runJsonSetupDirect(openclawImpl, ["--json"], ensure);
-    await runJsonSetupDirect(openclawImpl, ["--json", "--dry-run"], ensure);
+    await runJsonSetupDirect(openclawImpl, ["--json"], probe);
+    await runJsonSetupDirect(openclawImpl, ["--json", "--dry-run"], probe);
 
-    assert.deepStrictEqual(applyModes, [true, false]);
+    assert.deepStrictEqual(probes, [openclawImpl, openclawImpl]);
   });
 
   it("loads exactly one redacted config snapshot before planning and separates source gates from runtime routing", async () => {
     const calls = [];
     const cronAdds = [];
     const snapshot = validCronConfigSnapshot({
-      pluginConfig: { dailyConsolidation: { enabled: true } },
+      pluginConfig: { ...ALL_FEATURES_DISABLED, dailyConsolidation: { enabled: true } },
       runtimeConfig: {
         bindings: [{ agentId: "main", match: { channel: "telegram", peer: { kind: "group", id: "-100123" } } }],
         channels: { telegram: { defaultAccount: "default", accounts: { default: { enabled: true } } } },
@@ -699,7 +723,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     }
   });
 
-  it("creates the exact seven per-agent jobs without model, auth, token, or API overrides", async () => {
+  it("creates the exact eight per-agent jobs without model, auth, token, or API overrides", async () => {
     const cronAdds = [];
     const snapshot = validCronConfigSnapshot({
       pluginConfig: {
@@ -737,7 +761,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
     });
 
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(cronAdds.length, 7);
+    assert.strictEqual(cronAdds.length, 8);
     const byName = new Map(cronAdds.map((args) => [args[args.indexOf("--name") + 1], args]));
     assert.deepStrictEqual([...byName.keys()], [
       "plur1bus persona-evolve main",
@@ -747,6 +771,7 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       "plur1bus rem-dream main",
       "plur1bus skill-miner main",
       "plur1bus discover-semantic-links main",
+      "plur1bus gc-run main",
     ]);
     for (const args of cronAdds) {
       assert.deepStrictEqual(args.slice(args.indexOf("--agent"), args.indexOf("--agent") + 2), ["--agent", "main"]);
@@ -778,7 +803,15 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       assert.deepStrictEqual(args.slice(args.indexOf("--to"), args.indexOf("--to") + 2), ["--to", "-100123"]);
       assert.deepStrictEqual(args.slice(args.indexOf("--account"), args.indexOf("--account") + 2), ["--account", "primary"]);
       const feature = name.includes("afterthought") ? "afterthought" : "classify-recent";
-      assert.strictEqual(args[args.indexOf("--message") + 1], `/plur1bus internal ${feature}`);
+      assert.deepStrictEqual(
+        JSON.parse(args[args.indexOf("--command-argv") + 1]),
+        buildNativeFeatureCommandArgv({
+          agentId: "main",
+          feature,
+          command: `/plur1bus internal ${feature}`,
+        }),
+      );
+      assert.ok(!args.includes("--message"));
     }
     for (const [name, args] of byName) {
       if (name.includes("afterthought") || name.includes("classify-recent")) continue;
@@ -832,9 +865,9 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
 
     assert.strictEqual(result.exitCode, 0);
     assert.deepStrictEqual(cronEdits, [
-      ["cron", "edit", "c-main", "--cron", "0 4 * * *", "--tz", "Europe/Berlin"],
-      ["cron", "edit", "c-bernhardine", "--cron", "15 4 * * *", "--tz", "Europe/Berlin"],
-      ["cron", "edit", "c-heisenberg", "--cron", "30 4 * * *", "--tz", "Europe/Berlin"],
+      ["cron", "edit", "c-main", "--command-argv", JSON.stringify(buildNativeFeatureCommandArgv({ agentId: "main", feature: "consolidate-daily", command: "/plur1bus internal consolidate-daily" })), "--timeout-seconds", "600", "--output-max-bytes", "65536", "--cron", "0 4 * * *", "--tz", "Europe/Berlin"],
+      ["cron", "edit", "c-bernhardine", "--command-argv", JSON.stringify(buildNativeFeatureCommandArgv({ agentId: "bernhardine", feature: "consolidate-daily", command: "/plur1bus internal consolidate-daily" })), "--timeout-seconds", "600", "--output-max-bytes", "65536", "--cron", "15 4 * * *", "--tz", "Europe/Berlin"],
+      ["cron", "edit", "c-heisenberg", "--command-argv", JSON.stringify(buildNativeFeatureCommandArgv({ agentId: "heisenberg", feature: "consolidate-daily", command: "/plur1bus internal consolidate-daily" })), "--timeout-seconds", "600", "--output-max-bytes", "65536", "--cron", "30 4 * * *", "--tz", "Europe/Berlin"],
     ]);
   });
 
@@ -865,7 +898,12 @@ describe("runSetupFeatureCrons effective config snapshot", () => {
       if (args.join(" ") === "gateway call config.get --json") {
         return {
           ok: true,
-          stdout: JSON.stringify(validCronConfigSnapshot({ runtimeConfig: runtimeOnlyFeatures })),
+          // Silent source baseline: anything provisioned here could only have come
+          // from runtimeConfig, which is exactly what must not happen.
+          stdout: JSON.stringify(validCronConfigSnapshot({
+            pluginConfig: ALL_FEATURES_DISABLED,
+            runtimeConfig: runtimeOnlyFeatures,
+          })),
           stderr: "",
           status: 0,
         };
@@ -1211,7 +1249,11 @@ describe("runSetupFeatureCrons --json", () => {
     });
 
     assert.strictEqual(result.exitCode, 0);
-    assert.deepStrictEqual(cronEdits, [["cron", "edit", "job-a2", "--disable", "--no-deliver"]]);
+    assert.strictEqual(cronEdits.length, 1);
+    assert.deepStrictEqual(cronEdits[0].slice(0, 3), ["cron", "edit", "job-a2"]);
+    assert.ok(cronEdits[0].includes("--command-argv"));
+    assert.ok(cronEdits[0].includes("--disable"));
+    assert.ok(cronEdits[0].includes("--no-deliver"));
   });
 
   it("keeps explicit --agent afterthought disabled without a concrete delivery target", async () => {
@@ -1323,7 +1365,7 @@ describe("runDeferredFeatureCronBootstrap marker gating", () => {
           stdout: spawned === 1
             ? JSON.stringify({
               skipped: true,
-              reason: "host-direct-dispatch-unavailable",
+              reason: "native-command-capability-unavailable",
               lastPlanCreateCount: 7,
             })
             : spawned === 2
@@ -1441,15 +1483,13 @@ describe("runSetupFeatureCrons Message-Contract-Migration", () => {
     return { impl, cronEdits };
   }
 
-  it("setzt Jobs mit bekanntem Carrier-Contract per cron edit auf den exakten Command", async () => {
+  it("migriert alle exakten alten Carrier-Jobs auf native Commands", async () => {
     const { impl, cronEdits } = implWithExistingOldContract();
     const result = await runJsonSetupWith(impl);
     assert.strictEqual(result.exitCode, 0);
-    assert.strictEqual(cronEdits.length, 1, "genau ein cron edit für den Alt-Contract-Job");
-    assert.strictEqual(cronEdits[0][2], "at-main");
-    const msgIdx = cronEdits[0].indexOf("--message");
-    assert.ok(msgIdx > 0);
-    assert.strictEqual(cronEdits[0][msgIdx + 1], "/plur1bus internal afterthought");
+    assert.strictEqual(cronEdits.length, 3, "jeder exakte alte Carrier-Job wird einmal migriert");
+    assert.deepStrictEqual(cronEdits.map((args) => args[2]), ["at-main", "pe-main", "sm-main"]);
+    assert.ok(cronEdits.every((args) => args.includes("--command-argv") && !args.includes("--message")));
     assert.strictEqual(result.parsed.lastPlanCreateCount, 0);
   });
 
@@ -1458,7 +1498,7 @@ describe("runSetupFeatureCrons Message-Contract-Migration", () => {
     const result = await runJsonSetupWith(impl, ["--json", "--dry-run"]);
     assert.strictEqual(result.exitCode, 0);
     assert.strictEqual(cronEdits.length, 0);
-    assert.strictEqual(result.parsed.plan.update.length, 1);
+    assert.strictEqual(result.parsed.plan.update.length, 3);
   });
 
   it("fehlgeschlagenes Update erhöht lastPlanCreateCount (Retry beim nächsten Lauf)", async () => {

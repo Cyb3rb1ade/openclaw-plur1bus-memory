@@ -9,6 +9,7 @@ import { createConfirmation, validateConfirmation } from "../lib/security.js";
 import {
   buildMemoryAccountTopology,
   buildMemoryWorkspaceAliases,
+  createHostIncognitoSessionClassifier,
   createHostRoutingLoader,
   createMemoryTurnRouteRegistry,
   normalizeAndFreezeWorkspaceAliases,
@@ -36,6 +37,9 @@ const routingCapability = Object.freeze({
   },
   normalizeMessageChannel(value) {
     return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+  },
+  isIncognitoSessionKey(value) {
+    return /^agent:[^:]+:dashboard:incognito-[^:]+$/u.test(String(value || ""));
   },
 });
 
@@ -239,6 +243,41 @@ describe("B13 canonical memory request context", () => {
     const source = readFileSync(new URL("../lib/memory-request-context.js", import.meta.url), "utf8");
     assert.match(source, /import\("openclaw\/plugin-sdk\/routing"\)/);
     assert.doesNotMatch(source, /^import .*openclaw\/plugin-sdk\/routing/m);
+  });
+
+  it("loads, validates, and memoizes the public incognito classifier lazily", async () => {
+    let calls = 0;
+    const classify = createHostIncognitoSessionClassifier({
+      importRouting: async () => {
+        calls += 1;
+        return routingCapability;
+      },
+    });
+    assert.equal(calls, 0);
+    assert.equal(await classify("agent:a:main"), false);
+    assert.equal(await classify("agent:a:dashboard:incognito-review"), true);
+    assert.equal(calls, 1);
+
+    const malformed = createHostIncognitoSessionClassifier({ importRouting: async () => ({}) });
+    await assert.rejects(() => malformed("agent:a:main"), /incognito session classifier/);
+  });
+
+  it("does not cache a failed classifier load, so a later attempt can recover", async () => {
+    // A cached rejection would fail closed forever and silently disable
+    // durable capture for the whole gateway lifetime.
+    let calls = 0;
+    const classify = createHostIncognitoSessionClassifier({
+      importRouting: async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("routing import unavailable");
+        return routingCapability;
+      },
+    });
+
+    await assert.rejects(() => classify("agent:a:main"), /routing import unavailable/);
+    assert.equal(await classify("agent:a:main"), false, "the retry must load the classifier");
+    assert.equal(await classify("agent:a:dashboard:incognito-review"), true);
+    assert.equal(calls, 2, "the healed load is memoized again");
   });
 
   it("decodes the closed Telegram, Discord, Slack, and Mattermost command route grammar", async (t) => {
@@ -1162,6 +1201,69 @@ describe("B13 canonical memory request context", () => {
       const resolved = await resolveHook(hook, registry, sessionEntryFixture());
       assert.match(resolved.userPrincipal, /^user:v1:/);
     }
+  });
+
+  it("accepts an official headless agent hook without inventing a user or warning", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-headless-beta3-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const warnings = [];
+    let sessionReads = 0;
+    const resolved = await resolveHostHookMemoryContext({
+      runId: "run-headless-a",
+      agentId: "a",
+      sessionKey: "agent:a:auto-capture-lab-a",
+      sessionId: "session-headless-a",
+      workspaceDir,
+      // OpenClaw's public buildAgentHookContextChannelFields helper labels a
+      // Gateway CLI turn with its internal non-delivery webchat sentinel even
+      // though there is no authenticated transport sender or account.
+      channel: "webchat",
+      channelId: "webchat",
+      chatId: "webchat",
+    }, {
+      routingCapability,
+      turnRoutes: createMemoryTurnRouteRegistry({ routingCapability }),
+      accountTopology: buildMemoryAccountTopology({ channels: {} }),
+      getSessionEntry: () => { sessionReads++; return null; },
+      logger: { warn: (...args) => warnings.push(args) },
+    });
+
+    assert.equal(resolved.agentId, "a");
+    assert.equal(resolved.workspaceDir, realpathSync(workspaceDir));
+    assert.equal(resolved.userPrincipal, "");
+    assert.equal(resolved.conversationPrincipal, "");
+    assert.equal(resolved.chatId, "");
+    assert.equal(sessionReads, 0);
+    assert.deepEqual(warnings, []);
+  });
+
+  it("does not treat an identity-bearing webchat hook as a headless route", async (t) => {
+    const workspaceDir = mkdtempSync(join(tmpdir(), "plur1bus-b13-webchat-identity-"));
+    t.after(() => rmSync(workspaceDir, { recursive: true, force: true }));
+    const warnings = [];
+    const resolved = await resolveHostHookMemoryContext({
+      runId: "run-webchat-user-a",
+      agentId: "a",
+      sessionKey: "agent:a:arbitrary-webchat-session",
+      sessionId: "session-webchat-user-a",
+      workspaceDir,
+      channel: "webchat",
+      channelId: "webchat",
+      chatId: "webchat",
+      accountId: "default",
+      senderId: "owner-a",
+    }, {
+      routingCapability,
+      turnRoutes: createMemoryTurnRouteRegistry({ routingCapability }),
+      accountTopology: buildMemoryAccountTopology({ channels: {} }),
+      getSessionEntry: () => null,
+      logger: { warn: (...args) => warnings.push(args) },
+    });
+
+    assert.equal(resolved.userPrincipal, "");
+    assert.equal(resolved.conversationPrincipal, "");
+    assert.notEqual(resolved.chatId, "");
+    assert.equal(warnings.length, 1);
   });
 
   it("ignores non-host flat channelContext identity and thread fields", async (t) => {

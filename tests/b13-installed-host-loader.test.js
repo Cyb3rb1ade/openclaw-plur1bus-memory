@@ -1,32 +1,37 @@
 import assert from "node:assert/strict";
-import { existsSync, realpathSync } from "node:fs";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { it } from "node:test";
 import { pathToFileURL } from "node:url";
 
-function findInstalledOpenClaw() {
-  for (const directory of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
-    const candidate = join(directory, "openclaw");
-    if (existsSync(candidate)) return realpathSync(candidate);
-  }
-  return "";
+const require = createRequire(import.meta.url);
+
+function findPinnedOpenClawLoader() {
+  const packageRoot = dirname(dirname(require.resolve("openclaw")));
+  const packageJson = join(packageRoot, "package.json");
+  const pkg = require(packageJson);
+  assert.equal(pkg.version, "2026.8.2", "loader test must use the exact target OpenClaw release");
+  return join(packageRoot, "dist", "plugins", "loader.js");
 }
 
-it("loads reply_dispatch routing through the real installed OpenClaw plugin loader", async (t) => {
-  const executable = findInstalledOpenClaw();
-  if (!executable) {
-    t.skip("installed OpenClaw executable is unavailable");
-    return;
-  }
-  const loaderPath = join(dirname(executable), "dist", "plugins", "loader.js");
-  if (!existsSync(loaderPath)) {
-    t.skip("installed OpenClaw plugin loader is unavailable");
-    return;
-  }
+it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin loader", async () => {
+  const loaderPath = findPinnedOpenClawLoader();
+  assert.ok(existsSync(loaderPath), `pinned OpenClaw plugin loader is unavailable: ${loaderPath}`);
+  const isolatedHome = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-loader-"));
+  const previousEnv = Object.fromEntries(
+    ["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"].map((name) => [name, process.env[name]]),
+  );
+  process.env.HOME = isolatedHome;
+  process.env.OPENCLAW_HOME = join(isolatedHome, ".openclaw");
+  process.env.OPENCLAW_STATE_DIR = process.env.OPENCLAW_HOME;
+  process.env.OPENCLAW_CONFIG_PATH = join(process.env.OPENCLAW_HOME, "openclaw.json");
 
-  const loader = await import(pathToFileURL(loaderPath).href);
+  const loader = await import(`${pathToFileURL(loaderPath).href}?isolated=${Date.now()}`);
   const projectRoot = resolve(import.meta.dirname, "..");
   const pluginId = "memory-lancedb-namespaced";
+  const baseDbPath = join(isolatedHome, "plur1bus-state");
   const config = {
     agents: { list: [{ id: "smoke", workspace: projectRoot }] },
     plugins: {
@@ -36,7 +41,17 @@ it("loads reply_dispatch routing through the real installed OpenClaw plugin load
         [pluginId]: {
           enabled: true,
           hooks: { allowPromptInjection: true, allowConversationAccess: true },
-          config: { autoRecall: true, autoCapture: false },
+          config: {
+            autoRecall: true,
+            autoCapture: false,
+            baseDbPath,
+            embedding: {
+              provider: "local-transformers",
+              model: "intfloat/multilingual-e5-small",
+              local: { dimensions: 384 },
+            },
+            modelPreparation: { profile: "jina-v3-multilingual-32" },
+          },
         },
       },
       slots: { memory: pluginId },
@@ -55,13 +70,51 @@ it("loads reply_dispatch routing through the real installed OpenClaw plugin load
       workspaceDir: projectRoot,
       onlyPluginIds: [pluginId],
       cache: false,
-      activate: false,
+      activate: true,
       throwOnLoadError: true,
       logger,
     });
     const plugin = registry.plugins.find((entry) => entry.id === pluginId);
     assert.equal(plugin?.status, "loaded");
     assert.equal(realpathSync(plugin.source), realpathSync(join(projectRoot, "index.js")));
+    const runtimeLifecycles = registry.runtimeLifecycles.filter((entry) => entry.pluginId === pluginId);
+    assert.equal(runtimeLifecycles.length, 1, "installed host must own exactly one PLUR1BUS cleanup lifecycle");
+    assert.equal(runtimeLifecycles[0].lifecycle.id, "plur1bus-runtime-resources");
+    assert.equal(typeof runtimeLifecycles[0].lifecycle.cleanup, "function");
+    const localModelOwnerServices = registry.services.filter((entry) => entry.pluginId === pluginId
+      && entry.service?.id === "plur1bus-local-model-owner");
+    assert.equal(localModelOwnerServices.length, 1, "installed host must stage exactly one local-model owner service");
+    assert.equal(typeof localModelOwnerServices[0].service.start, "function");
+    assert.equal(typeof localModelOwnerServices[0].service.stop, "function");
+    const scopedEmbeddingServices = registry.services.filter((entry) => entry.pluginId === pluginId
+      && entry.service?.id === "plur1bus-scoped-embedding-owner");
+    assert.equal(scopedEmbeddingServices.length, 1, "installed host must stage exactly one scoped embedding IPC service");
+    assert.equal(typeof scopedEmbeddingServices[0].service.start, "function");
+    assert.equal(typeof scopedEmbeddingServices[0].service.stop, "function");
+    const preparationServices = registry.services.filter((entry) => entry.pluginId === pluginId
+      && entry.service?.id === "plur1bus-model-preparation");
+    assert.equal(preparationServices.length, 1, "installed host must stage exactly one preparation service");
+    assert.equal(typeof preparationServices[0].service.start, "function");
+    assert.equal(typeof preparationServices[0].service.stop, "function");
+    assert.deepEqual(
+      registry.services
+        .filter((entry) => entry.pluginId === pluginId)
+        .map((entry) => entry.service?.id)
+        .filter((id) => id?.startsWith("plur1bus-")),
+      [
+        "plur1bus-local-model-owner",
+        "plur1bus-scoped-embedding-owner",
+        "plur1bus-model-preparation",
+        "plur1bus-reembedding-switch-recovery",
+      ],
+      "service order must start local ownership before IPC and stop IPC before local ownership",
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      existsSync(join(baseDbPath, "control", "model-preparation.json")),
+      false,
+      "OpenClaw registry activation alone must not start model preparation before services start",
+    );
 
     const dispatchHook = registry.typedHooks.find((entry) => entry.pluginId === pluginId
       && entry.hookName === "reply_dispatch");
@@ -176,5 +229,10 @@ it("loads reply_dispatch routing through the real installed OpenClaw plugin load
     loader.clearPluginLoaderCache?.();
     loader.clearPluginRegistryLoadCache?.();
     loader.clearActivatedPluginRuntimeState?.();
+    for (const [name, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+    rmSync(isolatedHome, { recursive: true, force: true });
   }
 });

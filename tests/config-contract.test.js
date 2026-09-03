@@ -193,6 +193,47 @@ describe("manifest-derived configuration contract", () => {
     );
   });
 
+  it("validates the active reembedding generation as a closed atomic selection", () => {
+    const selection = {
+      activeGeneration: "generation-a",
+      fingerprintId: `embedding:v1:sha256:${"a".repeat(64)}`,
+      dimensions: 768,
+    };
+    assert.deepEqual(resolveEffectiveConfig({ reembedding: selection }).reembedding, selection);
+    for (const value of [
+      { ...selection, unknown: true },
+      { ...selection, activeGeneration: "../escape" },
+      { ...selection, fingerprintId: "moving" },
+      { ...selection, dimensions: 0 },
+    ]) {
+      assert.throws(() => validatePluginConfig({ reembedding: value }), /reembedding/);
+    }
+  });
+
+  it("accepts only closed automatic model-preparation profiles", () => {
+    const selected = resolveEffectiveConfig({
+      modelPreparation: {
+        profile: "jina-v3-multilingual-256",
+        acceptNonCommercialLicense: true,
+      },
+    });
+    assert.deepEqual(selected.modelPreparation, {
+      profile: "jina-v3-multilingual-256",
+      acceptNonCommercialLicense: true,
+    });
+    assert.equal(Object.hasOwn(resolveEffectiveConfig({}), "modelPreparation"), false);
+    assertConfigError(
+      () => validatePluginConfig({ modelPreparation: { profile: "moving-main" } }),
+      `${PLUGIN_CONFIG_PATH}.modelPreparation.profile`,
+      /one of/i,
+    );
+    assertConfigError(
+      () => validatePluginConfig({ modelPreparation: { profile: "e5-multilingual-384", url: "https://example.invalid" } }),
+      `${PLUGIN_CONFIG_PATH}.modelPreparation.url`,
+      /unknown/i,
+    );
+  });
+
   for (const forbidden of ["retroactiveInterference", "quietHours"]) {
     it(`keeps ${forbidden} schema-unreachable in B11`, () => {
       assertConfigError(

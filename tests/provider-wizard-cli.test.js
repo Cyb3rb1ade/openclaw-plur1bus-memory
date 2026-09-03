@@ -35,7 +35,7 @@ function runWizard(lines) {
     }, 5_000);
 
     function answerVisiblePrompts() {
-      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3\/4|a\/b\/c)\]: /g) || []).length;
+      const promptCount = (stdout.match(/\[(?:1\/2|1\/2\/3|1\/2\/3\/4|a\/b\/c|yes\/no)\]: /g) || []).length;
       while (sentLines < lines.length && sentLines < promptCount) {
         child.stdin.write(`${lines[sentLines]}\n`);
         sentLines += 1;
@@ -128,10 +128,39 @@ describe("provider wizard CLI input validation", () => {
     assert.strictEqual(result.code, 0, result.stderr);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
       provider: "local-transformers",
-      model: "BAAI/bge-reranker-v2-m3",
+      model: "woxpas-ai/bge-reranker-v2-m3-onnx",
       candidates: 20,
       timeoutMs: 5000,
       fallbackOnError: true,
     });
+  });
+
+  it("returns the pinned JinaAI v3 local embedding with no credential", async () => {
+    const result = await runWizard(["3", "yes", "3"]);
+
+    assert.strictEqual(result.code, 0, result.stderr);
+    assert.deepStrictEqual(parseWizardResult(result.stdout)?.embedding, {
+      provider: "local-transformers",
+      local: {
+        model: "jinaai/jina-embeddings-v3",
+        revision: "68ed94909d564380f954be27ae2e133214c1adc9",
+        dimensions: 1024,
+        queryPrefix: "",
+        passagePrefix: "",
+      },
+    });
+    assert.deepStrictEqual(parseWizardResult(result.stdout)?.modelPreparation, {
+      profile: "jina-v3-multilingual-1024",
+      acceptNonCommercialLicense: true,
+    });
+    assert.match(result.stderr, /CC BY-NC 4\.0.*non-commercial/i);
+  });
+
+  it("does not emit a usable Jina configuration when the non-commercial license is declined", async () => {
+    const result = await runWizard(["3", "no"]);
+
+    assert.notStrictEqual(result.code, 0);
+    assert.strictEqual(parseWizardResult(result.stdout), null);
+    assert.match(result.stderr, /license acknowledgement.*required/i);
   });
 });

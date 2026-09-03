@@ -44,6 +44,13 @@ describe("provider-wizard i18n rendering", () => {
     assert.ok(label.toLowerCase().includes("multilingual"), `'multilingual' fehlt: ${label}`);
   });
 
+  it("bietet JinaAI v3 als separates nachladbares mehrsprachiges Embedding an", () => {
+    const options = buildWizardOptions("embedding", { lang: "de" });
+    assert.equal(options[2].key, "local-jina");
+    const label = formatWizardOption("embedding", "local-jina", { lang: "de" });
+    assert.match(label, /JinaAI.*mehrsprachig.*1024d/i);
+  });
+
   it("Embedding OpenAI-Label enthält 'paid' (en)", () => {
     const label = formatWizardOption("embedding", "openai", { lang: "en" });
     assert.ok(label.toLowerCase().includes("paid"), `'paid' fehlt: ${label}`);

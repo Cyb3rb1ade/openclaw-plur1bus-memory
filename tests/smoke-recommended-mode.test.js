@@ -13,7 +13,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { recommendedProfile, applyFeatureProfile, isApplyBlocked, detectPendingFeatures } from "../lib/setup/feature-profiles.js";
+import { recommendedProfile, applyFeatureProfile, isApplyBlocked, detectPendingFeatures, reportDormantFeature } from "../lib/setup/feature-profiles.js";
 import { checkJobRateLimit, recordJobRun } from "../lib/job-rate-limit.js";
 import { collectStatusData } from "../lib/telegram-commands/status-data.js";
 
@@ -93,5 +93,39 @@ describe("recommended-mode-full", () => {
     });
     assert.strictEqual(status.memory.cardCount, null);
     assert.strictEqual(status.sync.status, "nicht konfiguriert");
+  });
+});
+
+describe("dormant feature reporting", () => {
+  function collect() {
+    const lines = { warn: [], info: [] };
+    return { logger: { warn: (m) => lines.warn.push(m), info: (m) => lines.info.push(m) }, lines };
+  }
+
+  it("warns only when the operator explicitly enabled the feature", () => {
+    // Opt-out means "on" no longer implies "requested". Warning every user on
+    // every start about a feature they never asked for is noise, and the
+    // matrix evidence gate rightly treats warn-level plugin lines as failures.
+    const explicit = collect();
+    reportDormantFeature(explicit.logger, { explicit: true, message: "needs a route" });
+    assert.deepStrictEqual(explicit.lines.warn, ["needs a route"]);
+    assert.deepStrictEqual(explicit.lines.info, []);
+
+    const byDefault = collect();
+    reportDormantFeature(byDefault.logger, { explicit: false, message: "needs a route" });
+    assert.deepStrictEqual(byDefault.lines.warn, []);
+    assert.deepStrictEqual(byDefault.lines.info, ["needs a route"]);
+
+    const unknown = collect();
+    reportDormantFeature(unknown.logger, { message: "needs a route" });
+    assert.deepStrictEqual(unknown.lines.warn, [], "an unknown origin is treated as a default");
+  });
+
+  it("stays silent without a message and survives a logger without levels", () => {
+    const c = collect();
+    reportDormantFeature(c.logger, { explicit: true });
+    assert.deepStrictEqual(c.lines.warn, []);
+    assert.doesNotThrow(() => reportDormantFeature({}, { explicit: true, message: "x" }));
+    assert.doesNotThrow(() => reportDormantFeature(null, { explicit: false, message: "x" }));
   });
 });
