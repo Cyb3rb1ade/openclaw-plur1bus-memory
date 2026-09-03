@@ -7,6 +7,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.5.1] — 2026-09-03
+
 ### Behoben
 
 - **Der Operator-Tab zeigte drei Funktionen als abgeschaltet, die niemand
