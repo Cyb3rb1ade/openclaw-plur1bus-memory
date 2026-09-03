@@ -2,7 +2,7 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.5.0 — native OpenClaw 2026.9.1-beta.1 compatibility**
+**PLUR1BUS 7.5.0 — native OpenClaw 2026.9.x
 
 Current source version: **7.5.0**. The compatibility target is exactly
 `openclaw@2026.9.1-beta.1`; see the
