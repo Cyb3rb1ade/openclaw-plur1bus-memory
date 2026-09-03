@@ -77,6 +77,11 @@ source-level verification of the 2026.8.1 floor, and a bounded smoke run on
 
 ## Laboratory findings (harness, not product)
 
+- The skill-workshop stage reported its local-mirror check as blocked on a
+  missing chat credential. The real cause was the actor tier defect above: the
+  mirror could never finish, whatever the channel. The stage now reads the
+  local record and fails when the activation stays unfinished.
+
 - Every stage needs a cleanup that can run without a healthy gateway; a
   synthetic Telegram channel left configured after its credential file was
   removed poisoned all following stages. Fixed by declaring the shrinking array

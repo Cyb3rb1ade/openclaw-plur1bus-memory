@@ -45,6 +45,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ### Behoben
 
+- **Extern freigegebene Skills werden lokal fertig aktiviert.** Der
+  Lebenszyklus-Pfad fuer eine Freigabe aus OpenClaws Skill Workshop uebergab
+  die Akteursstufe `system`, die das Vertrauensmodell nie kannte. Jeder
+  Nachweisuebergang scheiterte mit „illegal transition", der lokale Datensatz
+  blieb dauerhaft auf `activation_partial`, und die zitierten Erinnerungen
+  wurden nie bestaetigt. Neu ist die eng begrenzte Stufe
+  `system:skill-workshop`: sie darf ausschliesslich bestaetigen, niemals
+  `trusted` vergeben, niemals invalidieren und einen invalidierten Datensatz
+  gar nicht anfassen.
 - **LanceDB-Leser sehen jeden Schreibvorgang.** `MemoryDB` verbindet mit
   `readConsistencyInterval: 0`. Ohne Intervall behielt ein einmal geoeffnetes
   Tabellenobjekt seine Version; im Gateway sah der rem-dream-Lauf drei acht
