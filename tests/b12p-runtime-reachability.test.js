@@ -132,7 +132,9 @@ async function storeRuntimeRows(baseDbPath, rows) {
 describe("B12-P advertised recall runtime contract", () => {
   it("materializes and strictly validates each advertised recall switch", () => {
     const cfg = manifestConfigDefaults();
-    assert.equal(cfg.recall.queryRefinement.enabled, false);
+    // An seit 03.09.2026, zusammen mit continuityEngine und semanticLens: der
+    // Operator-Tab beschreibt alle Features als opt-out.
+    assert.equal(cfg.recall.queryRefinement.enabled, true);
     assert.equal(cfg.recall.adaptiveBudget.enabled, false);
     assert.equal(cfg.recall.adaptiveBudget.tokenBudgetPct, 0.3);
     assert.equal(cfg.recall.semanticCompression.enabled, false);

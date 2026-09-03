@@ -7,6 +7,31 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+### Behoben
+
+- **Der Operator-Tab zeigte drei Funktionen als abgeschaltet, die niemand
+  abgeschaltet hatte.** Ueber den Feature-Karten steht, ein fehlender Schalter
+  bedeute "an"; `continuityEngine`, `semanticLens` und `recall.queryRefinement`
+  standen im Manifest aber auf `default: false`. Eine unberuehrte Installation
+  widersprach damit dem Satz direkt darueber. Die drei Standardwerte stehen
+  jetzt auf `true`; ein ausdrueckliches `enabled: false` schaltet sie weiterhin
+  ab.
+- **Credential Readiness meldete einen laufenden Reranker als "missing".** Die
+  Pruefung las ausschliesslich `<bereich>.apiKey`. Ein per
+  `reranker.apiKeyEnv` konfigurierter Cohere-Schluessel blieb dadurch
+  unsichtbar, obwohl das Reranking nachweislich lief. Beide Formen werden jetzt
+  gelesen, und die fuenf Faehigkeiten, die auf OpenClaws eigene Modellroute
+  zurueckfallen (Merging, Knowledge Promotion, Skill Miner, Critical Push,
+  Emotion T3), werden als `host_route` ausgewiesen statt als fehlend — die
+  bisherige Anzeige behauptete, das jeweilige Feature bleibe deshalb aus.
+- **Der aktive Reranking-Anbieter war nirgends ablesbar.** Die Projektion
+  fuellte `providers.reranker` bereits, gerendert wurde aber nur das Embedding.
+  Der Operator konnte nicht erkennen, ob Cohere, JinaAI oder der lokale
+  BGE-Fallback sortiert. Die neue Karte "Reranking" nennt Provider, Modell und
+  Revision, meldet einen blockierten Runtime, und erklaert die Umstellung ueber
+  `reranker.provider` samt Schluesselquellen.
+
+
 ## [7.5.0] — 2026-09-03
 
 ### Kompatibilitaet

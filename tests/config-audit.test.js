@@ -159,8 +159,11 @@ describe("Schema-Default-Typen (Runtime / Cache)", () => {
 });
 
 describe("Schema-Default-Typen (Semantic Lens)", () => {
-  it("semanticLens.enabled ist default false", () =>
-    assertBooleanDefault("semanticLens.enabled", false));
+  // Seit 03.09.2026 an: der Operator-Tab sagt zu, dass ein fehlender Schalter
+  // "an" bedeutet. Mit default false widersprach eine unberuehrte Installation
+  // genau dem Satz, der ueber den Feature-Karten steht.
+  it("semanticLens.enabled ist default true", () =>
+    assertBooleanDefault("semanticLens.enabled", true));
   it("semanticLens.maxLensMemories ist 3", () =>
     assertNumberDefault("semanticLens.maxLensMemories", 3));
   it("semanticLens.maxBridgeMemories ist 2", () =>
