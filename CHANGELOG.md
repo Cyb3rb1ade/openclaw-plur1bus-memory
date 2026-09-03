@@ -7,7 +7,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-## [7.5.0] — Unreleased
+## [7.5.0] — 2026-09-03
 
 ### Kompatibilitaet
 
