@@ -5387,7 +5387,10 @@ const plugin = {
               (db) => applyEpistemicStatusToLanceDb(db, memoryId, nextStatus, {
                 ctx: lifecycleMemoryCtx,
                 actor: "openclaw-skill-workshop",
-                actorTier: "system",
+                // "system" was never a legal tier, so every evidence
+                // transition of an externally applied skill failed and the
+                // local record stayed at activation_partial for good.
+                actorTier: "system:skill-workshop",
                 authorized: false,
                 workspaceDir: eventWorkspaceDir,
                 reason: "skill-workshop-lifecycle",
