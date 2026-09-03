@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.5.6 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.6.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.5.6**. PLUR1BUS 7.5.6 supports OpenClaw `2026.8.1`
+Current source version: **7.6.0**. PLUR1BUS 7.6.0 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,27 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.6.0 — switch providers from the dashboard
+
+The operator tab can now change two things, if you let it. `controlUi.writeActions`
+is `off` by default, so nothing changes for an existing install.
+
+- **`reranker`** makes the reranking choice switchable from the page: local BGE,
+  local JinaAI (both keyless), Cohere when a key is configured, or off. That is a
+  runtime choice with no data migration behind it.
+- **`all`** additionally exposes the embedding target and the re-embedding
+  migration: dry run, copy, and a separate switch. The confirmation token that
+  binds those steps stays inside the Gateway and never appears in the browser.
+
+Every change carries a single-use form token from the page render it was clicked
+on, because the tab cookie the host mints is `SameSite=None`. While
+`writeActions` is `off` the page renders no form, forbids form targets in its
+Content-Security-Policy, and refuses POST outright.
+
+Also fixed: the reranking card used to name `jina` as a `reranker.provider`
+value. The schema rejects it. Jina reranking is a local model, selected through
+`reranker.local.model`.
 
 ### New in v7.5.6 — verified against OpenClaw 2026.9.1
 
@@ -455,7 +476,7 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
-PLUR1BUS 7.5.6 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
+PLUR1BUS 7.6.0 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
 On an older host the installer refuses the package instead of deploying it:
 `requires plugin API >=2026.8.1, but this OpenClaw runtime exposes <version>`.
 

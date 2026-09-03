@@ -2,7 +2,7 @@
   "id": "memory-lancedb-namespaced",
   "name": "PLUR1BUS Memory: Make your agent yours",
   "description": "PLUR1BUS neo-arch cognitive memory augment with per-agent LanceDB memory, OpenClaw-native turn journal, provenance, curation, recall, emotion-aware retrieval, ACL-scoped access, temporal reasoning, and meta-cognition.",
-  "version": "7.5.6",
+  "version": "7.6.0",
   "kind": "memory",
   "cliCommands": [
     { "name": "plur1bus-feature-cron", "description": "Run one PLUR1BUS feature cron without an agent/model turn", "hasSubcommands": false },
@@ -1075,6 +1075,19 @@
           "cacheTtlMs": {
             "type": "number",
             "default": 30000
+          }
+        }
+      },
+      "controlUi": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Operator dashboard surface. The tab is read-only unless writeActions is raised.",
+        "properties": {
+          "writeActions": {
+            "type": "string",
+            "enum": ["off", "reranker", "all"],
+            "default": "off",
+            "description": "off: the dashboard changes nothing and asks for read scope only. reranker: the reranking choice becomes switchable from the tab. all: additionally exposes the embedding target and the re-embedding migration steps. Anything but off gives the tab operator.write authority."
           }
         }
       },

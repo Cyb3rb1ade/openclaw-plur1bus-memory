@@ -52,6 +52,14 @@ import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plug
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
+import {
+  createConfirmationStore,
+  createEmbeddingProfileMutator,
+  createFormTokenStore,
+  createRerankerMutator,
+  applyControlUiWriteAction,
+  rerankerKeyConfigured,
+} from "./lib/setup/control-ui-write.js";
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
 import { createMemoryMaintenanceGate } from "./lib/memory-maintenance-gate.js";
@@ -8462,9 +8470,57 @@ const plugin = {
           );
         }
 
+        // Dashboard write surface. Off by default: a page that can change the
+        // running configuration is a different security posture from one that
+        // cannot, so an operator has to ask for it. Without the host's config
+        // mutation capability it stays off regardless.
+        const controlUiWriteMode = reembeddingConfigMutationAvailable
+          ? (cfg.controlUi?.writeActions === "reranker" || cfg.controlUi?.writeActions === "all"
+              ? cfg.controlUi.writeActions
+              : "off")
+          : "off";
+        if (cfg.controlUi?.writeActions && cfg.controlUi.writeActions !== "off" && controlUiWriteMode === "off") {
+          api.logger?.warn?.(
+            "memory-lancedb-namespaced: controlUi.writeActions is set but OpenClaw config mutation is unavailable; the dashboard stays read-only",
+          );
+        }
+        const controlUiWriteSurface = controlUiWriteMode === "off" ? null : (() => {
+          const confirmations = createConfirmationStore();
+          const setReranker = createRerankerMutator({ api });
+          const setEmbeddingProfile = createEmbeddingProfileMutator({ api });
+          const keyConfigured = () => rerankerKeyConfigured(cfg, process.env);
+          return {
+            mode: controlUiWriteMode,
+            tokens: createFormTokenStore(),
+            rerankerKeyConfigured: keyConfigured,
+            applyAction: ({ action, form, mode }) => applyControlUiWriteAction({
+              action,
+              form,
+              mode,
+              deps: {
+                logger: api.logger,
+                confirmations,
+                setReranker,
+                setEmbeddingProfile,
+                rerankerKeyConfigured: keyConfigured,
+                preparedTarget: () => {
+                  const snapshot = modelPreparationCoordinator?.snapshot() || null;
+                  return snapshot?.state === "ready"
+                    ? { profileId: snapshot.profileId, fingerprintId: snapshot.targetFingerprintId }
+                    : null;
+                },
+                nextMigrationId: () => `ui-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`,
+                planReembedding: (request) => reembeddingCoordinator.plan(request),
+                applyReembedding: (request) => reembeddingCoordinator.apply(request),
+                switchReembedding: (request) => reembeddingSwitchRuntime.switchGeneration(request),
+              },
+            }),
+          };
+        })();
         if (typeof api.registerGatewayMethod === "function") {
           registerControlUiRuntime({
             api,
+            write: controlUiWriteSurface,
             getProjection: async () => {
               const workspacePolicies = workspacePolicyStore.list();
               const migrations = reembeddingStateStore.list();

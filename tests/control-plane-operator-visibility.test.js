@@ -100,10 +100,15 @@ test("the dashboard shows which reranker is active and how to change it", async 
   assert.match(html, /Reranking/);
   assert.match(html, /cohere/);
   assert.match(html, /rerank-v3\.5/);
-  // The operator must be able to read off how to switch providers.
+  // The operator must be able to read off how to switch providers, with the
+  // values the config schema actually accepts. Until 7.6.0 this card offered
+  // "jina" as a provider value; the schema rejects it, because the Jina
+  // reranker is a local model chosen through reranker.local.model.
   assert.match(html, /reranker\.provider/);
-  assert.match(html, /jina/);
-  assert.match(html, /local/);
+  assert.match(html, /local-transformers/);
+  assert.match(html, /reranker\.local\.model/);
+  assert.match(html, /jinaai\/jina-reranker-v2-base-multilingual/);
+  assert.doesNotMatch(html, /<code>jina<\/code>/);
 });
 
 test("with no reranker the card says so and still explains the switch", async () => {

@@ -7,6 +7,34 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.6.0] — 2026-09-04
+
+### Hinzugefügt
+
+- **Umschalten direkt im Operator-Dashboard**, hinter dem neuen Schalter
+  `controlUi.writeActions` (Standard `off`, damit sich für bestehende
+  Installationen nichts ändert).
+  - `reranker`: Die Reranking-Wahl ist von der Seite aus umschaltbar, zwischen
+    lokalem BGE, lokalem JinaAI (beide ohne Schlüssel) und Cohere, sofern ein
+    Schlüssel hinterlegt ist. Reine Laufzeitwahl, keine Datenwanderung.
+  - `all`: zusätzlich das Embedding-Zielprofil und die Schritte der
+    Re-Embedding-Migration, also Probelauf, Kopie und getrenntes Umschalten.
+    Das Bestätigungs-Token der Migration bleibt im Gateway und steht nie im
+    Browser; der zweite Klick ist die Bestätigung.
+  - Jede Änderung braucht ein einmaliges Formular-Token aus genau dem
+    Seitenaufruf, in dem geklickt wurde. Das vom Host gesetzte Reiter-Cookie
+    ist `SameSite=None`, ein fremder Formular-POST käme sonst mit gültigen
+    Anmeldedaten an. Solange `writeActions` auf `off` steht, verbietet die
+    Content-Security-Policy Formularziele ganz und die Seite nimmt kein POST an.
+
+### Behoben
+
+- **Die Reranking-Karte nannte einen Wert, den das Schema ablehnt.** Seit 7.5.1
+  stand dort, `reranker.provider` nehme `jina`. Der Jina-Reranker ist aber ein
+  lokales Modell und wird über `reranker.local.model` bei Provider
+  `local-transformers` gewählt. Die Karte nennt jetzt die tatsächlich gültigen
+  Werte samt Modellnamen.
+
 ## [7.5.6] — 2026-09-04
 
 ### Geändert

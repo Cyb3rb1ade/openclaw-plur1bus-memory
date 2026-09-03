@@ -218,6 +218,36 @@ Fehler, Abbruch oder zu wenig Platz bleibt die aktive Generation unveraendert.
 
 ---
 
+## Schalter im Operator-Dashboard (7.6.0)
+
+Der PLUR1BUS-Reiter in OpenClaws Control UI ist standardmaessig rein lesend.
+`controlUi.writeActions` hebt das gezielt auf:
+
+| Wert | Wirkung |
+| --- | --- |
+| `off` (Standard) | Die Seite aendert nichts und fordert nur `operator.read` an. |
+| `reranker` | Die Reranking-Wahl ist von der Seite aus umschaltbar. |
+| `all` | Zusaetzlich Embedding-Zielprofil und die Schritte der Re-Embedding-Migration. |
+
+```json
+{
+  "controlUi": { "writeActions": "reranker" }
+}
+```
+
+Alles ausser `off` gibt dem Reiter `operator.write`; nur Operatoren mit diesem
+Recht bekommen ihn dann ueberhaupt angezeigt. Jede Aenderung braucht ein
+einmaliges Formular-Token aus genau dem Seitenaufruf, in dem geklickt wurde,
+weil das vom Host gesetzte Reiter-Cookie `SameSite=None` ist. Ohne OpenClaws
+Config-Mutations-Faehigkeit bleibt die Seite lesend, unabhaengig vom Wert.
+
+Die Reranker-Wahl ist eine reine Laufzeitentscheidung ohne Datenwanderung:
+lokal BGE, lokal JinaAI (beide ohne Schluessel), Cohere (nur wenn ein
+Schluessel hinterlegt ist) oder aus. Das Embedding-Ziel wird dagegen nur
+vorbereitet; der eigentliche Wechsel laeuft ueber die bestehende Migration mit
+Probelauf, Kopie und getrenntem Umschalten. Das Bestaetigungs-Token dieser
+Migration bleibt im Gateway und erscheint nie im Browser.
+
 ## B13 Shared-Memory-Routen und Hook-Grenze
 
 Shared-Memory ist keine Konfigurations-Abkürzung für Namespace-Reads.
