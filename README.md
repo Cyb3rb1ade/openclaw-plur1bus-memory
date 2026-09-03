@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.5.3 — native OpenClaw 2026.8.x compatibility**
+**PLUR1BUS 7.5.4 — native OpenClaw 2026.8.x compatibility**
 
-Current source version: **7.5.3**. PLUR1BUS 7.5.3 supports OpenClaw `2026.8.1`
+Current source version: **7.5.4**. PLUR1BUS 7.5.4 supports OpenClaw `2026.8.1`
 as its primary host target; the declared compatibility floor is
 `openclaw@2026.8.1` and plugin API `>=2026.8.1`. The package is built and
 tested against the immutable build baseline `openclaw@2026.8.2`; see the
@@ -24,6 +24,18 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.5.4 — the tab opens at once, and looks like the rest of the Control UI
+
+- **No more waiting for the health scan.** Opening the tab used to run a scan
+  over every partition table (2–21 s depending on gateway load) because the
+  snapshot cache lasted 10 s. The last snapshot is now served immediately and
+  refreshed in the background: once at gateway start, then every 10 minutes.
+  The page says how old the snapshot is.
+- **Host styling.** The page uses the Control UI's own colour, radius and type
+  tokens, dark by default and light when the operating system asks for it. The
+  tab runs in a sandboxed iframe that receives no theme message, so a
+  light/dark mode forced in the host cannot be followed, only the OS setting.
 
 ### New in v7.5.3 — the tab registers, and a host route is not a defect
 

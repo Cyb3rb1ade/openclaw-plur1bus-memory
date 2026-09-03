@@ -7,6 +7,23 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.5.4] — 2026-09-03
+
+### Geändert
+
+- **Das Dashboard wartet nicht mehr auf den Speicher-Scan.** Der Health-Scan
+  öffnet jede Partitionstabelle und vermisst das Store-Verzeichnis; gemessen
+  2 bis 21 s je nach Gateway-Last, und der Cache hielt nur 10 s. Der letzte
+  Stand wird jetzt sofort ausgeliefert, der Scan läuft dahinter: einmal beim
+  Gateway-Start und danach alle 10 Minuten. Die Seite nennt das Alter des
+  Snapshots. Ein fehlgeschlagener Scan (kalter Store direkt nach dem Start)
+  wird nach 30 s wiederholt statt zehn Minuten lang angezeigt.
+- **Die Seite sieht aus wie der Rest der Control UI.** Farben, Radien und
+  Schrift folgen den Tokens der OpenClaw-Oberfläche, dunkel als Standard und
+  hell nach Systemeinstellung. Der Reiter läuft in einem abgeschotteten Iframe
+  ohne Theme-Nachricht; einen im Host erzwungenen Hell/Dunkel-Modus kann er
+  deshalb nicht übernehmen, nur die Einstellung des Betriebssystems.
+
 ## [7.5.3] — 2026-09-03
 
 ### Behoben

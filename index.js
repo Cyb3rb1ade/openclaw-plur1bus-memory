@@ -2946,6 +2946,12 @@ export class AgentDbPool {
 }
 
 const CONTROL_HEALTH_MAX_PARTITIONS = 128;
+// The health scan opens every partition table (50+ on a busy install) and
+// walks the store directory; measured 2-21 s depending on gateway load. The
+// dashboard therefore serves the last snapshot at once and refreshes behind it.
+const CONTROL_HEALTH_CACHE_TTL_MS = 5 * 60_000;
+const CONTROL_HEALTH_REFRESH_INTERVAL_MS = 10 * 60_000;
+const CONTROL_HEALTH_FAILED_RETRY_MS = 30_000;
 const CONTROL_HEALTH_MAX_STORAGE_ENTRIES = 10_000;
 const CONTROL_HEALTH_SAFE_DIRECTORY_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const CONTROL_HEALTH_TABLE_PATH_NAMES = Object.freeze(["memories.lance", "memories"]);
@@ -5231,25 +5237,55 @@ const plugin = {
           dimensions: vectorDim,
         }))
       : [{ id: "legacy-flat", path: namespaceLayout.baseDbPath, dimensions: vectorDim }];
-    const controlHealth = createControlPlaneHealthInspector({
-      scan: createControlPlaneHealthScan({
-        namespaceRoots: controlHealthNamespaceRoots,
-        sharedRoots: {
-          workspace: {
-            path: resolve(embeddingGenerationLayout.sharedBaseDir, ".plur1bus-shared", "workspaces"),
-            dimensions: vectorDim,
-          },
-          user: {
-            path: resolve(embeddingGenerationLayout.sharedBaseDir, ".plur1bus-shared", "users"),
-            dimensions: vectorDim,
-          },
+    const controlHealthScan = createControlPlaneHealthScan({
+      namespaceRoots: controlHealthNamespaceRoots,
+      sharedRoots: {
+        workspace: {
+          path: resolve(embeddingGenerationLayout.sharedBaseDir, ".plur1bus-shared", "workspaces"),
+          dimensions: vectorDim,
         },
-        listPartitions: ({ basePath }) => listControlHealthPartitions(basePath),
-        inspectRows: createControlHealthRowInspector(vectorDim, api.logger),
-        measureStorage: () => measureControlHealthStorage(baseDbPath),
-        workspaceIdentityForKey: (key) => controlHealthWorkspaceIdentityByKey.get(key) ?? null,
-        maxPartitions: CONTROL_HEALTH_MAX_PARTITIONS,
-      }),
+        user: {
+          path: resolve(embeddingGenerationLayout.sharedBaseDir, ".plur1bus-shared", "users"),
+          dimensions: vectorDim,
+        },
+      },
+      listPartitions: ({ basePath }) => listControlHealthPartitions(basePath),
+      inspectRows: createControlHealthRowInspector(vectorDim, api.logger),
+      measureStorage: () => measureControlHealthStorage(baseDbPath),
+      workspaceIdentityForKey: (key) => controlHealthWorkspaceIdentityByKey.get(key) ?? null,
+      maxPartitions: CONTROL_HEALTH_MAX_PARTITIONS,
+    });
+    // The workspace identities are refreshed inside the scan, not by the page
+    // request: the warm-up at gateway start and the background refresh never
+    // go through a request, and without this they would count shared
+    // workspace cards under raw pool keys.
+    const syncControlHealthWorkspaceIdentities = () => {
+      controlHealthWorkspaceIdentityByKey.clear();
+      for (const record of workspacePolicyStore.list()) {
+        controlHealthWorkspaceIdentityByKey.set(
+          workspacePoolKey(record.workspaceIdentity),
+          record.workspaceIdentity,
+        );
+      }
+    };
+    const controlHealth = createControlPlaneHealthInspector({
+      scan: async () => {
+        try {
+          syncControlHealthWorkspaceIdentities();
+        } catch (error) {
+          api.logger?.warn?.(`memory-lancedb-namespaced: control health workspace identities unavailable: ${error?.message || error}`);
+        }
+        return controlHealthScan();
+      },
+      ttlMs: CONTROL_HEALTH_CACHE_TTL_MS,
+      staleWhileRevalidate: true,
+      refreshIntervalMs: CONTROL_HEALTH_REFRESH_INTERVAL_MS,
+      failedRetryMs: CONTROL_HEALTH_FAILED_RETRY_MS,
+      onRefresh: ({ status, failed, durationMs }) => {
+        const line = `memory-lancedb-namespaced: control health snapshot ${failed ? "failed" : "refreshed"} in ${Math.round(durationMs / 100) / 10}s (${status})`;
+        if (failed) api.logger?.warn?.(line);
+        else api.logger?.info?.(line);
+      },
     });
     const legacyMigrationShutdown = new AbortController();
     if (commandRuntimeHooks) {
@@ -8431,13 +8467,6 @@ const plugin = {
             api,
             getProjection: async () => {
               const workspacePolicies = workspacePolicyStore.list();
-              controlHealthWorkspaceIdentityByKey.clear();
-              for (const record of workspacePolicies) {
-                controlHealthWorkspaceIdentityByKey.set(
-                  workspacePoolKey(record.workspaceIdentity),
-                  record.workspaceIdentity,
-                );
-              }
               const migrations = reembeddingStateStore.list();
               const currentMigration = migrations.at(-1) || null;
               const sourceTables = Array.isArray(currentMigration?.source?.tables)
@@ -8527,6 +8556,13 @@ const plugin = {
               });
             },
           });
+          // Warm the health snapshot once the gateway is up and keep it warm,
+          // so opening the tab never waits for a scan. Only the gateway does
+          // this: a CLI process must not start a 20 s scan on its way out.
+          if (typeof api.on === "function") {
+            api.on("gateway_start", () => { controlHealth.start(); }, { timeoutMs: 5_000 });
+            api.on("gateway_stop", () => { controlHealth.stop(); }, { timeoutMs: 5_000 });
+          }
         } else {
           api.logger?.warn?.(
             "memory-lancedb-namespaced: OpenClaw control status Gateway capability unavailable",

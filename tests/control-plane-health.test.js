@@ -62,6 +62,141 @@ describe("PLUR1BUS control-plane health inspector", () => {
     assert.notStrictEqual(await third, left);
   });
 
+  const okScan = (marker) => ({
+    status: "ready",
+    namespaces: [],
+    cards: { byAgent: [{ id: "agent-a", cards: marker }], byWorkspace: [], byUser: [] },
+    storage: { bytes: 1, complete: true },
+    lastError: null,
+  });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("serves the last snapshot at once past the TTL and refreshes behind it", async () => {
+    let now = 1_000;
+    let calls = 0;
+    let release;
+    const inspector = createControlPlaneHealthInspector({
+      now: () => now,
+      ttlMs: 1_000,
+      staleWhileRevalidate: true,
+      scan: async () => {
+        calls += 1;
+        await new Promise((resolve) => { release = resolve; });
+        return okScan(calls);
+      },
+    });
+
+    const first = inspector.snapshot();
+    release();
+    const warm = await first;
+    assert.equal(calls, 1);
+
+    now = 5_000;
+    const stale = await inspector.snapshot();
+    assert.strictEqual(stale, warm, "a stale read returns the cached snapshot without waiting");
+    assert.equal(calls, 2, "a stale read starts exactly one background scan");
+    assert.strictEqual(await inspector.snapshot(), warm);
+    assert.equal(calls, 2, "readers during the scan share it");
+
+    release();
+    await settle();
+    const fresh = await inspector.snapshot();
+    assert.notStrictEqual(fresh, warm);
+    assert.equal(fresh.cards.byAgent[0].cards, 2);
+    assert.equal(fresh.observedAt, 5_000);
+    assert.equal(calls, 2);
+  });
+
+  it("start() warms the cache without a caller and keeps it warm on the interval", async () => {
+    let now = 0;
+    let calls = 0;
+    let cleared = 0;
+    const timers = [];
+    const inspector = createControlPlaneHealthInspector({
+      now: () => now,
+      ttlMs: 100,
+      staleWhileRevalidate: true,
+      refreshIntervalMs: 600,
+      setTimer: (fn, delay) => {
+        const timer = { fn, delay };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimer: () => { cleared += 1; },
+      scan: async () => {
+        calls += 1;
+        return okScan(calls);
+      },
+    });
+
+    inspector.start();
+    inspector.start();
+    assert.equal(calls, 1, "start() runs one warm scan, idempotently");
+    await settle();
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 600, "the next scan is scheduled after the warm scan completes");
+
+    now = 700;
+    timers[0].fn();
+    assert.equal(calls, 2, "the timer refreshes without a page request");
+    await settle();
+    assert.equal(timers.length, 2);
+    const served = await inspector.snapshot();
+    assert.equal(served.observedAt, 700);
+    assert.equal(calls, 2, "the page reads the warm snapshot without scanning");
+
+    inspector.stop();
+    assert.equal(cleared, 1, "stop() clears the pending timer");
+    now = 2_000;
+    await inspector.snapshot();
+    await settle();
+    assert.equal(calls, 3, "a stale read still refreshes behind the page after stop()");
+    assert.equal(timers.length, 2, "but nothing is scheduled any more");
+  });
+
+  it("retries a failed warm-up early instead of pinning it on the page", async () => {
+    let now = 0;
+    let calls = 0;
+    let fail = true;
+    const timers = [];
+    const inspector = createControlPlaneHealthInspector({
+      now: () => now,
+      ttlMs: 10_000,
+      staleWhileRevalidate: true,
+      refreshIntervalMs: 60_000,
+      failedRetryMs: 1_000,
+      setTimer: (fn, delay) => {
+        const timer = { fn, delay };
+        timers.push(timer);
+        return timer;
+      },
+      clearTimer: () => {},
+      scan: async () => {
+        calls += 1;
+        if (fail) throw new Error("cold store");
+        return okScan(calls);
+      },
+    });
+
+    inspector.start();
+    await settle();
+    assert.equal(calls, 1);
+    assert.equal(timers[0].delay, 1_000, "a failed scan is retried after the short delay");
+
+    now = 500;
+    const early = await inspector.snapshot();
+    assert.equal(early.status, "degraded");
+    assert.equal(calls, 1, "inside the retry window the failure is served, not re-scanned");
+
+    fail = false;
+    now = 1_500;
+    const real = await inspector.snapshot();
+    assert.equal(real.status, "ready");
+    assert.equal(calls, 2, "past the retry window a caller waits for a real scan rather than seeing the stale failure");
+    await settle();
+    assert.equal(timers.at(-1).delay, 60_000, "a good scan goes back to the normal interval");
+  });
+
   it("contains scanner failures behind a stable health error code", async () => {
     const inspector = createControlPlaneHealthInspector({
       scan: async () => { throw new Error("sentinel-secret from lancedb"); },

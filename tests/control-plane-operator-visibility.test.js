@@ -196,3 +196,41 @@ test("the control UI tab registers through the flat api method", async () => {
   assert.equal(descriptors[0].id, "plur1bus");
   assert.equal(routes.length, 1, "the http route must still be registered");
 });
+
+test("the dashboard wears the Control UI tokens and says how old the health snapshot is", async () => {
+  const { createControlUiHttpHandler } = await import("../lib/setup/control-ui-plugin-runtime.js");
+  const headers = new Map();
+  const res = {
+    statusCode: 0,
+    body: "",
+    setHeader(name, value) { headers.set(String(name).toLowerCase(), value); },
+    getHeader(name) { return headers.get(String(name).toLowerCase()); },
+    end(body = "") { this.body = body; },
+  };
+  const observedAt = 1_700_000_000_000;
+  const handler = createControlUiHttpHandler({
+    now: () => observedAt + 95_000,
+    getProjection: async () => buildControlPlaneProjection({
+      config: resolveEffectiveConfig({}),
+      health: {
+        status: "ready",
+        namespaces: [],
+        cards: { byAgent: [], byWorkspace: [], byUser: [] },
+        storage: { bytes: 0, complete: true },
+        lastError: null,
+        observedAt,
+      },
+    }),
+  });
+  await handler({ method: "GET", url: CONTROL_UI_PATH_FOR_TEST }, res);
+  const html = String(res.body);
+  // The host's own token names and values, dark first, light on the OS setting.
+  assert.match(html, /--bg: #0e1015/);
+  assert.match(html, /--accent: #ff5c5c/);
+  assert.match(html, /prefers-color-scheme: light/);
+  assert.match(html, /--card: #fff/);
+  assert.doesNotMatch(html, /\bCanvas\b|light-dark\(/, "no system-colour leftovers");
+  // The reader can tell how old the cached numbers are.
+  assert.match(html, /Snapshot observed <time datetime="2023-11-14T22:13:20.000Z">2 min ago<\/time>/);
+  assert.match(html, /refreshed in the background/);
+});
