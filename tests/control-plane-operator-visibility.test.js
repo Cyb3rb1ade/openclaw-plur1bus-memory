@@ -234,3 +234,68 @@ test("the dashboard wears the Control UI tokens and says how old the health snap
   assert.match(html, /Snapshot observed <time datetime="2023-11-14T22:13:20.000Z">2 min ago<\/time>/);
   assert.match(html, /refreshed in the background/);
 });
+
+test("a key in the runtime's default environment variable counts as configured", () => {
+  // The live install had no embedding.apiKey and no apiKeyEnv, the key sat in
+  // OPENAI_API_KEY, embeddings worked, and readiness said "missing".
+  const config = { embedding: { provider: "openai", model: "text-embedding-3-large" } };
+  const withEnv = buildControlPlaneProjection({ config, env: { OPENAI_API_KEY: "sk-present" } });
+  assert.deepEqual(withEnv.credentials.embedding, { status: "configured", source: "env_default", path: "OPENAI_API_KEY" });
+  const withoutEnv = buildControlPlaneProjection({ config, env: {} });
+  assert.deepEqual(withoutEnv.credentials.embedding, { status: "missing", source: null, path: "embedding.apiKey" });
+  const blank = buildControlPlaneProjection({ config, env: { OPENAI_API_KEY: "   " } });
+  assert.equal(blank.credentials.embedding.status, "missing", "a blank variable is not a key");
+  // The projection never carries the value.
+  assert.doesNotMatch(JSON.stringify(withEnv), /sk-present/);
+});
+
+test("a configured path still wins over the default environment variable", () => {
+  const projection = buildControlPlaneProjection({
+    config: { embedding: { provider: "openai", apiKeyEnv: "MY_OPENAI_KEY" } },
+    env: { OPENAI_API_KEY: "sk-present" },
+  });
+  assert.deepEqual(projection.credentials.embedding, { status: "configured", source: "env", path: "embedding.apiKeyEnv" });
+});
+
+test("keyless providers are not_required, an absent fallback is optional", () => {
+  const local = buildControlPlaneProjection({ config: { embedding: { provider: "local-transformers" }, reranker: { provider: "local-transformers" } } });
+  assert.equal(local.credentials.embedding.status, "not_required");
+  assert.equal(local.credentials.reranker.status, "not_required");
+  const off = buildControlPlaneProjection({ config: { reranker: { provider: "cohere", enabled: false } } });
+  assert.equal(off.credentials.reranker.status, "not_required");
+  const noFallback = buildControlPlaneProjection({ config: { embedding: { provider: "openai" } }, env: { OPENAI_API_KEY_FALLBACK: "sk-x" } });
+  assert.deepEqual(noFallback.credentials.embeddingFallback, { status: "optional", source: null, path: "embedding.fallback.apiKey" });
+  const fallback = buildControlPlaneProjection({ config: { embedding: { provider: "openai", fallback: { model: "text-embedding-3-small" } } }, env: { OPENAI_API_KEY_FALLBACK: "sk-x" } });
+  assert.deepEqual(fallback.credentials.embeddingFallback, { status: "configured", source: "env_default", path: "OPENAI_API_KEY_FALLBACK" });
+  const fallbackNoKey = buildControlPlaneProjection({ config: { embedding: { provider: "openai", fallback: { model: "text-embedding-3-small" } } }, env: {} });
+  assert.equal(fallbackNoKey.credentials.embeddingFallback.status, "missing", "a switched-on fallback without a key is missing");
+});
+
+test("the dashboard names the default variable and explains the new states", async () => {
+  const { createControlUiHttpHandler } = await import("../lib/setup/control-ui-plugin-runtime.js");
+  const headers = new Map();
+  const res = {
+    statusCode: 0,
+    body: "",
+    setHeader(name, value) { headers.set(String(name).toLowerCase(), value); },
+    getHeader(name) { return headers.get(String(name).toLowerCase()); },
+    end(body = "") { this.body = body; },
+  };
+  const handler = createControlUiHttpHandler({
+    getProjection: async () => buildControlPlaneProjection({
+      config: resolveEffectiveConfig({ embedding: { provider: "openai" }, reranker: { provider: "local-transformers" } }),
+      env: { OPENAI_API_KEY: "sk-present" },
+    }),
+  });
+  await handler({ method: "GET", url: CONTROL_UI_PATH_FOR_TEST }, res);
+  const html = String(res.body);
+  assert.match(html, /env OPENAI_API_KEY/);
+  assert.match(html, /environment \(default variable\)/);
+  assert.match(html, /badge-not_required/);
+  assert.match(html, /badge-optional/);
+  assert.match(html, /no key needed/);
+  assert.doesNotMatch(html, /sk-present/);
+  // Embedding must not wear the missing badge any more.
+  const embeddingRow = html.slice(html.indexOf("Embedding</span>"), html.indexOf("Embedding fallback</span>"));
+  assert.doesNotMatch(embeddingRow, /badge-missing/);
+});

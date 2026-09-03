@@ -8553,6 +8553,7 @@ const plugin = {
                   : null,
                 workspacePolicies,
                 health: await controlHealth.snapshot(),
+                env: process.env,
               });
             },
           });
