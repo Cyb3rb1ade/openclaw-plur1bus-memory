@@ -7,6 +7,8 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.5.2] — 2026-09-03
+
 ### Behoben
 
 - **Credential Readiness nannte den falschen Konfigurationspfad.** Die Tabelle
