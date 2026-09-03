@@ -5,8 +5,7 @@ PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolate
 **PLUR1BUS 7.5.0 — native OpenClaw 2026.9.x
 
 Current source version: **7.5.0**. The compatibility target is exactly
-`openclaw@2026.9.1-beta.1`; see the
-[compatibility contract](docs/compatibility-openclaw-2026.9.1-beta.1.md).
+`openclaw@2026.9.2`;
 The upstream source base is the immutable official tag `v7.4.10`, commit
 `c0a8a4c28ff1cb9c632e185f21f4502d67d1b605`.
 
