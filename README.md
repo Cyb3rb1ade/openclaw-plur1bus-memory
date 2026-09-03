@@ -150,7 +150,7 @@ Condensed summary of 7.3.0–7.3.5; see the [changelog](CHANGELOG.md) for detail
 - **Recall and namespace closure** — B12 Core and B12-P add secure read-only legacy access, globally bounded multi-namespace recall, adaptive budgets, compression, decision traces, and strict graph/provider authorization.
 - **OpenClaw owns the LLM choice** — PLUR1BUS feature routes inherit the effective target agent model unless a feature has a complete explicit direct-provider override. Hard-coded chat-model defaults were removed.
 - **Exact LLM result cache** — deterministic internal transforms can reuse validated, bounded, agent-scoped results without leaking prompts or credentials.
-- **Dependency and runtime baseline** — patched transitive dependencies and `sharp@0.35.3` close the dependency audit; PLUR1BUS now requires Node.js 22.5 or newer.
+- **Dependency and runtime baseline** — patched transitive dependencies and `sharp@0.35.3` close the dependency audit; PLUR1BUS now requires Node.js 22.22 or newer.
 - **Release verification** — the release baseline contains 3,260 tests (3,259 passed, 0 failed, 1 skipped) and `npm audit` reports 0 vulnerabilities.
 
 ### New in v6.9.10 — Maintenance progress and dedupe hardening
@@ -383,7 +383,7 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
-PLUR1BUS requires Node.js 22.5 or newer.
+PLUR1BUS requires Node.js 22.22 or newer.
 
 Until 7.5.0 is published, build an immutable tarball from this exact source
 checkout and install that artifact through OpenClaw's package installer:
