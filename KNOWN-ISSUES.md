@@ -30,11 +30,11 @@ source-level verification of the 2026.8.1 floor, and a bounded smoke run on
   restart the gateway in-process (`config change requires gateway restart
   (channels)`, SIGUSR1, HTTP server back after about three seconds). Five to
   seven seconds after the removal the restarted process still logs
-  `[default] starting provider` for the removed account and its command-menu
-  setup fails (`telegram deleteMyCommands failed ... (undefined: undefined)`)
-  before the new config takes effect. The container reports healthy for about
-  a second before the restart begins, so a health probe alone does not prove
-  the restart is over.
+  `[default] starting provider` for the removed account and sets its command
+  menu before the new config takes effect, so the bot API must still be
+  reachable at that moment. The container reports healthy for about a second
+  before the restart begins, so a health probe alone does not prove the
+  restart is over.
 - A LanceDB table handle without a read consistency interval keeps the
   version it was opened with; 7.5.0 connects with `readConsistencyInterval: 0`
   (see CHANGELOG). Before that fix a reader opened before a write never saw
