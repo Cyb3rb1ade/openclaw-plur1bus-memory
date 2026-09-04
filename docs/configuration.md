@@ -237,8 +237,11 @@ Nutzerpartitionen nie.
 folgt `timezone` aus der Plugin-Konfiguration. Derselbe Traum wird nicht
 zweimal eingetragen; ein Fehlschlag beim Schreiben bricht den Traum nicht ab.
 
-Damit das Tagebuch einen Autor hat, sollte memory-cores eigenes Träumen aus
-sein: `plugins.entries.memory-core.config.dreaming.enabled: false`.
+Damit das Tagebuch einen Autor hat, sollte das verwaltete Träumen des Hosts aus
+sein. Der Host liest diesen Schalter aus dem Eintrag des Memory-Slot-Besitzers,
+also `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false`.
+Das Flag unter `memory-core` ist bei fremdem Slot-Besitzer wirkungslos; das
+wurde am 04.09.2026 live geprüft.
 
 PLUR1BUS registriert ausserdem die Speicher-Laufzeit, die der Host vom Besitzer
 des Memory-Slots erwartet. Damit zeigen Übersicht und Szene derselben Seite

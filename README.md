@@ -32,8 +32,10 @@ By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/
   narratives are written into the agent's `DREAMS.md`, in the host's entry
   shape inside its managed diary block. Only the agent's private partition
   writes there; shared partitions never do. `dreaming.narrative.diary` turns
-  it off. To give the diary one author, switch memory-core's own dreaming off
-  with `plugins.entries.memory-core.config.dreaming.enabled: false`.
+  it off. To give the diary one author, switch the host's own managed dreaming
+  off. The host reads that switch from the memory slot owner's entry, so it is
+  `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false`,
+  not memory-core's flag.
 - **The Memory page knows the engine.** PLUR1BUS now registers the memory
   runtime the host expects from the slot owner, so Overview and Scene report
   PLUR1BUS' provider, model, embedding state and card count instead of

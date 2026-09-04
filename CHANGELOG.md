@@ -18,6 +18,15 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
   warf. Manager und Laufzeit sind jetzt gewöhnliche Objekte; ein Test stellt
   den Host-Proxy nach.
 
+### Korrektur zur Empfehlung aus 7.7.0
+
+- Der Schalter für das verwaltete Träumen des Hosts ist
+  `plugins.entries.memory-lancedb-namespaced.config.dreaming.enabled: false`,
+  nicht das Flag unter `memory-core`. Der Host liest die `dreaming`-Konfig des
+  Memory-Slot-Besitzers; memory-cores eigenes Flag bleibt bei fremdem Besitzer
+  ohne Wirkung (live geprüft: der verwaltete Cron lief weiter, bis der
+  Schalter im PLUR1BUS-Eintrag stand).
+
 ## [7.7.0] — 2026-09-04
 
 ### Hinzugefügt
