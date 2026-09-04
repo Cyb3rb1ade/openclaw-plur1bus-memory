@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.8] — 2026-09-05
+
+### Behoben
+
+- **Die geplante Verknüpfungssuche blieb trotz Quittung blockiert.** 7.8.6
+  gab dem Cron-Pfad die Freigabe des Bridge-Dienstes (`dashboards build`);
+  die trägt nur `vault_write`, die Suche braucht zusätzlich
+  `semantic_index_write`, das nur der Plan `semantic-discovery confirm` mit
+  bestätigter Aktion vergibt. Der geplante Lauf gilt jetzt als die stehende
+  Bestätigung des Operators (Feature-Schalter und Cron sind seine
+  Entscheidung); Quittung, `mode: apply` und `allowWrite` bleiben Pflicht.
+  Die interaktive Zwei-Schritt-Bestätigung im Chat ist unverändert.
+
 ## [7.8.7] — 2026-09-05
 
 ### Behoben

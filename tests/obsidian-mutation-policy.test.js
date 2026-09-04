@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   closedMutationGates,
+  mutationAllowed,
   parseObsidianCommandPlan,
 } from "../lib/obsidian-mutation-policy.js";
 
@@ -54,5 +55,32 @@ describe("naming the closed mutation gates", () => {
     for (const gate of named) {
       assert.doesNotMatch(gate, /\/tmp\/base|workspace:v1:a1|\ba1\b/u, `leaks context: ${gate}`);
     }
+  });
+});
+
+describe("scheduled semantic discovery policy", () => {
+  const base = {
+    memoryCtx: { agentId: "heisenberg", workspaceIdentity: "workspace:v1:heisenberg", workspaceId: "workspace:v1:heisenberg" },
+    baseDbPath: "/store",
+    mode: "apply",
+    dryRun: false,
+    allowWrite: true,
+    vaultConfirmed: true,
+  };
+
+  it("grants the semantic index write only through the semantic-discovery confirm plan with a confirmed action", () => {
+    const dashboards = parseObsidianCommandPlan(["dashboards", "build"], base).mutationPolicy;
+    assert.equal(mutationAllowed(dashboards, "vault_write"), true);
+    assert.equal(mutationAllowed(dashboards, "semantic_index_write"), false, "the dashboards plan never carries the index capability");
+
+    const scheduled = parseObsidianCommandPlan(["semantic-discovery", "confirm"], { ...base, actionConfirmed: true }).mutationPolicy;
+    assert.equal(mutationAllowed(scheduled, "semantic_index_write"), true);
+    assert.equal(mutationAllowed(scheduled, "vault_write"), true);
+
+    const unconfirmedAction = parseObsidianCommandPlan(["semantic-discovery", "confirm"], base).mutationPolicy;
+    assert.equal(mutationAllowed(unconfirmedAction, "semantic_index_write"), false, "the interactive two-step still needs its confirmation");
+
+    const noReceipt = parseObsidianCommandPlan(["semantic-discovery", "confirm"], { ...base, vaultConfirmed: false, actionConfirmed: true }).mutationPolicy;
+    assert.equal(mutationAllowed(noReceipt, "vault_write"), false, "a scheduled run without a vault receipt stays blocked");
   });
 });

@@ -6551,7 +6551,7 @@ const plugin = {
     // The cron handler used to call the discoverer without any policy, which
     // the policy layer rightly reads as "blocked", so scheduled discovery
     // never wrote a single link.
-    const obsidianServiceMutationPolicy = (workspace) => {
+    const obsidianServiceMutationPolicy = (workspace, { plan = ["dashboards", "build"], actionConfirmed } = {}) => {
       const workspaceIdentity = normalizeWorkspaceTarget(
         workspace.workspaceId,
         "Obsidian service workspace",
@@ -6561,7 +6561,7 @@ const plugin = {
         workspaceIdentity,
         workspaceId: workspaceIdentity,
       };
-      return parseObsidianCommandPlan(["dashboards", "build"], {
+      return parseObsidianCommandPlan(plan, {
         memoryCtx,
         baseDbPath,
         mode: obsidianBridgeCfg.mode,
@@ -6572,6 +6572,7 @@ const plugin = {
           memoryCtx,
           vaultPath: workspace.path,
         }),
+        ...(actionConfirmed === undefined ? {} : { actionConfirmed }),
       }).mutationPolicy;
     };
 
@@ -7475,9 +7476,15 @@ const plugin = {
                   try {
                     const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
                     const wsAgentId = ws.agentId || internalAgent;
-                    // Without a policy the discoverer is blocked by design;
-                    // this is the same receipt-bound policy the bridge uses.
-                    const mutationPolicy = obsidianServiceMutationPolicy({ ...ws, agentId: wsAgentId });
+                    // Without a policy the discoverer is blocked by design.
+                    // The scheduled run is the operator's standing confirmation
+                    // of the semantic-discovery action (the feature gate and the
+                    // cron exist because they switched it on); receipt, apply
+                    // mode and allowWrite are still required by the policy.
+                    const mutationPolicy = obsidianServiceMutationPolicy(
+                      { ...ws, agentId: wsAgentId },
+                      { plan: ["semantic-discovery", "confirm"], actionConfirmed: true },
+                    );
                     const semResult = await pool.withDb(wsAgentId, (wsDb) =>
                       runSemanticDiscoveryBatches({
                         db: wsDb,
