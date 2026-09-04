@@ -274,6 +274,14 @@ einmaliges Formular-Token aus genau dem Seitenaufruf, in dem geklickt wurde,
 weil das vom Host gesetzte Reiter-Cookie `SameSite=None` ist. Ohne OpenClaws
 Config-Mutations-Faehigkeit bleibt die Seite lesend, unabhaengig vom Wert.
 
+OpenClaw bettet den Reiter als Iframe mit `sandbox="allow-scripts"` ein, ohne
+`allow-forms`; der Browser blockiert dort jede native Formularabgabe. Seit
+7.8.1 traegt eine schreibfaehige Seite deshalb ein nonce-gebundenes Skript,
+das das Formular per `fetch` abschickt und die Seite danach selbst neu laedt;
+das Ergebnis erscheint beim naechsten Aufruf als Banner. Die CSP nennt als
+`connect-src` genau den Host, von dem die Seite kam. Eine lesende Seite bleibt
+ohne Skript.
+
 Die Reranker-Wahl ist eine reine Laufzeitentscheidung ohne Datenwanderung:
 lokal BGE, lokal JinaAI (beide ohne Schluessel), Cohere (nur wenn ein
 Schluessel hinterlegt ist) oder aus. Das Embedding-Ziel wird dagegen nur

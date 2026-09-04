@@ -7,6 +7,24 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.1] — 2026-09-05
+
+### Behoben
+
+- **Kein Knopf im PLUR1BUS-Reiter hat je etwas ausgelöst.** OpenClaw bettet
+  den Reiter als Iframe mit `sandbox="allow-scripts"` ein, ohne
+  `allow-forms`. Der Browser blockiert dort jede Formularabgabe still
+  („Blocked form submission … the 'allow-forms' permission is not set"),
+  betroffen waren die Reranker- und Embedding-Schalter aus 7.6.0 und der
+  Compact-Knopf aus 7.8.0; nur in einem eigenständigen Browser-Tab
+  funktionierten sie. Eine schreibfähige Seite trägt jetzt ein
+  nonce-gebundenes Skript, das das Formular per `fetch` abschickt (gleiche
+  Felder plus `via=fetch`, Cookie inklusive, Antwort ungelesen) und die Seite
+  danach selbst neu lädt. Das Ergebnis wartet bis zum nächsten Seitenaufruf
+  im Gateway (90 s) und erscheint dann als Banner. Die CSP nennt das Skript
+  per Nonce und als `connect-src` genau den Host, von dem die Seite kam; eine
+  rein lesende Seite bleibt ohne Skript. Das Einmal-Token gilt unverändert.
+
 ## [7.8.0] — 2026-09-04
 
 ### Hinzugefügt

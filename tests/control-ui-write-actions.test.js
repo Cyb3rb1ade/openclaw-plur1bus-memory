@@ -266,3 +266,79 @@ test("the descriptor asks for write scope only when the tab can write", () => {
   });
   assert.deepEqual(registered.at(-1).requiredScopes, ["operator.read", "operator.write"]);
 });
+
+test("a writable page carries a nonce-bound submit script and names its own host as connect-src", async () => {
+  // OpenClaw's plugin tab is an iframe sandboxed with allow-scripts only, so a
+  // native form submission is blocked there. The page therefore posts with
+  // fetch; the CSP allows exactly that script and exactly this host.
+  const tokens = createFormTokenStore();
+  const handler = createControlUiHttpHandler({
+    getProjection: async () => projectionFor(),
+    write: { mode: "reranker", tokens, rerankerKeyConfigured: () => false, applyAction: async () => ({ ok: true, code: "reranker_switched" }) },
+  });
+  const res = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, res);
+  const csp = res.getHeader("content-security-policy");
+  const nonce = /script-src 'nonce-([A-Za-z0-9_-]+)'/.exec(csp)?.[1];
+  assert.ok(nonce, `CSP must name a script nonce: ${csp}`);
+  assert.match(csp, /connect-src http:\/\/127\.0\.0\.1:18789 https:\/\/127\.0\.0\.1:18789;/);
+  assert.match(String(res.body), new RegExp(`<script nonce="${nonce}">`));
+  assert.match(String(res.body), /mode: "no-cors", credentials: "include"/);
+  assert.match(String(res.body), /body\.set\("via", "fetch"\)/);
+
+  const second = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, second);
+  assert.notEqual(/nonce-([A-Za-z0-9_-]+)/.exec(second.getHeader("content-security-policy"))[1], nonce, "every page gets a fresh nonce");
+
+  const noHost = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: {} }, noHost);
+  assert.doesNotMatch(noHost.getHeader("content-security-policy"), /connect-src/, "an unusable Host header yields no connect-src");
+
+  const readOnly = createControlUiHttpHandler({ getProjection: async () => projectionFor() });
+  const ro = collectingResponse();
+  await readOnly({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, ro);
+  assert.doesNotMatch(ro.getHeader("content-security-policy"), /script-src|connect-src/);
+  assert.doesNotMatch(String(ro.body), /<script/);
+});
+
+test("a fetch-submitted action answers without a redirect and shows its result exactly once", async () => {
+  let clock = 10_000;
+  const tokens = createFormTokenStore();
+  const handler = createControlUiHttpHandler({
+    getProjection: async () => projectionFor(),
+    now: () => clock,
+    write: { mode: "all", tokens, rerankerKeyConfigured: () => false, applyAction: async () => ({ ok: true, code: "compaction_started" }) },
+  });
+  const page = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, page);
+  const token = /name="form_token" value="([^"]+)"/.exec(String(page.body))[1];
+
+  const post = collectingResponse();
+  await handler(formRequest({ form_token: token, action: "compaction.start", partition: "main", via: "fetch" }), post);
+  assert.equal(post.statusCode, 204);
+  assert.equal(post.getHeader("location"), undefined);
+
+  const next = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, next);
+  assert.match(String(next.body), /Compaction started\./);
+  const again = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, again);
+  assert.doesNotMatch(String(again.body), /Compaction started\./, "the stored result is shown once");
+
+  // A stale token through the fetch path is still refused, and the refusal is what the next page shows.
+  const replay = collectingResponse();
+  await handler(formRequest({ form_token: token, action: "compaction.start", partition: "main", via: "fetch" }), replay);
+  assert.equal(replay.statusCode, 204);
+  const afterReplay = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, afterReplay);
+  assert.match(String(afterReplay.body), /That form was stale/);
+
+  // Results older than the window are dropped rather than shown late.
+  const late = collectingResponse();
+  const token2 = /name="form_token" value="([^"]+)"/.exec(String(afterReplay.body))[1];
+  await handler(formRequest({ form_token: token2, action: "compaction.start", partition: "main", via: "fetch" }), late);
+  clock += 120_000;
+  const expired = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, expired);
+  assert.doesNotMatch(String(expired.body), /Compaction started\./);
+});
