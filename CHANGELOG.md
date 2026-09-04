@@ -7,6 +7,19 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.3] — 2026-09-05
+
+### Behoben
+
+- **Der Host beantwortet einen `fetch`-POST aus dem Sandbox-Frame mit 401.**
+  Das Reiter-Cookie gilt dort nur für GET (ein POST kommt mit `Origin: null`
+  und wird abgewiesen); 7.8.2 scheiterte deshalb im Reiter mit 401. Die
+  Aktion reist jetzt als GET im Query (`action`, `form_token`, Felder,
+  `via=fetch`), der Handler antwortet 204 und parkt das Ergebnis für den
+  nächsten Seitenaufruf. Ohne `via=fetch` oder ohne Token rendert ein GET nur
+  die Seite; eine lesende Seite führt nie etwas aus. Der POST-Weg bleibt für
+  eigenständige Tabs. Live im Plugin-Reiter von OpenClaw 2026.9.1 geprüft.
+
 ## [7.8.2] — 2026-09-05
 
 ### Behoben

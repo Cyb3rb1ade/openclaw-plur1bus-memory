@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-const EXPECTED_VERSION = "7.8.2";
+const EXPECTED_VERSION = "7.8.3";
 // Built and runtime-verified against the stable host the package targets, not
 // against a beta no user runs. The installed-host loader test exercises this
 // exact OpenClaw, so a build-metadata drift would silently change what that

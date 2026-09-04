@@ -277,10 +277,13 @@ Config-Mutations-Faehigkeit bleibt die Seite lesend, unabhaengig vom Wert.
 OpenClaw bettet den Reiter als Iframe mit `sandbox="allow-scripts"` ein, ohne
 `allow-forms`; der Browser blockiert dort jede native Formularabgabe. Seit
 7.8.1 traegt eine schreibfaehige Seite deshalb ein nonce-gebundenes Skript,
-das das Formular per `fetch` abschickt und die Seite danach selbst neu laedt;
-das Ergebnis erscheint beim naechsten Aufruf als Banner. Die CSP nennt als
-`connect-src` genau den Host, von dem die Seite kam. Eine lesende Seite bleibt
-ohne Skript.
+das den Klick auf den Absende-Knopf abfaengt (das `submit`-Ereignis feuert im
+Sandbox-Frame nie) und die Aktion per `fetch` als GET mit dem Einmal-Token im
+Query abschickt (der Host nimmt das Reiter-Cookie nur fuer GET an, ein POST
+aus dem Frame bekommt 401); danach laedt die Seite sich selbst neu und zeigt
+das Ergebnis als Banner. Ohne `via=fetch` oder ohne Token rendert ein GET nur
+die Seite. Die CSP nennt als `connect-src` genau den Host, von dem die Seite
+kam. Eine lesende Seite bleibt ohne Skript.
 
 Die Reranker-Wahl ist eine reine Laufzeitentscheidung ohne Datenwanderung:
 lokal BGE, lokal JinaAI (beide ohne Schluessel), Cohere (nur wenn ein

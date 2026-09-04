@@ -30,6 +30,14 @@ function collectingResponse() {
   };
 }
 
+function actionGet(pairs) {
+  return {
+    method: "GET",
+    url: `/plugins/memory-lancedb-namespaced/control?${new URLSearchParams(pairs).toString()}`,
+    headers: { host: "127.0.0.1:18789" },
+  };
+}
+
 function formRequest(pairs, { method = "POST" } = {}) {
   const body = new URLSearchParams(pairs).toString();
   return {
@@ -283,8 +291,8 @@ test("a writable page carries a nonce-bound submit script and names its own host
   assert.ok(nonce, `CSP must name a script nonce: ${csp}`);
   assert.match(csp, /connect-src http:\/\/127\.0\.0\.1:18789 https:\/\/127\.0\.0\.1:18789;/);
   assert.match(String(res.body), new RegExp(`<script nonce="${nonce}">`));
-  assert.match(String(res.body), /mode: "no-cors", credentials: "include"/);
-  assert.match(String(res.body), /body\.set\("via", "fetch"\)/);
+  assert.match(String(res.body), /method: "GET", mode: "no-cors", credentials: "include"/);
+  assert.match(String(res.body), /query\.set\("via", "fetch"\)/);
   // A sandboxed frame never fires the submit event, so the click is what is intercepted.
   assert.match(String(res.body), /button\.addEventListener\("click"/);
 
@@ -303,6 +311,26 @@ test("a writable page carries a nonce-bound submit script and names its own host
   assert.doesNotMatch(String(ro.body), /<script/);
 });
 
+test("a GET without the fetch marker never applies an action", async () => {
+  const applied = [];
+  const tokens = createFormTokenStore();
+  const handler = createControlUiHttpHandler({
+    getProjection: async () => projectionFor(),
+    write: { mode: "all", tokens, rerankerKeyConfigured: () => false, applyAction: async (request) => { applied.push(request.action); return { ok: true, code: "compaction_started" }; } },
+  });
+  const page = collectingResponse();
+  await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, page);
+  const token = /name="form_token" value="([^"]+)"/.exec(String(page.body))[1];
+  const plain = collectingResponse();
+  await handler({ method: "GET", url: `/plugins/memory-lancedb-namespaced/control?form_token=${token}&action=compaction.start&partition=main`, headers: { host: "127.0.0.1:18789" } }, plain);
+  assert.equal(plain.statusCode, 200, "a bare link with parameters renders the page, it does not act");
+  assert.deepEqual(applied, []);
+  const readOnly = createControlUiHttpHandler({ getProjection: async () => projectionFor() });
+  const ro = collectingResponse();
+  await readOnly(actionGet({ form_token: token, action: "compaction.start", partition: "main", via: "fetch" }), ro);
+  assert.equal(ro.statusCode, 200, "a read-only tab renders, never applies");
+});
+
 test("a fetch-submitted action answers without a redirect and shows its result exactly once", async () => {
   let clock = 10_000;
   const tokens = createFormTokenStore();
@@ -316,7 +344,7 @@ test("a fetch-submitted action answers without a redirect and shows its result e
   const token = /name="form_token" value="([^"]+)"/.exec(String(page.body))[1];
 
   const post = collectingResponse();
-  await handler(formRequest({ form_token: token, action: "compaction.start", partition: "main", via: "fetch" }), post);
+  await handler(actionGet({ form_token: token, action: "compaction.start", partition: "main", via: "fetch" }), post);
   assert.equal(post.statusCode, 204);
   assert.equal(post.getHeader("location"), undefined);
 
@@ -329,7 +357,7 @@ test("a fetch-submitted action answers without a redirect and shows its result e
 
   // A stale token through the fetch path is still refused, and the refusal is what the next page shows.
   const replay = collectingResponse();
-  await handler(formRequest({ form_token: token, action: "compaction.start", partition: "main", via: "fetch" }), replay);
+  await handler(actionGet({ form_token: token, action: "compaction.start", partition: "main", via: "fetch" }), replay);
   assert.equal(replay.statusCode, 204);
   const afterReplay = collectingResponse();
   await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, afterReplay);
@@ -338,7 +366,7 @@ test("a fetch-submitted action answers without a redirect and shows its result e
   // Results older than the window are dropped rather than shown late.
   const late = collectingResponse();
   const token2 = /name="form_token" value="([^"]+)"/.exec(String(afterReplay.body))[1];
-  await handler(formRequest({ form_token: token2, action: "compaction.start", partition: "main", via: "fetch" }), late);
+  await handler(actionGet({ form_token: token2, action: "compaction.start", partition: "main", via: "fetch" }), late);
   clock += 120_000;
   const expired = collectingResponse();
   await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, expired);
