@@ -7,6 +7,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.7.1] — 2026-09-04
+
+### Behoben
+
+- **Die Memory-Übersicht meldete „gateway memory probe failed"** mit 7.7.0.
+  OpenClaw packt den registrierten Suchmanager in einen Proxy, der jede
+  Funktion gebunden zurückgibt. Ein eingefrorenes Manager-Objekt verletzt
+  dabei die Proxy-Invariante, und jeder Zugriff auf `status()` oder `close()`
+  warf. Manager und Laufzeit sind jetzt gewöhnliche Objekte; ein Test stellt
+  den Host-Proxy nach.
+
 ## [7.7.0] — 2026-09-04
 
 ### Hinzugefügt

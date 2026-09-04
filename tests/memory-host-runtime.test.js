@@ -166,3 +166,24 @@ test("a host-originated search stays on the agent's private partition", async ()
   assert.doesNotMatch(block, /workspaceIdentity|userPrincipal/, "nothing widens the scope by hand");
   assert.match(source, /runtime: memoryHostRuntime,/, "the runtime is what gets registered");
 });
+
+test("the manager survives the host's binding Proxy", async () => {
+  // OpenClaw's getActiveMemorySearchManagerCore wraps the manager in a Proxy
+  // whose get() returns a bound copy of each function. A frozen manager
+  // breaks the Proxy invariant and every access throws; the live 7.7.0
+  // deploy showed exactly that on doctor.memory.status.
+  const { runtime } = runtimeWith();
+  const { manager } = await runtime.getMemorySearchManager({ agentId: "main" });
+  const proxied = new Proxy(manager, {
+    get(target, property) {
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  assert.equal(proxied.status().provider, "openai");
+  assert.equal((await proxied.probeEmbeddingAvailability()).ok, true);
+  assert.equal((await proxied.search("Stadt", {})).length, 2);
+  await proxied.close();
+  assert.equal(Object.isFrozen(manager), false);
+  assert.equal(Object.isFrozen(runtime), false);
+});
