@@ -7,6 +7,17 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.4] — 2026-09-05
+
+### Behoben
+
+- **Der Compact-Knopf meldete „compaction failed"** mit dem Grund „optimize
+  unavailable on this adapter": Der Pool verleiht rohe `MemoryDB`-Instanzen,
+  `optimizeTable` gehört aber dem db-adapter. Der Läufer ruft jetzt den
+  db-adapter, der die Tabelle der Partition selbst auflöst und für ein
+  Verzeichnis ohne Tabelle `no-table` meldet. Live geprüft: Der Knopf
+  kompaktiert.
+
 ## [7.8.3] — 2026-09-05
 
 ### Behoben

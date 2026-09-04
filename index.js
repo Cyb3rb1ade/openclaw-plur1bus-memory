@@ -8565,8 +8565,10 @@ const plugin = {
           const setEmbeddingProfile = createEmbeddingProfileMutator({ api });
           const keyConfigured = () => rerankerKeyConfigured(cfg, process.env);
           // LanceDB fragment compaction per private partition, one at a time.
-          // Only ids the health scan listed are accepted; the lease goes
-          // through the active writer so no second handle is opened.
+          // Only ids the health scan listed are accepted. The db-adapter owns
+          // optimizeTable (the pool leases raw MemoryDB instances, which do
+          // not have it); it resolves the partition's table itself and reports
+          // `no-table` for a directory without one.
           const compaction = createCompactionRunner({
             logger: api.logger,
             knownPartitions: async () => {
@@ -8575,11 +8577,11 @@ const plugin = {
                 .map((entry) => entry?.id)
                 .filter((id) => isPartitionId(id));
             },
-            optimize: (partitionId) => pool.withWriteDb(partitionId, async (db) => (
-              typeof db?.optimizeTable === "function"
-                ? db.optimizeTable(partitionId, {})
+            optimize: async (partitionId) => (
+              typeof memoryDbAdapter?.optimizeTable === "function"
+                ? memoryDbAdapter.optimizeTable(partitionId, {})
                 : { ok: false, reason: "optimize unavailable on this adapter" }
-            )),
+            ),
             onFinished: () => controlHealth.invalidate(),
           });
           return {
