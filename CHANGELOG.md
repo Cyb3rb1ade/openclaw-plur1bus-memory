@@ -7,6 +7,16 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.2] — 2026-09-05
+
+### Behoben
+
+- **7.8.1 griff im Reiter noch nicht.** In einem Sandbox-Frame verweigert der
+  Browser die Abgabe, *bevor* er das `submit`-Ereignis auslöst; der Zuhörer
+  aus 7.8.1 kam also nie an die Reihe. Abgefangen wird jetzt der Klick auf den
+  Absende-Knopf, der `submit`-Zuhörer bleibt für eigenständige Tabs. Live im
+  Plugin-Reiter von OpenClaw 2026.9.1 geprüft.
+
 ## [7.8.1] — 2026-09-05
 
 ### Behoben

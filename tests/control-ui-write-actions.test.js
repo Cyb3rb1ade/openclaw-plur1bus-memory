@@ -285,6 +285,8 @@ test("a writable page carries a nonce-bound submit script and names its own host
   assert.match(String(res.body), new RegExp(`<script nonce="${nonce}">`));
   assert.match(String(res.body), /mode: "no-cors", credentials: "include"/);
   assert.match(String(res.body), /body\.set\("via", "fetch"\)/);
+  // A sandboxed frame never fires the submit event, so the click is what is intercepted.
+  assert.match(String(res.body), /button\.addEventListener\("click"/);
 
   const second = collectingResponse();
   await handler({ method: "GET", url: "/plugins/memory-lancedb-namespaced/control", headers: { host: "127.0.0.1:18789" } }, second);
