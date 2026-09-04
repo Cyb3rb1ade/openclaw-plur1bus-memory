@@ -6544,6 +6544,36 @@ const plugin = {
       }
     }
 
+    // One policy builder for every service-side vault write (bridge service
+    // and the discover-semantic-links cron): the exact workspace identity,
+    // the bridge's mode/dryRun/allowWrite, and the receipt for THIS vault.
+    // The cron handler used to call the discoverer without any policy, which
+    // the policy layer rightly reads as "blocked", so scheduled discovery
+    // never wrote a single link.
+    const obsidianServiceMutationPolicy = (workspace) => {
+      const workspaceIdentity = normalizeWorkspaceTarget(
+        workspace.workspaceId,
+        "Obsidian service workspace",
+      );
+      const memoryCtx = {
+        agentId: workspace.agentId,
+        workspaceIdentity,
+        workspaceId: workspaceIdentity,
+      };
+      return parseObsidianCommandPlan(["dashboards", "build"], {
+        memoryCtx,
+        baseDbPath,
+        mode: obsidianBridgeCfg.mode,
+        dryRun: obsidianBridgeCfg.dryRun,
+        allowWrite: obsidianBridgeCfg.allowWrite,
+        vaultConfirmed: isOwnedVaultConfirmed({
+          baseDbPath,
+          memoryCtx,
+          vaultPath: workspace.path,
+        }),
+      }).mutationPolicy;
+    };
+
     if (obsidianBridgeEnabled) {
       const bridgeService = createObsidianBridgeService(obsidianBridgeCfg, {
         logger: api.logger,
@@ -6569,29 +6599,7 @@ const plugin = {
             return records.filter((record) => checkAccess(memoryCtx, record).allowed);
           });
         },
-        mutationPolicyForWorkspace: (workspace) => {
-          const workspaceIdentity = normalizeWorkspaceTarget(
-            workspace.workspaceId,
-            "Obsidian service workspace",
-          );
-          const memoryCtx = {
-            agentId: workspace.agentId,
-            workspaceIdentity,
-            workspaceId: workspaceIdentity,
-          };
-          return parseObsidianCommandPlan(["dashboards", "build"], {
-            memoryCtx,
-            baseDbPath,
-            mode: obsidianBridgeCfg.mode,
-            dryRun: obsidianBridgeCfg.dryRun,
-            allowWrite: obsidianBridgeCfg.allowWrite,
-            vaultConfirmed: isOwnedVaultConfirmed({
-              baseDbPath,
-              memoryCtx,
-              vaultPath: workspace.path,
-            }),
-          }).mutationPolicy;
-        },
+        mutationPolicyForWorkspace: (workspace) => obsidianServiceMutationPolicy(workspace),
         memoryStore: async ({ workspace, payload }) => {
           const memoryCtx = resolveMemoryRequestContext({
             agentId: workspace.agentId,
@@ -7466,6 +7474,9 @@ const plugin = {
                   try {
                     const semVaultCfg = { ...semBridgeCfg, vaultPath: ws.path };
                     const wsAgentId = ws.agentId || internalAgent;
+                    // Without a policy the discoverer is blocked by design;
+                    // this is the same receipt-bound policy the bridge uses.
+                    const mutationPolicy = obsidianServiceMutationPolicy({ ...ws, agentId: wsAgentId });
                     const semResult = await pool.withDb(wsAgentId, (wsDb) =>
                       runSemanticDiscoveryBatches({
                         db: wsDb,
@@ -7473,6 +7484,7 @@ const plugin = {
                         pool,
                         logger: api.logger,
                         defaultAgentId: wsAgentId,
+                        mutationPolicy,
                       }));
                     api.logger?.info?.(`plur1bus internal discover-semantic-links[${wsAgentId}]: ${JSON.stringify(semResult)}`);
                     totalProcessed += semResult.processed;

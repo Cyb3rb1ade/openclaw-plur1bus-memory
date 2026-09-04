@@ -7,6 +7,27 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.6] — 2026-09-05
+
+### Behoben
+
+- **Die geplante Verknüpfungssuche schrieb nie eine Verknüpfung.** Der
+  Cron-Pfad von `discover-semantic-links` rief den Discoverer ohne
+  Schreibfreigabe auf; die Policy-Schicht liest das zu Recht als „blockiert"
+  (`bound_confirmation_required`), und zwar unabhängig von Quittungen und
+  Schaltern. Der Handler baut jetzt je Workspace dieselbe quittungsgebundene
+  Freigabe wie der Bridge-Dienst (Workspace-Identität, `mode`, `dryRun`,
+  `allowWrite`, Quittung für genau diesen Vault). Ohne Quittung bleibt die
+  Suche wie vorgesehen blockiert; die Quittung entsteht über
+  `plur1bus.obsidian.prepare`/`confirm` beziehungsweise die CLI.
+- **Der Vault-Bestätigungsfluss war nie ausführbar** („Invalid agent ID:
+  \"\"" bei `prepare` und `confirm`). Der Host übergibt einer
+  Gateway-Methode ein Kontextobjekt (`{ params, respond, … }`), die Handler
+  lasen die Parameter aber direkt; zudem nennt die CLI den Sitzungsschlüssel
+  `session`, der Kontextauflöser erwartet `sessionKey`. Beide Formen werden
+  jetzt entpackt, und die Agentenkennung fällt auf das Präfix
+  `agent:<id>:` des Schlüssels zurück.
+
 ## [7.8.5] — 2026-09-05
 
 ### Behoben

@@ -208,3 +208,30 @@ describe("vault detection across agent workspaces", () => {
     assert.deepEqual(listWorkspaceDirectories(join(base, "missing")), DEFAULT_WS_SUFFIXES, "an unreadable home falls back to the default suffix");
   });
 });
+
+describe("Obsidian vault gateway parameter shapes", () => {
+  it("unwraps the host's method context and maps the CLI's `session` to a session key with its agent", async (t) => {
+    const base = tempDir(t);
+    const vault = makeVault(base, "Bestand");
+    const seen = [];
+    const handlers = createObsidianVaultHandlers({
+      baseDbPath: base,
+      confirmationStore: new Map(),
+      resolveSessionMemoryContext: async (params) => {
+        seen.push({ sessionKey: params.sessionKey, agentId: params.agentId });
+        return { userId: "u-1", conversationPrincipal: "chat-1", agentId: params.agentId, workspaceIdentity: `workspace:v1:${params.agentId}` };
+      },
+      getObsidianBridgeConfig: () => ({ workspaces: [{ path: vault }] }),
+    });
+    // The host calls a gateway method with one context object, the CLI names the key `session`.
+    const prepared = await handlers.prepare({ params: { session: "agent:heisenberg:main:heartbeat", vaultPath: vault }, respond() {} });
+    assert.equal(prepared.ok, true);
+    assert.deepEqual(seen.at(-1), { sessionKey: "agent:heisenberg:main:heartbeat", agentId: "heisenberg" });
+    const confirmed = await handlers.confirm({ params: { session: "agent:heisenberg:main:heartbeat", vaultPath: vault, callbackData: prepared.callbackData } });
+    assert.equal(confirmed.ok, true, JSON.stringify(confirmed));
+    assert.deepEqual(seen.at(-1), { sessionKey: "agent:heisenberg:main:heartbeat", agentId: "heisenberg" });
+    // Plain params with an explicit agent id keep working.
+    await handlers.prepare({ sessionKey: "agent:main:main:heartbeat", agentId: "main", vaultPath: vault });
+    assert.deepEqual(seen.at(-1), { sessionKey: "agent:main:main:heartbeat", agentId: "main" });
+  });
+});

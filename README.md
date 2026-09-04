@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.8.5 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.8.6 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.8.5**. PLUR1BUS 7.8.5 supports OpenClaw `2026.8.1`
+Current source version: **7.8.6**. PLUR1BUS 7.8.6 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,19 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.8.6 — scheduled semantic-link discovery can write
+
+- The `discover-semantic-links` cron called the discoverer without a
+  mutation policy, which the policy layer reads as blocked, so scheduled
+  discovery never wrote a link. The handler now builds the same
+  receipt-bound policy per workspace that the bridge service uses. Without a
+  vault receipt it stays blocked by design.
+- The vault confirmation flow (`plur1bus-obsidian use/confirm`, gateway
+  methods `plur1bus.obsidian.prepare/confirm`) failed with "Invalid agent
+  ID": the handlers read the parameters off the host's method context object
+  and did not accept the CLI's `session` name. Both are handled now, and the
+  agent id falls back to the key's `agent:<id>:` prefix.
 
 ### New in v7.8.5 — the Obsidian card sees every agent's vault
 
