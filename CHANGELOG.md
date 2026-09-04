@@ -7,6 +7,29 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.5] — 2026-09-05
+
+### Behoben
+
+- **Die Obsidian-Karte sah die Vaults einer Mehragenten-Installation nicht.**
+  Die Kandidatensonde prüfte nur `<OpenClaw-Home>/workspace`; die Vaults in
+  `workspace-<agent>` blieben unsichtbar („1 target detected" bei drei
+  Vaults). Ohne konfigurierte Liste werden jetzt alle `workspace*`-Verzeichnisse
+  unter dem OpenClaw-Home auf `.obsidian/` geprüft.
+- **„Configured but not yet confirmed" trotz abgeschalteter
+  Bestätigungspflicht.** Bei `requireVaultPathConfirmation: false` handelt
+  die Bridge ohne Quittung; die Karte zeigte den Zustand dennoch als
+  „degraded". Ein konfiguriertes Ziel gilt jetzt als „ready", die Karte nennt
+  die Zahl der konfigurierten Ziele. Die Projektion trägt dafür
+  `configuredCount` und `confirmationRequired`, pfadfrei wie zuvor.
+
+### Hinweis zur Konfiguration
+
+Die Bridge kennt Vaults nur über `obsidianBridge.workspaces` (Liste aus
+`id`, `agentId`, `path`) oder `vaultPath`; der Standard ist eine leere Liste.
+Die Reviews laufen davon unabhängig über den Host-Workspace des Agenten, die
+Verknüpfungssuche und die Zielanzeige nicht.
+
 ## [7.8.4] — 2026-09-05
 
 ### Behoben

@@ -424,3 +424,28 @@ describe("PLUR1BUS OpenClaw Control UI runtime", () => {
     assert.match(warnings[0], /Control UI tab capability unavailable/);
   });
 });
+
+describe("Obsidian target with path confirmation switched off", () => {
+  it("counts a configured target as ready and says how many there are", async () => {
+    const handler = createControlUiHttpHandler({
+      getProjection: async () => ({
+        schemaVersion: 2,
+        obsidianVault: {
+          configured: true,
+          configuredCount: 3,
+          confirmed: false,
+          confirmationRequired: false,
+          candidates: 3,
+          mutationSurface: "operator_cli",
+          commands: [{ id: "detect", command: "plur1bus-obsidian detect --session <key>", purpose: "List the targets found." }],
+        },
+      }),
+    });
+    const response = fakeResponse();
+    assert.equal(await handler({ method: "GET", url: CONTROL_UI_PATH }, response), true);
+    assert.match(response.body, /3 targets configured; path confirmation is switched off/);
+    assert.match(response.body, /badge-ready">ready/);
+    assert.doesNotMatch(response.body, /not yet confirmed/);
+    assert.match(response.body, /3 targets detected/);
+  });
+});

@@ -285,6 +285,14 @@ das Ergebnis als Banner. Ohne `via=fetch` oder ohne Token rendert ein GET nur
 die Seite. Die CSP nennt als `connect-src` genau den Host, von dem die Seite
 kam. Eine lesende Seite bleibt ohne Skript.
 
+Die Karte „Obsidian Target" zeigt seit 7.8.5 die Zahl der konfigurierten
+Ziele und zaehlt ein konfiguriertes Ziel bei
+`obsidianBridge.requireVaultPathConfirmation: false` als „ready", weil die
+Bridge dann ohne Quittung handelt. Kandidaten werden ohne konfigurierte Liste
+in allen `workspace*`-Verzeichnissen unter dem OpenClaw-Home gesucht. Vaults
+kennt die Bridge nur ueber `obsidianBridge.workspaces` (Eintraege mit `id`,
+`agentId`, `path`) oder `vaultPath`; der Standard ist eine leere Liste.
+
 Die Reranker-Wahl ist eine reine Laufzeitentscheidung ohne Datenwanderung:
 lokal BGE, lokal JinaAI (beide ohne Schluessel), Cohere (nur wenn ein
 Schluessel hinterlegt ist) oder aus. Das Embedding-Ziel wird dagegen nur

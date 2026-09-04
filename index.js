@@ -8656,7 +8656,9 @@ const plugin = {
                 config: cfg,
                 obsidianVault: {
                   configured: configuredObsidianWorkspaces.length > 0,
+                  configuredCount: configuredObsidianWorkspaces.length,
                   confirmed: obsidianVaultsConfirmed === true,
+                  confirmationRequired: (cfg.obsidianBridge || {}).requireVaultPathConfirmation !== false,
                   candidates: obsidianCandidates,
                 },
                 hooks: api.config?.plugins?.entries?.["memory-lancedb-namespaced"]?.hooks || {},

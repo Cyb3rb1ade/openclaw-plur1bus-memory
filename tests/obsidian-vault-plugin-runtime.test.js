@@ -15,6 +15,7 @@ import {
   normalizeVaultPath,
   registerObsidianVaultRuntime,
 } from "../lib/setup/obsidian-vault-plugin-runtime.js";
+import { DEFAULT_WS_SUFFIXES, detectObsidianVaults, listWorkspaceDirectories } from "../lib/setup/feature-profiles.js";
 
 function tempDir(t) {
   const dir = mkdtempSync(join(tmpdir(), "plur1bus-vault-"));
@@ -181,5 +182,29 @@ describe("Obsidian vault runtime registration", () => {
       () => registerObsidianVaultRuntime({ api: { registerGatewayMethod() {} }, baseDbPath: "/tmp" }),
       /registerCli capability unavailable/,
     );
+  });
+});
+
+describe("vault detection across agent workspaces", () => {
+  it("probes every workspace directory under the OpenClaw home when nothing is configured", (t) => {
+    const base = tempDir(t);
+    makeVault(base, "workspace");
+    makeVault(base, "workspace-bernhardine");
+    mkdirSync(join(base, "workspace-heisenberg"), { recursive: true });
+    mkdirSync(join(base, "workspaces-not-an-agent"), { recursive: true });
+    const previous = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = base;
+    try {
+      assert.deepEqual(listWorkspaceDirectories(base), ["workspace", "workspace-bernhardine", "workspace-heisenberg"]);
+      const detected = detectObsidianVaults({});
+      assert.deepEqual(detected.vaultPaths, [join(base, "workspace"), join(base, "workspace-bernhardine")]);
+      assert.equal(detected.detected, true);
+      // An explicit list still wins over the directory probe.
+      const explicit = detectObsidianVaults({ workspaces: [{ path: join(base, "workspace-bernhardine") }] });
+      assert.deepEqual(explicit.vaultPaths, [join(base, "workspace-bernhardine")]);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCLAW_HOME; else process.env.OPENCLAW_HOME = previous;
+    }
+    assert.deepEqual(listWorkspaceDirectories(join(base, "missing")), DEFAULT_WS_SUFFIXES, "an unreadable home falls back to the default suffix");
   });
 });
