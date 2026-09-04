@@ -653,14 +653,33 @@ describe("daily consolidation staggering and migration", () => {
     assert.strictEqual(plan.create.length, 0);
   });
 
-  it("does not claim jobs with only a matching name or only a matching payload", () => {
-    const impostors = [
+  it("never claims a canonical name with a foreign payload, but claims the exact command under any name", () => {
+    const jobs = [
       { ...consolidationJob("name-only", "main", "0 3 * * *"), payload: { message: "/different" } },
       { ...consolidationJob("payload-only", "bernhardine", "0 4 * * *"), name: "operator custom job" },
     ];
-    const plan = planFeatureCrons(impostors, [consolidationSpec], { agents: agents.slice(0, 2) });
+    const plan = planFeatureCrons(jobs, [consolidationSpec], { agents: agents.slice(0, 2) });
+    // The operator-named bernhardine job runs the shipped command: it IS the
+    // consolidation for bernhardine, so no canonical sibling is created and
+    // its (shipped-looking) schedule is left alone because the name is not
+    // PLUR1BUS's own.
     assert.deepStrictEqual(plan.update, []);
-    assert.deepStrictEqual(plan.create.map((job) => job.agent), ["main", "bernhardine"]);
+    assert.deepStrictEqual(plan.create.map((job) => job.agent), ["main"]);
+    assert.deepStrictEqual(
+      plan.skip.map((entry) => [entry.existingJob.id, entry.spec.agentId]),
+      [["payload-only", "bernhardine"]],
+    );
+  });
+
+  it("does not duplicate operator-named consolidations that run the shipped command (live 04.09.2026)", () => {
+    const existing = ["main", "bernhardine", "heisenberg"].map((agentId, index) => ({
+      ...consolidationJob(`daily-${agentId}`, agentId, ["0 4 * * *", "15 4 * * *", "30 4 * * *"][index]),
+      name: `daily-memory-consolidation-${agentId}`,
+    }));
+    const plan = planFeatureCrons(existing, [consolidationSpec], { agents });
+    assert.deepStrictEqual(plan.create, []);
+    assert.deepStrictEqual(plan.update, []);
+    assert.strictEqual(plan.skip.length, 3);
   });
 
   it("does not claim a default-agent legacy consolidation name with a custom payload", () => {
@@ -1685,5 +1704,99 @@ describe("Delivery-Migration bestehender Jobs (announce -> last ohne Ziel)", () 
       noDeliver: true,
       disable: true,
     }]);
+  });
+});
+
+describe("installer defects found live on 04.09.2026", () => {
+  const gcSpec = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "gc-run");
+  const remSpec = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "rem-dream");
+  const afterthoughtSpec = REQUIRED_FEATURE_CRONS.find((spec) => spec.feature === "afterthought");
+  const agents = [
+    { id: "main", isDefault: true },
+    { id: "bernhardine", isDefault: false },
+    { id: "heisenberg", isDefault: false },
+  ];
+
+  it("treats a singleton owned by any agent as present and keeps the owner's identity", () => {
+    const existing = [{
+      id: "gc-main",
+      name: "plur1bus gc-run",
+      agentId: "main",
+      enabled: true,
+      payload: { message: "/plur1bus internal gc-run" },
+      schedule: { kind: "cron", expr: "45 4 * * *", tz: "Europe/Berlin" },
+    }];
+    // bernhardine sorts first when nobody is default: the collector must not
+    // be created a second time for her.
+    const plan = planFeatureCrons(existing, [gcSpec], {
+      agents: [{ id: "bernhardine", isDefault: false }, { id: "heisenberg", isDefault: false }, { id: "main", isDefault: false }],
+    });
+    assert.deepStrictEqual(plan.create, []);
+    assert.strictEqual(plan.skip.length, 1);
+    assert.strictEqual(plan.skip[0].spec.agentId, "main", "payload migrations must keep --agent main");
+    assert.strictEqual(plan.skip[0].existingJob.id, "gc-main");
+  });
+
+  it("re-enables an owned non-delivery job that is entirely disabled", () => {
+    const existing = [{
+      id: "rem-legacy",
+      name: "plur1bus rem-dream",
+      agentId: "main",
+      enabled: false,
+      payload: { message: "/plur1bus internal rem-dream" },
+      schedule: { kind: "cron", expr: "15 1 * * *", tz: "Europe/Berlin" },
+    }];
+    const plan = planFeatureCrons(existing, [remSpec], { agents: agents.slice(0, 1) });
+    assert.deepStrictEqual(plan.create, []);
+    assert.deepStrictEqual(plan.update, [{ id: "rem-legacy", name: "plur1bus rem-dream", enable: true, reason: "disabled-owned" }]);
+  });
+
+  it("prefers the canonical per-agent job when several disabled owned jobs exist", () => {
+    const existing = [
+      { id: "rem-legacy", name: "plur1bus rem-dream", agentId: "main", enabled: false, payload: { message: "/plur1bus internal rem-dream" } },
+      { id: "rem-main", name: "plur1bus rem-dream main", agentId: "main", enabled: false, payload: { message: "/plur1bus internal rem-dream" } },
+    ];
+    const plan = planFeatureCrons(existing, [remSpec], { agents: agents.slice(0, 1) });
+    assert.deepStrictEqual(plan.update.map((update) => update.id), ["rem-main"]);
+  });
+
+  it("leaves disabled owned jobs alone when an enabled sibling exists or delivery is required", () => {
+    const remJobs = [
+      { id: "rem-legacy", name: "plur1bus rem-dream", agentId: "main", enabled: false, payload: { message: "/plur1bus internal rem-dream" } },
+      { id: "rem-main", name: "plur1bus rem-dream main", agentId: "main", enabled: true, payload: { message: "/plur1bus internal rem-dream" } },
+    ];
+    assert.deepStrictEqual(planFeatureCrons(remJobs, [remSpec], { agents: agents.slice(0, 1) }).update, []);
+
+    const deliveryJob = [{
+      id: "after-main",
+      name: "plur1bus afterthought main",
+      agentId: "main",
+      enabled: false,
+      payload: { message: "/plur1bus internal afterthought" },
+      schedule: { kind: "every", everyMs: 3 * 60 * 60 * 1000 },
+      delivery: { mode: "announce", channel: "telegram", to: "12345" },
+    }];
+    const plan = planFeatureCrons(deliveryJob, [afterthoughtSpec], { agents: agents.slice(0, 1) });
+    assert.ok(!plan.update.some((update) => update.enable), "delivery jobs stay with the safety-recovery contract");
+  });
+
+  it("falls back to `main` as the default agent when the host flags none", () => {
+    const listed = [
+      { id: "heisenberg", workspace: "/w/h", bindings: 1, isDefault: false },
+      { id: "main", workspace: "/w/m", bindings: 4, isDefault: false },
+      { id: "bernhardine", workspace: "/w/b", bindings: 1, isDefault: false },
+    ];
+    assert.deepStrictEqual(selectAgentsForCronSetup(listed), [
+      { id: "main", isDefault: true },
+      { id: "bernhardine", isDefault: false },
+      { id: "heisenberg", isDefault: false },
+    ]);
+    assert.deepStrictEqual(
+      selectAgentsForCronSetup(listed, { defaultAgentId: "heisenberg" }).map((a) => a.id),
+      ["heisenberg", "bernhardine", "main"],
+    );
+    // An explicit host default always wins over the fallback.
+    listed[2].isDefault = true;
+    assert.strictEqual(selectAgentsForCronSetup(listed, { defaultAgentId: "main" })[0].id, "bernhardine");
   });
 });

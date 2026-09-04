@@ -61,6 +61,7 @@ import {
   applyControlUiWriteAction,
   rerankerKeyConfigured,
 } from "./lib/setup/control-ui-write.js";
+import { createCompactionRunner, isPartitionId } from "./lib/setup/control-ui-compaction.js";
 import { createOpenClawSkillWorkshopClient } from "./lib/setup/skill-workshop-plugin-runtime.js";
 import { createWorkspacePolicyStore } from "./lib/workspace-policy.js";
 import { createMemoryMaintenanceGate } from "./lib/memory-maintenance-gate.js";
@@ -8563,10 +8564,29 @@ const plugin = {
           const setReranker = createRerankerMutator({ api });
           const setEmbeddingProfile = createEmbeddingProfileMutator({ api });
           const keyConfigured = () => rerankerKeyConfigured(cfg, process.env);
+          // LanceDB fragment compaction per private partition, one at a time.
+          // Only ids the health scan listed are accepted; the lease goes
+          // through the active writer so no second handle is opened.
+          const compaction = createCompactionRunner({
+            logger: api.logger,
+            knownPartitions: async () => {
+              const snapshot = await controlHealth.snapshot();
+              return (Array.isArray(snapshot?.cards?.byAgent) ? snapshot.cards.byAgent : [])
+                .map((entry) => entry?.id)
+                .filter((id) => isPartitionId(id));
+            },
+            optimize: (partitionId) => pool.withWriteDb(partitionId, async (db) => (
+              typeof db?.optimizeTable === "function"
+                ? db.optimizeTable(partitionId, {})
+                : { ok: false, reason: "optimize unavailable on this adapter" }
+            )),
+            onFinished: () => controlHealth.invalidate(),
+          });
           return {
             mode: controlUiWriteMode,
             tokens: createFormTokenStore(),
             rerankerKeyConfigured: keyConfigured,
+            compactionStatus: () => compaction.status(),
             applyAction: ({ action, form, mode }) => applyControlUiWriteAction({
               action,
               form,
@@ -8587,6 +8607,7 @@ const plugin = {
                 planReembedding: (request) => reembeddingCoordinator.plan(request),
                 applyReembedding: (request) => reembeddingCoordinator.apply(request),
                 switchReembedding: (request) => reembeddingSwitchRuntime.switchGeneration(request),
+                startCompaction: (request) => compaction.start(request),
               },
             }),
           };

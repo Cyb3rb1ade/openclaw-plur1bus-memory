@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.7.1 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.8.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.7.1**. PLUR1BUS 7.7.1 supports OpenClaw `2026.8.1`
+Current source version: **7.8.0**. PLUR1BUS 7.8.0 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,25 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.8.0 — a Compact button per partition, and an installer that reaches its plan
+
+- **Compact behind every LanceDB row.** With `controlUi.writeActions: "all"`,
+  each private partition under "Cards by agent" gets a button that runs
+  LanceDB's fragment compaction (`table.optimize()`) for that partition in
+  the background, one at a time. The adapter had the primitive since August;
+  nothing ever called it. The row shows progress and the result.
+- **The feature-cron installer no longer times out its own probe.** On large
+  installs `openclaw plur1bus-feature-cron --help` takes longer than the old
+  five-second budget, so every run took the fail-closed branch and
+  safety-disabled the direct jobs. Budget is 30 s now.
+- **Ownership rules fixed:** a disabled owned job no longer counts as
+  present for non-delivery features (it is re-enabled), operator-named
+  consolidations that run the shipped command are not duplicated, the
+  singleton collector is recognised on any agent, and `main` is the default
+  agent when the host flags none.
+- **Memory Health no longer reads "degraded" because of `_neo`.** Reserved
+  store directories are skipped by the health scan.
 
 ### New in v7.7.0 — dreams on OpenClaw's own Dreams page
 
@@ -461,6 +480,8 @@ Setting this cron up is automatic when its raw feature gates are explicitly enab
 #### Multi-agent feature-cron automation
 
 `node scripts/setup-feature-crons.mjs` verifies the public native command-dispatch capability first. When healthy, it loads exactly one validated configuration snapshot with `openclaw gateway call config.get --json`, discovers bound agents, and idempotently plans up to seven jobs per agent plus one install-wide GC job. It fails closed without normal cron planning when the capability is absent, the gateway call fails, JSON is invalid, `valid !== true`, or `sourceConfig`/`runtimeConfig` is not a plain object. Custom prompts and unrelated jobs remain untouched. It never falls back to local config files or alternate raw/resolved fields.
+
+The capability probe allows the host CLI 30 seconds per help call (7.8.0); a booting host with many plugins needs more than the former five. Ownership is by exact command: an operator-named job that runs `/plur1bus internal <feature>` for an agent is that agent's job, and only PLUR1BUS-named jobs are eligible for schedule migration. A non-delivery feature whose only owned jobs are disabled gets its best candidate re-enabled; the singleton collector is satisfied by a job on any agent; when `openclaw agents list` flags no default agent, `main` is treated as the default.
 
 The two configuration views have separate roles: `sourceConfig` alone controls explicit raw feature gates and the raw `skillMiner` schedule; `runtimeConfig` alone controls effective bindings, accounts, and delivery. Runtime defaults cannot enable jobs. The eligible jobs are:
 

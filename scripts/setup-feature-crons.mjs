@@ -39,14 +39,27 @@ import {
 } from "../lib/setup/feature-cron-native.js";
 
 /**
+ * Budget for one capability probe. `openclaw plur1bus-feature-cron --help`
+ * boots the whole host CLI including every plugin; on a production install
+ * with large agent stores that took 11.6 s (measured 04.09.2026). The former
+ * 5 s budget timed out every run, so setup always took the fail-closed
+ * branch and safety-disabled the direct-feature jobs instead of planning.
+ */
+export const NATIVE_PROBE_TIMEOUT_MS = 30_000;
+
+/**
  * Probe the two documented CLI surfaces required by native feature crons.
  *
  * @param {(args: string[], timeout?: number) => object} [openclawImpl]
+ * @param {{timeoutMs?: number}} [options]
  * @returns {{ready: true, status: "native-command"}}
  */
-export function probeNativeCronCommandDispatch(openclawImpl = openclaw) {
-  const cronHelp = openclawImpl(["cron", "add", "--help"], 5000);
-  const pluginHelp = openclawImpl(["plur1bus-feature-cron", "--help"], 5000);
+export function probeNativeCronCommandDispatch(openclawImpl = openclaw, options = {}) {
+  const timeoutMs = Number.isFinite(options?.timeoutMs) && options.timeoutMs > 0
+    ? options.timeoutMs
+    : NATIVE_PROBE_TIMEOUT_MS;
+  const cronHelp = openclawImpl(["cron", "add", "--help"], timeoutMs);
+  const pluginHelp = openclawImpl(["plur1bus-feature-cron", "--help"], timeoutMs);
   const cronText = `${cronHelp?.stdout ?? ""}\n${cronHelp?.stderr ?? ""}`;
   const pluginText = `${pluginHelp?.stdout ?? ""}\n${pluginHelp?.stderr ?? ""}`;
   const ready = cronHelp?.ok === true
@@ -189,6 +202,20 @@ function writeOutput(stream, line) {
   stream.write(`${line}\n`);
 }
 
+/** Safety recoveries rename AND enable; a plain enable re-activates an owned job that was left disabled. */
+function updateAction(update) {
+  if (update?.enable && typeof update?.rename === "string") return "safety-recovery";
+  if (update?.enable) return "enable";
+  return "update";
+}
+
+function describeUpdateReason(update) {
+  const action = updateAction(update);
+  if (action === "safety-recovery") return "safety recovery";
+  if (action === "enable") return "re-enable disabled owned job";
+  return "contract migration";
+}
+
 function countPendingCreates(plan) {
   if (!plan || !Array.isArray(plan.create)) return 0;
   const failedCreates = Array.isArray(plan.results)
@@ -211,7 +238,11 @@ function mergeCronUpdates(updates, recoveries) {
     }
     const existing = merged[existingIndex];
     const combined = { ...existing, ...update };
-    if (existing.disable || existing.noDeliver || update.disable || update.noDeliver) {
+    // A disable always wins over an enable. Pinning delivery off (`noDeliver`)
+    // no longer cancels an enable: a non-delivery feature job is re-enabled
+    // AND pinned to no-deliver in the same edit. Delivery-required jobs with an
+    // unsafe delivery carry `disable` from planDeliveryMigration anyway.
+    if (existing.disable || update.disable) {
       delete combined.enable;
       delete combined.rename;
     }
@@ -623,7 +654,7 @@ export async function runSetupFeatureCrons(options = {}) {
         if (c.hint) writeOutput(stdout, `         hint: ${c.hint}`);
       }
       for (const u of updates) {
-        const reason = u.enable ? "safety recovery" : "contract migration";
+        const reason = describeUpdateReason(u);
         writeOutput(stdout, `  ${opts.dryRun ? "WOULD-UPDATE" : "UPDATE"}  ${u.name}  (${reason})`);
       }
       if (nothingToDo) {
@@ -660,12 +691,12 @@ export async function runSetupFeatureCrons(options = {}) {
       const r = openclawImpl(editArgs, 15000);
       results.push({
         job: u.name,
-        action: u.enable ? "safety-recovery" : "update",
+        action: updateAction(u),
         ok: r.ok,
         stderr: r.ok ? undefined : r.stderr?.trim(),
       });
       if (!opts.json) {
-        const reason = u.enable ? "safety recovery" : "contract migration";
+        const reason = describeUpdateReason(u);
         if (r.ok) {
           writeOutput(stdout, `  ✓ updated: ${u.name} (${reason})`);
         } else {

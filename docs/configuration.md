@@ -260,7 +260,7 @@ Der PLUR1BUS-Reiter in OpenClaws Control UI ist standardmaessig rein lesend.
 | --- | --- |
 | `off` (Standard) | Die Seite aendert nichts und fordert nur `operator.read` an. |
 | `reranker` | Die Reranking-Wahl ist von der Seite aus umschaltbar. |
-| `all` | Zusaetzlich Embedding-Zielprofil und die Schritte der Re-Embedding-Migration. |
+| `all` | Zusaetzlich Embedding-Zielprofil, die Schritte der Re-Embedding-Migration und der Compact-Knopf je Partition (7.8.0). |
 
 ```json
 {
@@ -280,6 +280,16 @@ Schluessel hinterlegt ist) oder aus. Das Embedding-Ziel wird dagegen nur
 vorbereitet; der eigentliche Wechsel laeuft ueber die bestehende Migration mit
 Probelauf, Kopie und getrenntem Umschalten. Das Bestaetigungs-Token dieser
 Migration bleibt im Gateway und erscheint nie im Browser.
+
+Seit 7.8.0 steht bei `all` hinter jeder privaten Partition unter „Cards by
+agent" ein Knopf **Compact**. Er startet LanceDBs Fragment-Kompaktierung
+(`table.optimize()`) fuer genau diese Partition: Jeder Schreibvorgang legt ein
+neues Fragment an, ohne Kompaktierung wachsen tausende kleine Dateien und
+Voll-Scans werden um Groessenordnungen langsamer. Es laeuft immer nur eine
+Kompaktierung; sie arbeitet im Hintergrund mit dem Zehn-Minuten-Budget des
+Adapters, die Zeile zeigt „compacting…" und danach das Ergebnis. Angenommen
+werden nur Partitionen, die der Health-Scan selbst gelistet hat. Der naechste
+Health-Scan zeigt den neuen Speicherstand.
 
 ## B13 Shared-Memory-Routen und Hook-Grenze
 

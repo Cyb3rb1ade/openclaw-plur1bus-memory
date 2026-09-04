@@ -7,6 +7,59 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.0] — 2026-09-04
+
+### Hinzugefügt
+
+- **Compact-Knopf hinter jeder LanceDB-Zeile.** Im PLUR1BUS-Reiter steht bei
+  „Cards by agent" hinter jeder privaten Partition ein Knopf, der die
+  Fragment-Kompaktierung von LanceDB (`table.optimize()`) für genau diese
+  Partition startet. Der Adapter hatte die Funktion seit August, nichts rief
+  sie auf; Partitionen wuchsen in tausende Mini-Dateien. Es läuft immer nur
+  eine Kompaktierung, sie arbeitet im Hintergrund mit dem Zehn-Minuten-Budget
+  des Adapters, die Zeile zeigt „compacting…", danach das Ergebnis
+  (Fragmente vorher → nachher, freigegebene Bytes). Nur Partitionen, die der
+  Health-Scan gelistet hat, werden angenommen. Braucht
+  `controlUi.writeActions: "all"` und das Einmal-Token des Formulars.
+
+### Behoben
+
+- **Der Feature-Cron-Installer lief auf großen Installationen nie bis zum
+  Plan.** Die Fähigkeitsprobe gab `openclaw plur1bus-feature-cron --help`
+  fünf Sekunden; der Aufruf lädt den ganzen Host samt Plugins und brauchte
+  live 11,6 s. Jeder Lauf endete im Sicherheitszweig und deaktivierte am
+  29.08.2026 die Direktjobs `afterthought` und `classify-recent` aller Agenten
+  mit dem Suffix `[plur1bus:host-dispatch-unavailable]`. Budget jetzt 30 s;
+  der nächste Lauf nimmt die Sicherheitsrücknahme vor.
+- **Deaktivierte eigene Jobs galten als vorhanden.** Ein seit Monaten
+  abgeschalteter `plur1bus rem-dream` blockierte die Neuanlage für diesen
+  Agenten dauerhaft. Ist für ein Feature ohne Zustellung kein aktiver
+  eigener Job mehr da, wird der beste Kandidat wieder eingeschaltet
+  (kanonischer Name vor Legacy-Name). Zustellungs-Jobs bleiben beim
+  Sicherheitsvertrag.
+- **Konsolidierung wurde verdoppelt.** `consolidate-daily` verlangte Name
+  UND Befehl; neben `daily-memory-consolidation-<agent>` wären drei
+  Duplikate zu denselben Minuten entstanden. Der exakte Befehl reicht jetzt
+  als Besitz; die Zeitplan-Migration bleibt auf PLUR1BUS-eigene Namen
+  beschränkt.
+- **Der Garbage-Collector wanderte zum falschen Agenten.** Meldet
+  `openclaw agents list` keinen Agenten als Standard, sortierte der Installer
+  alphabetisch und legte den Einzeljob neben dem bestehenden an. Ein Job auf
+  irgendeinem Agenten erfüllt die Spec jetzt; ohne Host-Standard gilt `main`
+  als Standard (Reihenfolge der Zeitversätze wie von Hand gesetzt).
+- **„degraded" durch das eigene `_neo`-Verzeichnis.** Der Health-Scan zählte
+  den Neo-Workspace im Store als unzulässige Partition und pinnte die
+  Memory-Übersicht dauerhaft auf „degraded". Reservierte Verzeichnisse mit
+  führendem Unterstrich werden übersprungen.
+
+### Empfehlung beim Update
+
+Nach `openclaw plugins install` den Gateway **sofort** neu starten. Zwischen
+Hot-Reload und Neustart laufen `/plur1bus internal …`-Crons als Prosa beim
+Agenten; am 04.09.2026 löschten die Agenten dabei zwei eigene Cron-Jobs. Der
+Installer stellt beim nächsten Start alle Feature-Crons auf native
+Befehls-Payloads um, die dieses Fenster nicht mehr kennen.
+
 ## [7.7.1] — 2026-09-04
 
 ### Behoben

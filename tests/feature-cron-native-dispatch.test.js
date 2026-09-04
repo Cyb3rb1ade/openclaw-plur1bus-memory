@@ -229,3 +229,23 @@ describe("native OpenClaw feature-cron dispatch", () => {
     assert.equal(args.includes("--command"), false);
   });
 });
+
+describe("native capability probe budget", () => {
+  it("allows the host CLI at least 30 seconds per help probe", async () => {
+    const { NATIVE_PROBE_TIMEOUT_MS } = await import("../scripts/setup-feature-crons.mjs");
+    assert.ok(NATIVE_PROBE_TIMEOUT_MS >= 30_000, "plur1bus-feature-cron --help boots every plugin; 11.6 s were measured live");
+    const seen = [];
+    probeNativeCronCommandDispatch((args, timeout) => {
+      seen.push([args[0], timeout]);
+      return {
+        ok: true,
+        stdout: args[0] === "cron"
+          ? "--command-argv <json> --timeout-seconds <n> --output-max-bytes <n>"
+          : "plur1bus-feature-cron --agent --feature",
+        stderr: "",
+        status: 0,
+      };
+    });
+    assert.deepStrictEqual(seen, [["cron", NATIVE_PROBE_TIMEOUT_MS], ["plur1bus-feature-cron", NATIVE_PROBE_TIMEOUT_MS]]);
+  });
+});

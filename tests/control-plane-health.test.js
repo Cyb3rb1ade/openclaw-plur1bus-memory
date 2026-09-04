@@ -334,3 +334,18 @@ describe("PLUR1BUS control-plane health inspector", () => {
     });
   });
 });
+
+describe("reserved store directories", () => {
+  it("skips PLUR1BUS's own `_neo` directory without degrading the snapshot", async () => {
+    const scan = createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      listPartitions: async () => ["main", "_neo"],
+      inspectRows: async ({ partitionId }) => (partitionId === "main" ? 4 : 0),
+      measureStorage: async () => ({ bytes: 10, complete: true }),
+    });
+    const snapshot = await scan();
+    assert.equal(snapshot.status, "ready");
+    assert.deepStrictEqual(snapshot.cards.byAgent, [{ id: "main", cards: 4 }]);
+    assert.equal(snapshot.lastError, null);
+  });
+});
