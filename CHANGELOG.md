@@ -7,6 +7,35 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.7.0] — 2026-09-04
+
+### Hinzugefügt
+
+- **PLUR1BUS-Träume erscheinen in OpenClaws Traumseite.** Light- und
+  REM-Erzählungen werden in `DREAMS.md` des Agenten-Workspace geschrieben, im
+  Eintragsformat des Hosts und innerhalb seines verwalteten Tagebuch-Blocks;
+  Einstellungen → Memory → Dreams → Diary zeigt sie an. Nur die private
+  Agentenpartition schreibt dorthin, geteilte Partitionen nie. Derselbe Traum
+  wird nicht zweimal eingetragen. Der Host bekommt über seine öffentliche
+  Ereignis-API ein `memory.dream.completed`. Schalter
+  `dreaming.narrative.diary`, Standard `true`.
+- **Speicher-Laufzeit für den Host.** PLUR1BUS registriert die Laufzeit, die
+  OpenClaw vom Besitzer des Memory-Slots erwartet. Übersicht und Szene der
+  Memory-Seite zeigen damit Anbieter, Modell, Embedding-Zustand und
+  Kartenzahl von PLUR1BUS statt „memory plugin unavailable". Die Suche des
+  Hosts läuft über die eigene Recall-Pipeline, nur auf der privaten Partition
+  des Agenten; Treffer werden als `plur1bus://<agent>/<karte>` adressiert und
+  das Lesen einer Adresse liefert den Kartentext. Sitzungs-Treffer werden nie
+  freigegeben, `close()` gibt keine geteilten Handles frei.
+
+### Bekannte Grenzen
+
+- Die Zähler unter „Erweitert" und die Phasen-Chips der Szene lesen
+  memory-cores internen Kurzzeitspeicher beziehungsweise dessen verwalteten
+  Cron. Dafür bietet der Host keine öffentliche Schnittstelle.
+- Das Tagebuch lädt im Host nur, wenn ein Agent ausgewählt ist; die Anfrage
+  ohne Agentenkennung weist der Host selbst ab.
+
 ## [7.6.0] — 2026-09-04
 
 ### Hinzugefügt

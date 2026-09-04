@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.6.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.7.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.6.0**. PLUR1BUS 7.6.0 supports OpenClaw `2026.8.1`
+Current source version: **7.7.0**. PLUR1BUS 7.7.0 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,22 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.7.0 — dreams on OpenClaw's own Dreams page
+
+- **PLUR1BUS dreams show up in Settings → Memory → Dreams.** Light and REM
+  narratives are written into the agent's `DREAMS.md`, in the host's entry
+  shape inside its managed diary block. Only the agent's private partition
+  writes there; shared partitions never do. `dreaming.narrative.diary` turns
+  it off. To give the diary one author, switch memory-core's own dreaming off
+  with `plugins.entries.memory-core.config.dreaming.enabled: false`.
+- **The Memory page knows the engine.** PLUR1BUS now registers the memory
+  runtime the host expects from the slot owner, so Overview and Scene report
+  PLUR1BUS' provider, model, embedding state and card count instead of
+  "memory plugin unavailable". Host-side search runs through PLUR1BUS' recall
+  pipeline on the agent's private partition only.
+- Not reachable from a plugin: the counters under Advanced and the phase chips,
+  which read memory-core's internal short-term store and its managed cron.
 
 ### New in v7.6.0 — switch providers from the dashboard
 
@@ -476,7 +492,7 @@ The `/plur1bus doctor` and `/plur1bus status` feature-cron hint is **condition-d
 
 ## Installation
 
-PLUR1BUS 7.6.0 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
+PLUR1BUS 7.7.0 requires Node.js 22.22 or newer and OpenClaw 2026.8.1 or newer.
 On an older host the installer refuses the package instead of deploying it:
 `requires plugin API >=2026.8.1, but this OpenClaw runtime exposes <version>`.
 

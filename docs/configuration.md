@@ -218,6 +218,36 @@ Fehler, Abbruch oder zu wenig Platz bleibt die aktive Generation unveraendert.
 
 ---
 
+## Träume in OpenClaws Traumseite (7.7.0)
+
+OpenClaws Control UI zeigt unter Einstellungen → Memory → Dreams das Tagebuch
+`DREAMS.md` aus dem Workspace des Agenten. PLUR1BUS schreibt seine
+Traumerzählungen (Light- und REM-Traum) seit 7.7.0 in genau diese Datei, im
+Eintragsformat des Hosts und innerhalb des vom Host verwalteten Blocks. Nur
+Träume aus der privaten Agentenpartition landen dort; geteilte Workspace- oder
+Nutzerpartitionen nie.
+
+```json
+{
+  "dreaming": { "narrative": { "diary": true } }
+}
+```
+
+`dreaming.narrative.diary` steht standardmässig auf `true`. Die Zeitangabe
+folgt `timezone` aus der Plugin-Konfiguration. Derselbe Traum wird nicht
+zweimal eingetragen; ein Fehlschlag beim Schreiben bricht den Traum nicht ab.
+
+Damit das Tagebuch einen Autor hat, sollte memory-cores eigenes Träumen aus
+sein: `plugins.entries.memory-core.config.dreaming.enabled: false`.
+
+PLUR1BUS registriert ausserdem die Speicher-Laufzeit, die der Host vom Besitzer
+des Memory-Slots erwartet. Damit zeigen Übersicht und Szene derselben Seite
+Anbieter, Modell und Embedding-Zustand von PLUR1BUS statt „memory plugin
+unavailable", und die Speichersuche des Hosts läuft über PLUR1BUS' eigene
+Recall-Pipeline, beschränkt auf die private Partition des Agenten. Die Zähler
+unter „Erweitert" und die Phasen-Chips bleiben memory-core vorbehalten; dafür
+gibt es keine öffentliche Schnittstelle.
+
 ## Schalter im Operator-Dashboard (7.6.0)
 
 Der PLUR1BUS-Reiter in OpenClaws Control UI ist standardmaessig rein lesend.

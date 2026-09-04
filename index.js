@@ -52,6 +52,7 @@ import { registerFeatureCronNativeDispatch } from "./lib/setup/feature-cron-plug
 import { registerWorkspacePolicyRuntime } from "./lib/setup/workspace-policy-plugin-runtime.js";
 import { describeVaultCandidates, registerObsidianVaultRuntime } from "./lib/setup/obsidian-vault-plugin-runtime.js";
 import { registerControlUiRuntime } from "./lib/setup/control-ui-plugin-runtime.js";
+import { createMemoryHostRuntime } from "./lib/setup/memory-host-runtime.js";
 import {
   createConfirmationStore,
   createEmbeddingProfileMutator,
@@ -4451,9 +4452,78 @@ const plugin = {
     });
     pluginLogger = api.logger;
     if (typeof api.registerMemoryCapability === "function") {
+      // The host asks the memory-slot owner for a runtime; without it the
+      // Memory page reports "memory plugin unavailable". Everything the
+      // runtime touches is created further down in this function, so the
+      // dependencies are closures that resolve when the host actually calls.
+      const memoryHostRuntime = createMemoryHostRuntime({
+        logger: api.logger,
+        hostConfig: () => runtimeIfUsable(api)?.config?.current?.() ?? api.config ?? {},
+        dbPath: () => baseDbPath,
+        provider: () => ({
+          provider: normalizedEmbeddingCfg.provider,
+          model: normalizedEmbeddingCfg.model || model,
+        }),
+        embed: (text) => embeddings.embed(text),
+        cardCount: async (forAgentId) => {
+          const snapshot = await controlHealth.snapshot();
+          const entry = snapshot?.cards?.byAgent?.find((item) => item.id === forAgentId);
+          return Number.isSafeInteger(entry?.cards) ? entry.cards : null;
+        },
+        readCard: ({ agentId: forAgentId, cardId }) => memoryDbAdapter.getCard(forAgentId, cardId),
+        // Host-originated searches carry no session, workspace identity or
+        // user principal, so this reads the agent's private partition only.
+        recall: async ({ agentId: forAgentId, query, limit, signal }) => {
+          const memoryCtx = resolveMemoryRequestContext({ agentId: forAgentId });
+          return withAccessReadDbs(pool, sharedMemoryPool, forAgentId, { ...memoryCtx, logger: api.logger }, async (readDbs) => {
+            const initialized = [];
+            for (const entry of readDbs) {
+              const ok = await entry.db.init();
+              if (ok !== false && entry.db.table) initialized.push(entry);
+            }
+            if (initialized.length === 0) return [];
+            const phaseTimer = createRecallPhaseTimer({
+              softBudgetMs,
+              hardTimeoutMs: runtimeScheduler.config.recallTimeoutMs,
+              logger: api.logger,
+            });
+            const { memories } = await runMergedNamespaceRecall(initialized, {
+              query,
+              embeddings,
+              topN: limit,
+              budget: resolveRuntimeRecallBudget(query, limit, adaptiveBudgetCfg),
+              adaptiveBudget: adaptiveBudgetCfg,
+              recallMinScore,
+              importanceBoost,
+              dedupEnabled,
+              dedupJaccard,
+              canonicalEnabled: false,
+              canonicalMinScore,
+              canonicalMaxItems,
+              reranker,
+              rerankCandidates,
+              candidateTopK,
+              rerankerTimeoutMs: rerankerCfg.timeoutMs ?? 5000,
+              rerankerFallbackOnError: rerankerCfg.fallbackOnError !== false,
+              summaryMaxWords,
+              logger: api.logger,
+              agentId: forAgentId,
+              memoryCtx,
+              workspaceKey: null,
+              phaseTimer,
+              softBudgetFallback,
+              queryRefinerEnabled: false,
+              associativeEnabled: false,
+              ...(signal ? { signal } : {}),
+            }, undefined, phaseTimer, { strictReadErrors: false });
+            return memories;
+          });
+        },
+      });
       api.registerMemoryCapability({
         deterministicRecallToolName: "memory_recall",
         supportsPrivateTranscriptRecall: false,
+        runtime: memoryHostRuntime,
       });
     } else {
       api.logger?.info?.(
@@ -4686,6 +4756,10 @@ const plugin = {
       temperature: dreamNarrativeRawCfg.temperature ?? 0.9,
       storeAsMemory: dreamNarrativeRawCfg.storeAsMemory !== false,
       importanceMax: dreamNarrativeRawCfg.importanceMax ?? 0.45,
+      // The narrative also goes into the agent's DREAMS.md, which is what the
+      // host's Dreams page shows. Off only on explicit request.
+      diary: dreamNarrativeRawCfg.diary !== false,
+      timezone: typeof cfg.timezone === "string" && cfg.timezone.trim() ? cfg.timezone.trim() : null,
     };
     const resolveTemperamentName = (forAgentId) =>
       cfg.emotion?.temperaments?.[forAgentId]?.preset || null;
