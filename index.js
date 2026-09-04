@@ -206,6 +206,7 @@ import {
   resolveHostCommandMemoryContext,
   resolveHostHookMemoryContext,
   resolveMemoryRequestContext,
+  resolveSessionOwnerMemoryContext,
   resolveToolMemoryRequestContext,
   normalizeWorkspaceTarget,
   workspacePoolKey,
@@ -8503,26 +8504,32 @@ const plugin = {
           },
         });
 
+        // An operator names a session; a direct chat session resolves to the
+        // same identity-bound context its chat commands get (user, channel,
+        // account, conversation principal), so the vault confirmation can be
+        // driven from the CLI for that conversation. Other session kinds keep
+        // the plain agent/workspace context.
         const resolveSessionPolicyMemoryContext = async ({ sessionKey, agentId: suppliedAgentId }) => {
-          const routingCapability = await hostRoutingLoader();
-          const parsed = routingCapability.parseAgentSessionKey(sessionKey);
-          const agentId = safeAgentId(parsed?.agentId || suppliedAgentId || "");
-          const sessionEntry = runtimeIfUsable(api).agent.session.getSessionEntry({
+          const sessionEntryFor = (agentId) => runtimeIfUsable(api).agent.session.getSessionEntry({
             agentId,
             sessionKey,
             readConsistency: "latest",
           });
-          const workspaceDir = sessionEntry?.spawnedCwd
-            || sessionEntry?.spawnedWorkspaceDir
-            || sessionEntry?.worktree?.canonicalWorkspaceDir
-            || await runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(api.config, agentId);
-          return resolveMemoryRequestContext({
-            agentId,
+          return resolveSessionOwnerMemoryContext({
             sessionKey,
-            workspaceDir,
-          }, {
-            requireWorkspace: true,
+            agentId: suppliedAgentId,
+            config: api.config,
+            routingLoader: hostRoutingLoader,
             workspaceAliases: memoryWorkspaceAliases,
+            requireWorkspace: true,
+            resolveAgentWorkspaceDir: async (_config, agentId) => {
+              const sessionEntry = sessionEntryFor(agentId);
+              return sessionEntry?.spawnedCwd
+                || sessionEntry?.spawnedWorkspaceDir
+                || sessionEntry?.worktree?.canonicalWorkspaceDir
+                || await runtimeIfUsable(api).agent.resolveAgentWorkspaceDir(api.config, agentId);
+            },
+            resolveSessionEntry: async ({ agentId }) => ({ available: true, entry: sessionEntryFor(agentId) }),
           });
         };
 

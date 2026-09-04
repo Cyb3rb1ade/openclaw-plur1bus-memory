@@ -7,6 +7,22 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.7] — 2026-09-05
+
+### Behoben
+
+- **Die Vault-Bestätigung per CLI oder Gateway endete mit
+  `identity_binding_required`.** Der Sitzungsauflöser der Operator-Wege
+  (`--session <key>`, Gateway-Methoden) lieferte nur Agent und Workspace,
+  keine Nutzer- und Konversationsidentität; die Bestätigung braucht beides.
+  Ein Sitzungsschlüssel eines Direktchats (`agent:<id>:<kanal>:<konto>:direct:<peer>`)
+  wird jetzt zu genau dem identitätsgebundenen Kontext aufgelöst, den die
+  Chat-Befehle dieser Konversation bekommen (Nutzer, Kanal, Konto,
+  Konversationsprinzipal mit der gespeicherten Sitzungs-ID). Andere
+  Sitzungsarten (Main, Heartbeat, Cron, Gruppen) behalten den reinen
+  Agenten-/Workspace-Kontext. Neu: `resolveSessionOwnerMemoryContext` und
+  `describeDirectSessionRoute` in `lib/memory-request-context.js`.
+
 ## [7.8.6] — 2026-09-05
 
 ### Behoben

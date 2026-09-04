@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 
 import { INPUT_LIMITS } from "../lib/input-limits.js";
 import { createConfirmation, validateConfirmation } from "../lib/security.js";
@@ -20,6 +22,8 @@ import {
   stableIdentityHash,
   userPoolKey,
   workspacePoolKey,
+  describeDirectSessionRoute,
+  resolveSessionOwnerMemoryContext,
 } from "../lib/memory-request-context.js";
 import { buildNeoWorkspaceAliases } from "../lib/neo-arch.js";
 
@@ -1301,5 +1305,52 @@ describe("B13 canonical memory request context", () => {
     registry.observeReplyDispatch(dispatchFixture({ runId: "run-x", senderId: "99" }));
     assert.equal(registry.pendingCount(), 1, "expired taint and run index must recover deterministically");
     assert.throws(() => createMemoryTurnRouteRegistry({ routingCapability, maxPending: -1 }), /maxPending/);
+  });
+});
+
+describe("operator session context for identity-bound steps", () => {
+  const { mkdtempSync, mkdirSync } = require("node:fs");
+  const { tmpdir } = require("node:os");
+  const { join } = require("node:path");
+  const root = mkdtempSync(join(tmpdir(), "plur1bus-session-ctx-"));
+  for (const agent of ["heisenberg", "main"]) mkdirSync(join(root, agent), { recursive: true });
+  const resolveAgentWorkspaceDir = async (_config, agentId) => join(root, agentId);
+
+  it("resolves a direct chat session to the conversation's identity-bound context", async () => {
+    const ctx = await resolveSessionOwnerMemoryContext({
+      sessionKey: "agent:heisenberg:telegram:heisenberg:direct:2048378590",
+      routingLoader: async () => routingCapability,
+      resolveAgentWorkspaceDir,
+      resolveSessionEntry: async () => ({ available: true, entry: { sessionId: "706f9ef6-06ca-4dc6-9469-e2531524dd9c" } }),
+    });
+    assert.equal(ctx.agentId, "heisenberg");
+    assert.equal(ctx.userId, "2048378590");
+    assert.equal(ctx.channel, "telegram");
+    assert.equal(ctx.accountId, "heisenberg");
+    assert.match(ctx.conversationPrincipal, /^conversation:v1:/);
+    assert.ok(ctx.userPrincipal, "a channel/account-bound user principal is present");
+    assert.equal(ctx.sessionKey, "agent:heisenberg:telegram:heisenberg:direct:2048378590");
+    // The same conversation always yields the same principal, as the chat command path does.
+    const again = await resolveSessionOwnerMemoryContext({
+      sessionKey: "agent:heisenberg:telegram:heisenberg:direct:2048378590",
+      routingLoader: async () => routingCapability,
+      resolveAgentWorkspaceDir,
+      resolveSessionEntry: async () => ({ available: true, entry: { sessionId: "706f9ef6-06ca-4dc6-9469-e2531524dd9c" } }),
+    });
+    assert.equal(again.conversationPrincipal, ctx.conversationPrincipal);
+  });
+
+  it("keeps the plain agent context for sessions without a direct conversation", async () => {
+    for (const sessionKey of ["agent:heisenberg:main:heartbeat", "agent:main:cron:abc:run:def", "agent:main:main"]) {
+      const ctx = await resolveSessionOwnerMemoryContext({
+        sessionKey,
+        routingLoader: async () => routingCapability,
+        resolveAgentWorkspaceDir,
+      });
+      assert.equal(ctx.userId, "", sessionKey);
+      assert.equal(ctx.conversationPrincipal, "", sessionKey);
+      assert.ok(ctx.workspaceIdentity, sessionKey);
+    }
+    assert.equal(describeDirectSessionRoute("agent:main:telegram:group:-100123", routingCapability), null, "a group is not a direct chat");
   });
 });
