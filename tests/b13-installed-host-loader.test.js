@@ -19,7 +19,10 @@ function findPinnedOpenClawLoader() {
 it("loads reply_dispatch routing through the exact OpenClaw 2026.8.2 plugin loader", async () => {
   const loaderPath = findPinnedOpenClawLoader();
   assert.ok(existsSync(loaderPath), `pinned OpenClaw plugin loader is unavailable: ${loaderPath}`);
-  const isolatedHome = mkdtempSync(join(tmpdir(), "plur1bus-openclaw-loader-"));
+  // macOS resolves its per-user temporary root to a path that can exceed the
+  // Unix-domain IPC limit once the plugin's private socket suffix is added.
+  // Keep Linux on its ordinary tmpdir while using the short local /tmp root.
+  const isolatedHome = mkdtempSync(join(process.platform === "darwin" ? "/tmp" : tmpdir(), "plur1bus-openclaw-loader-"));
   const previousEnv = Object.fromEntries(
     ["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"].map((name) => [name, process.env[name]]),
   );
