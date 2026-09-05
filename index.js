@@ -9251,8 +9251,12 @@ const plugin = {
         // out of the quote the host hands over, the decision out of the reply,
         // and the same authorized critical command does the work. Anything
         // less than an unambiguous decision falls through to the agent.
+        // The host fires `before_dispatch` for a chat message (with the quoted
+        // text as replyToBody) and `before_agent_reply` on the agent-runner
+        // path; both are claiming hooks, so the same handler serves both and
+        // whichever fires first with a quoted push answers.
         if (typeof api.on === "function" && cfg.criticalPush?.enabled !== false) {
-          api.on("before_agent_reply", async (event, context) => {
+          const answerQuotedCriticalReply = async (event, context) => {
             try {
               if (event?.isGroup === true) return undefined;
               const command = buildCriticalReplyCommand({
@@ -9289,7 +9293,14 @@ const plugin = {
               api.logger?.warn?.(`memory-lancedb-namespaced: critical quoted-reply handling failed: ${error?.message || error}`);
               return undefined;
             }
-          });
+          };
+          for (const hookName of ["before_dispatch", "before_agent_reply"]) {
+            try {
+              api.on(hookName, answerQuotedCriticalReply);
+            } catch (error) {
+              api.logger?.warn?.(`memory-lancedb-namespaced: could not listen on ${hookName}: ${error?.message || error}`);
+            }
+          }
         }
 
         /** Share a private memory into the bound workspace or user pool. */

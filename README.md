@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.9.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.9.1 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.9.0**. PLUR1BUS 7.9.0 supports OpenClaw `2026.8.1`
+Current source version: **7.9.1**. PLUR1BUS 7.9.1 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,12 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.9.1 — the quoted reply is caught on the chat dispatch hook
+
+- 7.9.0 listened on `before_agent_reply` only, which the host does not fire
+  for a Telegram chat message; the message went to the agent. The handler now
+  also listens on `before_dispatch`, where the host hands over the quoted text.
 
 ### New in v7.9.0 — accept or reject critical pushes in bulk, also by quoting
 

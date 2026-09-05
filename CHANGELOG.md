@@ -7,6 +7,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.9.1] — 2026-09-05
+
+### Behoben
+
+- **Die zitierte Push-Antwort aus 7.9.0 griff im Telegram-Chat nicht.** Für
+  eine Chat-Nachricht feuert der Host den Hook `before_dispatch` (mit dem
+  zitierten Text als `replyToBody`); `before_agent_reply` gehört zum
+  Agent-Runner-Pfad und bekam die Nachricht nicht zu sehen, sie lief in die
+  normale Antwort. Derselbe Handler hört jetzt auf beide Hooks; beide sind
+  Claiming-Hooks, der erste mit einem zitierten Push antwortet. Live
+  beobachtet: „Alle rejecten" ging an den Agenten statt an PLUR1BUS.
+
 ## [7.9.0] — 2026-09-05
 
 ### Hinzugefügt

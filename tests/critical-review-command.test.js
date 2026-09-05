@@ -411,8 +411,13 @@ test("eine zitierte Push-Antwort „bitte alle akzeptieren“ wird vor dem Agent
   api.on = (name, fn) => hooks.push({ name, fn });
   api.config = { workspaceDir };
   pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  // The chat dispatch path fires before_dispatch (with the quoted text); the
+  // agent-runner path fires before_agent_reply. The same handler serves both.
+  const dispatchHandler = hooks.filter((entry) => entry.name === "before_dispatch").at(-1)?.fn;
   const handler = hooks.filter((entry) => entry.name === "before_agent_reply").at(-1)?.fn;
+  assert.equal(typeof dispatchHandler, "function", "the plugin listens before dispatch");
   assert.equal(typeof handler, "function", "the plugin listens before the agent replies");
+  assert.equal(dispatchHandler, handler, "one handler, two hooks");
 
   // The quoted push names both cards; the reply decides for all of them.
   const quoted = ["9a075", "9a086"].map((shortRef) => buildCriticalMessage({ shortRef, type: "gesundheit", text: "x" }, { lang: "de" }).text).join("\n\n");
