@@ -10,6 +10,7 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
+import weakref
 from concurrent.futures import Future, wait
 from datetime import datetime, timezone
 from pathlib import Path
@@ -179,32 +180,19 @@ class EmbeddingBackend:
             return [self._cache.get_or_compute(
                 texts[0], lambda: self._embed_one_uncached(texts[0], purpose=purpose), purpose,
             )]
-        results: list[list[float] | None] = [self._cache.get(text, purpose) for text in texts]
-        missing_indexes = [index for index, value in enumerate(results) if value is None]
-        if not missing_indexes:
-            return [value for value in results if value is not None]
-        missing_texts = [texts[index] for index in missing_indexes]
-        if self.config.get("provider") != "omlx":
-            computed = [self._embed_one_uncached(text, purpose=purpose) for text in missing_texts]
-        else:
+        def compute_many(missing_texts):
+            if self.config.get("provider") != "omlx":
+                return [self._embed_one_uncached(text, purpose=purpose) for text in missing_texts]
             try:
-                computed = self._embed_omlx_many(self.config, missing_texts, purpose=purpose)
+                return self._embed_omlx_many(self.config, missing_texts, purpose=purpose)
             except Exception as primary_error:
                 fallback = self.config.get("fallback")
                 if not isinstance(fallback, dict):
                     raise primary_error
-                computed = [
+                return [
                     self._embed_with(fallback, text, purpose=purpose) for text in missing_texts
                 ]
-        for index, text, vector in zip(missing_indexes, missing_texts, computed, strict=True):
-            if not vector or any(not math.isfinite(float(value)) for value in vector):
-                raise ValidationError("embedding returned an empty or non-finite vector")
-            expected = int(self.config.get("dimensions", len(vector)))
-            if len(vector) != expected:
-                raise ValidationError(f"embedding dimensions mismatch: expected {expected}, got {len(vector)}")
-            results[index] = vector
-            self._cache.set(text, vector, purpose)
-        return [value for value in results if value is not None]
+        return self._cache.get_or_compute_many(texts, compute_many, purpose)
 
     def close(self) -> None:
         """Release loaded local models and persistent cache handles."""
@@ -455,6 +443,23 @@ class Plur1busRuntime:
     """Agent-isolated LanceDB storage with asynchronous capture and recall."""
 
     def __init__(self, data_dir: Path, config: dict[str, Any], agent_id: str, scope: Any = None) -> None:
+        from .runtime_lease import acquire_runtime_lease
+        agent_id = safe_agent_id(agent_id)
+        self._closed = False
+        self._closing = False
+        self._shutdown_complete = threading.Event()
+        self._generation_lease = acquire_runtime_lease(data_dir)
+        self._lease_finalizer = weakref.finalize(self, self._generation_lease.close)
+        try:
+            self._initialize(data_dir, config, agent_id, scope)
+        except BaseException:
+            self._lease_finalizer()
+            raise
+
+    def _initialize(self, data_dir: Path, config: dict[str, Any], agent_id: str, scope: Any) -> None:
+        """Initialize under the generation lease; constructor failures release it."""
+        from .generation import effective_generation_config
+        config = effective_generation_config(data_dir, safe_agent_id(agent_id), config)
         self.data_dir = data_dir
         self.config = config
         self.agent_id = safe_agent_id(agent_id)
@@ -1332,13 +1337,35 @@ class Plur1busRuntime:
         return proposal
 
     def shutdown(self, timeout_seconds: float = 5.0) -> None:
+        """Close admission; retain the generation lease until all admitted I/O drains."""
+        if self._closing:
+            self._shutdown_complete.wait(max(0, timeout_seconds))
+            return
+        self._closing = True
         self.flush(timeout_seconds)
         self._executor.shutdown(wait=False, cancel_futures=False)
-        self._embedding.close()
-        try:
-            self._llm_cache.close()
-        except Exception as error:
-            LOGGER.warning("LLM result cache close bypassed: %s", type(error).__name__)
+
+        def finalize():
+            from .writer_lock import writer_lock
+            # No hard cancellation claim: a live worker keeps the shared lease
+            # and therefore blocks activation even after shutdown's time budget.
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            with writer_lock(self.data_dir):
+                self._closed = True
+                try:
+                    self._embedding.close()
+                    self._llm_cache.close()
+                except Exception as error:
+                    LOGGER.warning("Runtime resource close failed: %s", type(error).__name__)
+                finally:
+                    self._lease_finalizer()
+                    self._shutdown_complete.set()
+
+        pending = getattr(self._executor, "metrics", {}).get("pending", 0)
+        if pending:
+            threading.Thread(target=finalize, name="plur1bus-drain", daemon=True).start()
+        else:
+            finalize()
 
     def flush(self, timeout_seconds: float = 5.0) -> None:
         """Wait for queued captures before a lifecycle boundary discards context."""
@@ -1515,8 +1542,13 @@ class Plur1busRuntime:
                 result.append(proposal)
         return result
 
+    def repair_merge_proposal(self, proposal_id: str, *, approved_revision: str | None = None) -> bool:
+        """Repair a verified replacement without retiring its authoritative source."""
+        return self.apply_merge_proposal(proposal_id, approved_revision=approved_revision, repair_only=True)
+
     @serialized_memory_write
-    def apply_merge_proposal(self, proposal_id: str, *, approved_revision: str | None = None) -> bool:
+    def apply_merge_proposal(self, proposal_id: str, *, approved_revision: str | None = None,
+                             repair_only: bool = False) -> bool:
         """Explicit crash-safe merge apply; source is retired only last."""
         from .durable_merge import stable_replacement_id, valid_time_marker, combined_window, proposal_revision
         proposal_id = safe_memory_id(proposal_id)
@@ -1538,7 +1570,7 @@ class Plur1busRuntime:
         revision = proposal_revision(proposal)
         if proposal.get("revision") != revision or (approved_revision is not None and approved_revision != revision):
             return False
-        if proposal.get("state") not in {"proposed", "prepared", "materialized", "applied"}:
+        if proposal.get("state") not in {"proposed", "prepared", "materialized", "applied", "repair_required"}:
             return False
         snapshot = proposal.get("candidateSnapshot") or {}
         incoming = proposal.get("incomingSnapshot") or {}
@@ -1597,6 +1629,21 @@ class Plur1busRuntime:
             return conflict()
         if existing and not replacement_matches(existing):
             return conflict()
+        if repair_only:
+            if not replacement_matches(existing):
+                return False
+            from .materialization_repair import repair_materialization
+            table, _ = self._table(create=False)
+            report = repair_materialization(self._domain, existing[0], table)
+            if not report.get("complete"):
+                return False
+            # Repair never archives the source. A separate approved apply is
+            # required, and repeats source/lineage checks after this boundary.
+            proposal["state"] = "materialized"
+            persist_proposal(path, proposal)
+            return True
+        if proposal["state"] == "repair_required":
+            return False
         if existing and proposal["state"] != "materialized":
             # The insert may have survived a crash before graph/metadata/mirror
             # materialization. Never retire the source on table existence alone.
@@ -1724,6 +1771,8 @@ class Plur1busRuntime:
         add_columns(pa.schema(fields))
 
     def _table(self, create: bool, first_record: dict[str, Any] | None = None):
+        if self._closed:
+            raise RuntimeError("memory runtime is closed")
         try:
             import lancedb
         except ImportError as error:
@@ -1740,6 +1789,8 @@ class Plur1busRuntime:
 
     def _recall_tables(self):
         """Open configured recall tables without creating read-only namespaces."""
+        if self._closed:
+            raise RuntimeError("memory runtime is closed")
         try:
             import lancedb
         except ImportError as error:

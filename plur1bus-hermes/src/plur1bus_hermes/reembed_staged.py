@@ -98,8 +98,15 @@ def _exact_source_route(data_dir: Path, agent_id: str, config: Mapping[str, Any]
     if raw_data_dir.is_symlink():
         raise ValidationError("canonical private source route is unavailable")
     data_dir = raw_data_dir.resolve()
-    route, _ = resolve_namespace_routes(data_dir, agent_id, dict(config))
-    expected = route.path.expanduser()
+    # First-generation staging is deliberately bound to the canonical private
+    # writer.  It must not consult normal generation-aware routing: during a
+    # pointer_swapped crash that routing correctly fails closed until recovery.
+    # Legacy namespace staging retains its existing resolver behaviour.
+    if config.get("namespaces") is None:
+        expected = data_dir / "lancedb" / agent_id
+    else:
+        route, _ = resolve_namespace_routes(data_dir, agent_id, dict(config))
+        expected = route.path.expanduser()
     if not expected.is_absolute() or not expected.is_dir():
         raise ValidationError("canonical private source route is unavailable")
     current = expected

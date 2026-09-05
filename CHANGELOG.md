@@ -12,8 +12,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Native Basis aus 7.4.8-hermes.1 auf unverändertem Upstream 7.10.0; Critical-
   Sammelreview, inaktive Klassifikationskandidaten ausgeschlossen, Hermes-Lifecycle-
   Isolation, private Dream Diary, explizite Recall-Opt-outs und Remote-Dimensionsprüfung.
-- Read-only Hermes-Dashboard, lokale Status-/Kompaktierungs-CLI und gebatchtes,
-  quellgebundenes Re-Embedding in separaten, niemals automatisch aktiven Stages.
+- Hermes-Dashboard mit sitzungs-/revisionsgebundenem Workshop-Review,
+  explizitem Approve/Publish und profilweiter Veröffentlichungswarnung.
+- Quellgebundenes Staging-Re-Embedding mit expliziter erster Generation-Aktivierung
+  und Crash-Recovery; kooperierende Runtimes halten Prozess-Leases bis zum
+  tatsächlichen Worker-Ende. Alte Generation bleibt erhalten. Keine Umschaltung
+  benannter Namespaces, kein automatischer Modellwechsel.
+- Workspace-Quellen: Plan, revisionsgebundene Freigabe, Apply und Widerruf per CLI.
+- Idempotente Reparatur unterbrochener Merge-Materialisierung; Quelle bleibt bis
+  zu einem separaten bestätigten Apply aktiv. Manuell geänderte Mirrors werden
+  nicht überschrieben. Graph-Mirror-Links bleiben im expliziten Rebuild.
+- Embedding-Batch-Coalescing teilt laufende Requests mit Einzelabrufen; Fehler
+  lösen wartende Aufrufer, ohne ungültige Vektoren zu cachen.
 - Schema-/ACL-, Profilrouting-, Symlink- und Retry/Checkpoint-Regressionen;
   Python-Wheels enthalten nun auch plugin.yaml.
 - Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad

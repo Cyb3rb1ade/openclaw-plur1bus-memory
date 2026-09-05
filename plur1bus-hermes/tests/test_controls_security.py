@@ -46,6 +46,20 @@ class ControlsSecurityTests(unittest.TestCase):
         self.assertTrue(result["archived"])
         self.assertEqual(runtime.forgotten, ["memory-id"])
 
+    def test_merge_repair_is_denied_without_mutation_authorization(self):
+        plugin = Plur1busControlsPlugin()
+        runtime = _Runtime(False)
+        runtime.repair_calls = []
+        runtime.repair_merge_proposal = lambda proposal_id, *, approved_revision: runtime.repair_calls.append((proposal_id, approved_revision)) or True
+        plugin._runtime = lambda _agent: runtime
+
+        result = json.loads(plugin.handle_command(
+            "merge repair 11111111-1111-4111-8111-111111111111 " + "d" * 64
+        ))
+
+        self.assertEqual(result["status"], "denied")
+        self.assertEqual(runtime.repair_calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,9 @@ Die maschinenlesbare Abdeckung in `parity.py` bleibt absichtlich `partial`.
   historische Fenster bleiben separate Karten. Stabile Ersatz-IDs und eine
   reentrante Prozess-/Thread-Schreibsperre verhindern kooperierende Doppelwrites.
   Bei ungeklärter Ersatzmaterialisierung bleibt die Quelle aktiv und der
-  Vorschlag erhält `repair_required`; hierfür fehlt noch ein eigener Repair-UI.
+  Vorschlag erhält `repair_required`. `merge repair` materialisiert fehlende
+  Metadaten-, Mirror-, Kognitions- und Graph-Anteile nach; die Quelle wird erst
+  danach retiret. Graph-Mirror-Links sind weiterhin ein separater Rebuild.
 - `/plur1bus knowledge propose|confirm`: private, bestätigte Übernahme in einen
   Managed Block von `KNOWLEDGE.md`, mit Erhalt manueller Abschnitte.
 - `/plur1bus persona seed|evolve`: optionale, begrenzte Stilpräferenzen; keine
@@ -38,22 +40,34 @@ Die maschinenlesbare Abdeckung in `parity.py` bleibt absichtlich `partial`.
   maximal 50 Turns), LLM-Narrative erst ab fünf Turns, begrenzte Eingaben und
   exakt gebundene Evidenz. Narrative sind abgeleitete Datensätze, keine neuen
   Fakten oder automatischen Graph-Schreiboperationen; heuristische Episoden bleiben.
-- Operator-CLI `source-sync --source DIR`: begrenzter Read-only-Plan; Import nur
-  mit `--apply --approved-revision SHA256`. Append-only, stabile Chunk-IDs,
-  untrusted Herkunft, keine versteckten Dateien/Symlinks/FIFOs und kein Löschen
-  der Quellen. Der lokale Operator wählt das Zielprofil separat.
-- Embedding-Cache: identische Einzelanfragen teilen Berechnungen; getrennte
-  Zwecke/Scopes/Routen bleiben getrennt. Fehler/ungültige Vektoren werden nicht
-  gecacht. Batchübergreifendes Coalescing bleibt ein offener Vertragsunterschied.
+- Operator-CLI `workspace-source plan|approve|apply|revoke --source DIR` bindet
+  einen begrenzten Read-only-Plan an die kanonische Agent-/Scope-/Writer-Route;
+  Apply verlangt die exakte revisionsgebundene Zustimmung. Der ältere
+  `source-sync`-Pfad bleibt ein direkter, explizit bestätigter Import. Beide
+  sind append-only, verwenden stabile Chunk-IDs und behandeln Quelle als
+  untrusted; versteckte Dateien/Symlinks/FIFOs werden nicht importiert und
+  Quellen werden nie gelöscht.
+- Operator-CLI für Reembedding kann eine validierte Staging-Generation nach
+  exakter Plan-ID aktivieren oder einen unterbrochenen Pointer recovern. Das
+  funktioniert nur für den privaten Standard-Writer und kooperierende
+  Runtime-Leases; Named Namespaces und externe, nicht kooperierende Leser sind
+  absichtlich nicht abgedeckt.
+- Dashboard-Workshop-Reviews zeigen nur die serverseitig gewählte Route. Approve
+  und Publish benötigen eine kurzlebige, einmalige, revisions- und
+  sessiongebundene Review-Nonce sowie denselben Origin und Confirm-Header.
+  Publish bleibt profilweit sichtbar, nicht agent-ACL-geschützt.
+- Embedding-Cache: identische Einzel- und Batchanfragen teilen Berechnungen;
+  getrennte Zwecke/Scopes/Routen bleiben getrennt. Fehler/ungültige Vektoren
+  werden nicht gecacht.
 
 Alle neuen LLM-/Hintergrundfunktionen sind opt-in; bestehende Provider,
 Dimensionen und Produktivdaten wurden durch diese Implementierung nicht verändert.
 
 ## Noch keine Vollständigkeitsfreigabe
 
-Offen bleiben insbesondere aktiver Reembedding-Generation-Switch samt
-Quieszenz/Backup/Recovery, vollständige Obsidian-Discovery-/Consent-/Web-Workflows,
-automatisches Store-Time-Merging, vollständige Graph-/Entitätsverträge und
+Offen bleiben insbesondere ein Generation-Switch für Named Namespaces oder
+nicht kooperierende Prozesse, vollständige Obsidian-Discovery-/Consent-/Web-Workflows,
+automatisches Store-Time-LLM-Merging, vollständige Graph-/Entitätsverträge und
 exakte Ressourcen-/Cache-Grenzen. Der lokale Jina-v3-Remote-Code-Pfad bleibt
 bis zu einem eigenständigen Audit gesperrt. Hermes bietet zwar Adapter-Reactions,
 aber keinen geprüften allgemeinen Plugin-Reaction-Hook; dieser Pfad wird nicht

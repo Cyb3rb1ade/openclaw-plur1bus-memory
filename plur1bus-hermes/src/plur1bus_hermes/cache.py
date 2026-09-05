@@ -185,7 +185,10 @@ class EmbeddingCache:
 
     def _compute_valid(self, compute: Callable[[], list[float]]) -> list[float]:
         """Copy and validate a backend result before it can become shareable."""
-        value = compute()
+        return self._validate_vector(compute())
+
+    def _validate_vector(self, value: Any) -> list[float]:
+        """Copy one finite vector and enforce the configured dimensions."""
         if not isinstance(value, (list, tuple)):
             raise ValidationError("embedding computation did not return a vector")
         vector = [float(item) for item in value]
@@ -193,6 +196,101 @@ class EmbeddingCache:
         if not vector or len(vector) != expected or any(not math.isfinite(item) for item in vector):
             raise ValidationError("embedding computation returned an invalid vector")
         return vector
+
+    def get_or_compute_many(
+        self,
+        texts: list[str],
+        compute_many: Callable[[list[str]], list[list[float]]],
+        purpose: str = "passage",
+    ) -> list[list[float]]:
+        """Batch-compute owned misses while sharing individual in-flight keys.
+
+        All own misses are registered before invoking ``compute_many``. Results
+        for every owned key are published before waiting on any foreign owner,
+        so overlapping batch and single requests cannot form a wait cycle.
+        """
+        values = list(texts)
+        if not values:
+            return []
+        try:
+            grouped: OrderedDict[str, tuple[str, list[int]]] = OrderedDict()
+            for index, text in enumerate(values):
+                cache_key = self.key(text, purpose)
+                if cache_key not in grouped:
+                    grouped[cache_key] = (text, [])
+                grouped[cache_key][1].append(index)
+        except Exception as error:
+            logging.getLogger(__name__).warning("Embedding cache key bypassed: %s", type(error).__name__)
+            return [list(vector) for vector in self._compute_many_valid(compute_many, values)]
+
+        results: list[list[float] | None] = [None] * len(values)
+        owned: list[tuple[str, str, list[int], _EmbeddingInFlight]] = []
+        waiting: list[tuple[list[int], _EmbeddingInFlight]] = []
+        with self._lock:
+            for cache_key, (text, indexes) in grouped.items():
+                try:
+                    cached = self._get_by_key(cache_key)
+                except Exception as error:
+                    logging.getLogger(__name__).warning("Embedding cache read bypassed: %s", type(error).__name__)
+                    cached = None
+                if cached is not None:
+                    for index in indexes:
+                        results[index] = list(cached)
+                    continue
+                operation = self._inflight.get(cache_key)
+                if operation is None:
+                    operation = _EmbeddingInFlight()
+                    self._inflight[cache_key] = operation
+                    owned.append((cache_key, text, indexes, operation))
+                else:
+                    self.metrics["coalesced"] += 1
+                    waiting.append((indexes, operation))
+        if owned:
+            try:
+                computed = self._compute_many_valid(compute_many, [item[1] for item in owned])
+                # Validation completes for the entire backend response before
+                # any key is cached or released: an invalid batch is atomic.
+                for (_cache_key, _text, _indexes, operation), vector in zip(owned, computed, strict=True):
+                    operation.result = list(vector)
+                for (_cache_key, text, _indexes, _operation), vector in zip(owned, computed, strict=True):
+                    self.set(text, vector, purpose)
+                for _cache_key, _text, indexes, operation in owned:
+                    for index in indexes:
+                        results[index] = list(operation.result or [])
+            except BaseException as error:
+                for _cache_key, _text, _indexes, operation in owned:
+                    operation.error = error
+                raise
+            finally:
+                # Release every owned key before this batch waits for a key
+                # owned by another request. See the method contract above.
+                with self._lock:
+                    for cache_key, _text, _indexes, operation in owned:
+                        if self._inflight.get(cache_key) is operation:
+                            self._inflight.pop(cache_key, None)
+                        operation.event.set()
+        for indexes, operation in waiting:
+            operation.event.wait()
+            if operation.error is not None:
+                raise operation.error
+            if operation.result is None:
+                raise RuntimeError("embedding computation ended without a result")
+            for index in indexes:
+                results[index] = list(operation.result)
+        if any(vector is None for vector in results):
+            raise RuntimeError("embedding batch ended without a result")
+        return [list(vector) for vector in results if vector is not None]
+
+    def _compute_many_valid(
+        self,
+        compute_many: Callable[[list[str]], list[list[float]]],
+        texts: list[str],
+    ) -> list[list[float]]:
+        """Validate all batch vectors before callers cache any individual key."""
+        raw = compute_many(list(texts))
+        if not isinstance(raw, (list, tuple)) or len(raw) != len(texts):
+            raise ValidationError("embedding batch returned an invalid length")
+        return [self._validate_vector(vector) for vector in raw]
 
     def _set(self, text: str, vector: list[float], purpose: str) -> None:
         expected = int(self.config.get("dimensions", len(vector)))

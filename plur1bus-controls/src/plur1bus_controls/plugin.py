@@ -542,7 +542,7 @@ class Plur1busControlsPlugin:
             mutating_command = mutating_command or (
                 command in {"dreams", "obsidian", "jobs", "critical", "reminders", "speakers", "temperament", "code", "knowledge", "persona", "merge"}
                 and bool(arguments)
-                and arguments[0] in {"run", "rebuild", "sync", "maintain", "map", "accept", "reject", "edit", "acknowledge", "cancel", "create", "propose", "confirm", "seed", "evolve", "apply"}
+                and arguments[0] in {"run", "rebuild", "sync", "maintain", "map", "accept", "reject", "edit", "acknowledge", "cancel", "create", "propose", "confirm", "seed", "evolve", "apply", "repair"}
             )
             mutating_command = mutating_command or (
                 command == "skills" and bool(arguments)
@@ -576,7 +576,7 @@ class Plur1busControlsPlugin:
             )
             requires_confirmation = requires_confirmation or (
                 command in {"knowledge", "persona", "merge"} and bool(arguments)
-                and arguments[0] in {"confirm", "seed", "evolve", "apply"}
+                and arguments[0] in {"confirm", "seed", "evolve", "apply", "repair"}
             ) or (
                 command == "reminders" and bool(arguments) and arguments[0] == "confirm"
             )
@@ -954,7 +954,7 @@ class Plur1busControlsPlugin:
             if command == "merge":
                 if not arguments or arguments[0] == "list":
                     if len(arguments) > 1:
-                        return "Usage: /plur1bus merge [--agent ID] list|propose TEXT|apply PROPOSAL_ID REVISION"
+                        return "Usage: /plur1bus merge [--agent ID] list|propose TEXT|repair PROPOSAL_ID REVISION|apply PROPOSAL_ID REVISION"
                     proposals = [
                         {
                             key: proposal.get(key)
@@ -975,6 +975,12 @@ class Plur1busControlsPlugin:
                         "revision": proposal["revision"],
                         "state": proposal["state"],
                     }, ensure_ascii=False, indent=2)
+                if arguments[0] == "repair" and len(arguments) == 3:
+                    return json.dumps({
+                        "repaired": runtime.repair_merge_proposal(arguments[1], approved_revision=arguments[2]),
+                        "sourceRetired": False,
+                        "mirrorLinksRequireRebuild": True,
+                    }, ensure_ascii=False, indent=2)
                 if arguments[0] == "apply" and len(arguments) == 3:
                     applied = runtime.apply_merge_proposal(
                         arguments[1], approved_revision=arguments[2]
@@ -984,7 +990,7 @@ class Plur1busControlsPlugin:
                         "proposalId": arguments[1],
                         "revision": arguments[2],
                     }, ensure_ascii=False, indent=2)
-                return "Usage: /plur1bus merge [--agent ID] list|propose TEXT|apply PROPOSAL_ID REVISION"
+                return "Usage: /plur1bus merge [--agent ID] list|propose TEXT|repair PROPOSAL_ID REVISION|apply PROPOSAL_ID REVISION"
             if command == "skills":
                 workshop = SkillWorkshop(runtime)
                 if not arguments or arguments[0] == "list":

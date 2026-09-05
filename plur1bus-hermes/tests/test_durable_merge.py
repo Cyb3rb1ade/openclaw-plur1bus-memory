@@ -10,6 +10,45 @@ from plur1bus_hermes.runtime import Plur1busRuntime
 
 
 class DurableMergeTests(unittest.TestCase):
+    def test_explicit_repair_is_idempotent_and_keeps_source_until_apply(self):
+        d, r = self.make()
+        try:
+            source = r._remember("alpha facts", "s", "user")
+            p = r.create_merge_proposal("beta facts", "s")
+            with patch.object(r._domain, "on_memory", side_effect=RuntimeError("crash")):
+                with self.assertRaises(RuntimeError):
+                    r.apply_merge_proposal(p["proposalId"], approved_revision=p["revision"])
+            self.assertFalse(r.repair_merge_proposal(p["proposalId"], approved_revision="wrong"))
+            self.assertTrue(r.repair_merge_proposal(p["proposalId"], approved_revision=p["revision"]))
+            self.assertTrue(r.repair_merge_proposal(p["proposalId"], approved_revision=p["revision"]))
+            table, _ = r._table(False)
+            self.assertEqual(table.search().where(f"id = '{source}'").limit(1).to_list()[0]["status"], "active")
+            selector = r._domain._scope_selector(acl_bindings=r.scope_binding)
+            rows = r._domain._metadata_rows_for_scope(selector)
+            self.assertEqual(sum(row["id"] == p["replacementId"] for row in rows), 1)
+            self.assertTrue(r.apply_merge_proposal(p["proposalId"], approved_revision=p["revision"]))
+        finally:
+            r.shutdown(); d.cleanup()
+
+    def test_repair_preserves_manual_mirror_and_source(self):
+        d, r = self.make()
+        try:
+            source = r._remember("alpha facts", "s", "user")
+            p = r.create_merge_proposal("beta facts", "s")
+            with patch.object(r._domain, "on_memory", side_effect=RuntimeError("crash")):
+                with self.assertRaises(RuntimeError):
+                    r.apply_merge_proposal(p["proposalId"], approved_revision=p["revision"])
+            self.assertTrue(r.repair_merge_proposal(p["proposalId"], approved_revision=p["revision"]))
+            selector = r._domain._scope_selector(acl_bindings=r.scope_binding)
+            note = r._domain._scope_workspace_dir(selector) / "plur1bus" / "memories" / f"{p['replacementId']}.md"
+            note.write_text("manual text")
+            self.assertFalse(r.repair_merge_proposal(p["proposalId"], approved_revision=p["revision"]))
+            self.assertEqual(note.read_text(), "manual text")
+            table, _ = r._table(False)
+            self.assertEqual(table.search().where(f"id = '{source}'").limit(1).to_list()[0]["status"], "active")
+        finally:
+            r.shutdown(); d.cleanup()
+
     def test_missing_approval_and_symlink_alias_refused(self):
         d, r = self.make()
         try:
@@ -133,6 +172,36 @@ class DurableMergeTests(unittest.TestCase):
             r.forget=lambda _id: False; r.apply_merge_proposal(p["proposalId"], approved_revision=p["revision"])
             t,_=r._table(False); t.update(where=f"id = '{p['replacementId']}'",values={"mergedFrom":"[]"})
             self.assertFalse(r.apply_merge_proposal(p["proposalId"], approved_revision=p["revision"])); self.assertEqual(t.search().where(f"id = '{sid}'").limit(1).to_list()[0]["status"],"active")
+        finally: r.shutdown(); d.cleanup()
+
+    def test_repair_rejects_cross_scope_and_preserves_source(self):
+        d, r = self.make()
+        other = Plur1busRuntime(Path(d.name), r.config, "main", {"scopeType": "workspace", "workspace": "other"})
+        other._embedding.embed = r._embedding.embed
+        try:
+            source = r._remember("alpha facts", "s", "user")
+            proposal = r.create_merge_proposal("beta facts", "s")
+            with patch.object(r._domain, "on_memory", side_effect=RuntimeError("crash")):
+                with self.assertRaises(RuntimeError):
+                    r.apply_merge_proposal(proposal["proposalId"], approved_revision=proposal["revision"])
+            self.assertFalse(other.repair_merge_proposal(proposal["proposalId"], approved_revision=proposal["revision"]))
+            table, _ = r._table(False)
+            self.assertEqual(table.search().where(f"id = '{source}'").limit(1).to_list()[0]["status"], "active")
+        finally:
+            other.shutdown(); r.shutdown(); d.cleanup()
+
+    def test_repair_rejects_stale_replacement_lineage_without_retiring_source(self):
+        d, r = self.make()
+        try:
+            source = r._remember("alpha facts", "s", "user")
+            proposal = r.create_merge_proposal("beta facts", "s")
+            with patch.object(r._domain, "on_memory", side_effect=RuntimeError("crash")):
+                with self.assertRaises(RuntimeError):
+                    r.apply_merge_proposal(proposal["proposalId"], approved_revision=proposal["revision"])
+            table, _ = r._table(False)
+            table.update(where=f"id = '{proposal['replacementId']}'", values={"mergedFrom": "[]"})
+            self.assertFalse(r.repair_merge_proposal(proposal["proposalId"], approved_revision=proposal["revision"]))
+            self.assertEqual(table.search().where(f"id = '{source}'").limit(1).to_list()[0]["status"], "active")
         finally: r.shutdown(); d.cleanup()
 
 if __name__ == '__main__': unittest.main()

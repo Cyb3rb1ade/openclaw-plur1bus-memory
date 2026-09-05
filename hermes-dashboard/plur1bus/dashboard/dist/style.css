@@ -12,4 +12,13 @@
 .pb-field dt { color: var(--text-secondary, #a9b1bd); font-size: .82rem; }
 .pb-field dd { margin: .18rem 0 0; overflow-wrap: anywhere; font-weight: 550; }
 .pb-error, .pb-loading { margin-top: 1rem; color: var(--text-secondary, #a9b1bd); }
-@media (max-width: 640px) { .pb-page { padding: 1.5rem 1rem 3rem; } .pb-header { flex-direction: column; } .pb-grid { grid-template-columns: 1fr; } }
+.pb-workshop, .pb-review { margin-top: 1rem; }
+.pb-workshop h2, .pb-review h2 { margin-top: 0; }
+.pb-proposals { display: grid; gap: .65rem; padding: 0; margin: 1rem 0 0; list-style: none; }
+.pb-proposals li { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: .65rem; padding: .75rem; border: 1px solid var(--border, #30343b); border-radius: .45rem; }
+.pb-proposals small { display: block; margin-top: .2rem; color: var(--text-secondary, #a9b1bd); }
+.pb-empty { color: var(--text-secondary, #a9b1bd); }
+.pb-warning { padding: .75rem; border-left: 3px solid #d48a33; background: rgba(212, 138, 51, .14); }
+.pb-instructions { max-height: 20rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: .85rem; border: 1px solid var(--border, #30343b); border-radius: .45rem; color: inherit; background: var(--surface, #17191d); }
+.pb-actions { display: flex; justify-content: flex-end; gap: .65rem; margin-top: 1rem; }
+@media (max-width: 640px) { .pb-page { padding: 1.5rem 1rem 3rem; } .pb-header { flex-direction: column; } .pb-grid { grid-template-columns: 1fr; } .pb-proposals li { grid-template-columns: 1fr; } }

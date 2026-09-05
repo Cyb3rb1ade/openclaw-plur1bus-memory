@@ -170,6 +170,29 @@ class ControlsTests(unittest.TestCase):
             ))
         self.assertTrue(second["applied"])
 
+    def test_merge_repair_requires_revision_bound_confirmation_and_never_reports_retirement(self) -> None:
+        calls = []
+        runtime = SimpleNamespace(
+            config={}, _domain=SimpleNamespace(),
+            scope_binding=SimpleNamespace(as_dict=lambda: {"scopeType": "agent-private"}),
+            _table=lambda create=False: (None, None),
+            repair_merge_proposal=lambda proposal_id, *, approved_revision: calls.append((proposal_id, approved_revision)) or True,
+        )
+        identity = RequestIdentity("telegram", "user", "chat", "private", "main", True)
+        plugin = Plur1busControlsPlugin({"agentId": "main"})
+        proposal_id, revision = "11111111-1111-4111-8111-111111111111", "c" * 64
+        with patch.object(plugin, "_runtime", return_value=runtime), patch(
+            "plur1bus_controls.plugin.current_identity", return_value=identity,
+        ):
+            first = json.loads(plugin.handle_command(f"merge repair {proposal_id} {revision}"))
+            self.assertEqual(first["status"], "confirmation_required")
+            second = json.loads(plugin.handle_command(
+                f"merge repair {proposal_id} {revision} --confirm {first['nonce']}"
+            ))
+        self.assertTrue(second["repaired"])
+        self.assertFalse(second["sourceRetired"])
+        self.assertEqual(calls, [(proposal_id, revision)])
+
     def test_knowledge_confirmation_passes_only_runtime_scope(self) -> None:
         captured = []
 

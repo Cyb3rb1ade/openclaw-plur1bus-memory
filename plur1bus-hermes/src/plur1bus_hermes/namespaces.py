@@ -271,11 +271,13 @@ def resolve_namespace_routes(
     config: dict[str, Any],
 ) -> tuple[NamespaceRoute, list[NamespaceRoute]]:
     """Resolve one writer and bounded read routes without selecting another agent."""
+    from .generation import resolve_generation_route
     raw = config.get("namespaces")
     if raw is None:
         route = NamespaceRoute(
             "default", Path(data_dir) / "lancedb" / agent_id, True
         )
+        route = resolve_generation_route(data_dir, agent_id, route)
         return route, [route]
     if not isinstance(raw, dict):
         raise ValueError("namespaces must be an object")
@@ -302,4 +304,6 @@ def resolve_namespace_routes(
         NamespaceRoute(name, root / name / agent_id, name == writer)
         for name in recall_names[:16]
     ]
-    return writer_route, routes
+    active_writer = resolve_generation_route(data_dir, agent_id, writer_route)
+    routes = [active_writer if route.writable else route for route in routes]
+    return active_writer, routes

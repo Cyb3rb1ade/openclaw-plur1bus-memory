@@ -11,7 +11,7 @@ Stand 2026-09-05. Lokaler Entwicklungsstand auf `codex/hermes-7.10.0-port`, ausg
 - Zeit-/Ablaufprädikate vor primären/verfeinerten ANN-Limits sowie in Shared Pools. Eng begrenzte Legacy-Fallbacks, erneuter Filter nach Recall-Boostern. Textduplikate mit nachweislich disjunkten Zeitfenstern bleiben getrennt. `full_text` hebt nicht das globale Inject-Budget auf.
 - Korrektur verifiziert die dauerhafte Ersatzkarte vor Archivierung und prüft die Quelle erneut. Leere, tombstone-blockierte oder nicht zur Queue zugelassene Ersatz-Writes löschen die Quelle nicht. Zeitfelder bleiben erhalten. Shared-Pool-Updates migrieren vor dem Upsert; kein gefährliches Delete-vor-Add bei Schemawechsel.
 - Live-LLM-Cache für erlaubte Zwecke; opt-in LLM-Query-Refinement als erreichbarer Consumer. Effektiver Payload, Agent, Endpoint, Modell und Credentials sind getrennt. Kritische Klassifikation, Träume, Emotion und Chat bleiben außerhalb der Allowlist. Synchrones Coalescing, async Fail-open, Abbruchisolation und Reparatur korrupter Cacheantworten getestet.
-- Embedding-Cache default ohne Persistenz, Routing-/Revisions-/Präfixinvalidierung, Off-Schalter, DB/WAL-Byteaufnahmeprüfung, Metriken und sichere Lese-/Schreibfehler-Fallbacks. Byteprüfung mit Headroom ist keine harte Dateisystemquote; vollständiges Embedding-Coalescing bleibt offen.
+- Embedding-Cache default ohne Persistenz, Routing-/Revisions-/Präfixinvalidierung, Off-Schalter, DB/WAL-Byteaufnahmeprüfung, Metriken sowie sichere Lese-/Schreibfehler-Fallbacks. Identische Einzel- und Batchanfragen werden zusammengeführt; Byteprüfung mit Headroom ist keine harte Dateisystemquote.
 - Capture-Admission mit begrenzter Queue und Wartefrist. Abgewiesene automatische Captures bleiben in der Retry-Queue ohne allein dadurch Backend-Versuche zu verbrauchen. Keine gewaltsame Beendigung laufender Python-I/O oder RSS-Garantie.
 - Retry-Einträge bleiben bis zur erfolgreichen Verarbeitung auf Disk; Inflight-Deduplizierung verhindert paralleles erneutes Einreichen innerhalb der Runtime. Atomare/fsync-gesicherte Dateien mit Modus 0600; ausgeschöpfte Versuche bleiben im Dead-letter-Archiv erhalten. At-least-once, nicht Exactly-once: Ein Crash zwischen Memory-Write und Queue-Bestätigung kann einen Replay auslösen.
 - Autorisierte, bestätigungsgebundene Remindererzeugung auf bestehenden Karten: feste absolute Zeit, gleiche ACL-Route, optionaler Text. Keine automatische Extraktion oder unabhängige Hintergrundzustellung.
@@ -71,11 +71,12 @@ Bestehende Controls-Bestätigung erforderlich. CRR/Lens/Style/Echo und Auto-Capt
 
 ## Weiterhin keine Vollparität
 
-- Automatische Store-Merges mit vollständiger Kandidaten-Lineage und Upstream-Revalidierung.
-- Schicht 1.5, Skill Miner/Workshop, Persona Voice, vertrauenswürdige Reaction-/Reply-Outcome-Integration.
-- Vollständige Light-Dream-/LLM-Episoden-/Graph-/Meta-Cognition-Workflows.
+- Automatische Store-Merges mit vollständiger Upstream-LLM-Kandidatenstrategie. Native explizite Merge-Vorschläge können fehlende Metadaten-, Mirror-, Kognitions- und Graph-Materialisierung reparieren; die Quelle wird vorher nicht retiret. Graph-Mirror-Links brauchen weiterhin einen separaten Rebuild.
+- Vollständige Reaction-Integration: vertrauenswürdige Reply-Outcome-Bindung besteht, ein allgemeiner Hermes-Plugin-Reaction-Hook fehlt.
+- Vollständige Graph-/Entitäts- und Meta-Cognition-Verträge.
 - Unabhängige Proaktivzustellung, plattformübergreifender nativer Scheduler, RSS-/harte I/O-Abbruchkontrolle.
-- Vollständige Workspace-Policy-/Source-Sync-/Obsidian-Consent-/Operator-Schreiboberflächen und produktiver Reembedding-Generation-Switch.
+- Browser-Discovery-/Consent-/Operator-Oberflächen für Workspace-Quellen. Die lokale CLI bietet bereits explizite revisionsgebundene Consent-Planung/Anwendung.
+- Named Namespaces oder nicht-kooperierende Prozesse beim Reembedding-Generation-Switch; nur der explizite private Writer mit kooperierenden Runtime-Leases ist unterstützt.
 - Jina-v3-Remote-Code-Kette bleibt gesperrt; weitere Konfigurations-/Hostunterschiede bleiben in `parity.py` sichtbar.
 
 Grüne Regressionen bedeuten Funktionsfähigkeit der getesteten Implementierung, nicht Vollständigkeit gegenüber jeder Upstream-Funktion. Der absichtlich fehlschlagende strikte Paritätscheck ist kein Regressionstestfehler. Test-/Buildnachweise stehen beim neuen lokalen Artefaktsatz, getrennt von den älteren Paketen.

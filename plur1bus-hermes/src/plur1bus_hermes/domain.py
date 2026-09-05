@@ -219,6 +219,7 @@ class Plur1busDomain:
             acl_bindings = record.get("aclBindings")
 
         binding: ScopeBinding | None = None
+        direct_key = ""
         if acl_bindings is not None:
             if isinstance(acl_bindings, ScopeBinding):
                 binding = acl_bindings
@@ -599,6 +600,12 @@ class Plur1busDomain:
         self._write_obsidian_note(record)
         self._build_graph_edges(record, table)
         metadata = self._metadata_for(record, importance=importance)
+        self._classify_materialized_memory(record, metadata, selector)
+
+    def _classify_materialized_memory(self, record: dict[str, Any], metadata: dict[str, Any],
+                                     selector: _ScopeSelector) -> None:
+        """Classify an inserted memory at most once, including explicit repair."""
+        state_dir = self._scope_state_dir(selector)
         source_role = str(record.get("sourceRole") or "")
         # A delayed writer must not create a review proposal for a record that
         # is no longer recall-eligible.
