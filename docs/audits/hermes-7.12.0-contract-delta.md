@@ -14,6 +14,31 @@ host boundaries remain applicable. This document is not a publication claim.
 | UI recommendation | Operator CLI exposes model preparation and migration prerequisites | Upstream dashboard recommendation/banner not reproduced in Hermes |
 | Runtime acceptance | Mocked regressions exercise contracts without downloading weights | Real local capture/recall and quality/performance checks required before release readiness |
 
+## Integration hardening
+
+- Local BGE uses the actual Sentence Transformers 3.x `cache_dir` constructor,
+  a 512-token limit, `trust_remote_code=False`, and optional explicit `revision`
+  and `localFilesOnly`. Model cache identity includes those settings.
+- Primary authorized recall is retained when additive boosters cannot find a
+  uniform scope in mixed legacy/current rows; the request binding is explicit.
+- Repeated forget verifies the immutable pre-delete archive, with full
+  non-deletion-field and scope comparison. Missing/tampered archives fail closed.
+- Retry and dead-letter queues are partitioned by agent and ACL scope. Replay
+  requires persisted `agentId`, `scopeKey` and `aclBinding` to match exactly.
+  Cooperating queue mutations use a process lock. Foreign entries and malformed
+  lines are retained, never replayed as this runtime's work.
+- The old `state/capture-retry.jsonl` has no trustworthy owner binding. It is
+  left byte-for-byte intact and warned about, not automatically imported into
+  whichever profile happens to capture first. Operators must attribute old
+  entries explicitly; upgrading does not promise automatic legacy replay.
+- Status and physical optimize accept only the exact generation route certified
+  by the namespace resolver, including activated staged generations. Merely
+  pointing at an old or foreign table is rejected.
+
+The original 7.10 audit files are historical snapshots, not current installation
+or test results. Release acceptance evidence is reported separately for the
+exact release artifact; partial host/workshop parity remains explicit.
+
 ## Native preparation
 
 Install the optional `plur1bus-hermes[local-onnx]` dependencies in the selected

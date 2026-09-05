@@ -62,7 +62,7 @@ class CaptureRetryTests(unittest.TestCase):
         return False
 
     def _retry_entries(self) -> list[dict[str, Any]]:
-        path = self.root / "state" / "capture-retry.jsonl"
+        path = self.runtime._capture_retry_path()
         if not path.is_file():
             return []
         entries = []
@@ -86,6 +86,9 @@ class CaptureRetryTests(unittest.TestCase):
         entry = self._retry_entries()[0]
         self.assertEqual(entry["assistant"], "retry me assistant")
         self.assertEqual(entry["sessionId"], "session-a")
+        self.assertEqual(entry["agentId"], "main")
+        self.assertEqual(entry["scopeKey"], self.runtime.scope_key)
+        self.assertEqual(entry["aclBinding"], self.runtime.scope_binding.acl_binding)
         errors = (self.root / "state" / "capture-errors.jsonl").read_text(encoding="utf-8")
         self.assertIn("oMLX request failed", errors)
 
@@ -133,15 +136,18 @@ class CaptureRetryTests(unittest.TestCase):
         self.assertEqual(doomed_calls(), MAX_CAPTURE_RETRIES, "no sixth attempt allowed")
 
     def test_corrupt_retry_lines_do_not_crash_capture(self) -> None:
-        state_dir = self.root / "state"
+        state_dir = self.runtime._capture_retry_path().parent
         state_dir.mkdir(parents=True, exist_ok=True)
         valid = {
             "user": "salvage user",
             "assistant": "salvage assistant",
             "sessionId": "session-d",
             "attempts": 1,
+            "agentId": "main",
+            "scopeKey": self.runtime.scope_key,
+            "aclBinding": self.runtime.scope_binding.acl_binding,
         }
-        (state_dir / "capture-retry.jsonl").write_text(
+        self.runtime._capture_retry_path().write_text(
             "not json at all\n" + '{"broken": \n' + json.dumps(valid) + "\n",
             encoding="utf-8",
         )
@@ -151,10 +157,15 @@ class CaptureRetryTests(unittest.TestCase):
         self.runtime.flush()
 
         self.assertTrue(self._wait_until(lambda: "salvage user" in self.embedding.calls))
-        self.assertTrue(self._wait_until(lambda: not self._retry_entries()))
+        self.assertTrue(self._wait_until(lambda: not self.runtime._read_capture_retries()))
+        self.assertEqual(self.runtime._capture_retry_path().read_text(), "not json at all\n" + '{"broken": \n')
 
     def test_retry_stays_durable_while_inflight_and_is_not_submitted_twice(self) -> None:
-        payload = {"user": "blocked", "assistant": "blocked reply", "sessionId": "session-e", "attempts": 1}
+        payload = {
+            "user": "blocked", "assistant": "blocked reply", "sessionId": "session-e", "attempts": 1,
+            "agentId": "main", "scopeKey": self.runtime.scope_key,
+            "aclBinding": self.runtime.scope_binding.acl_binding,
+        }
         self.runtime._write_capture_retries([payload])
         submitted: list[Future[None]] = []
 

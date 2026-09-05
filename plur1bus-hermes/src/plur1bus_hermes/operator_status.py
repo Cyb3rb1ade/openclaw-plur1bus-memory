@@ -34,7 +34,7 @@ def _credential_state(config: Mapping[str, Any], provider: str | None, *, rerank
     """Report credential configuration without exporting a key or env name."""
     if provider == "disabled":
         return "disabled"
-    if provider == "local-transformers":
+    if provider in {"local-transformers", "local-onnx"}:
         return "not_required"
     explicit_env = str(config.get("apiKeyEnv") or "").strip()
     if provider == "omlx" or (reranker and provider == "openai-compatible"):
@@ -137,8 +137,9 @@ def _exact_route(runtime: Any) -> Path:
         raise ValueError("runtime table directory is unavailable")
     _reject_symlink_components(raw_data_dir, actual_path)
     resolved = actual_path.resolve()
-    expected_root = expected.path.parent.resolve()
-    if resolved.parent != expected_root or resolved.name != agent_id:
+    # The namespace resolver validates any active generation pointer. Its
+    # certified target can have a staging-generation basename, not agent_id.
+    if resolved != expected.path.resolve():
         raise ValueError("runtime writer route escapes its data root")
     return resolved
 

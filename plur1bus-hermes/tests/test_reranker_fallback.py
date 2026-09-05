@@ -28,7 +28,8 @@ class _StubCrossEncoder:
     fail: bool = False
 
     def __init__(self, model_name: str, cache_dir: str | None = None,
-                 max_length: int = 512, trust_remote_code: bool = False) -> None:
+                 max_length: int = 512, trust_remote_code: bool = False,
+                 revision: str | None = None, local_files_only: bool = False) -> None:
         if _StubCrossEncoder.fail:
             raise RuntimeError("local reranker unavailable")
         self.model_name = model_name

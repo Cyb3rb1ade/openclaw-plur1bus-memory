@@ -12,6 +12,7 @@ import urllib.request
 import uuid
 import weakref
 from collections.abc import Mapping
+from contextlib import contextmanager
 from concurrent.futures import Future, wait
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +54,11 @@ from .valid_time import (
 from .runtime_scheduler import AdmissionRejected, BoundedExecutor
 from .durable_merge import build_proposal, persist_proposal
 from .writer_lock import serialized_memory_write
+
+try:  # POSIX is the supported Hermes host contract.
+    import fcntl
+except ImportError:  # pragma: no cover - protects import on unsupported hosts.
+    fcntl = None  # type: ignore[assignment]
 
 
 def _utcnow() -> str:
@@ -415,12 +421,14 @@ class RerankerBackend:
             raise RuntimeError("local reranking requires sentence-transformers") from error
         model_name = str(config.get("model", "BAAI/bge-reranker-v2-m3"))
         cache_dir = Path(str(config.get("cacheDir") or self.hermes_home / "plur1bus" / "models"))
+        model_key = json.dumps([model_name, str(cache_dir), config.get("revision"), config.get("localFilesOnly") is True])
         with self._lock:
-            model = self._models.get(model_name)
+            model = self._models.get(model_key)
             if model is None:
                 model = CrossEncoder(model_name, cache_dir=str(cache_dir), max_length=512,
-                                     trust_remote_code=False)
-                self._models[model_name] = model
+                                     trust_remote_code=False, revision=config.get("revision"),
+                                     local_files_only=config.get("localFilesOnly") is True)
+                self._models[model_key] = model
         scores = model.predict([(query, str(row.get("content", ""))) for row in rows])
         ranked = [dict(row, rerankScore=float(score)) for row, score in zip(rows, scores, strict=True)]
         return sorted(ranked, key=lambda row: row["rerankScore"], reverse=True)
@@ -597,7 +605,9 @@ class Plur1busRuntime:
         )
         self._futures: set[Future[None]] = set()
         self._lock = threading.RLock()
-        self._retry_inflight: set[tuple[str, str, str, str, str, str, str, str]] = set()
+        self._retry_lock = threading.RLock()
+        self._retry_inflight: set[tuple[str, str, str, str, str, str, str, str, str, str, str]] = set()
+        self._legacy_retry_queue_warned = False
 
     def capture_async(self, user: str, assistant: str, session_id: str, *, importance: float | None = None,
                       valid_from: Any = None, valid_until: Any = None, expires_at: Any = None,
@@ -624,7 +634,7 @@ class Plur1busRuntime:
             # backend-attempt count and retry it durably later.
             self._log_capture_error(error)
             if from_retry:
-                with self._lock:
+                with self._retry_lock:
                     self._retry_inflight.discard(self._retry_key(payload))
             else:
                 self._record_capture_retry(payload, attempts)
@@ -653,15 +663,84 @@ class Plur1busRuntime:
                 self._remove_capture_retry(payload)
         finally:
             if from_retry:
-                with self._lock:
+                with self._retry_lock:
                     self._retry_inflight.discard(self._retry_key(payload))
 
     def _capture_retry_path(self) -> Path:
-        return self.data_dir / "state" / "capture-retry.jsonl"
+        """Return this runtime's agent- and ACL-scoped durable retry queue."""
+        return self._retry_state_path("capture-retry.jsonl")
+
+    def _retry_state_path(self, filename: str) -> Path:
+        """Resolve one queue file and reject symlinked state-path components."""
+        if filename not in {"capture-retry.jsonl", "capture-retry-dead-letter.jsonl", ".capture-retry.lock"}:
+            raise ValidationError("invalid capture retry state filename")
+        base = Path(self.data_dir).expanduser().resolve()
+        parts = ("state", self.agent_id, "scopes", self.scope_key, filename)
+        raw = base.joinpath(*parts)
+        current = base
+        for part in parts:
+            current = current / part
+            # exists() misses dangling links; is_symlink() deliberately does not.
+            if current.is_symlink():
+                raise ValidationError("capture retry state path must not contain symlinks")
+        resolved = resolve_inside(str(base), "state", self.agent_id, "scopes", self.scope_key, filename)
+        if resolved != raw:
+            raise ValidationError("capture retry state path changed during resolution")
+        return resolved
+
+    def _ensure_retry_state_dir(self) -> Path:
+        """Create the certified scoped state directory without traversing links."""
+        path = self._retry_state_path("capture-retry.jsonl").parent
+        base = Path(self.data_dir).expanduser().resolve()
+        current = base
+        for part in ("state", self.agent_id, "scopes", self.scope_key):
+            current = current / part
+            if current.is_symlink():
+                raise ValidationError("capture retry state path must not contain symlinks")
+            current.mkdir(mode=0o700, exist_ok=True)
+            if current.is_symlink() or not current.is_dir():
+                raise ValidationError("capture retry state directory is invalid")
+        if path != current:
+            raise ValidationError("capture retry state directory mismatch")
+        return path
+
+    @contextmanager
+    def _locked_capture_retry_queue(self):
+        """Serialize the scoped queue across threads and cooperating processes."""
+        if fcntl is None:  # Defensive: no lock means no durable retry mutation.
+            raise RuntimeError("capture retry locking is unavailable on this platform")
+        with self._retry_lock:
+            directory = self._ensure_retry_state_dir()
+            lock_path = self._retry_state_path(".capture-retry.lock")
+            flags = os.O_RDWR | os.O_CREAT
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(lock_path, flags, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield directory
+            finally:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(fd)
+
+    def _warn_legacy_capture_retry_queue(self) -> None:
+        """Leave ambiguous pre-scope queues intact for an explicit manual migration."""
+        if self._legacy_retry_queue_warned:
+            return
+        legacy = Path(self.data_dir).expanduser().resolve() / "state" / "capture-retry.jsonl"
+        if legacy.exists() or legacy.is_symlink():
+            LOGGER.warning(
+                "legacy unowned capture retry queue exists; leaving it untouched for manual assignment",
+            )
+            self._legacy_retry_queue_warned = True
 
     @staticmethod
-    def _retry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str, str, str, str]:
+    def _retry_key(entry: dict[str, Any]) -> tuple[str, str, str, str, str, str, str, str, str, str, str]:
         return (
+            str(entry.get("agentId") or ""), str(entry.get("scopeKey") or ""),
+            str(entry.get("aclBinding") or ""),
             str(entry.get("user") or ""),
             str(entry.get("assistant") or ""),
             str(entry.get("sessionId") or ""),
@@ -670,32 +749,57 @@ class Plur1busRuntime:
             str(entry.get("expiresAt") or ""), str(entry.get("ttl") or ""),
         )
 
-    def _read_capture_retries(self) -> list[dict[str, Any]]:
-        """Read pending capture retries, skipping corrupt lines instead of failing."""
+    def _retry_entry_is_owned(self, entry: dict[str, Any]) -> bool:
+        """Accept retry work only when every persisted scope binding is exact."""
+        return (
+            entry.get("agentId") == self.agent_id
+            and entry.get("scopeKey") == self.scope_key
+            and entry.get("aclBinding") == self.scope_binding.acl_binding
+        )
+
+    def _read_capture_retry_contents_locked(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """Read valid entries and retain opaque malformed evidence verbatim."""
         try:
             text = self._capture_retry_path().read_text(encoding="utf-8")
         except FileNotFoundError:
-            return []
-        entries = []
-        for line in text.splitlines():
-            line = line.strip()
+            return [], []
+        entries: list[dict[str, Any]] = []
+        opaque_lines: list[str] = []
+        for raw_line in text.splitlines(keepends=True):
+            line = raw_line.strip()
             if not line:
                 continue
             try:
                 entry = json.loads(line)
             except ValueError:
+                LOGGER.warning("preserving malformed capture retry evidence without replay")
+                opaque_lines.append(raw_line)
                 continue
             if isinstance(entry, dict):
                 entries.append(entry)
-        return entries
+            else:
+                LOGGER.warning("preserving non-object capture retry evidence without replay")
+                opaque_lines.append(raw_line)
+        return entries, opaque_lines
 
-    def _write_capture_retries(self, entries: list[dict[str, Any]]) -> None:
-        """Atomically rewrite the retry queue via a tmp file and os.replace."""
+    def _read_capture_retries_locked(self) -> list[dict[str, Any]]:
+        """Read valid pending retries without treating malformed evidence as work."""
+        return self._read_capture_retry_contents_locked()[0]
+
+    def _read_capture_retries(self) -> list[dict[str, Any]]:
+        with self._locked_capture_retry_queue():
+            return self._read_capture_retries_locked()
+
+    def _write_capture_retries_locked(self, entries: list[dict[str, Any]]) -> None:
+        """Atomically rewrite valid work while preserving malformed queue evidence."""
         path = self._capture_retry_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_retry_state_dir()
+        _valid, opaque_lines = self._read_capture_retry_contents_locked()
         temp_path = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
         fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for raw_line in opaque_lines:
+                handle.write(raw_line if raw_line.endswith(("\n", "\r")) else f"{raw_line}\n")
             handle.write("".join(json.dumps(entry, sort_keys=True) + "\n" for entry in entries))
             handle.flush()
             os.fsync(handle.fileno())
@@ -706,6 +810,10 @@ class Plur1busRuntime:
         finally:
             os.close(directory_fd)
 
+    def _write_capture_retries(self, entries: list[dict[str, Any]]) -> None:
+        with self._locked_capture_retry_queue():
+            self._write_capture_retries_locked(entries)
+
     def _resubmit_capture_retries(self) -> None:
         """Requeue pending retries through the normal capture future path.
 
@@ -713,13 +821,17 @@ class Plur1busRuntime:
         updates its attempt count in place; an in-memory key set prevents a
         second resubmission of the same durable entry while it is in flight.
         """
-        with self._lock:
-            entries = self._read_capture_retries()
+        self._warn_legacy_capture_retry_queue()
+        with self._locked_capture_retry_queue():
+            entries = self._read_capture_retries_locked()
             if not entries:
                 return
             pending = []
             dead_letters = []
             for entry in entries:
+                if not self._retry_entry_is_owned(entry):
+                    LOGGER.warning("refusing capture retry with a mismatched agent or scope binding")
+                    continue
                 try:
                     attempts = int(entry.get("attempts", 0))
                 except (TypeError, ValueError):
@@ -737,20 +849,24 @@ class Plur1busRuntime:
                 pending.append((entry, attempts))
                 self._retry_inflight.add(self._retry_key(entry))
             if dead_letters:
-                self._append_capture_dead_letters(dead_letters)
+                self._append_capture_dead_letters_locked(dead_letters)
                 dead_keys = {self._retry_key(entry) for entry in dead_letters}
-                self._write_capture_retries([
+                self._write_capture_retries_locked([
                     entry for entry in entries if self._retry_key(entry) not in dead_keys
                 ])
         for entry, attempts in pending:
             self._submit_capture(entry, attempts, from_retry=True)
 
-    def _append_capture_dead_letters(self, entries: list[dict[str, Any]]) -> None:
+    def _append_capture_dead_letters_locked(self, entries: list[dict[str, Any]]) -> None:
         """Durably retain exhausted capture evidence instead of discarding it."""
-        path = self.data_dir / "state" / "capture-retry-dead-letter.jsonl"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        os.chmod(path, 0o600)
+        if any(not self._retry_entry_is_owned(entry) for entry in entries):
+            raise ValidationError("refusing to dead-letter an unowned capture retry")
+        path = self._retry_state_path("capture-retry-dead-letter.jsonl")
+        self._ensure_retry_state_dir()
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as handle:
             for entry in entries:
                 handle.write(json.dumps(entry, sort_keys=True) + "\n")
@@ -762,45 +878,51 @@ class Plur1busRuntime:
         finally:
             os.close(directory_fd)
 
+    def _append_capture_dead_letters(self, entries: list[dict[str, Any]]) -> None:
+        with self._locked_capture_retry_queue():
+            self._append_capture_dead_letters_locked(entries)
+
     def _remove_capture_retry(self, payload: dict[str, Any]) -> None:
         key = self._retry_key(payload)
-        with self._lock:
-            self._write_capture_retries([
-                entry for entry in self._read_capture_retries()
-                if self._retry_key(entry) != key
+        with self._locked_capture_retry_queue():
+            entries = self._read_capture_retries_locked()
+            self._write_capture_retries_locked([
+                entry for entry in entries
+                if not self._retry_entry_is_owned(entry) or self._retry_key(entry) != key
             ])
 
     def _record_capture_retry(self, payload: dict[str, Any], attempts: int) -> None:
         """Requeue a failed capture payload, or give up once attempts hit the cap."""
-        key = self._retry_key(payload)
-        with self._lock:
+        stamped = {
+            **payload,
+            "agentId": self.agent_id,
+            "scopeKey": self.scope_key,
+            "aclBinding": self.scope_binding.acl_binding,
+        }
+        key = self._retry_key(stamped)
+        with self._locked_capture_retry_queue():
             entries = [
                 entry
-                for entry in self._read_capture_retries()
-                if self._retry_key(entry) != key
+                for entry in self._read_capture_retries_locked()
+                if not self._retry_entry_is_owned(entry) or self._retry_key(entry) != key
             ]
             if attempts >= MAX_CAPTURE_RETRIES:
                 LOGGER.warning(
                     "capture retry exhausted after %d attempts; giving up on session %s",
                     attempts,
-                    key[2],
+                    key[5],
                 )
-                self._append_capture_dead_letters([{
-                    "user": key[0], "assistant": key[1], "sessionId": key[2],
-                    "attempts": attempts, "deadLetterAt": _utcnow(), "reason": "max_attempts",
+                self._append_capture_dead_letters_locked([{
+                    **stamped, "attempts": attempts,
+                    "deadLetterAt": _utcnow(), "reason": "max_attempts",
                 }])
             else:
                 entries.append({
-                    "user": key[0],
-                    "assistant": key[1],
-                    "sessionId": key[2],
-                    "importance": payload.get("importance"),
-                    "validFrom": payload.get("validFrom"), "validUntil": payload.get("validUntil"),
-                    "expiresAt": payload.get("expiresAt"), "ttl": payload.get("ttl"),
+                    **stamped,
                     "attempts": attempts,
                     "lastErrorAt": _utcnow(),
                 })
-            self._write_capture_retries(entries)
+            self._write_capture_retries_locked(entries)
 
     def recall(self, query: str, limit: int = 5, explain: bool = False, *, valid_at: Any = None,
                session_id: str = "", full_text: bool = False) -> str:
@@ -1077,7 +1199,19 @@ class Plur1busRuntime:
         # Delete zu erzeugen.
         if str(card.get("status") or "") == "deleted":
             try:
-                archive_card_atomically(archive_ref, card)
+                # The first forget archives the active source before changing
+                # its row to deleted.  A repeat must *verify* that immutable
+                # source, never overwrite it with the post-delete row.
+                if archive_ref.is_symlink() or not archive_ref.is_file() or archive_ref.stat().st_size > 1_000_000:
+                    raise ValueError("deleted card archive is missing or unsafe; repair the original source")
+                archived = json.loads(archive_ref.read_text(encoding="utf-8"))
+                if not isinstance(archived, dict) or not self._card_matches_scope(archived):
+                    raise ValueError("deleted card archive does not match scope")
+                deletion_only = {"status", "deletedAt", "deleteSettledAt", "deletedBy", "deleteReason"}
+                if (archived.get("id") != card_id or archived.get("status") != "active"
+                    or card.get("status") != "deleted"
+                    or any(archived.get(key) != card.get(key) for key in set(archived) | set(card) if key not in deletion_only)):
+                    raise ValueError("deleted card archive identity/content differs from source")
                 from .tombstone import backfill_committed_tombstone
 
                 backfill = backfill_committed_tombstone(

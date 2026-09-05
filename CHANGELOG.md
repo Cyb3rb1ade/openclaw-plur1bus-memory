@@ -37,6 +37,18 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Recall-Booster erhalten den expliziten Request-Scope und bleiben additiv:
   gemischte Legacy-/moderne Private-Kennungen sowie autorisierte Shared-Pool-
   Treffer können die primären Ergebnisse nicht mehr unbeabsichtigt leeren.
+- Wiederholtes Forget prüft das unveränderte Vorher-Archiv statt es mit der
+  gelöschten Row zu überschreiben; fehlende oder abweichende Archive bleiben
+  gesperrt. BGE unterstützt explizite Revision und lokalen Offline-Betrieb.
+  Die Statusanzeige verlangt für lokale ONNX-Embeddings keinen API-Key.
+- Capture-Retry und Dead-Letter sind nach Agent und ACL-Scope partitioniert,
+  mit exakter Eigentümerprüfung und prozessübergreifend gesperrten Änderungen.
+  Alte ungebundene Queues bleiben unverändert zur manuellen Zuordnung liegen;
+  sie werden keinem Profil automatisch zugeschrieben. Beschädigte Queue-Zeilen
+  bleiben bei Änderungen erhalten, ohne als Capture ausgeführt zu werden.
+- Operator-Status und physisches Optimize verwenden den zertifizierten aktiven
+  Generationspfad auch nach einer Re-Embedding-Umschaltung; alte oder fremde
+  Routen bleiben gesperrt.
 - Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.

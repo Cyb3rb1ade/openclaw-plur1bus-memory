@@ -36,6 +36,10 @@ class _Database:
 
 
 class OperatorStatusTests(unittest.TestCase):
+    def test_local_onnx_credentials_are_not_reported_as_missing_remote_key(self):
+        from plur1bus_hermes.operator_status import _credential_state
+        self.assertEqual(_credential_state({"provider": "local-onnx"}, "local-onnx", reranker=False), "not_required")
+
     def _runtime(self, root: Path, table: _Table):
         config = {"embedding": {"provider": "local-transformers", "model": "intfloat/e5", "dimensions": 384}}
         agent = "main"

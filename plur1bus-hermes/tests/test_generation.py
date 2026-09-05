@@ -61,6 +61,22 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(route.path, Path(self.plan["targetRoute"]))
         self.assertTrue(activate_staged_generation(self.plan, self.root, self.agent, self.config, approved_plan_id=self.plan["planId"])["idempotent"])
 
+    def test_operator_status_and_optimize_use_certified_active_generation(self) -> None:
+        from types import SimpleNamespace
+        from plur1bus_hermes.namespaces import binding_from_scope, resolve_namespace_routes
+        from plur1bus_hermes.operator_status import optimize_runtime_table, read_operator_status
+
+        activate_staged_generation(self.plan, self.root, self.agent, self.config,
+                                   approved_plan_id=self.plan["planId"])
+        route, _ = resolve_namespace_routes(self.root, self.agent, self.config)
+        runtime = SimpleNamespace(agent_id=self.agent, data_dir=self.root.resolve(), config=self.config,
+                                  _writer_route=route, scope_binding=binding_from_scope(self.agent))
+        self.assertEqual(read_operator_status(runtime)["storage"]["status"], "ready")
+        self.assertTrue(optimize_runtime_table(runtime, authorized=True)["ok"])
+        self.assertEqual(lancedb.connect(str(route.path)).open_table("memories").count_rows(), 2)
+        runtime._writer_route = NamespaceRoute("default", self.source, True)
+        self.assertEqual(read_operator_status(runtime)["storage"]["status"], "degraded")
+
     def test_tampered_target_identity_and_pointer_drift_fail_closed(self) -> None:
         target = lancedb.connect(self.plan["targetRoute"]).open_table("memories")
         target.update(where="id = 'b'", values={"content": "tampered"})
