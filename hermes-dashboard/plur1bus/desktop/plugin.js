@@ -245,9 +245,8 @@ export default {
     if (typeof window !== 'undefined' && window.location.hash === '#/plur1bus') host.navigate('/');
     ctx.registerMany([
       { id: 'open-button', area: STATUSBAR_AREAS.left, order: 55,
-        render: () => h('button', { type: 'button', disabled: !supported, onClick: open,
-          style: { padding: '2px 8px', cursor: supported ? 'pointer' : 'default', fontSize: '12px' },
-          title: supported ? 'PLUR1BUS als Workspace öffnen' : 'Hermes Desktop mit openWorkspace-Unterstützung erforderlich' }, 'PLUR1BUS') },
+        data: { id: 'plur1bus-open', variant: 'action', label: 'PLUR1BUS', disabled: !supported, onSelect: open,
+          title: supported ? 'PLUR1BUS als Workspace öffnen' : 'Hermes Desktop mit openWorkspace-Unterstützung erforderlich' } },
       { id: 'open', area: PALETTE_AREA, data: { id: 'plur1bus.open', label: 'PLUR1BUS öffnen',
         keywords: ['memory', 'embeddings', 'reranker', 'plur1bus'], run: open } },
     ]);

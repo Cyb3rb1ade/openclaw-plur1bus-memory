@@ -88,8 +88,9 @@ values.host.openWorkspace = (id, options) => { opened.push({ id, options }); ret
 plugin.namespace.default.register({ rest() {}, onDispose(fn) { dispose = fn; }, registerMany(value) { contributions = value; } });
 assert.equal(plugin.namespace.default.id, 'plur1bus');
 assert.equal(contributions.some(c => c.area === 'routes'), false, 'must not rely on the stale compiled route table');
-const button = contributions.find(c => c.area === 'statusBar.left').render();
-button[1].onClick();
+const button = contributions.find(c => c.area === 'statusBar.left').data;
+assert.equal(button.label, 'PLUR1BUS');
+button.onSelect();
 assert.equal(contributions.find(c => c.area === 'palette').data.id, 'plur1bus.open');
 contributions.find(c => c.area === 'palette').data.run();
 assert.deepEqual(opened.map(c => c.id), ['plur1bus', 'plur1bus'], 'stable workspace ID prevents duplicate tabs');
