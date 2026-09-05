@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
+import { buildCriticalMessage } from "../lib/critical-review.js";
 
 const VECTOR_DIM = 384;
 
@@ -356,4 +357,87 @@ test("critical: ungültige Referenz (zu kurz/nicht hex) wird abgewiesen", async 
 
   const notHex = await findCommand(api).handler(telegramContext(agentId, workspaceDir, "critical accept zzzzz"));
   assert.match(notHex.text, /Ungültige Referenz/);
+});
+
+test("critical accept all bestätigt jede ausstehende Prüfung des autorisierten Scopes", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  installEmbeddingStub(t);
+  const agentId = "critical-bulk-agent";
+  const ids = ["d4563cc9-7611-4528-992a-075f8889a031", "e4563cc9-7611-4528-992a-075f8889a042"];
+  const pluginModule = await loadFreshPlugin();
+  for (const id of ids) await seedCriticalCard(pluginModule, baseDbPath, agentId, { id, type: "gesundheit", text: `Karte ${id.slice(-3)}`, sourceMessageRole: "user" });
+  const api = createApi(baseDbPath);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await findCommand(api).handler(telegramContext(agentId, workspaceDir, "critical accept all"));
+  assert.match(result.text, /2 Erinnerung\(en\) werden nun besonders hervorgehoben/);
+  for (const id of ids) {
+    const card = await readCard(pluginModule, baseDbPath, agentId, id);
+    assert.ok(card.confirmed === true || card.confirmed === 1, `accept all muss ${id} bestätigen`);
+  }
+  const again = await findCommand(api).handler(telegramContext(agentId, workspaceDir, "critical accept all"));
+  assert.match(again.text, /Keine ausstehenden PLUR1BUS-Prüfungen/);
+});
+
+test("critical reject mit mehreren Referenzen verwirft die bekannten und meldet die unbekannten", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  installEmbeddingStub(t);
+  const agentId = "critical-multi-agent";
+  const ids = ["f4563cc9-7611-4528-992a-075f8889a053", "a4563cc9-7611-4528-992a-075f8889a064"];
+  const pluginModule = await loadFreshPlugin();
+  for (const id of ids) await seedCriticalCard(pluginModule, baseDbPath, agentId, { id, type: "person", text: `Karte ${id.slice(-3)}`, sourceMessageRole: "user" });
+  const api = createApi(baseDbPath);
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+
+  const result = await findCommand(api).handler(telegramContext(agentId, workspaceDir, "critical reject 9a053 9a064 fffff"));
+  assert.match(result.text, /2 Erinnerung\(en\) werden nicht besonders hervorgehoben/);
+  assert.match(result.text, /Übersprungen[^\n]*fffff/);
+  for (const id of ids) {
+    const card = await readCard(pluginModule, baseDbPath, agentId, id);
+    assert.ok(card, "reject darf nicht löschen");
+    assert.equal(card.type, "note");
+  }
+});
+
+test("eine zitierte Push-Antwort „bitte alle akzeptieren“ wird vor dem Agenten ausgeführt", async (t) => {
+  const { baseDbPath, workspaceDir } = withTempPaths(t);
+  installEmbeddingStub(t);
+  const agentId = "critical-reply-agent";
+  const ids = ["b4563cc9-7611-4528-992a-075f8889a075", "c4563cc9-7611-4528-992a-075f8889a086"];
+  const pluginModule = await loadFreshPlugin();
+  for (const id of ids) await seedCriticalCard(pluginModule, baseDbPath, agentId, { id, type: "gesundheit", text: `Karte ${id.slice(-3)}`, sourceMessageRole: "user" });
+  const hooks = [];
+  const api = createApi(baseDbPath);
+  api.on = (name, fn) => hooks.push({ name, fn });
+  api.config = { workspaceDir };
+  pluginModule.default.register(api, { importRouting: async () => routingCapability });
+  const handler = hooks.filter((entry) => entry.name === "before_agent_reply").at(-1)?.fn;
+  assert.equal(typeof handler, "function", "the plugin listens before the agent replies");
+
+  // The quoted push names both cards; the reply decides for all of them.
+  const quoted = ["9a075", "9a086"].map((shortRef) => buildCriticalMessage({ shortRef, type: "gesundheit", text: "x" }, { lang: "de" }).text).join("\n\n");
+  const event = {
+    body: "bitte alle akzeptieren",
+    replyToBody: quoted,
+    replyToIsQuote: true,
+    isGroup: false,
+    senderId: "command-owner",
+    channel: "telegram",
+    sessionKey: `agent:${agentId}:main`,
+  };
+  const context = { channelId: "telegram", accountId: "default", conversationId: "command-private", senderId: "command-owner", sessionKey: `agent:${agentId}:main` };
+  const handled = await handler(event, context);
+  assert.equal(handled?.handled, true, JSON.stringify(handled));
+  assert.match(handled.text, /2 Erinnerung\(en\) werden nun besonders hervorgehoben/);
+  for (const id of ids) {
+    const card = await readCard(pluginModule, baseDbPath, agentId, id);
+    assert.ok(card.confirmed === true || card.confirmed === 1);
+  }
+
+  // Not a decision, no quoted push, or a group: the agent gets the message.
+  assert.equal(await handler({ ...event, body: "Was ist das?" }, context), undefined);
+  assert.equal(await handler({ ...event, replyToBody: "Guten Morgen!" }, context), undefined);
+  assert.equal(await handler({ ...event, isGroup: true }, context), undefined);
+  // A quoted message that merely carries hand-typed reference lines is not a push.
+  assert.equal(await handler({ ...event, replyToBody: "Referenz: 9a075\nReferenz: 9a086" }, context), undefined);
 });

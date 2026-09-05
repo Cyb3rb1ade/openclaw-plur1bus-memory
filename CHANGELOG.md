@@ -7,6 +7,27 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.9.0] — 2026-09-05
+
+### Hinzugefügt
+
+- **Critical Push: alle auf einmal, auch als zitierte Antwort.**
+  `/plur1bus critical accept all`, `reject all` sowie mehrere Referenzen in
+  einem Befehl (`accept 9a019 9a028`) bearbeiten jede ausstehende Prüfung des
+  autorisierten Scopes; unbekannte oder nicht eindeutige Referenzen werden
+  gemeldet, der Rest wird ausgeführt. Wer einen Push im Chat zitiert und
+  darunter „bitte alle akzeptieren“, „alle ablehnen“, „accept all“ oder bei
+  genau einer zitierten Karte „akzeptieren“/„nicht hervorheben“ schreibt,
+  bekommt das vor dem Agenten ausgeführt: Die Referenzen kommen aus dem
+  zitierten Push (`Referenz: …`), die Entscheidung aus der Antwort, die
+  Autorisierung ist dieselbe wie beim Befehl (destruktiv, in Gruppen
+  verweigert). Ausgeführt wird nur, wenn das Zitat die feste Kopfzeile eines
+  PLUR1BUS-Pushes trägt; eine von Hand getippte „Referenz:“-Zeile in einer
+  anderen Nachricht ist kein Push. Alles Unklare, etwa eine verneinte
+  Zustimmung, mehrere Karten ohne „alle“ oder eine Rückfrage, geht wie
+  bisher an den Agenten.
+  Neu: `lib/critical-reply-intent.js`, Hook `before_agent_reply`.
+
 ## [7.8.11] — 2026-09-05
 
 ### Hinzugefügt

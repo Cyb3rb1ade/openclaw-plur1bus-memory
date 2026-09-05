@@ -104,6 +104,7 @@ import { writeMemoryNotes } from "./lib/obsidian/memory-note-writer.js";
 import { loadLinkIndex } from "./lib/obsidian/link-index.js";
 import { handleObsidianBridgeCommand, resolveCommandVaultPath } from "./lib/obsidian-control-room.js";
 import { mutationAllowed, parseObsidianCommandPlan } from "./lib/obsidian-mutation-policy.js";
+import { buildCriticalReplyCommand } from "./lib/critical-reply-intent.js";
 import { describeOwnedVaultConfirmation, isOwnedVaultConfirmed } from "./lib/obsidian-vault-authority.js";
 import { renderStatus } from "./lib/telegram-commands/status.js";
 import { collectStatusData } from "./lib/telegram-commands/status-data.js";
@@ -9175,6 +9176,40 @@ const plugin = {
 
             if (!ref) return { text: t("critical.usage", { lang, tone }) };
 
+            // Bulk: `accept all`, `reject all`, or several references at once.
+            // Each reference resolves against the same authorized pending set;
+            // unknown or ambiguous ones are reported, the rest is applied.
+            const refs = tokens.slice(1);
+            const wantsAll = refs.length === 1 && refs[0].toLowerCase() === "all";
+            if (subKey !== "edit" && (wantsAll || refs.length > 1)) {
+              if (!pending || pending.length === 0) return { text: t("critical.list_empty", { lang, tone }) };
+              const targets = [];
+              const skipped = [];
+              if (wantsAll) {
+                for (const card of pending) targets.push(card.id);
+              } else {
+                for (const candidate of refs) {
+                  const one = resolveShortRef(candidate, pending);
+                  if (one.ok && !targets.includes(one.id)) targets.push(one.id);
+                  else if (!one.ok) skipped.push(candidate);
+                }
+              }
+              if (targets.length === 0) return { text: t("critical.not_found", { lang, tone, vars: { ref: refs.join(", ") } }) };
+              let done = 0;
+              const failed = [];
+              for (const id of targets) {
+                const result = subKey === "accept"
+                  ? await memoryDbAdapter.markCriticalAccepted(agentId, id)
+                  : await memoryDbAdapter.markCriticalRejected(agentId, id);
+                if (result?.ok) done += 1;
+                else failed.push(refMap.get(id) || id.slice(-5));
+              }
+              const lines = [t(subKey === "accept" ? "critical.bulk_accepted" : "critical.bulk_rejected", { lang, tone, vars: { count: done } })];
+              if (skipped.length > 0) lines.push(t("critical.bulk_skipped", { lang, tone, vars: { refs: skipped.join(", ") } }));
+              if (failed.length > 0) lines.push(t("critical.failed", { lang, tone, vars: { error: failed.join(", ") } }));
+              return { text: lines.join("\n") };
+            }
+
             const resolved = resolveShortRef(ref, pending || []);
             if (!resolved.ok) {
               if (resolved.error === "ambiguous") {
@@ -9210,6 +9245,52 @@ const plugin = {
             return { text: t("critical.failed", { lang, tone, vars: { error: err?.message || err } }) };
           }
         };
+
+        // A quoted reply to a Critical Push ("bitte alle akzeptieren" under a
+        // quoted push) is answered here, before the agent: the references come
+        // out of the quote the host hands over, the decision out of the reply,
+        // and the same authorized critical command does the work. Anything
+        // less than an unambiguous decision falls through to the agent.
+        if (typeof api.on === "function" && cfg.criticalPush?.enabled !== false) {
+          api.on("before_agent_reply", async (event, context) => {
+            try {
+              if (event?.isGroup === true) return undefined;
+              const command = buildCriticalReplyCommand({
+                body: typeof event?.body === "string" ? event.body : event?.content,
+                replyToBody: event?.replyToBody,
+              });
+              if (!command) return undefined;
+              const sessionKey = String(context?.sessionKey || event?.sessionKey || "");
+              const agentId = /^agent:([^:]+):/.exec(sessionKey)?.[1];
+              const channel = String(context?.channelId || event?.channel || "");
+              const senderId = String(context?.senderId ?? event?.senderId ?? "");
+              const conversationId = String(context?.conversationId ?? "");
+              if (!agentId || !channel || !senderId || !conversationId) return undefined;
+              const target = `${channel}:${conversationId}`;
+              const result = await runCriticalCommand({
+                args: command.args,
+                lang: command.lang,
+                agentId,
+                sessionKey,
+                channel,
+                accountId: context?.accountId,
+                senderId,
+                from: target,
+                to: target,
+                config: api.config,
+                getCurrentConversationBinding: () => null,
+                message: { from: { id: senderId }, chat: { id: conversationId, type: "private" } },
+              });
+              const text = typeof result?.text === "string" ? result.text : "";
+              if (!text) return undefined;
+              api.logger?.info?.(`plur1bus critical[${agentId}]: quoted-reply ${command.action} for ${command.refs.length} reference(s)`);
+              return { handled: true, text, reply: { text } };
+            } catch (error) {
+              api.logger?.warn?.(`memory-lancedb-namespaced: critical quoted-reply handling failed: ${error?.message || error}`);
+              return undefined;
+            }
+          });
+        }
 
         /** Share a private memory into the bound workspace or user pool. */
         const runShareCommand = async (commandCtx) => {
