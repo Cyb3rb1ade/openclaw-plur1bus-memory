@@ -349,3 +349,23 @@ describe("reserved store directories", () => {
     assert.equal(snapshot.lastError, null);
   });
 });
+
+describe("shared user pool labels in the scan", () => {
+  it("names user partitions through the resolver and flags an invalid label", async () => {
+    const scanFor = (resolver) => createControlPlaneHealthScan({
+      namespaceRoots: [{ id: "lancedb-namespaced", path: "/not-projected/private", dimensions: 768 }],
+      sharedRoots: { user: { path: "/not-projected/shared/users", dimensions: 768 } },
+      listPartitions: async ({ kind }) => ({ agent: ["agent-a"], user: ["u-0123456789abcdef", "u-fedcba9876543210"] })[kind],
+      inspectRows: async ({ kind, partitionId }) => ({ "agent:agent-a": 3, "user:u-0123456789abcdef": 0, "user:u-fedcba9876543210": 2 })[`${kind}:${partitionId}`] ?? 0,
+      measureStorage: async () => ({ bytes: 1, complete: true }),
+      userIdentityForKey: resolver,
+    });
+    const named = await scanFor((key) => (key === "u-0123456789abcdef" ? "main.telegram.default" : null))();
+    assert.equal(named.status, "ready");
+    assert.deepStrictEqual(named.cards.byUser, [{ id: "main.telegram.default", cards: 0 }, { id: "u-fedcba9876543210", cards: 2 }]);
+    const invalid = await scanFor(() => "/root/private")();
+    assert.equal(invalid.status, "degraded");
+    assert.deepStrictEqual(invalid.lastError, { component: "health", code: "user_identity_invalid" });
+    assert.deepStrictEqual(invalid.cards.byUser.map((entry) => entry.id), ["u-0123456789abcdef", "u-fedcba9876543210"]);
+  });
+});

@@ -23,6 +23,7 @@ import {
   userPoolKey,
   workspacePoolKey,
   describeDirectSessionRoute,
+  describeUserPoolLabels,
   describeWorkspacePoolLabels,
   resolveSessionOwnerMemoryContext,
 } from "../lib/memory-request-context.js";
@@ -1378,5 +1379,39 @@ describe("shared workspace pool labels", () => {
       assert.match(entry.label, /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
     }
     assert.deepEqual(describeWorkspacePoolLabels(), []);
+  });
+});
+
+describe("shared user pool labels", () => {
+  it("names each allowed direct-message user's pool after agent, channel and account, never the id", () => {
+    const hostConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            default: { allowFrom: [55736530] },
+            bernhardine: { allowFrom: ["1211667028"] },
+            shared: { allowFrom: [111, 222] },
+            unbound: { allowFrom: [333] },
+          },
+        },
+        discord: { accounts: { default: { allowFrom: [] } } },
+      },
+      bindings: [
+        { agentId: "main", match: { channel: "telegram", accountId: "default" } },
+        { agentId: "bernhardine", match: { channel: "telegram", accountId: "bernhardine" } },
+        { agentId: "main", match: { channel: "telegram", accountId: "shared" } },
+        { agentId: "heisenberg", match: { channel: "telegram", accountId: "shared" } },
+      ],
+    };
+    const labels = describeUserPoolLabels(hostConfig);
+    const byLabel = Object.fromEntries(labels.map((entry) => [entry.label, entry.poolKey]));
+    assert.deepEqual(Object.keys(byLabel).sort(), ["bernhardine.telegram.bernhardine", "main.telegram.default", "telegram.shared.1", "telegram.shared.2", "telegram.unbound"]);
+    const expected = resolveMemoryRequestContext({ agentId: "main", channel: "telegram", accountId: "default", userId: "55736530", chatId: "55736530" });
+    assert.equal(byLabel["main.telegram.default"], userPoolKey(expected.userPrincipal));
+    for (const label of Object.keys(byLabel)) {
+      assert.doesNotMatch(label, /55736530|1211667028|111|222|333/, "labels never carry a user id");
+      assert.match(label, /^[A-Za-z][A-Za-z0-9._:-]{0,127}$/);
+    }
+    assert.deepEqual(describeUserPoolLabels({}), []);
   });
 });

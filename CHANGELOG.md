@@ -7,6 +7,20 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.8.11] — 2026-09-05
+
+### Hinzugefügt
+
+- **„Cards by user" nennt die Partitionen beim Namen.** Ein Nutzerprinzipal
+  ist der Hash aus Kanal, Konto und Nutzerkennung; die Host-Konfiguration
+  kennt je Kanalkonto die erlaubten Direktchat-Nutzer (`allowFrom`) und die
+  Bindung des Kontos an einen Agenten. Daraus entsteht je Nutzer ein
+  vorhersagbarer Pool-Schlüssel, und die Karte zeigt ihn als
+  `<agent>.<kanal>.<konto>` (nummeriert, wenn ein Konto mehrere Nutzer
+  zulässt; ohne eindeutige Bindung nur `<kanal>.<konto>`). Die
+  Nutzerkennung selbst erscheint nie. Der Health-Scan bekommt dafür einen
+  `userIdentityForKey`-Auflöser wie schon für Workspaces.
+
 ## [7.8.10] — 2026-09-05
 
 ### Behoben

@@ -205,6 +205,7 @@ import {
   createMemoryTurnRouteRegistry,
   resolveHostCommandMemoryContext,
   resolveHostHookMemoryContext,
+  describeUserPoolLabels,
   describeWorkspacePoolLabels,
   resolveMemoryRequestContext,
   resolveSessionOwnerMemoryContext,
@@ -5315,6 +5316,7 @@ const plugin = {
     // reuse a write pool: a status request is not allowed to create a Lance
     // table, directory, or card as a side effect.
     const controlHealthWorkspaceIdentityByKey = new Map();
+    const controlHealthUserLabelByKey = new Map();
     const controlHealthNamespaceRoots = namespaceLayout.mode === "named"
       ? namespaceLayout.recallReadNamespaces.map((id) => ({
           id,
@@ -5338,6 +5340,7 @@ const plugin = {
       inspectRows: createControlHealthRowInspector(vectorDim, api.logger),
       measureStorage: () => measureControlHealthStorage(baseDbPath),
       workspaceIdentityForKey: (key) => controlHealthWorkspaceIdentityByKey.get(key) ?? null,
+      userIdentityForKey: (key) => controlHealthUserLabelByKey.get(key) ?? null,
       maxPartitions: CONTROL_HEALTH_MAX_PARTITIONS,
     });
     // The workspace identities are refreshed inside the scan, not by the page
@@ -5365,6 +5368,19 @@ const plugin = {
         if (!controlHealthWorkspaceIdentityByKey.has(entry.poolKey)) {
           controlHealthWorkspaceIdentityByKey.set(entry.poolKey, entry.label);
         }
+      }
+      // User pools are named after the agent, channel and account whose
+      // allowed direct-message user owns them; the user id stays off the page.
+      controlHealthUserLabelByKey.clear();
+      let liveHostConfig = hostMemoryConfig;
+      try {
+        const current = runtimeIfUsable(api)?.config?.current;
+        if (typeof current === "function") liveHostConfig = current() || hostMemoryConfig;
+      } catch {
+        liveHostConfig = hostMemoryConfig;
+      }
+      for (const entry of describeUserPoolLabels(liveHostConfig)) {
+        controlHealthUserLabelByKey.set(entry.poolKey, entry.label);
       }
     };
     const controlHealth = createControlPlaneHealthInspector({
