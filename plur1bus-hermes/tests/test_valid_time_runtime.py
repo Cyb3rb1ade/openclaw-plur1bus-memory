@@ -77,7 +77,7 @@ class RuntimeValidTimeRecallTests(unittest.TestCase):
         runtime._reranker.rerank = lambda _query, rows: rows  # type: ignore[method-assign]
         runtime._shared_pools.recall_rows = lambda _vector, _limit: []  # type: ignore[method-assign]
         runtime._domain.boost_recall = lambda rows, _table, _limit, **_kwargs: rows  # type: ignore[method-assign]
-        runtime._domain.recall_overlay = lambda _query, _rows: ""  # type: ignore[method-assign]
+        runtime._domain.recall_overlay = lambda _query, _rows, **_kwargs: ""  # type: ignore[method-assign]
         runtime._domain.cognitive_prompt_blocks = lambda **_kwargs: []  # type: ignore[method-assign]
         return runtime
 
@@ -185,7 +185,7 @@ class ValidTimeSchemaMigrationTests(unittest.TestCase):
             runtime._reranker.rerank = lambda _query, rows: rows  # type: ignore[method-assign]
             runtime._shared_pools.recall_rows = lambda _vector, _limit: []  # type: ignore[method-assign]
             runtime._domain.boost_recall = lambda rows, _table, _limit, **_kwargs: rows  # type: ignore[method-assign]
-            runtime._domain.recall_overlay = lambda _query, _rows: ""  # type: ignore[method-assign]
+            runtime._domain.recall_overlay = lambda _query, _rows, **_kwargs: ""  # type: ignore[method-assign]
             runtime._domain.cognitive_prompt_blocks = lambda **_kwargs: []  # type: ignore[method-assign]
             runtime._recall_tables = lambda: [("main", reopened)]  # type: ignore[method-assign]
             at_start = runtime.recall("dated", valid_at="2026-01-01")

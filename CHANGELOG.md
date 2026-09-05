@@ -34,6 +34,9 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Lokaler BGE-Reranker verwendet den tatsächlichen CrossEncoder-Parameter
   `cache_dir` statt `cache_folder`; Regressionstest gegen die 3.x-Signatur,
   begrenzte Eingaben und kein Remote-Code. Echte Nano-/BGE-Inferenz geprüft.
+- Recall-Booster erhalten den expliziten Request-Scope und bleiben additiv:
+  gemischte Legacy-/moderne Private-Kennungen sowie autorisierte Shared-Pool-
+  Treffer können die primären Ergebnisse nicht mehr unbeabsichtigt leeren.
 - Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.

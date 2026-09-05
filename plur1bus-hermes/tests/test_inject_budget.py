@@ -115,8 +115,8 @@ class RuntimeInjectBudgetWiringTests(unittest.TestCase):
         runtime = Plur1busRuntime(Path(directory), config, "main")
         runtime._embedding.embed = lambda text, purpose="query": [0.1, 0.2]  # type: ignore[method-assign]
         runtime._reranker.rerank = lambda query, rows: rows  # type: ignore[method-assign]
-        runtime._domain.boost_recall = lambda rows, table, limit: rows  # type: ignore[method-assign]
-        runtime._domain.recall_overlay = lambda query, rows: ""  # type: ignore[method-assign]
+        runtime._domain.boost_recall = lambda rows, table, limit, **kwargs: rows  # type: ignore[method-assign]
+        runtime._domain.recall_overlay = lambda query, rows, **kwargs: ""  # type: ignore[method-assign]
         runtime._shared_pools.recall_rows = lambda vector, limit: []  # type: ignore[method-assign]
         return runtime
 

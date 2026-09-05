@@ -894,14 +894,22 @@ class Plur1busRuntime:
             seen_content.setdefault(canonical, []).append(row)
             deduplicated.append(row)
         if session_id:
-            rows = self._domain.boost_recall(
+            boosted = self._domain.boost_recall(
                 deduplicated, recall_tables[0][1], adaptive_limit + 3,
                 session_id=session_id,
+                acl_bindings=self.scope_binding.as_dict(),
             )
         else:
-            rows = self._domain.boost_recall(
+            boosted = self._domain.boost_recall(
                 deduplicated, recall_tables[0][1], adaptive_limit + 3,
+                acl_bindings=self.scope_binding.as_dict(),
             )
+        # SQL and shared-pool recall already authorized the primary rows.
+        # A scope-specific additive booster must never replace/drop them,
+        # including legacy private rows and separately authorized pool rows.
+        rows = list(deduplicated)
+        primary_ids = {str(row.get("id") or "") for row in rows}
+        rows.extend(row for row in boosted if str(row.get("id") or "") not in primary_ids)
         # Boosters are additive read paths, so enforce the lifecycle gates
         # again after they contribute rows.
         rows = [
@@ -913,8 +921,8 @@ class Plur1busRuntime:
             for row in rows
             if row.get("content")
         )
-        overlay = self._domain.recall_overlay(semantic_query, rows)
-        explanation = self._domain.explain_recall(rows) if explain else ""
+        overlay = self._domain.recall_overlay(semantic_query, rows, acl_bindings=self.scope_binding.as_dict())
+        explanation = self._domain.explain_recall(rows, acl_bindings=self.scope_binding.as_dict()) if explain else ""
         cognitive_blocks = "\n\n".join(self._domain.cognitive_prompt_blocks(
             acl_bindings=self.scope_binding.as_dict(), scope_key=self.scope_key,
         ))
