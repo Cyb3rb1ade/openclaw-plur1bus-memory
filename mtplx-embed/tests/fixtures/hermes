@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "config" && "${2:-}" == "path" ]]; then
+  [[ -n "${MTPLX_TEST_HERMES_CONFIG_PATH:-}" ]] && printf '%s\n' "$MTPLX_TEST_HERMES_CONFIG_PATH"
+  exit 0
+fi
+printf 'hermes:%s\n' "$*" >> "${MTPLX_TEST_RECORD:?MTPLX_TEST_RECORD is required}"
+if [[ "${1:-}" == "gateway" && "${2:-}" == "restart" && "${MTPLX_TEST_HERMES_RELOAD_FAIL:-0}" == "1" ]]; then
+  exit 1
+fi

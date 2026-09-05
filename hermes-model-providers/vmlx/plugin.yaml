@@ -1,0 +1,5 @@
+name: vmlx-provider
+kind: model-provider
+version: 1.0.0
+description: Local vMLX JANG and Gemma 4 inference
+author: PLUR1BUS

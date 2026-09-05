@@ -1,0 +1,5 @@
+name: omlx-provider
+kind: model-provider
+version: 1.0.0
+description: Local oMLX OpenAI-compatible inference
+author: PLUR1BUS

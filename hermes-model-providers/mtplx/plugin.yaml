@@ -1,0 +1,5 @@
+name: mtplx-provider
+kind: model-provider
+version: 1.0.0
+description: Local MTPLX inference with native MTP speculative decoding
+author: PLUR1BUS

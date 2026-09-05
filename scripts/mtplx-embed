@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Launch the MTPLX embedding/reranking sidecar from its dedicated installer
+# venv. This deliberately never shares Hermes or the MTPLX desktop runtime's
+# Python packages.
+#
+# Runs from either layout:
+#   repo      <repo>/scripts/mtplx-embed        → <repo>/mtplx-embed/src
+#   installed $HERMES_HOME/bin/mtplx-embed      → $HERMES_HOME/mtplx-embed
+#
+# The installed copy must live outside ~/Documents: a LaunchAgent runs without
+# Full Disk Access and macOS TCC denies it execute access there (exit 126).
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+parent_dir="$(cd "$script_dir/.." && pwd)"
+
+if [[ -d "$parent_dir/mtplx-embed/src/mtplx_embed" ]]; then
+  package_root="$parent_dir/mtplx-embed/src"
+elif [[ -d "$parent_dir/mtplx-embed/mtplx_embed" ]]; then
+  package_root="$parent_dir/mtplx-embed"
+else
+  printf 'mtplx-embed: cannot locate the mtplx_embed package near %s\n' "$parent_dir" >&2
+  exit 1
+fi
+
+# The installer writes this limited key/value file only after its download and
+# smoke gates pass. Parse it rather than sourcing it so a model path can never
+# become shell code.
+service_config="$parent_dir/mtplx-embed/service.env"
+backend="${MTPLX_EMBED_BACKEND:-auto}"
+embedding_model="${MTPLX_EMBEDDING_MODEL:-}"
+reranker_model="${MTPLX_RERANKER_MODEL:-}"
+model_dir="${MTPLX_EMBED_MODEL_DIR:-}"
+idle_seconds="${MTPLX_EMBED_IDLE_SECONDS:-300}"
+python_bin="${MTPLX_EMBED_PYTHON:-}"
+if [[ -f "$service_config" ]]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      MTPLX_EMBED_BACKEND) backend="$value" ;;
+      MTPLX_EMBEDDING_MODEL) embedding_model="$value" ;;
+      MTPLX_RERANKER_MODEL) reranker_model="$value" ;;
+      MTPLX_EMBED_MODEL_DIR) model_dir="$value" ;;
+      MTPLX_EMBED_IDLE_SECONDS) idle_seconds="$value" ;;
+      MTPLX_EMBED_PYTHON) python_bin="$value" ;;
+    esac
+  done < "$service_config"
+fi
+
+if [[ -z "$python_bin" ]]; then
+  printf 'mtplx-embed: no dedicated sidecar venv is configured; reinstall with scripts/install-mtplx-embed.sh\n' >&2
+  exit 1
+fi
+
+export PYTHONPATH="$package_root${PYTHONPATH:+:$PYTHONPATH}"
+
+args=(--backend "$backend" --idle-seconds "$idle_seconds")
+[[ -n "$embedding_model" ]] && args+=(--embedding-model "$embedding_model")
+[[ -n "$reranker_model" ]] && args+=(--reranker-model "$reranker_model")
+[[ -n "$model_dir" ]] && args+=(--model-dir "$model_dir")
+exec "$python_bin" -m mtplx_embed "${args[@]}" "$@"

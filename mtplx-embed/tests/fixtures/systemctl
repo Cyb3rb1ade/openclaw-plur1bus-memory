@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'systemctl:%s\n' "$*" >> "${MTPLX_TEST_RECORD:?MTPLX_TEST_RECORD is required}"

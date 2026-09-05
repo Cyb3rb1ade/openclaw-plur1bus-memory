@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plur1bus-controls"
+version = "7.4.8.1"
+description = "Hermes controls plugin for PLUR1BUS provider orchestration and slash commands."
+readme = "README.md"
+requires-python = ">=3.11"
+
+[project.scripts]
+plur1bus-controls = "plur1bus_controls.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
