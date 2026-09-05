@@ -776,6 +776,43 @@ unrelated hook and feature choices unchanged.
 
 All paths default to `$HOME/.openclaw/...` if omitted. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_HOME` env vars override the lookup of the gateway config file used by the toggle commands.
 
+### Choosing embedding and reranking models
+
+PLUR1BUS ships a keyless fallback for both stages and recommends something
+stronger for each. The two choices are not equal in weight: the embedding model
+decides how well recall separates hits from noise, the reranker only refines
+the candidates the embedding already found.
+
+**Embedding.** The fallback `intfloat/multilingual-e5-small` (fixed 384
+dimensions) packs its vectors into a narrow cone. Texts that have nothing to do
+with each other still land at a cosine similarity around 0.84, which is a recall
+score of roughly 0.86 on the `1 / (1 + distance)` scale PLUR1BUS uses. Hits and
+background noise sit so close together that neither the ranking nor a threshold
+can separate them cleanly, and the band 0.96 to 1.0 reserved for agent-marked
+cards as well as the duplicate threshold of 0.95 lose their meaning. This is
+exactly what the compatibility lab showed when it measured with E5 and no
+reranker. The recommended models spread similarities much wider:
+`jinaai/jina-embeddings-v3` locally (multilingual, Matryoshka dimensions from 32
+to 1024, CC BY-NC 4.0 license consent required) or OpenAI
+`text-embedding-3-large` hosted. With either of them ranking and thresholds do
+their job, which is why the installer proposes Jina or OpenAI and lists E5 only
+as the small keyless fallback. Changing the embedding model is a migration with
+a re-embedding run (dry run, copy, separate switch), not a setting.
+
+**Reranking.** The reranker reviews the 40 candidates the vector search returns
+and removes the ANN noise. Hosted, that is Cohere `rerank-v3.5`; locally,
+`jinaai/jina-reranker-v2-base-multilingual`, with `bge-reranker-v2-m3` as the
+controlled fallback when the Jina model fails. Switching between them is a
+runtime choice without any data migration (see `controlUi.writeActions`). The
+project has no measured quality difference between the Jina and BGE rerankers:
+both passed every run of the compatibility matrix, including the controlled
+fallback and the cache surviving a Gateway restart, and that is a functional
+proof, not a ranking benchmark.
+
+Settings for both stages are described in
+[docs/configuration.md](docs/configuration.md); the installer offers the
+preparation profiles for the local models.
+
 ### Named storage namespaces
 
 Omitting `namespaces` preserves the legacy-flat layout exactly:
