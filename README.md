@@ -803,6 +803,19 @@ Unlike the reranker switch, every card is embedded again along the way, so
 it takes time and disk space, and the old generation stays available for
 rollback.
 
+*Which dimension.* Jina v3 is trained with Matryoshka representation learning,
+so the vector can be cut to 32, 64, 128, 256, 512, 768 or 1024 dimensions. The
+Jina paper (table 7) reports retrieval nDCG@10 of 63.35 at 1024, 63.30 at 768,
+63.16 at 512, 62.72 at 256, 61.64 at 128, 58.54 at 64 and 52.54 at 32. Keep the
+PLUR1BUS default of **1024**: at memory scale the vectors are small anyway
+(50,000 cards are about 200 MB of float32 vectors), and the duplicate threshold
+of 0.95 and the reserved band above 0.96 are calibrated on full-width
+similarities. **512** is the economical choice for very large stores or weak
+hardware; it halves storage and ANN cost for a loss of 0.2 points. Do not go
+below 256: from 128 down the recall loss becomes visible and the similarity
+spread compresses, which moves every threshold. The dimension is baked into
+the table, so changing it later means another re-embedding run.
+
 **Reranking.** The reranker reviews the 40 candidates the vector search returns
 and removes the ANN noise. Locally, that is
 `jinaai/jina-reranker-v2-base-multilingual`, with `bge-reranker-v2-m3` as the
