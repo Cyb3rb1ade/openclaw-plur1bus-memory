@@ -7,6 +7,25 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
+## [7.12.0] — 2026-09-05
+
+### Geändert
+
+- **Jina v5 Text Nano ist die Vorgabe bei Neuinstallation.** Nach dem
+  Labortest (README, „Choosing embedding and reranking models“) bieten
+  Provider-Wizard und Shell-Installer `jinaai/jina-embeddings-v5-text-nano-retrieval`
+  als Option 1 und Vorgabe an; OpenAI ist Option 2, E5 der schlüssellose
+  Notnagel, Jina v3 bleibt für Bestandsinstallationen wählbar. Der Wizard
+  wählt den Zweig über den Schlüssel der Option. Nicht-interaktive Läufe und
+  Probeläufe brauchen `PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1` für die
+  CC-BY-NC-Zustimmung und fallen sonst auf E5 zurück, statt abzubrechen oder
+  eine Lizenz stillschweigend zu bejahen.
+- **Bestandsnutzern wird die Migration im Dashboard empfohlen.** Der
+  Dimensions-Planer zeigt bei aktivem anderem Embedding-Modell den Hinweis auf
+  Nano mit dem Weg über Modellvorbereitung und Re-Embedding-Migration
+  (Probelauf, Kopie, getrenntes Umschalten). Bestehende Konfigurationen werden
+  nicht angefasst, nichts migriert von selbst.
+
 ## [7.11.1] — 2026-09-05
 
 ### Behoben

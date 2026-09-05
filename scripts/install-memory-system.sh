@@ -756,14 +756,23 @@ RERANKER_LOCAL_CACHE_DIR="\${OPENCLAW_HOME}/models/plur1bus"
 if [[ "$KEEP_EXISTING_MEMORY_CONFIG" != "1" ]]; then
 echo ""
 info "Embedding-Provider-Auswahl:"
-info "  1) OpenAI text-embedding-3-large — empfohlen, remote, API-Key erforderlich."
-info "  2) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
-info "  3) Local JinaAI jina-embeddings-v3 — mehrsprachig, Matryoshka, optionaler verifizierter ~0,58-GB-Q8-Download."
+info "  1) Local JinaAI jina-embeddings-v5-text-nano — empfohlen: 15 europäische Sprachen, Matryoshka, verifizierter ~0,26-GB-Q8-Download, im Labortest gleichauf mit v3 bei dreifacher Migrationsgeschwindigkeit."
 warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
-info "  4) Local JinaAI jina-embeddings-v5-text-nano — neue Option, Labortest gegen v3 offen; 15 europäische Sprachen, Matryoshka, verifizierter ~0,26-GB-Q8-Download."
+info "  2) OpenAI text-embedding-3-large — remote, API-Key erforderlich."
+info "  3) Local multilingual-e5-small — lokal/privat, kein API-Key, CPU/Download-Hinweis."
+info "  4) Local JinaAI jina-embeddings-v3 — Bestandsoption; mehrsprachig, Matryoshka, optionaler verifizierter ~0,58-GB-Q8-Download."
 warn "     Lizenz: CC BY-NC 4.0 — nicht für kommerzielle Nutzung."
 info "  5) Custom OpenAI-compatible — OpenRouter, lokales Gateway oder kompatible Provider."
-prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: openai=empfohlen, local=E5, jina=JinaAI v3, jina5=JinaAI v5 Nano (Labortest offen), custom=OpenAI-kompatibel" "openai" "openai" "local" "jina" "jina5" "custom"
+prompt_choice EMBEDDING_PROVIDER_MODE "Embedding provider: jina5=JinaAI v5 Nano empfohlen, openai=remote, local=E5, jina=JinaAI v3, custom=OpenAI-kompatibel" "jina5" "jina5" "openai" "local" "jina" "custom"
+
+# Nicht-interaktiv oder Probelauf: Die Nano-Vorgabe braucht die ausdrückliche
+# Lizenzzustimmung. Ohne PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1 fällt der
+# Installer auf E5 zurück, statt abzubrechen oder eine Lizenz stillschweigend
+# zu bejahen.
+if [[ "$EMBEDDING_PROVIDER_MODE" == "jina5" && ( "$NON_INTERACTIVE" == "1" || "$DRY_RUN" == "1" ) && "${PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE:-0}" != "1" ]]; then
+  warn "Nicht-interaktiv ohne PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1: CC BY-NC 4.0 kann nicht bestätigt werden, Embedding fällt auf multilingual-e5-small zurück."
+  EMBEDDING_PROVIDER_MODE="local"
+fi
 
 case "$EMBEDDING_PROVIDER_MODE" in
   openai)
@@ -803,7 +812,9 @@ case "$EMBEDDING_PROVIDER_MODE" in
     info "Der erste echte Aufruf lädt den gepinnten Q8-ONNX-Export nach $EMBEDDING_LOCAL_CACHE_DIR."
     ;;
   jina5)
-    if ! confirm "CC BY-NC 4.0 für JinaAI jina-embeddings-v5-text-nano ausdrücklich akzeptieren?" "n"; then
+    if [[ "${PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE:-0}" == "1" ]]; then
+      info "CC BY-NC 4.0 für JinaAI jina-embeddings-v5-text-nano per PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1 bestätigt."
+    elif ! confirm "CC BY-NC 4.0 für JinaAI jina-embeddings-v5-text-nano ausdrücklich akzeptieren?" "n"; then
       error "JinaAI jina-embeddings-v5-text-nano wird ohne ausdrückliche Zustimmung zur CC BY-NC 4.0 nicht konfiguriert."
       exit 1
     fi

@@ -178,8 +178,11 @@ nicht benoetigt.
 
 Seit 7.11.0 ist zusaetzlich das Jina-v5-Text-Nano-Embedding gepinnt (Retrieval-
 Adapter in die Gewichte gemischt, EuroBERT-Encoder, 239M Parameter, 15
-europaeische Sprachen, Last-Token-Pooling). Es ist eine Option, kein Vorschlag;
-der PLUR1BUS-Labortest gegen v3 entscheidet ueber den Default. `dimensions`
+europaeische Sprachen, Last-Token-Pooling). Seit 7.12.0 ist es die Vorgabe des
+Installers bei Neuinstallation (Labortest vom 05.09.2026: Rangqualitaet
+gleichauf mit v3, klarere Trennung vom Rauschen, dreifache
+Migrationsgeschwindigkeit, halber Speicher); Bestandsinstallationen wechseln
+nur ueber die Re-Embedding-Migration im Dashboard. `dimensions`
 darf 32, 64, 128, 256, 512 oder 768 sein. Anfrage und Dokument werden ueber die
 veroeffentlichten Praefixe `Query: ` und `Document: ` unterschieden; der
 Provider verweigert abweichende Praefixe, damit ein kopierter v3-Block (leere

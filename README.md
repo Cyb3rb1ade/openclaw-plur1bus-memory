@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.11.1 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.12.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.11.1**. PLUR1BUS 7.11.1 supports OpenClaw `2026.8.1`
+Current source version: **7.12.0**. PLUR1BUS 7.12.0 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,20 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.0 — Jina v5 Text Nano is the proposal for new installs
+
+- After the lab test (see the comparison below) the provider wizard and the
+  shell installer offer `jinaai/jina-embeddings-v5-text-nano-retrieval` as
+  option 1 and default; OpenAI is option 2, E5 the keyless fallback, Jina v3
+  stays selectable for existing installs. Non-interactive and dry runs need
+  `PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1` to accept CC BY-NC 4.0 and fall
+  back to E5 otherwise, rather than failing or acknowledging a license silently.
+- Existing installs are not touched. The dashboard's Embedding Dimension
+  Planner now recommends the migration to Nano when another embedding model is
+  active: prepare the target in Model Preparation, then run the re-embedding
+  migration (dry run, copy, separate switch); the old generation stays for
+  rollback.
 
 ### New in v7.11.1 — long cards no longer drive the local Jina models into the OOM killer
 
@@ -832,9 +846,9 @@ exactly what the compatibility lab showed when it measured with E5 and no
 reranker. The recommended model spreads similarities much wider:
 `jinaai/jina-embeddings-v3` (multilingual, Matryoshka dimensions from 32 to
 1024, CC BY-NC 4.0 license consent required). With it, ranking and thresholds
-do their job. The installer's first option is OpenAI; among the local models it
-offers Jina v3 (and, since 7.11.0, Jina v5 Text Nano) and lists E5 only as the
-small keyless fallback. The embedding model is switched from the PLUR1BUS tab
+do their job. Since 7.12.0 the installer's first option is Jina v5 Text Nano
+(see the lab test below); OpenAI is the hosted alternative, Jina v3 stays
+selectable for existing installs, and E5 is only the small keyless fallback. The embedding model is switched from the PLUR1BUS tab
 as well (`controlUi.writeActions: "all"`): the button picks the target model,
 model preparation downloads and verifies it, and the re-embedding migration
 then runs from the same page with a dry run, a copy, and a separate switch.
@@ -890,9 +904,11 @@ thresholds hard to set), embeds cards three times faster in batches, loads in
 a third of the time and needs half the memory; v3 answers a single query
 twice as fast, which at a quarter of a second is not a user-visible
 difference. Both models push more distinct pairs above the 0.95 duplicate
-threshold than the production model, mostly genuine near-duplicates. The
-default for new installs is decided on these numbers by the maintainer, not
-by this file.
+threshold than the production model, mostly genuine near-duplicates. On these
+numbers the maintainer made Nano the proposal for new installs in 7.12.0 and
+recommends existing installs the migration from the dashboard: prepare the
+Nano target in Model Preparation, run the dry run, copy, then switch; the old
+generation stays for rollback. Nothing migrates on its own.
 
 **Reranking.** The reranker reviews the 40 candidates the vector search returns
 and removes the ANN noise. Two local models are pinned, both quantized ONNX

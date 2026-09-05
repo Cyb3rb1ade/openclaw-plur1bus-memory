@@ -68,7 +68,7 @@ function runWizard(lines) {
 
 describe("provider wizard CLI input validation", () => {
   it("reprompts after an invalid advanced choice and keeps reranking enabled", async () => {
-    const result = await runWizard(["2", "4", "x", "b"]);
+    const result = await runWizard(["3", "4", "x", "b"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.strictEqual((result.stdout.match(/\[a\/b\/c\]:/g) || []).length, 2);
@@ -83,7 +83,7 @@ describe("provider wizard CLI input validation", () => {
   });
 
   it("requires an exact advanced token instead of accepting a valid prefix", async () => {
-    const result = await runWizard(["2", "4", "a-extra", "c"]);
+    const result = await runWizard(["3", "4", "a-extra", "c"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.strictEqual((result.stdout.match(/\[a\/b\/c\]:/g) || []).length, 2);
@@ -94,7 +94,7 @@ describe("provider wizard CLI input validation", () => {
   });
 
   it("reprompts for multi-letter and whitespace-only advanced tokens", async () => {
-    const result = await runWizard(["2", "4", "aa", "   ", "a"]);
+    const result = await runWizard(["3", "4", "aa", "   ", "a"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.strictEqual((result.stdout.match(/\[a\/b\/c\]:/g) || []).length, 3);
@@ -105,14 +105,14 @@ describe("provider wizard CLI input validation", () => {
   });
 
   it("fails without final JSON when input ends after an invalid advanced choice", async () => {
-    const result = await runWizard(["2", "4", "x"]);
+    const result = await runWizard(["3", "4", "x"]);
 
     assert.notStrictEqual(result.code, 0);
     assert.strictEqual(parseWizardResult(result.stdout), null);
   });
 
   it("retains explicit top-level disable as the only disabled path", async () => {
-    const result = await runWizard(["2", "3"]);
+    const result = await runWizard(["3", "3"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
@@ -123,7 +123,7 @@ describe("provider wizard CLI input validation", () => {
   });
 
   it("offers the local BGE reranker as option 1, the recommendation", async () => {
-    const result = await runWizard(["2", "1"]);
+    const result = await runWizard(["3", "1"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.match(result.stderr, /\[1\] Local: woxpas-ai\/bge-reranker-v2-m3-onnx/);
@@ -139,7 +139,7 @@ describe("provider wizard CLI input validation", () => {
 
   it("keeps the second option on Cohere, selected by key rather than position", async () => {
     // E5 embedding, Cohere reranker, key from the environment, no fallback.
-    const result = await runWizard(["2", "2", "1", "1"]);
+    const result = await runWizard(["3", "2", "1", "1"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
@@ -154,7 +154,7 @@ describe("provider wizard CLI input validation", () => {
   });
 
   it("retains the default local BGE reranker choice", async () => {
-    const result = await runWizard(["2", "1"]);
+    const result = await runWizard(["3", "1"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.reranker, {
@@ -166,11 +166,11 @@ describe("provider wizard CLI input validation", () => {
     });
   });
 
-  it("returns the pinned JinaAI v5 Text Nano local embedding as option 4, after the license acknowledgement", async () => {
-    const result = await runWizard(["4", "yes", "3"]);
+  it("returns the pinned JinaAI v5 Text Nano local embedding as option 1, after the license acknowledgement", async () => {
+    const result = await runWizard(["1", "yes", "3"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
-    assert.match(result.stderr, /\[4\] Local: JinaAI jina-embeddings-v5-text-nano/);
+    assert.match(result.stderr, /\[1\] Local: JinaAI jina-embeddings-v5-text-nano/);
     const parsed = parseWizardResult(result.stdout);
     assert.deepStrictEqual(parsed?.embedding, {
       provider: "local-transformers",
@@ -186,14 +186,14 @@ describe("provider wizard CLI input validation", () => {
   });
 
   it("refuses the v5 nano option without the license acknowledgement", async () => {
-    const result = await runWizard(["4", "no"]);
+    const result = await runWizard(["1", "no"]);
 
     assert.notStrictEqual(result.code, 0);
     assert.strictEqual(parseWizardResult(result.stdout), null);
   });
 
   it("returns the pinned JinaAI v3 local embedding with no credential", async () => {
-    const result = await runWizard(["3", "yes", "3"]);
+    const result = await runWizard(["4", "yes", "3"]);
 
     assert.strictEqual(result.code, 0, result.stderr);
     assert.deepStrictEqual(parseWizardResult(result.stdout)?.embedding, {
@@ -214,7 +214,7 @@ describe("provider wizard CLI input validation", () => {
   });
 
   it("does not emit a usable Jina configuration when the non-commercial license is declined", async () => {
-    const result = await runWizard(["3", "no"]);
+    const result = await runWizard(["4", "no"]);
 
     assert.notStrictEqual(result.code, 0);
     assert.strictEqual(parseWizardResult(result.stdout), null);

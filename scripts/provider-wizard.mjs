@@ -28,13 +28,14 @@ const RERANKER_OPTIONS = [
   { key: "advanced",           i18nLabel: "setup.reranker.option.advanced",  i18nHelp: "setup.reranker.option.advanced_help" },
 ];
 
+// Reihenfolge = Empfehlung (seit 7.12.0, nach dem Labortest vom 05.09.2026):
+// Jina v5 Text Nano steht vorn, OpenAI ist die gehostete Alternative, E5 der
+// schlüssellose Notnagel, Jina v3 bleibt für Bestandsinstallationen wählbar.
 const EMBEDDING_OPTIONS = [
+  { key: "local-jina-v5-nano", i18nLabel: "setup.embedding.option.local_jina_v5_nano", i18nHelp: "setup.embedding.option.local_jina_v5_nano_help" },
   { key: "openai",             i18nLabel: "setup.embedding.option.openai",   i18nHelp: "setup.embedding.option.openai_help" },
   { key: "local-transformers", i18nLabel: "setup.embedding.option.local_e5", i18nHelp: "setup.embedding.option.local_e5_help" },
   { key: "local-jina",         i18nLabel: "setup.embedding.option.local_jina", i18nHelp: "setup.embedding.option.local_jina_help" },
-  // Angehängt, nicht einsortiert: Jina v5 Text Nano ist eine Option, kein
-  // Vorschlag; der Labortest gegen v3 entscheidet später über den Default.
-  { key: "local-jina-v5-nano", i18nLabel: "setup.embedding.option.local_jina_v5_nano", i18nHelp: "setup.embedding.option.local_jina_v5_nano_help" },
 ];
 
 const ADVANCED_RERANKER_MODELS = [
@@ -99,7 +100,9 @@ async function main() {
       if (["1", "2", "3", "4"].includes(choice)) break;
       console.error(t("setup.reranker.invalid_choice", { lang, tone }));
     }
-    if (choice === "1") {
+    // Auswahl über den Schlüssel der Option, nicht über die Position.
+    const selected = EMBEDDING_OPTIONS[Number(choice) - 1].key;
+    if (selected === "openai") {
       console.error(t("setup.embedding.api_key_ask", { lang, tone }));
       const keyChoice = await askLine("[1/2]: ");
       if (keyChoice === "2") {
@@ -107,7 +110,7 @@ async function main() {
         return { provider: "openai", apiKey: literal, model: "text-embedding-3-large", dimensions: 3072 };
       }
       return { provider: "openai", apiKeyEnv: "OPENAI_API_KEY", model: "text-embedding-3-large", dimensions: 3072 };
-    } else if (choice === "2") {
+    } else if (selected === "local-transformers") {
       return { provider: "local-transformers", model: "intfloat/multilingual-e5-small", dimensions: 384 };
     }
     console.error(t("setup.embedding.local_jina_license_confirm", { lang, tone }));
@@ -115,7 +118,7 @@ async function main() {
     if (accepted !== "yes") {
       throw new Error(t("setup.embedding.local_jina_license_required", { lang, tone }));
     }
-    if (choice === "4") {
+    if (selected === "local-jina-v5-nano") {
       return {
         embedding: {
           provider: "local-transformers",
