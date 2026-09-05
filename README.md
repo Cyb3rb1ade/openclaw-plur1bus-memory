@@ -795,8 +795,13 @@ reranker. The recommended model spreads similarities much wider:
 `jinaai/jina-embeddings-v3` (multilingual, Matryoshka dimensions from 32 to
 1024, CC BY-NC 4.0 license consent required). With it, ranking and thresholds
 do their job, which is why the installer proposes Jina and lists E5 only as the
-small keyless fallback. Changing the embedding model is a migration with a
-re-embedding run (dry run, copy, separate switch), not a setting.
+small keyless fallback. The embedding model is switched from the PLUR1BUS tab
+as well (`controlUi.writeActions: "all"`): the button picks the target model,
+model preparation downloads and verifies it, and the re-embedding migration
+then runs from the same page with a dry run, a copy, and a separate switch.
+Unlike the reranker switch, every card is embedded again along the way, so
+it takes time and disk space, and the old generation stays available for
+rollback.
 
 **Reranking.** The reranker reviews the 40 candidates the vector search returns
 and removes the ANN noise. Locally, that is
