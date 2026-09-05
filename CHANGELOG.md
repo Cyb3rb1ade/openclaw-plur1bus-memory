@@ -7,7 +7,7 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 
 ## [Unreleased]
 
-### Hermes-Port-Kandidat 7.10.0-hermes (lokal)
+### Hermes-Port-Kandidat 7.12.0-hermes (lokal)
 
 - Native Basis aus 7.4.8-hermes.1 auf unverändertem Upstream 7.10.0; Critical-
   Sammelreview, inaktive Klassifikationskandidaten ausgeschlossen, Hermes-Lifecycle-
@@ -29,6 +29,60 @@ und dieses Projekt folgt [Semantic Versioning](https://semver.org/lang/de/).
 - Keine Behauptung vollständiger Host-/Workshop-Parität. Jina-v3-Remote-Code-Pfad
   bleibt bis zum separaten Code-Audit gesperrt. Matrix und lokale Gate-Ergebnisse:
   `docs/audits/hermes-7.10.0-contract-matrix.md` und `hermes-7.10.0-verification.md`.
+
+## [7.12.0] — 2026-09-05
+
+### Geändert
+
+- **Jina v5 Text Nano ist die Vorgabe bei Neuinstallation.** Nach dem
+  Labortest (README, „Choosing embedding and reranking models“) bieten
+  Provider-Wizard und Shell-Installer `jinaai/jina-embeddings-v5-text-nano-retrieval`
+  als Option 1 und Vorgabe an; OpenAI ist Option 2, E5 der schlüssellose
+  Notnagel, Jina v3 bleibt für Bestandsinstallationen wählbar. Der Wizard
+  wählt den Zweig über den Schlüssel der Option. Nicht-interaktive Läufe und
+  Probeläufe brauchen `PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1` für die
+  CC-BY-NC-Zustimmung und fallen sonst auf E5 zurück, statt abzubrechen oder
+  eine Lizenz stillschweigend zu bejahen.
+- **Bestandsnutzern wird die Migration im Dashboard empfohlen.** Der
+  Dimensions-Planer zeigt bei aktivem anderem Embedding-Modell den Hinweis auf
+  Nano mit dem Weg über Modellvorbereitung und Re-Embedding-Migration
+  (Probelauf, Kopie, getrenntes Umschalten). Bestehende Konfigurationen werden
+  nicht angefasst, nichts migriert von selbst.
+
+## [7.11.1] — 2026-09-05
+
+### Behoben
+
+- **Lange Karten trieben die lokalen Jina-Embeddings in den OOM-Killer.** Beide
+  gepinnten Jina-Modelle nehmen 8192 Token an, und die ONNX-Laufzeit hält die
+  Attention für die längste Karte eines Batches mal Batchgröße im Arbeitsspeicher
+  vor, ohne ihn je zurückzugeben. Im Labortest zu 7.11.0 wuchs der v3-Prozess
+  auf 41 GB und wurde bei Karte 808 von 1 031 vom Kernel abgeschossen; ein
+  einziger Batch mit den acht längsten Karten (bis 15 000 Zeichen) brachte Nano
+  auf +30 GB und 117 s. Beide Jina-Läufe kappen jeden Text jetzt bei
+  `embedding.local.maxTokens`, Vorgabe 512 (32 bis 8192). Derselbe Batch
+  braucht damit +0,6 GB (Nano) bzw. +1,1 GB (v3) und 5 bzw. 22 s. Memory-Karten
+  sind Zusammenfassungen, 512 Token decken das 90. Perzentil mehrfach ab; wer
+  lange Karten vollständig einbetten will, hebt den Wert bewusst an. Die
+  Kappung geht in die Identität des geteilten Modell-Pools ein.
+
+## [7.11.0] — 2026-09-05
+
+### Hinzugefügt
+
+- **Jina v5 Text Nano als lokales Embedding-Ziel.** Gepinnt ist der
+  veröffentlichte Q8-ONNX-Export von `jinaai/jina-embeddings-v5-text-nano-retrieval`
+  (Revision `ac5d898c`, fünf Artefakte mit Größe und SHA-256, rund 265 MB).
+  Neuer Runtime-Zweig `jina-v5` im lokalen Embedding-Provider: EuroBERT-Konfig
+  wird geprüft, das Modell liefert `sentence_embedding` (normalisiertes
+  Last-Token-Pooling) direkt, sonst poolt der Provider über die Attention-Maske;
+  Matryoshka 32 bis 768; Anfrage und Dokument über die Präfixe `Query: ` und
+  `Document: `, abweichende Präfixe werden verweigert. Zielprofile
+  `jina-v5-nano-32…768` im Schema, im Dimensions-Planer und im Dashboard
+  (Re-Embedding-Migration wie bisher), Option 4 im Wizard und `jina5` im
+  Shell-Installer, jeweils mit Lizenzzustimmung (CC BY-NC 4.0). Eine Option,
+  kein Vorschlag: Der Default bleibt unverändert, bis der PLUR1BUS-Labortest
+  gegen v3 ausgewertet ist. Bestehende Konfigurationen werden nicht angefasst.
 
 ## [7.10.0] — 2026-09-05
 

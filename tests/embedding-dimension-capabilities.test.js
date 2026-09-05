@@ -79,6 +79,7 @@ describe("embedding dimension capabilities", () => {
       "text-embedding-3-large",
       E5_EMBEDDING_PROFILE.model,
       JINA_EMBEDDING_PROFILE.model,
+      "jinaai/jina-embeddings-v5-text-nano-retrieval",
       "runtime-probed-model",
     ]);
     assert.equal(profiles.filter((entry) => entry.current).length, 1);

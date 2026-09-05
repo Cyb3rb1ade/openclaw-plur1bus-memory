@@ -193,6 +193,7 @@ verified.
 | --- | --- | --- | --- |
 | E5 embedding | `intfloat/multilingual-e5-small` | `614241f622f53c4eeff9890bdc4f31cfecc418b3` | `onnx/model.onnx` |
 | Optional multilingual Jina v3 embedding (CC BY-NC 4.0) | `jinaai/jina-embeddings-v3` base `ab036b023d30b4d1138c4c3bfa9f0c445ab455d6`; Q8 conversion `ldwformat/jina-embeddings-v3-Q8-onnx` | `68ed94909d564380f954be27ae2e133214c1adc9` | local `onnx/model_quantized.onnx` from pinned `model.onnx` |
+| Optional Jina v5 Text Nano embedding (CC BY-NC 4.0, lab test pending) | `jinaai/jina-embeddings-v5-text-nano-retrieval` | `ac5d898c8d382b17167c33e5c8af644a3519b47d` | `onnx/model_quantized.onnx` + `onnx/model_quantized.onnx_data` |
 | Optional Jina v2 reranker (CC BY-NC 4.0) | `jinaai/jina-reranker-v2-base-multilingual` | `9cfeff2df7d40d1b78e75e5e9cebec92a99813c9` | `onnx/model_quantized.onnx` |
 | BGE reranker (recommended default, Apache 2.0) | `woxpas-ai/bge-reranker-v2-m3-onnx` | `c44ebc43de724ae8816668bb44d2e728e17faa18` | `onnx/model_quantized.onnx` |
 

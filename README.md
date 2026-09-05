@@ -2,9 +2,9 @@
 
 PLUR1BUS turns OpenClaw into an agent with long-term memory: a per-agent isolated LanceDB store as the source of truth, a mirrored Obsidian vault as a human-readable view, and a small set of background jobs that classify, consolidate, and (when warranted) notify.
 
-**PLUR1BUS 7.10.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
+**PLUR1BUS 7.12.0 — verified on OpenClaw 2026.8.x and 2026.9.1**
 
-Current source version: **7.10.0**. PLUR1BUS 7.10.0 supports OpenClaw `2026.8.1`
+Current source version: **7.12.0**. PLUR1BUS 7.12.0 supports OpenClaw `2026.8.1`
 as its primary host target and is additionally verified against OpenClaw
 `2026.9.1`; the declared compatibility floor is `openclaw@2026.8.1` and plugin
 API `>=2026.8.1`. The package is built and tested against the immutable build
@@ -25,6 +25,47 @@ separate login); reach it through however you already reach your Gateway
 ## What it does
 
 By default, each agent gets its own LanceDB store under `{baseDbPath}/{agentId}/` and a matching Obsidian vault folder for browsing. An explicit named-namespace configuration can read the same validated agent from multiple storage namespaces while keeping one active writer. The plugin captures conversation-derived memory cards automatically, runs a daily consolidator and a critical-push classifier as cron-driven background jobs, and exposes a small set of Telegram commands so the user can inspect, edit, or toggle behaviour without leaving the chat.
+
+### New in v7.12.0 — Jina v5 Text Nano is the proposal for new installs
+
+- After the lab test (see the comparison below) the provider wizard and the
+  shell installer offer `jinaai/jina-embeddings-v5-text-nano-retrieval` as
+  option 1 and default; OpenAI is option 2, E5 the keyless fallback, Jina v3
+  stays selectable for existing installs. Non-interactive and dry runs need
+  `PLUR1BUS_ACCEPT_NONCOMMERCIAL_LICENSE=1` to accept CC BY-NC 4.0 and fall
+  back to E5 otherwise, rather than failing or acknowledging a license silently.
+- Existing installs are not touched. The dashboard's Embedding Dimension
+  Planner now recommends the migration to Nano when another embedding model is
+  active: prepare the target in Model Preparation, then run the re-embedding
+  migration (dry run, copy, separate switch); the old generation stays for
+  rollback.
+
+### New in v7.11.1 — long cards no longer drive the local Jina models into the OOM killer
+
+- Both pinned Jina models accept 8,192 tokens, and the ONNX runtime keeps the
+  attention working set of the longest text in a batch, times the batch size,
+  without ever returning it. In the 7.11.0 lab run the v3 process grew to 41 GB
+  and was killed at card 808 of 1,031; one batch of the eight longest cards
+  (up to 15,000 characters) took nano to +30 GB and 117 s. Both Jina runtimes
+  now cap every text at `embedding.local.maxTokens`, default 512 (32 to 8,192).
+  The same batch then costs +0.6 GB (nano) or +1.1 GB (v3) and 5 or 22 s.
+  Memory cards are summaries; raise the cap deliberately if long cards must be
+  embedded in full. The cap is part of the shared model pool identity.
+
+### New in v7.11.0 — Jina v5 Text Nano as a local embedding option
+
+- The published Q8 ONNX export of `jinaai/jina-embeddings-v5-text-nano-retrieval`
+  is pinned (five artifacts, about 265 MB, SHA-256 checked). A `jina-v5`
+  runtime branch validates the EuroBERT config, takes the graph's own
+  `sentence_embedding` (normalized last-token pooling) or pools over the
+  attention mask itself, truncates to 32 to 768 Matryoshka dimensions, and
+  distinguishes queries from documents by the published `Query: ` and
+  `Document: ` prefixes, refusing any other prefix. Targets `jina-v5-nano-*`
+  appear in the schema, the dimension planner, the dashboard switch (same
+  re-embedding migration), wizard option 4 and installer choice `jina5`, each
+  behind the CC BY-NC 4.0 acknowledgement. An option, not a proposal: the
+  default stays where it is until the PLUR1BUS lab test against v3 is in,
+  and existing configurations are untouched.
 
 ### New in v7.10.0 — BGE is the recommended local reranker
 
@@ -805,8 +846,9 @@ exactly what the compatibility lab showed when it measured with E5 and no
 reranker. The recommended model spreads similarities much wider:
 `jinaai/jina-embeddings-v3` (multilingual, Matryoshka dimensions from 32 to
 1024, CC BY-NC 4.0 license consent required). With it, ranking and thresholds
-do their job, which is why the installer proposes Jina and lists E5 only as the
-small keyless fallback. The embedding model is switched from the PLUR1BUS tab
+do their job. Since 7.12.0 the installer's first option is Jina v5 Text Nano
+(see the lab test below); OpenAI is the hosted alternative, Jina v3 stays
+selectable for existing installs, and E5 is only the small keyless fallback. The embedding model is switched from the PLUR1BUS tab
 as well (`controlUi.writeActions: "all"`): the button picks the target model,
 model preparation downloads and verifies it, and the re-embedding migration
 then runs from the same page with a dry run, a copy, and a separate switch.
@@ -826,6 +868,47 @@ hardware; it halves storage and ANN cost for a loss of 0.2 points. Do not go
 below 256: from 128 down the recall loss becomes visible and the similarity
 spread compresses, which moves every threshold. The dimension is baked into
 the table, so changing it later means another re-embedding run.
+
+*Jina v5 Text Nano (7.11.0), an option with the lab test pending.* The
+EuroBERT-based nano model (239M parameters, 12 layers, 768 dimensions with
+Matryoshka down to 32, 15 European languages including German, CC BY-NC 4.0)
+runs as the upstream Q8 export at roughly a quarter of v3's compute and about
+265 MB on disk; on the reference machine one card embeds in about 0.45 s and
+the process grows by about 120 MB. Jina reports MMTEB 65.5 against 64.44 for
+v3. Queries and documents are told apart by the `Query: ` and `Document: `
+prefixes. Whether it becomes the proposal for new installs is decided by the
+PLUR1BUS lab test on real memory cards, not by the version number. That test
+ran on 5 September 2026 (OpenClaw 2026.9.1, Transformers.js 4.2.0, 12 cores
+shared with other work): 1,031 active cards of one agent, 72 real recall
+queries from the gateway log, the production ranking (OpenAI
+`text-embedding-3-large`, 3,072 dimensions) as reference, both models through
+the real provider with the 512-token cap, in separate processes, back to back.
+
+| | Jina v5 Text Nano, 768d | Jina v3, 1024d |
+|---|---|---|
+| Production top-1 found at rank 1 / within top 5 | 48.6 % / 70.8 % | 47.2 % / 73.6 % |
+| Overlap of the top 5 with production | 47.2 % | 46.1 % |
+| Median top-1 similarity / median noise band (ranks 11 to 50) | 0.615 / 0.333 | 0.721 / 0.541 |
+| Margin top hit over noise, median / 10th percentile | 0.242 / 0.132 | 0.153 / 0.100 |
+| Distinct-card pairs at or above 0.95 / 0.96 (production: 59 / 49) | 90 / 81 | 84 / 66 |
+| Model load | 5.1 s | 14.1 s |
+| One card in a batch of 8 (migration path) | 478 ms | 1,556 ms |
+| One card alone (capture path) | 313 ms | 416 ms |
+| One query (recall path) | 256 ms | 124 ms |
+| Process growth after load / peak | 444 MB / 1.2 GB | 1,120 MB / 2.3 GB |
+
+Reading it: on ranking quality the two are level within the noise of 72
+queries. Nano separates hits from the noise band much more clearly (v3
+compresses similarities into a narrow band around 0.54, which is what makes
+thresholds hard to set), embeds cards three times faster in batches, loads in
+a third of the time and needs half the memory; v3 answers a single query
+twice as fast, which at a quarter of a second is not a user-visible
+difference. Both models push more distinct pairs above the 0.95 duplicate
+threshold than the production model, mostly genuine near-duplicates. On these
+numbers the maintainer made Nano the proposal for new installs in 7.12.0 and
+recommends existing installs the migration from the dashboard: prepare the
+Nano target in Model Preparation, run the dry run, copy, then switch; the old
+generation stays for rollback. Nothing migrates on its own.
 
 **Reranking.** The reranker reviews the 40 candidates the vector search returns
 and removes the ANN noise. Two local models are pinned, both quantized ONNX

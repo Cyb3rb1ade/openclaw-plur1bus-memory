@@ -35,9 +35,15 @@ describe("provider-wizard i18n rendering", () => {
     assert.ok(msg.includes("1") && msg.includes("4"), `Keine Optionszahlen in: ${msg}`);
   });
 
-  it("OpenAI ist Option 1 in der Embedding-Liste", () => {
+  // Seit 7.12.0 ist Jina v5 Text Nano die Empfehlung und steht vorn; OpenAI
+  // folgt als gehostete Alternative, E5 als schlüsselloser Notnagel, v3 als
+  // Bestandsoption.
+  it("Jina v5 Text Nano ist Option 1, OpenAI Option 2 in der Embedding-Liste", () => {
     const options = buildWizardOptions("embedding", { lang: "de" });
-    assert.strictEqual(options[0].key, "openai");
+    assert.deepStrictEqual(options.map((o) => o.key), ["local-jina-v5-nano", "openai", "local-transformers", "local-jina"]);
+    assert.ok(formatWizardOption("embedding", "local-jina-v5-nano", { lang: "de" }).includes("empfohlen"));
+    assert.ok(formatWizardOption("embedding", "local-jina-v5-nano", { lang: "en" }).includes("recommended"));
+    assert.ok(!formatWizardOption("embedding", "openai", { lang: "de" }).includes("empfohlen"));
   });
 
   it("Embedding OpenAI-Label enthält 'kostenpflichtig' (de)", () => {
@@ -52,7 +58,7 @@ describe("provider-wizard i18n rendering", () => {
 
   it("bietet JinaAI v3 als separates nachladbares mehrsprachiges Embedding an", () => {
     const options = buildWizardOptions("embedding", { lang: "de" });
-    assert.equal(options[2].key, "local-jina");
+    assert.equal(options[3].key, "local-jina");
     const label = formatWizardOption("embedding", "local-jina", { lang: "de" });
     assert.match(label, /JinaAI.*mehrsprachig.*1024d/i);
   });
