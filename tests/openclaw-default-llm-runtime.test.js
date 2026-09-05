@@ -17,6 +17,7 @@ import { recordOwnedVaultConfirmation } from "../lib/obsidian-vault-authority.js
 import { LocalTransformersEmbeddingProvider } from "../lib/providers/embedding-local-transformers.js";
 import { safeProfile } from "../lib/setup/feature-profiles.js";
 import { SharedMemoryPool } from "../lib/shared-memory-pool.js";
+import { stableDirectoryCapabilitiesSupported } from "../lib/directory-capability.js";
 import { confirmedObsidianPolicy } from "./helpers/obsidian-mutation-policy.js";
 
 const VECTOR_DIM = 384;
@@ -890,6 +891,10 @@ test("Schicht 1.5 sanitizes provider failures in responses and logs", async (t) 
 });
 
 test("Skill Miner uses its feature-local native default through the command runtime", async (t) => {
+  if (!stableDirectoryCapabilitiesSupported()) {
+    t.skip("workspace-shared evidence requires stable fd-backed directory capabilities");
+    return;
+  }
   const { baseDbPath, workspaceDir } = withTempPaths(t);
   const agentId = "skill-session-agent";
   const workspaceContext = resolveMemoryRequestContext({

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -36,6 +36,7 @@ describe("active embedding generation routing", () => {
       dimensions: 768,
       tables: {},
     }));
+    const canonicalGenerationRoot = realpathSync(generationRoot);
     const original = resolveNamespaceLayout(root, {
       activeWriteNamespace: "lab",
       activeRecallNamespaces: ["lab"],
@@ -50,9 +51,9 @@ describe("active embedding generation routing", () => {
       },
     });
     assert.deepStrictEqual(result.selection, { mode: "generation", generation: "generation-a" });
-    assert.equal(result.dataLayout.baseDir, generationRoot);
-    assert.equal(result.activeRoot, join(generationRoot, "lab"));
-    assert.equal(result.sharedBaseDir, generationRoot);
+    assert.equal(result.dataLayout.baseDir, canonicalGenerationRoot);
+    assert.equal(result.activeRoot, join(canonicalGenerationRoot, "lab"));
+    assert.equal(result.sharedBaseDir, canonicalGenerationRoot);
   });
 
   it("fails closed on absent, malformed, or mismatched generation manifests", () => {

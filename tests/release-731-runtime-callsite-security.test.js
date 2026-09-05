@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -327,7 +327,32 @@ function filesUnder(root) {
   return files;
 }
 
+test("unsupported directory-capability hosts reject explicit shared writes without creating a shared root", async (t) => {
+  if (stableDirectoryCapabilitiesSupported()) {
+    t.skip("supported hosts exercise the shared-memory integration happy paths below");
+    return;
+  }
+  const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-unsupported-shared-"));
+  t.after(() => rmSync(baseDbPath, { recursive: true, force: true }));
+  class UnusedPool {}
+  const pool = new SharedMemoryPool(baseDbPath, VECTOR_DIM, UnusedPool);
+  await assert.rejects(
+    pool.withWorkspaceDb(REQUEST_CONTEXT, async () => {}),
+    /stable directory capabilities are unavailable/,
+  );
+  await assert.rejects(
+    pool.withUserDb(REQUEST_CONTEXT, async () => {}),
+    /stable directory capabilities are unavailable/,
+  );
+  assert.equal(existsSync(join(baseDbPath, ".plur1bus-shared")), false);
+  await pool.shutdown();
+});
+
 test("registered internal REM processes every allowed partition with isolated prompts and sinks", async (t) => {
+  if (!stableDirectoryCapabilitiesSupported()) {
+    t.skip("user/workspace shared partitions require stable fd-backed directory capabilities");
+    return;
+  }
   const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-rem-db-"));
   const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-rem-ws-"));
   t.after(() => {
@@ -377,6 +402,10 @@ test("registered internal REM processes every allowed partition with isolated pr
 });
 
 test("registered internal skill-miner processes every allowed partition without workspace leakage", async (t) => {
+  if (!stableDirectoryCapabilitiesSupported()) {
+    t.skip("user/workspace shared partitions require stable fd-backed directory capabilities");
+    return;
+  }
   const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-skill-db-"));
   const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-skill-ws-"));
   t.after(() => {
@@ -484,6 +513,10 @@ test("registered internal skill-miner scans physically isolated workspace shared
 });
 
 test("registered internal daily compaction invokes the partition-aware API per allowed partition", async (t) => {
+  if (!stableDirectoryCapabilitiesSupported()) {
+    t.skip("user/workspace shared partitions require stable fd-backed directory capabilities");
+    return;
+  }
   const baseDbPath = mkdtempSync(join(tmpdir(), "release-731-runtime-daily-db-"));
   const workspaceDir = mkdtempSync(join(tmpdir(), "release-731-runtime-daily-ws-"));
   t.after(() => {
